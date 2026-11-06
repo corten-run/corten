@@ -65,7 +65,7 @@ is shared. When you remove a checkout, remove its two volumes too.
 ```powershell
 $checkout = Split-Path -Leaf $PWD
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo fmt --all --check && cargo run -q -p corten-cli -- fmt --check crates examples bench && cargo clippy --workspace --all-features --all-targets -- -D warnings && cargo test --workspace --all-features && cargo test --release --workspace --all-features"
-docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry --tmpfs /usr/local/cargo/registry/src:exec -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo test -p corten --no-default-features && cargo build -q -p corten-cli && /target/debug/corten new /tmp/app --corten-path /src/crates/corten && cd /tmp/app && /target/debug/corten check && /target/debug/corten ui init && /target/debug/corten ui add --all && /target/debug/corten check && cd /src && CARGO_TARGET_DIR=/tmp/publish cargo publish --workspace --dry-run --locked --allow-dirty"
+docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry --tmpfs /usr/local/cargo/registry/src:exec -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo test -p corten-run --no-default-features && cargo build -q -p corten-cli && /target/debug/corten new /tmp/app --corten-path /src/crates/corten && cd /tmp/app && /target/debug/corten check && /target/debug/corten ui init && /target/debug/corten ui add --all && /target/debug/corten check && cd /src && CARGO_TARGET_DIR=/tmp/publish cargo publish --workspace --dry-run --locked --allow-dirty"
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-msrv-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1.88-bookworm cargo check --locked --workspace --all-features --all-targets
 npm run check
 docker build -f examples/watchlist/Dockerfile -t corten-watchlist .
@@ -245,6 +245,15 @@ A crate whose trusted publisher was added before the repository moved to `corten
 names the old owner's repository, and crates.io refuses the workflow until it is edited: before
 the next release, check each published crate's Settings on crates.io and point its publisher at
 `corten-run/corten`.
+
+The framework's package is `corten-run` and its library `corten` (`[lib] name` in
+`crates/corten/Cargo.toml`), so apps and the paths `corten-macros` generates still name it
+`corten`: `corten` on crates.io is an empty 2022 placeholder of someone else's, and crates.io does
+not transfer a crate without its owner
+([#835 The main crate cannot be published: corten on crates.io is an empty 2022 placeholder, so choose its package name (corten-run) or wait for crates.io](https://github.com/corten-run/corten/issues/835)).
+If crates.io frees the name, take it only so no one else can, and keep publishing `corten-run`:
+moving back would be a second rename for every app. The `corten` command still reads an app's pin
+under the old name (`PACKAGES` in `crates/corten-cli/src/pin.rs`).
 
 A published version cannot be replaced, only yanked (`cargo yank --version X.Y.Z <crate>`), so
 a fix is a new patch release.

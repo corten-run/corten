@@ -1,5 +1,5 @@
 [package]
-name = "corten"
+name = "corten-run"
 version.workspace = true
 edition = "2021"
 description = "A full-stack Rust web framework: pages in html!, fragment patches, typed handlers and live feeds, on axum."
@@ -9,6 +9,12 @@ rust-version.workspace = true
 keywords = ["web", "framework", "html", "server-rendering", "axum"]
 categories = ["web-programming::http-server", "template-engine"]
 readme = "../../README.md"
+
+# The package is corten-run (on crates.io `corten` is an empty placeholder of someone else's); the
+# library keeps the name corten, so apps write `use corten::...` and the paths corten-macros
+# generates (`::corten::...`) resolve.
+[lib]
+name = "corten"
 
 [dependencies]
 axum = "0.8"

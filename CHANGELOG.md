@@ -3497,6 +3497,16 @@ Corten is pre-1.0, so any minor version may change the API.
     `Accept` and the test client read a media type out of a header with one function
     (`api::media_type`)
     ([#918 Benchmark: investigate the item-page versus JSON throughput gap](https://github.com/corten-run/corten/issues/918)).
+153. The framework's package is `corten-run`, and its library is still `corten`: `corten` on crates.io
+    is an empty 2022 placeholder of someone else's, so the main crate could not be published. Code
+    is unchanged (`use corten::...`, and the paths `corten-macros` generates), and so is the
+    dependency key; an app's line names the package: `corten = { package = "corten-run", version =
+    ".." }`, or with `git` or `path` as before. `corten new` writes it, the examples use it, and
+    `corten`'s commands still read an app pinned to a revision from before the rename (its lock
+    names the package `corten`). Breaking for an app on a git pin that moves past the rename: add
+    `package = "corten-run"` to its `corten` line. `cargo test -p corten-run` and `cargo doc -p
+    corten-run` name the package
+    ([#835 The main crate cannot be published: corten on crates.io is an empty 2022 placeholder, so choose its package name (corten-run) or wait for crates.io](https://github.com/corten-run/corten/issues/835)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

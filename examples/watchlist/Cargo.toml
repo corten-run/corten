@@ -6,7 +6,7 @@ publish = false
 description = "A stock watchlist on Corten: live prices, market news, price alerts and an account. The browser smoke tests run against it."
 
 [dependencies]
-corten = { path = "../../crates/corten", features = ["feed", "types", "compress"] }
+corten = { package = "corten-run", path = "../../crates/corten", features = ["feed", "types", "compress"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 serde = { version = "1", features = ["derive"] }

@@ -73,27 +73,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
-name = "corten"
-version = "0.1.0"
-dependencies = [
- "axum",
- "corten-feed",
- "corten-macros",
- "form_urlencoded",
- "futures-util",
- "getrandom",
- "http-body",
- "serde",
- "serde_json",
- "tokio",
- "tower-layer",
- "tower-service",
- "tracing",
- "tracing-subscriber",
- "zmij",
-]
-
-[[package]]
 name = "corten-feed"
 version = "0.1.0"
 dependencies = [
@@ -116,6 +95,33 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "corten-run"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-core",
+ "bytes",
+ "corten-feed",
+ "corten-macros",
+ "form_urlencoded",
+ "futures-util",
+ "getrandom",
+ "http",
+ "http-body",
+ "hyper",
+ "hyper-util",
+ "memchr",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+ "tracing-subscriber",
+ "zmij",
 ]
 
 [[package]]
@@ -274,7 +280,7 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 name = "live-corten"
 version = "0.1.0"
 dependencies = [
- "corten",
+ "corten-run",
  "serde",
  "serde_json",
  "tokio",

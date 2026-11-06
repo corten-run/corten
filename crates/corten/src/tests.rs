@@ -435,7 +435,7 @@ async fn a_live_watch_sends_the_latest_value_from_where_the_page_is() {
 /// the median and slowest time from a change to the last stream having it. `WATCH_ROUNDS` (3)
 /// rounds of `WATCH_MODE` (`per-stream`, `once`, or both when unset); counting one mode at two
 /// numbers of changes under callgrind gives its instructions per change. Run in release:
-/// `cargo test --release -p corten --lib -- --ignored --nocapture what_a_change_costs_live_watch`
+/// `cargo test --release -p corten-run --lib -- --ignored --nocapture what_a_change_costs_live_watch`
 #[test]
 #[ignore]
 fn what_a_change_costs_live_watch() {

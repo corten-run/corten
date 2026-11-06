@@ -200,10 +200,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
 /// older than the copies it replaces), and the rest print the note, saying `diff` compares with
 /// this command's kit.
 fn pinned(sub: Option<&str>, note: Option<crate::pin::Note>) -> Result<Option<String>, String> {
-    let Some(crate::pin::Note { text, this }) = note else { return Ok(None) };
+    let Some(crate::pin::Note { text, this, package }) = note else { return Ok(None) };
     match sub {
         Some("add" | "init") => Err(format!(
-            "not copying: {text}\nor, to take this command's kit, move the app to its corten first: {this} for corten in Cargo.toml, then cargo update -p corten"
+            "not copying: {text}\nor, to take this command's kit, move the app to its corten first: {this} for corten in Cargo.toml, then cargo update -p {package}"
         )),
         Some("diff") => Ok(Some(format!(
             "{text}\nui diff compares the copies with this command's kit, not the pin's, and ui add refuses until the two match"
@@ -2650,7 +2650,7 @@ mod tests {
             assert!(error.starts_with("not copying: this corten command was built from corten dd028b94"), "{error}");
             assert!(
                 error.ends_with(&format!(
-                    "move the app to its corten first: rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+                    "move the app to its corten first: package = \"corten-run\", rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
                 )),
                 "{error}"
             );
@@ -2674,14 +2674,14 @@ mod tests {
         let line = crate::pin::note(&dir, "0.1.0", rev, Some(spaced)).unwrap().text;
         let own = spaced.join("corten-cli-00000000").display().to_string();
         assert!(line.contains(&format!("--target-dir \"{own}\"\n")), "{line}");
-        // A release: the app names this command's version.
-        let release = "[[package]]\nname = \"corten\"\nversion = \"0.0.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        // A release: the app names this command's version, under the package name the lock gives it.
+        let release = "[[package]]\nname = \"corten-run\"\nversion = \"0.0.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
         std::fs::write(dir.join("Cargo.lock"), release).unwrap();
         let error = super::pinned(Some("add"), crate::pin::note(&dir, "0.1.0", rev, Some(shared))).unwrap_err();
         assert!(error.contains("cargo install corten-cli --version 0.0.9 --locked\n"), "{error}");
         assert!(
             error.ends_with(&format!(
-                "version = \"0.1.0\" if this command is that release, or git = corten's repository and rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+                "package = \"corten-run\" with version = \"0.1.0\" if this command is that release, or with git = corten's repository and rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten-run"
             )),
             "{error}"
         );

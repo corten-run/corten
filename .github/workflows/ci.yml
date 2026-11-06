@@ -31,7 +31,7 @@ jobs:
       - run: cargo run -q -p corten-cli -- fmt --check crates examples bench
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       - run: cargo test --workspace --all-features
-      - run: cargo test -p corten --no-default-features
+      - run: cargo test -p corten-run --no-default-features
       - name: corten new writes an app that passes corten check, and so does every kit component in it
         run: |
           cargo build -q -p corten-cli

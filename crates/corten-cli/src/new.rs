@@ -59,7 +59,8 @@ fn check_name(name: &str) -> Result<(), String> {
         "mut", "override", "priv", "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true", "try", "type",
         "typeof", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
     ];
-    const TAKEN: &[&str] = &["std", "core", "alloc", "test", "proc_macro", "corten", "serde", "tokio"];
+    // `corten_run`: the framework's package (`corten-run`), which an app of that name would depend on.
+    const TAKEN: &[&str] = &["std", "core", "alloc", "test", "proc_macro", "corten", "corten_run", "serde", "tokio"];
     let path = name.replace('-', "_");
     if KEYWORDS.contains(&path.as_str()) {
         return Err(format!("{name:?} is a Rust keyword, and the app's main.rs names it as a path (use --name)"));
@@ -74,22 +75,27 @@ fn check_name(name: &str) -> Result<(), String> {
 
 /// The app's `corten` dependency: the release this command was built with (the crates share one
 /// version), or a local checkout with `--corten-path`: the corten crate, or the root of the
-/// workspace it is in. Anything else is refused before a file is written.
+/// workspace it is in. Anything else is refused before a file is written. The key is `corten`,
+/// with the package named when it is `corten-run` (a checkout from before the rename is
+/// `corten`), so the app's code names the library `corten` either way.
 fn dependency(path: Option<&str>) -> Result<String, String> {
+    let own = crate::pin::PACKAGES[0];
     match path {
         Some(given) => {
             let path = std::fs::canonicalize(given).map_err(|e| format!("--corten-path {given}: {e}"))?;
-            let corten = corten_crate(&path).map_err(|e| format!("--corten-path {given}: {e}"))?;
-            Ok(format!("path = {:?}", corten.to_string_lossy().trim_start_matches(r"\\?\")))
+            let (corten, name) = corten_crate(&path).map_err(|e| format!("--corten-path {given}: {e}"))?;
+            let path = format!("path = {:?}", corten.to_string_lossy().trim_start_matches(r"\\?\"));
+            Ok(if name == "corten" { path } else { format!("package = {name:?}, {path}") })
         }
-        None => Ok(format!("version = {:?}", env!("CARGO_PKG_VERSION"))),
+        None => Ok(format!("package = {own:?}, version = {:?}", env!("CARGO_PKG_VERSION"))),
     }
 }
 
-/// The directory of the `corten` package that `dir` is, or whose workspace root `dir` is, read
-/// by `cargo metadata` as `corten check` reads an app's packages. Its directory is named
-/// `corten`, since `corten ui add` finds corten-ui beside it.
-fn corten_crate(dir: &Path) -> Result<PathBuf, String> {
+/// The directory and package name of the corten package (either name, [`crate::pin::PACKAGES`])
+/// that `dir` is, or whose workspace root `dir` is, read by `cargo metadata` as `corten check`
+/// reads an app's packages. Its directory is named `corten`, since `corten ui add` finds
+/// corten-ui beside it.
+fn corten_crate(dir: &Path) -> Result<(PathBuf, String), String> {
     let manifest = dir.join("Cargo.toml");
     if !manifest.is_file() {
         return Err("has no Cargo.toml".into());
@@ -107,12 +113,13 @@ fn corten_crate(dir: &Path) -> Result<PathBuf, String> {
     let canonical = |p: &str| std::fs::canonicalize(p).ok();
     let root = metadata.get("workspace_root").and_then(|v| v.as_str()).and_then(canonical);
     let found = metadata.get("packages").map_or(&[][..], |p| p.items()).iter().find_map(|package| {
-        (package.get("name")?.as_str()? == "corten")
-            .then(|| canonical(package.get("manifest_path")?.as_str()?)?.parent().map(Path::to_path_buf))?
+        let name = package.get("name")?.as_str()?;
+        let dir = canonical(package.get("manifest_path")?.as_str()?)?.parent().map(Path::to_path_buf);
+        crate::pin::is_framework(name).then_some((dir?, name.to_string()))
     });
     match found {
-        Some(corten) if corten == dir || root.as_deref() == Some(dir) => match corten.file_name() {
-            Some(name) if name == "corten" => Ok(corten),
+        Some((corten, name)) if corten == dir || root.as_deref() == Some(dir) => match corten.file_name() {
+            Some(directory) if directory == "corten" => Ok((corten, name)),
             _ => Err(format!(
                 "its corten crate is in {}, and corten ui add finds corten-ui beside a directory named corten",
                 corten.display()
@@ -143,14 +150,14 @@ mod tests {
         for name in ["shop", "demo-app", "a_b-c", "views", "main", "app2"] {
             assert_eq!(check_name(name), Ok(()), "{name}");
         }
-        for name in ["", "2app", "My-App", "fn", "self", "async", "test", "std", "core", "tokio", "serde", "corten"] {
+        for name in ["", "2app", "My-App", "fn", "self", "async", "test", "std", "core", "tokio", "serde", "corten", "corten-run"] {
             assert!(check_name(name).unwrap_err().ends_with("(use --name)"), "{name}");
         }
     }
 
     #[test]
     fn a_new_app_depends_on_the_release_the_command_came_from() {
-        assert_eq!(dependency(None).unwrap(), format!("version = \"{}\"", env!("CARGO_PKG_VERSION")));
+        assert_eq!(dependency(None).unwrap(), format!("package = \"corten-run\", version = \"{}\"", env!("CARGO_PKG_VERSION")));
     }
 
     #[test]
@@ -183,6 +190,15 @@ mod tests {
         let other = dependency(Some(&at("ws/crates/other"))).unwrap_err();
         assert!(other.contains("not the corten crate"), "another member is not its workspace's root: {other}");
         assert!(dependency(Some(&at("empty"))).unwrap_err().ends_with("has no Cargo.toml"));
+        // A checkout since the rename: the package is named beside the path.
+        write("renamed/Cargo.toml", "[workspace]\nmembers = [\"crates/corten\"]\nresolver = \"2\"\n");
+        write("renamed/crates/corten/Cargo.toml", "[package]\nname = \"corten-run\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[lib]\nname = \"corten\"\n");
+        write("renamed/crates/corten/src/lib.rs", "");
+        let renamed = std::fs::canonicalize(base.join("renamed/crates/corten")).unwrap();
+        assert_eq!(
+            dependency(Some(&at("renamed"))).unwrap(),
+            format!("package = \"corten-run\", path = {:?}", renamed.to_string_lossy().trim_start_matches(r"\\?\"))
+        );
         let fork = dependency(Some(&at("fork"))).unwrap_err();
         assert!(fork.contains("a directory named corten"), "{fork}");
         assert!(dependency(Some("no/such/dir")).unwrap_err().starts_with("--corten-path no/such/dir: "));

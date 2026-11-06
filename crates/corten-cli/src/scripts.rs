@@ -87,8 +87,8 @@ pub fn check(dir: &Path) -> Result<(), String> {
     }
 }
 
-/// The workspace members whose directory is `dir` or under it and that depend on `corten`, in
-/// cargo's order.
+/// The workspace members whose directory is `dir` or under it and that depend on corten (under
+/// either package name, [`crate::pin::PACKAGES`]), in cargo's order.
 fn apps(metadata: &Value, dir: &Path) -> Vec<App> {
     let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
     let dir = canonical(dir);
@@ -102,7 +102,7 @@ fn apps(metadata: &Value, dir: &Path) -> Vec<App> {
             p.get("dependencies")
                 .map_or(&[][..], Value::items)
                 .iter()
-                .any(|d| d.get("name").and_then(Value::as_str) == Some("corten"))
+                .any(|d| d.get("name").and_then(Value::as_str).is_some_and(crate::pin::is_framework))
         })
         .filter_map(|p| {
             let name = p.get("name")?.as_str()?.to_string();
@@ -150,14 +150,15 @@ fn cargo_metadata(root: &Path) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// The `js/` directory of the `corten` crate the app builds against: the package whose manifest
-/// is in a directory named `corten` (a checkout) or `corten-{version}` (crates.io) and has
-/// `js/corten.js`.
+/// The `js/` directory of the corten crate the app builds against: the package whose manifest
+/// is in a directory named `corten` (a checkout) or `corten-run-{version}` (crates.io;
+/// `corten-{version}` from before the rename) and has `js/corten.js`.
 fn corten_js_dir(metadata: &Value) -> Option<PathBuf> {
     metadata.get("packages")?.items().iter().find_map(|package| {
         let dir = Path::new(package.get("manifest_path")?.as_str()?).parent()?;
         let name = dir.file_name()?.to_str()?;
-        let named = name == "corten" || name.strip_prefix("corten-").is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()));
+        let release = |prefix: &str| name.strip_prefix(prefix).is_some_and(|v| v.starts_with(|c: char| c.is_ascii_digit()));
+        let named = name == "corten" || release("corten-run-") || release("corten-");
         let js = dir.join("js");
         (named && js.join("corten.js").is_file()).then_some(js)
     })
@@ -219,7 +220,7 @@ mod tests {
     #[test]
     fn finds_the_corten_crate_from_a_checkout_or_crates_io() {
         let base = std::env::temp_dir().join(format!("corten-check-scripts-{}", std::process::id()));
-        for dir in ["registry/corten-0.1.0/js", "registry/corten-macros-0.1.0/js", "checkout/crates/corten/js"] {
+        for dir in ["registry/corten-0.1.0/js", "registry/corten-run-0.2.0/js", "registry/corten-macros-0.1.0/js", "checkout/crates/corten/js"] {
             std::fs::create_dir_all(base.join(dir)).unwrap();
             std::fs::write(base.join(dir).join("corten.js"), "").unwrap();
         }
@@ -232,6 +233,9 @@ mod tests {
         let find = |dirs: &[&str]| corten_js_dir(&json::parse(&metadata(dirs)).unwrap());
         let found = find(&["registry/corten-macros-0.1.0", "registry/corten-0.1.0"]).unwrap();
         assert!(found.ends_with("corten-0.1.0/js"), "{found:?}");
+        // A release since the rename unpacks as corten-run-{version}.
+        let found = find(&["registry/corten-macros-0.1.0", "registry/corten-run-0.2.0"]).unwrap();
+        assert!(found.ends_with("corten-run-0.2.0/js"), "{found:?}");
         let found = find(&["checkout/crates/corten"]).unwrap();
         assert!(found.ends_with("crates/corten/js"), "{found:?}");
         assert_eq!(find(&["registry/corten-macros-0.1.0"]), None);
@@ -252,7 +256,8 @@ mod tests {
         let metadata = format!(
             r#"{{"packages":[{},{},{},{}],"workspace_members":["admin-id","market-id","tools-id"],"target_directory":"/t"}}"#,
             package("admin", "ws/admin", "corten serde"),
-            package("market", "ws/market", "corten"),
+            // An app on a release since the rename names the package corten-run.
+            package("market", "ws/market", "corten-run"),
             package("tools", "ws/tools", "serde"),
             package("corten", "registry/corten-0.1.0", "corten-macros"),
         );

@@ -6,10 +6,10 @@ publish = false
 description = "corten-ui's components on one screen, a seller's draft listing for a card, styled by a small design system, with a browser smoke test."
 
 [dependencies]
-corten = { path = "../../crates/corten", features = ["zones"] }
+corten = { package = "corten-run", path = "../../crates/corten", features = ["zones"] }
 corten-ui = { path = "../../crates/corten-ui" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-corten = { path = "../../crates/corten", features = ["types"] }
+corten = { package = "corten-run", path = "../../crates/corten", features = ["types"] }
