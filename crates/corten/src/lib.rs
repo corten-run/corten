@@ -895,6 +895,31 @@ impl<E: std::error::Error + Send + Sync + 'static> From<E> for Error {
     }
 }
 
+/// A handler refuses the request as an extractor does: `Err(Refused::forbidden())?` (or
+/// `.into()`). It is answered as a [`Caller`]'s refusal is: the error page for a browser, at the
+/// refusal's status (a sign-in is a redirect, a 429 carries `Retry-After`), and the page treats it
+/// as the request's fault, so it draws the layout's reads ([`LayoutRead`]) as for a 404. A plain
+/// `Error::status(StatusCode::FORBIDDEN)` stays a failure that may be the app's own (a service
+/// that is down answered with a 4xx), which starts none.
+///
+/// ```
+/// use corten::{http::StatusCode, prelude::*};
+///
+/// fn owned(owner: u64, user: u64) -> corten::Result<()> {
+///     if owner != user {
+///         Err(Refused::forbidden())?;
+///     }
+///     Ok(())
+/// }
+/// # use corten::middleware::IntoResponse;
+/// assert_eq!(owned(1, 2).unwrap_err().into_response().status(), StatusCode::FORBIDDEN);
+/// ```
+impl From<Refused> for Error {
+    fn from(refused: Refused) -> Self {
+        Error { status: refused.status(), source: Box::new(caller::AsError(refused)) }
+    }
+}
+
 /// Marks a response as a failure, so the app renders its error page. Carries the message, which
 /// only an app in dev mode shows.
 #[derive(Clone)]
@@ -902,6 +927,21 @@ pub(crate) struct Failed(pub Arc<str>);
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        // A handler's refusal (`From<Refused>`): answered as an extractor's is.
+        let source = match self.source.downcast::<caller::AsError>() {
+            Ok(refused) => {
+                tracing::debug!(status = self.status.as_u16(), "corten: request refused by its handler");
+                return refused.0.into_response();
+            }
+            Err(source) => source,
+        };
+        let this = Error { status: self.status, source };
+        this.answer()
+    }
+}
+
+impl Error {
+    fn answer(self) -> Response {
         if self.status.is_server_error() {
             tracing::error!(status = self.status.as_u16(), error = %self.source, "corten: request failed");
         } else {

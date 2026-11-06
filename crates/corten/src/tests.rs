@@ -9884,67 +9884,87 @@ mod layout_reads {
     }
 
     fn shop(count: CartCount, page_delay: Duration) -> Router {
-        let routes = Router::new()
-            .route(
-                "/",
-                get(move |req: Req| async move {
-                    tokio::time::sleep(page_delay).await; // the page's own reads
-                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } })
-                })
-                .post(|req: Req| async move { req.redirect::<ForOne>(&Done) }),
-            )
-            .route(
-                "/form",
-                get(|req: Req| async move {
-                    let short = req.path().len() < 3;
-                    let draw = |why: &str| refused(&req, why);
-                    if short {
-                        return refused(&req, "too short");
-                    }
-                    if req.mode.swaps() {
-                        return refused(&req, "again");
-                    }
-                    draw("closure")
-                }),
-            )
-            .route(
-                "/cart",
-                get(|req: Req| async move {
-                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })
-                        .map(|page| page.give::<CartCount>(7))
-                }),
-            )
-            .route(
-                "/fails",
-                get(|_req: Req| async move {
-                    tokio::time::sleep(Duration::from_millis(10)).await; // the page's own reads, which fail
-                    Err::<HtmlResponse, _>(Error::new("the store is down"))
-                }),
-            )
-            .route("/refused", get(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
-            .route("/slow-down", get(|_req: Req| async move { crate::Refused::too_many(Duration::from_secs(1)).into_response() }))
-            .route("/conflict", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::status(StatusCode::CONFLICT)) }))
-            .route("/down", get(|_req: Req| async move { (StatusCode::SERVICE_UNAVAILABLE, "down for maintenance") }))
-            .route("/gone", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::not_found()) }))
-            .route("/refuse-write", axum::routing::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
-            .route(
-                "/who",
-                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
-            )
-            .route(
-                "/unread",
-                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<Unread>() }) }),
-            )
-            .route(
-                "/mine",
-                get(|req: Req, Caller(Viewer(name)): Caller<Viewer>| async move {
-                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{name}</p> } })
-                }),
-            )
-            .route(
-                "/inside",
-                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<CartCount>() }) }),
-            );
+        let routes =
+            Router::new()
+                .route(
+                    "/",
+                    get(move |req: Req| async move {
+                        tokio::time::sleep(page_delay).await; // the page's own reads
+                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } })
+                    })
+                    .post(|req: Req| async move { req.redirect::<ForOne>(&Done) }),
+                )
+                .route(
+                    "/form",
+                    get(|req: Req| async move {
+                        let short = req.path().len() < 3;
+                        let draw = |why: &str| refused(&req, why);
+                        if short {
+                            return refused(&req, "too short");
+                        }
+                        if req.mode.swaps() {
+                            return refused(&req, "again");
+                        }
+                        draw("closure")
+                    }),
+                )
+                .route(
+                    "/cart",
+                    get(|req: Req| async move {
+                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })
+                            .map(|page| page.give::<CartCount>(7))
+                    }),
+                )
+                .route(
+                    "/fails",
+                    get(|_req: Req| async move {
+                        tokio::time::sleep(Duration::from_millis(10)).await; // the page's own reads, which fail
+                        Err::<HtmlResponse, _>(Error::new("the store is down"))
+                    }),
+                )
+                .route("/refused", get(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
+                .route(
+                    "/slow-down",
+                    get(|_req: Req| async move { crate::Refused::too_many(Duration::from_secs(1)).into_response() }),
+                )
+                .route("/conflict", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::status(StatusCode::CONFLICT)) }))
+                .route("/down", get(|_req: Req| async move { (StatusCode::SERVICE_UNAVAILABLE, "down for maintenance") }))
+                .route("/gone", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::not_found()) }))
+                .route(
+                    "/refuse-write",
+                    axum::routing::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }),
+                )
+                .route(
+                    "/not-yours",
+                    get(|_req: Req| async move {
+                        tokio::time::sleep(Duration::from_millis(5)).await; // the handler's own check
+                        Err::<HtmlResponse, Error>(crate::Refused::forbidden().into())
+                    }),
+                )
+                .route(
+                    "/handler-slows",
+                    get(|_req: Req| async move {
+                        Err::<HtmlResponse, Error>(crate::Refused::too_many(Duration::from_secs(2)).into())
+                    }),
+                )
+                .route(
+                    "/who",
+                    get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
+                )
+                .route(
+                    "/unread",
+                    get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<Unread>() }) }),
+                )
+                .route(
+                    "/mine",
+                    get(|req: Req, Caller(Viewer(name)): Caller<Viewer>| async move {
+                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>{name}</p> } })
+                    }),
+                )
+                .route(
+                    "/inside",
+                    get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<CartCount>() }) }),
+                );
         let typed = shop_url::router();
         App::new(Routes(typed.0.merge(routes), typed.1))
             .error_page(
@@ -10089,6 +10109,28 @@ mod layout_reads {
         assert!(body.contains("<header>Cart <b>guest</b></header>") && body.contains("<p>404</p>"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "started for the error page");
         assert_eq!(count.finished.load(Ordering::SeqCst), 0);
+    }
+
+    /// A handler's own refusal (`Err(Refused::forbidden())?`) is the request's fault, as an
+    /// extractor's is: its error page waits for the reads and draws them (#890). A 429 from it
+    /// keeps its `Retry-After` and, as an extractor's 429, waits for none.
+    #[tokio::test]
+    async fn a_handlers_refusal_is_answered_as_an_extractors() {
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/not-yours", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started once, by the route");
+
+        let at = std::time::Instant::now();
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let res = shop(slow, Duration::ZERO)
+            .oneshot(Request::get("/handler-slows").header("accept", "text/html").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(res.headers().get("retry-after").and_then(|v| v.to_str().ok()), Some("2"));
+        assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
     }
 
     #[tokio::test]

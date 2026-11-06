@@ -2181,6 +2181,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten::script::ElementId`, a new script parameter type (an element's `#[derive(Id)]` id,
     `ElementId[]` in JSDoc), so a string where an id belongs does not compile
     ([#930 rows::sort's order is lost when a form outside the table's part posts the page's old order (the port's Refresh supply)](https://github.com/corten-run/corten/issues/930)).
+252. A handler refuses as an extractor does: `Err(Refused::forbidden())?` (`From<Refused> for
+    corten::Error`). It is answered as a `Caller`'s refusal: the error page at the refusal's status, a
+    sign-in's redirect, a 429's `Retry-After`, and, since the request is at fault, the layout's reads
+    drawn on its error page as for a 404, where `Error::status(StatusCode::FORBIDDEN)` starts none (it
+    may stand for a service that is down). The cost is one type check on an error's way out, and
+    none on a page's MEASURE_890
+    ([#890 A handler cannot refuse a request the way an extractor does, so its 403 page starts no layout read](https://github.com/corten-run/corten/issues/890)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

@@ -207,7 +207,32 @@ impl Refused {
     pub fn unavailable(error: impl std::fmt::Display) -> Self {
         Refused(Why::Unavailable(error.to_string().into()))
     }
+
+    /// The status it is answered with.
+    pub(crate) fn status(&self) -> StatusCode {
+        match &self.0 {
+            Why::SignIn(..) => StatusCode::UNAUTHORIZED,
+            Why::Refusal { status, .. } => *status,
+            Why::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+        }
+    }
 }
+
+/// A [`Refused`] a handler returned as its error (`Err(Refused::forbidden())?`), carried in a
+/// [`crate::Error`] and answered as the refusal it is.
+#[derive(Debug)]
+pub(crate) struct AsError(pub(crate) Refused);
+
+impl std::fmt::Display for AsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 .0 {
+            Why::Unavailable(message) => write!(f, "who is asking cannot be known: {message}"),
+            _ => write!(f, "refused: {}", self.0.status()),
+        }
+    }
+}
+
+impl std::error::Error for AsError {}
 
 /// The lookup's outcome for `T`, for the next reader in the request.
 #[derive(Clone)]

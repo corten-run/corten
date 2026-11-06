@@ -758,7 +758,7 @@ before it:
    includes the reads' wait ([design](../design.md#choices), Choice 20).
 7. A failure becomes its route's answer: JSON for a JSON route or a data client, the app's error
    page for a browser. For a failure the request is at fault for (an unknown URL, a wrong method,
-   a refusal other than a 429, a request that does not parse), the error page starts the layout
+   a refusal other than a 429, a handler's `Refused` included, a request that does not parse), the error page starts the layout
    reads not started yet and waits for them, here, outside 5: a middleware sees neither the
    error page nor that wait.
 8. Security headers, `Cache-Control` (private when anything read a caller), then the weak `ETag` on
@@ -1600,7 +1600,11 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    is how the lookup says the count is reached, checked before the credentials so a locked-out
    client learns nothing about them.
 8. A check that depends on the record (only the author may edit a draft) stays in the handler,
-   which loads the record; `Error::status(StatusCode::FORBIDDEN)` gives the same answers there.
+   which loads the record, and refuses as a lookup does: `Err(Refused::forbidden())?`. That is
+   answered as an extractor's refusal (the error page at 403, the layout's reads drawn as for a
+   404, a 429's `Retry-After` kept), where `Error::status(StatusCode::FORBIDDEN)` is a failure that
+   may be the app's own (a service that is down, answered with a 4xx), so its error page starts no
+   layout read.
 9. Test it the way a user meets it: a router test that sends each route signed out and signed
    in without the permission.
 

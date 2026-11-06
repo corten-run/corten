@@ -196,8 +196,8 @@ draws nothing there, and a `Public` page route never starts the read. An answer 
 (a redirect) drops a read still running, which stops it; one already in stays for an error page the
 app's middleware makes of the answer. A read that fails or passes the request's deadline draws
 nothing in its place and is logged; the page is still sent. The error page for a failure the request
-is at fault for (an unknown URL, a wrong method, a refusal other than a 429, a form that does not
-read) starts the reads not started yet and waits for them as a page does, so a 404 shows the
+is at fault for (an unknown URL, a wrong method, a refusal other than a 429, an extractor's or a
+handler's `Err(Refused::forbidden())?`, a form that does not read) starts the reads not started yet and waits for them as a page does, so a 404 shows the
 count every other page shows. A read it starts sees the head its extractors see (the URL, the
 cookies, `Authorization`, the language and the request's caller), not what the app's middleware
 added; one that has nothing to read without a session should return `None` from `start`, which
