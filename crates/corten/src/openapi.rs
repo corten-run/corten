@@ -342,7 +342,7 @@ pub trait Argument {
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no description in an OpenAPI document",
     label = "the answer of a handler in an API with openapi = ..",
-    note = "an API with an OpenAPI document answers JsonResult<T>, Json<T>, JsonResponse, StatusCode, text, a Relay, a Media, an event stream or a feed, a protocol switch (Switch, SwitchOr<..>), or Public<..> or NoStore<..> of one; an answer type of the app's own implements corten::openapi::Answers, and for another crate's type, a newtype around it does"
+    note = "an API with an OpenAPI document answers JsonResult<T>, Json<T>, JsonResponse, StatusCode, text, a Relay, a Media, a feed, a protocol switch (Switch, SwitchOr<..>), or Public<..> or NoStore<..> of one; an answer type of the app's own implements corten::openapi::Answers, and for another crate's type, a newtype around it does"
 )]
 pub trait Answers {
     /// Adds the answer's responses to the operation.
@@ -712,12 +712,6 @@ impl Answers for crate::answer::Media {
     }
 }
 
-impl Answers for crate::EventStreamResponse {
-    fn describe(operation: &mut Operation<'_>) {
-        operation.response("200", "Server-sent events", Some(("text/event-stream", json!({ "type": "string" }))));
-    }
-}
-
 impl Answers for crate::upgrade::Switch {
     fn describe(operation: &mut Operation<'_>) {
         operation.response("101", "Switching Protocols: the connection is the new protocol's", None);
@@ -734,7 +728,7 @@ impl<A: Answers> Answers for crate::upgrade::SwitchOr<A> {
 #[cfg(feature = "feed")]
 impl<T> Answers for corten_feed::FeedResponse<T> {
     fn describe(operation: &mut Operation<'_>) {
-        <crate::EventStreamResponse as Answers>::describe(operation)
+        operation.response("200", "Server-sent events", Some(("text/event-stream", json!({ "type": "string" }))));
     }
 }
 
@@ -1142,7 +1136,8 @@ mod tests {
         unimplemented!("only described")
     }
 
-    async fn events(_: crate::LiveSince) -> crate::EventStreamResponse {
+    /// An upstream's event stream passed on, resuming where the client left off.
+    async fn events(_: crate::LiveSince) -> crate::answer::Relay {
         unimplemented!("only described")
     }
 
@@ -1317,6 +1312,28 @@ mod tests {
         assert_eq!(
             security::<(Option<crate::ClientIp>, Option<crate::Caller<Partner>>)>(),
             [json!({ "x-api-key": [] }), json!({})]
+        );
+    }
+
+    /// A feed is described as server-sent events, which no route in the tested document answers
+    /// (#964 review).
+    #[cfg(feature = "feed")]
+    #[test]
+    fn a_feed_is_described_as_server_sent_events() {
+        let mut parameters = crate::route::__private::Parameters::default();
+        let mut schemes = serde_json::Map::new();
+        let mut operation = super::Operation {
+            parameters: &mut parameters,
+            schemes: &mut schemes,
+            security: Vec::new(),
+            body: None,
+            responses: serde_json::Map::new(),
+            own_failure: None,
+        };
+        <corten_feed::FeedResponse<()> as super::Answers>::describe(&mut operation);
+        assert_eq!(
+            Value::Object(operation.responses),
+            json!({ "200": { "description": "Server-sent events", "content": { "text/event-stream": { "schema": { "type": "string" } } } } })
         );
     }
 

@@ -728,7 +728,7 @@ with what it calls).
 ### What a browser's request costs Corten (callgrind, 2026-11-06)
 
 The rounds' page requests send `Accept-Encoding: identity` and no `If-None-Match`, the one
-request Corten neither tags nor compresses ([design Limit 22](../../docs/design.md#limit-etag): a client that accepts no compression
+request Corten neither tags nor compresses ([design Limit 21](../../docs/design.md#limit-etag): a client that accepts no compression
 and names no tag is not a browser keeping pages). Every browser names a compression, so its page
 has its `ETag` hashed and its body compressed as well. Measured on this branch's base, main
 `a17f1775`, with `route_loop`'s `LOOP_ENCODING` and `LOOP_TAG` added: card-market's release
@@ -748,7 +748,7 @@ for the hash alone); requests a second under load were not measured.
 | `gzip, deflate, br` | renders, hashes, brotli 2 | 1,336,000 (1,335,086-1,336,899) | 283-301 µs |
 
 So hashing the tag adds 27,700 instructions (32% of the in-process request, close to the third of
-the render [Limit 22](../../docs/design.md#limit-etag) gives), zstd 1 a further 230,000 (the page averages 8.8 KB, about 2.2 KB once
+the render [Limit 21](../../docs/design.md#limit-etag) gives), zstd 1 a further 230,000 (the page averages 8.8 KB, about 2.2 KB once
 compressed), and brotli 2, the level until the change below, a further 1.22 million in place of
 zstd's. Under zstd, 98% of the compression is the zstd library's own work (of `ZSTD_compress2`:
 `ZSTD_compressBlock_fast` 44%, Huffman coding of the literals 21%, the sequences 20%). In process,
@@ -1212,7 +1212,7 @@ automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line
     round after r15 it sends five, as the others do.
 
 17. The rounds' page requests send `Accept-Encoding: identity` and no `If-None-Match`, so no app
-    compresses its page and Corten does not hash an `ETag` for it ([design Limit 22](../../docs/design.md#limit-etag)), but SvelteKit
+    compresses its page and Corten does not hash an `ETag` for it ([design Limit 21](../../docs/design.md#limit-etag)), but SvelteKit
     and Rails tag every page anyway (round conform2, on a request that named no encoding), a hash
     Corten skips: it favors Corten's rows
     by whatever that hash costs them, not enough to change their places (773 and 417 pages a
