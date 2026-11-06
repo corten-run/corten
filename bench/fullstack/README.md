@@ -736,8 +736,8 @@ larger page the increments, and these ratios, would be larger.
 
 Since
 [#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985),
-a page compressed per request with brotli uses level 1, measured the same way (two pairs of 1 s
-and 30 s loops each; bytes from `render_cost`, the average over its 500 items):
+a page compressed per request with brotli uses level 1, measured the same way at `7b882204` (two
+pairs of 1 s and 30 s loops each; bytes from `render_cost`, the average over its 500 items):
 
 | brotli level | Instructions a request | Bytes sent |
 |---|---|---|
@@ -746,9 +746,13 @@ and 30 s loops each; bytes from `render_cost`, the average over its 500 items):
 | 0, window sized to the body | 859,102 (857,999-860,205) | 2,492 |
 
 Level 1 takes 40% fewer instructions than 2 for 10% more bytes, still fewer than gzip 1's 2,506
-and within 8% of zstd 1's 2,178; level 0 costs more than 1 and sends more. The 216 bytes level 1
-adds fit in the same first round trip, so a client sees no extra wait, and the server saves about
-529,000 instructions a page. Most of what level 1 still costs is the brotli crate's own encoder
+and about 8% more than zstd 1's 2,178; level 0 costs more than 1 and sends more. The 216 bytes level 1
+adds fit in the same first congestion window, so they cost a client no round trip, only the time
+to send them, and the server saves about 529,000 instructions a page. Both sides are estimated:
+216 bytes take about 173 µs at 10 Mbit/s and 17 µs at 100 Mbit/s, and 529,000 instructions about
+100 µs of the server's CPU (at the rate this table's times give). So below about 17 Mbit/s an
+unloaded request may reach the client slightly later at level 1; on a faster link, or on a busy
+server, where the CPU a request takes is time other requests wait, level 1 is ahead. Most of what level 1 still costs is the brotli crate's own encoder
 and the tables it allocates and zeroes for each response. Those cannot be kept between responses
 as zstd's context is: the crate's encoder ends a stream finished and has no reset, so each
 response needs a new one. A 4 MiB window was not the cost either: sizing the window to the body

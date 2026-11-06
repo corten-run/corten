@@ -3500,10 +3500,11 @@ Corten is pre-1.0, so any minor version may change the API.
 152. A page compressed per request for a client that accepts brotli but not zstd uses brotli 1, not
     2: on card-market's item page (callgrind, in process) the request takes 806,872 user
     instructions instead of 1,336,000, for 2,358 bytes instead of 2,142 (gzip 1 sends 2,506, zstd
-    1 2,178). brotli 0 costs more than 1 and sends more, and a window sized to the body changed
-    nothing. A held `json::Raw` compressed on every read now costs about 1.2 ms on an 80 KB
-    document instead of 2.1 ms (brotli 1 takes 55% of brotli 2's time on a 71 KB catalogue
-    document, release build)
+    1 2,178). brotli 0 (with its window sized to the body) costs more than 1 and sends more, and a
+    window sized to the body changed nothing at level 1. A held `json::Raw` compressed on every
+    read for a brotli client takes 455 µs on a 79 KB document instead of 754 µs, for 7,284 bytes
+    instead of 6,939 (release build on Windows, median of nine runs; zstd 1 takes 105 µs). The
+    guide's other numbers for that document (brotli 9 once, zstd 1 per read) are remeasured on it
     ([#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985)).
 
 ### Fixed
