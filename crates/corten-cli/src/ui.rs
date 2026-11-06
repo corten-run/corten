@@ -2968,6 +2968,10 @@ mod tests {
         let release = "[dependencies]\ncorten = { version = \"0.1.0\", features = [\"compress\"] }\n\n[dev-dependencies]\ntower = \"0.5\"\n";
         let text = depend_on_ui(release).unwrap().unwrap();
         assert!(text.contains(&format!("corten-ui = \"{}\"\n\n[dev-dependencies]", env!("CARGO_PKG_VERSION"))), "{text}");
+        // The line `corten new` writes, which names the package: corten-ui's own name is its package.
+        let named = "[dependencies]\ncorten = { package = \"corten-run\", version = \"0.2.0\", features = [\"compress\"] }\n";
+        let text = depend_on_ui(named).unwrap().unwrap();
+        assert!(text.ends_with(&format!("}}\ncorten-ui = \"{}\"\n", env!("CARGO_PKG_VERSION"))), "{text}");
         assert!(depend_on_ui("[dependencies]\nserde = \"1\"\n").is_err());
         let git = "[dependencies]\ncorten = { git = \"https://github.com/corten-run/corten\", rev = \"abc123\", features = [\"compress\"] }\n";
         let text = depend_on_ui(git).unwrap().unwrap();
