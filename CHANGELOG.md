@@ -5533,7 +5533,7 @@ Corten is pre-1.0, so any minor version may change the API.
     a raw TCP or UDP listener in an `App::task` that ends with its signal. Never a second server
     or a router merged after `app.router()`, which would skip the host check, the middleware and
     the shutdown grace. The skill's pages-and-routes reference says the same
-    ([#955 No guide says where gRPC, GraphQL, binary or XML bodies, and raw sockets go in an app](https://github.com/corten-run/corten/issues/955)).
+    ([#955 No guide says where gRPC, GraphQL, binary or XML bodies, and raw sockets go in an app, so each app works out its own way around the framework](https://github.com/corten-run/corten/issues/955)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
