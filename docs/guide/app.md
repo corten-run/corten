@@ -1610,10 +1610,12 @@ requests and tasks.
 2. Webhooks a vendor sends: a `POST` route under `App::api`, as above, in a routes module
    without `caller =` ([Areas](#areas)). The signature covers the bytes as sent, so the handler
    reads them with `bytes_up_to`, checks the signature by the vendor's scheme, and only then
-   parses them (`serde_json::from_slice`). A server's request usually has no `Origin` or
-   `Sec-Fetch-Site`, so Corten's check of writes from other sites lets it through; a vendor that
-   sends `Origin` is refused until the API allows it (`Api::allow_origin`). The signature is the
-   check, and an `Identify` cannot make it, since it does not read the body. Vendors retry and
+   parses them (`serde_json::from_slice`) or compares them, in constant time (the `hmac` crate's
+   `verify_slice`). A server's request usually has no `Origin` or `Sec-Fetch-Site`, so Corten's
+   check of writes from other sites lets it through. A vendor that sends `Origin` is refused until
+   an API allows it (`Api::allow_origin`), which opens every route of that API to the vendor's
+   pages: give the webhook an API of its own (`/api/hooks`, nested in the app's) and allow the
+   origin there alone. The signature is the check, and an `Identify` cannot make it, since it does not read the body. Vendors retry and
    deliver an event more than once: the handler records the event's id and answers a repeat as
    done, and answers quickly, leaving slow work to a task.
 3. GraphQL, for an app that must offer it: a library such as `async-graphql` on a `POST` route
@@ -1629,9 +1631,12 @@ requests and tasks.
    Its port is bound before `serve`, as the example below binds its own, and served with tonic's
    `serve_with_incoming_shutdown` until the task's signal aborts.
 5. A raw TCP or UDP protocol: a socket bound before `serve`, so a port that is taken stops the app
-   at startup rather than leaving it ready without it, and handed to an `App::task`. A TCP task
-   accepts until the signal aborts, then lets the connections it accepted finish within the grace
-   (a task still running at its end is ended, [Tasks](#tasks)); a UDP task reads datagrams until
+   at startup rather than leaving it ready without it, and handed to an `App::task`. It is bound
+   where `main` builds the app, not in the function tests build it with, which then starts no task
+   and binds no port. A TCP task accepts until the signal aborts, then stops listening and lets the
+   connections it accepted finish within the grace (a task still running at its end is ended,
+   [Tasks](#tasks)); a connection that lasts (a session of many requests) takes a clone of the
+   signal and stops at the next request boundary once it aborts. A UDP task reads datagrams until
    the signal aborts.
 
 ```rust
@@ -1650,6 +1655,8 @@ use tokio::{io::AsyncWriteExt, net::TcpListener, task::JoinSet};
 const MAX_BATCH_BYTES: usize = 4 * 1024 * 1024;
 /// The largest event a vendor sends.
 const MAX_EVENT_BYTES: usize = 64 * 1024;
+/// The largest GraphQL query the route takes.
+const MAX_QUERY_BYTES: usize = 64 * 1024;
 
 #[corten::routes(api = Ingest)]
 mod api {
@@ -1682,7 +1689,7 @@ async fn vendor_event(request: Request) -> corten::Result<StatusCode> {
     let body = bytes_up_to(request.into_body(), MAX_EVENT_BYTES)
         .await?
         .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
-    // The vendor's scheme, an HMAC of the body with the app's secret.
+    // The vendor's scheme, an HMAC of the body with the app's secret, verified in constant time.
     if signature.as_ref().map(|value| value.as_bytes()) != Some(&b"valid"[..]) {
         return Err(Error::status(StatusCode::UNAUTHORIZED));
     }
@@ -1694,7 +1701,7 @@ async fn vendor_event(request: Request) -> corten::Result<StatusCode> {
 
 /// A GraphQL query in, the library's JSON out.
 async fn graphql(request: Request) -> corten::Result<Json<Raw>> {
-    let _query = bytes_up_to(request.into_body(), MAX_EVENT_BYTES)
+    let _query = bytes_up_to(request.into_body(), MAX_QUERY_BYTES)
         .await?
         .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
     // The library executes the query here and writes its response.
@@ -1726,17 +1733,24 @@ async fn hello(listener: std::net::TcpListener, signal: Signal) {
             },
         }
     }
+    // New connections are refused from here; those accepted finish.
+    drop(listener);
     while connections.join_next().await.is_some() {}
 }
 
-/// Bound here, before `serve`: a port that is taken stops the app as it starts.
-fn app(pages: Routes) -> std::io::Result<App> {
-    // The protocol's port in an app (7070); any free one here.
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-    listener.set_nonblocking(true)?;
-    Ok(App::new(pages).api(api::api).task("hello", move |signal| hello(listener, signal)))
+/// The app, as the tests build it: no port, no task.
+fn app(pages: Routes) -> App {
+    App::new(pages).api(api::api)
 }
-# let _ = app(Routes::new()).unwrap().router();
+
+/// The app `main` serves, with the protocol on its port, bound here, before `serve`: a port
+/// that is taken stops the app as it starts.
+fn served(pages: Routes) -> std::io::Result<App> {
+    let listener = std::net::TcpListener::bind(("0.0.0.0", 7070))?;
+    listener.set_nonblocking(true)?;
+    Ok(app(pages).task("hello", move |signal| hello(listener, signal)))
+}
+# let _ = app(Routes::new()).router();
 ```
 
 ## Who is asking
