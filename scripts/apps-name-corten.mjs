@@ -41,7 +41,8 @@ for (const file of files) {
     if (!line.includes("axum::")) return;
     if (allowed.get(file)?.includes(line.trim())) return;
     if (testFile(file) && /corten::axum::/.test(line) && standIn(line)) return;
-    problems.push(`${file}:${i + 1}: names axum (${line.trim()}); use corten::extract (bytes_up_to for a whole body), corten::middleware, corten::answer::Body or corten::Bytes`);
+    const stand = testFile(file) ? " (a test's stand-in server writes corten::axum::Router::new() and corten::axum::serve as paths)" : "";
+    problems.push(`${file}:${i + 1}: names axum (${line.trim()}); use corten::extract (bytes_up_to for a whole body), corten::middleware, corten::answer::Body or corten::Bytes${stand}`);
   });
 }
 

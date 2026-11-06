@@ -2201,12 +2201,12 @@ Corten is pre-1.0, so any minor version may change the API.
     unchanged, and a release build says nothing
     ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801)).
 256. `corten::extract::bytes_up_to(body, max)`: a whole request body, or `None` when it is over
-    `max`, for a handler that takes the
-    `Request` and answers a body over a limit of its own itself, as a route that keeps another
-    server's error shape must. The rest of a body over it is read past (up to 64 MiB), as an
-    upload's is, so a client still sending reads the answer. Apps named axum's `to_bytes` for it,
-    whose one error is both a body over the limit and one that broke. Design Choice 21 and the app guide also say a test's stand-in for another
-    service stays axum's `Router` and `serve` through `corten::axum`
+    `max`, for a handler that takes the `Request` and answers a body over a limit of its own
+    itself, as a route that keeps another server's error shape must. The rest of a body over it is
+    read past (up to 64 MiB), as an upload's is, so a client still sending reads the answer. Apps
+    named axum's `to_bytes` for it, whose one error is both a body over the limit and one that
+    broke. Design Choice 21 and the app guide also say a test's stand-in for another service
+    stays axum's `Router` and `serve` through `corten::axum`
     ([#949 A handler that reads the whole body up to its own limit still names axum: corten::axum::body::to_bytes has no Corten name](https://github.com/corten-run/corten/issues/949),
     [#950 A test's stand-in for an upstream API has no Corten name: apps still write corten::axum::Router and corten::axum::serve for it](https://github.com/corten-run/corten/issues/950)).
 

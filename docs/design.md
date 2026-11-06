@@ -332,8 +332,9 @@ framework's shape, and what it does not do yet.
    purpose: a route's path and query are read as its `Params`, and a second reader would be a
    second way. A handler that takes the whole `Request` reads its body up to a limit of its own
    with `corten::extract::bytes_up_to`, as an upload's file is read with `File::bytes_up_to`, not
-   axum's `to_bytes`, whose one error is both a body over the limit and one that broke, and which
-   leaves the rest of a body over it unread, so a client still sending can miss the answer. `corten::axum` stays
+   axum's `to_bytes`, whose one error is both a body over the limit and one that broke, and
+   which leaves the rest of a body over it unread, so a client still sending can miss the
+   answer. `corten::axum` stays
    for a stand-in server in a test (its `Router` and `serve`): the stand-in is another server
    the app calls, not the app, so a Corten name for it would be a second server API for tests
    alone, and `serve_on` would give the stand-in the app's defaults (its security headers, its

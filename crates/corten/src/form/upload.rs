@@ -29,7 +29,7 @@ pub(crate) const READ_PAST: usize = 64 * 1024 * 1024;
 const JOIN_ROOM: usize = 64 * 1024;
 
 /// A piece smaller than this is joined in that room.
-const SMALL_PIECE: usize = 1024;
+pub(crate) const SMALL_PIECE: usize = 1024;
 /// A file that came in one piece at least this long is kept as it came; a shorter one is copied
 /// out of the buffer it was cut from (hyper's read buffer is up to about 408 KiB).
 pub(crate) const KEPT_AS_IT_CAME: usize = 64 << 10;
@@ -384,7 +384,7 @@ impl File<'_> {
 
 /// A file's pieces, and the run of small ones after them, in one buffer of its size.
 #[cold]
-fn join(pieces: &[Bytes], small: &[u8], len: usize) -> Bytes {
+pub(crate) fn join(pieces: &[Bytes], small: &[u8], len: usize) -> Bytes {
     let mut whole = Vec::with_capacity(len);
     for piece in pieces {
         whole.extend_from_slice(piece);

@@ -85,12 +85,12 @@
 use axum::body::HttpBody;
 pub use axum::extract::State;
 pub use axum_core::extract::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures_util::StreamExt;
 
 use crate::{
     answer::Body,
-    form::upload::{KEPT_AS_IT_CAME, READ_PAST},
+    form::upload::{join, KEPT_AS_IT_CAME, READ_PAST, SMALL_PIECE},
     http::StatusCode,
     Error,
 };
@@ -141,16 +141,18 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
     if body.size_hint().lower() > past as u64 {
         return Ok(None);
     }
-    // The pieces are kept as they came and joined once at the end, so a body that came in one
-    // piece (most) is not copied.
+    // As an upload's file is read: a piece of 1 KiB or more is kept as it came, a run of smaller
+    // ones is copied into one buffer as they arrive (so a body sent a few bytes at a time holds
+    // about its size, not a handle for each), and the pieces are joined once, at the end.
     let mut pieces: Vec<Bytes> = Vec::new();
+    let mut small: Vec<u8> = Vec::new();
     let mut len: usize = 0;
     let mut stream = body.into_data_stream();
     while let Some(piece) = stream.next().await {
         let piece = piece.map_err(|e| Error::new(e).with_status(StatusCode::BAD_REQUEST))?;
         len = len.saturating_add(piece.len());
         if len > max {
-            drop(pieces);
+            drop((pieces, small));
             // Read past, so the client reads the answer; a read that breaks here leaves the same.
             while len <= past {
                 match stream.next().await {
@@ -160,19 +162,22 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
             }
             return Ok(None);
         }
-        pieces.push(piece);
+        if piece.len() >= SMALL_PIECE {
+            if !small.is_empty() {
+                pieces.push(Bytes::from(std::mem::take(&mut small)));
+            }
+            pieces.push(piece);
+        } else {
+            small.extend_from_slice(&piece);
+        }
     }
-    Ok(Some(match pieces.len() {
-        0 => Bytes::new(),
+    Ok(Some(match (pieces.len(), small.is_empty()) {
+        (0, _) => Bytes::from(small),
         // A large body that came in one piece is kept as it came. A small one is copied: the piece
         // can be a slice of a read buffer hundreds of KiB long, which keeping it would hold whole.
-        1 if pieces[0].len() >= KEPT_AS_IT_CAME => pieces.swap_remove(0),
-        1 => Bytes::copy_from_slice(&pieces[0]),
-        _ => {
-            let mut whole = BytesMut::with_capacity(len);
-            pieces.iter().for_each(|piece| whole.extend_from_slice(piece));
-            whole.freeze()
-        }
+        (1, true) if pieces[0].len() >= KEPT_AS_IT_CAME => pieces.swap_remove(0),
+        (1, true) => Bytes::copy_from_slice(&pieces[0]),
+        _ => join(&pieces, &small, len),
     }))
 }
 
@@ -215,6 +220,36 @@ mod tests {
         });
         assert_eq!(bytes_up_to(Body::from_stream(pieces), 5).await.unwrap(), None);
         assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 4);
+    }
+
+    /// Reading past stops 64 MiB past the limit, where the connection is closed after the answer:
+    /// of 70 pieces of 1 MiB with nothing allowed, the one that went over and 64 more are read.
+    #[tokio::test]
+    async fn reading_past_stops_64_mib_past_the_limit() {
+        let read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = read.clone();
+        let mib = Bytes::from(vec![0; 1 << 20]);
+        let pieces = stream::iter(std::iter::repeat_n(mib, 70)).map(move |p| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok::<_, std::io::Error>(p)
+        });
+        assert_eq!(bytes_up_to(Body::from_stream(pieces), 0).await.unwrap(), None);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 65);
+    }
+
+    /// A body sent a byte at a time comes back whole, in one buffer of its size.
+    #[tokio::test]
+    async fn a_body_sent_a_byte_at_a_time_is_whole() {
+        let text: Vec<Bytes> = (0..3000).map(|n| Bytes::from(vec![b'a' + (n % 26) as u8])).collect();
+        let want: Vec<u8> = text.iter().flat_map(|b| b.iter().copied()).collect();
+        let body = Body::from_stream(stream::iter(text.into_iter().map(Ok::<_, std::io::Error>)));
+        assert_eq!(bytes_up_to(body, 1 << 20).await.unwrap().as_deref(), Some(&want[..]));
+        // Small pieces between large ones are kept in order.
+        let mixed = ["ab", std::str::from_utf8(&[b'x'; 2048]).unwrap(), "cd"]
+            .map(|p| Ok::<_, std::io::Error>(Bytes::copy_from_slice(p.as_bytes())));
+        let read = bytes_up_to(Body::from_stream(stream::iter(mixed)), 1 << 20).await.unwrap().unwrap();
+        assert_eq!(read.len(), 2052);
+        assert!(read.starts_with(b"abx") && read.ends_with(b"xcd"));
     }
 
     /// A body whose length is known to be over by more than is read past is not read: here,

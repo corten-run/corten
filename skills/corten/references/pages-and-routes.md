@@ -248,7 +248,8 @@ returns `Result<JsonResponse, JsonError>`: `Ok(Json(value).into())` or `Ok(relay
 that refuses in another server's error shape `?`s a `JsonResponse` (`Err(refused(status, msg))?`,
 a 4xx or 5xx): it is answered as written. A refusal is that `Err`, not an `Ok`. When a body it
 cannot read is refused in that shape too, it takes `corten::extract::Request` and reads the body
-with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over), not `Json<T>`. Do not box it
+with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over), not
+`Json<T>`. Do not box it
 or write an error enum of your own for clippy's `result_large_err`.
 
 A time shown where the visitor is needs their time zone: turn on Corten's `zones` feature and set
