@@ -16,6 +16,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo build --release && cp target/release/{{name}} /server
 
 FROM debian:bookworm-slim
+# jemalloc, preloaded, gives back memory a burst of connections took: after eight floods of
+# unfinished request heads, glibc's allocator kept 419 MiB and jemalloc 45 MiB (one run each),
+# with no measured cost per request
+# (https://github.com/corten-run/corten/blob/main/docs/guide/app.md). Remove these two lines to
+# run on glibc's allocator.
+RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
+ENV LD_PRELOAD=libjemalloc.so.2
 WORKDIR /app
 COPY --from=build /server /app/server
 # Behind a domain, add the names the app is served under (HOSTS=shop.example): any other Host
