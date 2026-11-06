@@ -73,7 +73,7 @@ defmodule ItemPageWeb.ItemLive do
             </tr>
           </tbody>
         </table>
-        <button :if={length(@item.offers) > 5 and not @all_offers} type="button" phx-click="all_offers">Show all {length(@item.offers)} offers</button>
+        <form :if={length(@item.offers) > 5 and not @all_offers} method="get" action={"/items/#{@item.id}"} phx-submit="all_offers"><button name="offers" value="all">Show all {length(@item.offers)} offers</button></form>
       </section>
       <section class="item-detail__panel">
         <h2>Price alert</h2>

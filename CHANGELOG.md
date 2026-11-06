@@ -3438,6 +3438,13 @@ Corten is pre-1.0, so any minor version may change the API.
     job took 14.2 minutes (watchlist step 6.0) and the `rust` job 15.0 (from 6.5; its release
     tests 8.8), so CI takes about 15 minutes where it took 23 to 30
     ([#947 CI's browser job now takes 23 to 30 minutes against its 30-minute limit, so ordinary variance cancels it](https://github.com/corten-run/corten/issues/947)).
+148. card-market's item page sends its first five offers, not every offer with the rest in a
+    `<template>`: "Show all" is a GET form (`?offers=all`) that works without JavaScript, the
+    page with every offer, and with it (`data-patch`) gets only the other offers
+    (`view::Append`). The benchmark's other apps write "Show all" as the same form, and
+    `bench/fullstack/parity.mjs` fails an app whose first response carries a different number of
+    table rows, a `<template>`'s included
+    ([#942 Benchmark: the item page's apps return the same visible page but do different work (Corten formats prices per request and renders every offer)](https://github.com/corten-run/corten/issues/942)).
 
 ### Fixed
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

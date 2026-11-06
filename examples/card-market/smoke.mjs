@@ -40,9 +40,9 @@ try {
     (await page.$$eval('head [data-corten-head][rel="canonical"]', (l) => l.map((x) => x.getAttribute("href")))).join() === "/items/item_5",
   );
   const scripts = await page.evaluate(() =>
-    performance.getEntriesByType("resource").map((e) => e.name).filter((n) => /\/scripts\/(listing_sort|offer_list)\.js$/.test(n)),
+    performance.getEntriesByType("resource").map((e) => e.name).filter((n) => /\/scripts\/listing_sort\.js$/.test(n)),
   );
-  check("the scripts a navigation's markup names load from versioned URLs", scripts.length === 2 && scripts.every((n) => /\/assets\/[0-9a-f]{12}\/scripts\//.test(n)), scripts.join(" "));
+  check("the scripts a navigation's markup names load from versioned URLs", scripts.length === 1 && scripts.every((n) => /\/assets\/[0-9a-f]{12}\/scripts\//.test(n)), scripts.join(" "));
 
   // Styles: tokens, a component's scoped rules and a responsive utility, from components.css.
   const styles = await page.evaluate(() => {
@@ -148,11 +148,14 @@ try {
     "a second click restores the server's order, rows with the same price included",
     (await firstPrice()) === before && (await rowOrder()) === order && (await page.innerText(sort)) === "Price: low to high",
   );
-  const more = await page.$("[data-scope=offer-list] button");
+  const more = await page.$("#show-all button");
   if (more) {
-    const rows = await page.$$eval("[data-scope=offer-list] tbody tr", (r) => r.length);
+    const rows = await page.$eval("#offer-rows tr", (r) => r.length);
+    const want = Number(/\d+/.exec(await more.innerText())?.[0]);
     await more.click();
-    check("a click runs the offer list handler", (await page.$$eval("[data-scope=offer-list] tbody tr", (r) => r.length)) > rows);
+    await page.waitForSelector("#show-all", { state: "detached", timeout: 5000 }).catch(() => {});
+    const after = await page.$eval("#offer-rows tr", (r) => r.length);
+    check("Show all adds the rest of the offers as a patch", rows === 5 && after === want && new URL(page.url()).search === "", `${rows} then ${after} of ${want}, at ${page.url()}`);
   }
 
   await page.fill('input[name="email"]', "buyer@example.com");

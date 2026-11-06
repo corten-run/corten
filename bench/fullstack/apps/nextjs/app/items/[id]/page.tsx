@@ -57,7 +57,7 @@ export default async function ItemPage({ params }: Props) {
         </section>
       </div>
       <Listings listings={item.listings} />
-      <Offers offers={item.offers} />
+      <Offers id={item.id} offers={item.offers} />
       <PriceAlert id={item.id} title={item.title} />
       <section className="item-detail__panel">
         <h2>Details</h2>

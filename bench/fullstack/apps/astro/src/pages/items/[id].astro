@@ -49,7 +49,7 @@ const offers = item ? (allOffers ? item.offers : item.offers.slice(0, 5)) : [];
         <thead><tr><th>Buyer</th><th>Condition</th><th>Qty</th><th>Price</th></tr></thead>
         <tbody>{offers.map((o) => <tr><td>{o.buyer}</td><td>{o.condition}</td><td>{o.quantity}</td><td class="price__amount">{o.price}</td></tr>)}</tbody>
       </table>
-      {item.offers.length > 5 && !allOffers && <button type="button" data-more={`/items/${item.id}?offers=all`}>{`Show all ${item.offers.length} offers`}</button>}
+      {item.offers.length > 5 && !allOffers && <form method="get" action={`/items/${item.id}`} data-more><button name="offers" value="all">{`Show all ${item.offers.length} offers`}</button></form>}
     </section>
     <section class="item-detail__panel">
       <h2>Price alert</h2>
@@ -90,15 +90,19 @@ const offers = item ? (allOffers ? item.offers : item.offers.slice(0, 5)) : [];
       rows.append(...[...rows.rows].reverse());
       for (const label of sort.children) (label as HTMLElement).hidden = !(label as HTMLElement).hidden;
     }
-    const more = target.closest<HTMLButtonElement>("button[data-more]");
-    if (more) {
-      const page = new DOMParser().parseFromString(await (await fetch(more.dataset.more!)).text(), "text/html");
-      more.closest("[data-offers]")!.replaceWith(page.querySelector("[data-offers]")!);
-    }
   });
 
   document.addEventListener("submit", async (event) => {
     const form = event.target as HTMLFormElement;
+    if (form.hasAttribute("data-more")) {
+      // "Show all": the page with every offer, as the form would load it, and its offers swapped in.
+      event.preventDefault();
+      const url = new URL(form.action);
+      url.search = new URLSearchParams(new FormData(form, event.submitter) as unknown as Record<string, string>).toString();
+      const page = new DOMParser().parseFromString(await (await fetch(url)).text(), "text/html");
+      form.closest("[data-offers]")!.replaceWith(page.querySelector("[data-offers]")!);
+      return;
+    }
     if (!form.hasAttribute("data-alert")) return;
     event.preventDefault();
     const { data, error } = await actions.alert(new FormData(form));

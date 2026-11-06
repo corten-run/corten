@@ -3,11 +3,14 @@
 // (outline.mjs). How each looks in a browser is look.mjs.
 // Usage: node parity.mjs [apps=all] [reference=first]  (apps running on their catalog ports)
 // Elements with the `hidden` attribute are not visible text (Corten renders both sort labels and
-// hides one).
+// hides one). The table rows a response carries are counted with any `<template>`'s included, so
+// an app cannot send rows the page does not show (the item page's offers past the first five).
 import { pageApps as apps } from "./apps.mjs";
 import { firstDifference, outline } from "./outline.mjs";
 
 const paths = [1, 2, 3, 5, 17, 99, 250, 777, 1500, 1999, 2000, 2500, 3000, 12345, 49999, "does-not-exist"].map((n) => `/items/${typeof n === "number" ? `item_${n}` : n}`).concat(["/"]);
+/** Table rows in a response, a `<template>`'s included; a script's are not markup. */
+const rows = (html) => (html.replace(/<script[\s\S]*?<\/script>/g, " ").match(/<tr\b/gi) ?? []).length;
 const visible = (html) =>
   html
     .replace(/<script[\s\S]*?<\/script>/g, " ")
@@ -44,7 +47,7 @@ for (const path of paths) {
   const pages = await Promise.all([reference, ...others].map(async (n) => {
     const res = await get(`http://localhost:${apps[n].port}${path}`);
     const html = await res.text();
-    return { n, status: res.status, text: visible(html), outline: outline(html) };
+    return { n, status: res.status, text: visible(html), outline: outline(html), rows: rows(html) };
   }));
   const ref = pages.find((p) => p.n === reference);
   for (const page of pages.filter((p) => others.includes(p.n))) {
@@ -54,6 +57,11 @@ for (const path of paths) {
       let i = 0;
       while (i < ref.text.length && ref.text[i] === page.text[i]) i += 1;
       console.log(JSON.stringify({ path, app: page.n, status: [ref.status, page.status], [reference]: ref.text.slice(Math.max(0, i - 50), i + 70), [page.n]: page.text.slice(Math.max(0, i - 50), i + 70) }));
+      continue;
+    }
+    if (page.rows !== ref.rows) {
+      failures += 1;
+      console.log(JSON.stringify({ path, app: page.n, rows: [ref.rows, page.rows] }));
       continue;
     }
     const difference = firstDifference(ref.outline, page.outline);

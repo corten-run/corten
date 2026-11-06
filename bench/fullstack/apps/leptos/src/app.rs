@@ -242,6 +242,7 @@ fn ItemDetail(item: ItemView) -> impl IntoView {
     let listings = item.listings.clone();
     let offers = item.offers.clone();
     let offer_count = offers.len();
+    let offers_action = format!("/items/{}", item.id);
     let title = item.title.clone();
     view! {
         <Title text=format!("{} | Card Market", item.title)/>
@@ -327,9 +328,12 @@ fn ItemDetail(item: ItemView) -> impl IntoView {
                     </tbody>
                 </table>
                 {move || (offer_count > 5 && !show_all_offers.get()).then(|| view! {
-                    <button type="button" on:click=move |_| show_all_offers.set(true)>
-                        {format!("Show all {offer_count} offers")}
-                    </button>
+                    <form method="get" action=offers_action.clone() on:submit=move |ev| {
+                        ev.prevent_default();
+                        show_all_offers.set(true);
+                    }>
+                        <button name="offers" value="all">{format!("Show all {offer_count} offers")}</button>
+                    </form>
                 })}
             </section>
             <section class="item-detail__panel">

@@ -79,7 +79,16 @@
       </tbody>
     </table>
     {#if item.offers.length > 5 && !showAllOffers}
-      <button type="button" onclick={() => (showAllOffers = true)}>{`Show all ${item.offers.length} offers`}</button>
+      <form
+        method="get"
+        action={`/items/${item.id}`}
+        onsubmit={(event) => {
+          event.preventDefault();
+          showAllOffers = true;
+        }}
+      >
+        <button name="offers" value="all">{`Show all ${item.offers.length} offers`}</button>
+      </form>
     {/if}
   </section>
   <section class="item-detail__panel">

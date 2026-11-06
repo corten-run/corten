@@ -33,7 +33,7 @@ use crate::{
     routes,
     source::Source,
     text::Msg,
-    views::{self, AlertForm, AlertFormView, AlertMessage, ItemList, ItemPage, Layout},
+    views::{self, AlertForm, AlertFormView, AlertMessage, ItemList, ItemPage, Layout, MoreOffers, Shown},
 };
 
 /// The app, assembled: routes plus the error page, catalogs and PWA settings. Corten adds the rest.
@@ -307,7 +307,7 @@ pub(crate) async fn robots() -> Public<seo::File> {
 }
 
 pub(crate) async fn sitemap() -> Public<seo::File> {
-    let urls: Vec<String> = (1..=50).map(|n| format!("{SITE}{}", items::Item { id: &format!("item_{n}") })).collect();
+    let urls: Vec<String> = (1..=50).map(|n| format!("{SITE}{}", items::Item { id: &format!("item_{n}"), ..Default::default() })).collect();
     seo::sitemap(urls.iter().map(|loc| SitemapUrl { loc, lastmod: None }))
 }
 
@@ -388,12 +388,16 @@ pub(crate) async fn category(
 
 /// The item's old address, moved for good.
 pub(crate) async fn old_item(req: Req, Params(old): Params<routes::OldItem<'_>>) -> HtmlResult {
-    req.moved(&items::Item { id: &old.id })
+    req.moved(&items::Item { id: &old.id, ..Default::default() })
 }
 
+/// The item page. "Show all" asks for it again with `?offers=all`: with JavaScript the answer is
+/// the offers the page does not have, without it the page with every offer.
 pub(crate) async fn show(req: Req, State(source): State<Source>, Params(at): Params<items::Item<'_>>) -> HtmlResult {
     let item = source.item(&at.id).await?.ok_or_else(Error::not_found)?;
-    req.page(ItemPage::new(req.t(), &item, String::new()).document(&req))
+    let all_offers = at.view.offers == Some(Shown::All);
+    let page = || async { req.page(ItemPage { all_offers, ..ItemPage::new(req.t(), &item, String::new()) }.document(&req)) };
+    if all_offers { req.patch_or(MoreOffers { t: req.t(), offers: &item.offers }, page).await } else { page().await }
 }
 
 /// The cached item, serialized where it is.
@@ -543,13 +547,13 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{api, items, mcp, routes};
+    use crate::{api, items, mcp, routes, views::ItemQuery};
 
     /// Fetch metadata a browser sends with a form post: a post from another site is refused.
     const SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
 
     /// The item the tests' catalog has, with listings and offers.
-    const ITEM: items::Item = items::Item { id: "item_9" };
+    const ITEM: items::Item = items::Item { id: "item_9", view: ItemQuery { offers: None } };
 
     /// The installed app's shortcut opens a category with items in the demo catalog.
     #[test]
@@ -593,20 +597,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn item_page_renders_sorted_listings_split_offers_and_escaped_text() {
+    async fn item_page_renders_sorted_listings_five_offers_and_escaped_text() {
         let res = app().get(&ITEM).await;
         let (status, headers, html) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(headers.contains_key("content-security-policy"));
         assert!(html.find("A · 4.9 ★ (12)").unwrap() < html.find(">B<").unwrap(), "cheapest listing first");
-        let (shown, rest) = html.split_once(r#"<template data-ref="rest">"#).unwrap();
-        assert_eq!(shown.matches("Buyer ").count(), 5);
-        assert_eq!(rest.matches("Buyer ").count(), 2);
-        assert!(html.contains("Show all 7 offers"), "catalog interpolation");
+        assert_eq!(html.matches("Buyer ").count(), 5, "the first response carries five offers");
+        assert!(!html.contains("<template"), "and none kept back for a script");
+        assert!(
+            html.contains(r#"<form id="show-all" method="get" action="/items/item_9" data-patch><button name="offers" value="all">Show all 7 offers</button></form>"#),
+            "{html}"
+        );
         assert!(html.contains("<h1>Pika &lt;Promo&gt; &amp; &quot;Friends&quot;</h1>"));
         assert!(html.contains(r#"<link rel="canonical" href="/items/item_9" data-corten-head>"#));
         assert!(html.contains(r#"/scripts/listing_sort.js">"#), "the scripts the page's handlers use are preloaded");
         assert!(html.contains(r#"<link rel="manifest" href="/manifest.webmanifest">"#));
+    }
+
+    #[tokio::test]
+    async fn show_all_is_the_page_with_every_offer_or_with_javascript_only_the_rest() {
+        let app = app();
+        let all = items::Item { id: "item_9", view: ItemQuery { offers: Some(Shown::All) } };
+        let res = app.get(&all).await;
+        let (status, _, html) = read(&res);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(html.matches("Buyer ").count(), 7, "without JavaScript, the page with every offer");
+        assert!(!html.contains("Show all"), "and no form");
+        let res = app.get(&all).mode(Mode::Action).await;
+        let (status, headers, patch) = read(&res);
+        assert_eq!(status, StatusCode::OK);
+        assert!(headers.contains_key("corten-patch"));
+        assert_eq!(
+            patch,
+            concat!(
+                r#"<template id="offer-rows" data-append>"#,
+                r#"<tr><td>Buyer 6</td><td>NM</td><td>1</td><td class="price__amount">$1.00</td></tr>"#,
+                r#"<tr><td>Buyer 7</td><td>NM</td><td>1</td><td class="price__amount">$1.00</td></tr>"#,
+                r#"</template><template id="show-all" data-remove></template>"#,
+            )
+        );
     }
 
     #[tokio::test]
@@ -634,13 +664,13 @@ mod tests {
 
     #[tokio::test]
     async fn an_item_with_no_picture_has_no_gallery_and_its_text_takes_the_width() {
-        let res = app().get(&items::Item { id: "item_10" }).await;
+        let res = app().get(&items::Item { id: "item_10", ..Default::default() }).await;
         let (status, _, html) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(html.contains(r#"<div class="item-detail__top"><div class="item-detail__intro">"#), "{html}");
         assert!(!html.contains("item-detail__gallery") && !html.contains("item-detail__art"), "no empty gallery: {html}");
         // One with art has one, beside the text (`the_demo_catalog_lists_its_cards...`).
-        let res = super::app(Source::demo()).test().get(&items::Item { id: "item_1" }).await;
+        let res = super::app(Source::demo()).test().get(&items::Item { id: "item_1", ..Default::default() }).await;
         let item = res.text();
         assert!(item.contains(r#"<div class="item-detail__gallery"><img class="item-detail__art""#), "{item}");
     }
@@ -890,7 +920,7 @@ mod tests {
     #[tokio::test]
     async fn an_alert_on_an_item_with_no_listings_is_a_message_for_the_whole_form() {
         let app = app();
-        let res = alert(&app, &items::Item { id: "item_10" }, "Bare", "2").mode(Mode::Action).await;
+        let res = alert(&app, &items::Item { id: "item_10", ..Default::default() }, "Bare", "2").mode(Mode::Action).await;
         let (status, _, body) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(
@@ -905,7 +935,7 @@ mod tests {
     #[tokio::test]
     async fn an_alert_on_an_item_that_does_not_exist_is_not_found() {
         let app = app();
-        let res = alert(&app, &items::Item { id: "item_404" }, "Gone", "2").mode(Mode::Action).await;
+        let res = alert(&app, &items::Item { id: "item_404", ..Default::default() }, "Gone", "2").mode(Mode::Action).await;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
     }
 
@@ -953,7 +983,7 @@ mod tests {
         assert!(offline.contains("<h1>Not available</h1>"), "{offline}");
         assert_eq!(app.get(&at("/health/ready")).await.status(), StatusCode::OK);
         assert!(app.get(&routes::Robots).await.text().contains("Disallow: /mcp"));
-        let res = app.get(&items::Item { id: "nope" }).await;
+        let res = app.get(&items::Item { id: "nope", ..Default::default() }).await;
         let (status, headers, body) = read(&res);
         assert_eq!((status, &headers["x-robots-tag"]), (StatusCode::NOT_FOUND, &"noindex".parse().unwrap()));
         assert!(body.contains("<h1>Not found</h1>"), "{body}");
@@ -963,7 +993,7 @@ mod tests {
     #[tokio::test]
     async fn the_demo_catalog_lists_its_cards_on_the_home_and_category_pages() {
         let app = super::app(Source::demo()).test();
-        let item = |id| items::Item { id };
+        let item = |id| items::Item { id, ..Default::default() };
         let home = app.get(&routes::Home).await;
         let home = home.text();
         assert!(home.contains("<strong>Ashen Drake</strong>") && home.contains("From $42.50"), "{home}");

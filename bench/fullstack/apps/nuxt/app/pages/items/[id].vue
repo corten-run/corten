@@ -58,7 +58,7 @@ async function submit(event: Event) {
           <tr v-for="o in offers" :key="o.id"><td>{{ o.buyer }}</td><td>{{ o.condition }}</td><td>{{ o.quantity }}</td><td class="price__amount">{{ o.price }}</td></tr>
         </tbody>
       </table>
-      <button v-if="item.offers.length > 5 && !showAllOffers" type="button" @click="showAllOffers = true">{{ `Show all ${item.offers.length} offers` }}</button>
+      <form v-if="item.offers.length > 5 && !showAllOffers" method="get" :action="`/items/${item.id}`" @submit.prevent="showAllOffers = true"><button name="offers" value="all">{{ `Show all ${item.offers.length} offers` }}</button></form>
     </section>
     <section class="item-detail__panel">
       <h2>Price alert</h2>

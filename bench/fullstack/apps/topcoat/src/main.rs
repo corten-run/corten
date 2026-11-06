@@ -317,7 +317,16 @@ async fn offers(cx: &Cx, id: String) -> Result<impl View> {
             </tbody>
         </table>
         if shown < total {
-            <button type="button" @click=$(|_e| all.set(true))>"Show all " (total) " offers"</button>
+            <form
+                method="get"
+                action=(format!("/items/{id}"))
+                @submit=$(|e: Event| {
+                    e.prevent_default();
+                    all.set(true);
+                })
+            >
+                <button name="offers" value="all">"Show all " (total) " offers"</button>
+            </form>
         }
     })
 }

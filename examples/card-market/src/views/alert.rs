@@ -27,7 +27,7 @@ pub fn AlertForm<'a>(t: Msg, form: AlertFormView<'a>) -> impl Patch {
     let e = form.errors.within(AlertFormId);
     html! {
         <div class={Form} id={AlertFormId}>
-            <form method="post" action={items::Item { id: form.id }} data-patch>
+            <form method="post" action={items::Item { id: form.id, ..Default::default() }} data-patch>
                 {form.errors.form_message()}
                 <input type="hidden" name={f.title} value={form.title}>
                 <label>

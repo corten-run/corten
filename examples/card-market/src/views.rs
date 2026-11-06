@@ -24,14 +24,14 @@ pub use item_card::ItemCard;
 pub use item_detail::{ItemDetail, ItemPage};
 pub use item_list::ItemList;
 pub use listing_sort::ListingSort;
-pub use offer_list::OfferList;
+pub use offer_list::{ItemQuery, MoreOffers, OfferList, Shown};
 pub use price::Price;
 pub use site_header::SiteHeader;
 
 /// Every component with a script or a stylesheet, tokens first: for `App::components` and the
 /// generated types.
 pub const COMPONENTS: &[Component] =
-    &[theme::TOKENS, SiteHeader, ItemDetail, AlertForm, Price, ItemList, ItemCard, ListingSort, OfferList];
+    &[theme::TOKENS, SiteHeader, ItemDetail, AlertForm, Price, ItemList, ItemCard, ListingSort];
 
 /// The page for a failed request (`App::error_page`), in the layout; under `corten dev` it shows
 /// the error. The PWA's offline page is `Failure::Offline`.

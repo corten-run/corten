@@ -104,9 +104,16 @@ function ItemDetail({ item }: { item: ItemView }) {
           </tbody>
         </table>
         {item.offers.length > 5 && !showAllOffers ? (
-          <button type="button" onClick={() => setShowAllOffers(true)}>
-            {`Show all ${item.offers.length} offers`}
-          </button>
+          <form
+            method="get"
+            action={`/items/${item.id}`}
+            onSubmit={(event) => {
+              event.preventDefault();
+              setShowAllOffers(true);
+            }}
+          >
+            <button name="offers" value="all">{`Show all ${item.offers.length} offers`}</button>
+          </form>
         ) : null}
       </section>
       <section className="item-detail__panel">
