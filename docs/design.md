@@ -552,9 +552,12 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
    trait of Corten's to axum's); value (a second trait beside axum's for each type would be a second
    concept, Values 6).
 
-   Revisit when: Corten owns its handler traits, which Choice 25 declines for now and says what
-   would reopen: the orphan rule then no longer stands between them, and these names stay as
-   Corten's own.
+   Revisit when: Corten owns extraction and dispatch (`FromRequestParts` and the `Handler` impls
+   that call a handler, not only the `RouteHandler` bound it owns now), which Choice 25 declines for
+   now and says what would reopen it: the orphan rule then no longer stands between them, and these
+   names stay as Corten's own. An axum release that changes `FromRequestParts` reaches apps'
+   extractors with the Corten release that moves to it, a cost this Choice accepts, and is Choice
+   25's first condition.
 
 22. **A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
@@ -699,17 +702,26 @@ and a Limit is what Corten does not do yet, where it says what would lift it.
     mistake that now compiles
     ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
 
-   Stands on: measured, one pair of runs and no prototype (callgrind on card-market's item page from
-   memory, split by crate on main `b79a6b23`: functions named for axum, tower or matchit are 1.7% of
-   its user instructions, 2.5% with their code inside Corten's, and 3.8% of the item's JSON);
-   reasoned (a router of Corten's would write again what axum's tests hold it to, `HEAD`, `405` with
-   `Allow`, percent-decoding, nesting and fallbacks, about 4,600 lines without their tests);
-   platform (`text/event-stream` is a standard format axum's encoder already writes); value
-   (correctness before speed, the order the README's Values give).
+    Stands on: bet (axum keeps `Handler`, `FromRequestParts` and `IntoResponse` as apps see them
+    across the releases Corten moves to); measured, one pair of runs, a floor and no prototype
+    (callgrind on card-market's item page from memory, split by crate on main `b79a6b23`: functions
+    named for axum, tower or matchit are 1.7% of its user instructions, 2.5% with their code inside
+    Corten's, and the item's JSON 3.8% by the same measure; allocations and copies axum causes are
+    counted in other rows); measured, three runs each (without `original-uri`, the functions that
+    copy, insert and drop a request's URI ran 339 instructions a request against 492, about 0.2% of
+    the item page's 83,400, on `fa597483`); platform (rustc names the argument no request can fill
+    for one impl per arity with axum's bounds written out, where one impl over every axum `Handler`,
+    with or without `#[diagnostic::do_not_recommend]`, did not; `tests/handler_message.rs` reads
+    both messages); platform (`text/event-stream` is a standard format axum's encoder already
+    writes); reasoned (a router of Corten's would write again what axum's tests hold it to, `HEAD`,
+    `405` with `Allow`, percent-decoding, nesting and fallbacks, and `#[corten::routes]` sees every
+    path in its module, so route clashes need no dispatch of Corten's); value (correctness before
+    speed, the order the README's Values give).
 
-   Revisit when: an axum release changes `Handler`, `FromRequestParts` or `IntoResponse` in a way
-   apps see; axum's share of the item page from memory grows past about 5% (2.5% now); or owning
-   dispatch would catch a mistake that now compiles.
+    Revisit when: an axum release changes `Handler`, `FromRequestParts` or `IntoResponse` in a way
+    apps see; axum's share of the item page from memory grows past about 5% (functions named for
+    axum, tower or matchit and their code inside Corten's: 2.5% now, the JSON's 3.8%); or owning
+    dispatch would catch a mistake that now compiles.
 
 ## Rules
 
