@@ -1380,7 +1380,7 @@ async function run(browser) {
       probe.remove();
       return background;
     });
-    check("FailedAlert draws no box before the failure, and the soft destructive alert while it is said", regionBefore.height === 0 && regionSaying.height > 0 && regionSaying.background === softDestructive, JSON.stringify({ regionBefore, regionSaying, softDestructive }));
+    check("FailedAlert draws no box before the failure, and the soft destructive alert while it is said", regionBefore.height === 0 && regionSaying.height > 0 && regionSaying.background === softDestructive && !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(softDestructive), JSON.stringify({ regionBefore, regionSaying, softDestructive }));
     await page.unroute("**/rename", cutRename);
     // Closed while the submit was on its way (Escape), the dialog shows nothing and the toaster says it.
     {
