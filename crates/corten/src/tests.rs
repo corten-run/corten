@@ -4220,6 +4220,45 @@ async fn a_refusal_tells_the_client_why_and_when_to_try_again() {
     assert_eq!(body, r#"{"type":"error","error":{"code":429,"message":"Too many failed attempts; try again later"}}"#);
 }
 
+#[derive(crate::Route)]
+#[route("/api/refuses")]
+struct ApiRefuses;
+
+/// A handler's own refusal says why in the API's own shape, as an extractor's does (#890): its
+/// message, a lockout's `Retry-After`, and a lookup that is down as a 503.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
+    async fn refuses(headers: axum::http::HeaderMap) -> crate::Result<&'static str> {
+        let refused = match headers.get("x-case").map(|v| v.as_bytes()) {
+            Some(b"forbid") => crate::Refused::forbidden().message("Not your item"),
+            Some(b"lock") => crate::Refused::too_many(std::time::Duration::from_millis(1500)).message("Slow down"),
+            Some(b"down") => crate::Refused::unavailable("the session store is down"),
+            _ => return Ok("ok"),
+        };
+        Err(refused.into())
+    }
+    let router = api_app(|api| {
+        api.route::<ApiRefuses>(crate::Methods::reads(get(refuses))).errors(|status, message| ShapedError {
+            r#type: "error",
+            error: ShapedDetail { code: status.as_u16(), message: message.to_string() },
+        })
+    });
+    for (case, status, retry, message) in [
+        ("forbid", 403, None, "Not your item"),
+        ("lock", 429, Some("2"), "Slow down"),
+        ("down", 503, None, "Service Unavailable"),
+    ] {
+        let req = Request::get("/api/refuses").header("x-case", case).body(Body::empty()).unwrap();
+        let res = router.clone().oneshot(req).await.unwrap();
+        let got = (res.status().as_u16(), res.headers().get("retry-after").map(|v| v.to_str().unwrap().to_owned()));
+        assert_eq!(got, (status, retry.map(str::to_owned)), "{case}");
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let want = format!(r#"{{"type":"error","error":{{"code":{status},"message":{message:?}}}}}"#);
+        assert_eq!(String::from_utf8(body.to_vec()).unwrap(), want, "{case}");
+    }
+}
+
 #[tokio::test]
 async fn an_allowed_origin_may_call_the_api_from_the_browser_but_not_post_the_pages() {
     let router = api_app(|api| api.allow_origin("https://partner.example/"));
@@ -7040,6 +7079,37 @@ async fn a_sign_in_page_that_needs_a_caller_is_an_error_not_a_loop() {
     let (status, res, body) = guarded(&router, "GET", "/sign-in", None, &[("accept", "text/html")]).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "not a redirect the browser follows forever");
     assert!(!res.contains_key("location") && !body.contains("itself"), "the message stays in the log: {body}");
+}
+
+/// A handler's own refusal is answered as an extractor's is (#890): a sign-in is a redirect for a
+/// browser, a `corten-location` for the runtime's form and a 401 problem for a data client.
+/// `with_status` makes it a plain failure at that status, which says the refusal's message.
+#[tokio::test]
+async fn a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors() {
+    async fn must_sign_in() -> crate::Result<&'static str> {
+        Err(crate::Refused::sign_in(&caller_url::SignIn))?;
+        Ok("never")
+    }
+    async fn moved() -> crate::Result<&'static str> {
+        Err(Error::from(crate::Refused::forbidden().message("not yours")).with_status(StatusCode::NOT_FOUND))
+    }
+    let routes = Router::new().route("/mine", get(must_sign_in).post(must_sign_in)).route("/moved", get(moved));
+    let router = App::new(Routes::from(routes)).error_page(test_error_page, ()).router();
+    for (method, headers) in [("GET", &[][..]), ("POST", &[][..]), ("GET", &[("corten", "nav")][..])] {
+        let (status, res, _) = guarded(&router, method, "/mine", None, headers).await;
+        assert_eq!((status, &res["location"]), (StatusCode::SEE_OTHER, &"/sign-in".parse().unwrap()), "{method} {headers:?}");
+    }
+    let (status, res, _) = guarded(&router, "POST", "/mine", None, &[("corten", "action")]).await;
+    assert_eq!((status, &res["corten-location"]), (StatusCode::NO_CONTENT, &"/sign-in".parse().unwrap()));
+    let (status, res, body) = guarded(&router, "GET", "/mine", None, &[("accept", "application/json")]).await;
+    assert_eq!((status, &body[..]), (StatusCode::UNAUTHORIZED, r#"{"title":"Unauthorized","status":401}"#), "a data client");
+    assert_eq!(res["content-type"], "application/problem+json");
+
+    let (status, res, _) = guarded(&router, "GET", "/moved", None, &[("accept", "text/html")]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "the status with_status gave");
+    assert!(!res.contains_key("location"));
+    let (status, _, body) = guarded(&router, "GET", "/moved", None, &[("accept", "application/json")]).await;
+    assert_eq!((status, &body[..]), (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404,"detail":"not yours"}"#));
 }
 
 #[cfg(feature = "json")]
@@ -9883,88 +9953,80 @@ mod layout_reads {
         pub struct PageOrFile;
     }
 
+    /// A handler's own check refuses the request (#890).
+    async fn not_yours() -> crate::Result<HtmlResponse> {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        Err(crate::Refused::forbidden().into())
+    }
+
+    async fn handler_slows() -> crate::Result<HtmlResponse> {
+        Err(crate::Refused::too_many(Duration::from_secs(2)).into())
+    }
+
     fn shop(count: CartCount, page_delay: Duration) -> Router {
-        let routes =
-            Router::new()
-                .route(
-                    "/",
-                    get(move |req: Req| async move {
-                        tokio::time::sleep(page_delay).await; // the page's own reads
-                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } })
-                    })
-                    .post(|req: Req| async move { req.redirect::<ForOne>(&Done) }),
-                )
-                .route(
-                    "/form",
-                    get(|req: Req| async move {
-                        let short = req.path().len() < 3;
-                        let draw = |why: &str| refused(&req, why);
-                        if short {
-                            return refused(&req, "too short");
-                        }
-                        if req.mode.swaps() {
-                            return refused(&req, "again");
-                        }
-                        draw("closure")
-                    }),
-                )
-                .route(
-                    "/cart",
-                    get(|req: Req| async move {
-                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })
-                            .map(|page| page.give::<CartCount>(7))
-                    }),
-                )
-                .route(
-                    "/fails",
-                    get(|_req: Req| async move {
-                        tokio::time::sleep(Duration::from_millis(10)).await; // the page's own reads, which fail
-                        Err::<HtmlResponse, _>(Error::new("the store is down"))
-                    }),
-                )
-                .route("/refused", get(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
-                .route(
-                    "/slow-down",
-                    get(|_req: Req| async move { crate::Refused::too_many(Duration::from_secs(1)).into_response() }),
-                )
-                .route("/conflict", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::status(StatusCode::CONFLICT)) }))
-                .route("/down", get(|_req: Req| async move { (StatusCode::SERVICE_UNAVAILABLE, "down for maintenance") }))
-                .route("/gone", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::not_found()) }))
-                .route(
-                    "/refuse-write",
-                    axum::routing::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }),
-                )
-                .route(
-                    "/not-yours",
-                    get(|_req: Req| async move {
-                        tokio::time::sleep(Duration::from_millis(5)).await; // the handler's own check
-                        Err::<HtmlResponse, Error>(crate::Refused::forbidden().into())
-                    }),
-                )
-                .route(
-                    "/handler-slows",
-                    get(|_req: Req| async move {
-                        Err::<HtmlResponse, Error>(crate::Refused::too_many(Duration::from_secs(2)).into())
-                    }),
-                )
-                .route(
-                    "/who",
-                    get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
-                )
-                .route(
-                    "/unread",
-                    get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<Unread>() }) }),
-                )
-                .route(
-                    "/mine",
-                    get(|req: Req, Caller(Viewer(name)): Caller<Viewer>| async move {
-                        req.page::<ForOne>(Layout { req: &req, children: html! { <p>{name}</p> } })
-                    }),
-                )
-                .route(
-                    "/inside",
-                    get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<CartCount>() }) }),
-                );
+        let routes = Router::new()
+            .route(
+                "/",
+                get(move |req: Req| async move {
+                    tokio::time::sleep(page_delay).await; // the page's own reads
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"home"</p> } })
+                })
+                .post(|req: Req| async move { req.redirect::<ForOne>(&Done) }),
+            )
+            .route(
+                "/form",
+                get(|req: Req| async move {
+                    let short = req.path().len() < 3;
+                    let draw = |why: &str| refused(&req, why);
+                    if short {
+                        return refused(&req, "too short");
+                    }
+                    if req.mode.swaps() {
+                        return refused(&req, "again");
+                    }
+                    draw("closure")
+                }),
+            )
+            .route(
+                "/cart",
+                get(|req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })
+                        .map(|page| page.give::<CartCount>(7))
+                }),
+            )
+            .route(
+                "/fails",
+                get(|_req: Req| async move {
+                    tokio::time::sleep(Duration::from_millis(10)).await; // the page's own reads, which fail
+                    Err::<HtmlResponse, _>(Error::new("the store is down"))
+                }),
+            )
+            .route("/refused", get(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
+            .route("/slow-down", get(|_req: Req| async move { crate::Refused::too_many(Duration::from_secs(1)).into_response() }))
+            .route("/conflict", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::status(StatusCode::CONFLICT)) }))
+            .route("/down", get(|_req: Req| async move { (StatusCode::SERVICE_UNAVAILABLE, "down for maintenance") }))
+            .route("/gone", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::not_found()) }))
+            .route("/refuse-write", axum::routing::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
+            .route("/not-yours", get(not_yours))
+            .route("/handler-slows", get(handler_slows))
+            .route(
+                "/who",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
+            )
+            .route(
+                "/unread",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<Unread>() }) }),
+            )
+            .route(
+                "/mine",
+                get(|req: Req, Caller(Viewer(name)): Caller<Viewer>| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{name}</p> } })
+                }),
+            )
+            .route(
+                "/inside",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<CartCount>() }) }),
+            );
         let typed = shop_url::router();
         App::new(Routes(typed.0.merge(routes), typed.1))
             .error_page(

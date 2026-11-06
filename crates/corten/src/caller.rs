@@ -142,8 +142,11 @@ pub trait Identify<S>: Clone + Hash + Send + Sync + 'static {
     fn identify(parts: &Parts, state: &S) -> impl Future<Output = Result<Self, Refused>> + Send;
 }
 
-/// Why there is no caller, from [`Identify::identify`], or why a middleware turned a request
-/// away (`Refused::too_many(wait).into_response()`).
+/// Why there is no caller, from [`Identify::identify`], why a middleware turned a request away
+/// (`Refused::too_many(wait).into_response()`), or why a handler did (`Err(Refused::forbidden())?`).
+///
+/// It does not implement `std::error::Error`: `From<Refused> for corten::Error` would then overlap
+/// the blanket `From<E: Error>`, and `?` would answer a refusal as a plain failure.
 #[derive(Debug)]
 pub struct Refused(Why);
 
@@ -227,12 +230,23 @@ impl std::fmt::Display for AsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 .0 {
             Why::Unavailable(message) => write!(f, "who is asking cannot be known: {message}"),
+            Why::Refusal { message: Some(message), .. } | Why::SignIn(_, Some(message)) => f.write_str(message),
             _ => write!(f, "refused: {}", self.0.status()),
         }
     }
 }
 
 impl std::error::Error for AsError {}
+
+impl AsError {
+    /// Answered as an extractor's refusal is. An unavailable lookup is logged where it is answered.
+    pub(crate) fn into_response(self) -> Response {
+        if !matches!(self.0 .0, Why::Unavailable(_)) {
+            tracing::debug!(status = self.0.status().as_u16(), "corten: request refused by its handler");
+        }
+        self.0.into_response()
+    }
+}
 
 /// The lookup's outcome for `T`, for the next reader in the request.
 #[derive(Clone)]
@@ -379,8 +393,9 @@ impl IntoResponse for Refused {
     }
 }
 
-/// A 503 for a request whose caller could not be looked up: the error page's
-/// [`crate::Failure::Unidentified`], not a handler's own 503.
+/// A 503 for a request whose caller could not be looked up, by an extractor or by a handler's
+/// `Refused::unavailable`: the error page's [`crate::Failure::Unidentified`], not a plain
+/// `Error::status(SERVICE_UNAVAILABLE)`.
 fn unidentified(message: &str) -> Response {
     let mut res = Error::new(format!("who is asking cannot be known: {message}"))
         .with_status(StatusCode::SERVICE_UNAVAILABLE)

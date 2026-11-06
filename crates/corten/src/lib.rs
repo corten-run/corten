@@ -854,9 +854,11 @@ impl Error {
         Error { status: StatusCode::INTERNAL_SERVER_ERROR, source: error.into() }
     }
 
-    /// An error with a specific status, for example 403 for a permission check (404 is
-    /// [`Error::not_found`]): `return Err(Error::status(StatusCode::FORBIDDEN))` (in a JSON handler,
-    /// `Err(Error::status(..))?` or `.into()`, since its error is a [`JsonError`]).
+    /// An error with a specific status, for example 409 for a write that lost a race (404 is
+    /// [`Error::not_found`]): `return Err(Error::status(StatusCode::CONFLICT))` (in a JSON handler,
+    /// `Err(Error::status(..))?` or `.into()`, since its error is a [`JsonError`]). A permission
+    /// check refuses with [`Refused`] instead (`Err(Refused::forbidden())?`), so the error page
+    /// treats it as the request's fault.
     pub fn status(status: StatusCode) -> Self {
         Error { status, source: status.canonical_reason().unwrap_or("error").into() }
     }
@@ -882,7 +884,8 @@ impl Error {
 
     /// The same error with another status: `Error::new("no item 7").with_status(StatusCode::NOT_FOUND)`.
     /// A JSON client (an [`App::api`] route, or a request for `application/json`) gets a 4xx
-    /// error's message, so give it one written for the client; the error page never shows it.
+    /// error's message, so give it one written for the client; the error page never shows it. On a
+    /// handler's [`Refused`], another status makes it a plain failure at that status.
     pub fn with_status(mut self, status: StatusCode) -> Self {
         self.status = status;
         self
@@ -927,16 +930,13 @@ pub(crate) struct Failed(pub Arc<str>);
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        // A handler's refusal (`From<Refused>`): answered as an extractor's is.
-        let source = match self.source.downcast::<caller::AsError>() {
-            Ok(refused) => {
-                tracing::debug!(status = self.status.as_u16(), "corten: request refused by its handler");
-                return refused.0.into_response();
-            }
-            Err(source) => source,
-        };
-        let this = Error { status: self.status, source };
-        this.answer()
+        match self.source.downcast::<caller::AsError>() {
+            // A handler's refusal (`From<Refused>`): answered as an extractor's is.
+            Ok(refused) if refused.0.status() == self.status => refused.into_response(),
+            // `with_status` gave it another status, which is answered as a plain failure's is.
+            Ok(refused) => Error { status: self.status, source: refused }.answer(),
+            Err(source) => Error { status: self.status, source }.answer(),
+        }
     }
 }
 

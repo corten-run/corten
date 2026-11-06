@@ -408,11 +408,13 @@ pub enum Failure {
     /// The handler needs a [`crate::Caller`] the request does not have, or one who may not do
     /// this, and there is nowhere to sign in: 401 or 403, or 429 for a client with too many failed
     /// attempts ([`crate::Refused`]); or a middleware turned the request away with a `Refused`
-    /// (a rate limit's 429).
+    /// (a rate limit's 429), or the handler did (`Err(Refused::forbidden())?`).
     Refused { status: StatusCode },
     /// Who is asking could not be found out now ([`crate::Refused::unavailable`]: the session
-    /// store is down), so the request was neither let through nor sent to sign in (503). Not a
-    /// handler's own 503, which is [`Failure::Failed`]. The detail is the lookup's error.
+    /// store is down), so the request was neither let through nor sent to sign in (503), by an
+    /// extractor or by a handler's `Err(Refused::unavailable(..))?`. Not a handler's
+    /// `Error::status(SERVICE_UNAVAILABLE)`, which is [`Failure::Failed`]. The detail is the
+    /// lookup's error.
     Unidentified { detail: Option<Arc<str>> },
     /// The path, the query or the body did not parse (400, 415 or 422). The detail is the
     /// extractor's text, written for a developer.
