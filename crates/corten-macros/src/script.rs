@@ -28,34 +28,6 @@ pub struct Handler {
     pub doc: String,
 }
 
-/// `Name` of a type that is all one `Name<..>` (`CustomEvent<{ f: () => void }>`), and nothing
-/// for a union or an index that only starts with one (`CustomEvent<T> | KeyboardEvent`,
-/// `CustomEvent<T>["detail"]`), which are other types.
-fn generic_name(ty: &str) -> Option<&str> {
-    let (name, _) = ty.split_once('<')?;
-    let name = name.trim();
-    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$') {
-        return None;
-    }
-    let mut depth = 0usize;
-    let mut previous = ' ';
-    for (i, c) in ty.char_indices().skip(name.len()) {
-        match c {
-            '<' => depth += 1,
-            // `=>` is an arrow in a function type, not a closing bracket.
-            '>' if previous != '=' => {
-                depth = depth.checked_sub(1)?;
-                if depth == 0 {
-                    return (i + 1 == ty.len()).then_some(name);
-                }
-            }
-            _ => {}
-        }
-        previous = c;
-    }
-    None
-}
-
 #[derive(Debug, PartialEq)]
 pub enum Param {
     /// A type Corten checks: a path under `::corten::script` (`el::HTMLButtonElement`).
@@ -1563,6 +1535,39 @@ fn unwrap_parens(mut ty: &str) -> &str {
     ty
 }
 
+/// `Name` of a type that is all one `Name<..>` (`CustomEvent<{ f: () => void }>`), and nothing
+/// for a union or an index that only starts with one (`CustomEvent<T> | KeyboardEvent`,
+/// `CustomEvent<T>["detail"]`), which are other types. Brackets in a quoted string
+/// (`CustomEvent<{ op: ">" }>`) are text, not brackets.
+fn generic_name(ty: &str) -> Option<&str> {
+    let (name, _) = ty.split_once('<')?;
+    let name = name.trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$') {
+        return None;
+    }
+    let mut depth = 0usize;
+    let mut previous = ' ';
+    let mut quote = None;
+    for (i, c) in ty.char_indices().skip(name.len()) {
+        match (quote, c) {
+            (Some(q), c) if c == q && previous != '\\' => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'' | '`') => quote = Some(c),
+            (None, '<') => depth += 1,
+            // `=>` is an arrow in a function type, not a closing bracket.
+            (None, '>') if previous != '=' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return (i + 1 == ty.len()).then_some(name);
+                }
+            }
+            _ => {}
+        }
+        previous = c;
+    }
+    None
+}
+
 /// The Rust bound for a JSDoc type.
 fn param_type(ty: &str) -> Param {
     let ty = unwrap_parens(ty.trim());
@@ -1766,6 +1771,10 @@ mod tests {
         assert_eq!(param_type("CustomEvent<{ a: number }> | AbortSignal"), Param::Any);
         assert_eq!(param_type("CustomEvent<{ status: number }>[\"detail\"]"), Param::Any);
         assert_eq!(param_type("NotAnEvent<{ a: number }>"), Param::Any);
+        // A bracket in a quoted string is text.
+        assert_eq!(param_type("CustomEvent<{ op: \">\" }>"), event("CustomEvent"));
+        assert_eq!(param_type("CustomEvent<{ s: `a>b` }>"), event("CustomEvent"));
+        assert_eq!(param_type("CustomEvent<{ a: \"<\" }> | Foo<\">\">"), Param::Any);
     }
 
     #[test]

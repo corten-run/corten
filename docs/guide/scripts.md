@@ -253,8 +253,9 @@ the event as `corten` declares it, `/** @import { CortenError, CortenNotice } fr
 what the script reads against what the runtime sends, and the markup that passes it another event
 or the `signal` does not compile. A handler that types `detail` itself
 (`CustomEvent<{ status: number }>`) is checked only as a `CustomEvent`, so its markup may pass it
-any custom event; `CortenError` is the type that ties it to `corten:error`. These names, like the
-browser's, are not an `#[event]`'s to take. Any other event name
+any custom event; `CortenError` is the type that ties it to `corten:error`. An `#[event]` takes
+neither name, nor that of a browser event Corten checks a handler against (`KeyboardEvent`,
+`PointerEvent`). Any other event name
 with a colon does not compile: a component's own event is an `#[event]` type, and another
 library's (`htmx:*`, a custom element's) is heard by a listener its script adds.
 
