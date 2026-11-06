@@ -194,7 +194,8 @@ A navigation or a `data-patch` action keeps the header the full load drew, so th
 started for it, nor for an API or a data client. A `Public` page is the same for everyone, so it
 draws nothing there, and a `Public` page route never starts the read. An answer that draws no layout
 (a redirect) drops a read still running, which stops it; one already in stays for an error page the
-app's middleware makes of the answer. A read that fails or passes the request's deadline draws
+app's middleware makes of the answer. So do the values a page drew, for an error page the
+middleware makes of that page. A read that fails or passes the request's deadline draws
 nothing in its place and is logged; the page is still sent. The error page for a failure the request
 is at fault for (an unknown URL, a wrong method, a refusal other than a 429, a form that does not
 read) starts the reads not started yet and waits for them as a page does, so a 404 shows the

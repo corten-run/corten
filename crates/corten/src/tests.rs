@@ -10903,6 +10903,56 @@ mod layout_reads {
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
     }
 
+    /// What a whole document that draws two layout reads costs: `READ_PAGES` (200) requests in
+    /// process, one at a time. Counting it under callgrind at two numbers of requests gives the
+    /// instructions per request. Run in release:
+    /// `READ_PAGES=200 cargo test --release -p corten --all-features --lib -- --ignored what_a_page_with_layout_reads_costs`
+    #[test]
+    #[ignore]
+    fn what_a_page_with_layout_reads_costs() {
+        let pages: usize = std::env::var("READ_PAGES").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        let routes = Router::new().route(
+            "/page",
+            get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page"</p> } }) }),
+        );
+        let router =
+            App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).middleware(AsViewer(Some("ada"))).router();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            for _ in 0..pages {
+                let (status, _, body) = call_with(router.clone(), "GET", "/page", None, None).await;
+                assert!(status == StatusCode::OK && body.contains(r#"<span class="count">3</span>"#), "{body}");
+            }
+        });
+    }
+
+    /// A page the app's middleware throws away after it was filled, answering an error itself: the
+    /// error page draws the values the page drew, which are in (#911).
+    #[tokio::test]
+    async fn the_error_page_middleware_makes_of_a_filled_page_draws_its_values() {
+        let count = CartCount::default();
+        let routes = Router::new().route(
+            "/page",
+            get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page"</p> } }) }),
+        );
+        let router = App::new(Routes::from(routes))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(count.clone())
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), RefuseAfter))
+            .router();
+        let (status, _, body) = call_with(router, "GET", "/page", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(!body.contains("<p>page</p>") && body.contains("<p>403</p>"), "{body}");
+        assert_eq!(body.matches(r#"<span class="count">3</span>"#).count(), 2, "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+    }
+
     /// A read that finishes on the same tick the route answers is in by the time it answered: the
     /// reads are polled once more before those still running are dropped.
     #[tokio::test(start_paused = true)]

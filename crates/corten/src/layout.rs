@@ -702,18 +702,6 @@ impl StartHere {
             (shared.clone(), refused, *error_waits)
         };
         self.finish(pending.signal.is_error_page() && !error_waits).await;
-        let reads = std::mem::take(&mut self.lock().reads.0);
-        // Each value by its read's type, and whether that read looked up who is asking. A `Public`
-        // page draws none, not even one it gave.
-        let mut values: Vec<(TypeId, Box<dyn Any + Send>, bool)> = Vec::new();
-        if !refused {
-            values.extend(given.into_iter().map(|(id, value)| (id, value, false)));
-        }
-        for Started { index, step, asked } in reads {
-            if let (Step::Done(value), Some(read)) = (step, shared.layout_reads.get(index)) {
-                values.push((read.id(), value, asked.load(Ordering::Relaxed)));
-            }
-        }
         let (head, body) = res.into_parts();
         let page = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(page) => page,
@@ -732,6 +720,23 @@ impl StartHere {
         // A view that drew this request's submit key makes the page one no tag stands for
         // (`cache::Unrepeatable`), as the page's own render does.
         crate::form::DREW_KEY.set(false);
+        // The reads in are drawn from where they are, and stay there for an error page the app's
+        // middleware may still make of this page, which draws them as this one does (#911); one
+        // still running past the deadline is dropped, which stops it. Held to the end of the
+        // splice: a read's view is given no request, so nothing it draws takes this again.
+        let mut here = self.lock();
+        here.reads.0.retain(|started| matches!(started.step, Step::Done(_)));
+        // Each value by its read's type, and whether that read looked up who is asking. A `Public`
+        // page draws none, not even one it gave (and started none, so none is in).
+        let mut values: Vec<(TypeId, &(dyn Any + Send), bool)> = Vec::new();
+        if !refused {
+            values.extend(given.iter().map(|(id, value)| (*id, &**value, false)));
+        }
+        for Started { index, step, asked } in &here.reads.0 {
+            if let (Step::Done(value), Some(read)) = (step, shared.layout_reads.get(*index)) {
+                values.push((read.id(), &**value, asked.load(Ordering::Relaxed)));
+            }
+        }
         let out = splice(page, pending.places.token, &pending.places.slots, |_, slot, out| {
             // A read the app does not start draws nothing, a value the page gave included; looked
             // for first, wherever the place is, so it is logged.
@@ -743,10 +748,12 @@ impl StartHere {
                 return;
             }
             let Some((_, value, asked)) = values.iter().find(|(id, ..)| *id == slot.id) else { return };
-            if draw(&**read, &**value, &shared, &pending.signal, out) {
+            if draw(&**read, *value, &shared, &pending.signal, out) {
                 personal |= *asked;
             }
         });
+        drop(values);
+        drop(here);
         if personal {
             pending.signal.mark_personal();
         }

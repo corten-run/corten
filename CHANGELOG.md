@@ -4902,6 +4902,11 @@ Corten is pre-1.0, so any minor version may change the API.
     copy is unaffected. `toasts.css` grew 431 bytes (1,905 to 2,336; 179 gzipped at zlib
     level 9, 810 to 989), 142 of its rules without comments (1,624 to 1,766; 41 gzipped); measured
     ([#946 The kit Toasts has a fixed 1rem inset, so on a phone layout with a fixed bottom bar every toast covers the bar, and nothing lets the app lift it](https://github.com/corten-run/corten/issues/946)).
+180. An error page the app's middleware made of a page it threw away after the route answered (a
+    `Refused::forbidden()` decided after `next`) drew the layout's places empty: drawing the page
+    used up its layout read values. They now stay for that error page, which draws them, with no
+    second read. MEASUREMENT
+    ([#911 An error page a middleware makes of an already-filled page draws no layout read values](https://github.com/corten-run/corten/issues/911)).
 
 ### Documentation
 
