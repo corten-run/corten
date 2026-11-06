@@ -3514,9 +3514,11 @@ Corten is pre-1.0, so any minor version may change the API.
     instructions instead of 1,336,000, for 2,358 bytes instead of 2,142 (gzip 1 sends 2,506, zstd
     1 2,178). brotli 0 (with its window sized to the body) costs more than 1 and sends more, and a
     window sized to the body changed nothing at level 1. A held `json::Raw` compressed on every
-    read for a brotli client takes 455 µs on a 79 KB document instead of 754 µs, for 7,284 bytes
-    instead of 6,939 (release build on Windows, median of nine runs; zstd 1 takes 105 µs). The
-    guide's other numbers for that document (brotli 9 once, zstd 1 per read) are remeasured on it
+    read for a brotli client takes 3.14 million instructions on a 79 KB document instead of 12.7
+    million (callgrind, two runs that agree), for 7,284 bytes instead of 6,939; timed once on
+    Windows the medians were 455 µs and 754 µs, though each level's samples spread wider than that
+    gap. The guide's numbers for that document are all remeasured on it; entry 106's were taken on
+    another 80 KB document
     ([#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985)).
 
 ### Fixed

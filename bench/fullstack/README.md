@@ -736,8 +736,10 @@ larger page the increments, and these ratios, would be larger.
 
 Since
 [#985 Per-request brotli costs about 1.2 million instructions on the item page, 5x zstd 1, with a 4 MiB window for an 8.8 KB body](https://github.com/corten-run/corten/issues/985),
-a page compressed per request with brotli uses level 1, measured the same way at `7b882204` (two
-pairs of 1 s and 30 s loops each; bytes from `render_cost`, the average over its 500 items):
+a page compressed per request with brotli uses level 1, measured the same way (two pairs of 1 s
+and 30 s loops each; bytes from `render_cost`, the average over its 500 items): level 2 at
+`a17f1775` (the table above), level 1 at `7b882204`, and level 0 at `7b882204` with the window
+sized to the body in a local build:
 
 | brotli level | Instructions a request | Bytes sent |
 |---|---|---|
@@ -750,7 +752,8 @@ and about 8% more than zstd 1's 2,178; level 0 costs more than 1 and sends more.
 adds fit in the same first congestion window, so they cost a client no round trip, only the time
 to send them, and the server saves about 529,000 instructions a page. Both sides are estimated:
 216 bytes take about 173 µs at 10 Mbit/s and 17 µs at 100 Mbit/s, and 529,000 instructions about
-100 µs of the server's CPU (at the rate this table's times give). So below about 17 Mbit/s an
+115 µs of the server's CPU (at the rate of the brotli row in the table above, 1,336,000 in 283 to
+301 µs). So below about 15 Mbit/s an
 unloaded request may reach the client slightly later at level 1; on a faster link, or on a busy
 server, where the CPU a request takes is time other requests wait, level 1 is ahead. Most of what level 1 still costs is the brotli crate's own encoder
 and the tables it allocates and zeroes for each response. Those cannot be kept between responses
