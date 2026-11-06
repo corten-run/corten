@@ -9,7 +9,7 @@ description = "Renders the browser bench's view pages with html! and writes the 
 [workspace]
 
 [dependencies]
-corten = { path = "../../../crates/corten", default-features = false, features = ["types"] }
+corten = { package = "corten-run", path = "../../../crates/corten", default-features = false, features = ["types"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
