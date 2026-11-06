@@ -11652,6 +11652,46 @@ mod layout_reads {
         }
     }
 
+    /// The app's middleware, refusing what the route answered as the request's fault (an error
+    /// page that waits for its reads).
+    struct ForbidAfter;
+
+    impl crate::Middleware for ForbidAfter {
+        async fn call(&self, req: axum::extract::Request, next: impl crate::middleware::Next) -> axum::response::Response {
+            let _ = next.run(req).await;
+            axum::response::IntoResponse::into_response(crate::Refused::forbidden())
+        }
+    }
+
+    /// The shop's pages behind middleware that refuses each after it was filled: `/page` draws its
+    /// reads, `/cart` gives the count, and `/given` gives it and says so (`gives(CartCount)`).
+    fn refused_after<M: crate::Middleware>(count: CartCount, refuse: M) -> Router {
+        let typed = shop_url::router();
+        let routes = Router::new()
+            .route(
+                "/page",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page"</p> } }) }),
+            )
+            .route(
+                "/cart",
+                get(|req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })
+                        .map(|page| page.give::<CartCount>(7))
+                }),
+            );
+        App::new(Routes(typed.0.merge(routes), typed.1))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(count)
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), refuse))
+            .router()
+    }
+
     /// A read in by the time the route answers with no page stays for the error page the app's
     /// middleware turns the answer into.
     #[tokio::test]
@@ -11679,6 +11719,67 @@ mod layout_reads {
         let (status, _, body) = call_with(router, "GET", "/away", None, None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+    }
+
+    /// What a whole document that draws two layout reads costs: `READ_PAGES` (200) requests in
+    /// process, one at a time. Counting it under callgrind at two numbers of requests gives the
+    /// instructions per request. Run in release:
+    /// `READ_PAGES=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_page_with_layout_reads_costs`
+    #[test]
+    #[ignore]
+    fn what_a_page_with_layout_reads_costs() {
+        let pages: usize = std::env::var("READ_PAGES").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        // `READ_GIVES=1`: a page that gives the count itself (`give`), the other read drawn.
+        let gives = std::env::var("READ_GIVES").is_ok_and(|v| v == "1");
+        let routes = Router::new()
+            .route(
+                "/page",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page"</p> } }) }),
+            )
+            .route(
+                "/cart",
+                get(|req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })
+                        .map(|page| page.give::<CartCount>(7))
+                }),
+            );
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware(AsViewer(Some("ada")))
+            .router();
+        let (path, count) = if gives { ("/cart", 7) } else { ("/page", 3) };
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            for _ in 0..pages {
+                let (status, _, body) = call_with(router.clone(), "GET", path, None, None).await;
+                assert!(status == StatusCode::OK && body.contains(&format!(r#"<span class="count">{count}</span>"#)), "{body}");
+            }
+        });
+    }
+
+    /// A page the app's middleware throws away after it was filled, answering an error itself: the
+    /// error page draws the values the page drew, its reads' and those it gave, without reading
+    /// them again, whether the error page waits for its reads (a refusal, the request's fault) or
+    /// not (a bare 403) (#911).
+    #[tokio::test]
+    async fn the_error_page_middleware_makes_of_a_filled_page_draws_its_values() {
+        // The page's path, the count it drew, and how many times the count is read.
+        for (path, drawn, reads) in [("/page", 3, 1), ("/cart", 7, 1), ("/given", 7, 0)] {
+            for forbid in [false, true] {
+                let count = CartCount::default();
+                let router =
+                    if forbid { refused_after(count.clone(), ForbidAfter) } else { refused_after(count.clone(), RefuseAfter) };
+                let (status, _, body) = call_with(router, "GET", path, None, None).await;
+                let case = format!("{path}, forbidden {forbid}: {body}");
+                assert_eq!(status, StatusCode::FORBIDDEN, "{case}");
+                assert!(!body.contains("<p>page</p>") && body.contains("<p>403</p>"), "{case}");
+                let header = format!(r#"<header>Cart <span class="count">{drawn}</span><b>ada</b></header>"#);
+                assert!(body.contains(&header), "{case}");
+                assert!(body.contains(&format!(r#"<footer><span class="count">{drawn}</span></footer>"#)), "{case}");
+                assert_eq!(count.started.load(Ordering::SeqCst), reads, "{case}");
+            }
+        }
     }
 
     /// A read that finishes on the same tick the route answers is in by the time it answered: the
