@@ -151,10 +151,11 @@ written in the API's.
 below) read what a browser sends the way it sends it, a key once per value. A form's type derives
 `Fields` alone, and a word in a form or a link `UrlValue` alone: each implements serde's
 `Deserialize` the way serde's derive would, from the same `#[serde(..)]` attributes (`rename`,
-`rename_all`, `alias`, `default`, `skip`, `other`, `deny_unknown_fields`, `borrow`), so the names
-a form posts, a link writes and the handler reads are one list. An attribute that changes reading
-in another way (`flatten`, `deserialize_with`) does not compile; such a field needs a type of its
-own that implements `Deserialize`.
+`rename_all`, `alias`, `default`, `skip`, `other`, `deny_unknown_fields`, `borrow`, `bound`,
+`expecting`), so the names a form posts, a link writes and the handler reads are one list. An
+attribute that reads the type some other way (`flatten`, `with`, `deserialize_with`, `from`,
+`try_from`, `transparent`, `remote`, `tag`, `untagged`) does not compile; such a field needs a
+type of its own that implements `Deserialize`.
 
 | Field type | Reads | A browser sends |
 |---|---|---|

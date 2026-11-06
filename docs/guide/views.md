@@ -489,8 +489,8 @@ of a library with them (corten-ui's `Copied`) do not link.
 
 Routes write their URL straight into the page (path parameters percent-encoded, `None` query
 parameters left out). A query field is anything `Display`; an enum in an address (a tab, a sort,
-what a redirect says happened) derives `UrlValue` beside `Deserialize`, which writes each
-variant as the word serde reads (`#[serde(rename_all = "kebab-case")]`: `AwaitingLabel` is
+what a redirect says happened) derives `UrlValue`, which writes each variant as the word
+its `Deserialize` (derived with it) reads (`#[serde(rename_all = "kebab-case")]`: `AwaitingLabel` is
 `awaiting-label`), so the link and the handler cannot disagree.
 
 A component several pages draw (a filter and sortable table that two screens share) takes where

@@ -4,7 +4,7 @@
 
 #![cfg(feature = "json")]
 
-use std::{borrow::Cow, cell::RefCell, collections::BTreeMap};
+use std::{borrow::Cow, cell::RefCell, collections::BTreeMap, marker::PhantomData};
 
 use serde::de::{value::Error as ValueError, Deserialize, DeserializeOwned, Deserializer, IntoDeserializer, Visitor};
 
@@ -30,6 +30,126 @@ macro_rules! twin {
 
 pub fn seven() -> u32 {
     7
+}
+
+pub fn fallback_filters() -> fallback::ours::Fallback {
+    fallback::ours::Fallback { page: 3, search: Some("all".into()) }
+}
+
+pub fn fallback_filters_theirs() -> fallback::theirs::Fallback {
+    fallback::theirs::Fallback { page: 3, search: Some("all".into()) }
+}
+
+twin! { sort, corten::UrlValue,
+    #[derive(Clone, Copy)]
+    pub enum Sort {
+        Price,
+        Newest,
+        #[serde(other)]
+        Unknown,
+    }
+}
+
+mod fallback {
+    pub mod ours {
+        #[derive(Debug, PartialEq, corten::Fields)]
+        #[serde(default = "crate::fallback_filters")]
+        pub struct Fallback {
+            pub page: u32,
+            pub search: Option<String>,
+        }
+    }
+    pub mod theirs {
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        #[serde(default = "crate::fallback_filters_theirs")]
+        pub struct Fallback {
+            pub page: u32,
+            pub search: Option<String>,
+        }
+    }
+}
+
+twin! { aliased, corten::Fields,
+    #[serde(deny_unknown_fields)]
+    pub struct Aliased {
+        #[serde(alias = "q", alias = "query")]
+        pub search: String,
+    }
+}
+
+// Bounds as serde infers them: `T: Default` for a defaulted `T`, none for one only a
+// `PhantomData` or a skipped field names; and a `bound` in their place.
+twin! { defaults, corten::Fields,
+    pub struct Defaults<T, U, K> {
+        #[serde(default)]
+        pub value: T,
+        pub kind: PhantomData<U>,
+        #[serde(skip)]
+        pub cache: Option<K>,
+    }
+}
+
+/// A number read for any `T`: a field a `bound` lets a type read when `T` is not `Deserialize`.
+#[derive(Debug, PartialEq)]
+pub struct Tagged<T>(pub u8, PhantomData<T>);
+
+impl<'de, T> Deserialize<'de> for Tagged<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        u8::deserialize(deserializer).map(|n| Tagged(n, PhantomData))
+    }
+}
+
+twin! { field_bound, corten::Fields,
+    pub struct FieldBound<T> {
+        #[serde(bound = "")]
+        pub value: Tagged<T>,
+    }
+}
+
+twin! { container_bound, corten::Fields,
+    #[serde(bound(serialize = "T: Copy", deserialize = "T: Default"), into = "u8")]
+    pub struct ContainerBound<T> {
+        pub value: Tagged<T>,
+    }
+}
+
+twin! { bytes, corten::Fields,
+    pub struct Bytes<'a, 'b> {
+        #[serde(borrow)]
+        pub raw: Cow<'a, [u8]>,
+        #[serde(borrow = "'b")]
+        pub named: Cow<'b, str>,
+        #[serde(borrow)]
+        pub maybe: Option<Cow<'a, str>>,
+    }
+}
+
+twin! { fixed, corten::Fields,
+    pub struct Fixed {
+        pub name: &'static str,
+    }
+}
+
+twin! { tree, corten::Fields,
+    pub struct Tree {
+        pub label: String,
+        #[serde(default)]
+        pub next: Option<Box<Self>>,
+    }
+}
+
+twin! { old, corten::Fields,
+    #[deprecated = "a test of a deprecated form type"]
+    pub struct Old {
+        pub a: u8,
+    }
+}
+
+twin! { raw, corten::Fields,
+    #[allow(non_camel_case_types)]
+    pub struct r#match {
+        pub a: u8,
+    }
 }
 
 twin! { tab, corten::UrlValue,
@@ -218,6 +338,9 @@ fn the_names_passed_to_the_deserializer_are_serde_s() {
     assert_eq!(names::<generic::ours::Generic<u8>>(), names::<generic::theirs::Generic<u8>>());
     assert_eq!(names::<empty::ours::Empty>(), names::<empty::theirs::Empty>());
     assert_eq!(names::<tab::ours::Tab>(), names::<tab::theirs::Tab>());
+    assert_eq!(names::<sort::ours::Sort>(), names::<sort::theirs::Sort>());
+    assert_eq!(names::<aliased::ours::Aliased>(), names::<aliased::theirs::Aliased>());
+    assert_eq!(names::<raw::ours::r#match>(), names::<raw::theirs::r#match>());
     assert_eq!(names::<sell::ours::Sell>().1, ["itemId", "qty", "quantity", "note", "tags", "gift", "days", "type"]);
 }
 
@@ -382,4 +505,100 @@ fn fields_alone_reads_groups_and_rows() {
     assert_eq!(refused.to_string(), "missing field `ship_to`");
     let refused = corten::form::from_bytes::<Order>(b"ship_to.apt=2").unwrap_err();
     assert_eq!(refused.to_string(), "ship_to: missing field `street`");
+}
+
+#[test]
+fn other_attributes_read_the_same() {
+    for text in [r#""price""#, r#""newest""#, r#""Price""#, r#""cheapest""#, "0", "2", "3"] {
+        same_json::<sort::ours::Sort, sort::theirs::Sort>(text);
+    }
+    for word in ["Price", "cheapest", ""] {
+        same_form::<orders_sort::ours::Orders, orders_sort::theirs::Orders>(&format!("sort={word}"));
+    }
+    for text in ["", "page=2", "search=red", "page=x"] {
+        same_form::<fallback::ours::Fallback, fallback::theirs::Fallback>(text);
+    }
+    for text in [r#"{}"#, r#"[]"#, r#"[4]"#, r#"{"page":4}"#] {
+        same_json::<fallback::ours::Fallback, fallback::theirs::Fallback>(text);
+    }
+    for text in ["search=a", "q=a", "query=a", "q=a&search=b", "other=1", ""] {
+        same_form::<aliased::ours::Aliased, aliased::theirs::Aliased>(text);
+    }
+    for text in ["", "value=2", "value=x", "kind=1", "cache=1"] {
+        same_form::<defaults::ours::Defaults<u8, NotRead, NotRead>, defaults::theirs::Defaults<u8, NotRead, NotRead>>(text);
+    }
+    for text in ["value=2", "", "value=x"] {
+        same_form::<field_bound::ours::FieldBound<NotRead>, field_bound::theirs::FieldBound<NotRead>>(text);
+        same_form::<container_bound::ours::ContainerBound<NotRead>, container_bound::theirs::ContainerBound<NotRead>>(text);
+    }
+    for text in [r#"{"label":"a"}"#, r#"{"label":"a","next":{"label":"b"}}"#, r#"{"label":"a","next":{}}"#] {
+        same_json::<tree::ours::Tree, tree::theirs::Tree>(text);
+    }
+    for text in [r#"{"a":1}"#, "1", "[]"] {
+        same_json::<raw::ours::r#match, raw::theirs::r#match>(text);
+        #[allow(deprecated)]
+        same_json::<old::ours::Old, old::theirs::Old>(text);
+    }
+}
+
+/// A type that is not `Deserialize`, which only a `PhantomData` or a skipped field names (serde
+/// bounds a skipped field's parameters by `Default`).
+#[derive(Debug, PartialEq, Default)]
+pub struct NotRead;
+
+mod orders_sort {
+    pub mod ours {
+        #[derive(Debug, PartialEq, corten::Fields)]
+        pub struct Orders {
+            pub sort: Option<crate::sort::ours::Sort>,
+        }
+    }
+    pub mod theirs {
+        #[derive(Debug, PartialEq, serde::Deserialize)]
+        pub struct Orders {
+            pub sort: Option<crate::sort::theirs::Sort>,
+        }
+    }
+}
+
+#[test]
+fn borrowed_bytes_and_named_lifetimes_borrow_where_serde_s_do() {
+    let text = r#"{"raw":"abc","named":"n","maybe":"m"}"#;
+    let ours: bytes::ours::Bytes<'_, '_> = serde_json::from_str(text).unwrap();
+    let theirs: bytes::theirs::Bytes<'_, '_> = serde_json::from_str(text).unwrap();
+    assert_eq!(format!("{ours:?}"), format!("{theirs:?}"));
+    assert!(matches!(ours.raw, Cow::Borrowed(b"abc")) && matches!(theirs.raw, Cow::Borrowed(b"abc")));
+    assert!(matches!(ours.named, Cow::Borrowed("n")) && matches!(theirs.named, Cow::Borrowed("n")));
+    // An `Option<Cow>` borrows the lifetime but reads by `Option`'s own `Deserialize`: owned.
+    assert!(matches!(ours.maybe, Some(Cow::Owned(_))) && matches!(theirs.maybe, Some(Cow::Owned(_))));
+    for text in [
+        r#"{"raw":"a
+b","named":"n"}"#,
+        r#"{"raw":[1,2],"named":"n"}"#,
+        r#"{"named":"n"}"#,
+        r#"{"raw":"r","named":1}"#,
+    ] {
+        assert_eq!(
+            shown(serde_json::from_str::<bytes::ours::Bytes<'_, '_>>(text)),
+            shown(serde_json::from_str::<bytes::theirs::Bytes<'_, '_>>(text)),
+            "{text}"
+        );
+    }
+    // A borrowed `Cow<str>` read from bytes, as serde's reads one: borrowed when they are UTF-8.
+    use corten::form::__private::Borrow;
+    use serde::de::value::{BorrowedBytesDeserializer, BytesDeserializer};
+    let text = Borrow::<Cow<'_, str>>::deserialize(BorrowedBytesDeserializer::<ValueError>::new(b"plain")).unwrap();
+    assert!(matches!(text.0, Cow::Borrowed("plain")));
+    let text = Borrow::<Cow<'_, str>>::deserialize(BytesDeserializer::<ValueError>::new(b"plain")).unwrap();
+    assert!(matches!(text.0, Cow::Owned(_)));
+    let refused = Borrow::<Cow<'_, str>>::deserialize(BorrowedBytesDeserializer::<ValueError>::new(b"\xff")).err().unwrap();
+    assert_eq!(refused.to_string(), "invalid value: byte array, expected a string");
+}
+
+#[test]
+fn a_static_field_reads_static_input() {
+    let ours: fixed::ours::Fixed = serde_json::from_str(r#"{"name":"n"}"#).unwrap();
+    let theirs: fixed::theirs::Fixed = serde_json::from_str(r#"{"name":"n"}"#).unwrap();
+    assert_eq!(ours.name, theirs.name);
+    assert_eq!(names::<fixed::ours::Fixed>(), names::<fixed::theirs::Fixed>());
 }

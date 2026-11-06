@@ -178,7 +178,8 @@ pub(crate) fn type_params(impl_generics: &TokenStream) -> Vec<Ident> {
 pub(crate) enum Value {
     Bare,
     Str(String),
-    Group,
+    /// `key(...)`, with what is inside the parentheses.
+    Group(TokenStream),
 }
 
 pub(crate) struct Arg {
@@ -241,7 +242,7 @@ pub(crate) fn serde_args_for(attrs: &[Group], derive: &str) -> Result<Vec<Arg>, 
                     Some(s) => Value::Str(s),
                     None => return err(l.span(), format!("{derive}: expected a string")),
                 },
-                (Some(TokenTree::Group(_)), _) => Value::Group,
+                (Some(TokenTree::Group(g)), _) => Value::Group(g.stream()),
                 _ => return err(key.span(), format!("{derive}: expected #[serde(key)] or #[serde(key = \"value\")]")),
             };
             out.push(Arg { key: key.to_string(), value, span: key.span() });
@@ -373,7 +374,7 @@ fn default_expr(arg: &Arg) -> Result<crate::schema::DefaultValue, Error> {
             Ok(path) => Ok(crate::schema::DefaultValue::Path(path)),
             Err(_) => err(arg.span, "ToJson: default takes a function's path"),
         },
-        Value::Group => err(arg.span, "ToJson: use #[serde(default)] or #[serde(default = \"path\")]"),
+        Value::Group(_) => err(arg.span, "ToJson: use #[serde(default)] or #[serde(default = \"path\")]"),
     }
 }
 

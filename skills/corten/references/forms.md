@@ -3,7 +3,7 @@
 ## A form that patches part of the page
 
 ```rust
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct GreetForm { name: String }
 
 fn home_page(req: &Req, name: &str) -> impl Document {
@@ -73,7 +73,7 @@ Name the input with a `Files` field of the form struct and take `Upload<T>`, nev
 answers 415) or a raw body with a parser of your own:
 
 ```rust
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct NewListing { title: String, photos: Files }   // <input type="file" name={f.photos} multiple>
 
 async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
@@ -118,7 +118,7 @@ Its form is a plain `method="post"` form: a file answered to a `data-patch` subm
 nothing for an unchecked box:
 
 ```rust
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct ArchiveInput {
     #[serde(default)]
     ids: Vec<String>,   // one <input type="checkbox" name={f.ids} value={id}> per row
@@ -268,6 +268,6 @@ Keep the HTML attributes (`required`, `type="email"`, `inputmode`) too: the brow
 first, and the server check is the one that counts. A field required only for some values of
 another goes in `corten_ui::RequiredWhen` (`control={f.kind} values={&[Kind::Partial]}`), never a
 script of the app's, and the handler checks the same rule. A field with a fixed set of values
-(a select, radios, a `corten_ui::ComboBox`) is a `#[derive(UrlValue, Deserialize)]` enum in the form
+(a select, radios, a `corten_ui::ComboBox`) is a `#[derive(UrlValue)]` enum in the form
 struct, and the markup writes its variants (`value={Kind::Partial}`, `Choice { value: Kind::Partial, .. }`),
 not their words as strings.

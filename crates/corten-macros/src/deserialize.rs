@@ -1,5 +1,5 @@
 //! serde's `Deserialize` for a `#[derive(Fields)]` struct and a `#[derive(UrlValue)]` enum, so neither
-//! needs `#[derive(Deserialize)]` beside it, nor serde's derive (and `syn`) at all. The impl is the one
+//! needs `#[derive(Deserialize)]` beside it, nor an app serde's derive. The impl is the one
 //! serde_derive writes for the attributes these derives read: the same names (`rename`,
 //! `rename_all`, `alias`), defaults, skipped fields and `other`, read from a map or a sequence (a
 //! struct) or an enum's variant (an enum), with the same errors. An attribute that changes reading
@@ -7,14 +7,14 @@
 
 use std::collections::BTreeSet;
 
-use proc_macro::{Group, Ident, Literal, TokenStream, TokenTree};
+use proc_macro::{Delimiter, Group, Ident, Literal, Spacing, TokenStream, TokenTree};
 
 use crate::{
     component::split,
     derive::{named_fields, Item},
     schema::DefaultValue,
-    to_json::{bounded, field_rule, serde_args_for, Arg, Value, RULES},
-    tokens::{err, q, Error},
+    to_json::{field_rule, serde_args_for, type_params, Arg, Value, RULES},
+    tokens::{err, q, string_value, Error},
 };
 
 /// Generated code as text, with `__A0`, `__A1`, .. where tokens that keep their own spans go (a
@@ -56,7 +56,7 @@ fn default_arg(derive: &str, arg: &Arg) -> Result<DefaultValue, Error> {
             Ok(path) => Ok(DefaultValue::Path(path)),
             Err(_) => err(arg.span, format!("{derive}: default takes a function's path")),
         },
-        Value::Group => err(arg.span, format!("{derive}: use #[serde(default)] or #[serde(default = \"path\")]")),
+        Value::Group(_) => err(arg.span, format!("{derive}: use #[serde(default)] or #[serde(default = \"path\")]")),
     }
 }
 
@@ -64,6 +64,39 @@ fn string_arg(derive: &str, arg: &Arg) -> Result<String, Error> {
     match &arg.value {
         Value::Str(s) => Ok(s.clone()),
         _ => err(arg.span, format!("{derive}: use #[serde({} = \"...\")], one name for reading and writing", arg.key)),
+    }
+}
+
+/// `bound = "T: Trait"`, or the `deserialize` half of `bound(serialize = "..", deserialize = "..")`:
+/// the where predicates reading takes instead of the ones serde would infer. `None` when only
+/// writing has one.
+fn bound_arg(derive: &str, arg: &Arg) -> Result<Option<TokenStream>, Error> {
+    let usage = format!("{derive}: use #[serde(bound = \"T: Trait\")] or #[serde(bound(deserialize = \"T: Trait\"))]");
+    let text = match &arg.value {
+        Value::Str(text) => Some(text.clone()),
+        Value::Bare => return err(arg.span, usage),
+        Value::Group(inner) => {
+            let mut found = None;
+            for part in split(inner.clone(), ',') {
+                let (Some(TokenTree::Ident(key)), Some(TokenTree::Punct(eq)), Some(TokenTree::Literal(text)), 3) =
+                    (part.first(), part.get(1), part.get(2), part.len())
+                else {
+                    return err(arg.span, usage);
+                };
+                let (Some(text), '=') = (string_value(text), eq.as_char()) else { return err(arg.span, usage) };
+                match key.to_string().as_str() {
+                    "deserialize" => found = Some(text),
+                    "serialize" => {}
+                    _ => return err(key.span(), usage),
+                }
+            }
+            found
+        }
+    };
+    match text.map(|text| text.parse::<TokenStream>()) {
+        None => Ok(None),
+        Some(Ok(predicates)) => Ok(Some(predicates)),
+        Some(Err(_)) => err(arg.span, format!("{derive}: a bound is where predicates, as in \"T: Default\"")),
     }
 }
 
@@ -84,6 +117,8 @@ struct Container {
     /// The name serde reads the type by (`rename`), passed to the deserializer.
     rename: Option<String>,
     expecting: Option<String>,
+    /// `bound`: the impl's where predicates in place of the inferred ones.
+    bound: Option<TokenStream>,
 }
 
 impl Container {
@@ -96,9 +131,9 @@ impl Container {
                 "deny_unknown_fields" => c.deny_unknown_fields = true,
                 "rename" => c.rename = Some(string_arg(derive, &arg)?),
                 "expecting" => c.expecting = Some(string_arg(derive, &arg)?),
-                // serde's own path, and bounds: Corten's impl names serde itself and bounds each
-                // type parameter by `Deserialize`.
-                "crate" | "bound" => {}
+                "bound" => c.bound = bound_arg(derive, &arg)?,
+                // serde's own path (Corten's impl names serde itself), and what only writing uses.
+                "crate" | "into" => {}
                 _ => return Err(unsupported(&arg)),
             }
         }
@@ -119,7 +154,7 @@ struct Generics {
 }
 
 /// The lifetimes a field borrows from the input, as serde_derive finds them: each `&'a` in its
-/// type (a `&str` or `&[u8]`), or every lifetime in it with `#[serde(borrow)]`.
+/// type (a `&str` or `&[u8]`), or every lifetime in it with a bare `#[serde(borrow)]`.
 fn borrowed(ty: &TokenStream, all: bool, out: &mut BTreeSet<String>) {
     let tokens: Vec<TokenTree> = ty.clone().into_iter().collect();
     for (i, token) in tokens.iter().enumerate() {
@@ -136,7 +171,162 @@ fn borrowed(ty: &TokenStream, all: bool, out: &mut BTreeSet<String>) {
     }
 }
 
-fn generics(item: &Item, borrowed: &BTreeSet<String>) -> Generics {
+/// Whether `ty` is `Cow<'a, str>` or `Cow<'a, [u8]>` (by any path), the two types a
+/// `#[serde(borrow)]` reads borrowed itself; any other type borrows by its own `Deserialize`.
+fn is_borrowed_cow(ty: &TokenStream) -> bool {
+    let tokens: Vec<TokenTree> = ty.clone().into_iter().collect();
+    let Some(at) = tokens.iter().rposition(|t| matches!(t, TokenTree::Ident(id) if id.to_string() == "Cow")) else {
+        return false;
+    };
+    let punct = |i: usize, c: char| matches!(tokens.get(i), Some(TokenTree::Punct(p)) if p.as_char() == c);
+    let elem = match tokens.get(at + 5) {
+        Some(TokenTree::Ident(id)) => id.to_string() == "str",
+        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => g.stream().to_string().trim() == "u8",
+        _ => false,
+    };
+    tokens.len() == at + 7
+        && punct(at + 1, '<')
+        && punct(at + 2, '\'')
+        && matches!(tokens.get(at + 3), Some(TokenTree::Ident(_)))
+        && punct(at + 4, ',')
+        && elem
+        && punct(at + 6, '>')
+}
+
+/// `ty` with each `Self` in it the type itself: inside the visitor `Self` is the visitor.
+fn without_self(ty: TokenStream, this: &TokenStream) -> TokenStream {
+    ty.into_iter()
+        .flat_map(|token| match token {
+            TokenTree::Ident(id) if id.to_string() == "Self" => this.clone(),
+            TokenTree::Group(g) => {
+                let mut inner = Group::new(g.delimiter(), without_self(g.stream(), this));
+                inner.set_span(g.span());
+                TokenTree::Group(inner).into()
+            }
+            other => other.into(),
+        })
+        .collect()
+}
+
+/// The type parameters `ty` names as a whole path segment, as serde_derive finds them: not inside
+/// `PhantomData<..>`, which reads whatever its parameter is.
+fn named_params(ty: &TokenStream, params: &[Ident], out: &mut BTreeSet<String>) {
+    let tokens: Vec<TokenTree> = ty.clone().into_iter().collect();
+    let joint_colon = |t: Option<&TokenTree>| matches!(t, Some(TokenTree::Punct(p)) if p.as_char() == ':');
+    let mut i = 0;
+    while i < tokens.len() {
+        match &tokens[i] {
+            TokenTree::Group(g) => named_params(&g.stream(), params, out),
+            TokenTree::Ident(id) if id.to_string() == "PhantomData" => {
+                // Past its `<..>`.
+                let mut depth = 0;
+                let mut j = i + 1;
+                while j < tokens.len() {
+                    if let TokenTree::Punct(p) = &tokens[j] {
+                        let after_dash =
+                            matches!(&tokens[j - 1], TokenTree::Punct(d) if d.as_char() == '-' && d.spacing() == Spacing::Joint);
+                        match p.as_char() {
+                            '<' => depth += 1,
+                            '>' if !after_dash => depth -= 1,
+                            _ => {}
+                        }
+                    }
+                    if depth == 0 {
+                        break;
+                    }
+                    j += 1;
+                }
+                i = j;
+            }
+            TokenTree::Ident(id) => {
+                let lifetime = i > 0 && matches!(&tokens[i - 1], TokenTree::Punct(p) if p.as_char() == '\'');
+                let in_path = (i > 0 && joint_colon(tokens.get(i - 1))) || joint_colon(tokens.get(i + 1));
+                let name = id.to_string();
+                if !lifetime && !in_path && params.iter().any(|p| p.to_string() == name) {
+                    out.insert(name);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
+/// The where clause serde_derive gives the impl: the item's own, each field's `bound`, then the
+/// container's `bound` if it has one, else the inferred ones: `T: Deserialize<'de>` for each type
+/// parameter a read field names (and `T::Assoc: Deserialize<'de>` for a field of that type),
+/// `T: Default` for one a field defaulted by `Default` names, and `Type: Default` for a container
+/// `default`.
+fn where_clause(item: &Item, container: &Container, fields: &[Field], this: &TokenStream) -> TokenStream {
+    let mut predicates: Vec<TokenStream> = fields.iter().filter_map(|f| f.bound.clone()).collect();
+    if let Some(bound) = &container.bound {
+        predicates.push(bound.clone());
+    } else {
+        if matches!(container.default, Some(DefaultValue::Trait)) {
+            let mut p = this.clone();
+            p.extend(q(": ::core::default::Default", &[]));
+            predicates.push(p);
+        }
+        let params = type_params(&item.impl_generics);
+        let (mut read, mut default) = (BTreeSet::new(), BTreeSet::new());
+        let mut associated = Vec::new();
+        for f in fields {
+            if !f.skip && f.bound.is_none() {
+                named_params(&f.ty, &params, &mut read);
+                let mut tokens = f.ty.clone().into_iter();
+                if let (Some(TokenTree::Ident(first)), Some(TokenTree::Punct(colon))) = (tokens.next(), tokens.next()) {
+                    if colon.as_char() == ':' && params.iter().any(|p| p.to_string() == first.to_string()) {
+                        associated.push(f.ty.clone());
+                    }
+                }
+            }
+            let by_default =
+                matches!(f.default, Some(DefaultValue::Trait)) || (f.skip && f.default.is_none() && container.default.is_none());
+            if by_default {
+                named_params(&f.ty, &params, &mut default);
+            }
+        }
+        for param in params.iter().filter(|p| read.contains(&p.to_string())) {
+            predicates.push(q("__A0: _serde::Deserialize<'de>", &[TokenTree::Ident(param.clone()).into()]));
+        }
+        for ty in associated {
+            predicates.push(q("__A0: _serde::Deserialize<'de>", &[ty]));
+        }
+        for param in params.iter().filter(|p| default.contains(&p.to_string())) {
+            predicates.push(q("__A0: ::core::default::Default", &[TokenTree::Ident(param.clone()).into()]));
+        }
+    }
+    let mut out = item.where_clause.clone();
+    let mut first = true;
+    for p in predicates.into_iter().filter(|p| !p.is_empty()) {
+        if first && out.is_empty() {
+            out.extend(q("where", &[]));
+        } else if first && !matches!(out.clone().into_iter().last(), Some(TokenTree::Punct(c)) if c.as_char() == ',') {
+            out.extend(q(",", &[]));
+        }
+        first = false;
+        out.extend(p);
+        out.extend(q(",", &[]));
+    }
+    out
+}
+
+/// `#[allow(deprecated)]` on the generated code when the item is `#[deprecated]` or allows it, as
+/// serde_derive does, so naming the item there warns no more than the item itself does.
+fn allows_deprecated(attrs: &[Group]) -> bool {
+    attrs.iter().any(|attr| {
+        let mut tokens = attr.stream().into_iter();
+        match (tokens.next(), tokens.next()) {
+            (Some(TokenTree::Ident(id)), _) if id.to_string() == "deprecated" => true,
+            (Some(TokenTree::Ident(id)), Some(TokenTree::Group(args))) if id.to_string() == "allow" => {
+                args.stream().into_iter().any(|t| matches!(t, TokenTree::Ident(lint) if lint.to_string() == "deprecated"))
+            }
+            _ => false,
+        }
+    })
+}
+
+fn generics(item: &Item, borrowed: &BTreeSet<String>, where_clause: TokenStream) -> Generics {
     let inner = |generics: &TokenStream| -> TokenStream {
         let tokens: Vec<TokenTree> = generics.clone().into_iter().collect();
         if tokens.len() < 2 {
@@ -152,6 +342,9 @@ fn generics(item: &Item, borrowed: &BTreeSet<String>) -> Generics {
             _ => None,
         })
         .filter(|lifetime| borrowed.contains(lifetime))
+        // A `&'static str` reads only from input that lives for ever, as serde_derive's
+        // `Deserialize<'static>` does.
+        .chain(borrowed.contains("'static").then(|| "'static".to_string()))
         .collect();
     let mut params = if lifetimes.is_empty() {
         q("'de", &[])
@@ -166,18 +359,14 @@ fn generics(item: &Item, borrowed: &BTreeSet<String>) -> Generics {
         visitor_args.extend(q(",", &[]));
         visitor_args.extend(type_inner);
     }
-    Generics {
-        params,
-        visitor_args,
-        type_args: item.type_generics.clone(),
-        where_clause: bounded(&item.impl_generics, &item.where_clause, "_serde::Deserialize<'de>"),
-    }
+    Generics { params, visitor_args, type_args: item.type_generics.clone(), where_clause }
 }
 
 /// `const _: () = { use serde; impl Deserialize for Name { fn deserialize(..) { body } } };`
 fn wrap(item: &Item, g: &Generics, body: TokenStream) -> TokenStream {
     let mut code = Code::default();
-    code.push("#[doc(hidden)] #[allow(non_upper_case_globals, unused_attributes, unused_qualifications, clippy::all)] const _: () = { use ::corten::__private::serde as _serde; #[automatically_derived] impl <");
+    let deprecated = if allows_deprecated(&item.attrs) { "#[allow(deprecated)]" } else { "" };
+    code.push(&format!("#[doc(hidden)] #[allow(non_upper_case_globals, unused_attributes, unused_qualifications, clippy::all)] {deprecated} const _: () = {{ use ::corten::__private::serde as _serde; #[automatically_derived] impl <"));
     code.hole(g.params.clone());
     code.push("> _serde::Deserialize<'de> for");
     code.hole(TokenTree::Ident(item.name.clone()).into());
@@ -294,8 +483,13 @@ struct Field {
     names: BTreeSet<String>,
     default: Option<DefaultValue>,
     skip: bool,
-    /// `#[serde(borrow)]` on a `Cow<'a, str>`: borrowed from the input where it can be.
+    /// `#[serde(borrow)]` on a `Cow<'a, str>` or `Cow<'a, [u8]>`: read through
+    /// `form::__private::Borrow`, borrowed from the input where it can be.
     borrow: bool,
+    /// The lifetimes it borrows from the input.
+    lent: BTreeSet<String>,
+    /// `bound`: its where predicates in place of the inferred ones.
+    bound: Option<TokenStream>,
 }
 
 /// `Deserialize` for a struct with named fields, as `#[derive(Fields)]` reads it.
@@ -314,17 +508,22 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
     let Some(body) = &item.body else {
         return err(item.name.span(), "Fields can only be derived for a struct with named fields");
     };
+    let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
+    this.extend(item.type_generics.clone());
     let mut fields = Vec::new();
     for field in named_fields(body)? {
         let mut f = Field {
             member: field.ident.clone(),
-            ty: field.ty.iter().cloned().collect(),
+            ty: without_self(field.ty.iter().cloned().collect(), &this),
             primary: String::new(),
             names: BTreeSet::new(),
             default: None,
             skip: false,
             borrow: false,
+            lent: BTreeSet::new(),
+            bound: None,
         };
+        let mut borrows = false;
         let mut rename = None;
         let mut aliases = Vec::new();
         for arg in serde_args_for(&field.attrs, DERIVE)? {
@@ -333,7 +532,31 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
                 "alias" => aliases.push(string_arg(DERIVE, &arg)?),
                 "default" => f.default = Some(default_arg(DERIVE, &arg)?),
                 "skip" | "skip_deserializing" => f.skip = true,
-                "borrow" if matches!(arg.value, Value::Bare) => f.borrow = true,
+                "borrow" => {
+                    borrows = true;
+                    match &arg.value {
+                        Value::Bare => borrowed(&f.ty, true, &mut f.lent),
+                        Value::Str(lifetimes) => {
+                            for lifetime in lifetimes.split('+').map(str::trim) {
+                                let named = lifetime.strip_prefix('\'').is_some_and(|n| !n.is_empty());
+                                if !named {
+                                    return err(
+                                        arg.span,
+                                        format!("{DERIVE}: borrow takes lifetimes, as in borrow = \"'a + 'b\""),
+                                    );
+                                }
+                                f.lent.insert(lifetime.to_string());
+                            }
+                        }
+                        Value::Group(_) => {
+                            return err(arg.span, format!("{DERIVE}: use #[serde(borrow)] or #[serde(borrow = \"'a\")]"))
+                        }
+                    }
+                    if f.lent.is_empty() {
+                        return err(arg.span, format!("{DERIVE}: field {} has no lifetimes to borrow", field.name));
+                    }
+                }
+                "bound" => f.bound = bound_arg(DERIVE, &arg)?,
                 // Writing only.
                 "skip_serializing" | "skip_serializing_if" | "serialize_with" | "getter" => {}
                 _ => return Err(unsupported(&arg)),
@@ -343,19 +566,22 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
             .unwrap_or_else(|| container.rename_all.as_deref().map_or(field.name.clone(), |rule| field_rule(&field.name, rule)));
         f.names = aliases.into_iter().collect();
         f.names.insert(f.primary.clone());
+        if borrows {
+            f.borrow = is_borrowed_cow(&f.ty);
+        } else {
+            borrowed(&f.ty, false, &mut f.lent);
+        }
         fields.push(f);
     }
-    let mut lent = BTreeSet::new();
-    for f in fields.iter().filter(|f| !f.skip) {
-        borrowed(&f.ty, f.borrow, &mut lent);
-    }
-    let g = generics(item, &lent);
+    let lent: BTreeSet<String> = fields.iter().filter(|f| !f.skip).flat_map(|f| f.lent.iter().cloned()).collect();
+    let g = generics(item, &lent, where_clause(item, &container, &fields, &this));
     let read: Vec<&Field> = fields.iter().filter(|f| !f.skip).collect();
     let entries: Vec<BTreeSet<String>> = read.iter().map(|f| f.names.clone()).collect();
-    // As written (`r#type` stays raw) for the code; without `r#` for serde's messages.
+    // As written (`r#type` stays raw) for the code and serde's messages, as serde_derive writes
+    // them; without `r#` for the name it passes the deserializer.
     let path = item.name.to_string();
     let type_name = path.strip_prefix("r#").unwrap_or(&path);
-    let expecting = container.expecting.clone().unwrap_or_else(|| format!("struct {type_name}"));
+    let expecting = container.expecting.clone().unwrap_or_else(|| format!("struct {path}"));
 
     let mut code = Code::default();
     let (extra, unknown) = if container.deny_unknown_fields {
@@ -499,10 +725,12 @@ pub fn for_unit_enum(item: &Item, variants: &[Variant]) -> Result<TokenStream, E
         (arg.span, format!("UrlValue: #[serde({})] changes the words serde reads in a way UrlValue does not follow", arg.key))
     };
     let container = Container::read("UrlValue", &item.attrs, true, &unsupported)?;
-    let g = generics(item, &BTreeSet::new());
+    let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
+    this.extend(item.type_generics.clone());
+    let g = generics(item, &BTreeSet::new(), where_clause(item, &container, &[], &this));
     let path = item.name.to_string();
     let type_name = path.strip_prefix("r#").unwrap_or(&path).to_string();
-    let expecting = container.expecting.clone().unwrap_or_else(|| format!("enum {type_name}"));
+    let expecting = container.expecting.clone().unwrap_or_else(|| format!("enum {path}"));
     let entries: Vec<BTreeSet<String>> = variants.iter().map(|v| v.names.clone()).collect();
     let other = variants.iter().position(|v| v.other).map(|i| format!("::core::result::Result::Ok(__Field::__field{i})"));
 

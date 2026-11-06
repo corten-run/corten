@@ -1103,8 +1103,8 @@ pub mod __private {
         V::deserialize(Missing(field, PhantomData))
     }
 
-    /// A `#[serde(borrow)]` `Cow<'a, str>` field: borrowed from the input where the input lends it,
-    /// owned where it was decoded.
+    /// A `#[serde(borrow)]` `Cow<'a, str>` or `Cow<'a, [u8]>` field: borrowed from the input where
+    /// the input lends it, owned where it was decoded, as serde's derive reads one.
     pub struct Borrow<T>(pub T);
 
     impl<'de: 'a, 'a> Deserialize<'de> for Borrow<Cow<'a, str>> {
@@ -1124,8 +1124,57 @@ pub mod __private {
                 fn visit_string<E: Error>(self, text: String) -> Result<Cow<'de, str>, E> {
                     Ok(Cow::Owned(text))
                 }
+                fn visit_borrowed_bytes<E: Error>(self, bytes: &'de [u8]) -> Result<Cow<'de, str>, E> {
+                    match std::str::from_utf8(bytes) {
+                        Ok(text) => Ok(Cow::Borrowed(text)),
+                        Err(_) => Err(E::invalid_value(serde::de::Unexpected::Bytes(bytes), &self)),
+                    }
+                }
+                fn visit_bytes<E: Error>(self, bytes: &[u8]) -> Result<Cow<'de, str>, E> {
+                    match std::str::from_utf8(bytes) {
+                        Ok(text) => Ok(Cow::Owned(text.to_owned())),
+                        Err(_) => Err(E::invalid_value(serde::de::Unexpected::Bytes(bytes), &self)),
+                    }
+                }
+                fn visit_byte_buf<E: Error>(self, bytes: Vec<u8>) -> Result<Cow<'de, str>, E> {
+                    match String::from_utf8(bytes) {
+                        Ok(text) => Ok(Cow::Owned(text)),
+                        Err(e) => Err(E::invalid_value(serde::de::Unexpected::Bytes(&e.into_bytes()), &self)),
+                    }
+                }
             }
             deserializer.deserialize_str(Text).map(Borrow)
+        }
+    }
+
+    impl<'de: 'a, 'a> Deserialize<'de> for Borrow<Cow<'a, [u8]>> {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct Bytes;
+            impl<'de> Visitor<'de> for Bytes {
+                type Value = Cow<'de, [u8]>;
+                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("a byte array")
+                }
+                fn visit_borrowed_str<E: Error>(self, text: &'de str) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Borrowed(text.as_bytes()))
+                }
+                fn visit_str<E: Error>(self, text: &str) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Owned(text.as_bytes().to_vec()))
+                }
+                fn visit_string<E: Error>(self, text: String) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Owned(text.into_bytes()))
+                }
+                fn visit_borrowed_bytes<E: Error>(self, bytes: &'de [u8]) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Borrowed(bytes))
+                }
+                fn visit_bytes<E: Error>(self, bytes: &[u8]) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Owned(bytes.to_vec()))
+                }
+                fn visit_byte_buf<E: Error>(self, bytes: Vec<u8>) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Owned(bytes))
+                }
+            }
+            deserializer.deserialize_bytes(Bytes).map(Borrow)
         }
     }
 
