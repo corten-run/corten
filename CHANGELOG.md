@@ -4831,6 +4831,12 @@ Corten is pre-1.0, so any minor version may change the API.
     answers with a plain `Toast`, so it is drawn as a notice
     ([#936 An action that reports its own failure answers with a plain Toast, drawn like a success, and has no way to take the Toaster's failed look](https://github.com/corten-run/corten/issues/936))
     ([#932 The kit Toaster draws a failed submit in the same box as a success notice, and nothing marks it for a stylesheet](https://github.com/corten-run/corten/issues/932)).
+177. The kit's `Pagination` tied its `link` closure's borrow to the links' lifetime, so a closure named
+    before the markup that borrows the page's data and returns a boxed link did not compile
+    (`page_link` does not live long enough). `link` is now any closure that gives a link: a typed
+    route with no box (`link={|page| url::Orders { page: Some(page) }}`), or a `Box<dyn Href>` as
+    before, so `link={&|page| Box::new(..)}` still compiles
+    ([#862 The kit's Pagination ties its link closure's borrow to the links' lifetime, so a named closure that returns a borrowed link does not compile](https://github.com/corten-run/corten/issues/862)).
 
 ### Documentation
 

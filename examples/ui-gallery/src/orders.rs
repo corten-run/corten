@@ -373,7 +373,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                             next_label="Next"
                             pages={PAGES}
                             current={page}
-                            link={&|page| Box::new(url::Orders { page: Some(page).filter(|p| *p > 1), sort })}
+                            link={|page| url::Orders { page: Some(page).filter(|p| *p > 1), sort }}
                         />
                     </footer>
                 </section>
