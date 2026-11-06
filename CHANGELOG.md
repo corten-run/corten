@@ -4871,6 +4871,16 @@ Corten is pre-1.0, so any minor version may change the API.
     The table's checks at 600 and 390px and Steps' at 320px also wait for the new width, and each
     of these checks fails if the page was not at it. Test code only
     ([#939 ui-gallery smoke: the Stats phone-row check measures right after a viewport change and failed once in WebKit](https://github.com/corten-run/corten/issues/939)).
+179. The kit's `Toasts` sat a fixed 1rem from the bottom, so on a phone layout with a fixed bottom
+    bar every toast covered the bar. It now sits `--toasts-inset-bottom` above the bottom (a size
+    token of the theme, 1rem; plus the home indicator's inset on a page with `viewport-fit=cover`),
+    and a layout sets the token on `body` where its bar shows. A token rather than a `var()` with a
+    fallback, as every size the kit reads is a theme token. An app that takes the new
+    `toasts.css` (`corten ui add toasts --merge`) and whose theme predates the token declares it:
+    `ui add` prints the line, and the app does not start until it is declared; one that keeps its
+    copy is unaffected. `toasts.css` grew 431 bytes (1,905 to 2,336; 179 gzipped at zlib
+    level 9, 810 to 989), 142 of its rules without comments (1,624 to 1,766; 41 gzipped); measured
+    ([#946 The kit Toasts has a fixed 1rem inset, so on a phone layout with a fixed bottom bar every toast covers the bar, and nothing lets the app lift it](https://github.com/corten-run/corten/issues/946)).
 
 ### Documentation
 
