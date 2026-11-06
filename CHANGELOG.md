@@ -5032,10 +5032,9 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#951 Four examples (deck-builder, listings-feed, seller-desk, ui-gallery) have a layout and no App::error_page, so a failure leaves their design](https://github.com/corten-run/corten/issues/951)).
 181. The kit's `FailedAlert` took a row and a gap in a kit `Dialog`'s grid before anything failed,
     because its live region stays rendered. The region is now out of the flow while its alert is
-    hidden (`position: absolute`; it stays in the accessibility tree, and Chromium keeps the same
-    alert node when it moves, so its text is announced), and in the flow again once the alert
-    shows. An app with a copy of the kit takes it
-    with `corten ui add alert --merge`
+    hidden (`position: absolute`), and in the flow again once the alert shows. It stays in the
+    accessibility tree: in Chromium it is an assertive alert both ways. An app with a copy of the
+    kit takes it with `corten ui add alert --merge`
     ([#998 Kit FailedAlert: its always-rendered live region adds an empty row to a kit Dialog's grid before anything has failed](https://github.com/corten-run/corten/issues/998)).
 
 ### Documentation

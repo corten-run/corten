@@ -1363,8 +1363,9 @@ async function run(browser) {
         belowHeading: r.getBoundingClientRect().top >= /** @type {HTMLElement} */ (r.parentElement?.querySelector("h2")).getBoundingClientRect().bottom,
       }));
     const regionBefore = await region();
-    // Chromium's accessibility tree, through CDP: moving the region into the flow keeps the node a
-    // screen reader is watching (the same node, not ignored, an alert), so its text is announced.
+    // Chromium's accessibility tree, through CDP: out of the flow and back in, the region stays an
+    // assertive alert that is not ignored. (A node's id there is its DOM node's, so it is not
+    // compared.) Whether a screen reader then announces it is not something CDP can show, and
     // Firefox and WebKit expose no such API to Playwright.
     const cdp = engine === "chromium" ? await page.context().newCDPSession(page) : null;
     await cdp?.send("Accessibility.enable");
@@ -1372,9 +1373,10 @@ async function run(browser) {
       if (!cdp) return null;
       const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
       const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: '#rename [role="alert"]' });
+      if (!nodeId) return null;
       const { nodes } = await cdp.send("Accessibility.getPartialAXTree", { nodeId, fetchRelatives: false });
       const node = nodes[0];
-      return { id: node.nodeId, ignored: node.ignored, role: node.role?.value, live: node.properties?.find((p) => p.name === "live")?.value?.value };
+      return { ignored: node.ignored, role: node.role?.value, live: node.properties?.find((p) => p.name === "live")?.value?.value };
     };
     const axBefore = await axNode();
     // An empty region adds no row or gap to the dialog's grid: the form starts one gap under the
@@ -1408,7 +1410,8 @@ async function run(browser) {
     const regionSaying = await region();
     const axSaying = await axNode();
     if (cdp) {
-      check("the region keeps its accessibility node when it moves into the flow (Chromium)", !!axBefore && !!axSaying && axBefore.id === axSaying.id && !axBefore.ignored && !axSaying.ignored && axSaying.role === "alert" && axSaying.live === "assertive", JSON.stringify({ axBefore, axSaying }));
+      const alert = (/** @type {{ ignored: boolean, role: string, live: string } | null} */ n) => !!n && !n.ignored && n.role === "alert" && n.live === "assertive";
+      check("out of the flow and back in, the region is an assertive alert in the accessibility tree (Chromium)", alert(axBefore) && alert(axSaying), JSON.stringify({ axBefore, axSaying }));
       await cdp.detach();
     }
     await page.keyboard.press("Escape");
