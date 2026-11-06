@@ -259,3 +259,20 @@ fn a_crlf_file_keeps_its_line_endings() {
     std::fs::remove_file(&file).unwrap();
     let _ = std::fs::remove_dir(&dir);
 }
+
+/// A char literal of an escaped backslash ends at its own quote, so what follows is read as code
+/// (and a file that ends with one does not run the token past its end).
+#[test]
+fn an_escaped_backslash_char_ends_at_its_quote() {
+    for src in ["let a = '\\\\'; let b = b'\\\\'; fn f() {}", "let a = '\\\\'", "let n = '\\n'; let q = '\\''; x"] {
+        let tokens = super::lex(src).unwrap();
+        assert!(tokens.iter().all(|t| t.end <= src.len()), "{src}");
+        let literals: Vec<&str> =
+            tokens.iter().filter(|t| t.kind == super::Kind::Literal).map(|t| &src[t.start..t.end]).collect();
+        assert!(literals.iter().all(|l| l.len() <= 4), "{src}: {literals:?}");
+    }
+    let src = "let a = '\\\\'; fn f() {}";
+    let idents: Vec<&str> =
+        super::lex(src).unwrap().iter().filter(|t| t.kind == super::Kind::Ident).map(|t| &src[t.start..t.end]).collect();
+    assert_eq!(idents, ["let", "a", "fn", "f"]);
+}
