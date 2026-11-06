@@ -278,7 +278,7 @@ pub(crate) mod tests {
         assert_eq!(html.matches("role=").count(), 1, "{html}");
         assert!(
             html.contains(
-                r#"<div role="alert"><div data-ref="said" class="alert__alert alert__destructive alert__soft" hidden><p>"#
+                r#"<div role="alert" class="alert__region"><div data-ref="said" class="alert__alert alert__destructive alert__soft" hidden><p>"#
             ),
             "{html}"
         );
