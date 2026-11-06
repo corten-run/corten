@@ -398,6 +398,69 @@ pub trait Messages: Copy + 'static {
     }
 }
 
+/// A locale of the app's messages as a URL names it: a route field (`/{lang}/listings` with
+/// `lang: Locale<Msg>`) whose tag is one `M` lists, written as that tag and read only as it is
+/// written (`/FR/listings` would be a second URL for one page, so it does not read; nor does a tag
+/// `M` does not list: either is refused as any path parameter that does not read is, 400), for a
+/// page whose locale is in its URL rather than its `Accept-Language` ([`crate::Req::set_locale`]).
+///
+/// ```
+/// corten::i18n::messages! { struct Msg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+/// use corten::i18n::{Locale, Messages as _};
+///
+/// let fr = Locale::of(Msg::for_locale("fr"));
+/// assert_eq!(fr.to_string(), "fr");
+/// assert_eq!(fr.messages().item_listings().to_string(), "Annonces");
+/// assert_eq!(Locale::<Msg>::parse("fr"), Some(fr));
+/// assert_eq!(Locale::<Msg>::parse("FR"), None, "one URL per locale");
+/// assert_eq!(Locale::<Msg>::parse("de"), None, "not one of the app's");
+///
+/// use serde::{de::value::{Error, StrDeserializer}, Deserialize};
+/// assert_eq!(Locale::<Msg>::deserialize(StrDeserializer::<Error>::new("fr")), Ok(fr));
+/// assert!(Locale::<Msg>::deserialize(StrDeserializer::<Error>::new("de")).is_err());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Locale<M>(M);
+
+impl<M: Messages> Locale<M> {
+    /// The locale `messages` are in.
+    pub fn of(messages: M) -> Self {
+        Locale(messages)
+    }
+
+    /// The app's messages in this locale.
+    pub fn messages(self) -> M {
+        self.0
+    }
+
+    /// The locale with this tag, exactly as `M` lists it, or `None`.
+    pub fn parse(tag: &str) -> Option<Self> {
+        M::LOCALES.iter().position(|l| *l == tag).map(|index| Locale(M::from_index(index)))
+    }
+}
+
+impl<M: Messages> Display for Locale<M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0.locale())
+    }
+}
+
+impl<'de, M: Messages> serde::Deserialize<'de> for Locale<M> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Tag<M>(std::marker::PhantomData<M>);
+        impl<M: Messages> serde::de::Visitor<'_> for Tag<M> {
+            type Value = Locale<M>;
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "one of the locales {}", M::LOCALES.join(", "))
+            }
+            fn visit_str<E: serde::de::Error>(self, tag: &str) -> Result<Locale<M>, E> {
+                Locale::parse(tag).ok_or_else(|| E::invalid_value(serde::de::Unexpected::Str(tag), &self))
+            }
+        }
+        deserializer.deserialize_str(Tag(std::marker::PhantomData))
+    }
+}
+
 /// The index in `locales` that best matches an `Accept-Language` header: highest `q` first, an
 /// exact tag before the primary language (`fr-CA` matches `fr`), then 0. Allocates nothing.
 pub fn negotiate(locales: &[&str], accept_language: Option<&str>) -> usize {
@@ -1094,6 +1157,206 @@ mod tests {
         struct Msg {
             "en" => "src/i18n/en.json",
             "fr" => "src/i18n/fr.json",
+        }
+    }
+
+    mod url_locale {
+        use crate::{i18n::Locale, prelude::*, App, Params};
+
+        crate::i18n::messages! {
+            /// The test catalogs, for a route field.
+            pub struct Msg {
+                "en" => "src/i18n/en.json",
+                "fr" => "src/i18n/fr.json",
+            }
+        }
+
+        crate::i18n::messages! {
+            /// The same catalogs listed in another order: a second messages type.
+            pub struct Other {
+                "fr" => "src/i18n/fr.json",
+                "en" => "src/i18n/en.json",
+            }
+        }
+
+        #[crate::routes]
+        mod url {
+            #[route("/{lang}/listings", get = listings)]
+            pub struct Listings {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+
+            #[route("/listings", get = negotiated)]
+            pub struct Negotiated;
+
+            #[route("/{lang}/other", get = other)]
+            pub struct OtherPage {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+
+            #[route("/{lang}/failing", get = failing)]
+            pub struct Failing {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+
+            #[route("/{lang}/late", get = late)]
+            pub struct Late {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+
+            #[route("/{lang}/other-first", get = other_first)]
+            pub struct OtherFirst {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+
+            #[route("/{lang}/twice", get = twice)]
+            pub struct Twice {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+
+            #[route("/{lang}/mixed", get = mixed)]
+            pub struct Mixed {
+                pub lang: crate::i18n::Locale<super::Msg>,
+            }
+        }
+
+        fn page(req: &Req) -> HtmlResult {
+            let (t, lang): (Msg, _) = (req.t(), req.lang());
+            req.page(html! {
+                <html lang={lang}>
+                    <head>
+                        <title>"Listings"</title>
+                        <Corten />
+                    </head>
+                    <body><main>{t.item_listings()}</main></body>
+                </html>
+            })
+        }
+
+        async fn listings(req: Req, Params(at): Params<url::Listings>) -> HtmlResult {
+            req.set_locale(at.lang);
+            page(&req)
+        }
+
+        async fn negotiated(req: Req) -> HtmlResult {
+            page(&req)
+        }
+
+        /// A second messages type follows the URL's locale by its tag, not by the app's index.
+        async fn other(req: Req, Params(at): Params<url::OtherPage>) -> String {
+            req.set_locale(at.lang);
+            let t: Other = req.t();
+            t.item_listings().to_string()
+        }
+
+        async fn failing(req: Req, Params(at): Params<url::Failing>) -> HtmlResult {
+            req.set_locale(at.lang);
+            Err(crate::Error::new("down"))
+        }
+
+        /// Reads the locale through a second messages type, then sets it.
+        async fn other_first(req: Req, Params(at): Params<url::OtherFirst>) -> HtmlResult {
+            let _: Other = req.t();
+            req.set_locale(at.lang);
+            page(&req)
+        }
+
+        /// Reads the locale through two messages types, which may give two languages, then sets it.
+        async fn mixed(req: Req, Params(at): Params<url::Mixed>) -> HtmlResult {
+            let _: Other = req.t();
+            let _ = req.lang();
+            req.set_locale(at.lang);
+            page(&req)
+        }
+
+        /// Sets one locale, then another, before anything reads it: the last one stands.
+        async fn twice(req: Req, Params(at): Params<url::Twice>) -> HtmlResult {
+            req.set_locale(Locale::of(Msg::for_locale("en")));
+            req.set_locale(at.lang);
+            page(&req)
+        }
+
+        /// Reads the locale, then sets another: a bug a debug build stops.
+        async fn late(req: Req, Params(at): Params<url::Late>) -> HtmlResult {
+            let _: Msg = req.t();
+            req.set_locale(at.lang);
+            page(&req)
+        }
+
+        fn header<'a>(res: &'a crate::testing::Answer, name: &str) -> &'a str {
+            res.headers().get(name).map_or("", |v| v.to_str().unwrap())
+        }
+
+        /// A page whose locale is in its URL is that locale whatever `Accept-Language` asks, says
+        /// so in `Content-Language`, and does not vary on `Accept-Language`, so a cache keys it on
+        /// the URL; one negotiated still varies on it. Pages in two locales have two shell keys.
+        #[tokio::test]
+        async fn a_locale_in_the_url_is_the_page_s_and_its_cache_key() {
+            let app = App::new(url::router()).messages::<Msg>().test();
+            let fr = Locale::of(Msg::for_locale("fr"));
+            let en = Locale::of(Msg::for_locale("en"));
+            let page = app.get(&url::Listings { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert!(
+                page.text().contains(r#"<html lang="fr">"#) && page.text().contains("<main>Annonces</main>"),
+                "{}",
+                page.text()
+            );
+            assert_eq!(header(&page, "content-language"), "fr");
+            assert_eq!(header(&page, "vary"), "corten, accept");
+            let other = app.get(&url::Listings { lang: en }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert!(other.text().contains("<main>Listings</main>"), "{}", other.text());
+            assert_ne!(header(&page, "corten-shell"), header(&other, "corten-shell"), "another locale, another layout");
+            let asked = app.get(&url::Negotiated).header(http::header::ACCEPT_LANGUAGE, "fr-CA").await;
+            assert!(asked.text().contains("<main>Annonces</main>"), "{}", asked.text());
+            assert_eq!(header(&asked, "content-language"), "fr");
+            assert_eq!(header(&asked, "vary"), "corten, accept, accept-language");
+            let none = app.get(&crate::route::Local::parse("/de/listings").unwrap()).await;
+            assert_eq!(
+                none.status(),
+                http::StatusCode::BAD_REQUEST,
+                "not one of the app's locales: a parameter that does not read"
+            );
+            let upper = app.get(&crate::route::Local::parse("/FR/listings").unwrap()).await;
+            assert_eq!(upper.status(), http::StatusCode::BAD_REQUEST, "one URL per locale");
+            let other = app.get(&url::OtherPage { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert_eq!(other.text(), "Annonces", "a second messages type, listed in another order");
+            let failed = app.get(&url::Failing { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert_eq!(failed.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(header(&failed, "content-language"), "fr", "the error page follows the URL's locale");
+            assert!(failed.text().contains(r#"<html lang="fr""#), "{}", failed.text());
+            assert_eq!(header(&failed, "vary"), "corten, accept");
+        }
+
+        /// Setting the locale after reading one would label the page in one language and draw it in
+        /// another; a debug build stops it.
+        #[cfg(debug_assertions)]
+        #[tokio::test]
+        async fn a_locale_set_after_one_was_read_is_a_bug() {
+            let app = App::new(url::router()).messages::<Msg>().test();
+            let fr = Locale::of(Msg::for_locale("fr"));
+            let late = app.get(&url::Late { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert_eq!(late.status(), http::StatusCode::INTERNAL_SERVER_ERROR, "a panic: {}", late.text());
+            let same = app
+                .get(&url::Late { lang: Locale::of(Msg::for_locale("en")) })
+                .header(http::header::ACCEPT_LANGUAGE, "en-US")
+                .await;
+            assert_eq!(same.status(), http::StatusCode::OK, "the locale it read: nothing changes");
+            let other = app.get(&url::OtherFirst { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert_eq!(other.status(), http::StatusCode::INTERNAL_SERVER_ERROR, "read through another messages type");
+            // Read through another messages type in the URL's language: nothing changes.
+            let other_same = app.get(&url::OtherFirst { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "fr-FR").await;
+            assert_eq!(other_same.status(), http::StatusCode::OK, "{}", other_same.text());
+            let en = Locale::of(Msg::for_locale("en"));
+            let other_en = app.get(&url::OtherFirst { lang: en }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert_eq!(other_en.status(), http::StatusCode::OK, "{}", other_en.text());
+            // Each read in the URL's language: nothing changes. Two reads in different languages
+            // (no header: each type's own default): one of them is not the URL's.
+            let both = app.get(&url::Mixed { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "fr-FR").await;
+            assert_eq!(both.status(), http::StatusCode::OK, "{}", both.text());
+            let split = app.get(&url::Mixed { lang: fr }).await;
+            assert_eq!(split.status(), http::StatusCode::INTERNAL_SERVER_ERROR, "{}", split.text());
+            let twice = app.get(&url::Twice { lang: fr }).header(http::header::ACCEPT_LANGUAGE, "en-US").await;
+            assert!(twice.text().contains("<main>Annonces</main>"), "set twice, read once: {}", twice.text());
         }
     }
 

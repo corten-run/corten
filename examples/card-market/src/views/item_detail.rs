@@ -18,13 +18,15 @@ pub struct ItemPage<'a> {
     pub form: AlertFormView<'a>,
     /// The versioned URL of the store's art for the item, when it has some (`ItemView::art`).
     pub art: Option<corten::assets::AssetUrl<'a>>,
+    /// Every offer, after "Show all" without JavaScript; else the first five.
+    pub all_offers: bool,
 }
 
 impl<'a> ItemPage<'a> {
     pub fn new(t: Msg, item: &'a ItemView, message: String) -> Self {
         let listings = sort_listings(&item.listings, false);
         let form = AlertFormView { id: &item.id, title: &item.title, ..AlertFormView::default() };
-        ItemPage { t, item, listings, message, form, art: None }
+        ItemPage { t, item, listings, message, form, art: None, all_offers: false }
     }
 
     /// The whole page in the app's layout, with the item's description and canonical link.
@@ -36,7 +38,7 @@ impl<'a> ItemPage<'a> {
         let page: ItemPage<'r> = ItemPage { art: item.art.map(|art| req.asset(art)), ..self };
         let head = html! {
             <meta name="description" content={&item.description}>
-            <link rel="canonical" href={items::Item { id: &item.id }}>
+            <link rel="canonical" href={items::Item { id: &item.id, ..Default::default() }}>
         };
         Layout { req, title: &item.title, head, children: page.view() }
     }
@@ -105,7 +107,7 @@ pub fn ItemDetail<'a>(page: ItemPage<'a>) -> impl Render {
                 </section>
             </div>
             <section class={Panel}><ListingSort t={t} listings={&page.listings} /></section>
-            <section class={Panel}><OfferList t={t} offers={&item.offers} /></section>
+            <section class={Panel}><OfferList t={t} id={&item.id} offers={&item.offers} all={page.all_offers} /></section>
             <section class={Panel}>
                 <h2>{t.alert_title()}</h2>
                 <AlertForm t={t} form={page.form.clone()} />
@@ -127,7 +129,9 @@ pub fn ItemDetail<'a>(page: ItemPage<'a>) -> impl Render {
                     <h2>{t.item_contents()}</h2>
                     <ul>
                         for c in &item.contents {
-                            <li><a href={items::Item { id: &c.item_id }}>{c.title}</a>" × "{c.quantity}</li>
+                            <li>
+                                <a href={items::Item { id: &c.item_id, ..Default::default() }}>{c.title}</a>" × "{c.quantity}
+                            </li>
                         }
                     </ul>
                 </section>
@@ -137,7 +141,9 @@ pub fn ItemDetail<'a>(page: ItemPage<'a>) -> impl Render {
                     <h2>{t.item_included_in()}</h2>
                     <ul>
                         for c in &item.included_in {
-                            <li><a href={items::Item { id: &c.item_id }}>{c.title}</a>" × "{c.quantity}</li>
+                            <li>
+                                <a href={items::Item { id: &c.item_id, ..Default::default() }}>{c.title}</a>" × "{c.quantity}
+                            </li>
                         }
                     </ul>
                 </section>

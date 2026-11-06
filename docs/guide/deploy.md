@@ -101,6 +101,17 @@ whole page, so it still works, more slowly; a data client gets HTML where it ask
 | Cloudflare | only under a Cache Rule that makes them eligible ([default cache behavior](https://developers.cloudflare.com/cache/concepts/default-cache-behavior/)) | the same rule's Vary setting ([Vary](https://developers.cloudflare.com/cache/concepts/vary/)): `corten`, `cookie` and `accept` passthrough (normalizing reorders `Accept`, and the app reads its first type), `accept-encoding` normalize, `accept-language` normalize with `languages` set to the app's locales (normalizing strips regions otherwise) |
 | CloudFront | by its cache policy | the cache policy lists `corten`, `accept` and, with messages, `accept-language` as headers and the cookies the app reads as cookies (CloudFront sends the app only the cookies its policies name), and turns on gzip and brotli ([cache key](https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/controlling-the-cache-key.html)) |
 
+A public page whose locale `Accept-Language` chooses is stored once per distinct header string
+where the cache keys on it raw (CloudFront's cache key, nginx): `en-US,en;q=0.9` and `en` are two
+copies of one English page, so the hit rate falls with the variety of browsers. Cloudflare's
+normalizing above keeps one per locale. Elsewhere, put the locale in the page's URL (a
+`Locale<Msg>` route field and `req.set_locale`, [Views](views.md#a-locale-in-the-url)): its answer
+does not vary on `accept-language`, so a cache keys it on the URL and keeps one copy per locale.
+A cache behavior whose pages all take their locale from the URL need not forward the header;
+one that still negotiates (the `/` that sends a visitor to their locale, a 404, a page without a
+locale in its URL) must, or CloudFront sends none and every visitor gets the default locale. Every
+page says its locale in `Content-Language`.
+
 The Cloudflare and CloudFront rows are from their documentation, not run here. Check a deploy
 the way it was measured: request a public page as a document, then the same URL with
 `corten: nav` and with `Accept: application/json`. The second must carry `corten-page` and the

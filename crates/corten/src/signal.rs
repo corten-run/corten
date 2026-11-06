@@ -29,7 +29,7 @@ use std::{
     convert::Infallible,
     pin::{pin, Pin},
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicU8, Ordering},
         Arc,
     },
     task::{Context, Poll},
@@ -95,6 +95,11 @@ pub enum Abort {
 #[derive(Clone, Default)]
 pub struct Signal(Arc<Inner>);
 
+/// [`Inner::locale`]: the handler chose it.
+const CHOSEN: u16 = 0x8000;
+/// [`Inner::locale`]: the index plus one.
+const LOCALE_INDEX: u16 = 0x7fff;
+
 #[derive(Default)]
 struct Inner {
     /// 0 while running, else an [`Abort`] + 1.
@@ -118,6 +123,14 @@ struct Inner {
     /// The page rendered the request's notice ([`crate::Req::notice`]), so a navigation's answer
     /// does not send it to the runtime as well.
     notice_drawn: AtomicBool,
+    /// The request's locale: its index in the app's locales plus one (0 until it is known), with
+    /// `CHOSEN` set when the handler chose it from the URL ([`crate::Req::set_locale`]) rather
+    /// than `Accept-Language`, which is then negotiated once per request.
+    locale: AtomicU16,
+    /// The locales something read (`req.t()`, `req.lang()`), by their tags: `set_locale` to
+    /// another is too late.
+    #[cfg(debug_assertions)]
+    locale_read: std::sync::Mutex<Vec<&'static str>>,
     /// The first callers marked, so one marked again (a rule that holds only the caller it is
     /// over, the error page's [`crate::ClientIp`] looked up again) is not mixed in twice.
     marked: [AtomicU64; 4],
@@ -385,6 +398,52 @@ impl Signal {
 
     pub(crate) fn notice_drawn(&self) -> bool {
         self.0.notice_drawn.load(Ordering::Relaxed)
+    }
+
+    /// The handler chose the locale at `index` in the app's locales from the URL.
+    pub(crate) fn set_locale(&self, index: usize) {
+        // `messages!` lists at most 255 locales, so every index fits.
+        let known = u16::try_from(index + 1).ok().filter(|known| *known <= LOCALE_INDEX).unwrap_or(1);
+        self.0.locale.store(known | CHOSEN, Ordering::Relaxed);
+    }
+
+    /// Something read the request's locale, `tag`. The first read is kept: a page drawn in it
+    /// is drawn in it from then on.
+    #[cfg(debug_assertions)]
+    pub(crate) fn read_locale(&self, tag: &'static str) {
+        let mut read = self.0.locale_read.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !read.contains(&tag) {
+            read.push(tag);
+        }
+    }
+
+    /// The locales something read, by their tags (two when two messages types read different
+    /// ones).
+    #[cfg(debug_assertions)]
+    pub(crate) fn locales_read(&self) -> Vec<&'static str> {
+        self.0.locale_read.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    /// The locale `Accept-Language` gave, by its index, kept so the request negotiates it once.
+    /// One the handler chose stays.
+    pub(crate) fn negotiated_locale(&self, index: usize) {
+        if index < usize::from(LOCALE_INDEX) {
+            let _ = self.0.locale.compare_exchange(0, index as u16 + 1, Ordering::Relaxed, Ordering::Relaxed);
+        }
+    }
+
+    /// The request's locale by its index in the app's locales, once known.
+    pub(crate) fn known_locale(&self) -> Option<usize> {
+        (usize::from(self.0.locale.load(Ordering::Relaxed) & LOCALE_INDEX)).checked_sub(1)
+    }
+
+    /// The locale the handler chose from the URL, by its index in the app's locales.
+    pub(crate) fn locale(&self) -> Option<usize> {
+        let known = self.0.locale.load(Ordering::Relaxed);
+        if known & CHOSEN == 0 {
+            return None;
+        }
+        (usize::from(known & LOCALE_INDEX)).checked_sub(1)
     }
 
     /// The app's error page is answering the request.
