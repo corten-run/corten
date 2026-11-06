@@ -9891,6 +9891,9 @@ mod layout_reads {
         #[route("/forgot-plain", get = forgets_count)]
         pub struct ForgotPlain;
 
+        #[route("/given-any", any = gives_count, gives(CartCount))]
+        pub struct GivenAny;
+
         #[route("/forgot", get = forgets_count, gives(CartCount, SignedIn))]
         pub struct Forgot;
 
@@ -10060,6 +10063,12 @@ mod layout_reads {
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "started for the error page");
+        // An `any = ..` route serves `GET` too.
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/given-any", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<span class="count">7</span>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
         // `gives` is about its `GET`: a write that draws a page starts the reads it draws, and a
         // `HEAD` starts none.
         let count = CartCount::default();

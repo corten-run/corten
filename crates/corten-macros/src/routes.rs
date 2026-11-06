@@ -687,7 +687,7 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                     }
                     if let Some(at) = serves.gives_at {
                         if !serves.handlers.iter().any(|(m, _)| ["get", "any"].contains(&m.to_string().as_str())) {
-                            return err(at, format!("gives(..) names the layout reads {name}'s GET page gives itself, and it has no get: #[route(\"{path}\", get = .., gives(CartCount))]"));
+                            return err(at, format!("gives(..) names the layout reads {name}'s GET page gives itself, and it has no get or any: #[route(\"{path}\", get = .., gives(CartCount))]"));
                         }
                     }
                     if serves.no_store.said() && serves.handlers.is_empty() {
