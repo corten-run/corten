@@ -1183,7 +1183,15 @@ mod tests {
 
         fn page(req: &Req) -> HtmlResult {
             let (t, lang): (Msg, _) = (req.t(), req.lang());
-            req.page(html! { <html lang={lang}><head><title>"Listings"</title><Corten /></head><body><main>{t.item_listings()}</main></body></html> })
+            req.page(html! {
+                <html lang={lang}>
+                    <head>
+                        <title>"Listings"</title>
+                        <Corten />
+                    </head>
+                    <body><main>{t.item_listings()}</main></body>
+                </html>
+            })
         }
 
         async fn listings(req: Req, Params(at): Params<url::Listings>) -> HtmlResult {
