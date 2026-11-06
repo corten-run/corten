@@ -1175,7 +1175,7 @@ mod tests {
     async fn an_api_serves_its_routes_as_an_openapi_document() {
         let doc = document(App::new(Routes::new()).api(api::api)).await;
         assert_eq!(doc["openapi"], "3.1.1");
-        assert_eq!(doc["info"]["title"], "corten");
+        assert_eq!(doc["info"]["title"], env!("CARGO_PKG_NAME"), "titled by the crate that declares the API");
         let price = &doc["paths"]["/api/items/{id}/price"]["get"];
         assert_eq!(price["operationId"], "price");
         assert_eq!(price["summary"], "An item's lowest price.", "the first paragraph, its lines joined");
