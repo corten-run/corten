@@ -3702,6 +3702,10 @@ Corten is pre-1.0, so any minor version may change the API.
     Breaking for an app whose check ran without `tsc`: install TypeScript (`npm install --global
     typescript`, or in the app's `package.json`), or pass the flag
     ([#1013 corten check exits 0 when tsc is not installed, so a CI job without TypeScript passes with every script unchecked](https://github.com/corten-run/corten/issues/1013)).
+160. A value that is not a link where an `Href` is expected (a `Box` of a route, text) fails with
+    "`..` is not a link" and notes that say what a link is and that a boxed route is passed as
+    the route itself or as a `Box<dyn Href>`, where before the error ended in a list of 120 types
+    ([#974 Href has no on_unimplemented note, so a value that is not a link (a Box of a route) fails with E0277 listing 120 impls](https://github.com/corten-run/corten/issues/974)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

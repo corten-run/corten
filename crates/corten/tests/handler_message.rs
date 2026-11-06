@@ -15,17 +15,21 @@ fn write(path: &Path, text: &str) {
 
 /// The errors `cargo build` prints for an app whose `home` takes `args`.
 fn build(args: &str) -> (bool, String) {
+    build_main("handler-message", &format!("use corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/\", get = home)]\n    pub struct Home;\n}}\n\npub struct Name;\n\n#[allow(unused_variables)]\nasync fn home({args}) -> HtmlResult {{\n    req.redirect(&url::Home)\n}}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"))
+}
+
+/// The errors `cargo build` prints for an app in `dir`, a package of that name (so two tests
+/// building at once in one target directory do not write each other's binary), whose `main.rs` is
+/// `main`.
+fn build_main(dir: &str, main: &str) -> (bool, String) {
     let corten = Path::new(env!("CARGO_MANIFEST_DIR")).to_string_lossy().replace('\\', "/");
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("handler-message");
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join(dir);
     write(
         &root.join("Cargo.toml"),
-        &format!("[package]\nname = \"app\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ncorten = {{ package = \"corten-run\", path = \"{corten}\" }}\n\n[workspace]\n"),
+        &format!("[package]\nname = \"{dir}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\ncorten = {{ package = \"corten-run\", path = \"{corten}\" }}\n\n[workspace]\n"),
     );
     std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"), root.join("Cargo.lock")).unwrap();
-    write(
-        &root.join("src/main.rs"),
-        &format!("use corten::prelude::*;\n\n#[corten::routes]\nmod url {{\n    #[route(\"/\", get = home)]\n    pub struct Home;\n}}\n\npub struct Name;\n\n#[allow(unused_variables)]\nasync fn home({args}) -> HtmlResult {{\n    req.redirect(&url::Home)\n}}\n\nfn main() {{\n    let _ = App::new(url::router());\n}}\n"),
-    );
+    write(&root.join("src/main.rs"), main);
     let target = Path::new(env!("CARGO_TARGET_TMPDIR")).join("link-clash-target");
     let out = Command::new(env!("CARGO"))
         .args(["build", "--offline", "-q"])
@@ -51,4 +55,19 @@ fn a_handler_argument_no_request_fills_is_named_in_cortens_words() {
     }
     let (ok, stderr) = build("req: Req");
     assert!(ok, "the same app with a handler a request can call: {stderr}");
+}
+
+/// A value that is not a link where one is expected says what a link is, and that a boxed route is
+/// not one, where before rustc's list of the types that are ended in "and 120 others" (#974).
+#[test]
+fn a_value_that_is_not_a_link_says_what_a_link_is() {
+    let app = |link: &str| {
+        format!("use corten::{{prelude::*, Href}};\n\n#[derive(Route)]\n#[route(\"/pull-sheet\")]\nstruct PullSheet;\n\nfn go(_: &dyn Href) {{}}\n\nfn main() {{\n    go(&{link});\n}}\n")
+    };
+    let (ok, stderr) = build_main("href-message", &app("Box::new(PullSheet)"));
+    assert!(!ok, "a boxed route compiled as a link");
+    assert!(stderr.contains("is not a link"), "Corten's message: {stderr}");
+    assert!(stderr.contains("box it as `Box<dyn Href>`"), "the note on a boxed route: {stderr}");
+    let (ok, stderr) = build_main("href-message", &app("(Box::new(PullSheet) as Box<dyn Href>)"));
+    assert!(ok, "the same link boxed as Box<dyn Href>: {stderr}");
 }

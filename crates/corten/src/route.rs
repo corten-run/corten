@@ -1878,6 +1878,12 @@ impl<T: Pairs + ?Sized> Pairs for &T {
 ///
 /// let _ = Filter { action: &"/pull-sheet/7" };
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a link",
+    label = "a link goes here",
+    note = "a link is a `#[derive(Route)]` value or a reference to one, `route.at(id)`, a `#[derive(Href)]` enum of routes, an `Elsewhere` or a `Uri`; text is not one",
+    note = "a `Box` of a route is not a link: pass the route itself, or box it as `Box<dyn Href>`"
+)]
 pub trait Href {
     /// Writes the URL; with `html`, escaped for an attribute's value (`&` as `&amp;`).
     fn write_link(&self, out: &mut String, html: bool);
