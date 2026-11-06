@@ -1484,6 +1484,36 @@ fn a_hung_ready_check_is_logged_once_until_it_answers() {
     assert_eq!(counts, [1, 2], "one warning per hang, not one per probe");
 }
 
+/// An app with a stylesheet and no error page is told so once, while it is developed; one with an
+/// error page, or with no stylesheet, is not.
+#[cfg(all(feature = "log", debug_assertions))]
+#[test]
+fn an_app_with_a_stylesheet_and_no_error_page_is_told_once() {
+    use std::sync::Mutex;
+    #[derive(Clone)]
+    struct Lines(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Lines {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let told = |app: fn() -> Router| {
+        let lines = Lines(Arc::default());
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        tracing::subscriber::with_default(subscriber, || drop(app()));
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        text.matches("no App::error_page").count()
+    };
+    assert_eq!(told(|| App::new(Routes::from(meters())).components(&[Meter]).router()), 1, "a stylesheet, no error page");
+    assert_eq!(told(meters_app), 0, "an error page of its own");
+    assert_eq!(told(|| App::new(Routes::from(meters())).router()), 0, "no stylesheet: the plain document is the app's");
+}
+
 /// A page that shows who is asking, or that no one is.
 fn who_routes() -> Router {
     Router::new().route(

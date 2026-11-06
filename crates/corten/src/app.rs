@@ -1163,6 +1163,13 @@ impl<M: Middleware> App<M> {
             }
         });
 
+        // An app with a design whose failures would leave it: said once, while it is developed.
+        #[cfg(debug_assertions)]
+        if self.error_page.is_none()
+            && assets.as_ref().is_some_and(|assets| assets.stylesheet().is_some() || !assets.section_stylesheets().is_empty())
+        {
+            no_error_page();
+        }
         let error_page = self.error_page.unwrap_or_else(|| error_page_fn(default_error_page, ()));
         let mut shared = Shared::new(error_page, assets, head);
         shared.finishing = self.finishing.clone();
@@ -2079,6 +2086,15 @@ impl<S: Steps> Layer<S> {
         let personal = watch.0.is_personal();
         (signal::follow(res, watch, self.zoned()), personal, mode)
     }
+}
+
+/// The app links a stylesheet and has no [`App::error_page`]: its failures would be Corten's plain
+/// document, outside its layout. Said in a debug build only; the default stays right for an app
+/// that has no layout of its own.
+#[cfg(debug_assertions)]
+#[cold]
+fn no_error_page() {
+    tracing::warn!("corten: the app has a stylesheet and no App::error_page, so a failed request is Corten's plain document, not your layout (see the Error pages section of the app guide)");
 }
 
 /// How long `/health/ready` waits for the app's check unless [`App::ready_within`] says.

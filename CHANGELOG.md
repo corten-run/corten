@@ -2176,6 +2176,10 @@ Corten is pre-1.0, so any minor version may change the API.
     outside card-market's benchmark against bare axum, and `npm run check` keeps it so (design
     Choice 21)
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
+248. In a debug build (`corten dev`, router tests), an app that links a stylesheet and has no
+    `App::error_page` is told once at startup that its failures are Corten's plain document, not
+    its layout. The default is unchanged, and a release build says nothing
+    ([#801 An app with a layout and no App::error_page fails every request as Corten's unstyled plain document, and nothing (check, debug build, startup) says so](https://github.com/corten-run/corten/issues/801))
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
