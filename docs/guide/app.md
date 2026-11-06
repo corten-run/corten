@@ -1690,14 +1690,19 @@ async fn vendor_event(request: Request) -> corten::Result<StatusCode> {
     let body = bytes_up_to(request.into_body(), MAX_EVENT_BYTES)
         .await?
         .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
-    // The vendor's scheme, an HMAC of the body with the app's secret, verified in constant time.
-    if signature.as_ref().map(|value| value.as_bytes()) != Some(&b"valid"[..]) {
+    if !signature.is_some_and(|signature| verify(&body, signature.as_bytes())) {
         return Err(Error::status(StatusCode::UNAUTHORIZED));
     }
     let event: serde_json::Value = serde_json::from_slice(&body).map_err(|_| Error::status(StatusCode::BAD_REQUEST))?;
     // The event's id is recorded, so a repeat is answered as done; slow work goes to a task.
     let _id = event.get("id");
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The vendor's scheme: an HMAC of `body` with the app's secret, compared with `signature` in
+/// constant time (the `hmac` crate's `verify_slice`). A stand-in here.
+fn verify(body: &[u8], signature: &[u8]) -> bool {
+    !body.is_empty() && !signature.is_empty()
 }
 
 /// A GraphQL query in, the library's JSON out.
@@ -1745,9 +1750,11 @@ fn app(pages: Routes) -> App {
 }
 
 /// The app `main` serves, with the protocol on its port, bound here, before `serve`: a port
-/// that is taken stops the app as it starts.
+/// that is taken stops the app as it starts. On the address `serve` listens on: `HOST` when it
+/// is set (`0.0.0.0` in a container), this machine alone otherwise.
 fn served(pages: Routes) -> std::io::Result<App> {
-    let listener = std::net::TcpListener::bind(("0.0.0.0", 7070))?;
+    let host = std::env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let listener = std::net::TcpListener::bind((host.as_str(), 7070))?;
     listener.set_nonblocking(true)?;
     Ok(app(pages).task("hello", move |signal| hello(listener, signal)))
 }
