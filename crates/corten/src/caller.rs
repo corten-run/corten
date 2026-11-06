@@ -230,8 +230,10 @@ impl std::fmt::Display for AsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.0 .0 {
             Why::Unavailable(message) => write!(f, "who is asking cannot be known: {message}"),
-            Why::Refusal { message: Some(message), .. } | Why::SignIn(_, Some(message)) => f.write_str(message),
-            _ => write!(f, "refused: {}", self.0.status()),
+            _ => match self.message() {
+                Some(message) => f.write_str(message),
+                None => write!(f, "refused: {}", self.0.status()),
+            },
         }
     }
 }
@@ -239,6 +241,14 @@ impl std::fmt::Display for AsError {
 impl std::error::Error for AsError {}
 
 impl AsError {
+    /// What the client is told (`Refused::message`), if anything.
+    pub(crate) fn message(&self) -> Option<&str> {
+        match &self.0 .0 {
+            Why::Refusal { message: Some(message), .. } | Why::SignIn(_, Some(message)) => Some(message),
+            _ => None,
+        }
+    }
+
     /// Answered as an extractor's refusal is. An unavailable lookup is logged where it is answered.
     pub(crate) fn into_response(self) -> Response {
         if !matches!(self.0 .0, Why::Unavailable(_)) {

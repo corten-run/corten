@@ -933,8 +933,11 @@ impl IntoResponse for Error {
         match self.source.downcast::<caller::AsError>() {
             // A handler's refusal (`From<Refused>`): answered as an extractor's is.
             Ok(refused) if refused.0.status() == self.status => refused.into_response(),
-            // `with_status` gave it another status, which is answered as a plain failure's is.
-            Ok(refused) => Error { status: self.status, source: refused }.answer(),
+            // `with_status` gave it another status, which is answered as a plain failure's is,
+            // telling a client only the refusal's own message: without one, the new status's
+            // reason, so a 404 that hides a record does not say it was a 403.
+            Ok(refused) if refused.message().is_some() => Error { status: self.status, source: refused }.answer(),
+            Ok(_) => Error::status(self.status).answer(),
             Err(source) => Error { status: self.status, source }.answer(),
         }
     }

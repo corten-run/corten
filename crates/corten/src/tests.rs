@@ -7135,7 +7135,17 @@ async fn a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors(
     async fn moved() -> crate::Result<&'static str> {
         Err(Error::from(crate::Refused::forbidden().message("not yours")).with_status(StatusCode::NOT_FOUND))
     }
-    let routes = Router::new().route("/mine", get(must_sign_in).post(must_sign_in)).route("/moved", get(moved));
+    async fn hidden() -> crate::Result<&'static str> {
+        Err(Error::from(crate::Refused::forbidden()).with_status(StatusCode::NOT_FOUND))
+    }
+    async fn gone() -> crate::Result<&'static str> {
+        Err(Error::not_found())
+    }
+    let routes = Router::new()
+        .route("/mine", get(must_sign_in).post(must_sign_in))
+        .route("/moved", get(moved))
+        .route("/hidden", get(hidden))
+        .route("/gone", get(gone));
     let router = App::new(Routes::from(routes)).error_page(test_error_page, ()).router();
     for (method, headers) in [("GET", &[][..]), ("POST", &[][..]), ("GET", &[("corten", "nav")][..])] {
         let (status, res, _) = guarded(&router, method, "/mine", None, headers).await;
@@ -7152,6 +7162,11 @@ async fn a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors(
     assert!(!res.contains_key("location"));
     let (status, _, body) = guarded(&router, "GET", "/moved", None, &[("accept", "application/json")]).await;
     assert_eq!((status, &body[..]), (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404,"detail":"not yours"}"#));
+    // Without a message of its own, a refusal moved to 404 says what any 404 does, not that it was a 403.
+    let json = [("accept", "application/json")];
+    let (hidden, gone) =
+        (guarded(&router, "GET", "/hidden", None, &json).await, guarded(&router, "GET", "/gone", None, &json).await);
+    assert_eq!((hidden.0, &hidden.2), (gone.0, &gone.2));
 }
 
 #[cfg(feature = "json")]

@@ -38,9 +38,9 @@ use crate::view::Render;
 /// page is the same for everyone, so it draws no one's value. A write that draws a page rather
 /// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
 /// answered. The error page for a failure Corten finds the request at fault for (an unknown
-/// address, a wrong method, a refusal other than a 429 by an extractor or by the
-/// handler's own `Refused` (a 429 slows a client down), a request that does not parse) starts the reads not started yet and waits for them as a page does, so a 404
-/// draws the count every other page does. For any other failure (a handler's [`crate::Error`] at
+/// address, a wrong method, a refusal other than a 429 by an extractor or by the handler's own
+/// `Refused` (a 429 slows a client down), a request that does not parse) starts the reads not
+/// started yet and waits for them as a page does, so a 404 draws the count every other page does. For any other failure (a handler's [`crate::Error`] at
 /// any status but 404, a 5xx, a 429, a cross-site write) it starts none and waits for none: it
 /// draws a value only if its read is in already, since what made the request fail (a database
 /// that is down) is likely what the read needs. An answer that draws no layout (a redirect) drops
