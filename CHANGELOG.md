@@ -2315,10 +2315,14 @@ Corten is pre-1.0, so any minor version may change the API.
 260. `corten::extract::pieces_up_to(body, max)`: a body too large to hold (a file `PUT` as
     `application/octet-stream` to a disk or an object store) read as it arrives, one piece at a
     time with `chunk()`, as an upload's file is. It counts what arrives, whatever the
-    `Content-Length` says, and refuses a body over `max` with a 413 as `bytes_up_to` does,
-    reading past what is left up to 64 MiB so a browser, which sends the whole body before it
-    reads the answer, reads the 413 rather than a closed connection; a body whose length says it
-    is over is refused before a piece is handed out, and one that breaks is a 400. Counting the
+    `Content-Length` says, and refuses a body over `max` (`BodyError::TooLarge`, a 413) as
+    `bytes_up_to` does, reading past the rest until the body has sent 64 MiB more than `max`, so
+    a browser, which sends the whole body before it reads the answer, reads the 413 rather than a
+    closed connection; a body whose length says it is over is refused before a piece is handed
+    out. A client that sends nothing for a minute (`Pieces::idle`, nginx's
+    `client_body_timeout`) is `Stalled`, a 408, while reading and while reading past, so a slow
+    client still sending is not cut off for the read past in all, and one that breaks is
+    `Broken`, a 400. Counting the
     body stream by hand, the first shape tried, stops at the limit, which a raw-socket client
     that sends its body before reading (as a browser does) saw as a dropped connection 6 times of
     6, where `bytes_up_to` answered 9 of 9; a reader keeps that read-past in one place.

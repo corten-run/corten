@@ -24,11 +24,13 @@ large to hold (a file `PUT` as `application/octet-stream`) is passed on as it ar
 `let mut pieces = corten::extract::pieces_up_to(request.into_body(), max)`, then
 `while let Some(piece) = pieces.chunk().await? { .. }`, writing each piece to the disk or store
 before asking for the next, so the request holds one piece, not the body. It counts what arrives,
-whatever the length says, and refuses a body over `max` as `bytes_up_to` does, reading past
-what is left (up to 64 MiB) so a browser, which sends the whole body before it reads, gets the
-413 rather than a closed connection; a body that breaks is a 400. The handler removes what it
-wrote of a body it does not finish, and puts the route in an API with a `deadline` that leaves
-time to read it. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
+whatever the length says, and refuses a body over `max` as `bytes_up_to` does, reading past the
+rest until the body has sent 64 MiB more than `max`, so a browser, which sends the whole body
+before it reads, gets the 413 rather than a closed connection. A client that sends nothing for a
+minute (`.idle(d)` to change it) is a 408, and a body that breaks is a 400; each is a
+`corten::extract::BodyError` to match or pass on with `?`. The handler removes what it wrote of a
+body it does not finish, and puts the route in an API with a `deadline` that leaves time to read
+it, which shutdown also waits for. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
 path and query are read as its `Params`, never another way. `corten::axum` stays for a stand-in
 server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-app)).
 
