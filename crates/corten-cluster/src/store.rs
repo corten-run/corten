@@ -63,7 +63,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), Error> {
 /// Creates feed `key` if it does not exist, inside the caller's transaction (so it can insert the
 /// feed's first rows in the same commit). Returns true when it was created.
 pub async fn create_feed(conn: &mut PgConnection, key: &str) -> Result<bool, Error> {
-    // The generation becomes the epoch in client cursors, which cannot contain '-'.
+    // The generation becomes the epoch in client cursors: ASCII letters, digits, '.' and '_'.
     let generation = format!("{:x}", now_ms());
     let created = sqlx::query("INSERT INTO corten_feeds (key, generation) VALUES ($1, $2) ON CONFLICT DO NOTHING")
         .bind(key)
