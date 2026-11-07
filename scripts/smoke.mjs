@@ -2753,7 +2753,10 @@ async function run(browser) {
   const feedErrors = errors.slice(feedsLogged).filter((e) => !/(can.t establish a connection to the server at|Failed to load resource: .* at) \S+\/feed\/(failed|retried)\b/.test(e));
   const snapshotLogged = feedErrors.filter((e) => /^(Error: )?corten: feed \/feed\/retried answered 500\b|^Error at \S+\/corten\.js$/.test(e));
   check("a snapshot that fails is logged once", snapshotLogged.length === 1, feedErrors.join(" | ") || "nothing logged");
-  errors.splice(feedsLogged, errors.length, ...feedErrors.filter((e) => !snapshotLogged.includes(e)));
+  const feedOthers = feedErrors.filter((e) => !snapshotLogged.includes(e));
+  // Checked here, while their text names where each came from, and not again at the end.
+  check("the feed checks log no other console error", feedOthers.length === 0, feedOthers.join(" | "));
+  errors.splice(feedsLogged);
 
   // A patch replaces markup but keeps what the user is doing: edited fields keep their state,
   // untouched ones take the server's, and focus and caret stay put (here a <corten-live> style

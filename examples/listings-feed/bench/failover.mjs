@@ -7,9 +7,9 @@
 // with Last-Event-ID; on an HTTP error, back off and reconnect. They are a client of this file's
 // own, not the runtime: a failed snapshot is retried on its own schedule (250 ms doubling to
 // 5 s), the HTTP-error backoff starts again on a patch (the runtime's, when a stream opens), and
-// a gap in seq is counted as lost rather than loading a snapshot, so they count what
-// the server sends. run.mjs keeps a Chromium page on subscribe() through the same run, and
-// scripts/smoke.mjs checks subscribe()'s recovery paths in browsers. The main thread commits WPS market
+// a gap in seq is counted as lost rather than loading a snapshot, so they count what the server
+// sends. run.mjs keeps a Chromium page on subscribe() through the same run, and scripts/smoke.mjs
+// checks subscribe()'s recovery paths in browsers. The main thread commits WPS market
 // writes per second (N listings each) through the load balancer and runs the schedule (default:
 // kill a, start a, kill b, start b; kills are SIGKILL). At the end every client must account for
 // every committed seq after its first snapshot, in order: as a patch, or inside a newer snapshot.
