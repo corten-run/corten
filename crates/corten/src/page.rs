@@ -2608,9 +2608,9 @@ async fn page_or_error<S: crate::app::Steps>(
 ) -> Response {
     use axum::body::HttpBody;
     let offline = req.method() == axum::http::Method::GET && shared.offline.as_deref() == Some(req.uri().path());
-    // A browser: the runtime, or a document request that asks for HTML (a health probe or a
-    // webhook sender does not).
-    let browser = matches!(mode, Mode::Navigation | Mode::Action) || (mode == Mode::Document && accepts_html(req.headers()));
+    // A browser: the runtime (whose whole-page fetch asks for `*/*`), or a document request that
+    // asks for HTML (a health probe or a webhook sender does not).
+    let browser = fetched || (mode == Mode::Document && accepts_html(req.headers()));
     // Taken now, while the request (its nonce, its credentials) is here; it allocates nothing.
     let asked = Asked::new(&req, shared, Credentials::of(req.headers()), (mode, fetched));
     #[cfg(debug_assertions)]
@@ -2716,7 +2716,8 @@ fn no_assets(path: &'static str) -> crate::assets::AssetUrl<'static> {
 
 /// `res` with the headers of the failed response it replaces, `kept`, except the ones that
 /// described its body or that Corten sets for the answer it sends (`Cache-Control`, its own
-/// `corten-` headers); a header `res` has already wins. A `Cache-Control` that names `no-store`
+/// `corten-` headers); a header `res` has already wins, but for `Vary`, whose values are added to its
+/// own, since what the failed answer varied on still decides this one. A `Cache-Control` that names `no-store`
 /// (`NoStore`, or one written by hand, on any of its lines, however a reader could find it) makes
 /// `res` `no-store` too: whoever set it said nothing may keep the answer, a failure included. Its
 /// other directives described the failed answer, so they are not carried.
@@ -2729,6 +2730,8 @@ fn carried(kept: HeaderMap, mut res: Response) -> Response {
     if kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes())) {
         headers.insert(header::CACHE_CONTROL, crate::cache::NO_STORE);
     }
+    // Allocates only for a failure that varied on something.
+    let vary: Vec<HeaderValue> = kept.get_all(header::VARY).iter().cloned().collect();
     let mut kept_name = None;
     // A name comes with its first value only; the values after it have `None`.
     for (key, value) in kept {
@@ -2746,6 +2749,7 @@ fn carried(kept: HeaderMap, mut res: Response) -> Response {
                     | header::ETAG
                     | header::LAST_MODIFIED
                     | header::CACHE_CONTROL
+                    | header::VARY
             ) || key.as_str().starts_with("corten-");
             if !replaced {
                 if let Entry::Vacant(entry) = headers.entry(key) {
@@ -2755,6 +2759,9 @@ fn carried(kept: HeaderMap, mut res: Response) -> Response {
         } else if let Some(entry) = &mut kept_name {
             entry.append(value);
         }
+    }
+    for value in vary {
+        res.headers_mut().append(header::VARY, value);
     }
     res
 }

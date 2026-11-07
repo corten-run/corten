@@ -5546,7 +5546,9 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten-location`, as to a navigation; one to another site no longer costs a refused fetch
     and a reload. Every redirect now varies on `corten`, and the answer to the runtime's fetch is
     kept by the browser alone, so a cache that keys on the URL cannot hand a full load's 303 to the
-    runtime, or the runtime's `corten-location` to a full load
+    runtime, or the runtime's `corten-location` to a full load. An extractor's refusal of that
+    fetch draws the error page rather than its plain text, and an error page keeps the `Vary` of
+    the failure it replaces beside its own
     ([#1034 A page fetched whole after a write that redirects to a place loses its #id: the fetch sends no corten header, so the redirect is a 303 that fetch follows without the fragment](https://github.com/corten-run/corten/issues/1034)).
 
 ### Documentation

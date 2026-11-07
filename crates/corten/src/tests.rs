@@ -116,7 +116,7 @@ impl crate::Middleware for AsViewer {
     }
 }
 
-/// Stamps every answer with a request id and two `Server-Timing` values, and answers 429 with
+/// Stamps every answer with a request id, two `Server-Timing` values and `Vary: origin`, and answers 429 with
 /// `Retry-After` itself when asked to by `x-flood`.
 struct Stamp;
 
@@ -134,14 +134,15 @@ impl crate::Middleware for Stamp {
         headers.insert("x-request-id", HeaderValue::from_static("r-1"));
         headers.append("server-timing", HeaderValue::from_static("app;dur=1"));
         headers.append("server-timing", HeaderValue::from_static("db;dur=2"));
+        headers.append(header::VARY, HeaderValue::from_static("origin"));
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=600"));
         res
     }
 }
 
 /// A failure that becomes the error page keeps what the handler and the middleware said besides
-/// the body (a request id, `Retry-After`, every `Server-Timing` value), in every mode; the error
-/// page's own type and `Cache-Control` win.
+/// the body (a request id, `Retry-After`, every `Server-Timing` value, what it varies on beside
+/// what the error page does), in every mode; the error page's own type and `Cache-Control` win.
 #[tokio::test]
 async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
     use axum::http::header;
@@ -168,6 +169,8 @@ async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
             assert_eq!(headers["x-request-id"], "r-1", "{at}");
             let timing: Vec<_> = headers.get_all("server-timing").iter().collect();
             assert_eq!(timing, ["app;dur=1", "db;dur=2"], "{at}");
+            let vary: Vec<_> = headers.get_all(header::VARY).iter().flat_map(|v| v.to_str().unwrap().split(", ")).collect();
+            assert!(vary.contains(&"origin") && vary.contains(&"corten"), "{at}: {vary:?}");
             assert_eq!(headers.get(header::RETRY_AFTER).map(|v| v.to_str().unwrap()), retry, "{at}");
             assert!(headers[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"), "{at}: {headers:?}");
             assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{at}: an error page is never shared");
@@ -1178,6 +1181,9 @@ async fn an_extractor_rejection_gets_the_error_page_in_a_browser_and_its_text_in
     assert!(body.contains("<title>Something went wrong</title>") && !body.contains("parse"), "{body}");
     let (_, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", Some("nav"), None).await;
     assert_eq!(headers["corten-page"], "1", "a navigation swaps the error page in: {body}");
+    // The whole page after a write, which `fetch` asks for with `Accept: */*` (#1034).
+    let (_, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", Some("page"), Some("*/*")).await;
+    assert!(body.contains("<title>Something went wrong</title>") && headers.contains_key("corten-shell"), "{body}");
     let (_, _, body) = call_with(App::new(Routes::from(routes())).dev(true).router(), "GET", "/n/abc", None, html).await;
     assert!(body.contains("<pre>Invalid URL"), "the default error page shows it: {body}");
     let (status, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", None, Some("application/json")).await;

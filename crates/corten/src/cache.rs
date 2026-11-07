@@ -26,8 +26,8 @@
 //!   `private, no-cache`;
 //! - when it is not the full document (a client navigation, a form answer, a data client's JSON
 //!   from the same URL as the page), or is the document as the runtime fetches it after a write
-//!   (`corten: page`, whose redirect to a place differs), only the browser keeps it (`private`, same lifetime), so a
-//!   cache that ignores `Vary` cannot hand one form to another client. An [`crate::App::api`]
+//!   (`corten: page`, whose redirect to a place differs), only the browser keeps it (`private`,
+//!   same lifetime), so a cache that ignores `Vary` cannot hand one form to another client. An [`crate::App::api`]
 //!   route has one form only, so it may be shared;
 //! - a response that keeps a lifetime also varies on `cookie`: after the user signs in or out,
 //!   the browser fetches the page again instead of reusing the other one.
