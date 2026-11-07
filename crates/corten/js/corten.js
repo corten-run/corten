@@ -2016,7 +2016,6 @@ async function visit(url, signal, redirected, again, place, source, written, pre
   const key = pageKey(url);
   // A read again fetches the page on screen, which no prefetch takes.
   const going = again ? null : { key };
-  if (going) fetching = going;
   const hit = again || written ? undefined : prefetched.get(key);
   prefetched.delete(key);
   const fresh = hit && performance.now() - hit.at < PREFETCH_FRESH_MS;
@@ -2035,6 +2034,7 @@ async function visit(url, signal, redirected, again, place, source, written, pre
     for (const el of busy) if (el && busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   };
   signal.addEventListener("abort", idle);
+  if (going) fetching = going;
   try {
     /** @type {Response} */
     let res;
@@ -2291,6 +2291,9 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
   if (skip) return;
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
+  // The dwell of the link followed ends: the server may answer with another page (a redirect),
+  // which a prefetch of the link would fetch again. A read again leaves a dwell over another link.
+  if (!again) clearTimeout(hoverTimer);
   // The page is about to change: replies to its pending submits would patch the wrong page.
   if (!again) for (const pending of submits.values()) pending.controller.abort();
   const redirected = event.info?.[REDIRECTED];

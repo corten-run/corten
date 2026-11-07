@@ -5334,7 +5334,10 @@ Corten is pre-1.0, so any minor version may change the API.
     (the dwell the click cut short, the pointer back on its link or on a part of it), since the
     address stays the page being left until the new page is in
     ([#1028 A client navigation changes the address when the page's answer is in (#992)](https://github.com/corten-run/corten/pull/1028)).
-    The runtime now prefetches no page the newest visit is fetching. The watchlist smoke holds
+    The runtime now prefetches no page the newest visit is fetching, and a navigation ends the
+    dwell of the link followed (a link the server redirects would be fetched again otherwise).
+    Where a redirect sends it is not known until the answer, so a hover on a link to there can
+    still fetch it a second time. The watchlist smoke holds
     such a page's answer, moves the pointer off its link and back, and checks it is fetched once
     (it failed on main in Chromium and Firefox). The prefetch check's one-off failure in Firefox
     (an extra request) matches this. The two Firefox checks that failed now and then say what they
