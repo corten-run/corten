@@ -33,6 +33,12 @@ export function sent(event) {
   document.title = String(event.detail.status);
 }
 
+/** @param {ProgressEvent} event @param {HTMLProgressElement} bar */
+export function progressed(event, bar) {
+  if (event.lengthComputable) bar.value = event.loaded / event.total;
+  else bar.removeAttribute("value");
+}
+
 /** @param {HTMLElement} line */
 export function remove(line) {
   line.remove();

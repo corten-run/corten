@@ -340,8 +340,37 @@ async fn page(req: Req, Caller(viewer): Caller<Viewer>) -> HtmlResult {
     account_page(&req, &viewer, "", StatusCode::OK)
 }
 
-fn account_page(req: &Req, viewer: &Viewer, result: &str, status: StatusCode) -> HtmlResult {
+/// The picture's form. With JavaScript it is sent as a patch, and a bar shows how much of it is
+/// sent (`on:corten:progress`, the browser's `ProgressEvent` for the whole form's body) while the
+/// form waits for its answer; without, it is a plain upload.
+#[component(css, js)]
+pub(crate) fn PictureUpload<'a>(viewer: &'a Viewer, result: &'a str) -> impl Render {
     let f = AvatarForm::FIELDS;
+    let bar = refs();
+    html! {
+        <form
+            id={AvatarFormId}
+            method="post"
+            action={app::url::Avatar}
+            enctype="multipart/form-data"
+            data-patch
+            on:corten:progress={js::sending(event, bar)}
+            class={(card(), stack(Space::_3))}
+        >
+            <h2>"Profile picture"</h2>
+            <AccountPicture viewer={viewer} />
+            <label class={stack(Space::_1)}>
+                <span class={muted()}>"A PNG, JPEG, GIF or WebP, up to 64 KB"</span>
+                <input type="file" name={f.picture} accept="image/png,image/jpeg,image/gif,image/webp" required>
+            </label>
+            <div><button>"Upload"</button></div>
+            <progress ref={bar} class={Bar} aria-label="Sending the picture"></progress>
+            <AvatarResult text={result} />
+        </form>
+    }
+}
+
+fn account_page(req: &Req, viewer: &Viewer, result: &str, status: StatusCode) -> HtmlResult {
     req.page_with_status(
         status,
         html! {
@@ -354,23 +383,7 @@ fn account_page(req: &Req, viewer: &Viewer, result: &str, status: StatusCode) ->
                             <button class={secondary()}>"Sign out"</button>
                         </form>
                     </section>
-                    <form
-                        id={AvatarFormId}
-                        method="post"
-                        action={app::url::Avatar}
-                        enctype="multipart/form-data"
-                        data-patch
-                        class={(card(), stack(Space::_3))}
-                    >
-                        <h2>"Profile picture"</h2>
-                        <AccountPicture viewer={viewer} />
-                        <label class={stack(Space::_1)}>
-                            <span class={muted()}>"A PNG, JPEG, GIF or WebP, up to 64 KB"</span>
-                            <input type="file" name={f.picture} accept="image/png,image/jpeg,image/gif,image/webp" required>
-                        </label>
-                        <div><button>"Upload"</button></div>
-                        <AvatarResult text={result} />
-                    </form>
+                    <PictureUpload viewer={viewer} result={result} />
                 </div>
             </Layout>
         },
@@ -421,6 +434,8 @@ mod tests {
         let ada = ada.text();
         assert!(ada.contains("<p>Signed in as Ada.</p>") && ada.contains("No picture yet."), "{ada}");
         assert!(ada.contains(r#"enctype="multipart/form-data""#) && ada.contains(r#"id="avatar-result""#), "{ada}");
+        // Its form hears its upload's progress, so the page loads the module that sends it.
+        assert!(ada.contains("corten:progress:picture_upload.sending($e,") && ada.contains("scripts/corten-upload.js"), "{ada}");
         let res = app.post(&SignOut).cookie("session", &session).await;
         let cookie = res.headers()["set-cookie"].to_str().unwrap();
         assert!(cookie.starts_with("session=; Path=/; SameSite=Lax; Max-Age=0"), "{cookie}");
