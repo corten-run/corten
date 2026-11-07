@@ -13,8 +13,10 @@ export const kinds = /** @type {const} */ (["page", "slow", "json", "home", "pos
 export const classes = /** @type {const} */ (["ok", "limited", "refused", "failed", "none"]);
 /**
  * The share of the item pages whose item the item API answers late (item-api/server.mjs's
- * `item_slow_<n>`): about 2 a second at 150/s, enough for a deadline to fire every second without
- * the late requests' held connections being most of what the app holds.
+ * `item_slow_<n>`): about 2 a second at 150/s, enough for a deadline to fire every second. An app
+ * with no deadline holds each for `slowMs`, about 84 at once (150 x 70% x 2% x 40 s): one with
+ * fewer request slots than that (a few workers or threads) is filled by them, and the phase then
+ * measures that, as a site with a slow upstream and no deadline would see it.
  */
 export const slowShare = 0.02;
 /**
@@ -25,8 +27,12 @@ export const slowShare = 0.02;
 export const slowMs = 40_000;
 /** The phase's length: what its rate and CPU are over, not the wait for its last late answers after it. */
 export const mixedSeconds = 60;
-/** How long the phase waits for the answers still to come when its time is up: past `slowMs`. */
-export const tailSeconds = 45;
+/**
+ * How long the phase waits for the answers still to come when its time is up: k6's 60 s timeout
+ * for each request, so every request sent ends counted, answered or not (one k6 stops waiting
+ * for is in no count).
+ */
+export const tailSeconds = 60;
 
 /**
  * What mixed-load.js needs to post the item page's price-alert form as the page posts it: its

@@ -7,8 +7,9 @@
 // Every request comes from k6's one address, so an app's per-client write limit is met, and asks
 // for compression as a browser does (the other phases ask for none), so each answer is compressed
 // as the app compresses it for a browser.
-// Env: BASE, RATE, DURATION, ITEMS (500), SLOW_SHARE (0), TAIL (the longest a late answer may
-// still take once the phase's time is up; 30 s), and the form as run-ssr.mjs read it from
+// Env: BASE, RATE, DURATION, ITEMS (500), SLOW_SHARE (0), TAIL (how long requests still waiting
+// when the time is up are kept: mixed.mjs's tailSeconds, 60 s, each request's timeout), and the
+// form as run-ssr.mjs read it from
 // the item page (mixed.mjs's formEnv): FORM_PATH, FORM_TYPE, FORM_BODY, FORM_COOKIE, FORM_HOST,
 // ORIGIN (no FORM_PATH: the app's form is sent by its script, or there is none, and the posts'
 // share asks for item pages instead). The kinds and classes are mixed.mjs's, which reads them.
@@ -34,9 +35,9 @@ export const options = {
   insecureSkipTLSVerify: BASE.startsWith("https:"),
   summaryTrendStats: ["avg", "p(50)", "p(95)", "p(99)", "max"],
   scenarios: {
-    // A request still waiting when the time is up is kept until its answer, up to TAIL, so a late
-    // item's answer (or its deadline's) is counted and not cut off.
-    load: { executor: "constant-arrival-rate", rate: Number(__ENV.RATE || 150), timeUnit: "1s", duration: __ENV.DURATION || "60s", gracefulStop: __ENV.TAIL || "30s", preAllocatedVUs: 200, maxVUs: 2000 },
+    // A request still waiting when the time is up is kept until its answer or its timeout (TAIL,
+    // as long as the timeout), so it is counted and not cut off.
+    load: { executor: "constant-arrival-rate", rate: Number(__ENV.RATE || 150), timeUnit: "1s", duration: __ENV.DURATION || "60s", gracefulStop: __ENV.TAIL || "60s", preAllocatedVUs: 200, maxVUs: 2000 },
   },
 };
 

@@ -10,6 +10,8 @@
 // Item pages from the item API end with the mixed phase (#813, mixed-load.js): the fixed rate as a
 // mix of pages, JSON, the home page and the page's form posted, some items answered late.
 import { spawn, spawnSync } from "node:child_process";
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,11 +53,28 @@ function k6(name, base, envs, script = "ssr-load.js") {
 }
 
 /**
+ * A post's status, or why it got none: over TLS to the edge, whose certificate is made for the run.
+ * @param {string} url @param {Record<string, string>} headers @param {string} body
+ * @returns {Promise<number | string>}
+ */
+const postStatus = (url, headers, body) => new Promise((done) => {
+  const send = url.startsWith("https:") ? httpsRequest : httpRequest;
+  const req = send(url, { method: "POST", headers: { ...headers, "content-length": String(Buffer.byteLength(body)) }, rejectUnauthorized: false, timeout: 30_000 }, (res) => {
+    res.resume();
+    done(res.statusCode ?? "no status");
+  });
+  req.on("timeout", () => req.destroy(new Error("no answer in 30 s")));
+  req.on("error", (err) => done(String(err)));
+  req.end(body);
+});
+
+/**
  * The mixed phase's env (mixed-load.js), from the item page read just before it, directly: the
- * form and its cookies, and the rate. One post is sent first, directly and as k6 sends them, and
- * its status kept in `-form.json` beside the form, so a post the harness built wrong is seen
- * before its answers are read as the app's. Directly, k6 names the app as conform.mjs's own post
- * does; through the edge, which names it by its container, the post's origin is that name's.
+ * form and its cookies, and the rate. One post is sent first as k6 sends them (through the edge
+ * in the matched tier) and its status kept in `-form.json` beside the form, so a post the harness
+ * built wrong is seen before its answers are read as the app's. Directly, k6 names the app as
+ * conform.mjs's own post does; through the edge, which names it by its container, the post's
+ * origin is that name's.
  * @param {string} name @param {{ port: number }} app @param {string} file the phase's files' name
  */
 async function mixedEnv(name, app, file) {
@@ -73,15 +92,10 @@ async function mixedEnv(name, app, file) {
   let record = { ...form };
   if ("env" in form) {
     const e = form.env;
-    /** @type {number | string} */
-    let check;
-    try {
-      const headers = { "content-type": e.FORM_TYPE, accept: "text/html", origin: at, "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", ...(e.FORM_COOKIE ? { cookie: e.FORM_COOKIE } : {}) };
-      check = (await fetch(`${at}${e.FORM_PATH}`, { method: "POST", headers, body: e.FORM_BODY, redirect: "manual" })).status;
-    } catch (err) {
-      check = String(err);
-    }
-    record = { path: e.FORM_PATH, type: e.FORM_TYPE, check };
+    // The edge as the host reaches it, or the app directly, named as k6 names it (FORM_HOST).
+    const to = viaEdge ? edgeBase(app, "outside") : at;
+    const headers = { "content-type": e.FORM_TYPE, accept: "text/html", origin: e.ORIGIN, "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", ...(e.FORM_COOKIE ? { cookie: e.FORM_COOKIE } : {}), ...(e.FORM_HOST ? { host: e.FORM_HOST } : {}) };
+    record = { path: e.FORM_PATH, type: e.FORM_TYPE, check: await postStatus(`${to}${e.FORM_PATH}`, headers, e.FORM_BODY) };
   }
   writeFileSync(join(results, `${file}-form.json`), JSON.stringify(record, null, 1));
   return { RATE: fixedRate, DURATION: `${mixedSeconds}s`, TAIL: `${tailSeconds}s`, SLOW_SHARE: String(slowShare), ...("env" in form ? form.env : {}) };

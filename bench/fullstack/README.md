@@ -1171,16 +1171,21 @@ passes, a separate diagnostic build of card-market's crate run after it:
      compression (`Accept-Encoding: br, gzip`, where the other phases ask for none), so each kind
      of answer is compressed as the app compresses it for a browser. Every request comes from k6's
      one address, so a write limit per client (card-market's 20 a minute) is met and its 429s
-     counted. One post is sent first, directly, and its status kept (`<app>-mixed-form.json`): the
+     counted. One post is sent first as k6 sends them (through the edge in the matched tier), and its
+     status kept (`<app>-mixed-form.json`): the
      table marks the posts' column `CHECK POST <status>` when it was not taken, so a post the
      harness built wrong is not read as the app's refusal. An app whose form its script sends
      (Livewire, LiveView) has no post; that share asks for item pages, and the table says why.
-     When the 60 s are up, the requests still waiting are kept up to 45 s for their answers, so
-     every late item's answer, or its deadline's, is counted; the rate and the app's CPU are over
-     the 60 s, so an app is not shown slower for the wait. The summary's Mixed table gives each
+     When the 60 s are up, the requests still waiting are kept for their answers up to k6's 60 s
+     timeout, so every request sent is counted, answered or not; the rate and the app's CPU are
+     over the 60 s, so an app is not shown slower for the wait (its CPU counted in the wait is
+     charged to those 60 s, a little more for an app whose late answers come last). An app with no
+     deadline holds each late item for its 40 s, about 84 at once (estimated, 150/s x 70% x 2%): one
+     with fewer request slots (a few workers or threads) is filled by them for the whole phase, and
+     every column then shows that, as a site with a slow upstream and no deadline would see it. The summary's Mixed table gives each
      kind of request its median and p99 latency and its answers by class (2xx and 3xx, 429, other
      4xx, 5xx, none), with the app's CPU and peak memory over the phase (`mixed.mjs`;
-     `<app>-mixed.json`, and `-cpu`, `-stats` and `-form` beside it). It adds about 1.8 minutes
+     `<app>-mixed.json`, and `-cpu`, `-stats` and `-form` beside it). It adds about 2 minutes
      an app a pass (estimated). It runs in both tiers; only in the matched tier has every app a
      deadline, and the deadlines differ (card-market's and axum-maud's are 10 s), so the late
      items' latency is each app's own deadline, not a comparison of speed. The matched profile has

@@ -2471,7 +2471,7 @@ Corten is pre-1.0, so any minor version may change the API.
     compression act under load together (`mixed-load.js`, `mixed.mjs`). One post is checked
     before the phase. The summary's Mixed table gives each kind of request its latency and its
     answers by class (2xx and 3xx, 429, other 4xx, 5xx, none), with the app's CPU and peak memory.
-    A round's api page call has 200 minutes and its unit 22 hours.
+    A round's api page call has 220 minutes and its unit 23 hours.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
