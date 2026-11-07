@@ -48,6 +48,7 @@ jobs:
       - run: node --test bench/catalog/*.test.mjs
         env:
           CATALOG_DOCKER_TESTS: "1"
+      - run: node --test bench/fullstack/apps/*/catalog.test.mjs
 
   parity:
     needs: harness
@@ -64,6 +65,9 @@ jobs:
           node-version: 24
       - run: npm ci --no-audit --no-fund
       - run: node bench/catalog/fixtures.mjs
+      - name: Test the standalone Corten app
+        if: matrix.app == 'corten'
+        run: cargo test --manifest-path bench/catalog/corten/Cargo.toml --locked
       # check-only still launches BOTH fixture and API sources and fails on any
       # structural, styling, escaping, navigation, schema, or upstream-read error.
       # This workflow does not measure/publish performance or touch nightly state.
