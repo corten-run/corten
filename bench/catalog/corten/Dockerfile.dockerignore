@@ -1,0 +1,10 @@
+.git
+**/.env
+**/.env.*
+**/target
+**/node_modules
+bench/catalog/results
+bench/catalog/fixtures
+bench/fullstack
+bench/live
+tmp

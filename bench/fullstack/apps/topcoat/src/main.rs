@@ -2,6 +2,8 @@
 //! same markup and stylesheets, and the item as JSON. The listings' sort and the offers' "show
 //! all" are shards (rendered again on the server when their signal changes), the price alert a
 //! procedure, and links between pages Topcoat's client navigation.
+mod catalog;
+mod catalog_view;
 mod items;
 mod model;
 
@@ -31,11 +33,13 @@ use crate::model::{ContentLine, ItemView, alert_message, sort_listings};
 const STYLE: Asset = asset!("static/style.css");
 const COMPONENTS: Asset = asset!("static/components.css");
 const READY: Asset = asset!("static/ready.js");
+const CATALOG: Asset = asset!("static/catalog.css");
 
 #[tokio::main]
 async fn main() {
     // Load the fixture (if any) and read API_BASE before listening, like the other apps.
     items::init();
+    catalog::source::init();
     topcoat::start(router()).await.unwrap();
 }
 
@@ -43,8 +47,10 @@ fn router() -> Router {
     Router::builder()
         .page(home)
         .page(item_page)
+        .page(catalog_view::catalog_page)
         .page(not_found)
         .route(item_json)
+        .route(catalog_view::catalog_json)
         .route(listings)
         .route(offers)
         .route(create_alert)
@@ -57,7 +63,7 @@ fn router() -> Router {
 
 /// The document every page shares, as card-market's layout writes it.
 #[component]
-async fn document(#[into] title: String, #[default] child: Child<'_>) -> Result<impl View> {
+async fn document(#[into] title: String, #[default] catalog: bool, #[default] child: Child<'_>) -> Result<impl View> {
     Ok(view! {
         <!DOCTYPE html>
         <html lang="en">
@@ -67,6 +73,9 @@ async fn document(#[into] title: String, #[default] child: Child<'_>) -> Result<
                 <title>(title)</title>
                 <link rel="stylesheet" href=(STYLE)>
                 <link rel="stylesheet" href=(COMPONENTS)>
+                if catalog {
+                    <link rel="stylesheet" href=(CATALOG)>
+                }
                 topcoat::runtime::script()
                 // After the runtime's module, so it runs once the page is interactive.
                 <script type="module" src=(READY)></script>

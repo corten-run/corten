@@ -1,0 +1,34 @@
+---
+import Base from "../../layouts/Base.astro";
+import { fetchCatalogRecord } from "../../lib/catalog";
+
+export const prerender = false;
+const record = await fetchCatalogRecord(Astro.params.id ?? "");
+if (!record) Astro.response.status = 404;
+const field = Astro.url.searchParams.get("field") ?? "";
+---
+<Base title="Catalog | Card Market">
+  <link slot="head" rel="stylesheet" href="/catalog.css" />
+  {record ? (
+    <article aria-label="Catalog record">
+      <h1>{record.title}</h1>
+      <p>{record.subtitle}</p>
+      <p>{record.description}</p>
+      <ul aria-label="Tags">{record.tags.map((tag) => <li>{tag}</li>)}</ul>
+      <form method="get" action={`/catalog/${encodeURIComponent(record.id)}`}>
+        <label>Field name <input name="field" value={field} /></label>
+        <button type="submit">Filter</button>
+      </form>
+      <table>
+        <caption>Record fields</caption>
+        <thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+        <tbody>{record.fields.filter((entry) => entry.name.startsWith(field)).map((entry) =>
+          <tr><th scope="row">{entry.name}</th><td>{entry.value}</td></tr>
+        )}</tbody>
+      </table>
+      <nav aria-label="Related records"><ul>{record.related.map((related) =>
+        <li><a href={`/catalog/${encodeURIComponent(related.id)}`}>{related.title}</a></li>
+      )}</ul></nav>
+    </article>
+  ) : <h1>Not found</h1>}
+</Base>
