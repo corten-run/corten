@@ -851,10 +851,27 @@ async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_rep
     assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
     // In a debug build, a component rendered ahead counts as rendered where it is placed. A
     // release build does not note a view's components, so only a debug build reports it.
+    // Outside `corten dev` too, as an app's own router test runs (#1029): the message describes the
+    // app's code, so the error page's detail keeps it.
     if cfg!(debug_assertions) {
-        let (status, _, body) = call(placed_meters_listing(true, |body| Box::new(body), &[]), "GET", None).await;
+        for dev in [true, false] {
+            let (status, _, body) = call(placed_meters_listing(dev, |body| Box::new(body), &[]), "GET", None).await;
+            assert_eq!(status, 500, "{body}");
+            assert!(body.contains("renders Meter, which the app does not list"), "dev {dev}: {body}");
+        }
+    }
+}
+
+/// Outside `corten dev`, a handler's own error keeps its message out of the error page: only the
+/// debug build's errors about the app's code (above) keep theirs.
+#[tokio::test]
+async fn a_handlers_error_keeps_its_message_off_the_page_outside_dev() {
+    let page = |_: Req| async { Err::<Response, _>(Error::new("database password wrong")) };
+    for dev in [true, false] {
+        let router = App::new(Routes::from(Router::new().route("/", get(page)))).dev(dev).error_page(test_error_page, ()).router();
+        let (status, _, body) = call(router, "GET", None).await;
         assert_eq!(status, 500, "{body}");
-        assert!(body.contains("renders Meter, which the app does not list"), "{body}");
+        assert_eq!(body.contains("database password wrong"), dev, "dev {dev}: {body}");
     }
 }
 

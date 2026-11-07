@@ -5197,6 +5197,14 @@ Corten is pre-1.0, so any minor version may change the API.
     65,698, range 65,631 to 65,737; with a value the page gives, 61,140, range 61,073 to 61,184,
     against 61,222, range 61,208 to 61,468)
     ([#911 An error page a middleware makes of an already-filled page draws no layout read values](https://github.com/corten-run/corten/issues/911)).
+183. A debug build's error about the app's own code (a page that draws a component the app does
+    not serve, a script module it does not list, a hint no control names) kept its message off
+    the error page outside `corten dev`, as every failure's is, so an app's own router test,
+    which runs without `CORTEN_DEV`, saw the generic error page; the message went only to
+    stderr, easy to miss in a long log. It is now the error page's `Failure::detail` in every
+    debug build, which the template's error page shows. A release build never raises these, and
+    a handler's own error still keeps its message off the page outside `corten dev` (tested)
+    ([#1029 A debug build's served-component check answers an app's own router test with a bare 500: the message that names the component goes only to tracing](https://github.com/corten-run/corten/issues/1029)).
 
 ### Documentation
 

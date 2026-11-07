@@ -972,7 +972,12 @@ impl IntoResponse for Error {
 impl Error {
     fn answer(self) -> Response {
         let detail = Arc::from(self.source.to_string());
-        self.answer_saying(detail)
+        let keeps_detail = cfg!(debug_assertions) && self.source.is::<page::Unserved>();
+        let mut res = self.answer_saying(detail);
+        if keeps_detail {
+            res.extensions_mut().insert(page::KeepsDetail);
+        }
+        res
     }
 
     /// The failure's answer, logged with its source and telling a client `detail`.

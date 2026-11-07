@@ -440,8 +440,9 @@ impl Failure {
         }
     }
 
-    /// What went wrong, for the developer: set under `corten dev` only, and logged instead in
-    /// production.
+    /// What went wrong, for the developer: set under `corten dev`, and logged instead in
+    /// production. A debug build's error about the app's own code (a component the page draws that
+    /// the app does not serve) keeps it outside `corten dev` too, so an app's router test names it.
     pub fn detail(&self) -> Option<&str> {
         match self {
             Failure::Rejected { detail, .. }
@@ -483,6 +484,25 @@ impl Failure {
         }
     }
 }
+
+/// A debug build's error about the app's own code (a component the app does not serve, a hint no
+/// control names), from [`Req::unserved`]: its answer is marked [`KeepsDetail`].
+#[derive(Debug)]
+pub(crate) struct Unserved(String);
+
+impl std::fmt::Display for Unserved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unserved {}
+
+/// Marks a debug build's failed answer whose message describes the app's code, not the request, so
+/// the error page's [`Failure`] keeps it outside `corten dev` (where every other detail is only
+/// logged). A release build never sets it.
+#[derive(Clone, Copy)]
+pub(crate) struct KeepsDetail;
 
 /// Why a failed response failed, when its status and body do not say: set by the stage that
 /// answered it, read when the error page is chosen.
@@ -1580,15 +1600,16 @@ impl Req {
         }
     }
 
-    /// A debug build's error for something a page would be served without. Outside `corten dev`
-    /// the error page does not show it and a router test has no logger, so it goes to stderr too,
-    /// which a failing test shows.
+    /// A debug build's error for something a page would be served without. It describes the app's
+    /// code, not the request, so its message stays on the error page's [`Failure::detail`] outside
+    /// `corten dev` too (a router test that prints the body names what to fix), and a router test
+    /// has no logger, so it goes to stderr as well.
     #[cold]
     fn unserved(&self, message: String) -> Error {
         if !self.shared.dev {
             eprintln!("corten: {message}");
         }
-        Error::new(message)
+        Error::new(Unserved(message))
     }
 
     /// In a debug build: the page's places for layout values are each a read the app starts, in
@@ -2555,6 +2576,7 @@ async fn page_or_error<S: crate::app::Steps>(
         return carried(kept, error_page(shared, asked, failure).await);
     }
     let mut failed = res.extensions().get::<crate::Failed>().cloned();
+    let keeps_detail = cfg!(debug_assertions) && res.extensions().get::<KeepsDetail>().is_some();
     let cause = res.extensions().get::<Cause>().copied();
     let empty_error = res.body().size_hint().exact() == Some(0);
     // An extractor's rejection (a form field missing, a path segment that does not parse) is
@@ -2592,7 +2614,7 @@ async fn page_or_error<S: crate::app::Steps>(
             status => Failure::Failed { status, detail: None },
         },
     };
-    let failure = if shared.dev { failure } else { failure.without_detail() };
+    let failure = if shared.dev || keeps_detail { failure } else { failure.without_detail() };
     carried(kept, error_page(shared, asked, failure).await)
 }
 

@@ -524,8 +524,9 @@ dev-dependencies: the one test that needs them).
 Neither starts the app's tasks, so a test of a task runs its function itself with `Signal::task()`.
 `corten check` runs `cargo test`, so it runs every test that is not `#[ignore]`d. A test is a
 debug build, so a page it asks for that renders a component its area does not get, or one the
-app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows
-it instead): a test that asks for each screen (a step behind a query string included) checks them
+app does not list, answers 500 with why in the error page's `failure.detail()`, which the error
+page `corten new` writes shows (so a status assert that prints the body names the component), and
+prints it to stderr too: a test that asks for each screen (a step behind a query string included) checks them
 all. A component no test draws is not missed for that: before the tests, `corten check` fails,
 naming the file and line, for a component with a stylesheet, script or view that no array names
 (`pub const COMPONENTS: &[Component] = &[..]`, `.components(&[..])` or a `vec![..]` passed to
