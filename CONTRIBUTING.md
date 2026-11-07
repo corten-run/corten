@@ -36,7 +36,7 @@ trait), `hyper` and `hyper-util` (connections, including ones that switch protoc
 (sockets, signals, timers), `tracing`, `form_urlencoded` (forms and query strings),
 `corten-macros` (no dependencies). axum's features are only `http1`, `tokio` and `matched-path`
 (and `json` with Corten's `json`): [design Choice 25](docs/design.md#choice-axum-router). Optional:
-`tracing-subscriber` (`log`, on by default), `serde`'s derive and `serde_json` (`json`), `zstd`, `brotli`, `flate2` (`compress`),
+`serde`'s derive and `serde_json` (`json`), `zstd`, `brotli`, `flate2` (`compress`),
 `corten-feed` (`feed`). Apps need no JavaScript dependencies; `package.json` here is tooling for
 the framework itself.
 
