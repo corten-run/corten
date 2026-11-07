@@ -150,6 +150,8 @@ pub const ELEMENTS: &[&str] = &[
 
 /// `HTMLElementEventMap`: the interface of an event (`click` is `PointerEvent`). `connect`, which
 /// Corten fires when an element joins the page, and events lib.dom does not list are `Event`.
+/// `scripts/events.mjs` (`npm run check`) holds this to lib.dom: a name it types more narrowly
+/// than `Event` has an arm here, its interface or an `Event` arm that says why.
 pub fn event(name: &str) -> &'static str {
     match name {
         "click" | "auxclick" | "contextmenu" | "pointerdown" | "pointerup" | "pointermove" | "pointerover" | "pointerout"
@@ -161,6 +163,8 @@ pub fn event(name: &str) -> &'static str {
         "beforeinput" => "InputEvent",
         "focus" | "blur" | "focusin" | "focusout" => "FocusEvent",
         "submit" => "SubmitEvent",
+        "formdata" => "FormDataEvent",
+        "securitypolicyviolation" => "SecurityPolicyViolationEvent",
         "toggle" | "beforetoggle" => "ToggleEvent",
         "wheel" => "WheelEvent",
         "drag" | "dragstart" | "dragend" | "dragenter" | "dragleave" | "dragover" | "drop" => "DragEvent",
@@ -169,7 +173,10 @@ pub fn event(name: &str) -> &'static str {
         "transitionstart" | "transitionend" | "transitionrun" | "transitioncancel" => "TransitionEvent",
         "copy" | "cut" | "paste" => "ClipboardEvent",
         "compositionstart" | "compositionupdate" | "compositionend" => "CompositionEvent",
-        "error" => "ErrorEvent",
+        // lib.dom types these as the window's (`ErrorEvent`, `UIEvent`) or as XMLHttpRequest's
+        // (`ProgressEvent`), but an image, media or other element fires a plain `Event` for
+        // each, and no `on:` hears the window.
+        "error" | "abort" | "progress" | "resize" => "Event",
         // The runtime's own, each a `CustomEvent` whose `detail` corten.js declares.
         "corten:error" => "CortenError",
         "corten:notice" => "CortenNotice",
@@ -221,7 +228,9 @@ pub fn reaches_document(name: &str) -> bool {
             | "change"
             | "select"
             | "submit"
+            | "formdata"
             | "reset"
+            | "securitypolicyviolation"
             | "focusin"
             | "focusout"
             | "drag"
@@ -270,6 +279,8 @@ pub const EVENTS: &[&str] = &[
     "CompositionEvent",
     "TouchEvent",
     "SubmitEvent",
+    "FormDataEvent",
+    "SecurityPolicyViolationEvent",
     "ToggleEvent",
     "AnimationEvent",
     "TransitionEvent",

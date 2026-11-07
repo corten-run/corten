@@ -39,6 +39,16 @@ export function progressed(event, bar) {
   else bar.removeAttribute("value");
 }
 
+/** @param {FormDataEvent} event */
+export function tidy(event) {
+  for (const [key, value] of Array.from(event.formData.entries())) if (value === "") event.formData.delete(key);
+}
+
+/** @param {SecurityPolicyViolationEvent} event */
+export function refused(event) {
+  document.title = event.violatedDirective;
+}
+
 /** @param {HTMLElement} line */
 export function remove(line) {
   line.remove();

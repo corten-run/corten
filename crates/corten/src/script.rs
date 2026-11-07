@@ -766,6 +766,88 @@
 //! # fn main() {}
 //! ```
 //!
+//! A browser event's handler takes it as lib.dom's `HTMLElementEventMap` types it, except where an
+//! element fires a plainer one: an image's or media element's `error`, `abort`, `progress` and
+//! `resize` are `Event`s (lib.dom gives them the window's and XMLHttpRequest's types). A form's
+//! `formdata`, fired when its entries are read (a submit, `new FormData(form)`), is a
+//! `FormDataEvent`, so a handler can change what the form sends without rebuilding the body: here
+//! it leaves out blank fields, so a `GET` form's address has only the filters set. It bubbles, so
+//! `on:document:formdata` hears every form's:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:formdata={js::tidy(event)}><form on:formdata={js::tidy(event)}></form></li> }
+//! }
+//! # fn main() {
+//! let html = CartLine {}.to_html();
+//! assert!(html.contains(r#"data-on="document.formdata:cart_line.tidy($e)""#), "{html}");
+//! assert!(html.contains(r#"data-on="formdata:cart_line.tidy($e)""#), "{html}");
+//! # }
+//! ```
+//!
+//! A `FormDataEvent` handler takes no other event, and another event's handler does not take it:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:click={js::tidy(event)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:formdata={js::shortcut(event, target)}><form></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A page's `securitypolicyviolation`, a `SecurityPolicyViolationEvent` for each thing its CSP
+//! refused, bubbles to the document, which is where the browser fires most of them:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:securitypolicyviolation={js::refused(event)}></li> }
+//! }
+//! # fn main() {
+//! assert!(CartLine {}.to_html().contains(r#"data-on="document.securitypolicyviolation:cart_line.refused($e)""#));
+//! # }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:click={js::refused(event)}></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A media element's `progress` is a plain `Event`, so a `ProgressEvent` handler does not take it:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! { <li><video on:progress={js::progressed(event, bar)}></video><progress ref={bar}></progress></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
 //! `on:` takes no other name with a colon, so the same markup with `corten:notice` (no element
 //! hears it) or any other does not compile; a component's own event is an `#[event]` type, and
 //! another library's is heard by a listener its script adds:
@@ -1770,7 +1852,7 @@ pub mod ev {
     #[diagnostic::on_unimplemented(
         message = "the handler takes a {P}, and this on: attribute's event is a {Self}",
         label = "a {Self}",
-        note = "the event's type comes from the on: attribute's name (on:click is a MouseEvent); widen the JSDoc type to Event to take any"
+        note = "the event's type comes from the on: attribute's name (on:click is a PointerEvent); widen the JSDoc type to Event to take any"
     )]
     pub trait SubOf<P> {}
 
@@ -1797,6 +1879,8 @@ pub mod ev {
     events!(CompositionEvent: CompositionEvent, UIEvent, Event);
     events!(TouchEvent: TouchEvent, UIEvent, Event);
     events!(SubmitEvent: SubmitEvent, Event);
+    events!(FormDataEvent: FormDataEvent, Event);
+    events!(SecurityPolicyViolationEvent: SecurityPolicyViolationEvent, Event);
     events!(ToggleEvent: ToggleEvent, Event);
     events!(AnimationEvent: AnimationEvent, Event);
     events!(TransitionEvent: TransitionEvent, Event);

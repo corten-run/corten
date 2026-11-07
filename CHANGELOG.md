@@ -5401,6 +5401,17 @@ Corten is pre-1.0, so any minor version may change the API.
     request with its purpose, and the timed requests and console errors of the module that is
     imported again
     ([#1053 Two Firefox watchlist smoke checks (prefetch's newest 8, a script module imported again) each fail now and then on a branch that does not touch them](https://github.com/corten-run/corten/issues/1053)).
+187. A handler that takes a form's `formdata` event as lib.dom types it (`@param {FormDataEvent} event`)
+    did not compile since every handler parameter is checked
+    ([#1066 A handler parameter no call is checked against stops the call compiling; @import'ed events are checked (#1037)](https://github.com/corten-run/corten/pull/1066)):
+    Corten typed `on:formdata`'s event `Event`, and `FormDataEvent` was no interface a call is
+    checked against. `formdata` is now a `FormDataEvent` and `securitypolicyviolation` a
+    `SecurityPolicyViolationEvent`, and both bubble, so `on:document:` hears them. An element's
+    `error`, `abort`, `progress` and `resize` stay `Event`: lib.dom gives them the window's and
+    XMLHttpRequest's types, but an element fires a plain `Event` (probed in Chromium, Firefox and
+    WebKit). `npm run check` now holds the event map to lib.dom (`scripts/events.mjs`), so an event
+    lib.dom types more narrowly cannot fall back to `Event` unnoticed
+    ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
 
 ### Documentation
 
