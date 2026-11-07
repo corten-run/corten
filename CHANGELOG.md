@@ -2453,8 +2453,8 @@ Corten is pre-1.0, so any minor version may change the API.
     and browser pass measure an app as it is deployed. Each phase counts the edge's CPU beside the
     app's (`edgePerCpuSecond`, `edgeCpuUsedPct`), and k6's in every tier (`k6CpuUsedPct`); the
     summary marks a phase the edge or k6 limited (EDGE-BOUND, LOAD-BOUND) and, through the edge,
-    a saturation phase whose app used less than 90% of its core (APP-IDLE), as every local one was. A matched round
-    runs on a c-16, and `droplet.mjs --edge off` runs it reached directly, to compare. The defaults
+    a saturation phase whose app used less than 90% of its core (APP-IDLE), as every local one was. A matched full-stack
+    round runs on a c-16, and `droplet.mjs --edge off` runs it reached directly, to compare. The defaults
     tier stays direct.
 269. `bench/fullstack/REVIEW.md` tells a framework's maintainers what the comparison measures,
     what they may change in their app (settings a production deployment uses, the app's own code)

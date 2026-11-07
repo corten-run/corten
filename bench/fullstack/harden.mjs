@@ -120,9 +120,13 @@ const git = (/** @type {string[]} */ ...args) => {
   const run = spawnSync("git", args, { cwd: here, encoding: "utf8" });
   return run.status === 0 ? run.stdout.trim() : null;
 };
-const commit = git("rev-parse", "HEAD");
-const status = commit === null ? null : git("status", "--porcelain", "--", ".", ":!results");
-const dirty = status === null ? null : status !== "";
+// On a droplet the upload has no .git: the commit the images were built from stands in, as
+// droplet.mjs passes it (CONFORM_IMAGES_FROM, "<commit>" or "<commit>-dirty").
+const head = git("rev-parse", "HEAD");
+const built = /^([0-9a-f]+)(-dirty)?$/.exec(process.env.CONFORM_IMAGES_FROM ?? "");
+const commit = head ?? built?.[1] ?? null;
+const status = head === null ? null : git("status", "--porcelain", "--", ".", ":!results");
+const dirty = status !== null ? status !== "" : built ? built[2] !== undefined : null;
 const file = out ? join(here, "results", out, "hardening.json") : null;
 const previous = file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
 /** @type {Record<string, any>} */

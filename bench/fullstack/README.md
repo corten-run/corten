@@ -1123,7 +1123,7 @@ passes, a separate diagnostic build of card-market's crate run after it:
 2. Cores: the app under test pinned to core 1 with 1 GiB of memory, the item API to cores 2-3,
    the load generator (k6) to cores 4-7, the system and Docker on core 0. One app runs at a time.
    From r7, with items in memory, k6 also gets cores 2-3, which the item API does not use then.
-   A matched-tier round runs on a `c-16`: the edge on cores 4-9 and k6 on 10-15 (with items in
+   A matched-tier full-stack round runs on a `c-16`: the edge on cores 4-9 and k6 on 10-15 (with items in
    memory, 2-3 as well), the rest as above (The matched tier).
 3. Cold start (`cold-start.mjs`): the container runs a shell that writes the time and execs the
    server; a probe in the same network namespace polls for the first 200 of an item page (items
@@ -1336,8 +1336,8 @@ keeping the app's one core busy would take about 3.2 to 3.5 of the edge's cores 
 the assumption that the app, nginx and k6 all run faster on a droplet alike), so it has six
 there; at Caddy's, neither four nor six would do.
 
-The edge runs on cores of its own (`BENCH_EDGE_CPUS`; 4-9 on a droplet, so a matched round needs
-16 vCPUs, a c-16, and its script stops on a smaller host before it starts; off a bench host, four
+The edge runs on cores of its own (`BENCH_EDGE_CPUS`; 4-9 on a droplet, so a matched full-stack round
+needs 16 vCPUs, a c-16, and its script stops on a smaller host before it starts; off a bench host, four
 CPUs' time, unpinned), and each phase counts its CPU beside the app's: the summary's
 `edgePerCpuSecond`, `edgeCpuUsedPct` (of one CPU) and `edgeBound`, true when the edge used 90% or
 more of the cores it had (`edge.json` in the round's load folders says how many), so the phase
@@ -1438,7 +1438,9 @@ its container, so a phase cut off at its limit leaves no connections for the nex
 stopped short. The step
 has its own cadence, not every round's (`droplet.mjs <round> --suite harden`, about eight minutes
 an app, estimated from local runs), and in the matched tier (`BENCH_TIER=matched`) runs its apps
-with the production profile.
+with the production profile. It reaches each app directly, with no edge, on the defaults tier's
+c-8 and cores, so it measures the bare app: a deployment's proxy in front of it may absorb some of
+these clients first.
 
 ### Drift across rounds
 
@@ -1632,7 +1634,7 @@ node bench/fullstack/droplet.mjs p1 --ssh-key <id> --apps corten,axum-maud --pas
 # The hardening step alone (slow clients, oversized requests, floods), every app or --apps:
 node bench/fullstack/droplet.mjs h1 --ssh-key <id> --suite harden --detach
 # A round of the matched tier (named m<n>; its apps with the production profile), and its collect:
-node bench/fullstack/droplet.mjs m1 --ssh-key <id> --tier matched --detach   # a c-16: the edge has six cores
+node bench/fullstack/droplet.mjs m1 --ssh-key <id> --tier matched --detach   # a c-16: the edge has six cores (a hardening round of the tier, with --suite harden, has no edge and runs on a c-8)
 node bench/fullstack/droplet.mjs m1 --collect
 # Or by hand, from the repository root: the images, the fixture, then everything.
 docker build -f examples/card-market/Dockerfile -t cb-corten .
