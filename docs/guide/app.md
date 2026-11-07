@@ -584,11 +584,11 @@ not checked.
 
 ### In a browser
 
-A link or a form the runtime follows changes the address when the navigation starts (in a browser
-with the Navigation API), before the new page is drawn (and, unless it was prefetched, before it
-is fetched). A browser test that waits only for the address (Playwright's `page.waitForURL`)
-can read the page it left: wait for something the new page draws as well (its heading, a row it
-lists).
+A link or a form the runtime follows changes the address when the page's answer is in, where the
+browser lets a navigation say when its address changes (the Navigation API's `precommitHandler`),
+and when the navigation starts where it does not; either way, before the new page is drawn. A
+browser test that waits only for the address (Playwright's `page.waitForURL`) can read the page
+it left: wait for something the new page draws as well (its heading, a row it lists).
 
 ```js
 await page.getByRole("link", { name: "Orders" }).click();

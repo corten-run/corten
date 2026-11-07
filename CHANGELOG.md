@@ -3739,6 +3739,11 @@ Corten is pre-1.0, so any minor version may change the API.
     costs the same (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each:
     9,241 instructions a read before and after)
     ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
+160. A value that is not a link where an `Href` is expected (a `&dyn Href`, `req.redirect`, a
+    `#[derive(Href)]` variant) fails with "`..` is not a link" and notes that say what a link is,
+    that text from outside the code is `Local::parse(text)` and that a boxed route is passed as the
+    route itself or as a `Box<dyn Href>`, where before the error ended in a long list of types
+    ([#974 Href has no on_unimplemented note, so a value that is not a link (a Box of a route) fails with E0277 listing 120 impls](https://github.com/corten-run/corten/issues/974)).
 161. The runtime's declarations for `corten/views` (`rows()`, `view()`, `Holds`, `ViewClass`,
     `Rows` and the rest) ship with the crate in `js/views.d.ts`, which `corten check` already
     gives `tsc`, instead of being written into each app's `types/app.d.ts`. The app's file holds
@@ -3752,6 +3757,23 @@ Corten is pre-1.0, so any minor version may change the API.
     `Types::sync`'s message says the file may be out of date with how the Corten release declares
     the app's types as well as with the types
     ([#1020 A pin bump fails the app's corten check once when Corten's own script declarations change, blaming the app's Rust types](https://github.com/corten-run/corten/issues/1020)).
+162. A client navigation changes the address when the page's answer is in, as a full load's does,
+    not at the click: while a slow handler runs, the address still names the page on screen, so
+    reloading, copying or sharing it gets that page, and a link the server redirects shows only
+    the redirect's address (keeping the link's `#id` when it names none), in one history entry
+    instead of the link's address replaced by the target's; a link the server sends to a place
+    on a page or another site (`corten-location`) shows only that address too, the next
+    navigation taking this one's place in history before its address changes. `main` and the
+    link are busy from the click as before. It holds where the browser has the Navigation API's
+    `precommitHandler`, which the runtime detects; elsewhere, and for back and forward, the
+    address changes at the click as before. The runtime's own navigations (a redirect followed,
+    a write's page) handle their `committed` promise, which a navigation replaced before its
+    address changes rejects.
+    In the watchlist's smoke, a page held 800 ms showed the old page busy at the old address for
+    781 to 800 ms and the new address on the old page for 0 ms, in Chromium and Firefox; the
+    issue measured the address changing 29 ms after the click and the page 255 ms after. The
+    minified runtime is 789 bytes larger (40,232; 301 more gzip at level 9, 272 brotli, 301 zstd)
+    ([#992 A client navigation changes the address before the page arrives, so the address names a page the screen does not show for the handler's whole time](https://github.com/corten-run/corten/issues/992)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
