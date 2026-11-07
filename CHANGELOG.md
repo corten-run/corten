@@ -2425,6 +2425,16 @@ Corten is pre-1.0, so any minor version may change the API.
     a header timeout and a cap of 1,000 connections, which `conform-hold.mjs` probes as two new
     columns of the tier's matrix. Corten and axum-maud are in it so far (axum-maud with
     tower-http's layers); card-market reads `MAX_CONNECTIONS` into `App::max_connections`.
+267. `bench/fullstack` has a hardening step
+    ([#808 bench/fullstack measures only throughput and latency, not how each server holds up against slow clients, oversized requests and connection floods](https://github.com/corten-run/corten/issues/808)):
+    `harden.mjs` runs six phases against each freshly started app (unfinished heads, heads and
+    bodies sent a byte a second, clients that stop reading, idle connections, oversized
+    requests) beside a well-behaved client, and writes whether the app stayed up, what it did with
+    the abusive connections, the client's latency and the app's memory and CPU to
+    `results/<round>/hardening.json`; `droplet.mjs --suite harden` runs it on its own cadence.
+    The README reports a local run of nine apps, with where Corten falls short: a trickled body
+    is closed by the deadline, not a minimum rate, and a client that stops reading by the 60 s
+    send timeout, where Kestrel's minimum rates close both sooner.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

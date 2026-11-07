@@ -607,6 +607,59 @@ that do little of it; a tier where every app does the same is
 and checking that each app does the same work is
 [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/corten-run/corten/issues/806).
 
+### Hardening, nine apps at their defaults (round harden-local2, 2026-11-07)
+
+How each app holds up against slow clients, oversized requests and connection floods, as its
+framework starts it (the step is Method, The hardening step). Measured locally (Docker Desktop on
+Windows, one run each, with other work on the machine, so the well-behaved client's latencies are
+indicative; `results/harden-local2/hardening.json`): Corten, axum-maud and the six other apps the
+matched tier names, ASP.NET Core as both its Razor Pages app and aspnet-aot. The images were
+`cb-corten` and `cb-axum-maud` built at `720c8a88`, `cb-aspnet-aot` at this step's commit and
+the others on 2026-11-06 from main, whose apps changed after that only in the page markup of
+[#942 Benchmark: the item page's apps return the same visible page but do different work (Corten formats prices per request and renders every offer)](https://github.com/corten-run/corten/issues/942).
+Every app but Next.js was still running after every phase and answered a request on a new
+connection after it; Next.js's process had exited during the clients that stop reading (`DOWN`;
+the next phase starts the app again). Each cell: what the app did with the abusive connections
+(closed, by when; held, for the phase's length), the well-behaved client's p99 and its failures
+(none unless said), and the app's peak memory.
+
+| App | 2,000 unfinished heads | 200 heads, a byte a second | 100 bodies, a byte a second | 200 clients that stop reading | 5,000 idle connections |
+|---|---|---|---|---|---|
+| corten | closed by 30.9 s; 35 ms; 49 MiB | closed by 30.1 s; 22 ms | closed by 10.1 s (its deadline); 21 ms | closed by 63.9 s; 195 ms; 87 MiB | closed by 32.5 s; 42 ms; 40 MiB |
+| aspnet-aot | closed by 32.4 s; 46 ms; 56 MiB | closed by 32.1 s; 10 ms | closed by 6.6 s; 16 ms | closed by 21.9 s; 690 ms; 98 MiB | held 60 s; 21 ms; 84 MiB |
+| aspnet | closed by 32.6 s; 61 ms; 98 MiB | closed by 31.9 s; 27 ms | closed by 5.5 s; 165 ms | held 90 s; 4,864 ms, 27 of 892 failed; 140 MiB | held 60 s; 50 ms; 116 MiB |
+| topcoat | closed by 32.8 s; 6 ms; 41 MiB | closed by 30.1 s; 7 ms | held 90 s; 15 ms | held 90 s; 1,121 ms; 92 MiB | held 60 s; 33 ms; 39 MiB |
+| axum-maud | held 45 s; 25 ms; 51 MiB | held 60 s; 17 ms | held 90 s; 17 ms | held 90 s; 1,371 ms; 85 MiB | held 60 s; 25 ms; 62 MiB |
+| leptos | held 45 s; 47 ms; 41 MiB | held 60 s; 12 ms | closed by 0.2 s; 28 ms | held 90 s; 1,295 ms; 82 MiB | held 60 s; 15 ms; 31 MiB |
+| nextjs | held 45 s; 124 ms; 142 MiB | held 60 s; 22 ms | held 90 s; 3,466 ms | DOWN: 530 of 530 failed; 643 MiB | held 60 s; 50 ms; 189 MiB |
+| spring | held 45 s; 515 ms; 307 MiB | held 60 s; 40 ms | held 90 s; 498 ms | held 90 s; 4,981 ms, 874 of 899 failed; 466 MiB | 4,222 closed by 66.2 s; 36 ms; 259 MiB |
+| django | held 45 s; 417 of 458 failed | held 60 s; 578 of 599 failed | closed by 0.5 s; 418 ms | 129 closed by 88.4 s; 894 of 900 failed | 2,043 connected; 1,165 of 1,207 failed |
+
+Oversized requests: every app refused a 1 MiB header (431; Spring 400), and every app but Next.js
+(200) and Spring (400) refused 200 headers with 431. A 16 MiB body posted to the form got 413 from
+axum-maud and Spring, 400 from the Razor Pages app, 405 from aspnet-aot (which has no form), 403
+from Django and 200 from Next.js, which took it; Corten, Topcoat and Leptos closed the connection
+before the probe read an answer. Corten's was a 413 in an earlier local run.
+
+Where Corten leads: it closed every abusive connection in every phase, and it and aspnet-aot are
+the only apps that closed all the clients that stop reading and stayed up, Corten with the less
+memory, and the well-behaved client's p99 stayed under 200 ms in each phase. Where it falls short:
+
+1. A body sent a byte a second is closed by the request deadline (card-market's 10 s, 30 s by
+   default), not by a rate: Kestrel closed it in 5.5 to 6.6 s by its minimum of 240 bytes a
+   second, and a route whose deadline is removed (`deadline(None)`, for a long upload) has
+   nothing that closes it until `Upload::idle`'s minute of silence, which a byte a second never
+   reaches.
+2. A client that stops reading is closed by `App::send_timeout`'s 60 s; aspnet-aot's Kestrel
+   closed the same clients in 21.9 s by its minimum response rate (the Razor Pages app held them
+   all 90 s). Corten holds them three times as long, though
+   with less memory (87 against 98 MiB) and a quarter of the well-behaved client's p99.
+3. 5,000 idle connections were all accepted (`App::max_connections` is unbounded by default), as
+   every app but Django's three workers did; the header timeout closed them in 32.5 s.
+4. The 16 MiB body's 413 was not read in one of two local runs (above).
+
+The table has no droplet round yet: `droplet.mjs <round> --suite harden` runs it (Running it).
+
 ### Corten's item API path
 
 Corten's item-API page fell from 1,290 a second in r2 to 1,175 in r3 as the unchanged apps fell
@@ -1239,6 +1292,36 @@ the ETag, the cross-site post, the two failed reads (502 `text/plain`), the 404 
 (empty), the unknown Host and the 64 KiB header (200), liveness and readiness, the unfinished head
 (still held at 45 s) and the cap (answered with 1,050 held). No load phase has run in the tier yet.
 
+### The hardening step
+
+`harden.mjs` measures how each app holds up against abuse, not how many requests it serves. Each
+phase runs against a freshly started app (as `runArgs` starts it, reading items from the item
+API, at its tier's settings), sent by `harden-probe.mjs` from a container on the bench network
+(through Docker Desktop's port proxy the proxy reads for the client, so no server sees a slow
+reader), while a well-behaved client asks for the item as JSON on a new connection every 100 ms:
+
+1. `headFlood`: 2,000 connections each send a request head without its blank line, then nothing,
+   held 45 s (past Corten's 30 s header timeout).
+2. `slowHead`: 200 connections each send a 4 KiB head a byte a second, held 60 s.
+3. `slowBody`: 100 posts to the form declare a 1 MiB body and send it a byte a second, held 90 s.
+4. `slowReader`: 200 connections each pipeline 1,000 page requests and never read, held 90 s
+   (more than the sockets' buffers between two containers hold, so the server's writes block; an
+   empty line a second shows when the server has closed one).
+5. `idleFlood`: 5,000 connections opened and sent nothing, held 60 s.
+6. `oversized`: 200 headers, a 1 MiB header, and a 16 MiB body to the form, each on its own
+   connection; each one's status, or `closed` when the connection closed with none.
+
+For each phase it records when the server closed each abusive connection, the well-behaved
+client's requests (answered 200 within 5 s, or failed) and their p50 and p99, the app's peak
+memory (`docker stats`) and CPU seconds (its cgroup's counter), whether the container still runs
+or was killed for memory, and the status of one request on a new connection once the abuse has
+closed. An app is up after a phase when it runs, was not killed for memory, and answered that
+request 200. `results/<round>/hardening.json` keeps each phase's record and its cell;
+`node harden.mjs [apps|all] [round] [phases]` runs some phases again and keeps the rest. The step
+has its own cadence, not every round's (`droplet.mjs <round> --suite harden`, about eight minutes
+an app, estimated from local runs), and in the matched tier (`BENCH_TIER=matched`) runs its apps
+with the production profile.
+
 ### Drift across rounds
 
 A round's differences under about 10% are noise (caveat 1), so a number that gets a few percent
@@ -1428,6 +1511,8 @@ node bench/fullstack/droplet.mjs r17 --collect                        # then col
 node bench/fullstack/droplet.mjs aot2 --ssh-key <id> --apps corten,aspnet,aspnet-aot --detach
 # Each load phase three times, the apps taking turns, for medians and ranges:
 node bench/fullstack/droplet.mjs p1 --ssh-key <id> --apps corten,axum-maud --passes 3 --detach
+# The hardening step alone (slow clients, oversized requests, floods), every app or --apps:
+node bench/fullstack/droplet.mjs h1 --ssh-key <id> --suite harden --detach
 # A round of the matched tier (named m<n>; its apps with the production profile), and its collect:
 node bench/fullstack/droplet.mjs m1 --ssh-key <id> --tier matched --detach
 node bench/fullstack/droplet.mjs m1 --collect
@@ -1464,7 +1549,7 @@ node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repe
 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
    from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`, `bytes.json`,
-   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json`, `trend.json` and, in a round
+   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and, in a round
    committed before this, `raw.txt` (below). Its raw output
    (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
    `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
