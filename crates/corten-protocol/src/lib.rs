@@ -83,8 +83,8 @@ pub struct SnapshotRef<'a, T> {
 }
 
 /// Where a client is in a feed: `epoch-seq` on the wire (`Last-Event-ID` or `?since=`). The epoch
-/// names the log, so a cursor is only valid against the same log; it is ASCII letters, digits,
-/// `.` and `_`, so a cursor goes into a URL and an event's `id:` line as it is.
+/// names the log, so a cursor is only valid against the same log; it is one or more ASCII
+/// letters, digits, `.` and `_`, so a cursor goes into a URL and an event's `id:` line as it is.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Cursor {
     pub epoch: String,

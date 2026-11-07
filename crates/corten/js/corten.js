@@ -708,7 +708,7 @@ export function subscribe(url, handlers, { signal } = {}) {
   let timer;
   let seq = 0;
   let failures = 0;
-  // Snapshots in a row whose own cursor the stream refused before any patch came.
+  // Snapshots in a row whose own cursor the stream refused as it opened.
   let refused = 0;
   const status = handlers.status ?? (() => {});
   signal?.addEventListener(
@@ -721,19 +721,24 @@ export function subscribe(url, handlers, { signal } = {}) {
     { once: true },
   );
 
-  /** Runs `next` after a backoff that grows with each failure in a row. @param {() => void} next */
-  function retry(next) {
-    failures += 1;
+  /** Runs `next` after a backoff that grows with `times`. @param {() => void} next @param {number} times */
+  function wait(next, times) {
     clearTimeout(timer);
-    timer = setTimeout(next, Math.min(30_000, 500 * 2 ** failures));
+    timer = setTimeout(next, Math.min(30_000, 500 * 2 ** times));
   }
 
-  async function sync() {
+  /** Runs `next` after a backoff that grows with each failure in a row. @param {() => void} next */
+  function retry(next) {
+    wait(next, (failures += 1));
+  }
+
+  /** @param {boolean} [shown] the status already says `syncing` */
+  async function sync(shown = false) {
     source?.close();
     source = null;
     request?.abort();
     if (signal?.aborted) return;
-    status("syncing");
+    if (!shown) status("syncing");
     const current = (request = new AbortController());
     try {
       const res = await fetch(url, { headers: { accept: "application/json" }, signal: current.signal });
@@ -756,8 +761,10 @@ export function subscribe(url, handlers, { signal } = {}) {
     const es = new EventSource(liveUrl);
     source = es;
     let cursor = new URL(liveUrl, location.href).searchParams.get("since") ?? "";
+    let opened = 0;
     es.addEventListener("open", () => {
       failures = 0;
+      opened ||= performance.now();
       status("live");
     });
     // EventSource retries by itself and sends Last-Event-ID, so the server resumes after `seq`.
@@ -767,16 +774,18 @@ export function subscribe(url, handlers, { signal } = {}) {
       status("reconnecting");
       if (es.readyState === EventSource.CLOSED && source === es) retry(() => listen(`${url}/live?since=${encodeURIComponent(cursor)}`));
     });
+    // A stream that answers the cursor the snapshot just gave with `sync` as it opens refuses it
+    // (the URL serves more than one feed, say): load the snapshot again after a backoff that
+    // grows, not straight away in a loop. A `sync` later (a reset) loads it at once.
     es.addEventListener("sync", () => {
-      if (!fresh) return void sync();
-      // The stream refused the cursor the snapshot just gave (the URL serves more than one feed,
-      // say): load it again after a backoff that grows, not straight away in a loop.
+      if (!fresh || performance.now() - opened > 250) {
+        refused = 0;
+        return void sync();
+      }
       es.close();
       source = null;
       status("syncing");
-      refused += 1;
-      clearTimeout(timer);
-      timer = setTimeout(sync, Math.min(30_000, 500 * 2 ** refused));
+      wait(() => sync(true), (refused += 1));
     });
     es.addEventListener("patch", (event) => {
       const receivedAt = performance.now();

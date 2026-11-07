@@ -150,19 +150,19 @@ impl<T: Row> Feed<T> {
     /// log. Every instance that follows the same log with the same generation accepts the same
     /// cursors. Changes arrive through [`Feed::apply`].
     ///
-    /// A generation is ASCII letters, digits, `.` and `_` (`deploy.3`, a hex time, a version):
+    /// A generation is one or more ASCII letters, digits, `.` and `_` (`deploy.3`, a hex time):
     /// it is the cursor's epoch, which a client writes into a URL (`?since=`) and the server into
     /// each event's `id:` line, so it holds nothing an encoder escapes, no `-` (the cursor's
     /// separator) and no line break.
     ///
     /// # Panics
     ///
-    /// When `generation` holds anything else, at the line that set it rather than as a feed that
-    /// never goes live.
+    /// When `generation` is empty or holds anything else, at the line that set it rather than as a
+    /// feed that never goes live.
     pub fn follow(generation: impl Into<String>, seq: u64, rows: impl IntoIterator<Item = T>) -> Self {
         let epoch = generation.into();
         assert!(
-            epoch.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_'),
+            !epoch.is_empty() && epoch.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_'),
             "a feed generation is ASCII letters, digits, '.' and '_', not {epoch:?}"
         );
         let rows = rows.into_iter().map(|r| (r.id().to_string(), r)).collect();
@@ -619,7 +619,9 @@ impl<T: Row> Tx<'_, T> {
 }
 
 /// The client's cursor: the `Last-Event-ID` header (an `EventSource` reconnecting) or the
-/// `since` query parameter (a new subscription after a snapshot), as `epoch-seq`.
+/// `since` query parameter (a new subscription after a snapshot), as `epoch-seq`. The parameter
+/// is read as written, not percent-decoded: a feed's generation ([`Feed::follow`]) holds nothing
+/// a URL encoder escapes.
 pub struct Since(pub Option<Cursor>);
 
 impl<S: Send + Sync> FromRequestParts<S> for Since {
@@ -872,8 +874,9 @@ mod tests {
     }
 
     /// Every kind of generation `Feed::follow` takes goes live from the cursor its own snapshot
-    /// gives, sent as `subscribe()` writes it: `encodeURIComponent` leaves each of these bytes as
-    /// it is, so the stream is the feed's (`retry:`), not `sync` (#1067).
+    /// gives, sent as it is: what `subscribe()`'s `encodeURIComponent` writes for these bytes, as
+    /// every URL encoder does (they are all unreserved), so the stream is the feed's (`retry:`),
+    /// not `sync` (#1067).
     #[tokio::test]
     async fn every_generation_follow_takes_goes_live_from_its_own_cursor() {
         for generation in ["g7", "deploy.3", "v1_2", "A.b_9", "0"] {
@@ -891,7 +894,7 @@ mod tests {
     /// set, not served as a feed that answers every stream with `sync` (#1067).
     #[test]
     fn a_generation_a_cursor_cannot_carry_is_refused_where_it_is_set() {
-        for generation in ["deploy:3", "v 1", "ab+c", "b64/x=", "a-b", "g\nevent: x", "caf\u{e9}", "a%20b"] {
+        for generation in ["", "deploy:3", "v 1", "ab+c", "b64/x=", "a-b", "g\nevent: x", "caf\u{e9}", "a%20b"] {
             let refused = std::panic::catch_unwind(|| Feed::follow(generation, 0, std::iter::empty::<Item>()));
             let message =
                 refused.err().and_then(|e| e.downcast::<String>().ok()).unwrap_or_else(|| panic!("{generation:?} was taken"));

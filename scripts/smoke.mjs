@@ -2558,36 +2558,65 @@ async function run(browser) {
   );
   await page.evaluate(() => document.querySelector("#resume-live")?.remove());
 
-  // A feed whose stream refuses the cursor its own snapshot gives (here every stream is `sync`,
-  // as when one URL serves more than one feed) loads the snapshot again after a backoff that
-  // grows (1 s, 2 s, ...), not straight away in a loop, and stops when its signal aborts (#1067).
-  const refusedFeed = { snapshots: 0, streams: 0 };
-  await page.route("**/feed/refused", (route) => {
-    refusedFeed.snapshots += 1;
-    return route.fulfill({ status: 200, contentType: "application/json", body: '{"epoch":"a","seq":1,"rows":[]}' });
-  });
-  await page.route("**/feed/refused/live*", (route) => {
-    refusedFeed.streams += 1;
-    return route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: 'event: sync\ndata: {"reason":"cursor-expired"}\n\n' });
-  });
-  await page.evaluate(async () => {
-    const { subscribe } = /** @type {any} */ (await import(/** @type {string} */ ("corten")));
-    const w = /** @type {any} */ (window);
-    w.__refused = new AbortController();
-    w.__refusedStates = [];
-    subscribe("/feed/refused", { snapshot() {}, patch() {}, status: (/** @type {string} */ s) => w.__refusedStates.push(s) }, { signal: w.__refused.signal });
-  });
+  // A feed whose stream refuses the cursor its own snapshot gives as it opens (here every stream
+  // is `sync`, as when one URL serves more than one feed) loads the snapshot again after a backoff
+  // that doubles (1 s, then 2 s), not straight away in a loop, and stops when its signal aborts
+  // (#1067). A `sync` that comes later on a stream (a server restarted, its cursor gone) loads the
+  // snapshot at once.
+  /** @param {string} name @param {(n: number) => string} stream */
+  const feedTimes = async (name, stream) => {
+    const times = { snapshots: /** @type {number[]} */ ([]), streams: 0 };
+    await page.route(`**/feed/${name}`, (route) => {
+      times.snapshots.push(Date.now());
+      return route.fulfill({ status: 200, contentType: "application/json", body: '{"epoch":"a","seq":1,"rows":[]}' });
+    });
+    await page.route(`**/feed/${name}/live*`, (route) =>
+      route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: stream((times.streams += 1)) }),
+    );
+    await page.evaluate(async (name) => {
+      const { subscribe } = /** @type {any} */ (await import(/** @type {string} */ ("corten")));
+      const w = /** @type {any} */ (window);
+      w.__feeds ??= {};
+      const stop = new AbortController();
+      w.__feeds[name] = { stop, states: [] };
+      subscribe(`/feed/${name}`, { snapshot() {}, patch() {}, status: (/** @type {string} */ s) => w.__feeds[name].states.push(s) }, { signal: stop.signal });
+    }, name);
+    return times;
+  };
+  /** @param {string} name */
+  const stopFeed = async (name) => {
+    const states = await page.evaluate((name) => {
+      const feed = (/** @type {any} */ (window)).__feeds[name];
+      feed.stop.abort();
+      return feed.states.join(" ");
+    }, name);
+    await page.unroute(`**/feed/${name}`);
+    await page.unroute(`**/feed/${name}/live*`);
+    return states;
+  };
+  const refusedFeed = await feedTimes("refused", () => 'event: sync\ndata: {"reason":"cursor-expired"}\n\n');
   await page.waitForTimeout(3500);
-  const refusedIn = { ...refusedFeed };
-  await page.evaluate(() => (/** @type {any} */ (window)).__refused.abort());
-  await page.waitForTimeout(2500);
+  const refusedAt = refusedFeed.snapshots.slice();
+  const refusedStates = await stopFeed("refused");
+  // The next snapshot was due 4 s after the third: wait past it.
+  await page.waitForTimeout(5000);
+  const gaps = refusedAt.slice(1).map((at, i) => at - refusedAt[i]);
   check(
-    "a feed whose stream refuses its own snapshot's cursor backs off, and stops when its signal aborts",
-    refusedIn.snapshots >= 2 && refusedIn.snapshots <= 4 && refusedFeed.snapshots === refusedIn.snapshots && refusedFeed.streams <= refusedFeed.snapshots,
-    `${refusedIn.snapshots} snapshots and ${refusedIn.streams} streams in 3.5 s, ${refusedFeed.snapshots - refusedIn.snapshots} after the abort; ${(await page.evaluate(() => (/** @type {any} */ (window)).__refusedStates.length))} status calls`,
+    "a feed whose stream refuses its own snapshot's cursor backs off 1 s then 2 s, and stops when its signal aborts",
+    gaps.length === 2 && gaps[0] >= 900 && gaps[0] < 1700 && gaps[1] >= 1900 && gaps[1] < 2800 && refusedFeed.snapshots.length === 3 && !refusedStates.includes("syncing syncing"),
+    `snapshots ${gaps.map((g) => `+${g} ms`).join(", ")} in 3.5 s, ${refusedFeed.snapshots.length - refusedAt.length} after the abort; ${refusedStates}`,
   );
-  await page.unroute("**/feed/refused");
-  await page.unroute("**/feed/refused/live*");
+  // The first stream is accepted and ends; the browser reconnects 400 ms later, and that stream
+  // answers `sync`; later streams are accepted.
+  const quietFeed = await feedTimes("quiet", (n) => (n === 1 ? "retry: 400\n\n" : n === 2 ? 'event: sync\ndata: {"reason":"cursor-expired"}\n\n' : "retry: 60000\n\n"));
+  await page.waitForTimeout(2000);
+  await stopFeed("quiet");
+  const quietGap = quietFeed.snapshots.length === 2 ? quietFeed.snapshots[1] - quietFeed.snapshots[0] : NaN;
+  check(
+    "a sync that comes later on a feed's stream loads the snapshot at once, not after a backoff",
+    quietFeed.snapshots.length === 2 && quietFeed.streams >= 2 && quietGap < 900,
+    `${quietFeed.snapshots.length} snapshots, ${quietFeed.streams} streams, the second snapshot +${quietGap} ms after the first`,
+  );
 
   // A patch replaces markup but keeps what the user is doing: edited fields keep their state,
   // untouched ones take the server's, and focus and caret stay put (here a <corten-live> style
