@@ -62,9 +62,13 @@ one does), the deploy and its layout, and when a navigation answers with a diffe
 never stale.
 
 While a request is on its way, the runtime marks what waits for it with `aria-busy="true"`: a
-`data-patch` form until its answer comes, and for a navigation `<main>` and the link or GET form
-that started it (through a redirect too), until the new page is swapped in. When another
-navigation replaces one, the first one's marks go at once, and the newer one's stay. Showing which control is working is then CSS
+`data-patch` form and the button that sent it until its answer comes, and for a navigation
+`<main>` and the link or GET form that started it, with the form's button, until the new page is
+swapped in (through a redirect too). A button outside its form (`form="open"`, a row's action
+for one form the rows share) is marked as well, so the one pressed shows it is working, and the
+kit's `Button` draws that. When another
+navigation replaces one, or another button sends the same form, the first one's marks go at once,
+and the newer one's stay. Showing which control is working is then CSS
 alone, in the component's stylesheet:
 
 ```css

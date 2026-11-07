@@ -483,6 +483,41 @@ async function run(browser) {
     return { gap: t.left - i.right, rem: parseFloat(getComputedStyle(document.documentElement).fontSize) / 2, off: i.top + i.height / 2 - (t.top + t.height / 2) };
   });
   check("Icon: beside a button's text, the button's gap apart and on the text's middle", spacedLikeButton(buttonIcon), JSON.stringify(buttonIcon));
+  // A busy Button (the runtime marks the one that sent a form, #1063): a ring after the label in
+  // the text's color, turning unless the user asks for less motion, and drawn under forced colors.
+  const busyButton = page.getByRole("button", { name: "List for sale" });
+  const ring = () =>
+    busyButton.evaluate((b) => {
+      const s = getComputedStyle(b, "::after");
+      return { content: s.content, border: s.borderTopStyle, color: s.borderTopColor, text: getComputedStyle(b).color, end: s.borderRightColor, animation: s.animationName, cursor: getComputedStyle(b).cursor };
+    });
+  const idleRing = await ring();
+  await busyButton.evaluate((b) => b.setAttribute("aria-busy", "true"));
+  const busyRing = await ring();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const stillRing = await ring();
+  await page.emulateMedia({ reducedMotion: null });
+  /** @type {Awaited<ReturnType<typeof ring>> | null} */
+  let forcedBusy = null;
+  if (engine !== "webkit") {
+    await page.emulateMedia({ forcedColors: "active" });
+    forcedBusy = await ring();
+    await page.emulateMedia({ forcedColors: "none" });
+  }
+  await busyButton.evaluate((b) => b.removeAttribute("aria-busy"));
+  check(
+    "Button: busy, a ring after its label in the text's color that turns, still under reduced motion and drawn under forced colors",
+    idleRing.content === "none" &&
+      busyRing.content === '""' &&
+      busyRing.border === "solid" &&
+      busyRing.color === busyRing.text &&
+      busyRing.end === "rgba(0, 0, 0, 0)" &&
+      busyRing.animation.endsWith("button-busy") &&
+      busyRing.cursor === "progress" &&
+      stillRing.animation === "none" &&
+      (forcedBusy === null || (forcedBusy.border === "solid" && forcedBusy.color !== "rgba(0, 0, 0, 0)")),
+    JSON.stringify({ idleRing, busyRing, stillRing, forcedBusy }),
+  );
   // Under forced colors the box shadow is not drawn: the group's outline is the focus ring.
   const forcedRingName = "InputGroup: under forced colors its input's focus draws the group's outline";
   if (engine === "webkit") skip(forcedRingName, "Playwright's WebKit does not emulate forced colors");

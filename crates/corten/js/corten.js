@@ -2050,9 +2050,11 @@ async function visit(url, signal, redirected, again, place, source, written, pre
   // A visit left before its prefetched answer is used stops that request too.
   else signal.addEventListener("abort", () => discard(hit), { once: true });
   // Marked busy as this visit's (past a form control named setAttribute): a newer visit's mark
-  // is not cleared when this one ends.
+  // is not cleared when this one ends. A form's navigation marks the form and the button that
+  // sent it, one outside it (`form=`) too.
   const mine = {};
-  const busy = again ? [] : [document.querySelector("main"), source];
+  const form = source instanceof HTMLButtonElement || source instanceof HTMLInputElement ? source.form : null;
+  const busy = again ? [] : [document.querySelector("main"), form ?? source, form && source];
   for (const el of busy) if (el) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
   // Cleared when the visit ends, or at once when it is abandoned: a prefetched answer it awaits
   // is not cancelled with it.
@@ -2283,8 +2285,16 @@ function sendsAs(form, submitter) {
  */
 function startedBy(event) {
   const el = event.info?.[SOURCE] ?? event.sourceElement;
-  return el?.form instanceof HTMLFormElement ? el.form : el instanceof Element ? el : null;
+  if (!(el instanceof HTMLFormElement)) return el instanceof Element ? el : null;
+  // Firefox names the form where Chromium names the button: the button is the one the form's
+  // last submit named.
+  const button = sentBy.get(el);
+  sentBy.delete(el);
+  return button ?? el;
 }
+
+/** The button that sent each form's last submit the runtime does not send itself. @type {WeakMap<HTMLFormElement, HTMLElement>} */
+const sentBy = new WeakMap();
 
 /**
  * Whether a navigation is a form sent by POST, which the browser sends itself. Chromium names
@@ -2684,8 +2694,13 @@ addEventListener("submit", patchSubmit);
 /** Sends a `data-patch` form's submit as a patch, unless a handler cancelled it. @param {Event} event */
 function patchSubmit(event) {
   const form = event.target;
-  if (event.defaultPrevented || !(form instanceof HTMLFormElement) || !formCall(form, "hasAttribute", "data-patch")) return;
+  if (event.defaultPrevented || !(form instanceof HTMLFormElement)) return;
   const submitter = /** @type {SubmitEvent} */ (event).submitter;
+  if (!formCall(form, "hasAttribute", "data-patch")) {
+    if (submitter) sentBy.set(form, submitter);
+    else sentBy.delete(form);
+    return;
+  }
   const sends = sendsAs(form, submitter);
   // A dialog's form closes the dialog and sends nothing: the browser's to do.
   if (sends.method === "dialog") return;
@@ -2730,7 +2745,12 @@ async function send(form, submitter, sends) {
     init.body = plain ? entries.map(([name, value]) => `${name}=${value}\r\n`).join("") : fields.toString();
     init.headers = { corten: "action", "content-type": plain ? "text/plain" : "application/x-www-form-urlencoded" };
   }
-  formCall(form, "setAttribute", "aria-busy", "true");
+  // The form and the control that sent it (a button outside it, by `form=`, too) are busy until
+  // the answer is drawn, as this submit's: a newer submit's marks are not cleared when this one
+  // ends.
+  const mine = {};
+  const busy = submitter ? [form, submitter] : [form];
+  for (const el of busy) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
   // A write can change any page, so nothing fetched before it is reused, nor anything prefetched
   // while it was on its way (which may predate it, or use up a notice it sets).
   const forget = () => {
@@ -2812,9 +2832,12 @@ async function send(form, submitter, sends) {
     pending.next = undefined;
     formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: 0, error } }));
   } finally {
-    if (submits.get(form)?.controller === controller) {
+    // Cleared when this submit ends, or when a newer one of the form took its place (whose marks
+    // stay); a redirect's page or a navigation that aborted it takes the page with the marks on.
+    const current = submits.get(form)?.controller === controller;
+    if (current || submits.has(form)) for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
+    if (current) {
       submits.delete(form);
-      formCall(form, "removeAttribute", "aria-busy");
       // In a task of its own, after the answer is drawn; not into a page being left.
       const next = pending.next;
       if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next));

@@ -12,6 +12,20 @@
 }
 .button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .button:disabled, .button[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+/* The runtime marks the button that sent a form, or the link that started a navigation,
+   aria-busy until its answer is drawn: a ring after the label, in the text's color (so forced
+   colors keep it), turning unless the user asks for less motion. */
+.button[aria-busy="true"] { cursor: progress; }
+/* An icon button has room for one mark: the ring takes the icon's place. */
+.icon[aria-busy="true"] > * { display: none; }
+.button[aria-busy="true"]::after {
+  content: ""; flex: none; box-sizing: border-box; width: 1em; height: 1em;
+  border: 2px solid currentColor; border-inline-end-color: transparent; border-radius: 50%;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .button[aria-busy="true"]::after { animation: button-busy .8s linear infinite; }
+  @keyframes button-busy { to { rotate: 1turn; } }
+}
 .primary { background: var(--primary); color: var(--primary-foreground); }
 .primary:hover { background: color-mix(in oklab, var(--primary) 88%, var(--foreground)); }
 .secondary { background: var(--secondary); color: var(--secondary-foreground); }
