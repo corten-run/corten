@@ -851,11 +851,70 @@ async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_rep
     assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
     // In a debug build, a component rendered ahead counts as rendered where it is placed. A
     // release build does not note a view's components, so only a debug build reports it.
+    // Outside `corten dev` too, as an app's own router test runs (#1029): the message describes the
+    // app's code, so the error page's detail keeps it.
     if cfg!(debug_assertions) {
-        let (status, _, body) = call(placed_meters_listing(true, |body| Box::new(body), &[]), "GET", None).await;
-        assert_eq!(status, 500, "{body}");
-        assert!(body.contains("renders Meter, which the app does not list"), "{body}");
+        for dev in [true, false] {
+            let (status, _, body) = call(placed_meters_listing(dev, |body| Box::new(body), &[]), "GET", None).await;
+            assert_eq!(status, 500, "{body}");
+            assert!(body.contains("renders Meter, which the app does not list"), "dev {dev}: {body}");
+        }
     }
+}
+
+/// Outside `corten dev`, a handler's own error keeps its message out of the error page: only the
+/// debug build's errors about the app's code (above) keep theirs.
+#[tokio::test]
+async fn a_handlers_error_keeps_its_message_off_the_page_outside_dev() {
+    let page = |_: Req| async { Err::<Response, _>(Error::new("database password wrong")) };
+    let panics = || async {
+        if true {
+            panic!("the vault key is 1234")
+        } else {
+            "never"
+        }
+    };
+    let rejects = |axum::extract::Path(n): axum::extract::Path<u32>| async move { n.to_string() };
+    let html = Some("text/html");
+    for dev in [true, false] {
+        let routes = Router::new().route("/", get(page)).route("/panic", get(panics)).route("/n/{n}", get(rejects));
+        let router = App::new(Routes::from(routes)).dev(dev).error_page(test_error_page, ()).router();
+        for mode in [None, Some("nav")] {
+            let (status, _, body) = call_with(router.clone(), "GET", "/", mode, html).await;
+            assert_eq!(status, 500, "{body}");
+            assert_eq!(body.contains("database password wrong"), dev, "dev {dev} {mode:?}: {body}");
+            let (status, _, body) = call_with(router.clone(), "GET", "/panic", mode, html).await;
+            assert_eq!(status, 500, "{body}");
+            assert_eq!(body.contains("the vault key"), dev, "a panic, dev {dev} {mode:?}: {body}");
+            let (status, _, body) = call_with(router.clone(), "GET", "/n/abc", mode, html).await;
+            assert_eq!(status, 400, "{body}");
+            assert_eq!(body.contains("Invalid URL"), dev, "a rejection, dev {dev} {mode:?}: {body}");
+        }
+    }
+}
+
+/// An error page that fails too (the same unlisted component in the layout) is plain text, which
+/// in a debug build keeps what the page's failure says about the app's code, and nothing else.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn an_error_page_that_fails_keeps_the_pages_detail_about_the_apps_code_in_its_text() {
+    async fn broken(_: Failure, _: Req) -> HtmlResult {
+        Err(Error::new("the error page broke"))
+    }
+    let routes = Router::new()
+        .route(
+            "/",
+            get(|| async {
+                Err::<Response, _>(crate::page::unserved(false, "the page draws Meter, which the app does not list".into()))
+            }),
+        )
+        .route("/secret", get(|| async { Err::<Response, _>(Error::new("database password wrong")) }));
+    let router = App::new(Routes::from(routes)).dev(false).error_page(broken, ()).router();
+    let (status, _, body) = call_with(router.clone(), "GET", "/", None, Some("text/html")).await;
+    assert_eq!(status, 500, "{body}");
+    assert!(body.starts_with("The page could not be shown.") && body.contains("the page draws Meter"), "{body}");
+    let (status, _, body) = call_with(router, "GET", "/secret", None, Some("text/html")).await;
+    assert_eq!((status.as_u16(), body.as_str()), (500, "The page could not be shown."));
 }
 
 #[derive(crate::view::Id)]
@@ -2327,6 +2386,9 @@ async fn a_page_with_a_refresh_header_is_an_error_in_debug_builds() {
         let res = app(routes.clone(), None).oneshot(request_in(mode)).await.unwrap();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}");
         assert!(!res.headers().contains_key("refresh"), "{mode:?}");
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("sends a Refresh header"), "it names the mistake outside dev too: {body}");
     }
     let api = Router::new().route("/", get(|| async { ([("refresh", "2")], "ok") }));
     assert_eq!(call(app(api, None), "GET", None).await.0, StatusCode::OK, "only pages are checked");
@@ -2539,7 +2601,11 @@ async fn a_redirect_outside_form_action_names_the_origin_and_a_sign_in_is_checke
     let (status, _, body) =
         call_with(App::new(Routes::from(routes.clone())).router(), "POST", "/go", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(!body.contains("else.example"), "outside dev the page does not say: {body}");
+    assert!(body.contains("https://else.example") && body.contains("Policy::form_action"), "outside dev too: {body}");
+    let (status, _, body) =
+        call_with(App::new(Routes::from(routes.clone())).router(), "POST", "/account", None, Some("text/html")).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body.contains("https://id.example"), "a sign-in's outside dev too: {body}");
     // A report-only policy stops nothing.
     let watching = App::new(Routes::from(routes)).policy(crate::security::Policy::new().report_only());
     let (status, ..) = call_with(watching.router(), "POST", "/go", None, Some("text/html")).await;
