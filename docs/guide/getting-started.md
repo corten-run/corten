@@ -51,7 +51,7 @@ says nothing for a new tag or branch. A path dependency (a checkout of corten) i
 | `src/main.rs` | `main`, which serves `my_app::app()` (the crate's name); it declares no modules, since one declared in both is a second copy of its components, which fails to build |
 | `src/views.rs` | the layout (the whole document), the error page and the pages, in `html!` |
 | `src/click_counter.js`, `.css` | the `ClickCounter` component's handlers and stylesheet, next to it |
-| `static/` | the app's own CSS (element defaults, the layout), its favicon (`favicon.svg`, Corten's mark until you replace it), images; compiled into the program (`embed!`, a constant per file) and served at versioned URLs |
+| `static/` | the app's own CSS (element defaults, the layout), its favicon (`favicon.svg`, Corten's mark until you replace it; also answered at `/favicon.ico`), images; compiled into the program (`embed!`, a constant per file) and served at versioned URLs |
 | `AGENTS.md` | the rules for an AI agent working on the app |
 | `Dockerfile` | a release build in a slim image that preloads jemalloc, which gives back memory a burst of connections took (remove its two lines to run on glibc's allocator); zstd is linked to the build image's libzstd, so the server needs `libzstd.so.1` where it runs (the slim image has it; for one without it, distroless or scratch, remove the `ZSTD_SYS_USE_PKG_CONFIG` line) |
 
