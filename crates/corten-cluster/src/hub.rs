@@ -346,8 +346,7 @@ impl<S: Source> Hub<S> {
 }
 
 /// Whether two handles are one feed. A feed's generation is a string it owns, so while both
-/// handles live, the same address means the same feed. (Two feeds with an empty generation look
-/// the same; the cost is one reload too many.)
+/// handles live, the same address means the same feed (a generation is never empty).
 fn same<T: corten::feed::Row>(a: &Feed<T>, b: &Feed<T>) -> bool {
     std::ptr::eq(a.generation(), b.generation())
 }
