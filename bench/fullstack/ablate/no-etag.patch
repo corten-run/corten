@@ -1,0 +1,16 @@
+diff --git a/crates/corten/src/app.rs b/crates/corten/src/app.rs
+index 78188364..0e427895 100644
+--- a/crates/corten/src/app.rs
++++ b/crates/corten/src/app.rs
+@@ -2021,9 +2021,8 @@ impl<S: Steps> Layer<S> {
+         // are, and anything that does not gets the default.
+         cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
+         // A body with this request's nonce differs every time, so its tag would never match.
+-        if tagged && !nonced {
+-            res = cache::tag(res, &has).await;
+-        }
++        // Ablation: no tag hashed.
++        let _ = (tagged, &has);
+         if let Some(mount) = mount {
+             mount.cors(cors, &mut res);
+         }
