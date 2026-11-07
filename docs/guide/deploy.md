@@ -80,12 +80,15 @@ server {
 
 A route that reads a large body as it arrives (a file `PUT` read with
 `corten::extract::pieces_up_to`) gets a `location` of its own in the same `server`, so nginx
-neither refuses it at the forms' limit nor holds all of it before the app sees a byte; the app's
-own limit and its 413 then apply, and its read-past reaches the browser:
+neither refuses it at the forms' limit nor holds all of it before the app sees a byte. Its
+`client_max_body_size` is the route's `max` and the 64 MiB the app reads past (or `0`), so the
+app's own 413 (the API's shape, or the handler's) is what the browser reads; at exactly `max`,
+nginx would answer first with a page of its own. A prefix that also serves downloads keeps
+`proxy_cache app;` here too:
 
 ```nginx
     location /files/ {
-        client_max_body_size 1g;        # the route's max
+        client_max_body_size 1088m;     # the route's max (1 GiB) and the 64 MiB the app reads past
         proxy_request_buffering off;    # pass each piece on as it arrives
         proxy_pass http://app;
         proxy_http_version 1.1;

@@ -2335,13 +2335,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `client_body_timeout`) is `Stalled`, a 408; the minute holds for each piece while reading
     past too, so a slow client still sending is not cut off for the read past in all (one that
     stops there is still the 413), and one that breaks is `Broken`, a 400. The deploy guide's
-    nginx setup gives such a route a `location` with its limit and `proxy_request_buffering off`. Counting the
-    body stream by hand, the first shape tried, stops at the limit, which a raw-socket client
-    that sends its body before reading (as a browser does) saw as a dropped connection 6 times of
-    6, where `bytes_up_to` answered 9 of 9; a reader keeps that read-past in one place.
-    Measured with `what_a_large_upload_costs` (1 GiB over a socket, release, three runs, with
-    the idle timer on each piece): 262 to 286 ms, the process peaking at 10 MiB resident (7 MiB before the request), the largest piece
-    496 KiB. Nothing else on the request path changes: `bytes_up_to` calls the same read-past,
+    nginx setup gives such a route a `location` whose limit is `max` and the read-past, with
+    `proxy_request_buffering off`. Counting the body stream by hand, the first shape tried,
+    stops at the limit, which a raw-socket client that sends its body before reading (as a
+    browser does) saw as a dropped connection 6 times of 6, where `bytes_up_to` answered 9 of 9;
+    a reader keeps that read-past in one place. Measured with `what_a_large_upload_costs` (1 GiB
+    over a socket, release, three runs, with the idle timer on each piece): 262 to 286 ms, the
+    process peaking at 10 MiB resident (7 MiB before the request), the largest piece 496 KiB. Nothing else on the request path changes: `bytes_up_to` calls the same read-past,
     moved into a function, only for a body over its limit
     ([#1003 Evaluate a bounded raw-body chunk reader for large PUT and POST uploads without buffering or duplicating limit handling](https://github.com/corten-run/corten/issues/1003)).
 
