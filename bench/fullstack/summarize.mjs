@@ -105,16 +105,18 @@ if (summary.build) {
   const mb = (/** @type {number | null} */ bytes) => (bytes == null ? "?" : `${Math.round(bytes / 1e6)} MB`);
   const loops = Object.entries(summary.build).filter(([, b]) => !b.failed && b.complete !== false && (b.check || b.test || b.edits || b.disk || b.loopsFailed));
   // How many crates a step compiled, so a rebuild that compiled more than the app shows it.
-  const stopped = " (stopped before the edit)";
   const crates = (/** @type {{ runs?: { compiled?: string[] }[], compiled?: string[] }} */ r) => ` [${(r.runs?.[0] ?? r).compiled?.length ?? 0} crates]`;
   if (loops.length) console.log("\nEditor, tests, other edits and disk (wall time; after an edit, the median)");
   for (const [name, b] of loops) {
+    const failed = typeof b.loopsFailed === "string" ? { loops: b.loopsFailed } : b.loopsFailed ?? {};
+    // A clean result without its after-edit one: failed (said below) or stopped.
+    const stopped = (/** @type {string} */ group) => (failed[group] ? "" : " (stopped before the edit)");
     console.log(line([
       name,
-      b.check ? `check ${s(b.check.clean.ms)}${b.check.again ? `, after the edit ${s(b.check.again.ms)}${crates(b.check.again)}` : stopped}` : "",
-      b.test ? `tests compiled ${s(b.test.clean.ms)}${b.test.rebuild ? `, after the edit ${s(b.test.rebuild.ms)}${crates(b.test.rebuild)}` : stopped}` : "",
+      b.check ? `check ${s(b.check.clean.ms)}${b.check.again ? `, after the edit ${s(b.check.again.ms)}${crates(b.check.again)}` : stopped("check")}` : "",
+      b.test ? `tests compiled ${s(b.test.clean.ms)}${b.test.rebuild ? `, after the edit ${s(b.test.rebuild.ms)}${crates(b.test.rebuild)}` : stopped("test")}` : "",
       ...Object.entries(b.edits ?? {}).map(([kind, e]) => `dev after a ${kind} edit ${s(e.ms)} (${e.runs.length} run${e.runs.length === 1 ? "" : "s"})${crates(e)}`),
-      ...Object.entries(typeof b.loopsFailed === "string" ? { loops: b.loopsFailed } : b.loopsFailed ?? {}).map(([group, why]) => `${group} FAILED: ${String(why).split("\n")[0]}`),
+      ...Object.entries(failed).map(([group, why]) => `${group} FAILED: ${String(why).split("\n")[0]}`),
       b.disk ? `disk: deps ${mb(b.disk.depsBytes)}, build ${mb(b.disk.buildBytes)}, dev ${mb(b.disk.devBytes)}` : "",
     ].filter(Boolean)));
   }

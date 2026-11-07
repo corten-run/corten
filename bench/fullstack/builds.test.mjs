@@ -36,6 +36,8 @@ test("each other kind of edit changes one place in its file, and kinds are not r
   for (const [name, r] of Object.entries(recipes)) {
     const kinds = (r.edits ?? []).map((e) => e.kind);
     assert.equal(new Set(kinds).size, kinds.length, `${name}: a kind of edit twice`);
+    // A kind names its group in loopsFailed, beside the test build's and the check's.
+    for (const kind of kinds) assert.ok(!["test", "check"].includes(kind), `${name}: an edit may not be called ${kind}`);
     for (const e of r.edits ?? []) {
       const text = readFileSync(join(repo, contextOf(name), e.edit), "utf8");
       assert.equal(text.split(e.from).length, 2, `${name}: ${e.edit} needs exactly one ${e.from}`);
