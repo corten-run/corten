@@ -3744,6 +3744,19 @@ Corten is pre-1.0, so any minor version may change the API.
     that text from outside the code is `Local::parse(text)` and that a boxed route is passed as the
     route itself or as a `Box<dyn Href>`, where before the error ended in a long list of types
     ([#974 Href has no on_unimplemented note, so a value that is not a link (a Box of a route) fails with E0277 listing 120 impls](https://github.com/corten-run/corten/issues/974)).
+161. The runtime's declarations for `corten/views` (`rows()`, `view()`, `Holds`, `ViewClass`,
+    `Rows` and the rest) ship with the crate in `js/views.d.ts`, which `corten check` already
+    gives `tsc`, instead of being written into each app's `types/app.d.ts`. The app's file holds
+    only what its own types, events and views produce, so a release that changes the runtime's
+    declarations no longer fails the app's types test once and leaves framework text to commit
+    with the pin. An app with views gets that failure one last time when it moves to this
+    release, as `Types::sync` drops the runtime's block from its file. Since `tsc` now sees
+    `rows()` and `view()` declared for every app while the import map names `corten/views` only for
+    an app with a view, a script of an app without one that imports it is an error when the app
+    starts, as an import of `corten/keys` with nothing serving it is, rather than in the browser.
+    `Types::sync`'s message says the file may be out of date with how the Corten release declares
+    the app's types as well as with the types
+    ([#1020 A pin bump fails the app's corten check once when Corten's own script declarations change, blaming the app's Rust types](https://github.com/corten-run/corten/issues/1020)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

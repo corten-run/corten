@@ -1,6 +1,7 @@
 //! `corten check`'s type check of the app's scripts: TypeScript's `tsc`, in JavaScript mode, over
 //! every `.js` file in `src/` and `static/`, against the DOM's types, the `corten` runtime's
-//! JSDoc and the app's generated `types/app.d.ts` (feed rows, `corten/events`, `corten/views`).
+//! JSDoc and declarations (`js/views.d.ts`: `rows()`, `view()`, `Holds`; `js/events.d.ts`) and the
+//! app's generated `types/app.d.ts` (feed rows, its `corten/events` and `corten/views` classes).
 //!
 //! A handler's call is checked when the crate compiles; this checks its body. TypeScript is not
 //! a dependency of an app: the check uses `tsc` from the app's `node_modules` or the `PATH`,
