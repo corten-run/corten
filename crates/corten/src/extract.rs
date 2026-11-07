@@ -108,7 +108,9 @@ use crate::{
 /// 64 MiB past it, so a client still sending reads the handler's answer rather than a closed
 /// connection, as an upload's is ([`crate::form::File::bytes_up_to`]); past that, or when its
 /// length says it is, it is `None` at once and the connection closes after the answer. `Err` is
-/// a body that could not be read (the connection broke), a 400 the handler passes on with `?`.
+/// a body that could not be read (the connection broke), a 400 the handler passes on with `?`,
+/// or answers in its own shape with why (`error.to_string()`) and its status
+/// ([`Error::status_code`]).
 ///
 #[cfg_attr(feature = "json", doc = "```")]
 #[cfg_attr(not(feature = "json"), doc = "```ignore")]
@@ -125,12 +127,14 @@ use crate::{
 /// struct Replaced { bytes: usize }
 ///
 /// async fn replace(request: Request) -> Result<JsonResponse, JsonError> {
-///     let refused = |error: String| Json(Said { error }).with_status(StatusCode::INTERNAL_SERVER_ERROR);
-///     let Some(bytes) = bytes_up_to(request.into_body(), MAX_BODY_BYTES).await? else {
-///         return Err(refused("Error: length limit exceeded".into()).into());
+///     let refused = |status, error: String| Json(Said { error }).with_status(status);
+///     let bytes = match bytes_up_to(request.into_body(), MAX_BODY_BYTES).await {
+///         Ok(Some(bytes)) => bytes,
+///         Ok(None) => return Err(refused(StatusCode::INTERNAL_SERVER_ERROR, "Error: length limit exceeded".into()).into()),
+///         Err(error) => return Err(refused(error.status_code(), format!("Error: {error}")).into()),
 ///     };
 ///     let Ok(text) = std::str::from_utf8(&bytes) else {
-///         return Err(refused("SyntaxError: not UTF-8".into()).into());
+///         return Err(refused(StatusCode::INTERNAL_SERVER_ERROR, "SyntaxError: not UTF-8".into()).into());
 ///     };
 ///     Ok(Json(Replaced { bytes: text.len() }).into())
 /// }
