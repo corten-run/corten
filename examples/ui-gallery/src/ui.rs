@@ -333,6 +333,20 @@ pub(crate) mod tests {
         assert_eq!(list, r#"<dl class="stats__stats stats__plain"></dl>"#);
     }
 
+    /// `Gap::App` writes only the layout's class, in a stack and a cluster, so the app's own gap
+    /// class beside it is the one; a literal gap still writes its class.
+    #[test]
+    fn an_app_gap_writes_no_gap_class_of_the_kit_s() {
+        use super::stack::{Cluster, Gap, Stack};
+        use corten::view::Render;
+        let stack = corten::html! { <div class={Stack { gap: Gap::App }}></div> }.to_html();
+        assert_eq!(stack, r#"<div class="stack__stack"></div>"#);
+        let cluster = corten::html! { <div class={Cluster { gap: Gap::App }}></div> }.to_html();
+        assert_eq!(cluster, r#"<div class="stack__cluster"></div>"#);
+        let literal = corten::html! { <div class={(Stack { gap: Gap::Md }, Cluster { gap: Gap::Sm })}></div> }.to_html();
+        assert_eq!(literal, r#"<div class="stack__stack stack__md stack__cluster stack__sm"></div>"#);
+    }
+
     /// A look imported under another name, beside an app type that has its name, keeps the kit's
     /// classes: they follow the component, not the name it is imported as.
     #[test]

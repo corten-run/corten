@@ -3949,6 +3949,19 @@ async function run(browser) {
     };
   });
   check("StatusDot and Stack: the dot is not read, and a stack's gap is its only space", spacing.dot && spacing.gap === 1.5 && spacing.paragraph === 1 && spacing.margins === 0, JSON.stringify(spacing));
+  // Gap::App: the payout row is a cluster with no gap class of the kit's, so the page's .75rem is its gap.
+  const appGap = await orders.evaluate(() => {
+    const row = document.querySelector("[class*='orders__payout']");
+    if (!row) return null;
+    const style = getComputedStyle(row);
+    return {
+      cluster: /stack__cluster/.test(row.className),
+      kitGap: /stack__(xs|sm|md|lg|xl)\b/.test(row.className),
+      wraps: style.flexWrap,
+      gap: parseFloat(style.columnGap) / parseFloat(getComputedStyle(document.documentElement).fontSize),
+    };
+  });
+  check("Cluster with Gap::App: no kit gap class, so the page's own gap is the row's", appGap?.cluster === true && !appGap.kitGap && appGap.wraps === "wrap" && appGap.gap === 0.75, JSON.stringify(appGap));
   await orders.getByRole("button", { name: "Share the shop" }).click();
   check("Popover: its button opens it", await orders.locator("#share").evaluate((p) => p.matches(":popover-open")));
   await orders.keyboard.press("Escape");

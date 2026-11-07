@@ -3969,6 +3969,16 @@ Corten is pre-1.0, so any minor version may change the API.
     its cursor raw (`Last-Event-ID`, `Replica::cursor`) could follow it. An app that names its
     generation from configuration checks it against the same set (Fixed 188)
     ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
+166. The kit's `Gap` has a sixth value, `Gap::App`, which prints only `.stack` or `.cluster`: the
+    app's own `gap` utility or class beside it (`class={(Stack { gap: Gap::App }, gap_3())}`) is
+    then the only gap, so an app on its own spacing scale keeps the kit's column or wrapping row
+    and its dropped child margins instead of a page rule of its own. A literal gap beside the
+    utility sets `gap` twice at one specificity, so the stylesheet linked last wins: use `App`
+    there. The five
+    literal gaps are unchanged. A `match` over `Gap` in an app's code needs the new arm; `corten
+    ui diff` shows the change to a copied `stack.rs`. The ui-gallery's payout row uses it with the
+    page's own .75rem
+    ([#1065 Kit Stack and Cluster always print a literal gap, so an app on its own token spacing scale cannot use them with its gap utility](https://github.com/corten-run/corten/issues/1065)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
