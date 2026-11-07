@@ -41,6 +41,7 @@ if (tier !== "defaults" && tier !== "matched") throw new Error(`BENCH_TIER is de
  * BENCH_EDGE=off runs the matched tier without it, to measure what the edge adds to the same app.
  */
 if (process.env.BENCH_EDGE && process.env.BENCH_EDGE !== "off") throw new Error(`BENCH_EDGE is off or unset, not ${process.env.BENCH_EDGE}`);
+// The hardening step (harden.mjs) reaches every app directly and does not read this.
 export const viaEdge = tier === "matched" && process.env.BENCH_EDGE !== "off";
 /** What every app container of the tier is started with (runArgs, cold-start.mjs): the profile in the matched tier. */
 export const tierEnv = tier === "matched" ? ["-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${maxConnections}`] : [];

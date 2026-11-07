@@ -32,7 +32,9 @@ try {
   const drawn = await browser.newPage();
   /** @type {string[]} */
   const errors = [];
-  drawn.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  /** @type {string[]} */
+  const warnings = [];
+  drawn.on("console", (m) => (m.type() === "error" ? errors : m.type() === "warning" ? warnings : []).push(m.text()));
   /** @param {string} name */
   const reportOf = (name) => drawn.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: ${name} `), timeout: 10000 }).then(() => true, () => false);
   await drawn.route(base + "/", async (route) => {
@@ -48,16 +50,68 @@ try {
       '<div role="alert"><span id="quiet" aria-live="off">x</span></div>',
       '<div role="status" aria-live="off"><p id="silenced" role="alert">z</p></div>',
       '<div aria-live="polite" id="lasthost"><p id="lastlive" role="status">y</p></div>',
+      // Closed dialogs and popovers (#1081): one a rule inside @media gives a display is warned
+      // of, at the width the page is at and one it is not at, nested too; a card look outside a
+      // query, one under @supports, the open one's look, one the app draws with its own !important
+      // rule, an open one and one the query hides are not.
+      '<dialog id="rail" class="rail"><p>Filters</p></dialog><dialog id="card" class="card"></dialog>',
+      '<dialog id="kept" class="kept"></dialog><dialog id="shown" class="rail" open></dialog>',
+      '<dialog id="gone" class="gone"></dialog><dialog id="inplace" class="inplace"></dialog>',
+      '<dialog id="enhanced" class="enhanced"></dialog><dialog id="modal" class="modal"></dialog>',
+      '<div id="nav" class="nav" popover></div><div class="page"><dialog id="side" class="side"></dialog></div>',
+      '<dialog id="keptHidden" class="kept" hidden></dialog><dialog id="lastrail" class="rail"></dialog>',
     ].join("");
-    await route.fulfill({ response: res, body: (await res.text()).replace("</body>", `${controls}</body>`) });
+    const sheet = '<link rel="stylesheet" href="/dialog-in-place.css">';
+    await route.fulfill({ response: res, body: (await res.text()).replace("</head>", `${sheet}</head>`).replace("</body>", `${controls}</body>`) });
   });
+  await drawn.route(base + "/dialog-in-place.css", (route) =>
+    route.fulfill({
+      contentType: "text/css",
+      body: [
+        ".card { display: flex; }",
+        "@media (min-width: 9999px) { .rail { display: block; } }",
+        "@media (min-width: 1px) { .kept { display: block; } .kept:not([open],[hidden]) { display: block !important; } }",
+        "@media (min-width: 1px) { .gone { display: none; } }",
+        "@media (min-width: 1px) { .inplace { display: block; } .modal[open] { display: grid; } }",
+        "@supports (display: grid) { .enhanced { display: grid; } }",
+        "@media (min-width: 1px) { .nav { display: grid; } }",
+        ".page { .side { @media (min-width: 1px) { display: block; } } }",
+      ].join("\n"),
+    }),
+  );
   const loaded = reportOf("last");
   const loadedLive = reportOf("lastlive");
+  const loadedRail = reportOf("lastrail");
   await drawn.goto(base + "/");
   const onLoad = (await loaded) ? errors.filter((e) => e.includes("its own attributes refuse")).map((e) => e.split(" ")[1]) : [];
   check("dev mode reports a control drawn with a value its own attributes refuse, and only those", onLoad.join(",") === "delay,last", onLoad.join(","));
   const nestedOnLoad = (await loadedLive) ? errors.filter((e) => e.includes("is a live region inside another")).map((e) => e.split(" ")[1]) : [];
   check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
+  const railOnLoad = (await loadedRail) ? warnings.filter((e) => e.includes(" is a closed ")) : [];
+  const railNames = railOnLoad.map((e) => e.split(" ")[1]).join(",");
+  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,lastrail", railNames);
+  check(
+    "its warning names the rule, the query, the rule that draws it in place and the open one's look",
+    !!railOnLoad[0]?.includes("`.rail` in `@media (min-width: 9999px)` gives display: block") &&
+      !!railOnLoad[0]?.includes("`.rail:not([open],[hidden]) { display: block !important }`") &&
+      !!railOnLoad[0]?.includes("`.rail[open]`"),
+    railOnLoad[0],
+  );
+  // components.css's rule is what hides `inplace`, whose query holds now; the rule the warning
+  // gives draws `kept` over it.
+  const shown = await drawn.evaluate(() => ["inplace", "kept", "keptHidden"].map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).display).join(","));
+  check("components.css hides a closed dialog a query draws, and the rule the warning gives draws it but not one with hidden", shown === "none,block,none", shown);
+  const patchedRail = reportOf("patchedrail");
+  await drawn.evaluate(() => document.body.append(Object.assign(document.createElement("dialog"), { id: "patchedrail", className: "rail" })));
+  check("dev mode warns of such a dialog a patch draws", await patchedRail);
+  // One drawn with `hidden` is meant hidden and not warned of, until a script shows it.
+  await drawn.evaluate(() => document.body.append(Object.assign(document.createElement("dialog"), { id: "hiddenrail", className: "rail", hidden: true })));
+  const quiet = reportOf("hiddenquiet");
+  await drawn.evaluate(() => document.body.append(Object.assign(document.createElement("dialog"), { id: "hiddenquiet", className: "rail" })));
+  const whileHidden = (await quiet) && !warnings.some((w) => w.startsWith("corten: hiddenrail "));
+  const unhidden = reportOf("hiddenrail");
+  await drawn.evaluate(() => ((/** @type {HTMLElement} */ (document.getElementById("hiddenrail"))).hidden = false));
+  check("dev mode warns of such a dialog once a script shows it, not while it has hidden", whileHidden && (await unhidden));
   const patchedLive = reportOf("patchedlive");
   await drawn.evaluate(() => {
     const p = Object.assign(document.createElement("p"), { id: "patchedlive", textContent: "Sent." });
