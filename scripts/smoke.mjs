@@ -264,7 +264,15 @@ async function run(browser) {
   // stylesheet that failed), and the stream the status check drops on purpose, as an error, in one
   // of two wordings.
   const cut = /was interrupted while the page was loading|can.t establish a connection to the server at \S+\/live\/(trades|flaky)/;
-  page.on("console", (m) => m.type() === "error" && !bug(m.text()) && !cut.test(m.text()) && errors.push(m.text()));
+  // While `located` is set, each error is named with where it came from (Chromium and WebKit
+  // give a failed resource's URL only there): the feed checks below tell their own errors apart.
+  let located = false;
+  page.on("console", (m) => {
+    const text = m.type() === "error" ? m.text() : "";
+    if (!text || bug(text) || cut.test(text)) return;
+    const at = located ? m.location()?.url : "";
+    errors.push(at ? `${text} at ${at}` : text);
+  });
   page.on("pageerror", (e) => errors.push(e.message));
   // Every EventSource the page opens, to see which are still open.
   await page.addInitScript(() => {
@@ -2563,25 +2571,40 @@ async function run(browser) {
   // that doubles (1 s, then 2 s), not straight away in a loop, and stops when its signal aborts
   // (#1067). A `sync` that comes later on a stream (a server restarted, its cursor gone) loads the
   // snapshot at once.
-  /** @param {string} name @param {(n: number) => string} stream @param {string} [forward] a server to send the streams to instead */
-  const feedTimes = async (name, stream, forward) => {
-    const times = { snapshots: /** @type {number[]} */ ([]), streams: 0 };
+  /**
+   * Subscribes to a feed of the smoke's own at `/feed/{name}` and counts what it asks for: the
+   * `n`th stream is answered `stream(n)` (a body, or a status with no stream), or sent to
+   * `forward`, and the `n`th snapshot `snapshot(n)`'s status (200: epoch `a`, seq 1, no rows).
+   * @param {string} name @param {(n: number) => string | { status: number }} stream
+   * @param {{ forward?: string, snapshot?: (n: number) => number }} [options]
+   */
+  const feedTimes = async (name, stream, { forward, snapshot } = {}) => {
+    const times = { snapshots: /** @type {number[]} */ ([]), streams: 0, streamsAt: /** @type {number[]} */ ([]), since: /** @type {(string | null)[]} */ ([]) };
     await page.route(`**/feed/${name}`, (route) => {
       times.snapshots.push(Date.now());
-      return route.fulfill({ status: 200, contentType: "application/json", body: '{"epoch":"a","seq":1,"rows":[]}' });
+      const status = snapshot?.(times.snapshots.length) ?? 200;
+      return route.fulfill({ status, contentType: "application/json", body: status === 200 ? '{"epoch":"a","seq":1,"rows":[]}' : "{}" });
     });
     await page.route(`**/feed/${name}/live*`, (route) => {
       times.streams += 1;
+      times.streamsAt.push(Date.now());
+      times.since.push(new URL(route.request().url()).searchParams.get("since"));
       if (forward) return route.continue({ url: forward });
-      return route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: stream(times.streams) });
+      const answer = stream(times.streams);
+      if (typeof answer !== "string") return route.fulfill({ status: answer.status, body: "" });
+      return route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: answer });
     });
     await page.evaluate(async (name) => {
       const { subscribe } = /** @type {any} */ (await import(/** @type {string} */ ("corten")));
       const w = /** @type {any} */ (window);
       w.__feeds ??= {};
       const stop = new AbortController();
-      w.__feeds[name] = { stop, states: [] };
-      subscribe(`/feed/${name}`, { snapshot() {}, patch() {}, status: (/** @type {string} */ s) => w.__feeds[name].states.push(s) }, { signal: stop.signal });
+      const feed = (w.__feeds[name] = { stop, states: /** @type {string[]} */ ([]), patches: /** @type {number[]} */ ([]) });
+      subscribe(
+        `/feed/${name}`,
+        { snapshot() {}, patch: (/** @type {unknown} */ _, /** @type {number} */ seq) => feed.patches.push(seq), status: (/** @type {string} */ s) => feed.states.push(s) },
+        { signal: stop.signal },
+      );
     }, name);
     return times;
   };
@@ -2592,6 +2615,17 @@ async function run(browser) {
       feed.stop.abort();
       return /** @type {string} */ (feed.states.join(" "));
     }, name);
+  /** The seqs the subscription handed to `patch`. @param {string} name */
+  const feedPatches = (name) => page.evaluate((name) => /** @type {number[]} */ ((/** @type {any} */ (window)).__feeds[name].patches), name);
+  /** Waits until the subscription has gone live `times` times. @param {string} name @param {number} times */
+  const feedLive = (name, times, timeout = 5000) =>
+    page
+      .waitForFunction(
+        ([name, times]) => (/** @type {any} */ (window)).__feeds[name].states.filter((/** @type {string} */ s) => s === "live").length >= times,
+        /** @type {[string, number]} */ ([name, times]),
+        { timeout },
+      )
+      .catch(() => {});
   /** @param {string} name */
   const unrouteFeed = async (name) => {
     await page.unroute(`**/feed/${name}`);
@@ -2644,10 +2678,10 @@ async function run(browser) {
     });
     await new Promise((resolve) => resetServer.listen(0, "127.0.0.1", () => resolve(undefined)));
     const resetPort = /** @type {import("node:net").AddressInfo} */ (resetServer.address()).port;
-    /** @type {{ snapshots: number[], streams: number }} */
-    let resetFeed = { snapshots: [], streams: 0 };
+    /** @type {Awaited<ReturnType<typeof feedTimes>>} */
+    let resetFeed = { snapshots: [], streams: 0, streamsAt: [], since: [] };
     try {
-      resetFeed = await feedTimes("reset", () => "", `http://127.0.0.1:${resetPort}/live`);
+      resetFeed = await feedTimes("reset", () => "", { forward: `http://127.0.0.1:${resetPort}/live` });
       for (const end = Date.now() + 5000; resetFeed.snapshots.length < 2 && Date.now() < end; ) await page.waitForTimeout(50);
       await stopFeed("reset");
     } finally {
@@ -2658,6 +2692,71 @@ async function run(browser) {
     const resetGap = resetFeed.snapshots.length === 2 && syncsSent.length ? resetFeed.snapshots[1] - syncsSent[0] : NaN;
     check(resetName, resetFeed.snapshots.length === 2 && resetGap < 500, `${resetFeed.snapshots.length} snapshots, the second ${resetGap} ms after the sync was sent`);
   }
+
+  // subscribe()'s other recovery paths (#1068). A patch already applied is dropped, and one that
+  // skips a seq loads a new snapshot: seq 2, 2 again, 3, then 5.
+  const feedsLogged = errors.length;
+  located = true;
+  /** @param {number} seq */
+  const patchEvent = (seq) => `event: patch\nid: a-${seq}\ndata: {"seq":${seq},"changes":[]}\n\n`;
+  const gapFeed = await feedTimes("gap", (n) => (n === 1 ? `${patchEvent(2)}${patchEvent(2)}${patchEvent(3)}${patchEvent(5)}` : "retry: 60000\n\n"));
+  await feedLive("gap", 2);
+  const gapPatches = await feedPatches("gap");
+  const gapStates = await stopFeed("gap");
+  await unrouteFeed("gap");
+  check(
+    "a patch that skips a seq loads a new snapshot, and a patch already applied is dropped",
+    gapFeed.snapshots.length === 2 && gapFeed.streams === 2 && gapPatches.join() === "2,3" && gapFeed.since[1] === "a-1" && gapStates.startsWith("syncing live syncing live"),
+    `${gapFeed.snapshots.length} snapshots, patches ${gapPatches.join(",")}, second stream since ${gapFeed.since[1]}; ${gapStates}`,
+  );
+  // A stream answered with an HTTP error ends EventSource for good: subscribe() listens again from
+  // the last patch's cursor, with no snapshot, waiting longer after each error in a row (1 s, 2 s),
+  // and a stream that opens starts the count again (1 s). The first stream sends seq 2 and ends;
+  // the browser reconnects (after 100 ms) to a 503, then subscribe() twice more, to a 503 and a
+  // stream that ends; the browser reconnects to a 503, and subscribe() to a stream.
+  const failedFeed = await feedTimes("failed", (n) =>
+    n === 1 ? `retry: 100\n\n${patchEvent(2)}` : n === 4 ? "retry: 100\n\n" : n <= 5 ? { status: 503 } : "retry: 60000\n\n",
+  );
+  await feedLive("failed", 3, 10000);
+  const failedStates = await stopFeed("failed");
+  await unrouteFeed("failed");
+  const failedGaps = [2, 3, 5].map((i) => failedFeed.streamsAt[i] - failedFeed.streamsAt[i - 1]);
+  check(
+    "a stream answered with an error is listened to again from the last patch, after 1 s then 2 s, and 1 s again after a stream opened, with no snapshot",
+    failedFeed.snapshots.length === 1 &&
+      failedFeed.streams === 6 &&
+      failedFeed.since.slice(2).every((since) => since === "a-2") &&
+      failedGaps[0] >= 900 &&
+      failedGaps[0] < 1900 &&
+      failedGaps[1] >= 1900 &&
+      failedGaps[1] < 3500 &&
+      failedGaps[2] >= 900 &&
+      failedGaps[2] < 1900 &&
+      failedStates.includes("reconnecting live"),
+    `${failedFeed.snapshots.length} snapshots, ${failedFeed.streams} streams since ${failedFeed.since.join(" ")}, ${failedGaps.map((g) => `+${g} ms`).join(", ")}; ${failedStates}`,
+  );
+  // A snapshot that fails is fetched again after 1 s, and the feed goes live once one arrives.
+  const retriedFeed = await feedTimes("retried", () => "retry: 60000\n\n", { snapshot: (n) => (n === 1 ? 500 : 200) });
+  await feedLive("retried", 1);
+  const retriedStates = await stopFeed("retried");
+  await unrouteFeed("retried");
+  const retriedGap = retriedFeed.snapshots.length === 2 ? retriedFeed.snapshots[1] - retriedFeed.snapshots[0] : NaN;
+  check(
+    "a snapshot that fails is fetched again after 1 s, and the feed goes live",
+    retriedFeed.snapshots.length === 2 && retriedGap >= 900 && retriedGap < 1900 && retriedFeed.streams === 1 && retriedStates.startsWith("syncing live"),
+    `${retriedFeed.snapshots.length} snapshots, +${retriedGap} ms, ${retriedFeed.streams} streams; ${retriedStates}`,
+  );
+  // The browsers' own errors for the 503 streams and the 500 snapshot are the point of these
+  // checks, not faults, and the runtime logs the failed snapshot once (Firefox gives the logged
+  // error's text as `Error`, so there it is known by coming from the runtime).
+  located = false;
+  const feedErrors = errors.slice(feedsLogged).filter((e) => !/(can.t establish a connection to the server at|Failed to load resource: .* at) \S+\/feed\/(failed|retried)\b/.test(e));
+  const snapshotLogged = feedErrors.filter((e) => /^(Error: )?corten: feed \/feed\/retried answered 500\b|^Error at \S+\/corten\.js$/.test(e));
+  check("a snapshot that fails is logged once", snapshotLogged.length === 1, feedErrors.join(" | ") || "nothing logged");
+  const feedOthers = feedErrors.filter((e) => !snapshotLogged.includes(e));
+  // Checked here, while their text names where each came from, and not again at the end.
+  check("the feed checks log no other console error", feedOthers.length === 0, feedOthers.join(" | "));
+  errors.splice(feedsLogged);
 
   // A patch replaces markup but keeps what the user is doing: edited fields keep their state,
   // untouched ones take the server's, and focus and caret stay put (here a <corten-live> style

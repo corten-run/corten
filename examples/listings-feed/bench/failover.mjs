@@ -2,9 +2,14 @@
 // socket mounted so it can stop and restart instances on the same clock it measures with.
 //
 // CLIENTS subscribers (split over WORKERS threads, so the load generator is not the bottleneck)
-// follow feed s1 through the load balancer exactly like EventSource + corten.js: snapshot, then
-// /live?since=cursor; on a dropped stream, reconnect after the server's `retry` with
-// Last-Event-ID; on an HTTP error, back off and reconnect. The main thread commits WPS market
+// follow feed s1 through the load balancer much as EventSource + corten.js do:
+// snapshot, then /live?since=cursor; on a dropped stream, reconnect after the server's `retry`
+// with Last-Event-ID; on an HTTP error, back off and reconnect. They are a client of this file's
+// own, not the runtime: a failed snapshot is retried on its own schedule (250 ms doubling to
+// 5 s), the HTTP-error backoff starts again on a patch (the runtime's, when a stream opens), and
+// a gap in seq is counted as lost rather than loading a snapshot, so they count what the server
+// sends. run.mjs keeps a Chromium page on subscribe() through the same run, and scripts/smoke.mjs
+// checks subscribe()'s recovery paths in browsers. The main thread commits WPS market
 // writes per second (N listings each) through the load balancer and runs the schedule (default:
 // kill a, start a, kill b, start b; kills are SIGKILL). At the end every client must account for
 // every committed seq after its first snapshot, in order: as a patch, or inside a newer snapshot.
@@ -240,6 +245,17 @@ async function subscribers({ t0, from, count }) {
 // ---------------------------------------------------------------------------------------------
 // Main: workers, the writer, the schedule, the report.
 
+/** Each instance's own address on the feedbench network, past the load balancer. */
+const instances = { "fb-a": "http://10.77.77.21:8080", "fb-b": "http://10.77.77.22:8080" };
+
+/** Whether the instance runs the relay (its `/api/stats`), or null when it does not answer in 1 s. */
+async function relayActive(name) {
+  const stats = await fetch(`${instances[name]}/api/stats`, { signal: AbortSignal.timeout(1000) })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  return typeof stats?.relay_active === "boolean" ? stats.relay_active : null;
+}
+
 /** Docker Engine API over the mounted socket: POST /containers/{name}/{action}. */
 function docker(action, name) {
   return new Promise((resolve, reject) => {
@@ -334,9 +350,12 @@ async function main() {
   console.error(`started: ${clients} subscribers on ${pool.length} threads, ${wps} writes/s`);
   for (const [at, action, name] of schedule) {
     await sleep(Math.max(0, started + at * 1000 - Date.now()));
+    // Whether the instance about to be killed runs the relay, from the instance itself: its
+    // "relay active" line can come before the app's subscriber is installed and not be logged.
+    const relay = action === "kill" ? await relayActive(name) : undefined;
     const when = Date.now();
     await docker(action, name);
-    events.push({ at: when - t0, action, name });
+    events.push({ at: when - t0, action, name, ...(relay === undefined ? {} : { relay }) });
     console.error(`${(when - started) / 1000}s: ${action} ${name}`);
   }
   await sleep(Math.max(0, started + seconds * 1000 - Date.now()));

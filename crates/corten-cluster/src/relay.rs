@@ -29,7 +29,7 @@ pub(crate) fn subject(options: &Options, feed: &str) -> String {
 pub(crate) async fn run(pool: PgPool, js: jetstream::Context, options: Arc<Options>, active: Arc<AtomicBool>) {
     loop {
         if let Err(e) = lead(&pool, &js, &options, &active).await {
-            eprintln!("relay {}: {e}; standing by", options.instance);
+            tracing::warn!(target: "corten::feed", instance = %options.instance, error = %e, "relay standing by");
         }
         active.store(false, Ordering::Relaxed);
         tokio::time::sleep(options.lease / 4).await;
@@ -75,7 +75,7 @@ async fn lead(pool: &PgPool, js: &jetstream::Context, options: &Options, active:
     }
     let mut held = Held { conn, renewed: Instant::now(), stale: options.lease * 3 / 4 };
     active.store(true, Ordering::Relaxed);
-    eprintln!("relay {}: active", options.instance);
+    tracing::info!(target: "corten::feed", instance = %options.instance, "relay active");
     let result = publish(pool, js, options, &mut held).await;
     active.store(false, Ordering::Relaxed);
     let _ = store::release(&mut held.conn).await;

@@ -2430,6 +2430,12 @@ Corten is pre-1.0, so any minor version may change the API.
     a header timeout and a cap of 1,000 connections, which `conform-hold.mjs` probes as two new
     columns of the tier's matrix. Corten and axum-maud are in it so far (axum-maud with
     tower-http's layers); card-market reads `MAX_CONNECTIONS` into `App::max_connections`.
+269. `bench/fullstack/REVIEW.md` tells a framework's maintainers what the comparison measures,
+    what they may change in their app (settings a production deployment uses, the app's own code)
+    and what they may not (caching rendered output, skipping work, tuning past the framework's
+    guidance), and how to propose it; the README's app table says whether each app has been
+    reviewed by its maintainers (none has been reviewed in full yet)
+    ([#814 No one who maintains the other frameworks has reviewed their bench/fullstack apps, so a fair-comparison claim rests on our own reading of each](https://github.com/corten-run/corten/issues/814)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -5455,15 +5461,39 @@ Corten is pre-1.0, so any minor version may change the API.
     smoke checks the backoff's 1 s and 2 s, that it stops on the signal, and that a `sync` later
     or after a reconnect is not delayed
     ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
+189. `corten-cluster` wrote what happens to a feed across instances (a gap in its patches and the
+    reload it starts, a patch dropped as invalid, a failed reload, consumer or resubscribe, a feed
+    loaded with no replay log, the relay going active or standing by) to stderr with `eprintln!`,
+    so the app's subscriber, its filters and JSON lines never saw them. Each is now a `tracing`
+    event with target `corten::feed`, as the feed's own are, with fields (`instance`, `feed`, and
+    `have` and `got` for a gap): a warning, or `info` for the relay going active. A test installs
+    a subscriber and sees a gap and a dropped patch with their feed; it saw nothing before. An event while
+    the app starts (an instance taking the lease, or failing to, before `serve`) no longer prints
+    with the default subscriber, which `serve` installs; `eprintln!` printed it. The failover
+    bench reads which instance ran the relay from its `/api/stats` at each kill instead
+    ([#1069 corten-cluster reports gaps, reloads and relay failover with eprintln!, so the app's tracing subscriber, filters and JSON logs never see them](https://github.com/corten-run/corten/issues/1069)).
+190. `subscribe()` told its `status` handler `syncing` twice in a row when a snapshot failed and
+    was fetched again. Its recovery paths now each have a browser check in `scripts/smoke.mjs`,
+    in Chromium, Firefox and WebKit: a patch that skips a `seq` loads one new snapshot and a
+    patch already applied is dropped; a stream answered with an HTTP error is listened to again
+    from the last patch's cursor, with no snapshot, after 1 s and then 2 s; a failed snapshot is
+    fetched again after 1 s and logged once, and the feed goes live (`sync` was checked with
+    [#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067),
+    except a `sync` on a stream already open, which WebKit skips). That a stream which opens
+    starts the error backoff again is checked too. The live-data guide and the failover
+    benchmark now say its 200 clients are the benchmark's own Node client of the feed's
+    protocol on its own retry schedule, beside a Chromium page running `subscribe()` that lost
+    nothing
+    ([#1068 subscribe()'s resync paths (sync, a seq gap, a stream answered with an error) have no browser smoke check, and the failover benchmark counts a Node copy of the client](https://github.com/corten-run/corten/issues/1068)).
 192. Nothing answered `/favicon.ico`, which browsers ask for on their own for a PDF, an image or
     JSON opened in a tab, so each such request was the app's 404 page with its layout reads. The
     path now answers the static directory's `favicon.ico`, else its `favicon.svg` (the icon
     `corten new` writes, sent itself rather than a redirect,
     [design](docs/design.md#choice-favicon-path)), each `public, max-age=86400` with its ETag,
     and with neither it is a 404 with no body, `public, max-age=3600`; no layout read starts and
-    no page is drawn, and it is never JSON, whatever the client accepts or an API at `/`. A page or API route of the
-    app's that the router would pick for the path (written as it, or a parameter or catch-all
-    route) still takes it, so an app that answers it today keeps its own answer. A static file's
+    no page is drawn, and it is never JSON, whatever the client accepts or an API at `/`. A page
+    or API route of the app's that the router would pick for the path (written as it, or a
+    parameter or catch-all route) still takes it, so an app that answers it today keeps its own answer. A static file's
     ETag is now compared as `If-None-Match` is, weakly and in a list or as `*`, so a proxy that
     marks it weak gets a 304 where it got the whole file
     ([#1056 Nothing answers /favicon.ico, so each browser request for it is the app's 404 page with its layout reads](https://github.com/corten-run/corten/issues/1056)).
@@ -5958,6 +5988,11 @@ Corten is pre-1.0, so any minor version may change the API.
     intro and the Limits section no longer say every limit is "yet": some wait on the platform or
     an app, others are so by design
     ([#967 design.md's Limits 11 and 12 are decisions, not limits, and its intro calls every limit something Corten does not do yet](https://github.com/corten-run/corten/issues/967)).
+74. The README is about Corten again: what it is, highlights, the quick start, the compiled
+    example, how a request and a page work, a short table of Corten's own measured numbers, and
+    the guides, examples and crates. The benchmark tables against other frameworks and their notes
+    moved to `docs/performance.md`, unchanged apart from their links, with the README's former
+    headline comparisons as its summary; `docs/design.md` and `bench/browser` now cite them there.
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
