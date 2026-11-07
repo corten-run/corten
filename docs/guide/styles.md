@@ -64,7 +64,12 @@ look that sets `display` (a card) can go on either and is drawn only while it is
 outranks `!important`, so animate a close that way: a `@keyframes` animation of `display` is
 held at `none`. A closed dialog meant to stay drawn (to fade out) takes the app's own
 `!important` rule with more weight than an attribute
-(`dialog.fading:not([open]) { display: block !important }`). When only areas have stylesheets,
+(`dialog.fading:not([open]) { display: block !important }`). So does a closed dialog drawn in
+place from a breakpoint, a filters rail that is a modal on a phone: in its component's file, inside
+the media query, `.filters:not([open]) { display: block !important }`. `corten dev` names in the
+console each closed dialog or popover that a rule inside a condition (`@media`, `@container`,
+`@supports`) gives a `display` at any width, with the rule to add, since nothing else fails: the
+page answers and the rail is simply not drawn. When only areas have stylesheets,
 each area's file starts with these rules. An app with no component stylesheet has neither file,
 so if its `static/style.css` gives a hidden element, a popover or a dialog a `display` (styling
 corten-ui's parts there, say), it adds them itself:

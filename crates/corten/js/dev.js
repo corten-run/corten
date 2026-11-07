@@ -65,10 +65,96 @@ function check(root) {
   }
 }
 
+// A closed dialog or popover, which components.css keeps hidden whatever display a class gives it.
+// An engine that cannot read :popover-open is checked for dialogs only.
+const CLOSED = "dialog:not([open],[popover]),[popover]:not(:popover-open,dialog[open])";
+const CLOSED_DIALOG = "dialog:not([open],[popover])";
+
+/**
+ * The elements in or at `root` that match `selector`.
+ * @param {Element} root
+ * @param {string} selector
+ * @returns {Element[]}
+ */
+function within(root, selector) {
+  try {
+    return [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)];
+  } catch {
+    return selector === CLOSED ? within(root, CLOSED_DIALOG) : [];
+  }
+}
+
+/**
+ * Each style rule of the page's stylesheets that sets `display`: its selector, the condition it
+ * is inside (`@media (min-width: 64rem)`, or null) and whether it is `!important`. Read again for
+ * each check, as a dev server's stylesheets change; a sheet the page may not read is skipped.
+ * @returns {{ selector: string, display: string, condition: string | null, important: boolean }[]}
+ */
+function displays() {
+  /** @type {{ selector: string, display: string, condition: string | null, important: boolean }[]} */
+  const found = [];
+  /** @param {CSSRuleList} rules @param {string | null} condition @param {string | null} selector */
+  const walk = (rules, condition, selector) => {
+    for (const rule of rules) {
+      const style = /** @type {CSSStyleRule} */ (rule).style;
+      // A nested rule's own selector, or a nested block of declarations, which has its parent's.
+      const own = rule instanceof CSSStyleRule ? rule.selectorText : selector;
+      if (style && own && style.display) found.push({ selector: own, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
+      const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
+      if (!inner) continue;
+      const at = rule instanceof CSSConditionRule ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null;
+      walk(inner, condition ?? at, own);
+    }
+  };
+  for (const sheet of document.styleSheets) {
+    try {
+      walk(sheet.cssRules, null, null);
+    } catch {}
+  }
+  return found;
+}
+
+/** @param {Element} el @param {string} selector */
+const matching = (el, selector) => {
+  try {
+    return el.matches(selector);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Reports each closed dialog or popover in or at `root` that a rule inside a condition (`@media`,
+ * `@container`, `@supports`) gives a `display`, at the viewport's width now or any other:
+ * the shape of one drawn in place from a breakpoint (a filters rail that is a modal on a phone),
+ * which components.css keeps hidden while it is closed, so it is simply not drawn. A look that
+ * sets `display` outside a condition (a card) is the rule's own case and is not reported, nor
+ * is one the app already draws with an `!important` rule of its own.
+ * @param {Element} root
+ */
+function inPlace(root) {
+  const closed = within(root, CLOSED).filter((el) => !reported.has(el));
+  if (!closed.length) return;
+  const rules = displays();
+  for (const el of closed) {
+    if (getComputedStyle(el).display !== "none") continue;
+    const applies = rules.filter((r) => matching(el, r.selector));
+    const drawn = applies.find((r) => r.condition && r.display !== "none");
+    if (!drawn || applies.some((r) => r.important && r.display !== "none")) continue;
+    reported.add(el);
+    const dialog = el.localName === "dialog" && !el.hasAttribute("popover");
+    // A component's file names its classes as written (`.filters`, which Corten prefixes, `.search-page__filters`).
+    const cls = el.classList[0]?.split("__").pop();
+    const named = cls ? "." + cls : el.localName + (el.id ? "#" + el.id : "");
+    console.error(`corten: ${el.id || el.localName} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.selector}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed: to draw it in place there, give it a rule of its own in that condition, \`${named}:not(${dialog ? "[open]" : ":popover-open"}) { display: ${drawn.display} !important }\``, el);
+  }
+}
+
 /** @param {Element} root */
 function checkAll(root) {
   check(root);
   nested(root);
+  inPlace(root);
 }
 
 // The page once its handlers have connected (a task after `ready`, as a script's
@@ -90,7 +176,7 @@ ready.then(() =>
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["value", "min", "max", "step", "role", "aria-live"],
+      attributeFilter: ["value", "min", "max", "step", "role", "aria-live", "open"],
     });
   }),
 );
