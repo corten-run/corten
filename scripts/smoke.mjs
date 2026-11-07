@@ -2583,34 +2583,37 @@ async function run(browser) {
     }, name);
     return times;
   };
-  /** @param {string} name */
-  const stopFeed = async (name) => {
-    const states = await page.evaluate((name) => {
+  /** Aborts the subscription and gives its status calls. @param {string} name */
+  const stopFeed = (name) =>
+    page.evaluate((name) => {
       const feed = (/** @type {any} */ (window)).__feeds[name];
       feed.stop.abort();
-      return feed.states.join(" ");
+      return /** @type {string} */ (feed.states.join(" "));
     }, name);
+  /** @param {string} name */
+  const unrouteFeed = async (name) => {
     await page.unroute(`**/feed/${name}`);
     await page.unroute(`**/feed/${name}/live*`);
-    return states;
   };
   const refusedFeed = await feedTimes("refused", () => 'event: sync\ndata: {"reason":"cursor-expired"}\n\n');
-  await page.waitForTimeout(3500);
-  const refusedAt = refusedFeed.snapshots.slice();
+  for (const end = Date.now() + 6000; refusedFeed.snapshots.length < 3 && Date.now() < end; ) await page.waitForTimeout(50);
+  const refusedAt = refusedFeed.snapshots.slice(0, 3);
   const refusedStates = await stopFeed("refused");
-  // The next snapshot was due 4 s after the third: wait past it.
+  // The next snapshot was due 4 s after the third: wait past it with the routes still counting.
   await page.waitForTimeout(5000);
+  await unrouteFeed("refused");
   const gaps = refusedAt.slice(1).map((at, i) => at - refusedAt[i]);
   check(
     "a feed whose stream refuses its own snapshot's cursor backs off 1 s then 2 s, and stops when its signal aborts",
     gaps.length === 2 && gaps[0] >= 900 && gaps[0] < 1700 && gaps[1] >= 1900 && gaps[1] < 2800 && refusedFeed.snapshots.length === 3 && !refusedStates.includes("syncing syncing"),
-    `snapshots ${gaps.map((g) => `+${g} ms`).join(", ")} in 3.5 s, ${refusedFeed.snapshots.length - refusedAt.length} after the abort; ${refusedStates}`,
+    `snapshots ${gaps.map((g) => `+${g} ms`).join(", ")}, ${refusedFeed.snapshots.length - refusedAt.length} in the 5 s after the abort; ${refusedStates}`,
   );
   // The first stream is accepted and ends; the browser reconnects 400 ms later, and that stream
-  // answers `sync`; later streams are accepted.
+  // answers `sync` (a feed reset while the page was away); later streams are accepted.
   const quietFeed = await feedTimes("quiet", (n) => (n === 1 ? "retry: 400\n\n" : n === 2 ? 'event: sync\ndata: {"reason":"cursor-expired"}\n\n' : "retry: 60000\n\n"));
   await page.waitForTimeout(2000);
   await stopFeed("quiet");
+  await unrouteFeed("quiet");
   const quietGap = quietFeed.snapshots.length === 2 ? quietFeed.snapshots[1] - quietFeed.snapshots[0] : NaN;
   check(
     "a sync that comes later on a feed's stream loads the snapshot at once, not after a backoff",

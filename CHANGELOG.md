@@ -5429,7 +5429,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `id:` line (a line break could also start a field of its own in every patch frame; Changed
     165). Corten's own generations are hex, so they are unchanged. `subscribe()` now loads the
     snapshot again after a backoff (1 s, doubling to 30 s) when a stream answers the cursor the
-    snapshot just gave with `sync` as it opens (within 250 ms), so a feed that cannot go live
+    snapshot just gave with `sync` as it opens (on its first connection, within 900 ms), so a feed that cannot go live
     for another reason (two feeds behind one URL) costs 3 snapshots in the same 3.5 s in
     Chromium, Firefox and WebKit; a `sync` later on a stream (a reset) still loads it at once.
     The runtime is 68 B larger (gzip). The watchlist smoke checks the backoff's 1 s and 2 s, that

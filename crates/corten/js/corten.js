@@ -762,9 +762,11 @@ export function subscribe(url, handlers, { signal } = {}) {
     source = es;
     let cursor = new URL(liveUrl, location.href).searchParams.get("since") ?? "";
     let opened = 0;
+    let opens = 0;
     es.addEventListener("open", () => {
       failures = 0;
-      opened ||= performance.now();
+      opened = performance.now();
+      opens += 1;
       status("live");
     });
     // EventSource retries by itself and sends Last-Event-ID, so the server resumes after `seq`.
@@ -774,11 +776,12 @@ export function subscribe(url, handlers, { signal } = {}) {
       status("reconnecting");
       if (es.readyState === EventSource.CLOSED && source === es) retry(() => listen(`${url}/live?since=${encodeURIComponent(cursor)}`));
     });
-    // A stream that answers the cursor the snapshot just gave with `sync` as it opens refuses it
-    // (the URL serves more than one feed, say): load the snapshot again after a backoff that
-    // grows, not straight away in a loop. A `sync` later (a reset) loads it at once.
+    // A stream that answers the cursor the snapshot just gave with `sync` as it first opens
+    // refuses it (the URL serves more than one feed, say): load the snapshot again after a
+    // backoff that grows, not straight away in a loop. A `sync` later, or after a reconnect (a
+    // reset), loads it at once. 900 ms leaves room for a task that delays the event.
     es.addEventListener("sync", () => {
-      if (!fresh || performance.now() - opened > 250) {
+      if (!fresh || opens > 1 || performance.now() - opened > 900) {
         refused = 0;
         return void sync();
       }
