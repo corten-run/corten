@@ -44,7 +44,7 @@ node dashboard.mjs      # 200 cards on one shared store
 node state-check.mjs    # state() and render scheduling: batching, key switches, abort
 node ab.mjs <prep|-> <click> <app> <app> ...   # interleaved means, for sub-millisecond gaps
 node run-all.mjs <round>     # build, run, ssr and dashboard into results/<round>/, then the table
-node summarize.mjs <round>   # the README table from results/<round>/
+node summarize.mjs <round>   # the client-heavy table in docs/performance.md, from results/<round>/
 ```
 
 On a Linux droplet: `node bench/fullstack/droplet.mjs <round> --ssh-key <id> --suite browser`
@@ -71,7 +71,8 @@ apps of `bench/fullstack`'s browser pass were stopped. Corten's runtime, `views.
 handler module are the ones the framework serves. Every app passed the DOM checks after every
 operation, and every server-rendered app kept the server's 1,000 rows (none removed or added
 while starting). [results/browser-3](results/browser-3) has every number, including frame times;
-the README's client table is this one ([summarize.mjs](summarize.mjs)).
+the client-heavy table in [docs/performance.md](../../docs/performance.md#client-heavy-screens) is
+this one ([summarize.mjs](summarize.mjs)).
 
 | | **Corten (views)** | Solid 1.9 | Svelte 5 | Vue 3.5 | React 19 | Remix 3 | Plain JS (floor) |
 |---|---|---|---|---|---|---|---|
