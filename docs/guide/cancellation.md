@@ -35,7 +35,9 @@ that connection finds it, so a connection given such state closes when it is dro
 ([a lock whose snapshot follows it](requests-and-forms.md#when-the-works-snapshot-must-follow-the-lock)). `App::deadline` (30 seconds unless set, `None` for
 none) bounds the time to a response's start and answers 503 with the error page; streams run as
 long as they need. It includes reading the request body, so an app that takes large uploads
-raises it. A client closing an HTTP/1.1 connection mid-request is seen at once (an
+raises it. A deadline that finds the handler waiting for more of the body is the client's 408
+instead (the request had not arrived whole in time; a 413 while a body over its limit is read
+past), and is warned of as the 503 is ([design.md, Choice 30](../design.md#choice-deadline-body)). A client closing an HTTP/1.1 connection mid-request is seen at once (an
 integration test closes the socket and waits for `Disconnected`). The deadline's timer starts
 only when a handler waits, so a page rendered from memory registers none.
 
@@ -55,8 +57,8 @@ App::new(url::router())
     .api::<Proxy>(|proxy| proxy.route::<Compact>(post(compact)).deadline(Duration::from_secs(600)))
 ```
 
-Each answers the same way past it: the 503 (the error page, or JSON under an API) and
-`Abort::Deadline`. `None` removes it for those routes only. A single slow route goes in an area
+Each answers the same way past it: the 503 (the error page, or JSON under an API), or the 408
+while the handler waits for the body, and `Abort::Deadline`. `None` removes it for those routes only. A single slow route goes in an area
 or an API of its own.
 
 ## Work that must finish

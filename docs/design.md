@@ -1001,6 +1001,39 @@ rules something out.
     157 and WebKit 27.2 by the watchlist smoke test (`fetch` and streamed bodies read in the Fetch
     standard and MDN, not probed).
 
+30. <a id="choice-deadline-body"></a>**A deadline that passes while the handler waits for more of the request body is
+    the client's 408; the idle time stays a minute and the deadline 30 seconds.** RFC 9110 gives
+    408 to a request the server did not receive whole in the time it was prepared to wait, and at
+    such a deadline the body has not arrived whole: the client stopped, or is sending slower than
+    the deadline allows (a server too busy to read its socket looks the same, and is rare next to
+    either). So at the deadline Corten asks what the handler's last poll waited for: more of the
+    body is the 408 (`Failure::Failed`, as `?` on `UploadError::Stalled` gives), more of a body
+    over its limit that is being read past is the 413 that read gives, and anything else is the
+    503 (`Failure::TimedOut`). A handler that read the whole body and then took too long, or never
+    read it, is the server's 503. The 408 is warned of as the 503 is, since a large upload still
+    being sent at the deadline says the deadline is too short for it. The mark is one thread-local
+    value: the body `corten::serve` hands the router sets it when a read waits, the read past a
+    limit sets it to that limit, and the deadline clears it before each poll of the handler, so
+    nothing is allocated. Not chosen: an idle time under the deadline (any route whose deadline is
+    set lower brings the 503 back, and nginx's `client_body_timeout`, whose minute the idle time
+    follows, is usually what a proxy in front already uses); a deadline that starts after the body
+    has arrived (a client that sends slowly would then hold a handler's slot past any bound).
+
+    Stands on: platform (RFC 9110, section 15.5.9: 408 Request Timeout); reasoned (the wait is
+    known where the deadline is, in the same poll, so the mark reads that poll's wait and needs no
+    allocation); measured (callgrind, card-market's item page and its JSON over one keep-alive
+    connection, 1,300 requests less 300 over 1,000, three repeats each: the page 86,737 instructions a request on `5dba8477` and 86,767 with the
+    mark, its JSON 65,737 and 65,761, medians, which is under the few hundred that code layout
+    moves between builds).
+
+    Revisit when: a body read moves off the handler's task (a reader on a task of its own would
+    not mark the handler's thread), or Corten serves HTTP/2, where a body's reads would need the
+    same mark and a test that a stalled stream is the 408 while the connection's other streams
+    go on.
+
+    Last checked: 2026-11-07, the socket tests at the default deadline and the count, on
+    `5dba8477` with this change.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

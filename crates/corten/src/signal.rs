@@ -82,7 +82,8 @@ pub enum Abort {
     /// The client went away before the response was sent: it closed the connection, cancelled the
     /// fetch, or left a stream.
     Disconnected,
-    /// The handler ran past the app's deadline ([`crate::App::deadline`]) and the client got 503.
+    /// The handler ran past the app's deadline ([`crate::App::deadline`]) and the client got 503,
+    /// or 408 when the handler was waiting for the client to send the body.
     Deadline,
     /// The app is shutting down: the reason a task's signal aborts ([`crate::App::task`]), and the
     /// signal of work a handler finishes ([`Signal::finish`]); a request's never does.

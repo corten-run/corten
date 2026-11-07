@@ -271,6 +271,88 @@ pub fn pieces_up_to(body: Body, max: usize) -> Pieces {
     }
 }
 
+std::thread_local! {
+    /// What a read of the request body waited for during the handler's poll that the deadline is
+    /// making ([`crate::page`]'s `within`): set by [`Arriving`] and [`reading_past`], cleared
+    /// before each poll.
+    static WAITED: std::cell::Cell<Waited> = const { std::cell::Cell::new(Waited::Nothing) };
+}
+
+/// What the handler's last poll waited for of the request body, for the deadline's answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Waited {
+    /// Nothing of the body.
+    Nothing,
+    /// The client, to send more of the body.
+    Body,
+    /// The client, to send more of a body over its limit, read past so the client reads the 413.
+    PastLimit(Over),
+}
+
+/// The limit a body read past went over, as the reader's own error says it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Over {
+    /// [`pieces_up_to`]'s or [`bytes_up_to`]'s `max`.
+    Body(usize),
+    /// [`crate::Upload::limit`].
+    Upload(usize),
+}
+
+/// A request body as it arrives from the connection ([`crate::serve`]), which marks a read that
+/// waits for the client, so a deadline that passes while the handler waits for the body answers
+/// as the client's (a 408), not as the server's (#1061). It allocates nothing: the mark is one
+/// thread-local flag, set only when a read waits.
+pub(crate) struct Arriving<B>(pub(crate) B);
+
+impl<B: HttpBody + Unpin> HttpBody for Arriving<B> {
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<B::Data>, B::Error>>> {
+        let polled = Pin::new(&mut self.0).poll_frame(cx);
+        if polled.is_pending() && WAITED.get() == Waited::Nothing {
+            WAITED.set(Waited::Body);
+        }
+        polled
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.0.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.0.size_hint()
+    }
+}
+
+/// Forgets a wait for the request body, before the handler is polled again.
+#[inline]
+pub(crate) fn forget_wait() {
+    WAITED.set(Waited::Nothing);
+}
+
+/// What the handler's last poll waited for of the request body.
+pub(crate) fn waited() -> Waited {
+    WAITED.get()
+}
+
+/// `fut`, a read of a body over `over`'s limit that is read past: a poll of it that waits marks
+/// the wait as one past the limit, so a deadline that passes there answers the 413 the read gives.
+pub(crate) async fn reading_past<F: Future>(over: Over, fut: F) -> F::Output {
+    let mut fut = std::pin::pin!(fut);
+    std::future::poll_fn(|cx| {
+        let polled = fut.as_mut().poll(cx);
+        if polled.is_pending() {
+            WAITED.set(Waited::PastLimit(over));
+        }
+        polled
+    })
+    .await
+}
+
 /// How long [`Pieces`] waits for the next piece unless [`Pieces::idle`] says otherwise: nginx's
 /// `client_body_timeout`.
 pub(crate) const IDLE: Duration = Duration::from_secs(60);
@@ -451,7 +533,7 @@ impl Idle {
 async fn read_past(stream: &mut BodyDataStream, mut read: usize, max: usize, idle: &mut Idle) {
     let past = max.saturating_add(READ_PAST);
     while read <= past {
-        match idle.next(stream).await {
+        match reading_past(Over::Body(max), idle.next(stream)).await {
             Some(Some(Ok(piece))) => read = read.saturating_add(piece.len()),
             _ => break,
         }

@@ -994,6 +994,128 @@ async fn a_stalled_upload_over_a_socket_is_a_408_and_its_connection_is_closed() 
     server.await.unwrap().unwrap();
 }
 
+/// Serves `app` over a socket, sends a head with `extra` headers and, `wait` later, `sent` bytes
+/// of a body that says it is `len` bytes long, then nothing more, and reads what comes back until
+/// the server closes the connection: the answer, and how long that took on the runtime's clock.
+async fn stalled_over_a_socket(
+    app: crate::App,
+    path: &str,
+    extra: &str,
+    len: usize,
+    (wait, sent): (std::time::Duration, &[u8]),
+) -> (String, std::time::Duration) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let head = format!(
+        "POST {path} HTTP/1.1\r\nhost: localhost\r\ncontent-type: multipart/form-data; boundary={BOUNDARY}\r\ncontent-length: {len}\r\n{extra}\r\n"
+    );
+    let began = tokio::time::Instant::now();
+    stream.write_all(head.as_bytes()).await.unwrap();
+    tokio::time::sleep(wait).await;
+    stream.write_all(sent).await.unwrap();
+    let mut read = Vec::new();
+    stream.read_to_end(&mut read).await.expect("the answer, then the connection closed, not reset");
+    let took = began.elapsed();
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+    (String::from_utf8_lossy(&read).into_owned(), took)
+}
+
+/// With the defaults (a 30 s deadline, a minute's idle time), a page upload whose client stops
+/// sending is answered at the deadline as the client's: the error page at 408, not the server's
+/// 503, and its connection is closed after it. So is a data client's, as Problem Details (#1061).
+#[tokio::test(start_paused = true)]
+async fn a_stalled_upload_at_the_default_deadline_is_the_clients_408() {
+    async fn title(upload: Upload<Listing>) -> crate::Result<String> {
+        Ok(upload.fields().await?.title)
+    }
+    let app = || crate::App::new(crate::Routes::from(axum::Router::new().route("/up", axum::routing::post(title))));
+    let bytes = body(&[("title", None, None, &[b'a'; 4000])]);
+    let (page, took) =
+        stalled_over_a_socket(app(), "/up", "accept: text/html\r\n", bytes.len(), (std::time::Duration::ZERO, &bytes[..1000]))
+            .await;
+    assert!(page.starts_with("HTTP/1.1 408"), "{page}");
+    assert!(page.contains("<!DOCTYPE html>") && page.contains("Not received"), "the error page: {page}");
+    assert_eq!(took, std::time::Duration::from_secs(30), "at the default deadline");
+    let (json, _) = stalled_over_a_socket(
+        app(),
+        "/up",
+        "accept: application/json\r\n",
+        bytes.len(),
+        (std::time::Duration::ZERO, &bytes[..1000]),
+    )
+    .await;
+    assert!(json.starts_with("HTTP/1.1 408"), "{json}");
+    assert!(json.contains(r#""status":408"#), "{json}");
+}
+
+/// The deadline is still the server's 503 when the handler was not waiting for the body: one that
+/// read all of it and then took too long, and one that never read it (#1061).
+#[tokio::test(start_paused = true)]
+async fn the_deadline_is_the_servers_503_when_the_handler_is_not_waiting_for_the_body() {
+    async fn slow_after(upload: Upload<Listing>) -> crate::Result<String> {
+        let title = upload.fields().await?.title;
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        Ok(title)
+    }
+    async fn never_reads(_upload: Upload<Listing>) -> &'static str {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        "late"
+    }
+    let routes =
+        axum::Router::new().route("/after", axum::routing::post(slow_after)).route("/never", axum::routing::post(never_reads));
+    let app = || crate::App::new(crate::Routes::from(routes.clone()));
+    let bytes = body(&[("title", None, None, b"Lamp")]);
+    let (after, took) = stalled_over_a_socket(
+        app(),
+        "/after",
+        "accept: text/html\r\nconnection: close\r\n",
+        bytes.len(),
+        (std::time::Duration::ZERO, &bytes),
+    )
+    .await;
+    assert!(after.starts_with("HTTP/1.1 503"), "{after}");
+    assert_eq!(took, std::time::Duration::from_secs(30));
+    let (never, _) =
+        stalled_over_a_socket(app(), "/never", "accept: text/html\r\n", bytes.len(), (std::time::Duration::ZERO, &bytes[..10]))
+            .await;
+    assert!(never.starts_with("HTTP/1.1 503"), "{never}");
+    // The body came 5 s late, so the handler waited for it then, and was slow after it: what it
+    // waited for before is not the deadline's to count.
+    let (late, _) = stalled_over_a_socket(
+        app(),
+        "/after",
+        "accept: text/html\r\nconnection: close\r\n",
+        bytes.len(),
+        (std::time::Duration::from_secs(5), &bytes),
+    )
+    .await;
+    assert!(late.starts_with("HTTP/1.1 503"), "{late}");
+}
+
+/// A body over the limit that is still being read past at the deadline is the 413 the read gives,
+/// as it is when its client stops for the idle time there (#1061).
+#[tokio::test(start_paused = true)]
+async fn a_body_read_past_its_limit_at_the_deadline_is_the_413() {
+    async fn small(mut upload: Upload<Listing>) -> crate::Result<String> {
+        upload.limit(1024);
+        Ok(upload.fields().await?.title)
+    }
+    let app = || crate::App::new(crate::Routes::from(axum::Router::new().route("/up", axum::routing::post(small))));
+    let bytes = body(&[("title", None, None, &[b'a'; 4000])]);
+    let (page, took) =
+        stalled_over_a_socket(app(), "/up", "accept: text/html\r\n", bytes.len(), (std::time::Duration::ZERO, &bytes[..3000]))
+            .await;
+    assert!(page.starts_with("HTTP/1.1 413"), "{page}");
+    assert_eq!(took, std::time::Duration::from_secs(30), "at the default deadline");
+}
+
 /// What reading an upload costs per piece of its body: `UPLOAD_READS` (200) reads of a form with
 /// a 2 KiB file and a title, sent a byte at a time (each read is 2,259 pieces), the file
 /// read with `bytes_up_to`. Counted under callgrind at two numbers of reads, the difference is the
