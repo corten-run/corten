@@ -31,6 +31,9 @@ const logs = (name) => {
   return `${r.stdout}${r.stderr}`;
 };
 
+/** corten-cluster's events (target corten::feed) and the server's start, as each instance logs them. */
+const clusterLine = /relay (active|standing by)|gap in the feed|patch dropped|reloading the feed|JetStream|replay log|listening/;
+
 async function until(what, test, ms = 60_000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
@@ -53,7 +56,8 @@ docker("run", "-d", "--name", "fb-nats", ...net, "--ip", "10.77.77.11", "nats:2-
 await until("postgres", () => spawnSync("docker", ["exec", "fb-pg", "pg_isready", "-U", "postgres", "-d", "feeds"]).status === 0);
 // a starts first, so it is the active relay when it is killed.
 instance("fb-a", "10.77.77.21", "a");
-await until("a", () => /relay a: active/.test(logs("fb-a")));
+// a holds the lease alone until b starts; the kill records whether it still does (event.relay).
+await until("a", () => /listening/.test(logs("fb-a")));
 instance("fb-b", "10.77.77.22", "b");
 await until("b", () => /listening/.test(logs("fb-b")));
 docker("run", "-d", "--name", "fb-lb", ...net, "--ip", "10.77.77.30", "-p", "18420:8080", "-v", `${join(here, "nginx.conf")}:/etc/nginx/nginx.conf:ro`, "nginx:1.27-alpine");
@@ -93,18 +97,18 @@ result.browser = { ...probe, committed, resyncs: Math.max(0, probe.snapshots - 1
 result.instanceLogs = Object.fromEntries(
   ["fb-a", "fb-b"].map((c) => {
     const r = spawnSync("docker", ["logs", "-t", c], { encoding: "utf8" });
-    return [c, (r.stdout + r.stderr).split("\n").filter((l) => /relay|hub|listening/.test(l))];
+    return [c, (r.stdout + r.stderr).split("\n").filter((l) => clusterLine.test(l))];
   }),
 );
-// Relay takeover: from killing the active relay to the other instance logging "relay: active".
+// Relay takeover: from killing the active relay to the other instance logging "relay active".
 const activations = Object.entries(result.instanceLogs).flatMap(([c, lines]) =>
-  lines.filter((l) => /relay \w+: active/.test(l)).map((l) => ({ c, at: Date.parse(l.slice(0, l.indexOf(" "))) - result.t0 })),
+  lines.filter((l) => /\brelay active\b/.test(l)).map((l) => ({ c, at: Date.parse(l.slice(0, l.indexOf(" "))) - result.t0 })),
 );
 result.relayTakeoverMs = result.events
   .filter((e) => e.action === "kill")
   .map((e) => {
     const next = activations.filter((a) => a.c !== e.name && a.at > e.at).sort((x, y) => x.at - y.at)[0];
-    const wasLeader = activations.filter((a) => a.at < e.at).sort((x, y) => y.at - x.at)[0]?.c === e.name;
+    const wasLeader = e.relay ?? activations.filter((a) => a.at < e.at).sort((x, y) => y.at - x.at)[0]?.c === e.name;
     return { killed: e.name, wasLeader, takeoverMs: wasLeader && next ? next.at - e.at : null };
   });
 result.stats = Object.fromEntries(["fb-a", "fb-b", "fb-pg", "fb-nats", "fb-lb"].map((c) => [c, docker("stats", "--no-stream", "--format", "{{.CPUPerc}} {{.MemUsage}}", c)]));

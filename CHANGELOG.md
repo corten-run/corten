@@ -5428,6 +5428,14 @@ Corten is pre-1.0, so any minor version may change the API.
     an event lib.dom types more narrowly cannot fall back to `Event` unnoticed, nor an arm be
     narrower than lib.dom
     ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
+189. `corten-cluster` wrote what happens to a feed across instances (a gap in its patches and the
+    reload it starts, a patch dropped as invalid, a failed reload, consumer or resubscribe, a feed
+    loaded with no replay log, the relay going active or standing by) to stderr with `eprintln!`,
+    so the app's subscriber, its filters and JSON lines never saw them. Each is now a `tracing`
+    event with target `corten::feed`, as the feed's own are, with fields (`instance`, `feed`, and
+    `have` and `got` for a gap): a warning, or `info` for the relay going active. A test installs
+    a subscriber and sees a gap and a dropped patch with their feed; it saw nothing before
+    ([#1069 corten-cluster reports gaps, reloads and relay failover with eprintln!, so the app's tracing subscriber, filters and JSON logs never see them](https://github.com/corten-run/corten/issues/1069)).
 
 ### Documentation
 

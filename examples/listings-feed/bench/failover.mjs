@@ -240,6 +240,17 @@ async function subscribers({ t0, from, count }) {
 // ---------------------------------------------------------------------------------------------
 // Main: workers, the writer, the schedule, the report.
 
+/** Each instance's own address on the feedbench network, past the load balancer. */
+const instances = { "fb-a": "http://10.77.77.21:8080", "fb-b": "http://10.77.77.22:8080" };
+
+/** Whether the instance runs the relay (its `/api/stats`), or null when it does not answer in 1 s. */
+async function relayActive(name) {
+  const stats = await fetch(`${instances[name]}/api/stats`, { signal: AbortSignal.timeout(1000) })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  return typeof stats?.relay_active === "boolean" ? stats.relay_active : null;
+}
+
 /** Docker Engine API over the mounted socket: POST /containers/{name}/{action}. */
 function docker(action, name) {
   return new Promise((resolve, reject) => {
@@ -334,9 +345,12 @@ async function main() {
   console.error(`started: ${clients} subscribers on ${pool.length} threads, ${wps} writes/s`);
   for (const [at, action, name] of schedule) {
     await sleep(Math.max(0, started + at * 1000 - Date.now()));
+    // Whether the instance about to be killed runs the relay, from the instance itself: its
+    // "relay active" line can come before the app's subscriber is installed and not be logged.
+    const relay = action === "kill" ? await relayActive(name) : undefined;
     const when = Date.now();
     await docker(action, name);
-    events.push({ at: when - t0, action, name });
+    events.push({ at: when - t0, action, name, ...(relay === undefined ? {} : { relay }) });
     console.error(`${(when - started) / 1000}s: ${action} ${name}`);
   }
   await sleep(Math.max(0, started + seconds * 1000 - Date.now()));

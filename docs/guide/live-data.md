@@ -260,7 +260,15 @@ runs one feed across instances (Postgres outbox, a leased relay to NATS JetStrea
 failover benchmark (200 clients, 50 writes a second, each instance killed and restarted under
 load), every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000
 with clients back on the other instance after 1.1 s at the median (measured,
-`examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). An instance serves
+`examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). What it does on the
+way is logged through the app's subscriber, as the feed's own events are (target `corten::feed`,
+fields `instance` and `feed`): a warning for a gap in a feed's patches (`have`, `got`) and the
+reload it starts, a patch dropped as invalid, a reload, the JetStream consumer or a resubscribe
+that failed, and a feed loaded with no replay log (clients that move to the instance resync), and
+`relay active` and `relay standing by` as the relay's lease moves, so a log pipeline counts gaps
+and failovers. `Cluster::start` starts the relay before `serve` installs Corten's default
+subscriber, so an event that early (the first instance's `relay active`) is printed only by a
+subscriber the app set before `Cluster::start`. An instance serves
 many feeds, and loading one (on first use, after an idle unload or a gap) or applying a patch to
 one does not hold up requests for the others: a feed is built from its rows on a blocking
 thread, outside the lock that finds a feed. Reading the rows (the app's `Source::rows`) runs on
