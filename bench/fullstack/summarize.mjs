@@ -11,7 +11,7 @@ import { phases, ssrOf } from "./ssr.mjs";
 const here = dirname(fileURLToPath(import.meta.url));
 const round = process.argv[2] ?? "r1";
 // A matched round (m<n>) is summarized with BENCH_TIER=matched, its apps, and only it.
-if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
+if (roundNameError(round, tier, { full: true })) throw new Error(/** @type {string} */ (roundNameError(round, tier, { full: true })));
 const dir = join(here, "results", round);
 // A packed round's raw files (each app's k6, CPU and startup files) are read from its archive.
 const raw = rawOf(dir);

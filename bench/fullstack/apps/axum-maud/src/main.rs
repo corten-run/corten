@@ -45,23 +45,29 @@ type AppState = State<Arc<App>>;
 async fn main() {
     // Load the fixture (if any) before listening, like the other apps.
     let app = Arc::new(App { items: Items::from_env(), prices: broadcast::channel(1024).0 });
-    let router = Router::new()
+    let profile = std::env::var("PROFILE").as_deref() == Ok("matched");
+    let routes = Router::new()
         .route("/", get(home))
         .route("/items/{id}", get(item_page).post(create_alert))
         .route("/api/items/{id}", get(item_json))
         .route("/live/prices", get(live_prices))
         .route("/live/publish", post(live_publish))
-        .nest_service("/static", ServeDir::new("static"))
-        .fallback(async || not_found())
-        .with_state(app);
-    let router = if std::env::var("PROFILE").as_deref() == Ok("matched") { matched(router) } else { router };
+        .fallback(async || not_found());
+    // The profile's cache policy is the pages' and the JSON's, not the static files'.
+    let routes = if profile {
+        routes.layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache")))
+    } else {
+        routes
+    };
+    let router = routes.nest_service("/static", ServeDir::new("static")).with_state(app);
+    let router = if profile { matched(router) } else { router };
     let port: u16 = std::env::var("PORT").map_or(8080, |p| p.parse().expect("PORT is a port number"));
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await.expect("bind PORT");
     axum::serve(listener, router).await.expect("server");
 }
 
-/// The matched tier's production profile, as far as tower-http's layers go: the security headers
-/// and a page cache policy on every answer, compression when asked, a 503 past a 10 second
+/// The rest of the matched tier's production profile, as far as tower-http's layers go: the
+/// security headers on every answer, compression when asked, a 503 past a 10 second
 /// deadline (card-market's), and request bodies of at most 2 MiB (axum's own extractor limit).
 fn matched(router: Router) -> Router {
     let header =
@@ -82,7 +88,6 @@ fn matched(router: Router) -> Router {
             HeaderName::from_static("permissions-policy"),
             "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
         ))
-        .layer(header(header::CACHE_CONTROL, "private, no-cache"))
 }
 
 async fn home(State(app): AppState) -> Markup {

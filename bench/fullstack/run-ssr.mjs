@@ -11,13 +11,16 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { allApps, apiContainer, apps as catalog, k6Net, k6User, loadCpusFor, network, runArgs } from "./apps.mjs";
+import { allApps, apiContainer, apps as catalog, k6Net, k6User, loadCpusFor, network, runArgs, tier } from "./apps.mjs";
+import { roundNameError } from "./round.mjs";
 import { cpuUsec } from "./cpu-time.mjs";
 import { passFile, passesOf } from "./passes.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", source = "api", fixedRate = "150", appsArg = Object.keys(catalog).join(","), target = "page", passesArg] = process.argv.slice(2);
 const passes = passesOf(passesArg);
+// The matched tier's numbers never go into an r<n> round, nor the defaults' into an m<n> one.
+if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
 const results = join(here, "results", round, source);
 mkdirSync(results, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

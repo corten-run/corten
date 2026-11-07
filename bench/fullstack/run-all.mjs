@@ -35,7 +35,7 @@ const unattended = process.argv.includes("--unattended");
 const [round = "r1", browserRuns = "10", from = steps[0]] = process.argv.slice(2).filter((a) => a !== "--unattended");
 if (!steps.includes(from)) throw new Error(`from must be one of ${steps.join(", ")}`);
 // A matched-tier round (BENCH_TIER=matched) is m<n>, and only it: the trend reads r<n> alone.
-if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
+if (roundNameError(round, tier, { full: true })) throw new Error(/** @type {string} */ (roundNameError(round, tier, { full: true })));
 // It removes every container on the host, so only where droplet.mjs runs it.
 if (unattended && (process.platform !== "linux" || !process.env.BENCH_APP_CPUS)) throw new Error("--unattended is for a bench droplet (droplet.mjs runs it there)");
 const minute = 60_000;

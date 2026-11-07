@@ -3,11 +3,14 @@
 // mode "head": a request head that is never finished (the request line and one header, then
 //   nothing): { closedMs } when the server closed the connection, { timedOutMs } when it still
 //   held it at timeoutMs, or { error }.
-// mode "cap": `hold` connections opened and left idle, then one request on a connection of its
-//   own: whether it was answered within waitMs while they were held, and then, the held ones
-//   closed, whether it was answered within releaseMs (a server at its cap leaves the new one
-//   queued, or closes it). { held, whileHeld: status | null, afterRelease: status | "closed" |
-//   null, releaseMs } or { error }; held is how many of the `hold` connected.
+// mode "cap": `below` connections opened and left idle, then one request on a connection of its
+//   own, which an app capped at more than `below` answers within waitMs (belowHeld: its status, or
+//   null); they are closed. Then `hold` connections the same way and a request: whether it was
+//   answered within waitMs while they were held, and then, the held ones closed, whether it was
+//   answered within releaseMs (a server at its cap leaves the new one waiting, or closes it, or
+//   does not accept it: "refused"); last, a request on a new connection, to see the app still
+//   serves (afterwards: its status, or null). { below, belowHeld, held, whileHeld, afterRelease,
+//   releaseMs, afterwards } or { error }; below and held are how many connected.
 import { connect } from "node:net";
 import { parseAnswer } from "./conformance.mjs";
 
@@ -23,7 +26,8 @@ const open = () => /** @type {Promise<import("node:net").Socket | null>} */ (new
   const socket = connect({ host: r.host, port: r.port });
   socket.once("connect", () => done(socket));
   socket.once("error", () => done(null));
-  socket.setTimeout(30_000, () => socket.destroy());
+  // A connection never accepted (a full queue) times out with no error event: it resolves null too.
+  socket.setTimeout(30_000, () => { socket.destroy(); done(null); });
 }));
 
 if (r.mode === "head") {
@@ -48,29 +52,48 @@ if (r.mode === "head") {
     socket.destroy();
   }
 } else {
-  const held = (await Promise.all(Array.from({ length: r.hold ?? 0 }, open))).filter((s) => s !== null);
-  for (const s of held) { s.on("error", () => {}); s.on("data", () => {}); }
-  // Give the server time to accept what it will.
-  await sleep(500);
-  const socket = await open();
-  /** @type {Buffer[]} */
-  const got = [];
-  let closed = false;
-  if (socket) {
-    socket.setTimeout(0);
-    socket.on("data", (c) => got.push(c));
-    socket.on("error", () => {});
-    socket.on("close", () => { closed = true; });
-    socket.write(request);
-  }
-  const status = () => parseAnswer(Buffer.concat(got))?.status ?? null;
-  const until = async (/** @type {number} */ ms) => { const end = Date.now() + ms; while (Date.now() < end && status() === null && !closed) await sleep(25); };
-  await until(r.waitMs ?? 3000);
-  const whileHeld = status();
-  for (const s of held) s.destroy();
+  /**
+   * `count` idle connections, then a request on one more: its status within waitMs while they are
+   * held ("refused" when it could not connect), and the open connections, to close or wait on.
+   */
+  const holding = async (/** @type {number} */ count) => {
+    const held = (await Promise.all(Array.from({ length: count }, open))).filter((s) => s !== null);
+    for (const s of held) { s.on("error", () => {}); s.on("data", () => {}); }
+    // Give the server time to accept what it will.
+    await sleep(500);
+    const socket = await open();
+    /** @type {Buffer[]} */
+    const got = [];
+    const state = { closed: socket === null };
+    if (socket) {
+      socket.setTimeout(0);
+      socket.on("data", (c) => got.push(c));
+      socket.on("error", () => {});
+      socket.on("close", () => { state.closed = true; });
+      socket.write(request);
+    }
+    const status = () => parseAnswer(Buffer.concat(got))?.status ?? null;
+    const until = async (/** @type {number} */ ms) => { const end = Date.now() + ms; while (Date.now() < end && status() === null && !state.closed) await sleep(25); };
+    await until(r.waitMs ?? 3000);
+    return { held, socket, status, until, state };
+  };
+  const first = await holding(r.below ?? 0);
+  const belowHeld = first.status();
+  for (const s of first.held) s.destroy();
+  first.socket?.destroy();
+  await sleep(1000);
+  const second = await holding(r.hold ?? 0);
+  const whileHeld = second.status();
+  for (const s of second.held) s.destroy();
   const released = Date.now();
-  if (whileHeld === null && !closed) await until(r.releaseMs ?? 10_000);
-  const after = whileHeld !== null ? null : status() ?? (closed ? "closed" : null);
-  process.stdout.write(JSON.stringify(socket ? { held: held.length, whileHeld, afterRelease: after, releaseMs: Date.now() - released } : { error: "could not connect" }));
-  socket?.destroy();
+  if (whileHeld === null && !second.state.closed) await second.until(r.releaseMs ?? 10_000);
+  const after = whileHeld !== null ? null : second.status() ?? (!second.socket ? "refused" : second.state.closed ? "closed" : null);
+  const releaseMs = Date.now() - released;
+  second.socket?.destroy();
+  await sleep(1000);
+  // Still serving after it: a cap, not a crash or a hang.
+  const last = await holding(0);
+  const afterwards = last.status();
+  last.socket?.destroy();
+  process.stdout.write(JSON.stringify({ below: first.held.length, belowHeld, held: second.held.length, whileHeld, afterRelease: after, releaseMs, afterwards }));
 }

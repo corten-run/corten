@@ -15,6 +15,8 @@ export const format = 2;
 export const maxConnections = 1000;
 /** How many idle connections conform.mjs holds to see the cap: past it, by more than a few. */
 export const capHeld = maxConnections + 50;
+/** And first, how many it holds below the cap, when a request must still be answered. */
+export const capBelow = maxConnections - 50;
 
 /** The item conform.mjs's item API (conform-items.mjs) answers 500 for: a read that fails. */
 export const brokenItem = "conform_broken";
@@ -154,15 +156,20 @@ const unfinishedOf = (/** @type {{ closedMs?: number, timedOutMs?: number, error
   !p ? "n/a: not probed" : p.error ? "error " + p.error : p.closedMs !== undefined ? "closed in " + (p.closedMs / 1000).toFixed(1) + " s" : "held " + Math.round((p.timedOutMs ?? 0) / 1000) + " s";
 
 /**
- * The cap's cell: "capped, then <status | closed | held>" when a request on a connection past the
- * held ones was not answered while they were held, "served with <n> held" when it was, or why it
- * could not be seen (fewer connections held than the cap allows).
+ * The cap's cell. "capped, then <status | closed | refused | held>": a request was answered with
+ * 950 connections held, not with 1,050 held (it waited, was closed, or never connected), and the
+ * app served a request after they closed. Otherwise what fell short: "served with <n> held" (no
+ * cap there), "not served with <n> held" (a cap, or a pool of workers each tied up by a connection,
+ * well under the profile's), "stopped serving" (a crash or a hang, not a cap), or why the cap
+ * could not be seen (fewer connections held than it allows).
  */
-const capOf = (/** @type {{ held?: number, whileHeld?: number | null, afterRelease?: number | string | null, error?: string } | undefined} */ p) => {
+const capOf = (/** @type {{ below?: number, belowHeld?: number | null, held?: number, whileHeld?: number | null, afterRelease?: number | string | null, afterwards?: number | null, error?: string } | undefined} */ p) => {
   if (!p) return "n/a: not probed";
   if (p.error) return "error " + p.error;
-  if ((p.held ?? 0) < capHeld) return `n/a: held only ${p.held} connections`;
+  if ((p.below ?? 0) < capBelow || (p.held ?? 0) < capHeld) return `n/a: held only ${p.below ?? 0} and ${p.held ?? 0} connections`;
+  if (p.belowHeld === null || p.belowHeld === undefined) return `not served with ${p.below} held`;
   if (p.whileHeld !== null && p.whileHeld !== undefined) return `served with ${p.held} held (${p.whileHeld})`;
+  if (p.afterwards === null || p.afterwards === undefined) return `stopped serving after ${p.held} held`;
   return "capped, then " + (p.afterRelease === null || p.afterRelease === undefined ? "held" : String(p.afterRelease));
 };
 

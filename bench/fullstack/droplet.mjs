@@ -52,10 +52,11 @@ if (!round || round.startsWith("--")) throw new Error("usage: node droplet.mjs <
 // The round goes into droplet and unit names, paths and shell commands unquoted.
 if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(round)) throw new Error("the round is letters, digits, - and _ (r10)");
 const suite = flag("suite", "fullstack") ?? "fullstack";
-const tier = flag("tier", "defaults") ?? "defaults";
+// An m<n> round is the matched tier's, so --collect and --attach need no --tier for it.
+const tier = flag("tier") ?? (/^m\d+$/.test(round) ? "matched" : "defaults");
 if (tier !== "defaults" && tier !== "matched") throw new Error("--tier is defaults or matched");
 if (tier !== "defaults" && suite !== "fullstack") throw new Error("--tier is for a full-stack round");
-if (suite === "fullstack" && roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
+if (suite === "fullstack" && roundNameError(round, tier, { full: true })) throw new Error(/** @type {string} */ (roundNameError(round, tier, { full: true })));
 // The tier's apps, whatever BENCH_TIER says here: the droplet's run reads it from the round's env.
 const apps = tier === "matched" ? Object.fromEntries(Object.entries(allApps).filter(([, app]) => /** @type {{ matched?: boolean }} */ (app).matched)) : allApps;
 const only = flag("apps")?.split(",").map((n) => n.trim()).filter(Boolean);
@@ -316,7 +317,7 @@ const launch = async () => {
   // Starting a unit that has started does nothing, so this can be tried again.
   mayDestroy = false;
   await retry(3, () => ssh(`systemctl start ${unitName} && systemctl is-active --quiet ${unitName}`));
-  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: passes > 1 ? `about ${Math.round(((only?.length ?? Object.keys(apps).length) * (25 + 16 * (passes - 1))) / 6) / 10} hours with ${passes} passes of each load phase (estimated: about twenty-five minutes an app for the first pass, its build included, and about sixteen for each pass after, its four sets of load phases; the unit stops at ${hoursFor(passes)})` : only ? `about twenty-five minutes an app, its build included, for ${only.length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
+  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: passes > 1 ? `about ${Math.round(((only?.length ?? Object.keys(apps).length) * (25 + 16 * (passes - 1))) / 6) / 10} hours with ${passes} passes of each load phase (estimated: about twenty-five minutes an app for the first pass, its build included, and about sixteen for each pass after, its four sets of load phases; the unit stops at ${hoursFor(passes)})` : only || tier === "matched" ? `about twenty-five minutes an app, its build included, for ${(only ?? Object.keys(apps)).length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
 };
 
 // Finds the droplet of a round started earlier, by its name.

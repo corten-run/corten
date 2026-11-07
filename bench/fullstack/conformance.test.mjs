@@ -6,7 +6,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
-import { capHeld, errorOf, features, featuresOf, format, formBody, formOf, logLinesOf, maxConnections, parseAnswer, rowOf, scriptPolicyOf, securityOf, statusOf } from "./conformance.mjs";
+import { capBelow, capHeld, errorOf, features, featuresOf, format, formBody, formOf, logLinesOf, maxConnections, parseAnswer, rowOf, scriptPolicyOf, securityOf, statusOf } from "./conformance.mjs";
 
 const answer = (/** @type {number} */ status, /** @type {Record<string, string>} */ headers = {}, body = "x", ms = 5) => ({ status, headers, bodyLength: body.length, ms });
 const secure = { "content-security-policy": "default-src 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "cross-origin-opener-policy": "same-origin" };
@@ -278,22 +278,32 @@ test("the matched tier's columns are its own: a defaults row has neither", () =>
   assert.ok(capHeld > maxConnections, "the cap probe holds more connections than the cap allows");
 });
 
-test("an unfinished head counts when closed within 35 seconds; the cap when the request past it waits", () => {
+test("an unfinished head counts when closed within 35 seconds; the cap when a request waits past it alone and the app serves after", () => {
   const row = (/** @type {Record<string, any>} */ o) => rowOf({ pages: false, tier: "matched", ...o });
-  const closed = row({ unfinishedHead: { closedMs: 30_120 }, cap: { held: capHeld, whileHeld: null, afterRelease: 200, releaseMs: 40 } });
+  const capped = { below: capBelow, belowHeld: 200, held: capHeld, whileHeld: null, afterRelease: 200, releaseMs: 40, afterwards: 200 };
+  const closed = row({ unfinishedHead: { closedMs: 30_120 }, cap: capped });
   assert.equal(closed.unfinishedHead, "closed in 30.1 s");
   assert.equal(closed.connectionCap, "capped, then 200");
   for (const key of ["unfinishedHead", "connectionCap"]) assert.ok(!closed.unmet.includes(key), key);
-  const open = row({ unfinishedHead: { timedOutMs: 45_010 }, cap: { held: capHeld, whileHeld: 200, afterRelease: null, releaseMs: 0 } });
+  const open = row({ unfinishedHead: { timedOutMs: 45_010 }, cap: { ...capped, whileHeld: 200, afterRelease: null } });
   assert.equal(open.unfinishedHead, "held 45 s");
   assert.equal(open.connectionCap, `served with ${capHeld} held (200)`);
   for (const key of ["unfinishedHead", "connectionCap"]) assert.ok(open.unmet.includes(key), key);
-  // Refused past the cap (closed) or still waiting when the probe gave up both count as capped.
-  assert.equal(row({ cap: { held: capHeld, whileHeld: null, afterRelease: "closed" } }).connectionCap, "capped, then closed");
-  assert.equal(row({ cap: { held: capHeld, whileHeld: null, afterRelease: null } }).connectionCap, "capped, then held");
-  // Too few held to see a cap, a failed probe, or no probe at all: not counted.
-  const unseen = row({ cap: { held: 900, whileHeld: null, afterRelease: null } });
-  assert.equal(unseen.connectionCap, "n/a: held only 900 connections");
+  // Refused past the cap (closed, or never accepted) or still waiting when the probe gave up all count as capped.
+  for (const afterRelease of ["closed", "refused", null]) {
+    const c = row({ cap: { ...capped, afterRelease } }).connectionCap;
+    assert.equal(c, "capped, then " + (afterRelease ?? "held"));
+  }
+  // Not answered below the cap (workers tied up, or a far lower cap), or not serving after: not the cap.
+  const low = row({ cap: { ...capped, belowHeld: null } });
+  assert.equal(low.connectionCap, `not served with ${capBelow} held`);
+  assert.ok(low.unmet.includes("connectionCap"));
+  const crashed = row({ cap: { ...capped, afterRelease: "closed", afterwards: null } });
+  assert.equal(crashed.connectionCap, `stopped serving after ${capHeld} held`);
+  assert.ok(crashed.unmet.includes("connectionCap"));
+  // Too few held to see a cap, a failed probe, or no probe at all: not counted, or an error.
+  const unseen = row({ cap: { ...capped, held: 900 } });
+  assert.equal(unseen.connectionCap, `n/a: held only ${capBelow} and 900 connections`);
   assert.ok(!unseen.unmet.includes("connectionCap"));
   assert.equal(row({ unfinishedHead: { error: "could not connect" } }).unfinishedHead, "error could not connect");
   assert.ok(row({ unfinishedHead: { error: "could not connect" } }).unmet.includes("unfinishedHead"));
@@ -325,12 +335,30 @@ test("the head probe sees a server close an unfinished head, and one that holds 
   assert.ok(holds.timedOutMs >= 300, JSON.stringify(holds));
 });
 
-test("the cap probe tells a server that answers past the held connections from one that refuses them", async () => {
-  const uncapped = await holdAgainst(createServer(answers), { mode: "cap", hold: 5, waitMs: 1000, releaseMs: 1000 });
-  assert.deepEqual([uncapped.held, uncapped.whileHeld, uncapped.afterRelease], [5, 200, null]);
+test("the cap probe tells a server that answers past the held connections from one that refuses them, and one that makes the next wait", async () => {
+  const probe = { mode: "cap", below: 3, hold: 6, waitMs: 1000, releaseMs: 2000 };
+  const uncapped = await holdAgainst(createServer(answers), probe);
+  assert.deepEqual([uncapped.below, uncapped.belowHeld, uncapped.held, uncapped.whileHeld, uncapped.afterRelease, uncapped.afterwards], [3, 200, 6, 200, null, 200]);
   // node:net's own cap closes a connection past it at once.
-  const capped = createServer(answers);
-  capped.maxConnections = 5;
-  const refused = await holdAgainst(capped, { mode: "cap", hold: 5, waitMs: 1000, releaseMs: 1000 });
-  assert.deepEqual([refused.held, refused.whileHeld, refused.afterRelease], [5, null, "closed"]);
+  const closing = createServer(answers);
+  closing.maxConnections = 5;
+  const closed = await holdAgainst(closing, probe);
+  assert.deepEqual([closed.belowHeld, closed.held, closed.whileHeld, closed.afterRelease, closed.afterwards], [200, 6, null, "closed", 200]);
+  // A server that, past five open connections, answers a request only once fewer are open: the
+  // request waits while they are held and is answered when they close.
+  /** @type {Set<import("node:net").Socket>} */
+  const open = new Set();
+  /** @type {(() => void)[]} */
+  const waiting = [];
+  const waits = createServer((s) => {
+    open.add(s);
+    s.on("error", () => {});
+    s.on("close", () => { open.delete(s); while (open.size <= 5 && waiting.length) /** @type {() => void} */ (waiting.shift())(); });
+    s.once("data", () => {
+      const answer = () => s.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+      if (open.size <= 5) answer(); else waiting.push(answer);
+    });
+  });
+  const waited = await holdAgainst(waits, probe);
+  assert.deepEqual([waited.belowHeld, waited.held, waited.whileHeld, waited.afterRelease, waited.afterwards], [200, 6, null, 200, 200]);
 });

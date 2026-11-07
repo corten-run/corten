@@ -239,7 +239,10 @@ export function roundsIn(results) {
       const of = commitOf(d.name);
       if (!of) return [];
       const { commit, dirty } = of;
-      return [{ round: d.name, commit, dirty, at: time(d.name, commit), summary: JSON.parse(readFileSync(join(results, d.name, "summary.json"), "utf8")) }];
+      const summary = JSON.parse(readFileSync(join(results, d.name, "summary.json"), "utf8"));
+      // The matched tier's rounds are m<n>; one in an r<n> folder would mix its numbers into the trend.
+      if (summary.tier === "matched") throw new Error(`${d.name}'s summary.json is of the matched tier, whose rounds are m<n>: it does not belong among the defaults tier's r<n>`);
+      return [{ round: d.name, commit, dirty, at: time(d.name, commit), summary }];
     })
     .sort((a, b) => a.at - b.at || a.round.localeCompare(b.round, "en", { numeric: true }));
 }

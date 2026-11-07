@@ -4,8 +4,8 @@ import { maxConnections } from "./conformance.mjs";
 // app with `pages: false` serves only the item as JSON, so it takes part in the JSON steps alone.
 // `matched: true`: one of the matched tier's apps (README, "The matched tier"), set once the app
 // starts with the production profile under PROFILE=matched. The tier's membership (README, "The
-// matched tier") also names nextjs, leptos, django, aspnet, spring and topcoat; each joins with
-// its profile.
+// matched tier") also names nextjs, leptos, django, aspnet (with aspnet-aot for the JSON), spring
+// and topcoat; each joins with its profile.
 const catalog = {
   corten: { image: "cb-corten", port: 18410, label: "Corten 0.1 (Rust, axum, html! views)", matched: true },
   nextjs: { image: "cb-nextjs", port: 18411, label: "Next.js 16.4 (App Router, RSC)" },
@@ -35,6 +35,8 @@ const catalog = {
  */
 export const tier = process.env.BENCH_TIER || "defaults";
 if (tier !== "defaults" && tier !== "matched") throw new Error(`BENCH_TIER is defaults or matched, not ${tier}`);
+/** What every app container of the tier is started with (runArgs, cold-start.mjs): the profile in the matched tier. */
+export const tierEnv = tier === "matched" ? ["-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${maxConnections}`] : [];
 /**
  * The apps a run measures: every one (the matched tier's, in that tier), or those BENCH_APPS
  * names (comma separated; droplet.mjs --apps sets it on the droplet), in the catalog's order.
@@ -94,7 +96,7 @@ export function runArgs(name, app, source, fixturesDir) {
   const args = ["run", "-d", "--name", `fsw-${name}`, "--network", network, ...appCpus, "--memory", "1g", "-p", `${app.port}:8080`];
   // The load generator calls the app by its container name, which Corten answers only when listed.
   args.push("-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=fsw-${name}`);
-  if (tier === "matched") args.push("-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${maxConnections}`);
+  args.push(...tierEnv);
   if (source === "fixture") args.push("-v", `${fixturesDir}:/fixtures:ro`, "-e", "ITEM_SOURCE=fixture", "-e", "FIXTURE_PATH=/fixtures/items.json");
   args.push(app.image);
   return args;

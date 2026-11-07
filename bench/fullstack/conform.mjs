@@ -22,8 +22,8 @@
 //    endpoint says while the items cannot be read.
 // In the matched tier (BENCH_TIER=matched, apps.mjs) it probes that tier's apps, each started with
 // PROFILE=matched, and two things more in the first run (conform-hold.mjs): whether a request head
-// never finished has its connection closed, and whether a request past 1,050 idle connections is
-// left unanswered while they are held (the profile's cap is 1,000). The app and fsw-probe may
+// never finished has its connection closed, and whether a request is answered with 950 idle
+// connections held but not with 1,050, and still afterwards (the profile's cap is 1,000). The app and fsw-probe may
 // each hold 65,536 files there, so a file limit is not taken for a cap.
 // Every probe is a plain HTTP/1.1 request (node:http, no decompression) on its own connection,
 // given up after a total time, sent by conform-probe.mjs from a container on the bench network
@@ -45,10 +45,13 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { network, runArgs, tier, tierApps as all } from "./apps.mjs";
-import { brokenItem, capHeld, featuresOf, format, formBody, formOf, livePaths, logLinesOf, readyPaths, rowOf } from "./conformance.mjs";
+import { brokenItem, capBelow, capHeld, featuresOf, format, formBody, formOf, livePaths, logLinesOf, readyPaths, rowOf } from "./conformance.mjs";
+import { roundNameError } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [appsArg, out] = process.argv.slice(2);
+// The matched tier's matrix never goes into an r<n> round, nor the defaults' into an m<n> one.
+if (out && roundNameError(out, tier)) throw new Error(/** @type {string} */ (roundNameError(out, tier)));
 const names = appsArg && appsArg !== "all" ? appsArg.split(",") : Object.keys(all);
 for (const n of names) if (!(n in all)) throw new Error("unknown app " + n + (tier === "matched" ? " in the matched tier" : ""));
 /** In the matched tier, the app and fsw-probe may hold this many files (the cap probe holds 1,050 connections). */
@@ -253,7 +256,7 @@ for (const name of names) {
   if (tier === "matched") {
     o.tier = tier;
     o.unfinishedHead = hold(name, { mode: "head", path: "/api/items/item_5", timeoutMs: 45_000 });
-    o.cap = hold(name, { mode: "cap", path: "/api/items/item_5", hold: capHeld, waitMs: 3000, releaseMs: 10_000 });
+    o.cap = hold(name, { mode: "cap", path: "/api/items/item_5", below: capBelow, hold: capHeld, waitMs: 3000, releaseMs: 10_000 });
   }
   o.live = firstOk(name, livePaths);
   const ready = firstOk(name, readyPaths);
