@@ -2430,6 +2430,21 @@ Corten is pre-1.0, so any minor version may change the API.
     a header timeout and a cap of 1,000 connections, which `conform-hold.mjs` probes as two new
     columns of the tier's matrix. Corten and axum-maud are in it so far (axum-maud with
     tower-http's layers); card-market reads `MAX_CONNECTIONS` into `App::max_connections`.
+267. `bench/fullstack` has a hardening step
+    ([#808 bench/fullstack measures only throughput and latency, not how each server holds up against slow clients, oversized requests and connection floods](https://github.com/corten-run/corten/issues/808)):
+    `harden.mjs` runs six phases against each freshly started app (unfinished heads, heads and
+    bodies sent a byte a second, clients that stop reading, idle connections, oversized
+    requests) beside a well-behaved client, and writes whether the app stayed up (or degraded),
+    what it did with the abusive connections and what it answered them, the client's latency and
+    the app's memory and CPU to `results/<round>/hardening.json`; `droplet.mjs --suite harden`
+    runs it on its own cadence, a run with a phase that could not run is not a finished one, and
+    a rerun of some phases records the commit each phase ran at and keeps the result it replaces.
+    The README reports a local run of nine apps (measured, one run each): Corten closed every
+    abusive connection in every phase and took the least CPU against clients that stop reading,
+    and it falls short where a trickled body is closed by the deadline (10 s in card-market) and
+    not a minimum rate, a client that stops reading by the 60 s send timeout, where Kestrel's
+    minimum rates close both sooner, and a 16 MiB body's 413 was lost to the connection closing in
+    1 of the 3 committed local passes.
 268. `bench/fullstack`'s matched tier reaches its apps through an edge
     ([#809 bench/fullstack serves every app over plain HTTP/1.1 with no proxy, though Corten's design expects one for TLS and HTTP/2](https://github.com/corten-run/corten/issues/809)):
     one pinned nginx with one config (`edge.mjs`, the deploy guide's less its cache, with the
@@ -2438,8 +2453,8 @@ Corten is pre-1.0, so any minor version may change the API.
     and browser pass measure an app as it is deployed. Each phase counts the edge's CPU beside the
     app's (`edgePerCpuSecond`, `edgeCpuUsedPct`), and k6's in every tier (`k6CpuUsedPct`); the
     summary marks a phase the edge or k6 limited (EDGE-BOUND, LOAD-BOUND) and, through the edge,
-    a saturation phase whose app used less than 90% of its core (APP-IDLE), as every local one was. A matched round
-    runs on a c-16, and `droplet.mjs --edge off` runs it reached directly, to compare. The defaults
+    a saturation phase whose app used less than 90% of its core (APP-IDLE), as every local one was. A matched full-stack
+    round runs on a c-16, and `droplet.mjs --edge off` runs it reached directly, to compare. The defaults
     tier stays direct.
 269. `bench/fullstack/REVIEW.md` tells a framework's maintainers what the comparison measures,
     what they may change in their app (settings a production deployment uses, the app's own code)
