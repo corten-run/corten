@@ -879,25 +879,27 @@ async fn a_client_that_stops_sending_an_upload_is_a_408() {
     assert!(waited.is_err(), "no idle time of its own");
 }
 
-/// The idle time holds piece by piece, not for the body in all: a client sending steadily, however
-/// long it takes, is read to the end, and while a body over the limit is read past it reads the
-/// 413; one that stops while it is read past is answered the 413 after the idle time.
+/// The idle time holds piece by piece, not for the body in all: a client sending steadily (above
+/// the minimum rate), however long it takes, is read to the end, and while a body over the limit is
+/// read past it reads the 413; one that stops while it is read past is answered the 413 after the
+/// idle time.
 #[tokio::test(start_paused = true)]
 async fn an_upload_sent_steadily_is_never_cut_off_by_the_idle_time() {
     let half = std::time::Duration::from_secs(30);
-    let photo = vec![1u8; 4000];
+    let photo = vec![1u8; 320 << 10];
     let bytes = body(&[("photos", Some("p.png"), None, &photo), ("title", None, None, b"Mew")]);
-    // About 40 pieces, 30 seconds apart: 20 minutes in all, each within the minute.
+    // About 40 pieces of 8 KiB, 30 seconds apart (273 bytes a second): 20 minutes in all, each
+    // within the minute.
     let sent = std::sync::Arc::<std::sync::atomic::AtomicUsize>::default();
-    let (files, listing) = read(sent_slowly(&bytes, 100, half, sent.clone()), None).await.unwrap();
-    assert_eq!((files[0].3.len(), listing.title.as_str()), (4000, "Mew"));
-    assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), bytes.len().div_ceil(100));
+    let (files, listing) = read(sent_slowly(&bytes, 8 << 10, half, sent.clone()), None).await.unwrap();
+    assert_eq!((files[0].3.len(), listing.title.as_str()), (320 << 10, "Mew"));
+    assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), bytes.len().div_ceil(8 << 10));
 
     // Over its limit: read past to its end, piece by piece.
     let sent = std::sync::Arc::<std::sync::atomic::AtomicUsize>::default();
-    let refused = read(sent_slowly(&bytes, 100, half, sent.clone()), Some(1024)).await.unwrap_err();
+    let refused = read(sent_slowly(&bytes, 8 << 10, half, sent.clone()), Some(1024)).await.unwrap_err();
     assert_eq!(status(refused), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), bytes.len().div_ceil(100), "read to its end");
+    assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), bytes.len().div_ceil(8 << 10), "read to its end");
 
     // Over its limit, then stopped: still the 413, after the idle time.
     let long = body(&[("title", None, None, &[b'a'; 4000])]);
@@ -908,10 +910,11 @@ async fn an_upload_sent_steadily_is_never_cut_off_by_the_idle_time() {
     assert_eq!(started.elapsed(), std::time::Duration::from_secs(60));
 }
 
-/// Pieces `apart` from each other, then nothing: how long `fields` takes to be `Stalled`.
+/// Pieces of 16 KiB of a photo `apart` from each other (above the minimum rate at up to 68 s),
+/// then nothing: how long `fields` takes to be `Stalled`.
 async fn stalled_after(apart: u64, pieces: usize, idle: Option<u64>) -> std::time::Duration {
-    let long = body(&[("title", None, None, &[b'a'; 4000])]);
-    let chunks: Vec<Bytes> = long.chunks(100).take(pieces).map(Bytes::copy_from_slice).collect();
+    let long = body(&[("photos", Some("p.png"), None, &vec![1u8; 1 << 20]), ("title", None, None, b"Mew")]);
+    let chunks: Vec<Bytes> = long.chunks(16 << 10).take(pieces).map(Bytes::copy_from_slice).collect();
     let apart = std::time::Duration::from_secs(apart);
     let sent = futures_util::stream::iter(chunks).then(move |piece| async move {
         tokio::time::sleep(apart).await;
@@ -940,6 +943,29 @@ async fn a_stall_after_reads_that_waited_comes_the_idle_time_after_the_last_piec
         assert_eq!(took, std::time::Duration::from_secs(apart * pieces as u64 + 60), "{pieces} pieces {apart} s apart");
     }
     assert_eq!(stalled_after(7, 9, Some(10)).await, std::time::Duration::from_secs(7 * 9 + 10));
+}
+
+/// An upload trickled in, a piece of 10 bytes every 5 seconds (2 bytes a second), each well within
+/// the minute, is `Stalled` once it falls the minute behind the minimum rate: 60.5 s in,
+/// where the idle time alone would read it for as long as it is sent (#1074).
+#[tokio::test(start_paused = true)]
+async fn an_upload_trickled_in_is_stalled_once_it_falls_behind_the_rate() {
+    let long = body(&[("photos", Some("p.png"), None, &vec![1u8; 1 << 20]), ("title", None, None, b"Mew")]);
+    let chunks: Vec<Bytes> = long.chunks(10).map(Bytes::copy_from_slice).collect();
+    let sent = futures_util::stream::iter(chunks).then(|piece| async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        Ok::<_, std::io::Error>(piece)
+    });
+    let req = Request::builder()
+        .method("POST")
+        .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
+        .body(Body::from_stream(sent))
+        .unwrap();
+    let upload = Upload::<Listing>::from_request(req, &()).await.unwrap();
+    let started = tokio::time::Instant::now();
+    assert!(matches!(upload.fields().await, Err(UploadError::Stalled)));
+    let took = started.elapsed().as_millis();
+    assert!((60_400..=60_600).contains(&took), "{took} ms");
 }
 
 /// An idle time too long to add to the clock (`Duration::MAX`) waits as `None` does, for

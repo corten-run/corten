@@ -3934,6 +3934,13 @@ Corten is pre-1.0, so any minor version may change the API.
     its cursor raw (`Last-Event-ID`, `Replica::cursor`) could follow it. An app that names its
     generation from configuration checks it against the same set (Fixed 188)
     ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
+167. A body read as it arrives (`pieces_up_to`, `Upload`) is also `Stalled` (408) once the client
+    falls its idle time behind 240 bytes a second in all (Kestrel's minimum body rate), counting
+    only the time spent waiting for the client. A byte now and then reset the idle time before,
+    so on a route with a long deadline or none (a large upload's) a client trickling the body
+    held the connection and the request as long as it liked. A client sending at any real speed
+    is not affected; `idle(None)` turns the rate off with the idle time
+    ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

@@ -1215,7 +1215,15 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `App::max_request_head` (32 KiB, [Choice 19](#choice-head-size)) with at most 100 headers; an answer must make
     progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
     seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
-    bytes a second, which needs a count of bytes and a window per connection); how many may be open
+    bytes a second, which needs a count of bytes and a window per connection); a request body read
+    as it arrives (`pieces_up_to`, `Upload`) gives up on a client that sends nothing for its idle
+    time (a minute, nginx's `client_body_timeout`) or falls that idle time behind 240 bytes a
+    second in all, counting only the time spent waiting for the client (Kestrel's minimum body
+    rate, with the idle time as its grace), since one byte resets an idle time alone and a long
+    upload's route has a long deadline or none. That reader already notes when a wait begins,
+    so the rate costs it two counts and a clock read per piece it waited for, nothing per
+    connection; a body read whole (`bytes_up_to`, `Form`, `Json`) is bounded by the route's
+    deadline alone, which a route that removes it keeps for those; how many may be open
     is `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from a proxy
     or CDN in front of `corten::serve`. An app with live streams needs one: over HTTP/1.1 a
     browser opens about six connections to a host, each open stream holds one, and requests queue

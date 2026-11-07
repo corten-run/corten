@@ -1619,7 +1619,10 @@ requests and tasks.
    `Media::new(content_type, bytes)`, or JSON. Its failures are the API's JSON (`Api::errors`
    for another shape). A body too large to hold (a file `PUT` to a store) is read as it
    arrives with `pieces_up_to(request.into_body(), max)` instead, under an API whose
-   `deadline` leaves time for it; a large upload sent as a form is `Upload`
+   `deadline` leaves time for it (its idle time and minimum rate, not the deadline, are what
+   give up on a client that trickles it in; a body read whole, by `bytes_up_to`, `Form` or
+   `Json`, is bounded by the deadline alone, so keep one on those routes); a large upload sent
+   as a form is `Upload`
    ([requests and forms](requests-and-forms.md)).
 2. Webhooks a vendor sends: a `POST` route under `App::api`, as above, in a routes module
    without `caller =` ([Areas](#areas)). The signature covers the bytes as sent, so the handler

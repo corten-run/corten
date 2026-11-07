@@ -84,8 +84,9 @@ pub enum UploadError {
     Malformed(String),
     /// The text fields do not fit the form struct (422).
     Fields(String),
-    /// The client sent nothing for [`Upload::idle`] (408), while the request read a file, its
-    /// fields or what it passes over. The connection is closed after the answer.
+    /// The client sent nothing for [`Upload::idle`], or sent the body so slowly it fell that far
+    /// behind 240 bytes a second (408), while the request read a file, its fields or what it
+    /// passes over. The connection is closed after the answer.
     Stalled,
 }
 
@@ -228,10 +229,14 @@ impl<T> Upload<T> {
     /// How long the client may go without sending a piece of the body, while the request reads a
     /// file, its fields or what it passes over: a minute unless set (nginx's
     /// `client_body_timeout`, as [`Pieces::idle`](crate::extract::Pieces::idle)), and past it a
-    /// read is [`UploadError::Stalled`]. A client still sending is never cut off for taking long
-    /// in all, so a large upload's route needs only a deadline that leaves time for it. While a
-    /// body over its limit is read past, a client that stops for the idle time ends that read, and
-    /// the answer is still the 413. `None` leaves only the route's deadline.
+    /// read is [`UploadError::Stalled`]. The idle time is also the body's allowance against a
+    /// trickle: the reads may wait for the client that long, plus a second for every 240 bytes
+    /// that came (Kestrel's minimum rate), in all, so a client that sends a byte now and then is
+    /// given up on too, while one sending at any real speed is never cut off for taking long in
+    /// all, and a large upload's route needs only a deadline that leaves time for it. Time the
+    /// handler spends between reads is not counted. While a body over its limit is read past, a
+    /// client that stops for the idle time ends that read, and the answer is still the 413.
+    /// `None` leaves only the route's deadline, for the idle time and the rate both.
     pub fn idle(&mut self, idle: impl Into<Option<Duration>>) -> &mut Self {
         self.parts.idle = Idle::new(idle.into());
         self

@@ -27,8 +27,9 @@ before asking for the next, so the request holds one piece, not the body. It cou
 whatever the length says, and refuses a body over `max` as `bytes_up_to` does, reading past the
 rest until the body has sent 64 MiB more than `max`, so a browser, which sends the whole body
 before it reads, gets the 413 rather than a closed connection. A client that sends nothing for a
-minute (`.idle(d)` to change it) is a 408 (still the 413 when it stops past the limit), and a
-body that breaks is a 400; each is a
+minute (`.idle(d)` to change it), or trickles the body in so slowly that it falls that minute
+behind 240 bytes a second, is a 408 (still the 413 when it stops past the limit), and a body that
+breaks is a 400; each is a
 `corten::extract::BodyError` to match or pass on with `?`. The handler removes what it wrote of a
 body it does not finish, and puts the route in an API with a `deadline` that leaves time to read
 it, which shutdown also waits for. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
@@ -1186,10 +1187,14 @@ is then drawn again with its other fields kept and the message next to the input
 
 A client that sends nothing for a minute while the handler reads a file, passes one over or reads
 the fields is `UploadError::Stalled`, a 408, as for [`pieces_up_to`](#http-types) (nginx's
-`client_body_timeout`). The minute holds for each piece, so a large upload sent steadily is never
-cut off, and the route's deadline ([app guide](app.md)) is what bounds it in all; one that stops
-while a body over the limit is read past is still the 413. `upload.idle(d)` changes the minute, and
-`upload.idle(None)` leaves only the route's deadline. A page's deadline is 30 seconds unless set,
+`client_body_timeout`). The minute holds for each piece, and is also the body's allowance against
+a client that sends a byte now and then, which would reset it forever: the reads may wait for the
+client that minute plus a second for every 240 bytes that came (Kestrel's minimum rate), in all,
+and past that the read is `Stalled` too. Time the handler spends between reads (writing a piece to
+a slow store) is not counted. So a large upload sent at any real speed is never cut off, and the
+route's deadline ([app guide](app.md)) is what bounds it in all; one that stops while a body over
+the limit is read past is still the 413. `upload.idle(d)` changes the minute (and so the
+allowance), and `upload.idle(None)` leaves only the route's deadline, for both. A page's deadline is 30 seconds unless set,
 so there a client that stops is caught by the deadline first: since the handler was waiting for
 the body, that answer is a 408 too (the error page's `Failure::Failed` with status 408, or the
 JSON 408), not the deadline's 503. The idle time matters on a route whose deadline is longer
