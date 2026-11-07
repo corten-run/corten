@@ -2333,11 +2333,11 @@ Corten is pre-1.0, so any minor version may change the API.
     Maud's clean build again on two vCPUs and on all of them, and their development build linked
     by mold, with the linker of each build read from the binary. A failure in these steps is
     recorded apart and hides none of the app's other results. `summarize.mjs` prints each. A
-    trial on a desktop (Docker Desktop, cores 0-3, one run each, not a round's machine, before
-    the check took `--all-targets`) took Corten's `cargo check` 1.0 s after the edit against
-    3.6 s for its development build, and its development build 3.3 to 7.9 s after the other kinds
-    of edit, the derive on a shared type the slowest. Save to reload, rust-analyzer's own analysis and a Docker build with
-    BuildKit's cache warm are left to
+    trial on a desktop (Docker Desktop, cores 0-3, one run each, not a round's machine) took
+    Corten's check 1.4 s after the edit against 3.3 s for its development build and 3.5 s for its
+    tests, and its development build 2.8 to 6.0 s after the other kinds of edit, the derive on a
+    shared type the slowest, each recompiling card-market alone. Save to reload, rust-analyzer's
+    own analysis and a Docker build with BuildKit's cache warm are left to
     [#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)
     ([#774 bench/fullstack measures no editor, test-build, save-to-reload, disk or core-scaling cost, so where a Corten app is slow to work on is still partly unmeasured](https://github.com/corten-run/corten/issues/774)).
 

@@ -1049,7 +1049,9 @@ passes, a separate diagnostic build of card-market's crate run after it:
       from the clean development build.
     - Disk: what the dependency step, the production build and the development build each
       wrote, the size of the step's container layer (for the Rust apps, mostly `target/`). A CI
-      cache of the dependencies and the build holds about the first two together.
+      cache of the dependencies and the build holds about the first two together. Each entry
+      records Docker's storage driver (`storage`: overlay2 on the classic image store,
+      overlayfs on containerd's).
     - Cores and linker, when the round sets `BENCH_BUILD_SCALE` (vCPU sets; a round sets
       `1-2,0-7` on a c-8, whose vCPUs are hyperthreads, so all eight may add sibling threads
       rather than cores): the clean production build again on each, for the apps in

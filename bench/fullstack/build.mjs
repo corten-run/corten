@@ -24,7 +24,7 @@
 //    (`cargo test --no-run`) from the dependencies, then again after the edit. For an app whose
 //    recipe lists other kinds of edit (Corten's: a handler's body, a type the pages share, a
 //    `messages!` entry, a route added), the development rebuild after each.
-// 8. With BENCH_BUILD_SCALE (core sets, as `0-1,0-7`), the clean production build again on each,
+// 8. With BENCH_BUILD_SCALE (vCPU sets, as `1-2,0-7`), the clean production build again on each,
 //    for the apps in BENCH_BUILD_SCALE_APPS (default corten and axum-maud, the anchor); and for
 //    those that build with cargo, the development build clean and after the edit linked by mold
 //    instead of the toolchain's default linker, with the linker each build used.
@@ -59,6 +59,9 @@ const hostMemory = Number(spawnSync("docker", ["info", "--format", "{{.MemTotal}
 const memoryCap = Math.min(12 * 2 ** 30, (hostMemory || 16 * 2 ** 30) - 2 * 2 ** 30);
 const cpus = ["--cpuset-cpus", cores, "--memory", String(memoryCap)];
 const cpusLabel = `cores ${cores}`;
+// Docker's storage driver, which the disk sizes (the container's layer) come from: overlay2 on the
+// classic image store, overlayfs on containerd's.
+const storage = spawnSync("docker", ["info", "--format", "{{.Driver}}"], { encoding: "utf8" }).stdout.trim() || "unknown";
 const scaleCores = (process.env.BENCH_BUILD_SCALE ?? "").split(",").map((c) => c.trim()).filter(Boolean);
 const scaleApps = (process.env.BENCH_BUILD_SCALE_APPS ?? "corten,axum-maud").split(",");
 const hour = 3_600_000;
@@ -166,7 +169,7 @@ for (const name of appsArg.split(",")) {
   const images = ["src", "deps", "built", "dev", "checked", "tested", "mold", "mold-dev"];
   for (const what of images) docker(["rmi", "-f", tag(what)]);
   /** @type {Record<string, any>} */
-  const entry = { cpus: cpusLabel, memoryCap, measuredAt: new Date().toISOString(), complete: false };
+  const entry = { cpus: cpusLabel, memoryCap, storage, measuredAt: new Date().toISOString(), complete: false };
   out[name] = entry;
   /** Records one finished step's result and saves it at once. */
   const keep = (/** @type {string} */ key, /** @type {unknown} */ value) => { entry[key] = value; save(); return value; };
@@ -200,43 +203,45 @@ for (const name of appsArg.split(",")) {
     // What the dependency step, the production build and the development build each wrote.
     keep("disk", { depsBytes: d.diskBytes ?? null, buildBytes: b.diskBytes ?? null, devBytes: entry.dev?.clean.diskBytes ?? null });
     keep("complete", true);
-    // The editor's and the tests' loops and the other kinds of edit, after the rest is saved, so a
-    // failure here costs only these.
-    try {
-      // Other kinds of edit, each from the clean development build.
-      for (const e of r.edits ?? []) {
-        const text = readFileSync(join(context, e.edit), "utf8");
-        if (text.split(e.from).length !== 2) throw new Error(`${name}: ${e.edit} does not have exactly one ${e.from}`);
-        const path = `${r.workdir}/${e.edit}`;
-        const kind = e.kind.replace(/\W+/g, "-");
-        const list = [];
-        for (let i = 0; i < runs; i += 1) {
-          list.push(rebuilt(step(`${name}-dev-${kind}-${i + 1}`, tag("dev"), touchThen(path, r.dev), { files: { [path]: text.replace(e.from, e.to) } }), `the dev rebuild after the ${e.kind} edit`));
-          keep("edits", { ...entry.edits, [e.kind]: summary(list) });
-        }
+    // The editor's and the tests' loops and the other kinds of edit, after the rest is saved, each
+    // group apart, so a failure costs only its own group (`loopsFailed` says which and why).
+    /** Runs one group, recording its failure without stopping the others. */
+    const apart = (/** @type {string} */ group, /** @type {() => void} */ run) => {
+      try { run(); } catch (e) {
+        keep("loopsFailed", { ...entry.loopsFailed, [group]: e instanceof Error ? e.message.slice(0, 2000) : String(e) });
+        console.log(`${name} ${group}: ${entry.loopsFailed[group]}`);
       }
-      // The tests built from the dependencies alone, as the editor's check is: every app's the same
-      // way, whatever its development build sets (cargo-leptos's debug builds use other cfgs).
-      if (r.test) {
-        const clean = step(`${name}-test`, tag("deps"), r.test, { commit: tag("tested") });
-        const list = [];
-        for (let i = 0; i < runs; i += 1) {
-          list.push(rebuilt(step(`${name}-test-rebuild-${i + 1}`, tag("tested"), again(r.test), { files: edited }), "the test build"));
-          keep("test", { clean, rebuild: summary(list) });
-        }
+    };
+    // Other kinds of edit, each from the clean development build.
+    if (r.dev) for (const e of r.edits ?? []) apart(e.kind, () => {
+      const text = readFileSync(join(context, e.edit), "utf8");
+      if (text.split(e.from).length !== 2) throw new Error(`${name}: ${e.edit} does not have exactly one ${e.from}`);
+      const path = `${r.workdir}/${e.edit}`;
+      const kind = e.kind.replace(/\W+/g, "-");
+      const list = [];
+      for (let i = 0; i < runs; i += 1) {
+        list.push(rebuilt(step(`${name}-dev-${kind}-${i + 1}`, tag("dev"), touchThen(path, r.dev), { files: { [path]: text.replace(e.from, e.to) } }), `the dev rebuild after the ${e.kind} edit`));
+        keep("edits", { ...entry.edits, [e.kind]: summary(list) });
       }
-      if (r.check) {
-        const clean = keep("check", { clean: step(`${name}-check`, tag("deps"), r.check, { commit: tag("checked") }) });
-        const list = [];
-        for (let i = 0; i < runs; i += 1) {
-          list.push(rebuilt(step(`${name}-check-again-${i + 1}`, tag("checked"), again(r.check), { files: edited }), "the check"));
-          keep("check", { ...clean, again: summary(list) });
-        }
+    });
+    // The tests built from the dependencies alone, as the editor's check is: every app's the same
+    // way, whatever its development build sets (cargo-leptos's debug builds use other cfgs).
+    if (r.test) apart("test", () => {
+      const clean = keep("test", { clean: step(`${name}-test`, tag("deps"), r.test, { commit: tag("tested") }) });
+      const list = [];
+      for (let i = 0; i < runs; i += 1) {
+        list.push(rebuilt(step(`${name}-test-rebuild-${i + 1}`, tag("tested"), again(r.test), { files: edited }), "the test build"));
+        keep("test", { ...clean, rebuild: summary(list) });
       }
-    } catch (e) {
-      keep("loopsFailed", e instanceof Error ? e.message.slice(0, 2000) : String(e));
-      console.log(`${name} editor and test loops: ${entry.loopsFailed}`);
-    }
+    });
+    if (r.check) apart("check", () => {
+      const clean = keep("check", { clean: step(`${name}-check`, tag("deps"), r.check, { commit: tag("checked") }) });
+      const list = [];
+      for (let i = 0; i < runs; i += 1) {
+        list.push(rebuilt(step(`${name}-check-again-${i + 1}`, tag("checked"), again(r.check), { files: edited }), "the check"));
+        keep("check", { ...clean, again: summary(list) });
+      }
+    });
     if (scaleCores.length && scaleApps.includes(name)) try {
       // The clean build on other core sets, and for cargo the development loop linked by mold.
       for (const on of scaleCores) keep("scale", { ...entry.scale, [on]: step(`${name}-build-on-${on}`, tag("deps"), r.build, { cores: on }) });
