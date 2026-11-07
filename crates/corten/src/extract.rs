@@ -85,7 +85,7 @@
 //! A body too large to hold (a file `PUT` as `application/octet-stream`, to an object store or a
 //! disk) is read as it arrives with [`pieces_up_to`], one piece at a time.
 
-use std::time::Duration;
+use std::{future::Future, task::Poll, time::Duration};
 
 use axum::body::{BodyDataStream, HttpBody};
 pub use axum::extract::State;
@@ -272,7 +272,7 @@ pub fn pieces_up_to(body: Body, max: usize) -> Pieces {
 
 /// How long [`Pieces`] waits for the next piece unless [`Pieces::idle`] says otherwise: nginx's
 /// `client_body_timeout`.
-const IDLE: Duration = Duration::from_secs(60);
+pub(crate) const IDLE: Duration = Duration::from_secs(60);
 
 /// A body read as it arrives, up to a limit: [`pieces_up_to`].
 pub struct Pieces {
@@ -393,12 +393,29 @@ impl Pieces {
     }
 }
 
-/// The stream's next item, or `None` when `idle` passed first.
-async fn next(stream: &mut BodyDataStream, idle: Option<Duration>) -> Option<Option<Result<Bytes, axum::Error>>> {
-    match idle {
-        Some(idle) => tokio::time::timeout(idle, stream.next()).await.ok(),
-        None => Some(stream.next().await),
-    }
+/// The stream's next item, or `None` when `idle` passed first. The timer is made only when the
+/// stream has nothing yet: a piece that has arrived is taken without one, since making it reads
+/// the clock and the runtime's handle, which a body sent a byte at a time would pay per byte
+/// (measured, callgrind, #1030).
+/// A plain function returning the future, not an `async fn`, so it inlines into the read that
+/// awaits it rather than adding a state machine for each piece (measured, callgrind, #1030).
+#[inline]
+pub(crate) fn next(
+    stream: &mut BodyDataStream,
+    idle: Option<Duration>,
+) -> impl Future<Output = Option<Option<Result<Bytes, axum::Error>>>> + '_ {
+    // Boxed when made, so a read that finds its piece waiting carries a pointer, not a timer.
+    let mut timer: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
+    std::future::poll_fn(move |cx| {
+        if let Poll::Ready(item) = stream.poll_next_unpin(cx) {
+            return Poll::Ready(Some(item));
+        }
+        let Some(idle) = idle else { return Poll::Pending };
+        match timer.get_or_insert_with(|| Box::pin(tokio::time::sleep(idle))).as_mut().poll(cx) {
+            Poll::Ready(()) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    })
 }
 
 /// Reads the rest of a body over `max`, keeping nothing, until it ends, breaks, `read` (what

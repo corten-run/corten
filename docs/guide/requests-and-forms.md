@@ -1132,6 +1132,12 @@ is the photo's message, not a 413. A body is read no
 further than 64 MiB past the limit, what is read past included, where the connection is closed.
 Past the limit every read returns `UploadError::TooLarge`, which `?` makes a 413 and the error
 page.
+A client that sends nothing for a minute while the handler reads a file, passes one over or reads
+the fields is `UploadError::Stalled`, a 408, as for [`pieces_up_to`](#http-types) (nginx's
+`client_body_timeout`). The minute holds for each piece, so a large upload sent steadily is never
+cut off, and the route's deadline ([app guide](app.md)) is what bounds it in all; one that stops
+while a body over the limit is read past is still the 413. `upload.idle(d)` changes the minute, and
+`upload.idle(None)` leaves only the route's deadline.
 To draw the form again with a message instead, read in one block and match its outcome once,
 since any read can find the body over the limit:
 

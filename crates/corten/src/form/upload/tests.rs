@@ -1,3 +1,5 @@
+use futures_util::StreamExt;
+
 use super::*;
 use crate::form::Errors;
 use axum::body::Body;
@@ -799,4 +801,137 @@ async fn headers_past_their_limit_are_refused_whatever_the_pieces() {
             assert_eq!(listing.title, "Mew", "end {end}, pieces of {size}");
         }
     }
+}
+
+/// A request whose body is `bytes` in pieces of `size`, each sent `apart` after the one before.
+fn sent_slowly(
+    bytes: &[u8],
+    size: usize,
+    apart: std::time::Duration,
+    sent: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) -> Request {
+    let pieces: Vec<Bytes> = bytes.chunks(size).map(Bytes::copy_from_slice).collect();
+    let pieces = futures_util::stream::iter(pieces).then(move |piece| {
+        let sent = sent.clone();
+        async move {
+            tokio::time::sleep(apart).await;
+            sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok::<_, std::io::Error>(piece)
+        }
+    });
+    Request::builder()
+        .method("POST")
+        .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
+        .body(Body::from_stream(pieces))
+        .unwrap()
+}
+
+/// A request whose body is the first `sent` bytes of `bytes`, then nothing more.
+fn stops_after(bytes: &[u8], sent: usize) -> Request {
+    let first = futures_util::stream::iter([Ok::<_, std::io::Error>(Bytes::copy_from_slice(&bytes[..sent]))]);
+    Request::builder()
+        .method("POST")
+        .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
+        .body(Body::from_stream(first.chain(futures_util::stream::pending())))
+        .unwrap()
+}
+
+/// A client that sends nothing for the idle time is a 408, while the handler reads a file, passes
+/// one over or reads the fields, and at every read after; `idle` sets the time, and `None` waits as
+/// long as the route's deadline lets it.
+#[tokio::test(start_paused = true)]
+async fn a_client_that_stops_sending_an_upload_is_a_408() {
+    let photo = vec![1u8; 1000];
+    let bytes = body(&[("photos", Some("p.png"), None, &photo), ("title", None, None, b"Mew")]);
+    let in_the_file = bytes.iter().position(|&b| b == 1).unwrap() + 500;
+    let in_the_title = bytes.len() - 10;
+    let minute = std::time::Duration::from_secs(60);
+
+    // Reading the file.
+    let mut upload = Upload::<Listing>::from_request(stops_after(&bytes, in_the_file), &()).await.unwrap();
+    let mut file = upload.next_file().await.unwrap().unwrap();
+    assert_eq!(file.chunk().await.unwrap().map(|piece| piece.len()), Some(500));
+    let started = tokio::time::Instant::now();
+    let stalled = file.chunk().await.unwrap_err();
+    assert_eq!(started.elapsed(), minute);
+    assert_eq!(status(stalled.into()), StatusCode::REQUEST_TIMEOUT);
+    assert!(matches!(file.chunk().await, Err(UploadError::Stalled)), "at every read after");
+    assert!(matches!(upload.next_file().await, Err(UploadError::Stalled)));
+
+    // Passing a file over.
+    let mut upload = Upload::<Listing>::from_request(stops_after(&bytes, in_the_file), &()).await.unwrap();
+    assert!(upload.next_file().await.unwrap().is_some());
+    let started = tokio::time::Instant::now();
+    assert!(matches!(upload.next_file().await, Err(UploadError::Stalled)));
+    assert_eq!(started.elapsed(), minute);
+
+    // Reading the fields, with an idle time of its own.
+    let mut upload = Upload::<Listing>::from_request(stops_after(&bytes, in_the_title), &()).await.unwrap();
+    upload.idle(std::time::Duration::from_secs(5));
+    let started = tokio::time::Instant::now();
+    assert!(matches!(upload.fields().await, Err(UploadError::Stalled)));
+    assert_eq!(started.elapsed(), std::time::Duration::from_secs(5));
+
+    // No idle time of its own.
+    let mut upload = Upload::<Listing>::from_request(stops_after(&bytes, in_the_title), &()).await.unwrap();
+    upload.idle(None);
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(3600), upload.fields()).await;
+    assert!(waited.is_err(), "no idle time of its own");
+}
+
+/// The idle time holds piece by piece, not for the body in all: a client sending steadily, however
+/// long it takes, is read to the end, and while a body over the limit is read past it reads the
+/// 413; one that stops while it is read past is answered the 413 after the idle time.
+#[tokio::test(start_paused = true)]
+async fn an_upload_sent_steadily_is_never_cut_off_by_the_idle_time() {
+    let half = std::time::Duration::from_secs(30);
+    let photo = vec![1u8; 4000];
+    let bytes = body(&[("photos", Some("p.png"), None, &photo), ("title", None, None, b"Mew")]);
+    // About 40 pieces, 30 seconds apart: 20 minutes in all, each within the minute.
+    let sent = std::sync::Arc::<std::sync::atomic::AtomicUsize>::default();
+    let (files, listing) = read(sent_slowly(&bytes, 100, half, sent.clone()), None).await.unwrap();
+    assert_eq!((files[0].3.len(), listing.title.as_str()), (4000, "Mew"));
+    assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), bytes.len().div_ceil(100));
+
+    // Over its limit: read past to its end, piece by piece.
+    let sent = std::sync::Arc::<std::sync::atomic::AtomicUsize>::default();
+    let refused = read(sent_slowly(&bytes, 100, half, sent.clone()), Some(1024)).await.unwrap_err();
+    assert_eq!(status(refused), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(sent.load(std::sync::atomic::Ordering::Relaxed), bytes.len().div_ceil(100), "read to its end");
+
+    // Over its limit, then stopped: still the 413, after the idle time.
+    let long = body(&[("title", None, None, &[b'a'; 4000])]);
+    let mut upload = Upload::<Listing>::from_request(stops_after(&long, 3000), &()).await.unwrap();
+    upload.limit(1024);
+    let started = tokio::time::Instant::now();
+    assert!(matches!(upload.fields().await, Err(UploadError::TooLarge { limit: 1024 })));
+    assert_eq!(started.elapsed(), std::time::Duration::from_secs(60));
+}
+
+/// What reading an upload costs per piece of its body: `UPLOAD_READS` (200) reads of a form with
+/// a 2 KiB file and a title, sent a byte at a time (each read is 2,259 pieces), the file
+/// read with `bytes_up_to`. Counted under callgrind at two numbers of reads, the difference is the
+/// cost of that many reads. `UPLOAD_IDLE=none` reads with no idle time. Run in release:
+/// `UPLOAD_READS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_reading_an_upload_costs`
+/// (#1030).
+#[test]
+#[ignore]
+fn what_reading_an_upload_costs() {
+    let reads: usize = std::env::var("UPLOAD_READS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let idle = std::env::var("UPLOAD_IDLE").map_or(true, |idle| idle != "none");
+    let photo = vec![1u8; 2048];
+    let bytes = body(&[("photos", Some("p.png"), None, &photo), ("title", None, None, b"Mew")]);
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..reads {
+            let mut upload = Upload::<Listing>::from_request(request(&bytes, 1), &()).await.unwrap();
+            if !idle {
+                upload.idle(None);
+            }
+            let mut file = upload.next_file().await.unwrap().unwrap();
+            let kept = file.bytes_up_to(4096).await.unwrap().unwrap();
+            assert_eq!(std::hint::black_box(kept).len(), 2048);
+            assert_eq!(upload.fields().await.unwrap().title, "Mew");
+        }
+    });
 }

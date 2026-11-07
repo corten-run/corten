@@ -2361,6 +2361,21 @@ Corten is pre-1.0, so any minor version may change the API.
     own analysis and a Docker build with BuildKit's cache warm are left to
     [#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)
     ([#774 bench/fullstack measures no editor, test-build, save-to-reload, disk or core-scaling cost, so where a Corten app is slow to work on is still partly unmeasured](https://github.com/corten-run/corten/issues/774)).
+264. `Upload::idle(impl Into<Option<Duration>>)`: a client that sends nothing of a form upload for
+    a minute, while the handler reads a file, passes one over or reads the fields, is
+    `UploadError::Stalled`, a 408, as `Pieces` already was (nginx's `client_body_timeout`), so a
+    stalled client no longer holds its connection, handler and a shutdown drain until the route's
+    deadline. The minute holds for each piece, so an upload sent steadily is never cut off; one
+    that stops while a body over the limit is read past is still the 413; `None` leaves only the
+    route's deadline. Breaking: `UploadError` has a new variant, so a `match` without a wildcard
+    arm needs one for `Stalled`. `Upload` and `Pieces` share one read, which makes its timer only
+    when no piece is waiting. Measured with the new `what_reading_an_upload_costs` (callgrind,
+    release, one run at 20 and at 120 reads of a 2,259-byte form sent a byte at a time): 1,942,268
+    instructions a read on main `cdbe4392` and 2,133,245 with the idle time, about 85 more per
+    piece (9.8% on this worst case, where every piece is one byte; a browser's pieces are KiB, so
+    the cost per byte is a thousandth of that), and the same with `idle(None)`, whose cost is the
+    shared read, not a timer. A timer made for every piece, as `Pieces` made it, measured 2,458,776
+    ([#1030 Upload's files have no idle time, so a client that stops sending a form upload holds its request until the route's deadline](https://github.com/corten-run/corten/issues/1030)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

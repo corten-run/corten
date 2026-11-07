@@ -95,7 +95,9 @@ async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
 A body over `upload.limit` makes every read return `UploadError::TooLarge` (`?`: a 413 and the
 error page). To answer it in the form, put the reads in one `async` block returning
 `Result<_, UploadError>` and match `Err(UploadError::TooLarge { .. })` once; never compare
-statuses or check `Content-Length` by hand.
+statuses or check `Content-Length` by hand. A client that stops sending for a minute is
+`UploadError::Stalled` (408); `upload.idle(d)` changes the minute, `upload.idle(None)` leaves only
+the route's deadline; never wrap the reads in a `tokio::time::timeout` of the handler's own.
 
 Types, counts and per-file sizes are the handler's checks, reported with `errors.add(f.photos, ..)`
 so the form is drawn again with the message beside the input.
