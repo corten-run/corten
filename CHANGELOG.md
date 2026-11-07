@@ -3739,6 +3739,19 @@ Corten is pre-1.0, so any minor version may change the API.
     costs the same (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each:
     9,241 instructions a read before and after)
     ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
+161. The runtime's declarations for `corten/views` (`rows()`, `view()`, `Holds`, `ViewClass`,
+    `Rows` and the rest) ship with the crate in `js/views.d.ts`, which `corten check` already
+    gives `tsc`, instead of being written into each app's `types/app.d.ts`. The app's file holds
+    only what its own types, events and views produce, so a release that changes the runtime's
+    declarations no longer fails the app's types test once and leaves framework text to commit
+    with the pin. An app with views gets that failure one last time when it moves to this
+    release, as `Types::sync` drops the runtime's block from its file. Since `tsc` now sees
+    `rows()` and `view()` declared for every app while the import map names `corten/views` only for
+    an app with a view, a script of an app without one that imports it is an error when the app
+    starts, as an import of `corten/keys` with nothing serving it is, rather than in the browser.
+    `Types::sync`'s message says the file may be out of date with how the Corten release declares
+    the app's types as well as with the types
+    ([#1020 A pin bump fails the app's corten check once when Corten's own script declarations change, blaming the app's Rust types](https://github.com/corten-run/corten/issues/1020)).
 162. A client navigation changes the address when the page's answer is in, as a full load's does,
     not at the click: while a slow handler runs, the address still names the page on screen, so
     reloading, copying or sharing it gets that page, and a link the server redirects shows only
