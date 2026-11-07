@@ -1,6 +1,7 @@
 // One round of the browser benchmark, in order, on a quiet machine: build every app, then the
 // operations (two rounds, the second in reverse order), the server-rendered pages and the
-// dashboard. Results land in results/<round>/; summarize.mjs prints the README table from them.
+// dashboard. Results land in results/<round>/; summarize.mjs prints docs/performance.md's
+// client-heavy table from them.
 // Usage: node run-all.mjs <round>
 // droplet.mjs (bench/fullstack) runs it on a Linux droplet with `--suite browser`.
 import { spawnSync } from "node:child_process";
