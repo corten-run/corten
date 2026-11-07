@@ -3795,6 +3795,29 @@ Corten is pre-1.0, so any minor version may change the API.
     issue measured the address changing 29 ms after the click and the page 255 ms after. The
     minified runtime is 789 bytes larger (40,232; 301 more gzip at level 9, 272 brotli, 301 zstd)
     ([#992 A client navigation changes the address before the page arrives, so the address names a page the screen does not show for the handler's whole time](https://github.com/corten-run/corten/issues/992)).
+163. The `log` feature (on by default) prints with a subscriber of Corten's own instead of
+    `tracing-subscriber`, so an app's default build has five crates fewer: `tracing-subscriber`,
+    `sharded-slab`, `thread_local`, `nu-ansi-term` and `lazy_static` (`cargo tree -p corten-run -e
+    normal`: 53 crates before, 48 after). Each event at `INFO` or above goes to stdout as the line
+    `tracing_subscriber::fmt().with_target(false)` wrote, colors and an error's `.sources` included
+    (`2026-11-06T21:20:29.018154Z  WARN message key=value`), which
+    `log::tests::lines_are_tracing_subscriber_s` checks line by line against it, with and without
+    color, for startup, shutdown, a failed request, an agent tool's error and an app's error with
+    sources. What changes: the spans an event is in are not printed (an app that wants them sets its
+    own subscriber before `serve`, as before); colors only when stdout is a terminal, where they
+    were written into a container's logs too; every control character but a tab is escaped in
+    every field, a line break included, where only the message's and an error's escape, bell,
+    backspace, form feed, delete and C1 controls were, so request text in a field cannot start a
+    line that reads as another event; and a `log` crate record is not printed even where another
+    crate in the build turns on `tracing-subscriber`'s `tracing-log`, which made `try_init` forward
+    them. The guide said stderr; it was and is stdout. A line costs 10.4% fewer instructions
+    (callgrind, release build, 1,200 lines less 200 over 1,000, two runs each: 6,619 and 6,627 a
+    line against 7,363 and 7,414 for `tracing-subscriber` with the `ansi` feature `log` turned on
+    in it), and the template app's release binary is 151,672 bytes smaller (5,903,632 against
+    6,055,304 at `bcd31ffe`). Its clean build time, measured on the first version of this change
+    against `f6d39bbd`, did not move beyond the machine's noise (debug, six runs each on 4 CPUs,
+    alternating: median 55.7 s against 58.0 s, ranges 50.9 to 61.3 s and 45.1 to 75.6 s)
+    ([#764 The default log feature compiles tracing-subscriber and four crates only it needs, to print a few lines to stderr](https://github.com/corten-run/corten/issues/764)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
