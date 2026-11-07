@@ -11,7 +11,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { allApps, apiContainer, apps as catalog, k6Net, k6User, loadCpusFor, network, runArgs, tier } from "./apps.mjs";
+import { allApps, apiContainer, apps as catalog, k6Net, k6User, loadCores, loadCpusFor, network, runArgs, tier, tierApps, viaEdge } from "./apps.mjs";
+import { edgeBase, edgeContainer, edgeCores, edgeImage, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { roundNameError } from "./round.mjs";
 import { cpuUsec } from "./cpu-time.mjs";
 import { passFile, passesOf } from "./passes.mjs";
@@ -27,14 +28,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const docker = (...args) => spawnSync("docker", args, { encoding: "utf8" });
 const log = (msg) => console.log(new Date().toISOString(), msg);
 
+/**
+ * Runs one k6 phase; the CPU time k6 used, in microseconds, or null. k6 reads it from its own
+ * cgroup as it ends, so a phase whose app is not busy can say whether k6 was (ssr.mjs).
+ * @param {string} name @param {string} base @param {Record<string, string>} envs
+ */
 function k6(name, base, envs) {
   const args = ["run", "--rm", "--network", network, ...k6Net, ...loadCpusFor(source), ...k6User, "-v", `${here}:/bench`, "-e", `BASE=${base}`, "-e", `TARGET=${target}`];
   for (const [k, v] of Object.entries(envs)) args.push("-e", `${k}=${v}`);
-  args.push("grafana/k6:latest", "run", "--quiet", "--summary-export", `/bench/results/${round}/${source}/${name}.json`, "/bench/ssr-load.js");
+  const run = `k6 run --quiet --summary-export /bench/results/${round}/${source}/${name}.json /bench/ssr-load.js; s=$?; echo "k6 $(grep usage_usec /sys/fs/cgroup/cpu.stat)"; exit $s`;
+  args.push("--entrypoint", "sh", "grafana/k6:latest", "-c", run);
   const r = docker(...args);
   writeFileSync(join(results, `${name}.log`), (r.stdout ?? "") + (r.stderr ?? ""));
   // One failed phase is reported and the run goes on to the next, so it does not cost the apps after it.
   if (!existsSync(join(results, `${name}.json`))) log(`k6 wrote no summary for ${name}; see ${name}.log`);
+  const used = /^k6 usage_usec (\d+)$/m.exec(r.stdout ?? "");
+  return used ? Number(used[1]) : null;
 }
 
 const names = appsArg.split(",");
@@ -47,6 +56,14 @@ for (const name of names) if (!catalog[name]) throw new Error(`unknown app ${nam
 const earlierPasses = existsSync(join(results, "passes.json")) ? JSON.parse(readFileSync(join(results, "passes.json"), "utf8")).passes : null;
 if (earlierPasses !== null && earlierPasses !== passes) throw new Error(`${results} was run with ${earlierPasses} passes, not ${passes}: pass ${earlierPasses} as the last argument, or start the round again`);
 writeFileSync(join(results, "passes.json"), JSON.stringify({ passes }));
+// The matched tier's apps are reached through the edge, started once for every app of the tier.
+if (viaEdge) {
+  const failed = await startEdge(Object.entries(tierApps), network);
+  if (failed) throw new Error(failed);
+  process.on("exit", stopEdge);
+  // What the edge had, so the summary can say which phases it may have bounded (ssr.mjs).
+  writeFileSync(join(results, "edge.json"), JSON.stringify({ image: edgeImage, cores: edgeCores() }));
+}
 const earlier = new RegExp(`^(${names.join("|")})${target === "json" ? "-json" : ""}-(startup|warmup|fixed|sat64|sat256)(-p\\d+)?(-stats|-cpu)?\\.(json|log)$`);
 for (const file of readdirSync(results)) if (earlier.test(file)) rmSync(join(results, file));
 for (let pass = 1; pass <= passes; pass += 1) for (const name of names) {
@@ -82,10 +99,18 @@ for (let pass = 1; pass <= passes; pass += 1) for (const name of names) {
     docker("rm", "-f", `fsw-${name}`);
     continue;
   }
+  // Through the edge, the app's first request is the edge's too: it must reach the app first.
+  const unreachable = viaEdge ? await reachApp(app, path) : null;
+  if (unreachable) {
+    writeFileSync(join(results, `${named("startup")}.json`), JSON.stringify({ failed: unreachable }, null, 1));
+    log(`${file} ${source} failed: ${unreachable}`);
+    docker("rm", "-f", `fsw-${name}`);
+    continue;
+  }
   await sleep(5000);
   const idle = docker("stats", "--no-stream", "--format", "{{.MemUsage}}", `fsw-${name}`).stdout.trim();
   writeFileSync(join(results, `${named("startup")}.json`), JSON.stringify({ firstOkMsFromDockerRun: ready, idleMem: idle }, null, 1));
-  const base = `http://fsw-${name}:8080`;
+  const base = viaEdge ? edgeBase(app, "inside") : `http://fsw-${name}:8080`;
   log(`${file} ${source} warmup`);
   // 30 s: long enough for the JVM's and .NET's tiered JITs to settle, the same for every app.
   k6(named("warmup"), base, { MODE: "closed", VUS: "32", DURATION: "30s" });
@@ -95,15 +120,17 @@ for (let pass = 1; pass <= passes; pass += 1) for (const name of names) {
     ["sat256", { MODE: "closed", VUS: "256", DURATION: "60s" }],
   ]) {
     log(`${file} ${source} ${phase}`);
-    const sampled = [`fsw-${name}`, ...(source === "api" ? [apiContainer] : [])];
+    const sampled = [`fsw-${name}`, ...(source === "api" ? [apiContainer] : []), ...(viaEdge ? [edgeContainer] : [])];
     // CPU time each container used during the phase, from its cgroup's counter: what requests per
     // CPU-second divides by. Null where the counter could not be read. Read before the sampler
     // starts, since under Docker Desktop a read takes a few seconds.
     const before = sampled.map(cpuUsec);
     const s = spawn("node", [join(here, "sample-stats.mjs"), join(results, `${named(phase)}-stats.json`), "62", ...sampled], { stdio: "ignore", windowsHide: true });
-    k6(named(phase), base, envs);
+    const k6Usec = k6(named(phase), base, envs);
     const after = sampled.map(cpuUsec);
-    writeFileSync(join(results, `${named(phase)}-cpu.json`), JSON.stringify(Object.fromEntries(sampled.map((c, i) => [c, before[i] !== null && after[i] !== null ? { usec: after[i] - before[i] } : null])), null, 1));
+    const counted = Object.fromEntries(sampled.map((c, i) => [c, before[i] !== null && after[i] !== null ? { usec: after[i] - before[i] } : null]));
+    // k6's own, beside the containers': what the load generator used, with the cores it had.
+    writeFileSync(join(results, `${named(phase)}-cpu.json`), JSON.stringify({ ...counted, k6: k6Usec === null ? null : { usec: k6Usec, cores: loadCores(source) } }, null, 1));
     await new Promise((r) => (s.exitCode !== null ? r() : s.on("exit", r)));
   }
   docker("rm", "-f", `fsw-${name}`);

@@ -1054,6 +1054,42 @@ rules something out.
     Last checked: 2026-11-07, the count on `e4d8281c` (`5dba8477` with this change), and the
     socket tests at the default deadline.
 
+31. <a id="choice-favicon-path"></a>**`/favicon.ico` is the static directory's icon itself, the
+    SVG when there is no `.ico`, not a redirect to its versioned URL.** Browsers ask for the
+    path on their own for a document that names no icon, and so do feed readers and crawlers, so
+    with no answer of Corten's each such request was the app's 404 page, its layout reads
+    included. Corten answers it from the directory the app already gives `App::assets`:
+    `favicon.ico` when there is one, else `favicon.svg` (the icon `corten new` writes), sent
+    with its own type, a day's public cache and its ETag; with neither, a 404 with no body and
+    an hour's. A page or API route of the app's that the router would pick for the path (written
+    as it, or a parameter or catch-all route that matches it) takes it instead, whatever its
+    methods, as an app's own answer always does for a fixed path an app may want (the health
+    checks are Corten's alone because a platform probes them). The SVG is sent rather than a
+    redirect because a redirect costs a second request for every client that asks, and it would
+    point at a versioned URL that changes with each deploy, so it could not be cached for long
+    without naming an old version.
+    The file is chosen once, at startup. Not chosen: refusing an app's route at the path at
+    startup (an app that draws its icon, or answers it per tenant, would lose the path); a
+    redirect (above).
+
+    Stands on: reasoned (one request instead of two, and the redirect's target would change
+    with each deploy); bet (a client that asks `/favicon.ico` decodes what it gets by the type
+    it is sent with, as for any image, so an SVG there is shown wherever an SVG icon is;
+    nothing here checks it in a browser or a crawler); measured (callgrind,
+    `what_a_page_with_layout_reads_costs`, 1,200 requests less 200 over 1,000 in process, three
+    repeats each, medians and ranges: 65,655 (65,637 to 65,665) instructions a request on
+    `82af2ec4` and 65,623 (65,613 to 65,711) on `975ceec1`, with this route, ranges that
+    overlap, so no difference is shown);
+    value (the icon the template ships answers the browser's own request, and a route of the
+    app's still takes it, Values 7).
+
+    Revisit when: a client that matters shows no icon for an SVG sent at `/favicon.ico` but
+    would after a redirect, or an app needs more than one icon at the path (per area or per
+    host).
+
+    Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
+    smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
