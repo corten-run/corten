@@ -6,8 +6,9 @@
 .alert > :is(h2, h3, h4, h5, h6, strong) { margin: 0; font-size: inherit; font-weight: 500; line-height: 1.25rem; }
 .alert > p { margin: 0; color: inherit; }
 /* A list (the reasons a form was refused, the steps to fix something) is spaced as a paragraph is,
-   by the grid's gap, its markers inside the alert's padding. */
-.alert > :is(ol, ul) { margin: 0; padding-inline-start: 1.25rem; color: inherit; }
+   by the grid's gap, its markers inside the alert's padding; a list in one of its items is
+   indented as much again. */
+.alert > :is(ol, ul), .alert li > :is(ol, ul) { color: inherit; margin: 0; padding-inline-start: 1.25rem; }
 /* A variant is its tone (soft and outline text), and the fill and text of a solid alert. */
 .neutral { --kit-tone: var(--foreground); --kit-tone-fill: var(--secondary); --kit-tone-text: var(--secondary-foreground); }
 .info { --kit-tone: var(--info); --kit-tone-fill: var(--info); --kit-tone-text: var(--info-foreground); }

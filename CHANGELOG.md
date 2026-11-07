@@ -5295,10 +5295,12 @@ Corten is pre-1.0, so any minor version may change the API.
 184. A list in the kit's `Alert` (the reasons a form was refused, the steps to fix a problem) kept
     the browser's own box: a 1em margin above and below, wider than the alert's .25rem gap, and a
     40px indent. It now has no margin of its own, so it sits the gap under its heading or paragraph,
-    an indent of 1.25rem that keeps its markers inside the alert's padding, and the paragraph's
-    color in every emphasis (the outline's tone mix, the neutral outline's muted text), which the
-    kit's contrast test covers with the paragraph's rules. The gallery's warning alert shows one,
-    and its smoke measures the margin, the gap, the indent and the color in each engine. An app
+    an indent of 1.25rem that keeps its markers inside the alert's padding (a list in one of its
+    items as much again), and the paragraph's color in every emphasis (the outline's tone mix, the
+    neutral outline's muted text), which the kit's contrast test covers with the paragraph's rules.
+    The gallery's soft warning and outline info alerts show one, and its smoke measures the margin,
+    the gap and the indents, and checks that the outline's list is its paragraph's color and not
+    the alert's, in each engine. An app
     with a copy of the kit takes it with `corten ui add alert --merge`
     ([#1048 Kit Alert styles its heading and paragraphs but not a list, so a list in an alert keeps the browser's 1em margin and 40px indent](https://github.com/corten-run/corten/issues/1048)).
 

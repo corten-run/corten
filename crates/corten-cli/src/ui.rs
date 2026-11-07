@@ -3292,7 +3292,7 @@ mod tests {
                 ".neutral.outline > :is(p, ol, ul) { color: var(--muted-foreground); }",
                 ".alert > p { margin: 0; color: inherit; }",
                 // A list takes the paragraph's color in every emphasis, so it is checked with it.
-                ".alert > :is(ol, ul) { margin: 0; padding-inline-start: 1.25rem; color: inherit; }",
+                ".alert > :is(ol, ul), .alert li > :is(ol, ul) { color: inherit;",
             ] {
                 assert!(
                     alert.contains(rule)

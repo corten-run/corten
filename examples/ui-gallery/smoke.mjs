@@ -2137,22 +2137,36 @@ async function run(browser) {
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
   // A list in an alert is spaced and colored as its paragraph is: no margin of its own (the alert's
-  // grid gap apart), its markers inside the alert's padding, the paragraph's color.
-  const list = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => {
-    const alert = /** @type {Element} */ (s.parentElement);
-    const [p, ul] = [alert.querySelector(":scope > p"), alert.querySelector(":scope > ul")];
-    if (!p || !ul) return null;
-    const [ps, us, as] = [getComputedStyle(p), getComputedStyle(ul), getComputedStyle(alert)];
-    const gap = ul.getBoundingClientRect().top - p.getBoundingClientRect().bottom;
-    const marker = /** @type {Element} */ (ul.firstElementChild).getBoundingClientRect().left - alert.getBoundingClientRect().left;
-    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
-    return { margin: us.marginTop + " " + us.marginBottom, gap, rowGap: parseFloat(as.rowGap), indent: parseFloat(us.paddingInlineStart) / rem, markerIn: marker > 0, color: us.color === ps.color };
-  });
+  // grid gap apart), indented 1.25rem, and a list in one of its items as much again. In the outline
+  // alert the paragraph's color is not the alert's own (the tone), so a list that took the alert's
+  // color instead of the paragraph's shows.
+  const list = (/** @type {import("@playwright/test").Locator} */ alert) =>
+    alert.evaluate((alert) => {
+      const [p, ul] = [alert.querySelector(":scope > p"), alert.querySelector(":scope > ul")];
+      const inner = alert.querySelector(":scope > ul li > ul");
+      if (!p || !ul) return null;
+      const [ps, us, as] = [getComputedStyle(p), getComputedStyle(ul), getComputedStyle(alert)];
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      return {
+        margin: us.marginTop + " " + us.marginBottom,
+        gap: ul.getBoundingClientRect().top - p.getBoundingClientRect().bottom,
+        rowGap: parseFloat(as.rowGap),
+        indent: parseFloat(us.paddingInlineStart) / rem,
+        inner: inner ? parseFloat(getComputedStyle(inner).paddingInlineStart) / rem : null,
+        asParagraph: us.color === ps.color,
+        notAlert: us.color !== as.color,
+      };
+    });
+  const spaced = (/** @type {any} */ l) => !!l && l.margin === "0px 0px" && Math.abs(l.gap - l.rowGap) < 1 && Math.abs(l.indent - 1.25) < 0.01 && l.asParagraph;
+  const soft = await list(orders.locator("strong", { hasText: "past its ship-by date" }).locator(".."));
+  check("Alert: a list has no margin of its own, sits the grid's gap under the paragraph, is indented 1.25rem and colored as the paragraph", spaced(soft), JSON.stringify(soft));
+  const outline = await list(orders.locator("p", { hasText: "Orders paid before 3 pm" }).locator(".."));
   check(
-    "Alert: a list has no margin of its own, sits the grid's gap under the paragraph, is indented 1.25rem and colored as the paragraph",
-    !!list && list.margin === "0px 0px" && Math.abs(list.gap - list.rowGap) < 1 && Math.abs(list.indent - 1.25) < 0.01 && list.markerIn && list.color,
-    JSON.stringify(list),
-  );  // The tones the kit's looks take, as each engine computes them: a soft alert is its tone mixed
+    "Alert: in an outline alert a list is the paragraph's color, not the alert's, and a list in an item is indented 1.25rem again",
+    spaced(outline) && !!outline && outline.notAlert && outline.inner !== null && Math.abs(outline.inner - 1.25) < 0.01,
+    JSON.stringify(outline),
+  );
+  // The tones the kit's looks take, as each engine computes them: a soft alert is its tone mixed
   // 12% into the card, an outline one the card's, a solid one its tone's fill and text, and a
   // toned button is filled with its tone.
   const tones = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => {
