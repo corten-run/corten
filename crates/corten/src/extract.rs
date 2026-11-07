@@ -208,8 +208,9 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
 /// A large body takes time to arrive, and the route's deadline runs until the answer starts, so
 /// its route is in an API (or an area) whose `deadline` leaves time to read it; shutdown waits
 /// for that deadline too (the app guide, Shutdown). The handler's future is dropped at the
-/// deadline, when the client leaves and at shutdown, so no code after the `await` it was in runs: what it wrote of a body it does not
-/// finish is removed by a guard's `Drop` or by work the request's [`crate::Signal`] starts.
+/// deadline, when the client leaves and at shutdown, so no code after the `await` it was in
+/// runs: what it wrote of a body it does not finish is removed by a guard's `Drop` or by work
+/// the request's [`crate::Signal`] starts.
 ///
 /// ```
 /// use std::time::Duration;

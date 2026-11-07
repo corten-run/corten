@@ -2341,8 +2341,9 @@ Corten is pre-1.0, so any minor version may change the API.
     browser does) saw as a dropped connection 6 times of 6, where `bytes_up_to` answered 9 of 9;
     a reader keeps that read-past in one place. Measured with `what_a_large_upload_costs` (1 GiB
     over a socket, release, three runs, with the idle timer on each piece): 262 to 286 ms, the
-    process peaking at 10 MiB resident (7 MiB before the request), the largest piece 496 KiB. Nothing else on the request path changes: `bytes_up_to` calls the same read-past,
-    moved into a function, only for a body over its limit
+    process peaking at 10 MiB resident (7 MiB before the request), the largest piece 496 KiB.
+    Nothing else on the request path changes: `bytes_up_to` calls the same read-past, moved into
+    a function, only for a body over its limit
     ([#1003 Evaluate a bounded raw-body chunk reader for large PUT and POST uploads without buffering or duplicating limit handling](https://github.com/corten-run/corten/issues/1003)).
 
 ### Removed
