@@ -65,6 +65,14 @@ alone, in the component's stylesheet:
 Back and forward mark only `<main>`, since nothing on the page started them, and a page reading
 itself again marks nothing.
 
+The address changes when the page's answer is in, as a full load's does, not at the click: while a
+slow handler runs, the address still names the page on screen, so reloading, copying or sharing it
+gets that page, and a link the server redirects shows only the redirect's address, in one history
+entry. This holds where the browser lets a navigation say when its address changes (the Navigation
+API's `precommitHandler`: Chromium and Firefox). Elsewhere, and for back and forward, the address
+changes at the click while the old page is shown busy until the new one comes; `main[aria-busy]`
+is the hook for styling that wait.
+
 Back and forward draw the page again from the server, as a link does, and put back what the user
 typed or chose in it, as the browser does for a page it loaded: each field of `<main>` the user
 typed or chose in whose state was not the markup's when the page was left, found again by its id,

@@ -3718,6 +3718,20 @@ Corten is pre-1.0, so any minor version may change the API.
     costs the same (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each:
     9,241 instructions a read before and after)
     ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
+162. A client navigation changes the address when the page's answer is in, as a full load's does,
+    not at the click: while a slow handler runs, the address still names the page on screen, so
+    reloading, copying or sharing it gets that page, and a link the server redirects shows only
+    the redirect's address (keeping the link's `#id` when it names none), in one history entry
+    instead of the link's address replaced by the target's. `main` and the link are busy from
+    the click as before. It holds where the browser has the Navigation API's `precommitHandler`
+    (Chromium and Firefox); elsewhere, and for back and forward, the address changes at the
+    click as before. The runtime's own navigations (a redirect followed, a write's page) handle
+    their `committed` promise, which a navigation replaced before its address changes rejects.
+    In the watchlist's smoke, a page held 800 ms showed the old page busy at the old address for
+    781 to 800 ms and the new address on the old page for 0 ms, in Chromium and Firefox; the
+    issue measured the address changing 29 ms after the click and the page 255 ms after. The
+    minified runtime is 682 bytes larger (40,125; 263 more gzip at level 9, 235 brotli, 256 zstd)
+    ([#992 A client navigation changes the address before the page arrives, so the address names a page the screen does not show for the handler's whole time](https://github.com/corten-run/corten/issues/992)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

@@ -1988,8 +1988,11 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
  *   user, handed on when the server redirects
  * @param {Element | null} [source] the link or GET form that started it, marked busy with `main`
  * @param {boolean} [written] sent by a write: the page is fetched whole and its layout drawn again
+ * @param {(res?: Response) => Promise<boolean>} [commit] where the address waits for the answer
+ *   ({@link interceptVisit}): commits it once the answer is in (none when there is none), at the
+ *   redirect's target when the server redirected, and is true when it took that target
  */
-async function visit(url, signal, redirected, again, place, source, written) {
+async function visit(url, signal, redirected, again, place, source, written, commit) {
   // A write's page reading itself again is read whole as well, as a browser without JavaScript
   // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
   // when the read finds it. It stays whole while the page asks to be read again.
@@ -2028,9 +2031,15 @@ async function visit(url, signal, redirected, again, place, source, written) {
       if (signal.aborted) throw error;
       // Offline or the server is unreachable: load the URL as a normal navigation, which the
       // service worker (if any) answers with the offline page, and the browser otherwise explains.
+      await commit?.();
+      signal.throwIfAborted();
       reload();
       return;
     }
+    signal.throwIfAborted();
+    // The address changes now that the answer is here, as a full load's does: whatever is done
+    // with the answer after this (a swap, a full load, a redirect to a place) starts from it.
+    const took = (await commit?.(res)) ?? false;
     signal.throwIfAborted();
     const notice = noticeOf(res);
     // A read again's notice is the one the page drew and the user has seen: a full load in its
@@ -2041,7 +2050,7 @@ async function visit(url, signal, redirected, again, place, source, written) {
     // redirect but drops its `#id`.
     const to = res.headers.get("corten-location");
     if (to) {
-      navigation.navigate(to, { history: "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source } });
+      go(to, { history: "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source } });
       return;
     }
     if (!res.headers.has(whole ? "corten-shell" : "corten-page") || shellChanged(res)) {
@@ -2051,10 +2060,10 @@ async function visit(url, signal, redirected, again, place, source, written) {
     // The server redirected (a `Caller` sending someone to sign in). Changing the address with
     // history.replaceState would abort this navigation and the body with it, so read the body,
     // then navigate again to where it came from, in place of this entry, with the page in hand.
-    if (res.redirected && !redirected) {
+    if (res.redirected && !redirected && !took) {
       const page = new Response(await res.text(), { headers: res.headers });
       signal.throwIfAborted();
-      navigation.navigate(res.url, { history: "replace", info: { [REDIRECTED]: page, [KEEP_PLACE]: place, [SOURCE]: source, [WRITTEN]: whole } });
+      go(res.url, { history: "replace", info: { [REDIRECTED]: page, [KEEP_PLACE]: place, [SOURCE]: source, [WRITTEN]: whole } });
       return;
     }
     const html = await res.text();
@@ -2143,7 +2152,7 @@ function readAgainLater() {
       // A read cancelled on its way (a script's `replaceState`, as a sort in place does) is read
       // again later while this is still the entry: only a swapped page starts the next. A read
       // that failed stops them, as before.
-      navigation.navigate(location.href, { history: "replace", info: { [READ_AGAIN]: true } }).finished.catch((/** @type {unknown} */ error) => {
+      go(location.href, { history: "replace", info: { [READ_AGAIN]: true } }).catch((/** @type {unknown} */ error) => {
         const cancelled = error instanceof DOMException && error.name === "AbortError";
         if (cancelled && page === readAgainPage && navigation.currentEntry?.key === entry) readAgainLater();
       });
@@ -2275,8 +2284,7 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
     // A new page starts at its `#id`, else at the top. Scrolled here, not left to the browser:
     // Chromium leaves a swapped page where the last one was scrolled, and Firefox does not scroll
     // to an `#id` the address already had.
-    const handler = async () => {
-      await visit(url, event.signal, redirected, false, undefined, startedBy(event), written);
+    const after = () => {
       if (event.signal.aborted) return;
       let id = url.hash.slice(1);
       try {
@@ -2286,11 +2294,10 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
       if (at) at.scrollIntoView();
       else scrollTo(0, 0);
     };
-    event.intercept({ handler, scroll: "manual" });
+    interceptVisit(event, (commit) => visit(url, event.signal, redirected, false, undefined, startedBy(event), written, commit), after, { scroll: "manual" });
     return;
   }
-  const handler = async () => {
-    await visit(url, event.signal, redirected, again, place, startedBy(event), written);
+  const after = () => {
     // Back to the control, unless the user has moved on meanwhile.
     const now = document.activeElement;
     const el = /** @type {HTMLInputElement | undefined} */ (place && (!now || now === document.body) ? document.querySelectorAll(place.at)[place.nth] : undefined);
@@ -2301,8 +2308,89 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
       if (start !== null) el.setSelectionRange(start, end, direction);
     } catch {}
   };
-  event.intercept({ handler, scroll: "manual", focusReset: "manual" });
+  const visiting = (/** @type {Parameters<typeof visit>[7]} */ commit) => visit(url, event.signal, redirected, again, place, startedBy(event), written, commit);
+  // A page reading itself again keeps its address: nothing to wait for.
+  interceptVisit(event, visiting, after, { scroll: "manual", focusReset: "manual" }, !again);
 });
+
+/**
+ * The runtime's own navigation (a redirect followed, a write's page): `navigation.navigate`, with
+ * its `committed` promise handled, since one that another navigation replaces before its address
+ * changes (the user clicks on while the page is on its way) rejects it, which the browser would
+ * log as uncaught. Returns `finished`, for the caller that wants to know how it ended.
+ * @param {string} url
+ * @param {object} options
+ * @returns {Promise<unknown>}
+ */
+function go(url, options) {
+  const { committed, finished } = navigation.navigate(url, options);
+  committed.catch(() => {});
+  return finished;
+}
+
+/** Whether the browser lets a navigation say when its address changes (`precommitHandler`). */
+const PRECOMMIT = "NavigationPrecommitController" in window;
+
+/**
+ * Intercepts `event` with `run`, a visit, and then `after`. Where the browser lets it
+ * (`precommitHandler`), the address waits for the page's answer, as a full load's does: it changes
+ * when the answer is in, to the redirect's target when the server redirected (one entry, never the
+ * link's), so reloading, copying or sharing the address during a slow handler gets the page on
+ * screen (#992). `main` is busy from the click either way. Elsewhere, and for back and forward,
+ * the address changes at once, as before.
+ * @param {any} event
+ * @param {(commit: Parameters<typeof visit>[7]) => Promise<void>} run
+ * @param {() => void} after
+ * @param {object} options
+ * @param {boolean} [early] whether the address may wait for the answer (not a page read again)
+ */
+function interceptVisit(event, run, after, options, early = true) {
+  if (!early || !PRECOMMIT || !event.cancelable || event.navigationType === "traverse") {
+    event.intercept({ ...options, handler: () => run(undefined).then(after) });
+    return;
+  }
+  /** @type {() => void} */
+  let committed = () => {};
+  // The commit's handler runs once the address is the page's; an abandoned navigation never gets
+  // there, so its abort lets the visit stop waiting.
+  const ready = new Promise((resolve) => {
+    committed = () => resolve(undefined);
+    event.signal.addEventListener("abort", committed, { once: true });
+  });
+  /** @type {Promise<void>} */
+  let visiting = Promise.resolve();
+  event.intercept({
+    ...options,
+    precommitHandler: (/** @type {any} */ controller) =>
+      new Promise((answered, failed) => {
+        visiting = run(async (res) => {
+          let took = false;
+          if (res?.redirected) {
+            // `fetch` drops the `#id`; a full load's redirect keeps the link's when it names none.
+            const to = new URL(res.url);
+            to.hash ||= new URL(event.destination.url).hash;
+            try {
+              controller.redirect(to.href);
+              took = true;
+            } catch {
+              // Not one the address can take (another origin): navigated to again, as before.
+            }
+          }
+          answered(undefined);
+          await ready;
+          return took;
+        });
+        // A visit that ends before its answer (a full load) lets the navigation end too. One left
+        // for another (back, or a second link) ends quietly: the browser does not handle a
+        // precommit handler's failure once its navigation is aborted, and would log it.
+        visiting.then(answered, (error) => (event.signal.aborted ? answered(undefined) : failed(error)));
+      }),
+    handler: () => {
+      committed();
+      return visiting.then(after);
+    },
+  });
+}
 
 /**
  * What the user typed or chose in the page of each history entry they left, by the entry's key:
@@ -2602,7 +2690,7 @@ async function send(form, submitter, sends) {
       submits.delete(form);
       if (navigation) {
         stale ||= method !== "GET";
-        navigation.navigate(location_, { info: { [LOAD]: true, [WRITTEN]: method !== "GET" } });
+        go(location_, { info: { [LOAD]: true, [WRITTEN]: method !== "GET" } });
       } else {
         // Without the Navigation API, a URL that differs only in its `#id` would only scroll.
         const to = new URL(location_, location.href);

@@ -1751,6 +1751,47 @@ async function run(browser) {
         linkBusy.with && linkBusy.then?.path === "/" && linkBusy.then.stories === 0 && !(await more.$("[aria-busy]")),
         JSON.stringify(linkBusy),
       );
+      // Where the browser lets a navigation say when its address changes (precommitHandler), a
+      // slow page's address changes when its answer is in, as a full load's does, not at the click
+      // while the old page is still on screen (#992). Read every frame: how long the old page was
+      // shown busy at the old address, and how long the new address showed the old page (the body
+      // read and the swap after the answer's headers).
+      if (await more.evaluate(() => "NavigationPrecommitController" in window)) {
+        /** @param {URL} url */
+        const news = (url) => url.pathname === "/news" && url.search === "";
+        await more.route(news, async (route) => {
+          if (route.request().headers().corten === "nav") await new Promise((resolve) => setTimeout(resolve, 800));
+          await route.continue().catch(() => {});
+        });
+        await more.evaluate(() => {
+          /** @type {[number, string, number, boolean][]} */
+          const frames = [];
+          /** @type {any} */ (window).__frames = frames;
+          const read = (/** @type {number} */ at) => {
+            const stories = document.querySelectorAll("#stories > li").length;
+            frames.push([at, location.pathname, stories, !!document.querySelector("main[aria-busy]")]);
+            if (frames.length < 5000 && !(location.pathname === "/news" && stories > 0)) requestAnimationFrame(read);
+          };
+          requestAnimationFrame(read);
+        });
+        await more.click('header a[href="/news"]');
+        await more.waitForFunction(() => location.pathname === "/news" && document.querySelectorAll("#stories > li").length > 0 && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 });
+        /** @type {[number, string, number, boolean][]} */
+        const frames = await more.evaluate(() => /** @type {any} */ (window).__frames);
+        /** @param {(frame: [number, string, number, boolean]) => boolean} which */
+        const span = (which) => {
+          const times = frames.filter(which).map(([at]) => at);
+          return times.length ? Math.round(times.at(-1) - times[0]) : 0;
+        };
+        const waited = span(([, path, , busy]) => path === "/" && busy);
+        const ahead = span(([, path, stories]) => path === "/news" && stories === 0);
+        check(
+          "a slow page's address changes with its content, not before",
+          waited >= 500 && ahead < 200,
+          `busy at the old address ${waited} ms, the new address on the old page ${ahead} ms`,
+        );
+        await more.unroute(news);
+      } else skip("a slow page's address changes with its content, not before", "no precommitHandler: the address changes at the click");
       // A GET form whose controls are named like the methods that mark it still navigates.
       await more.evaluate(() =>
         document
@@ -2261,6 +2302,18 @@ async function run(browser) {
   check("a page whose handlers take no format does not load the format module", !(await formatLoaded()));
   // A visitor's header has no account link (the sign-in button is in its place), so the page gets one.
   await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-account" href="/account">Account</a>')));
+  // Every address the page shows on the way, and how many history entries it has.
+  const entriesBefore = await page.evaluate(() => {
+    /** @type {string[]} */
+    const addresses = [location.pathname];
+    /** @type {any} */ (window).__addresses = addresses;
+    const read = () => {
+      if (addresses.at(-1) !== location.pathname) addresses.push(location.pathname);
+      if (addresses.length < 20 && document.title !== "Stocks | Watchlist") requestAnimationFrame(read);
+    };
+    requestAnimationFrame(read);
+    return /** @type {any} */ (window).navigation?.entries().length ?? 0;
+  });
   await page.click("#to-account");
   await page.waitForFunction(() => document.title === "Stocks | Watchlist", null, { timeout: 5000 }).catch(() => {});
   check(
@@ -2268,6 +2321,16 @@ async function run(browser) {
     (await page.title()) === "Stocks | Watchlist" && new URL(page.url()).pathname === "/",
     page.url(),
   );
+  // Where the address waits for the answer, a redirect's target is the only address the link
+  // gives, in one new history entry, as a full load's redirect is (#992).
+  if (await page.evaluate(() => "NavigationPrecommitController" in window)) {
+    const [addresses, entries] = await page.evaluate(() => [/** @type {any} */ (window).__addresses, /** @type {any} */ (window).navigation.entries().length]);
+    check(
+      "a link the server redirects shows only the redirect's address, in one history entry",
+      addresses.join() === "/news,/" && entries === entriesBefore + 1,
+      `${addresses.join(" -> ")}, ${entriesBefore} -> ${entries} entries`,
+    );
+  } else skip("a link the server redirects shows only the redirect's address, in one history entry", "no precommitHandler: the address changes at the click");
   // The watchlist's live prices take the money format: reached from the news page, it loads the
   // module before its markup joins, and the script writes prices with it.
   const firstPrices = await prices();
