@@ -2312,6 +2312,18 @@ Corten is pre-1.0, so any minor version may change the API.
     event with zstd on main and 100,474 on this branch (+0.09%), brotli 213,884 against 213,716
     (-0.08%), and the stream is 3 bytes longer, its frame's end
     ([#1001 Media only accepts buffered bytes, so a large generated download needs Relay instead of an app-owned streaming answer](https://github.com/corten-run/corten/issues/1001)).
+260. `corten::Error` implements `Display`, writing its source's message (what the log says), and
+    `Error::status_code()` returns the status of the answer it makes (a sign-in's 401, which a
+    browser gets as a redirect), so a handler that answers in
+    a shape of its own (a route keeping another server's `{"error": ..}` bodies) can say why a
+    step failed: `extract::bytes_up_to`'s `Err` for a body that could not be read, which it could
+    only answer with a fixed message before. The accessor is named apart from `Error::status`,
+    which makes an error. `std::error::Error` stays unimplemented, since the conversion from any
+    error (`From<E: std::error::Error>`) would then include `Error` itself. Corten still never
+    sends a 5xx message to a browser. The message is the log's, so it can name what a
+    `with_status` hid (a refusal answered as a 404 says `refused: 403 Forbidden`); an app that
+    sends it, in its own body or in markup, chooses to
+    ([#995 corten::Error has no Display or status accessor, so a handler answering in its own JSON shape cannot say why a body read failed](https://github.com/corten-run/corten/issues/995)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3727,7 +3739,20 @@ Corten is pre-1.0, so any minor version may change the API.
     costs the same (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each:
     9,241 instructions a read before and after)
     ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
-161. The `log` feature (on by default) prints with a subscriber of Corten's own instead of
+161. The runtime's declarations for `corten/views` (`rows()`, `view()`, `Holds`, `ViewClass`,
+    `Rows` and the rest) ship with the crate in `js/views.d.ts`, which `corten check` already
+    gives `tsc`, instead of being written into each app's `types/app.d.ts`. The app's file holds
+    only what its own types, events and views produce, so a release that changes the runtime's
+    declarations no longer fails the app's types test once and leaves framework text to commit
+    with the pin. An app with views gets that failure one last time when it moves to this
+    release, as `Types::sync` drops the runtime's block from its file. Since `tsc` now sees
+    `rows()` and `view()` declared for every app while the import map names `corten/views` only for
+    an app with a view, a script of an app without one that imports it is an error when the app
+    starts, as an import of `corten/keys` with nothing serving it is, rather than in the browser.
+    `Types::sync`'s message says the file may be out of date with how the Corten release declares
+    the app's types as well as with the types
+    ([#1020 A pin bump fails the app's corten check once when Corten's own script declarations change, blaming the app's Rust types](https://github.com/corten-run/corten/issues/1020)).
+163. The `log` feature (on by default) prints with a subscriber of Corten's own instead of
     `tracing-subscriber`, so an app's default build has five crates fewer: `tracing-subscriber`,
     `sharded-slab`, `thread_local`, `nu-ansi-term` and `lazy_static` (`cargo tree -p corten-run -e
     normal`: 53 crates before, 48 after). Each event at `INFO` or above goes to stdout as the line

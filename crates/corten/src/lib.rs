@@ -839,7 +839,12 @@ pub async fn shutdown_signal() {
 
 /// An error that ends the request with a status (500 unless set). The message is logged with
 /// `tracing` and never sent to the browser (except under `corten dev`); the app's error page is
-/// what the user sees.
+/// what the user sees. A handler that answers in a shape of its own reads the message with
+/// `Display` (`error.to_string()`) and the status with [`Error::status_code`]. The message is the
+/// log's, written for the app's developers: it can name a 5xx's internals, or a cause a
+/// [`Error::with_status`] hid (a [`Refused`] answered as a 404 still says `refused: 403
+/// Forbidden`), so sending it, in a body of the app's own or written into markup (`{error}`),
+/// is the app's choice, made where it knows the error is meant for the client.
 #[derive(Debug)]
 pub struct Error {
     status: StatusCode,
@@ -886,6 +891,29 @@ impl Error {
     pub fn with_status(mut self, status: StatusCode) -> Self {
         self.status = status;
         self
+    }
+
+    /// The status of the answer the error makes: 500 for [`Error::new`] and an error converted
+    /// with `?`, the one given to [`Error::status`] or [`Error::with_status`], a [`Refused`]'s own
+    /// (a sign-in's 401, which a browser is then sent to sign in from as a redirect). Named apart
+    /// from [`Error::status`], which makes an error.
+    ///
+    /// ```
+    /// use corten::{http::StatusCode, Error};
+    ///
+    /// let missing = Error::new("no item 7").with_status(StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.status_code(), StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.to_string(), "no item 7");
+    /// ```
+    pub fn status_code(&self) -> StatusCode {
+        self.status
+    }
+}
+
+/// The error's message, as it is logged: the source's own `Display`.
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.source, f)
     }
 }
 
