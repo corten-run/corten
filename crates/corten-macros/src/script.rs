@@ -1697,13 +1697,16 @@ fn jsdoc_namespace_import(block: &str, module: &str) -> bool {
     let starts: Vec<usize> = block.match_indices("@import").map(|(at, _)| at).collect();
     starts.iter().enumerate().any(|(n, &at)| {
         let end = starts.get(n + 1).copied().unwrap_or(block.len());
-        // `* as name from "module"`, word by word.
-        let mut words = block[at + "@import".len()..end].split_whitespace();
-        words.next() == Some("*")
-            && words.next() == Some("as")
-            && words.next().is_some()
-            && words.next() == Some("from")
-            && words.next().is_some_and(|m| quoted.iter().any(|q| m.starts_with(q.as_str())))
+        // `* as name from "module"`, spaced as TypeScript reads it (`*as ev`, `from"m"`).
+        let rest = block[at + "@import".len()..end].trim_start();
+        let Some(rest) = rest.strip_prefix('*').map(str::trim_start) else { return false };
+        let Some(rest) = rest.strip_prefix("as").filter(|r| r.starts_with(char::is_whitespace)) else { return false };
+        let rest = rest.trim_start();
+        let name = rest.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).unwrap_or(rest.len());
+        let Some(rest) = (name > 0).then(|| rest[name..].trim_start()).and_then(|r| r.strip_prefix("from")) else {
+            return false;
+        };
+        quoted.iter().any(|q| rest.trim_start().starts_with(q.as_str()))
     })
 }
 
@@ -2090,6 +2093,8 @@ function helper() {}
             "/**\n * @import\n * * as ev from \"corten/events\"\n */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
             "/**\n * @import *\n * as ev from \"corten/events\"\n */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
             "/** @import * as fromEvents from \"corten/events\" */\n/** @param {fromEvents.Saved} a */\nexport function f(a) {}",
+            "/** @import *as ev from \"corten/events\" */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
+            "/** @import * as ev from\"corten/events\" */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
         ] {
             let err = parse(source).unwrap_err();
             assert!(err.1.starts_with("import typed events by name"), "{source}: {err:?}");
@@ -2102,6 +2107,10 @@ function helper() {}
             let (handlers, _) = parse(source).unwrap();
             assert_eq!(handlers[0].params[0].1, Param::Event("Saved".into()), "{source}");
         }
+        // `A as B` spaced with tabs, two spaces, or over a line break.
+        let (handlers, _) = parse("/**\n * @import { Saved  as\tDone,\n *   RowToggled\n *   as Toggled } from \"corten/events\"\n */\n/** @param {Done} a @param {Toggled} b */\nexport function f(a, b) {}").unwrap();
+        let params: Vec<&Param> = handlers[0].params.iter().map(|(_, p)| p).collect();
+        assert_eq!(params, [&Param::Event("Saved".into()), &Param::Event("RowToggled".into())]);
         // A namespace import of another module beside a named import of typed events is not one.
         let (handlers, _) = parse("/**\n * @import * as app from \"../types/app\"\n * @import { Saved } from \"corten/events\"\n */\n/** @param {Saved} a */\nexport function f(a) {}")
             .unwrap();

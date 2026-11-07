@@ -233,8 +233,8 @@ for its type alone by `/** @import { RowToggled } from "corten/events" */`, whic
 takes only the `event` of an `on:` for that type, a compile error otherwise; the `#[event]` type is in scope in the
 component's module (for `script!`, the module that invokes it), or the script does not compile.
 Events are imported by name: a namespace import of `"corten/events"` (`import * as ev`, or
-`/** @import * as ev from "corten/events" */`) stops the script compiling, wherever its types are
-used. In `examples/seller-desk`, each price cell sends `PriceEdited` as its price
+`/** @import * as ev from "corten/events" */`) stops the script compiling, whether or not a
+handler uses its types. In `examples/seller-desk`, each price cell sends `PriceEdited` as its price
 is typed or put back, and the grid around the cells counts the prices not saved.
 
 A script that submits a `data-patch` form (`form.requestSubmit()`) and needs what the server
