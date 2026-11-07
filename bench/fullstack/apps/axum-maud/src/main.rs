@@ -64,7 +64,8 @@ async fn main() {
 /// and a page cache policy on every answer, compression when asked, a 503 past a 10 second
 /// deadline (card-market's), and request bodies of at most 2 MiB (axum's own extractor limit).
 fn matched(router: Router) -> Router {
-    let header = |name: HeaderName, value: &'static str| SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value));
+    let header =
+        |name: HeaderName, value: &'static str| SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value));
     router
         .layer(TimeoutLayer::with_status_code(StatusCode::SERVICE_UNAVAILABLE, Duration::from_secs(10)))
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))

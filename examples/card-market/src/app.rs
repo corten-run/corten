@@ -47,9 +47,9 @@ pub fn app(source: Source) -> App {
     // The most connections held open at once (`MAX_CONNECTIONS`), so many idle or slow clients
     // cannot hold every socket the process may open; no limit unless set.
     match std::env::var("MAX_CONNECTIONS") {
-        Ok(n) => app.max_connections(
-            n.trim().parse().ok().filter(|&n| n > 0).expect("MAX_CONNECTIONS is a whole number above zero"),
-        ),
+        Ok(n) => {
+            app.max_connections(n.trim().parse().ok().filter(|&n| n > 0).expect("MAX_CONNECTIONS is a whole number above zero"))
+        }
         Err(_) => app,
     }
 }
