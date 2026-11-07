@@ -5423,8 +5423,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `error` is now an `Event`, not an `ErrorEvent`, as the element fires it (probed in Chromium,
     Firefox and WebKit): an `on:error` handler typed `ErrorEvent` read an `event.message` that is
     never there, and no longer compiles; type it `Event`. `abort`, `progress` and `resize` stay
-    `Event`, for the same reason, though lib.dom gives them the window's and XMLHttpRequest's types. `npm run check` now holds the event map to lib.dom (`scripts/events.mjs`), so an event
-    lib.dom types more narrowly cannot fall back to `Event` unnoticed
+    `Event`, for the same reason, though lib.dom gives them the window's and XMLHttpRequest's
+    types. `npm run check` now holds the event map to lib.dom both ways (`scripts/events.mjs`), so
+    an event lib.dom types more narrowly cannot fall back to `Event` unnoticed, nor an arm be
+    narrower than lib.dom
     ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
 
 ### Documentation
