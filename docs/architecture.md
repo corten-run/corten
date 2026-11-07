@@ -100,7 +100,7 @@ definition:
 | Seam | Source of truth | Checked by |
 |---|---|---|
 | Rust to markup | page struct and component props | `html!` and `#[component]` are Rust: a missing field or prop is a compile error |
-| Markup to handler | each handler's JSDoc, in the script next to the component | `#[component(js)]` reads the script when the crate compiles: `js::name(..)` exists only for an export, and each argument must match its `@param` type: a ref by the tag it is on, `event` by the `on:` name, `target` by the tag, values by their Rust type. `tsc --checkJs` (strict) checks the function bodies against the same JSDoc |
+| Markup to handler | each handler's JSDoc, in the script next to the component | `#[component(js)]` reads the script when the crate compiles: `js::name(..)` exists only for an export, and each argument must match its `@param` type: a ref by the tag it is on, `event` by the `on:` name, `target` by the tag, values by their Rust type (a JSON value by a generated declaration's; a call to a handler whose parameter has no type to check the argument against does not compile, and only `unknown` takes any argument). `tsc --checkJs` (strict) checks the function bodies against the same JSDoc |
 | Typed events | the `#[event]` struct | `corten::types` declares its class in `corten/events` with the fields' types; `on:Name` must name an `#[event]` type |
 | Feed rows to script | the row struct | `corten::types` writes `types/app.d.ts`; `subscribe<Row>` types the snapshot and every patch |
 | Form fields to handler | the input struct | `#[derive(Fields)]`: views print `Input::FIELDS.email`, a `FieldName`, and `Errors` takes only that, so a renamed field is a compile error |
@@ -123,9 +123,9 @@ fails `npm run check`. A subscription that names no type gets `unknown`, never
 
 Not checked: `data-*` attributes a script reads through `dataset` (strings on both sides; pass
 the value as a handler argument instead), that a ref inside an `if` is present when a handler
-runs (the call throws when it is not; the type says it is always there), the parameter type of a
-handler that takes a typed event (`@param {RowToggled} event` is checked by `tsc`, not at the
-call), that a route marked `link` in a routes module (or a plain `#[derive(Route)]` struct) is
+runs (the call throws when it is not; the type says it is always there), the value a call passes to a
+handler parameter typed `unknown` (any `ToJson`, ref or event; the script narrows it, and `tsc` holds it to
+that), that a route marked `link` in a routes module (or a plain `#[derive(Route)]` struct) is
 served by the API or area that should serve it (the app's tests cover that), that every component a page renders is listed in
 `App::components`, or in an area (`Area::components`) the page is under (checked at run time in debug builds,
 a router test or `cargo run` as well as `corten dev`: the page fails and names it), that a CSS custom property a stylesheet reads exists (a misspelled `var()` falls
