@@ -37,7 +37,7 @@
 // droplet that stops answering for --stall minutes while this waits or collects is power-cycled,
 // which does the same.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { allApps } from "./apps.mjs";
@@ -307,7 +307,7 @@ const launch = async () => {
     browser: `. "$HOME/.cargo/env"; node run-all.mjs ${round} 10 browser; cd /bench/bench/browser && node run-all.mjs ${round}`,
     fullstack: `exec node run-all.mjs ${round} 10 ${from ?? steps[0]} --unattended`,
     // Each app's phases run against a freshly started app; the step needs no load generator.
-    harden: `node harden.mjs ${only ? only.join(",") : "all"} ${round}; echo all done`,
+    harden: `node harden.mjs ${only ? only.join(",") : "all"} ${round} && echo all done`,
   }[suite];
   const script = `/bench/round-${round}.sh`;
   await retry(3, () => remote([
@@ -419,6 +419,12 @@ try {
       await downloadAll("results");
       // A finished round keeps its summaries as files and its raw output in one archive (pack.mjs).
       // A failure there leaves the files as downloaded and the droplet's fate as it was.
+      // harden.mjs prints the marker only when every phase ran and its file was written; a download
+      // without the file is not a finished hardening round.
+      if (suite === "harden" && !existsSync(join(here, "results", round, "hardening.json"))) {
+        console.log(`results/${round}/hardening.json did not come down with the round`);
+        process.exitCode = 1;
+      }
       if (suite === "fullstack") {
         try {
           // A round collected before was packed: the download brought every file again, so its

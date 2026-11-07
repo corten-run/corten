@@ -2,12 +2,15 @@
 // the phase names, sent from many connections at once, and beside it a well-behaved client that
 // asks for the item as JSON on a new connection every 100 ms. Reads { host, port, phase, ...the
 // phase's numbers } as JSON on stdin and writes JSON on stdout:
-//   { phase, opened, closedBy: [ms at which each abusive connection the server closed was closed],
-//     heldMs, good: { sent, ok, failed, p50, p99, max }, after, statuses? }
-// where opened is how many abusive connections connected, heldMs how long the phase lasted, good
-// the well-behaved client's requests (ok: answered 200 within 5 s; failed: anything else), after
-// the status of one request on a new connection once the abuse was closed (null: no answer within
-// 5 s), and statuses the oversized phase's answers. Phases:
+//   { phase, opened, closedBy: [ms from its own connect to its close, for each abusive connection
+//     the server closed], answers: { [status or "none"]: count }, heldMs,
+//     good: { sent, ok, failed, p50, p99, max }, after, statuses?, reset? }
+// where opened is how many abusive connections connected, answers what the server sent each one
+// before it closed (the first status line it wrote, or none), heldMs how long the hold lasted, good
+// the well-behaved client's requests (timed from before its connect; ok: answered 200 within 5 s
+// of that; failed: anything else), after the status of one request on a new connection once the
+// abuse was closed (null: no answer within 5 s), statuses the oversized phase's answers and reset
+// how the server ended the 16 MiB body's connection when it reset it (ECONNRESET or EPIPE), or null. Phases:
 //   headFlood: `count` connections each send a request head without its blank line, then nothing.
 //   slowHead: `count` connections each send a valid head one byte every `everyMs`.
 //   slowBody: `count` POSTs to `formPath` declare a 1 MiB body and send it a byte every `everyMs`.
@@ -29,26 +32,32 @@ const sleep = (/** @type {number} */ ms) => new Promise((done) => setTimeout(don
 const jsonPath = r.jsonPath ?? "/api/items/item_5";
 const started = Date.now();
 
-/** A connection, once connected (null when it could not within 5 s), with when it was closed. */
-const open = () => /** @type {Promise<{ socket: import("node:net").Socket, closed: () => number | null, got: Buffer[] } | null>} */ (new Promise((done) => {
+/**
+ * A connection, once connected (null when it could not within `ms`): when it connected and was
+ * closed (ms since the probe started), what it read first, and whether the server reset it.
+ */
+const open = (ms = 5000) => /** @type {Promise<{ socket: import("node:net").Socket, openedAt: number, closed: () => number | null, reset: () => string | null, got: Buffer[] } | null>} */ (new Promise((done) => {
   const socket = connect({ host: r.host, port: r.port });
   /** @type {number | null} */
   let closedAt = null;
+  /** @type {string | null} */
+  let reset = null;
   /** @type {Buffer[]} */
   const got = [];
-  const limit = setTimeout(() => { socket.destroy(); done(null); }, 5000);
+  const limit = setTimeout(() => { socket.destroy(); done(null); }, ms);
   socket.on("data", (c) => { if (got.length < 4) got.push(c); });
-  socket.on("error", () => {});
+  // A reset is seen as ECONNRESET on a read, or EPIPE on a write into the reset connection.
+  socket.on("error", (e) => { const code = /** @type {NodeJS.ErrnoException} */ (e).code; if (code === "ECONNRESET" || code === "EPIPE") reset ??= code; });
   socket.on("close", () => { closedAt ??= Date.now() - started; });
-  socket.once("connect", () => { clearTimeout(limit); done({ socket, closed: () => closedAt, got }); });
+  socket.once("connect", () => { clearTimeout(limit); done({ socket, openedAt: Date.now() - started, closed: () => closedAt, reset: () => reset, got }); });
   socket.once("error", () => { clearTimeout(limit); done(null); });
 }));
 
-/** One request on a new connection: its status within `ms`, or null. */
+/** One request on a new connection: its status within `ms` of starting to connect, or null. */
 const ask = async (/** @type {string} */ raw, ms = 5000) => {
-  const c = await open();
-  if (!c) return { status: null, ms: null };
   const at = Date.now();
+  const c = await open(ms);
+  if (!c) return { status: null, ms: null };
   c.socket.write(raw);
   const end = at + ms;
   while (Date.now() < end && c.closed() === null && parseAnswer(Buffer.concat(c.got)) === null) await sleep(5);
@@ -105,9 +114,15 @@ const holdAll = async (/** @type {NonNullable<Awaited<ReturnType<typeof open>>>[
     await sleep(Math.min(250, everyMs));
   }
   const heldMs = Date.now() - from;
-  const closedBy = conns.map((c) => c.closed()).filter((t) => t !== null).map((t) => /** @type {number} */ (t)).sort((a, b) => a - b);
+  const closedBy = conns.flatMap((c) => { const t = c.closed(); return t === null ? [] : [t - c.openedAt]; }).sort((a, b) => a - b);
+  /** @type {Record<string, number>} */
+  const answers = {};
+  for (const c of conns) {
+    const key = String(parseAnswer(Buffer.concat(c.got))?.status ?? "none");
+    answers[key] = (answers[key] ?? 0) + 1;
+  }
   for (const c of conns) c.socket.destroy();
-  return { heldMs, closedBy };
+  return { heldMs, closedBy, answers };
 };
 
 const count = r.count ?? 0;
@@ -118,6 +133,8 @@ if (r.phase === "oversized") {
   const many = `GET ${jsonPath} HTTP/1.1\r\nhost: localhost\r\n${Array.from({ length: 200 }, (_, i) => `x-h${i}: v\r\n`).join("")}connection: close\r\n\r\n`;
   const huge = `GET ${jsonPath} HTTP/1.1\r\nhost: localhost\r\nx-padding: ${"x".repeat(1024 * 1024)}\r\nconnection: close\r\n\r\n`;
   const body = 16 * 1024 * 1024;
+  /** @type {string | null} */
+  let hugeBodyReset = null;
   const post = `POST ${r.formPath ?? "/items/item_5"} HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: ${body}\r\nconnection: close\r\n\r\n`;
   const stop = goodClient();
   const statuses = { manyHeaders: (await ask(many)).status, hugeHeader: (await ask(huge)).status, hugeBody: await (async () => {
@@ -127,16 +144,18 @@ if (r.phase === "oversized") {
     // The body in 64 KiB pieces as the socket takes them, until all is sent or the server answers or closes.
     const piece = Buffer.alloc(64 * 1024, "a");
     for (let sent = 0; sent < body && c.closed() === null && parseAnswer(Buffer.concat(c.got)) === null; sent += piece.length) {
-      if (!c.socket.write(piece)) await new Promise((done) => { c.socket.once("drain", done); c.socket.once("close", done); });
+      // A server that stops reading without answering or closing holds the write: 10 s, then stop sending.
+      if (!c.socket.write(piece) && !(await Promise.race([new Promise((done) => { c.socket.once("drain", () => done(true)); c.socket.once("close", () => done(true)); }), new Promise((done) => setTimeout(() => done(false), 10_000).unref())]))) break;
     }
     const end = Date.now() + 10_000;
     while (Date.now() < end && c.closed() === null && parseAnswer(Buffer.concat(c.got)) === null) await sleep(10);
     const status = parseAnswer(Buffer.concat(c.got))?.status ?? null;
+    hugeBodyReset = c.reset();
     c.socket.destroy();
     return status ?? (c.closed() !== null ? "closed" : null);
   })() };
   const good = await stop();
-  out = { phase: r.phase, statuses, good, after: (await ask(get(jsonPath))).status };
+  out = { phase: r.phase, statuses, reset: { hugeBody: hugeBodyReset }, good, after: (await ask(get(jsonPath))).status };
 } else {
   const stop = goodClient();
   const conns = await openMany(count);
@@ -161,9 +180,9 @@ if (r.phase === "oversized") {
   } else if (r.phase !== "idleFlood") {
     throw new Error("unknown phase " + r.phase);
   }
-  const { heldMs, closedBy } = await holdAll(conns, tick, everyMs);
+  const { heldMs, closedBy, answers } = await holdAll(conns, tick, everyMs);
   const good = await stop();
   await sleep(1000);
-  out = { phase: r.phase, opened: conns.length, closedBy, heldMs, good, after: (await ask(get(jsonPath))).status };
+  out = { phase: r.phase, opened: conns.length, closedBy, answers, heldMs, good, after: (await ask(get(jsonPath))).status };
 }
 process.stdout.write(JSON.stringify(out));

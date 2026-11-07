@@ -34,18 +34,26 @@ const start = (/** @type {string} */ name) => {
   const i = args.findIndex((a) => a.startsWith("API_BASE="));
   if (i < 0) throw new Error("runArgs no longer sets API_BASE");
   args[i] = "API_BASE=http://fsw-items:8080";
+  // card-market lets one client 20 writes a minute (WRITES_PER_MINUTE), and the probe sends every
+  // slow body from one address: raised past the phase's 100, so each body reaches the server's
+  // handling of it, not the app's limiter, as in every other app.
+  if (name === "corten") args.splice(args.length - 1, 0, "-e", "WRITES_PER_MINUTE=1000");
   const run = docker(...args);
   return run.status === 0 ? null : run.stderr.trim();
 };
 
-/** Runs one phase in fsw-probe; its JSON, or { error }. */
+/**
+ * Runs one phase in fsw-probe; its JSON, or { error }. The probe is killed inside the container at
+ * the limit (busybox's timeout), so none of its connections or its well-behaved client reach the
+ * next phase's app, which has the same name.
+ */
 const phase = (/** @type {Record<string, unknown>} */ input, /** @type {number} */ limitMs) => new Promise((done) => {
-  const child = spawn("docker", ["exec", "-i", "fsw-probe", "node", "/b/harden-probe.mjs"]);
+  const child = spawn("docker", ["exec", "-i", "fsw-probe", "timeout", "-s", "KILL", String(Math.ceil(limitMs / 1000)), "node", "/b/harden-probe.mjs"]);
   let stdout = "";
   let stderr = "";
   child.stdout.on("data", (c) => (stdout += c));
   child.stderr.on("data", (c) => (stderr += c));
-  const timer = setTimeout(() => child.kill(), limitMs);
+  const timer = setTimeout(() => child.kill(), limitMs + 10_000);
   child.on("close", (code) => {
     clearTimeout(timer);
     if (code !== 0) return done({ error: "probe failed: " + (stderr || "exit " + code).trim().slice(0, 300) });
@@ -76,10 +84,13 @@ const memoryNow = (/** @type {string} */ container) => {
   return m ? +(Number(m[1]) * ({ KiB: 1 / 1024, KB: 1 / 1024, MiB: 1, MB: 1, GiB: 1024, GB: 1024 }[m[2]] ?? NaN)).toFixed(1) : null;
 };
 
-/** Whether the container is still running, and how often it restarted or was killed for memory. */
+/** Whether the container is still running or was killed for memory; when it stopped, its exit code and last log lines. */
 const alive = (/** @type {string} */ container) => {
-  const s = docker("inspect", "-f", "{{.State.Running}} {{.State.OOMKilled}} {{.RestartCount}}", container).stdout?.trim().split(" ") ?? [];
-  return { running: s[0] === "true", oomKilled: s[1] === "true" };
+  const s = docker("inspect", "-f", "{{.State.Running}} {{.State.OOMKilled}} {{.State.ExitCode}}", container).stdout?.trim().split(" ") ?? [];
+  const running = s[0] === "true";
+  if (running) return { running, oomKilled: s[1] === "true" };
+  const logs = docker("logs", "--tail", "5", container);
+  return { running, oomKilled: s[1] === "true", exitCode: Number(s[2]), logTail: (logs.stdout + logs.stderr).trim().split("\n").slice(-5) };
 };
 
 /** Waits until the app answers the item as JSON, up to two minutes. */
@@ -134,10 +145,13 @@ for (const name of names) {
     const cpuBefore = cpuUsec(container);
     const stopWatch = watchMemory(container);
     const input = { host: container, port: 8080, phase: p.key, ...p.input, pagePath: pages ? "/items/item_5" : "/api/items/item_5", formPath: pages ? "/items/item_5" : "/api/items/item_5" };
+    const from = Date.now();
     const r = await phase(input, p.limitMs);
+    const wallMs = Date.now() - from;
     const memMax = stopWatch();
     const cpuAfter = cpuUsec(container);
-    o[p.key] = { ...r, memBeforeMiB: memBefore, memMaxMiB: memMax, cpuSeconds: cpuBefore !== null && cpuAfter !== null ? +((cpuAfter - cpuBefore) / 1e6).toFixed(2) : null, ...alive(container) };
+    // Each phase keeps the commit and time it was taken at: a rerun of some phases rewrites the file's own.
+    o[p.key] = { ...r, taken: { commit, dirty, date: new Date().toISOString() }, wallMs, memBeforeMiB: memBefore, memMaxMiB: memMax, cpuSeconds: cpuBefore !== null && cpuAfter !== null ? +((cpuAfter - cpuBefore) / 1e6).toFixed(2) : null, ...alive(container) };
     console.error(`${name} ${p.key}: ${JSON.stringify(cellsOf({ [p.key]: o[p.key] })[p.key])}`);
   }
   docker("rm", "-f", "fsw-" + name);
@@ -150,3 +164,7 @@ const header = ["app", ...phases.map((p) => p.label)];
 const lines = ["| " + header.join(" | ") + " |", "|" + header.map(() => "---").join("|") + "|"];
 for (const name of names) lines.push("| " + [name, ...phases.map((p) => results[name]?.cells?.[p.key] ?? "?")].join(" | ") + " |");
 console.log(lines.join("\n"));
+// A run where a phase failed to run, or that wrote nothing it was asked to, is not a finished one.
+const failed = names.flatMap((n) => run.filter((p) => results[n]?.probes?.[p.key]?.error).map((p) => `${n} ${p.key}`));
+if (failed.length) console.error("phases that did not run: " + failed.join(", "));
+if (failed.length || (file && !existsSync(file))) process.exitCode = 1;
