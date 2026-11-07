@@ -2345,6 +2345,20 @@ Corten is pre-1.0, so any minor version may change the API.
     Nothing else on the request path changes: `bytes_up_to` calls the same read-past, moved into
     a function, only for a body over its limit
     ([#1003 Evaluate a bounded raw-body chunk reader for large PUT and POST uploads without buffering or duplicating limit handling](https://github.com/corten-run/corten/issues/1003)).
+262. `on:corten:progress` on a `data-patch` form: its handler is called with the browser's
+    `ProgressEvent` while a multipart write's body is sent (`loaded` and `total` count the whole
+    request, `lengthComputable` says whether `total` is known), so an upload's progress is a native
+    `<progress>` the app fills, with Corten's submit (its keys, refusals, redirects, cancellation)
+    kept. Such a form's multipart writes go by `XMLHttpRequest`, which reports upload progress
+    where `fetch` does not, in a module of its own (`corten-upload`, 768 bytes, 502 gzipped) that
+    only a page with such a form loads; every other submit is a `fetch` as before. The form stays
+    `aria-busy` until the answer is drawn, a navigation or newer submit that abandons it stops its
+    events, and without JavaScript it posts as before. A handler typed `ProgressEvent` takes no
+    other event, and `corten:progress` is heard only on the `<form>`, both at compile time. The
+    runtime grows by 345 bytes (40,232 to 40,577), 145 gzipped (14,394 to 14,539) and 130 with
+    brotli (13,019 to 13,149); an ordinary submit adds one check of the form's handlers. The
+    watchlist's profile picture shows the bar
+    ([#1002 Enhanced multipart forms expose only aria-busy, so upload progress requires replacing Corten's submission logic](https://github.com/corten-run/corten/issues/1002)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

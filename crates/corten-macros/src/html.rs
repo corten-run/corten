@@ -883,6 +883,7 @@ impl Cursor {
         }
         let (name, path, name_span) = self.name()?;
         let component = name.contains("::") || name.starts_with(|c: char| c.is_ascii_uppercase());
+        let is_form = name == "form";
         if component && name.contains('-') {
             return err(name_span, "a component name is a Rust path; element names with - are lowercase");
         }
@@ -995,7 +996,10 @@ impl Cursor {
                                 // ends the type, so the runtime's `corten:error` keeps its own).
                                 let named = event.strip_prefix("document:").unwrap_or(event);
                                 if named.contains(':') && !crate::dom::is_runtime_event(named) {
-                                    return err(span, format!("{name}: an event name with a colon is one of the runtime's, corten:error (on a data-patch form, or on:document:) or corten:notice (on:document:corten:notice); a component's own event is a typed one (#[event], on:RowToggled)"));
+                                    return err(span, format!("{name}: an event name with a colon is one of the runtime's, corten:error (on a data-patch form, or on:document:), corten:progress (on a data-patch form) or corten:notice (on:document:corten:notice); a component's own event is a typed one (#[event], on:RowToggled)"));
+                                }
+                                if named == "corten:progress" && (event != named || !is_form) {
+                                    return err(span, format!("{name}: the runtime dispatches corten:progress on the data-patch form whose upload it is, and it does not bubble: write on:corten:progress on that <form>"));
                                 }
                                 if event == "corten:notice" {
                                     return err(span, format!("{name}: the runtime dispatches corten:notice on the document, so no element hears it: write on:document:corten:notice"));
@@ -1618,8 +1622,13 @@ impl Gen {
                     let target: TokenStream =
                         format!("::corten::script::el::{}", crate::dom::element(name)).parse().expect("a path parses");
                     let mut binds = TokenStream::new();
+                    let mut binds_before = TokenStream::new();
                     for attr in attrs {
                         let Attr::On(event, span, expr) = attr else { continue };
+                        // A form that hears its upload's progress sends it by the upload module.
+                        if event == "corten:progress" {
+                            binds_before.extend(q("::corten::script::__private::uses_upload();", &[]));
+                        }
                         // A typed event's name is the one its `#[event]` gave it (a library's carries its
                         // prefix: `ui-copied`), so it is read from the type rather than derived here.
                         let (printed, ty) = if event.starts_with(|c: char| c.is_ascii_uppercase()) {
@@ -1635,6 +1644,7 @@ impl Gen {
                         let expr = keywords(expr.clone(), &ty, &target);
                         binds.extend(q("(__A0, &(__A1) as &dyn ::corten::script::Bind),", &[printed, expr]));
                     }
+                    self.code(binds_before);
                     self.code(q("::corten::script::__private::data_on(__OUT, &[__A0]);", &[binds]));
                 }
                 // Classes are a list (see `corten::style::ClassList`): `class={(Row, hot.then_some(Hot))}`.

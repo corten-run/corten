@@ -3801,6 +3801,75 @@ async function run(browser) {
   const overForm = await upload({ name: "card.png", mimeType: "image/png", buffer: png });
   await page.evaluate(() => document.getElementById("smoke-note")?.remove());
   check("a form that keeps more than its limit is answered in the form", overForm === "The form is over 1 MB.", overForm);
+
+  // The picture's form hears its upload's progress (`on:corten:progress`), so its multipart
+  // writes go by XMLHttpRequest: the uploads above were answered through it. Each event is the
+  // browser's ProgressEvent for the whole body, while the form is busy; the bar shows only then.
+  await page.evaluate(() => {
+    const form = document.querySelector("main form[enctype]");
+    /** @type {any} */ (window).__progress = [];
+    form?.addEventListener("corten:progress", (e) => {
+      const p = /** @type {ProgressEvent} */ (e);
+      const bar = form.querySelector("progress");
+      /** @type {any} */ (window).__progress.push({
+        loaded: p.loaded,
+        total: p.total,
+        computable: p.lengthComputable,
+        busy: form.getAttribute("aria-busy"),
+        shown: bar ? getComputedStyle(bar).display !== "none" : false,
+      });
+    });
+  });
+  const progressed = await upload({ name: "slow.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(600 << 10, 7) });
+  /** @type {{ loaded: number, total: number, computable: boolean, busy: string | null, shown: boolean }[]} */
+  const events = await page.evaluate(() => /** @type {any} */ (window).__progress);
+  const last = events.at(-1);
+  check(
+    "a form's on:corten:progress hears its whole body sent, while it is busy and its bar shows",
+    !!last && last.computable && last.loaded === last.total && last.total > 600 << 10 && events.every((e) => e.busy === "true" && e.shown) && progressed.startsWith("The picture is over 64 KB"),
+    `${events.length} events, last ${JSON.stringify(last)}, ${progressed}`,
+  );
+  const barAfter = await page.evaluate(() => {
+    const form = document.querySelector("main form[enctype]");
+    const bar = form?.querySelector("progress");
+    return [form?.getAttribute("aria-busy") ?? null, bar ? getComputedStyle(bar).display : "none"];
+  });
+  check("once the answer is drawn the form is not busy and the bar is hidden", barAfter[0] === null && barAfter[1] === "none", JSON.stringify(barAfter));
+  // A network failure reaches the form as corten:error, as a fetch's does. The browser logs the
+  // request it fails on purpose (Chromium's net::ERR_FAILED), and the one a navigation abandons.
+  const failedOnPurpose = errors.length;
+  await page.route("**/avatar", (route) => route.abort());
+  const uploadFailed = page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        document.querySelector("main form[enctype]")?.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true });
+        setTimeout(() => resolve("none"), 8000);
+      }),
+  );
+  await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+  await page.click("main form[enctype] button");
+  check("an upload the network fails dispatches corten:error with status 0", (await uploadFailed) === 0, String(await uploadFailed));
+  await page.unroute("**/avatar");
+  // A navigation abandons an upload still waiting for its answer: no progress reaches the form after it.
+  /** @type {import("playwright").Route[]} */
+  const heldUploads = [];
+  await page.route("**/avatar", (route) => {
+    heldUploads.push(route);
+  });
+  await page.evaluate(() => (/** @type {any} */ (window).__progress = []));
+  await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+  await page.click("main form[enctype] button");
+  await page.waitForFunction(() => document.querySelector("main form[enctype]")?.getAttribute("aria-busy") === "true", null, { timeout: 4000 }).catch(() => {});
+  const beforeLeaving = await page.evaluate(() => /** @type {any} */ (window).__progress.length);
+  await page.click('header a[href="/"]');
+  await page.waitForFunction(() => !document.querySelector("main form[enctype]"), null, { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(300);
+  const afterLeaving = await page.evaluate(() => /** @type {any} */ (window).__progress?.length ?? 0);
+  check("a navigation abandons a waiting upload and its progress", afterLeaving === beforeLeaving && !(await page.$("main form[enctype]")), `${beforeLeaving} then ${afterLeaving}`);
+  await page.unroute("**/avatar", { behavior: "ignoreErrors" });
+  for (const route of heldUploads) await route.abort().catch(() => {});
+  await page.goto(`${base}/account`);
+  errors.splice(failedOnPurpose, errors.length, ...errors.slice(failedOnPurpose).filter((e) => !/ERR_FAILED|ERR_ABORTED|NS_BINDING_ABORTED|cancelled/i.test(e)));
   if (!signsIn) await page.context().clearCookies({ name: "session" });
 
   // The posts answered 415, and the uploads 422 and 413 (the form over its limit), on purpose; the
