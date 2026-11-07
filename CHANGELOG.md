@@ -5461,7 +5461,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `corten new` writes, sent itself rather than a redirect,
     [design](docs/design.md#choice-favicon-path)), each `public, max-age=86400` with its ETag,
     and with neither it is a 404 with no body, `public, max-age=3600`; no layout read starts and
-    no page is drawn, and an API at `/` does not answer it as JSON. A page or API route of the
+    no page is drawn, and it is never JSON, whatever the client accepts or an API at `/`. A page or API route of the
     app's that the router would pick for the path (written as it, or a parameter or catch-all
     route) still takes it, so an app that answers it today keeps its own answer. A static file's
     ETag is now compared as `If-None-Match` is, weakly and in a list or as `*`, so a proxy that

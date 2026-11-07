@@ -1064,9 +1064,10 @@ rules something out.
     an hour's. A page or API route of the app's that the router would pick for the path (written
     as it, or a parameter or catch-all route that matches it) takes it instead, whatever its
     methods, as an app's own answer always does for a fixed path an app may want (the health
-    checks are Corten's alone because a platform probes them). The SVG is sent rather than a redirect because a redirect costs a
-    second request for every client that asks, and it would point at a versioned URL that
-    changes with each deploy, so it could not be cached for long without naming an old version.
+    checks are Corten's alone because a platform probes them). The SVG is sent rather than a
+    redirect because a redirect costs a second request for every client that asks, and it would
+    point at a versioned URL that changes with each deploy, so it could not be cached for long
+    without naming an old version.
     The file is chosen once, at startup. Not chosen: refusing an app's route at the path at
     startup (an app that draws its icon, or answers it per tenant, would lose the path); a
     redirect (above).
@@ -1074,10 +1075,11 @@ rules something out.
     Stands on: reasoned (one request instead of two, and the redirect's target would change
     with each deploy); bet (a client that asks `/favicon.ico` decodes what it gets by the type
     it is sent with, as for any image, so an SVG there is shown wherever an SVG icon is;
-    nothing here checks it in a browser or a crawler); measured (callgrind, `what_a_page_with_layout_reads_costs`, 1,200
-    requests less 200 over 1,000 in process, three repeats each, medians and ranges: 65,655
-    (65,637 to 65,665) instructions a request on `82af2ec4` and 65,623 (65,613 to 65,711) with
-    this route, ranges that overlap, so no difference is shown);
+    nothing here checks it in a browser or a crawler); measured (callgrind,
+    `what_a_page_with_layout_reads_costs`, 1,200 requests less 200 over 1,000 in process, three
+    repeats each, medians and ranges: 65,655 (65,637 to 65,665) instructions a request on
+    `82af2ec4` and 65,623 (65,613 to 65,711) on `975ceec1`, with this route, ranges that
+    overlap, so no difference is shown);
     value (the icon the template ships answers the browser's own request, and a route of the
     app's still takes it, Values 7).
 
@@ -1085,8 +1087,8 @@ rules something out.
     would after a redirect, or an app needs more than one icon at the path (per area or per
     host).
 
-    Last checked: 2026-11-07, the three cases on `ba625dee`, by the crate's tests and
-    card-market's smoke.
+    Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
+    smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
 ## Rules
 

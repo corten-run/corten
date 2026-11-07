@@ -930,8 +930,8 @@ from the directory: its `favicon.ico` (`image/x-icon`) when it has one, else its
 (`image/svg+xml`, the file itself rather than a redirect to its versioned URL,
 [design](../design.md#choice-favicon-path)), each sent `public, max-age=86400` with its ETag, so
 a browser asks again after a day and gets a 304. With neither it is a 404 with no body, sent
-`public, max-age=3600` so an icon added later is seen within the hour, and JSON is not asked of it
-under an API at `/`. Either way no layout read starts and no page is drawn. The file is chosen
+`public, max-age=3600` so an icon added later is seen within the hour, and never JSON, whatever
+the client accepts or an API at `/`. Either way no layout read starts and no page is drawn. The file is chosen
 when the app starts. A page or API route of the app's that matches `/favicon.ico` takes the path
 instead, whatever its methods: one written as that path, or one with a parameter or a catch-all
 (`/{*rest}`) that the router would pick for it. Every static file's ETag is compared as
