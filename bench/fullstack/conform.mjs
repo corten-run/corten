@@ -20,6 +20,11 @@
 // 2. On an item API that accepts connections and never answers (fsw-stall): how long a page (for
 //    an app without pages, the JSON) takes to answer and with what, and what the readiness
 //    endpoint says while the items cannot be read.
+// In the matched tier (BENCH_TIER=matched, apps.mjs) it probes that tier's apps, each started with
+// PROFILE=matched, and two things more in the first run (conform-hold.mjs): whether a request head
+// never finished has its connection closed, and whether a request is answered with 950 idle
+// connections held but not with 1,050, and still afterwards (the profile's cap is 1,000). The app and fsw-probe may
+// each hold 65,536 files there, so a file limit is not taken for a cap.
 // Every probe is a plain HTTP/1.1 request (node:http, no decompression) on its own connection,
 // given up after a total time, sent by conform-probe.mjs from a container on the bench network
 // (fsw-probe) to fsw-<app>:8080 with Host: localhost (the page and its form posts: localhost:<port>). Nothing goes through a published port: on
@@ -39,13 +44,24 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { allApps as all, network, runArgs } from "./apps.mjs";
-import { brokenItem, features, format, formBody, formOf, livePaths, logLinesOf, readyPaths, rowOf } from "./conformance.mjs";
+import { network, runArgs, tier, tierApps as all } from "./apps.mjs";
+import { brokenItem, capBelow, capHeld, featuresOf, format, formBody, formOf, livePaths, logLinesOf, readyPaths, rowOf } from "./conformance.mjs";
+import { roundNameError } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [appsArg, out] = process.argv.slice(2);
+// The matched tier's matrix never goes into an r<n> round, nor the defaults' into an m<n> one.
+if (out && roundNameError(out, tier)) throw new Error(/** @type {string} */ (roundNameError(out, tier)));
+// Nor overwrites a stored matrix of the other tier.
+{
+  const stored = out ? join(here, "results", out, "conformance.json") : null;
+  const was = stored && existsSync(stored) ? JSON.parse(readFileSync(stored, "utf8")).tier ?? "defaults" : tier;
+  if (was !== tier) throw new Error(`results/${out}/conformance.json is of the ${was} tier, not ${tier}: name this run otherwise, or set BENCH_TIER=${was}`);
+}
 const names = appsArg && appsArg !== "all" ? appsArg.split(",") : Object.keys(all);
-for (const n of names) if (!(n in all)) throw new Error("unknown app " + n);
+for (const n of names) if (!(n in all)) throw new Error("unknown app " + n + (tier === "matched" ? " in the matched tier" : ""));
+/** In the matched tier, the app and fsw-probe may hold this many files (the cap probe holds 1,050 connections). */
+const files = tier === "matched" ? ["--ulimit", "nofile=65536:65536"] : [];
 const docker = (/** @type {string[]} */ ...args) => spawnSync("docker", args, { encoding: "utf8" });
 const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -67,6 +83,22 @@ const probe = (name, { method = "GET", path, headers = {}, body, timeoutMs = 10_
     return { error: "probe answered no JSON: " + run.stdout.slice(0, 200), ms: 0 };
   }
   return a.body === undefined ? a : { ...a, body: Buffer.from(a.body, "base64") };
+};
+
+/**
+ * One of the matched tier's connection probes (conform-hold.mjs) from fsw-probe to the app.
+ * @param {string} name the app
+ * @param {{ mode: "head" | "cap", path: string, timeoutMs?: number, hold?: number, waitMs?: number, releaseMs?: number }} r
+ */
+const hold = (name, r) => {
+  const input = JSON.stringify({ host: "fsw-" + name, port: 8080, ...r });
+  const run = spawnSync("docker", ["exec", "-i", "fsw-probe", "node", "/b/conform-hold.mjs"], { input, encoding: "utf8", timeout: 120_000 });
+  if (run.status !== 0) return { error: "probe failed: " + (run.stderr || run.error?.message || "").trim().slice(0, 200) };
+  try {
+    return JSON.parse(run.stdout);
+  } catch {
+    return { error: "probe answered no JSON: " + run.stdout.slice(0, 200) };
+  }
 };
 
 /** Waits until the app answers anything at all on a path that needs no items, up to two minutes. */
@@ -92,6 +124,7 @@ const start = (/** @type {string} */ name, /** @type {"items" | "stall"} */ mode
   const i = args.findIndex((a) => a.startsWith("API_BASE="));
   if (i < 0) throw new Error("runArgs no longer sets API_BASE");
   args[i] = "API_BASE=http://fsw-" + mode + ":8080";
+  args.splice(args.indexOf("run") + 1, 0, ...files);
   const run = docker(...args);
   return run.status === 0 ? null : run.stderr.trim();
 };
@@ -128,7 +161,7 @@ docker("rm", "-f", "fsw-items");
 const items = docker("run", "-d", "--name", "fsw-items", "--network", network, "-v", here + ":/b:ro", "node:24-bookworm-slim", "node", "/b/conform-items.mjs", "/b/fixtures/items.json");
 if (items.status !== 0) throw new Error("fsw-items: " + items.stderr);
 docker("rm", "-f", "fsw-probe");
-const prober = docker("run", "-d", "--name", "fsw-probe", "--network", network, "-v", here + ":/b:ro", "node:24-alpine", "sleep", "infinity");
+const prober = docker("run", "-d", "--name", "fsw-probe", "--network", network, ...files, "-v", here + ":/b:ro", "node:24-alpine", "sleep", "infinity");
 if (prober.status !== 0) throw new Error("fsw-probe: " + prober.stderr);
 // The item API answers before any app is probed: one that did not start would make every read fail.
 {
@@ -161,7 +194,7 @@ const imagesFrom = process.env.CONFORM_IMAGES_FROM ?? (out && existsSync(commitF
 const save = () => {
   if (!out) return;
   mkdirSync(join(here, "results", out), { recursive: true });
-  writeFileSync(join(here, "results", out, "conformance.json"), JSON.stringify({ format, commit, dirty, imagesFrom, date: new Date().toISOString(), apps: names, results }, null, 2) + "\n");
+  writeFileSync(join(here, "results", out, "conformance.json"), JSON.stringify({ format, tier, commit, dirty, imagesFrom, date: new Date().toISOString(), apps: names, results }, null, 2) + "\n");
 };
 for (const name of names) {
   const app = all[/** @type {keyof typeof all} */ (name)];
@@ -226,6 +259,11 @@ for (const name of names) {
   for (let i = 0; i < 20; i++) probe(name, { path: "/api/items/item_5" });
   await sleep(1000);
   o.logLines = logLinesOf(linesBefore, logLines(name), 20);
+  if (tier === "matched") {
+    o.tier = tier;
+    o.unfinishedHead = hold(name, { mode: "head", path: "/api/items/item_5", timeoutMs: 45_000 });
+    o.cap = hold(name, { mode: "cap", path: "/api/items/item_5", below: capBelow, hold: capHeld, waitMs: 3000, releaseMs: 10_000 });
+  }
   o.live = firstOk(name, livePaths);
   const ready = firstOk(name, readyPaths);
   o.readyPath = ready?.path ?? null;
@@ -244,8 +282,8 @@ for (const name of names) {
   console.error(name + " done");
 }
 
-const header = ["app", ...features.map((f) => f.label)];
+const header = ["app", ...featuresOf(tier).map((f) => f.label)];
 const lines = ["| " + header.join(" | ") + " |", "|" + header.map(() => "---").join("|") + "|"];
-for (const [name, r] of Object.entries(results)) lines.push("| " + [name, ...features.map((f) => String(r.row?.[f.key] ?? r.error ?? "?"))].join(" | ") + " |");
+for (const [name, r] of Object.entries(results)) lines.push("| " + [name, ...featuresOf(tier).map((f) => String(r.row?.[f.key] ?? r.error ?? "?"))].join(" | ") + " |");
 console.log(lines.join("\n"));
 

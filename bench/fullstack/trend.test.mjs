@@ -128,3 +128,22 @@ test("a round just collected, with no commit.txt yet, is placed by the commit it
     rmSync(results, { recursive: true, force: true });
   }
 });
+
+test("the matched tier's rounds (m<n>) are not read, and a matched summary in an r<n> folder is an error", () => {
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: import.meta.dirname, encoding: "utf8" }).stdout.trim();
+  const results = mkdtempSync(join(tmpdir(), "trend-"));
+  try {
+    const round = (/** @type {string} */ name, /** @type {Record<string, unknown>} */ summary) => {
+      mkdirSync(join(results, name));
+      writeFileSync(join(results, name, "summary.json"), JSON.stringify(summary));
+      writeFileSync(join(results, name, "commit.txt"), `${head}\n`);
+    };
+    round("r1", { tier: "defaults" });
+    round("m1", { tier: "matched" });
+    assert.deepEqual(roundsIn(results).map((r) => r.round), ["r1"]);
+    round("r2", { tier: "matched" });
+    assert.throws(() => roundsIn(results), /r2's summary.json is of the matched tier/);
+  } finally {
+    rmSync(results, { recursive: true, force: true });
+  }
+});
