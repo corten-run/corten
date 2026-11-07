@@ -5420,9 +5420,10 @@ Corten is pre-1.0, so any minor version may change the API.
     Corten typed `on:formdata`'s event `Event`, and `FormDataEvent` was no interface a call is
     checked against. `formdata` is now a `FormDataEvent` and `securitypolicyviolation` a
     `SecurityPolicyViolationEvent`, and both bubble, so `on:document:` hears them. An element's
-    `error`, `abort`, `progress` and `resize` stay `Event`: lib.dom gives them the window's and
-    XMLHttpRequest's types, but an element fires a plain `Event` (probed in Chromium, Firefox and
-    WebKit). `npm run check` now holds the event map to lib.dom (`scripts/events.mjs`), so an event
+    `error` is now an `Event`, not an `ErrorEvent`, as the element fires it (probed in Chromium,
+    Firefox and WebKit): an `on:error` handler typed `ErrorEvent` read an `event.message` that is
+    never there, and no longer compiles; type it `Event`. `abort`, `progress` and `resize` stay
+    `Event`, for the same reason, though lib.dom gives them the window's and XMLHttpRequest's types. `npm run check` now holds the event map to lib.dom (`scripts/events.mjs`), so an event
     lib.dom types more narrowly cannot fall back to `Event` unnoticed
     ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
 

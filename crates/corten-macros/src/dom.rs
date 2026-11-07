@@ -150,8 +150,9 @@ pub const ELEMENTS: &[&str] = &[
 
 /// `HTMLElementEventMap`: the interface of an event (`click` is `PointerEvent`). `connect`, which
 /// Corten fires when an element joins the page, and events lib.dom does not list are `Event`.
-/// `scripts/events.mjs` (`npm run check`) holds this to lib.dom: a name it types more narrowly
-/// than `Event` has an arm here, its interface or an `Event` arm that says why.
+/// `scripts/events.mjs` (`npm run check`) holds this to lib.dom both ways: a name it types more
+/// narrowly than `Event` has an arm here with its interface, or is in that script's list of events
+/// an element fires as a plain `Event` (the `Event` arm below), and no arm is narrower than lib.dom.
 pub fn event(name: &str) -> &'static str {
     match name {
         "click" | "auxclick" | "contextmenu" | "pointerdown" | "pointerup" | "pointermove" | "pointerover" | "pointerout"

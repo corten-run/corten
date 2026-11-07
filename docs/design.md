@@ -163,7 +163,8 @@ rules something out.
    2026-11-07, TypeScript 5.9.3's lib.dom event maps against the events `on:` types, at `f686fd88`
    (five typed `Event` that lib.dom types more narrowly; `formdata` and `securitypolicyviolation`
    now take theirs, and an element's `error`, `abort` and `progress` were probed as plain `Event`s
-   in Chromium 156, Firefox 157 and WebKit 27.2), held by `scripts/events.mjs`
+   in Chromium 156, Firefox 157 and WebKit 27.2; a media element's `resize` is one in the HTML
+   standard's event table, not probed), held by `scripts/events.mjs`
    ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility

@@ -65,7 +65,8 @@ the JSDoc. A ref's element type is inferred from the tag it is put on, `event`'s
 `abort`, `progress` and `resize` are `Event`s, as the element fires them) and `target`'s from
 the tag, so passing a `<tbody>` ref where the handler takes a `<button>`, a `MouseEvent` where
 it takes a `KeyboardEvent`, a number where it takes a `string`, or calling a handler the script
-does not export is a compile error that points at the call. Inside the script, `tsc --checkJs` checks the function bodies against the same JSDoc.
+does not export is a compile error that points at the call. Inside the script, `tsc --checkJs`
+checks the function bodies against the same JSDoc.
 A ref on several kinds of element is typed as one they all are: `ref={tab as HTMLElement}`.
 
 **What the browser gets.** Plain HTML: `data-ref="rows"` and

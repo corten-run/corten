@@ -1,8 +1,9 @@
 // Holds the interface each `on:` event is typed as (crates/corten-macros/src/dom.rs, `event()`)
-// to TypeScript's lib.dom: every event lib.dom types more narrowly than `Event` on an element
-// (`GlobalEventHandlersEventMap`, `ElementEventMap`, `HTMLElementEventMap`) has an arm, either
-// lib.dom's interface or `Event` where an element fires a plain one (an arm that dom.rs explains);
-// every interface an arm names is in `EVENTS` and has a `corten::script::ev` marker
+// to TypeScript's lib.dom both ways: every event lib.dom types more narrowly than `Event` on an
+// element (`GlobalEventHandlersEventMap`, `ElementEventMap`, `HTMLElementEventMap`) has an arm with
+// lib.dom's interface, or is one of `plain` below, which an element fires as an `Event`; no arm
+// names an interface for an event lib.dom types otherwise (the runtime's own `corten:` names
+// aside); and every interface an arm names is in `EVENTS` and has a `corten::script::ev` marker
 // (crates/corten/src/script.rs). Run by npm run check.
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -37,15 +38,29 @@ for (const [, names, iface] of body.matchAll(/((?:\|?\s*"[^"]+"\s*)+)=>\s*\{?\s*
 const listed = new Set([...dom.slice(dom.indexOf("pub const EVENTS")).matchAll(/^\s*"(\w+)",$/gm)].map(([, n]) => n));
 const marked = new Set([...markers.matchAll(/^\s*events!\((\w+):/gm)].map(([, n]) => n));
 
+/**
+ * Events lib.dom types as the window's (`ErrorEvent`, `UIEvent`) or as XMLHttpRequest's
+ * (`ProgressEvent`), which an image, media or other element fires as a plain `Event`: dom.rs's
+ * `Event` arm for them says so. Probed for `error` (an image's, a video's), `abort` and
+ * `progress`; `resize` is a media element's, an `Event` in the HTML standard's event table.
+ */
+const plain = new Set(["error", "abort", "progress", "resize"]);
 const failures = [];
 if (lib.size < 50) failures.push(`read only ${lib.size} events from ${libDom}`);
 if (ours.size < 50) failures.push(`read only ${ours.size} event names from dom.rs's event()`);
 for (const [name, iface] of lib) {
   if (iface === "Event") continue;
-  const mapped = ours.get(name);
-  if (mapped === undefined) failures.push(`${name}: lib.dom types it ${iface}, and event() has no arm for it (it is typed Event)`);
-  else if (mapped !== iface && mapped !== "Event") failures.push(`${name}: lib.dom types it ${iface}, and event() ${mapped}`);
+  const mapped = ours.get(name) ?? "Event";
+  if (plain.has(name)) {
+    if (mapped !== "Event") failures.push(`${name}: an element fires it as a plain Event, and event() types it ${mapped}`);
+  } else if (mapped !== iface) failures.push(`${name}: lib.dom types it ${iface}, and event() ${ours.has(name) ? mapped : "has no arm for it (it is typed Event)"}`);
 }
+for (const [name, mapped] of ours) {
+  if (mapped === "Event" || name.startsWith("corten:")) continue;
+  const iface = lib.get(name) ?? "Event";
+  if (iface !== mapped) failures.push(`${name}: event() types it ${mapped}, and lib.dom ${iface}, so a handler for what the browser does not send would compile`);
+}
+for (const name of plain) if (ours.get(name) !== "Event") failures.push(`${name}: event() needs its explicit Event arm`);
 for (const iface of new Set(ours.values())) {
   if (!listed.has(iface)) failures.push(`${iface}: event() returns it, and EVENTS does not list it`);
 }

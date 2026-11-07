@@ -811,7 +811,7 @@
 //! ```
 //!
 //! A page's `securitypolicyviolation`, a `SecurityPolicyViolationEvent` for each thing its CSP
-//! refused, bubbles to the document, which is where the browser fires most of them:
+//! refused, bubbles to the document (probed for an image the CSP refused, fired at the document):
 //!
 //! ```
 //! use corten::prelude::*;
@@ -835,7 +835,8 @@
 //! # fn main() {}
 //! ```
 //!
-//! A media element's `progress` is a plain `Event`, so a `ProgressEvent` handler does not take it:
+//! A media element's `progress` is a plain `Event`, so a `ProgressEvent` handler does not take it,
+//! nor an `ErrorEvent` handler (the window's) an image's `error`:
 //!
 //! ```compile_fail
 //! use corten::prelude::*;
@@ -844,6 +845,16 @@
 //! fn CartLine() -> impl Render {
 //!     let bar = refs();
 //!     html! { <li><video on:progress={js::progressed(event, bar)}></video><progress ref={bar}></progress></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><img src="/a.png" alt="" on:error={js::crashed(event)}></li> }
 //! }
 //! # fn main() {}
 //! ```

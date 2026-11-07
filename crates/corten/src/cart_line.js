@@ -49,6 +49,11 @@ export function refused(event) {
   document.title = event.violatedDirective;
 }
 
+/** @param {ErrorEvent} event */
+export function crashed(event) {
+  document.title = event.message;
+}
+
 /** @param {HTMLElement} line */
 export function remove(line) {
   line.remove();
