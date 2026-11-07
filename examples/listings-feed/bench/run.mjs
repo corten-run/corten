@@ -54,9 +54,9 @@ docker("network", "create", "--subnet", "10.77.77.0/24", "feedbench");
 docker("run", "-d", "--name", "fb-pg", ...net, "--ip", "10.77.77.10", "-e", "POSTGRES_PASSWORD=postgres", "-e", "POSTGRES_DB=feeds", "postgres:16-alpine");
 docker("run", "-d", "--name", "fb-nats", ...net, "--ip", "10.77.77.11", "nats:2-alpine", "-js");
 await until("postgres", () => spawnSync("docker", ["exec", "fb-pg", "pg_isready", "-U", "postgres", "-d", "feeds"]).status === 0);
-// a starts first, so it is the active relay when it is killed.
+// a starts first, so it is almost always the active relay when it is killed; each kill records
+// whether it was (event.relay), and one that was not gives no takeover time.
 instance("fb-a", "10.77.77.21", "a");
-// a holds the lease alone until b starts; the kill records whether it still does (event.relay).
 await until("a", () => /listening/.test(logs("fb-a")));
 instance("fb-b", "10.77.77.22", "b");
 await until("b", () => /listening/.test(logs("fb-b")));

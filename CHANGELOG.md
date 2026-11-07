@@ -5456,9 +5456,10 @@ Corten is pre-1.0, so any minor version may change the API.
     so the app's subscriber, its filters and JSON lines never saw them. Each is now a `tracing`
     event with target `corten::feed`, as the feed's own are, with fields (`instance`, `feed`, and
     `have` and `got` for a gap): a warning, or `info` for the relay going active. A test installs
-    a subscriber and sees a gap and a dropped patch with their feed; it saw nothing before. The
-    failover bench reads which instance ran the relay from its `/api/stats` at each kill, since the
-    first `relay active` can come before `serve` installs the default subscriber
+    a subscriber and sees a gap and a dropped patch with their feed; it saw nothing before. An event while
+    the app starts (an instance taking the lease, or failing to, before `serve`) no longer prints
+    with the default subscriber, which `serve` installs; `eprintln!` printed it. The failover
+    bench reads which instance ran the relay from its `/api/stats` at each kill instead
     ([#1069 corten-cluster reports gaps, reloads and relay failover with eprintln!, so the app's tracing subscriber, filters and JSON logs never see them](https://github.com/corten-run/corten/issues/1069)).
 
 ### Documentation

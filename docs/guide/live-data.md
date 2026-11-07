@@ -276,8 +276,9 @@ reload it starts, a patch dropped as invalid, a reload, the JetStream consumer o
 that failed, and a feed loaded with no replay log (clients that move to the instance resync), and
 `relay active` and `relay standing by` as the relay's lease moves, so a log pipeline counts gaps
 and failovers. `Cluster::start` starts the relay before `serve` installs Corten's default
-subscriber, so an event that early (the first instance's `relay active`) is printed only by a
-subscriber the app set before `Cluster::start`. An instance serves
+subscriber, so events while the app starts (an instance taking the lease as it starts, or failing
+to) print only with a `tracing` subscriber the app installed before `Cluster::start`
+(`tracing-subscriber`'s, for one). An instance serves
 many feeds, and loading one (on first use, after an idle unload or a gap) or applying a patch to
 one does not hold up requests for the others: a feed is built from its rows on a blocking
 thread, outside the lock that finds a feed. Reading the rows (the app's `Source::rows`) runs on
