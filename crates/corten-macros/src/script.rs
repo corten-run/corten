@@ -1619,17 +1619,20 @@ const UNKNOWN: &str = "unknown";
 /// Why a call to a handler whose parameter is typed `ty` (`expanded` with its aliases written
 /// out) does not compile: no Rust type is checked against it, and a precise-looking annotation
 /// that takes any value would be a guarantee only in appearance.
-/// `browser`: the type names an element, an event or another value only the browser supplies,
-/// which no Rust type stands for, so the way out is a type the call checks, not a declaration.
+/// `browser`: the type names an element, an event or another value that is not JSON (a signal,
+/// an element id, a feed URL, a message or a format), which no generated declaration stands for,
+/// so the way out is a type the call checks, not a declaration.
 fn unchecked(ty: &str, expanded: &str, browser: bool) -> String {
     let shown = if expanded == ty { ty.to_string() } else { format!("{ty}, which is {expanded}") };
     if browser {
-        return format!("{shown}: no call can be checked against this type, so a wrong element, event or signal would compile; take one the scripts guide lists as checked: an element type, a union or a list of them (El[]), one event interface (for several events, the one they share, such as UIEvent or Event, narrowed in the script), AbortSignal, Holds<Row, El>, Map<string, El>, a message or a format, or a @typedef of these (a group) taken as it is, not in a list or with null; or take {UNKNOWN} and check the value in the script");
+        return format!("{shown}: no call can be checked against this type, so a wrong element, event or other value would compile; take one the scripts guide lists as checked: an element type, a union or a list of them (El[]), one event interface (for several events, the one they share, such as UIEvent or Event, narrowed in the script), AbortSignal, ElementId or ElementId[], FeedUrl<Row>, Holds<Row, El>, Map<string, El>, a message or a format, or a @typedef of these (a group) taken as it is, not in a list or with null; or take {UNKNOWN} and check the value in the script");
     }
     format!("{shown}: no call can be checked against this type, so a wrong argument would compile; declare a Rust type for the value (derive ToJson, add it with Types::add) and take its declaration, import(\"../types/app\").Name, use a type the scripts guide lists as checked, or take {UNKNOWN} and check the value in the script")
 }
 
-/// Names of values only the browser supplies, besides elements and events.
+/// Names of values a handler takes that are not JSON, besides elements and events: the browser's
+/// (a node, a signal, a map of elements) and Corten's (an element id, a feed URL, a message, a
+/// format).
 const BROWSER: &[&str] = &[
     "EventTarget",
     "Node",
@@ -1650,22 +1653,37 @@ const BROWSER: &[&str] = &[
     "PercentFormat",
 ];
 
+/// A JSDoc block's text with each line's leading `*` taken off, so a tag written over several
+/// lines reads as it would on one.
+fn jsdoc_text(block: &str) -> String {
+    block
+        .lines()
+        .map(|line| {
+            let line = line.trim_start();
+            if line.starts_with("*/") {
+                line
+            } else {
+                line.strip_prefix('*').unwrap_or(line)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The names every JSDoc `@import { A, B as C } from "module"` of `module` in a block brings in,
-/// as written (a list over several lines, each starting `*`, read as one).
+/// as written (a tag over several lines read as one).
 fn jsdoc_import(block: &str, module: &str) -> Option<Vec<String>> {
     let quoted = [format!("\"{module}\""), format!("'{module}'")];
+    let block = jsdoc_text(block);
     let mut out = Vec::new();
     for (at, _) in block.match_indices("@import") {
         let Some(rest) = block[at + "@import".len()..].trim_start().strip_prefix('{') else { continue };
         let Some((names, after)) = rest.split_once('}') else { continue };
-        // `} from ".."` may be on the next line of the block, after its `*`.
-        let from = after.trim_start().trim_start_matches('*').trim_start();
-        let from = from.strip_prefix("from").map(str::trim_start).unwrap_or("");
+        let from = after.trim_start().strip_prefix("from").map(str::trim_start).unwrap_or("");
         if !quoted.iter().any(|q| from.starts_with(q.as_str())) {
             continue;
         }
-        let names = names.lines().map(|line| line.trim().trim_start_matches('*')).collect::<Vec<_>>().join(" ");
-        out.extend(names.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()));
+        out.extend(names.split(',').map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|n| !n.is_empty()));
     }
     (!out.is_empty()).then_some(out)
 }
@@ -1675,19 +1693,17 @@ fn jsdoc_import(block: &str, module: &str) -> Option<Vec<String>> {
 /// beside a named import of this one is not one).
 fn jsdoc_namespace_import(block: &str, module: &str) -> bool {
     let quoted = [format!("\"{module}\""), format!("'{module}'")];
+    let block = jsdoc_text(block);
     let starts: Vec<usize> = block.match_indices("@import").map(|(at, _)| at).collect();
     starts.iter().enumerate().any(|(n, &at)| {
         let end = starts.get(n + 1).copied().unwrap_or(block.len());
-        let one = &block[at + "@import".len()..end];
-        let Some(rest) = one.trim_start().strip_prefix('*') else { return false };
-        let rest = rest.trim_start();
-        if !rest.strip_prefix("as").is_some_and(|r| r.starts_with(char::is_whitespace)) {
-            return false;
-        }
-        one.split_once("from").is_some_and(|(_, from)| {
-            let from = from.trim_start().trim_start_matches('*').trim_start();
-            quoted.iter().any(|q| from.starts_with(q.as_str()))
-        })
+        // `* as name from "module"`, word by word.
+        let mut words = block[at + "@import".len()..end].split_whitespace();
+        words.next() == Some("*")
+            && words.next() == Some("as")
+            && words.next().is_some()
+            && words.next() == Some("from")
+            && words.next().is_some_and(|m| quoted.iter().any(|q| m.starts_with(q.as_str())))
     })
 }
 
@@ -2069,6 +2085,23 @@ function helper() {}
             let err = parse(source).unwrap_err();
             assert!(err.1.starts_with("import typed events by name"), "{source}: {err:?}");
         }
+        // Over several lines, and with an alias that holds `from`.
+        for source in [
+            "/**\n * @import\n * * as ev from \"corten/events\"\n */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
+            "/**\n * @import *\n * as ev from \"corten/events\"\n */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
+            "/** @import * as fromEvents from \"corten/events\" */\n/** @param {fromEvents.Saved} a */\nexport function f(a) {}",
+        ] {
+            let err = parse(source).unwrap_err();
+            assert!(err.1.starts_with("import typed events by name"), "{source}: {err:?}");
+        }
+        // A named import with its list or its module on the next line.
+        for source in [
+            "/**\n * @import\n * { Saved } from \"corten/events\"\n */\n/** @param {Saved} a */\nexport function f(a) {}",
+            "/**\n * @import { Saved } from\n * \"corten/events\"\n */\n/** @param {Saved} a */\nexport function f(a) {}",
+        ] {
+            let (handlers, _) = parse(source).unwrap();
+            assert_eq!(handlers[0].params[0].1, Param::Event("Saved".into()), "{source}");
+        }
         // A namespace import of another module beside a named import of typed events is not one.
         let (handlers, _) = parse("/**\n * @import * as app from \"../types/app\"\n * @import { Saved } from \"corten/events\"\n */\n/** @param {Saved} a */\nexport function f(a) {}")
             .unwrap();
@@ -2094,13 +2127,22 @@ function helper() {}
     }
 
     #[test]
+    fn an_element_id_or_a_feed_url_in_another_shape_gets_the_advice_that_names_them() {
+        for ty in ["ElementId | null", "FeedUrl<Level> | null"] {
+            let why = refusal(&format!("/** @param {{{ty}}} a */\nexport function f(a) {{}}"));
+            assert!(why.contains("a wrong element, event or other value would compile"), "{ty}: {why}");
+            assert!(why.contains("ElementId or ElementId[], FeedUrl<Row>"), "{ty}: {why}");
+        }
+    }
+
+    #[test]
     fn a_group_field_typed_by_a_group_gets_the_same_advice_in_either_order() {
         let outer = "/** @typedef {{ button: HTMLButtonElement; inner: Inner | null }} Outer */\n";
         let inner = "/** @typedef {{ input: HTMLInputElement }} Inner */\n";
         let handler = "/** @param {Outer} a */\nexport function f(a) {}";
         for source in [format!("{outer}{inner}{handler}"), format!("{inner}{outer}{handler}")] {
             let why = refusal(&source);
-            assert!(why.contains("a wrong element, event or signal would compile"), "{source}: {why}");
+            assert!(why.contains("a wrong element, event or other value would compile"), "{source}: {why}");
         }
     }
 

@@ -3874,7 +3874,8 @@ Corten is pre-1.0, so any minor version may change the API.
     an export only other scripts call is typed as the script needs. A typed event imported for
     its type alone (`/** @import { Saved } from "corten/events" */`) is now its `#[event]` type,
     as an `import` statement's is, where it took any event: `on:click` on such a handler does not
-    compile. No example, kit component or template script called a handler with such a parameter;
+    compile. A JSDoc namespace import of them (`/** @import * as ev from "corten/events" */`), which
+    compiled, now stops the script compiling, as a namespace `import` statement of them does. No example, kit component or template script called a handler with such a parameter;
     six event handlers in `examples/deck-builder` and `examples/seller-desk` are now checked
     ([#1037 Unsupported handler parameter types can silently fall back to unchecked Rust-to-JS arguments](https://github.com/corten-run/corten/issues/1037)).
 

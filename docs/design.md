@@ -152,8 +152,8 @@ rules something out.
 
    Revisit when: an example or a kit component has to take `unknown` where a precise type would
    serve it, because no checked type or generated declaration fits, so a wrong call compiles; or
-   JavaScript gains type syntax of its own (TC39's type annotations proposal), which a script could carry in place of
-   JSDoc.
+   JavaScript gains type syntax of its own (TC39's type annotations proposal), which a script
+   could carry in place of JSDoc.
 
    Last checked: 2026-11-07, at `cdbe4392`: every parameter a handler in the repository took as
    any JSON value was listed (seven: six typed events imported in a JSDoc `@import`, now each its
