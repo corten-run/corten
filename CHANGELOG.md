@@ -2441,6 +2441,12 @@ Corten is pre-1.0, so any minor version may change the API.
     a saturation phase whose app used less than 90% of its core (APP-IDLE), as every local one was. A matched round
     runs on a c-16, and `droplet.mjs --edge off` runs it reached directly, to compare. The defaults
     tier stays direct.
+269. `bench/fullstack/REVIEW.md` tells a framework's maintainers what the comparison measures,
+    what they may change in their app (settings a production deployment uses, the app's own code)
+    and what they may not (caching rendered output, skipping work, tuning past the framework's
+    guidance), and how to propose it; the README's app table says whether each app has been
+    reviewed by its maintainers (none has been reviewed in full yet)
+    ([#814 No one who maintains the other frameworks has reviewed their bench/fullstack apps, so a fair-comparison claim rests on our own reading of each](https://github.com/corten-run/corten/issues/814)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -5466,6 +5472,19 @@ Corten is pre-1.0, so any minor version may change the API.
     smoke checks the backoff's 1 s and 2 s, that it stops on the signal, and that a `sync` later
     or after a reconnect is not delayed
     ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
+190. `subscribe()` told its `status` handler `syncing` twice in a row when a snapshot failed and
+    was fetched again. Its recovery paths now each have a browser check in `scripts/smoke.mjs`,
+    in Chromium, Firefox and WebKit: a patch that skips a `seq` loads one new snapshot and a
+    patch already applied is dropped; a stream answered with an HTTP error is listened to again
+    from the last patch's cursor, with no snapshot, after 1 s and then 2 s; a failed snapshot is
+    fetched again after 1 s and logged once, and the feed goes live (`sync` was checked with
+    [#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067),
+    except a `sync` on a stream already open, which WebKit skips). That a stream which opens
+    starts the error backoff again is checked too. The live-data guide and the failover
+    benchmark now say its 200 clients are the benchmark's own Node client of the feed's
+    protocol on its own retry schedule, beside a Chromium page running `subscribe()` that lost
+    nothing
+    ([#1068 subscribe()'s resync paths (sync, a seq gap, a stream answered with an error) have no browser smoke check, and the failover benchmark counts a Node copy of the client](https://github.com/corten-run/corten/issues/1068)).
 
 ### Documentation
 
@@ -5957,6 +5976,11 @@ Corten is pre-1.0, so any minor version may change the API.
     intro and the Limits section no longer say every limit is "yet": some wait on the platform or
     an app, others are so by design
     ([#967 design.md's Limits 11 and 12 are decisions, not limits, and its intro calls every limit something Corten does not do yet](https://github.com/corten-run/corten/issues/967)).
+74. The README is about Corten again: what it is, highlights, the quick start, the compiled
+    example, how a request and a page work, a short table of Corten's own measured numbers, and
+    the guides, examples and crates. The benchmark tables against other frameworks and their notes
+    moved to `docs/performance.md`, unchanged apart from their links, with the README's former
+    headline comparisons as its summary; `docs/design.md` and `bench/browser` now cite them there.
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
