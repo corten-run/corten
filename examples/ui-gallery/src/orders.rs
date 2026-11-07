@@ -235,6 +235,10 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
             <Alert variant={AlertVariant::Warning} emphasis={AlertEmphasis::Soft}>
                 <strong>"One order is past its ship-by date"</strong>
                 <p>"Ada Lovelace's Ashen Drake was due to ship yesterday. Ship it today or message the buyer."</p>
+                <ul>
+                    <li>"Ship it today with its postage bought."</li>
+                    <li>"Or message the buyer and give a new date."</li>
+                </ul>
                 <div class={Cluster { gap: Gap::Sm }}>
                     <button class={Button { variant: ButtonVariant::Success, size: ButtonSize::Sm }} type="button">
                         "Mark shipped"
@@ -281,6 +285,14 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                     <div class={CardContent {}}>
                         <Alert variant={AlertVariant::Info} emphasis={AlertEmphasis::Outline}>
                             <p>"Orders paid before 3 pm ship the same day."</p>
+                            <ul>
+                                <li>
+                                    "Paid later, they ship the next day,"
+                                    <ul>
+                                        <li>"or on Monday when that is a Sunday."</li>
+                                    </ul>
+                                </li>
+                            </ul>
                         </Alert>
                         // Each order is a view the server renders: links, the current one marked.
                         <nav class={SegmentedLinks {}} aria-label="Order the orders by">

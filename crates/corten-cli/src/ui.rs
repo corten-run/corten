@@ -3280,17 +3280,19 @@ mod tests {
             }
             // An alert's tones and its soft and solid emphases are the badge's, checked above; an
             // outline alert's text is the tone on the card (the pairs above), and its paragraph 85% of
-            // the tone in the foreground, on the card.
+            // the tone in the foreground, on the card. A list in an alert is colored as its paragraph is.
             let alert = include_str!("../kit/alert.css");
             for rule in [
                 ".soft { background: color-mix(in srgb, var(--kit-tone) 12%, var(--card)); color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground));",
                 ".solid { background: var(--kit-tone-fill); color: var(--kit-tone-text);",
-                ".outline > p { color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }",
+                ".outline > :is(p, ol, ul) { color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }",
                 ".outline { background: var(--card); color: var(--kit-tone);",
                 ".neutral.solid { border-color: var(--border); }",
                 ".neutral.outline { color: var(--card-foreground);",
-                ".neutral.outline > p { color: var(--muted-foreground); }",
+                ".neutral.outline > :is(p, ol, ul) { color: var(--muted-foreground); }",
                 ".alert > p { margin: 0; color: inherit; }",
+                // A list takes the paragraph's color in every emphasis, so it is checked with it.
+                ".alert > :is(ol, ul), .alert li > :is(ol, ul) { color: inherit;",
             ] {
                 assert!(
                     alert.contains(rule)
