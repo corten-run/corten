@@ -1,0 +1,20 @@
+<%inc #include "catalog.h"
+#include <drogon/utils/Utilities.h> %>
+<%layout Layout%>
+<%c++ const auto &record = *@@.get<catalog::RecordPtr>("record"); const auto &prefix = @@.get<std::string>("prefix"); %>
+<article aria-label="Catalog record">
+<h1>{% drogon::HttpViewData::htmlTranslate(record.title) %}</h1>
+<p>{% drogon::HttpViewData::htmlTranslate(record.subtitle) %}</p>
+<p>{% drogon::HttpViewData::htmlTranslate(record.description) %}</p>
+<ul aria-label="Tags"><%c++ for (const auto &tag : record.tags) { %><li>{% drogon::HttpViewData::htmlTranslate(tag) %}</li><%c++ } %></ul>
+<form method="get" action="/catalog/{% drogon::utils::urlEncodeComponent(record.id) %}">
+<label>Field name <input name="field" value="{% drogon::HttpViewData::htmlTranslate(prefix) %}"></label>
+<button type="submit">Filter</button>
+</form>
+<table>
+<caption>Record fields</caption>
+<thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+<tbody><%c++ for (const auto &field : record.fields) { if (field.name.compare(0, prefix.size(), prefix) == 0) { %><tr><th scope="row">{% drogon::HttpViewData::htmlTranslate(field.name) %}</th><td>{% drogon::HttpViewData::htmlTranslate(field.value) %}</td></tr><%c++ } } %></tbody>
+</table>
+<nav aria-label="Related records"><ul><%c++ for (const auto &related : record.related) { %><li><a href="/catalog/{% drogon::utils::urlEncodeComponent(related.id) %}">{% drogon::HttpViewData::htmlTranslate(related.title) %}</a></li><%c++ } %></ul></nav>
+</article>

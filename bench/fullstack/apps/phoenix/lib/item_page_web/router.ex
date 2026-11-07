@@ -17,6 +17,8 @@ defmodule ItemPageWeb.Router do
   scope "/", ItemPageWeb do
     pipe_through :browser
 
+    get "/catalog/:id", CatalogController, :show
+
     live_session :default do
       live "/", HomeLive
       live "/items/:id", ItemLive
@@ -27,6 +29,7 @@ defmodule ItemPageWeb.Router do
   scope "/api", ItemPageWeb do
     pipe_through :api
     get "/items/:id", ItemJSONController, :show
+    get "/catalog/:id", CatalogController, :json_record
   end
 
   # The live benchmark's publisher: the JSON body goes to every "prices" subscriber.

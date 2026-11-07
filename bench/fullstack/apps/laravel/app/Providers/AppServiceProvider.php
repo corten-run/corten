@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Support\CatalogSource;
 use App\Support\ItemSource;
 use Illuminate\Support\ServiceProvider;
 
@@ -10,6 +11,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->singleton(ItemSource::class);
+        $this->app->singleton(CatalogSource::class);
     }
 
     public function boot(): void
@@ -19,6 +21,7 @@ class AppServiceProvider extends ServiceProvider
         // small for the 508 items as PHP arrays, so the in-memory runs fail; that is reported.
         if (! $this->app->runningInConsole()) {
             $this->app->make(ItemSource::class);
+            $this->app->make(CatalogSource::class);
         }
     }
 }

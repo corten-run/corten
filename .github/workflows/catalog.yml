@@ -1,0 +1,78 @@
+name: Catalog Contract
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/catalog.yml
+      - bench/catalog/**
+      - bench/fullstack/apps/**
+      - bench/fullstack/apps.mjs
+      - bench/fullstack/passes.mjs
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - package.json
+      - package-lock.json
+      - scripts/steady.mjs
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/catalog.yml
+      - bench/catalog/**
+      - bench/fullstack/apps/**
+      - bench/fullstack/apps.mjs
+      - bench/fullstack/passes.mjs
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - package.json
+      - package-lock.json
+      - scripts/steady.mjs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: node bench/catalog/fixtures.mjs
+      - run: node --test bench/catalog/*.test.mjs
+        env:
+          CATALOG_DOCKER_TESTS: "1"
+
+  parity:
+    needs: harness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 95
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [corten, nextjs, tanstack-start, sveltekit, react-router, leptos, django, rails, laravel, aspnet, spring, phoenix, astro, nuxt, topcoat, axum-maud, gin, drogon]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci --no-audit --no-fund
+      - run: node bench/catalog/fixtures.mjs
+      # check-only still launches BOTH fixture and API sources and fails on any
+      # structural, styling, escaping, navigation, schema, or upstream-read error.
+      # This workflow does not measure/publish performance or touch nightly state.
+      - name: Build and verify both catalog sources
+        run: node bench/catalog/run.mjs c1 --apps ${{ matrix.app }} --build --check-only
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: catalog-contract-${{ matrix.app }}
+          path: bench/catalog/results/c1/
+          if-no-files-found: warn
+          retention-days: 14

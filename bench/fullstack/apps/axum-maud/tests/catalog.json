@@ -1,0 +1,25 @@
+{
+  "record_1": {
+    "id": "record_1",
+    "title": "Ridge <trail> & \"notes\"",
+    "subtitle": "Survey <notes>",
+    "description": "001.20 <script>alert(1)</script>",
+    "tags": ["survey & outdoors", "<tag>"],
+    "fields": [
+      {"name": "Access", "value": "North <gate>"},
+      {"name": "access", "value": "South & gate"},
+      {"name": " Access", "value": "West gate"},
+      {"name": "Access", "value": "East gate"}
+    ],
+    "related": [{"id": "record_2", "title": "Valley <trail>"}]
+  },
+  "record_2": {
+    "id": "record_2",
+    "title": "Valley trail",
+    "subtitle": "",
+    "description": "Empty lists remain present.",
+    "tags": [],
+    "fields": [],
+    "related": []
+  }
+}
