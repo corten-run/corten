@@ -5300,8 +5300,8 @@ Corten is pre-1.0, so any minor version may change the API.
     neutral outline's muted text), which the kit's contrast test covers with the paragraph's rules.
     The gallery's soft warning and outline info alerts show one, and its smoke measures the margin,
     the gap and the indents, and checks that the outline's list is its paragraph's color and not
-    the alert's, in each engine. An app
-    with a copy of the kit takes it with `corten ui add alert --merge`
+    the alert's, in each engine. An app with a copy of the kit takes it with
+    `corten ui add alert --merge`
     ([#1048 Kit Alert styles its heading and paragraphs but not a list, so a list in an alert keeps the browser's 1em margin and 40px indent](https://github.com/corten-run/corten/issues/1048)).
 
 ### Documentation

@@ -286,7 +286,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                         <Alert variant={AlertVariant::Info} emphasis={AlertEmphasis::Outline}>
                             <p>"Orders paid before 3 pm ship the same day."</p>
                             <ul>
-                                <li>"Paid later, they ship the next day,"
+                                <li>
+                                    "Paid later, they ship the next day,"
                                     <ul>
                                         <li>"or on Monday when that is a Sunday."</li>
                                     </ul>
