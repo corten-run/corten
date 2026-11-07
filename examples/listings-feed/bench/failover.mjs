@@ -2,11 +2,12 @@
 // socket mounted so it can stop and restart instances on the same clock it measures with.
 //
 // CLIENTS subscribers (split over WORKERS threads, so the load generator is not the bottleneck)
-// follow feed s1 through the load balancer with the requests EventSource + corten.js make:
+// follow feed s1 through the load balancer much as EventSource + corten.js do:
 // snapshot, then /live?since=cursor; on a dropped stream, reconnect after the server's `retry`
 // with Last-Event-ID; on an HTTP error, back off and reconnect. They are a client of this file's
 // own, not the runtime: a failed snapshot is retried on its own schedule (250 ms doubling to
-// 5 s), and a gap in seq is counted as lost rather than loading a snapshot, so they count what
+// 5 s), the HTTP-error backoff starts again on a patch (the runtime's, when a stream opens), and
+// a gap in seq is counted as lost rather than loading a snapshot, so they count what
 // the server sends. run.mjs keeps a Chromium page on subscribe() through the same run, and
 // scripts/smoke.mjs checks subscribe()'s recovery paths in browsers. The main thread commits WPS market
 // writes per second (N listings each) through the load balancer and runs the schedule (default:

@@ -264,12 +264,14 @@ async function run(browser) {
   // stylesheet that failed), and the stream the status check drops on purpose, as an error, in one
   // of two wordings.
   const cut = /was interrupted while the page was loading|can.t establish a connection to the server at \S+\/live\/(trades|flaky)/;
-  // A failed resource is named by its URL (Chromium and WebKit put it only in the location).
+  // While `located` is set, each error is named with where it came from (Chromium and WebKit
+  // give a failed resource's URL only there): the feed checks below tell their own errors apart.
+  let located = false;
   page.on("console", (m) => {
     const text = m.type() === "error" ? m.text() : "";
     if (!text || bug(text) || cut.test(text)) return;
-    const at = m.location()?.url;
-    errors.push(text.startsWith("Failed to load resource") && at ? `${text} at ${at}` : text);
+    const at = located ? m.location()?.url : "";
+    errors.push(at ? `${text} at ${at}` : text);
   });
   page.on("pageerror", (e) => errors.push(e.message));
   // Every EventSource the page opens, to see which are still open.
@@ -2694,6 +2696,7 @@ async function run(browser) {
   // subscribe()'s other recovery paths (#1068). A patch already applied is dropped, and one that
   // skips a seq loads a new snapshot: seq 2, 2 again, 3, then 5.
   const feedsLogged = errors.length;
+  located = true;
   /** @param {number} seq */
   const patchEvent = (seq) => `event: patch\nid: a-${seq}\ndata: {"seq":${seq},"changes":[]}\n\n`;
   const gapFeed = await feedTimes("gap", (n) => (n === 1 ? `${patchEvent(2)}${patchEvent(2)}${patchEvent(3)}${patchEvent(5)}` : "retry: 60000\n\n"));
@@ -2745,9 +2748,10 @@ async function run(browser) {
   );
   // The browsers' own errors for the 503 streams and the 500 snapshot are the point of these
   // checks, not faults, and the runtime logs the failed snapshot once (Firefox gives the logged
-  // error's text as `Error`).
+  // error's text as `Error`, so there it is known by coming from the runtime).
+  located = false;
   const feedErrors = errors.slice(feedsLogged).filter((e) => !/(can.t establish a connection to the server at|Failed to load resource: .* at) \S+\/feed\/(failed|retried)\b/.test(e));
-  const snapshotLogged = feedErrors.filter((e) => /^(Error: )?corten: feed \/feed\/retried answered 500\b|^Error$/.test(e));
+  const snapshotLogged = feedErrors.filter((e) => /^(Error: )?corten: feed \/feed\/retried answered 500\b|^Error at \S+\/corten\.js$/.test(e));
   check("a snapshot that fails is logged once", snapshotLogged.length === 1, feedErrors.join(" | ") || "nothing logged");
   errors.splice(feedsLogged, errors.length, ...feedErrors.filter((e) => !snapshotLogged.includes(e)));
 
