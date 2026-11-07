@@ -428,7 +428,9 @@ impl Pieces {
     /// is read past: a minute unless set. It is also the body's allowance against a trickle: the
     /// reads may wait for the client that long plus a second for every 240 bytes that came, in
     /// all (time the handler spends between reads is not counted), so a byte now and then does
-    /// not hold the request. `None` leaves only the route's deadline, for both.
+    /// not hold the request. That assumes the handler asks for the next piece promptly: one that
+    /// spends a fixed time on each piece lets a client that sends one in that time go on. `None`
+    /// leaves only the route's deadline, for both.
     pub fn idle(mut self, idle: impl Into<Option<Duration>>) -> Self {
         self.idle.set(idle.into());
         self
@@ -497,14 +499,8 @@ impl Pieces {
 pub(crate) struct Idle {
     time: Option<Duration>,
     timer: Option<Pin<Box<Sleep>>>,
-    /// When the read that waits now gives up; `None` when none has waited yet, or the idle time is
-    /// too long to add to the clock (`Duration::MAX`), which never gives up.
-    due: Option<tokio::time::Instant>,
-    /// When the wait for the next piece began; `None` when no read waits for one. Kept here, not
-    /// in the read, so a read dropped while it waits (inside a `timeout` or a `select!`) does not
-    /// start the wait again.
-    waiting: Option<tokio::time::Instant>,
-    /// Nanoseconds the reads have waited for the client in all.
+    /// Nanoseconds the reads have waited for the client in all, a read dropped while it waited
+    /// (inside a `timeout` or a `select!`) included ([`NextPiece`]).
     waited: u64,
     /// Nanoseconds of waiting the pieces that came have earned: [`WAIT_PER_BYTE`] each byte.
     earned: u64,
@@ -519,54 +515,84 @@ const WAIT_PER_BYTE: u64 = 1_000_000_000 / MIN_BODY_RATE;
 
 impl Idle {
     pub(crate) const fn new(time: Option<Duration>) -> Self {
-        Idle { time, timer: None, due: None, waiting: None, waited: 0, earned: 0 }
+        Idle { time, timer: None, waited: 0, earned: 0 }
     }
 
-    /// Sets the idle time, keeping what the body has waited and earned so far.
+    /// Sets the idle time, keeping what the body has waited and earned so far. The timer, set for
+    /// the old one, is made again by the next read that waits.
     pub(crate) fn set(&mut self, time: Option<Duration>) {
         self.time = time;
-        self.waiting = None;
-        self.due = None;
+        self.timer = None;
     }
 
     /// The stream's next item, or `None` when the idle time passed first.
     #[inline]
-    pub(crate) fn next<'a>(
-        &'a mut self,
-        stream: &'a mut BodyDataStream,
-    ) -> impl Future<Output = Option<Option<Result<Bytes, axum::Error>>>> + 'a {
-        std::future::poll_fn(move |cx| {
-            if let Poll::Ready(item) = stream.poll_next_unpin(cx) {
-                if let Some(at) = self.waiting.take() {
-                    let waited = tokio::time::Instant::now().saturating_duration_since(at);
-                    self.waited = self.waited.saturating_add(u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX));
-                }
-                if let (Some(_), Some(Ok(piece))) = (self.time, &item) {
-                    self.earned = self.earned.saturating_add((piece.len() as u64).saturating_mul(WAIT_PER_BYTE));
-                }
-                return Poll::Ready(Some(item));
+    pub(crate) fn next<'a>(&'a mut self, stream: &'a mut BodyDataStream) -> NextPiece<'a> {
+        NextPiece { idle: self, stream, since: None, due: None }
+    }
+}
+
+/// A read of a body's next piece ([`Idle::next`]): the stream's next item, or `None` when the idle
+/// time passed first. What it waited for the client counts for the body even when it is dropped
+/// first (a read inside a `timeout`), and the time after that, the handler's, does not.
+pub(crate) struct NextPiece<'a> {
+    idle: &'a mut Idle,
+    stream: &'a mut BodyDataStream,
+    /// When this read began to wait for the client; `None` until it waits.
+    since: Option<tokio::time::Instant>,
+    /// When it gives up; `None` until it waits, or when the idle time is too long to add to the
+    /// clock (`Duration::MAX`), which never gives up.
+    due: Option<tokio::time::Instant>,
+}
+
+impl NextPiece<'_> {
+    /// Adds what this read has waited to the body's waits.
+    fn stop_waiting(&mut self) {
+        if let Some(at) = self.since.take() {
+            let waited = tokio::time::Instant::now().saturating_duration_since(at);
+            self.idle.waited = self.idle.waited.saturating_add(u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX));
+        }
+    }
+}
+
+impl Future for NextPiece<'_> {
+    type Output = Option<Option<Result<Bytes, axum::Error>>>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        let read = &mut *self;
+        if let Poll::Ready(item) = read.stream.poll_next_unpin(cx) {
+            read.stop_waiting();
+            if let (Some(_), Some(Ok(piece))) = (read.idle.time, &item) {
+                read.idle.earned = read.idle.earned.saturating_add((piece.len() as u64).saturating_mul(WAIT_PER_BYTE));
             }
-            let Some(time) = self.time else { return Poll::Pending };
-            if self.waiting.is_none() {
-                let now = tokio::time::Instant::now();
-                self.waiting = Some(now);
-                // The idle time, less what the body has waited past what its bytes earned.
-                let behind = Duration::from_nanos(self.waited.saturating_sub(self.earned));
-                self.due = now.checked_add(time.saturating_sub(behind));
+            return Poll::Ready(Some(item));
+        }
+        let Some(time) = read.idle.time else { return Poll::Pending };
+        if read.since.is_none() {
+            let now = tokio::time::Instant::now();
+            read.since = Some(now);
+            // The idle time, less what the body has waited past what its bytes earned.
+            let behind = Duration::from_nanos(read.idle.waited.saturating_sub(read.idle.earned));
+            read.due = now.checked_add(time.saturating_sub(behind));
+        }
+        let Some(due) = read.due else { return Poll::Pending };
+        let timer = read.idle.timer.get_or_insert_with(|| Box::pin(tokio::time::sleep_until(due)));
+        loop {
+            if timer.as_mut().poll(cx).is_pending() {
+                return Poll::Pending;
             }
-            let Some(due) = self.due else { return Poll::Pending };
-            let timer = self.timer.get_or_insert_with(|| Box::pin(tokio::time::sleep_until(due)));
-            loop {
-                if timer.as_mut().poll(cx).is_pending() {
-                    return Poll::Pending;
-                }
-                if timer.deadline() >= due {
-                    return Poll::Ready(None);
-                }
-                // Set for an earlier read: moved to this one's time, and polled there.
-                timer.as_mut().reset(due);
+            if timer.deadline() >= due {
+                return Poll::Ready(None);
             }
-        })
+            // Set for an earlier read: moved to this one's time, and polled there.
+            timer.as_mut().reset(due);
+        }
+    }
+}
+
+impl Drop for NextPiece<'_> {
+    fn drop(&mut self) {
+        self.stop_waiting();
     }
 }
 
@@ -972,9 +998,9 @@ mod tests {
         assert!(matches!(read_all(&mut pieces).await, (65_538, None)));
     }
 
-    /// A read dropped while it waits (a handler that reads inside a `timeout` and does something
-    /// else between) does not start the wait again: a byte-a-second trickle read that way is still
-    /// a 408 at 60.25 s.
+    /// A read dropped while it waits (a handler that reads inside a `timeout`) keeps what it
+    /// waited: a byte-a-second trickle read that way, read again at once, is still a 408 at
+    /// 60.25 s.
     #[tokio::test(start_paused = true)]
     async fn a_read_dropped_while_it_waits_does_not_start_the_wait_again() {
         let started = tokio::time::Instant::now();
@@ -991,6 +1017,40 @@ mod tests {
         assert!(matches!(failed, Some(BodyError::Stalled)), "{failed:?} after {read} bytes");
         let took = started.elapsed().as_millis();
         assert!((60_249..=60_251).contains(&took), "{took} ms");
+    }
+
+    /// A read dropped while it waits counts what it waited, and the handler's time after it does
+    /// not: a body sent at 240 bytes a second, read inside a 100 ms `timeout` with ten seconds of
+    /// the handler's own work after each one that passes, is read whole.
+    #[tokio::test(start_paused = true)]
+    async fn the_handlers_time_after_a_dropped_read_is_not_counted() {
+        let mut pieces = pieces_up_to(sent_every(30, 240, std::time::Duration::from_secs(1)), usize::MAX);
+        let mut read = 0;
+        let failed = loop {
+            match tokio::time::timeout(std::time::Duration::from_millis(100), pieces.chunk()).await {
+                Err(_) => tokio::time::sleep(std::time::Duration::from_secs(10)).await,
+                Ok(Ok(Some(piece))) => read += piece.len(),
+                Ok(Ok(None)) => break None,
+                Ok(Err(error)) => break Some(error),
+            }
+        };
+        assert!(failed.is_none() && read == 7200, "{failed:?} after {read} bytes");
+    }
+
+    /// An idle time set after a read waited is the one the next wait keeps to: a body that sends
+    /// a second's worth at 1 s and then nothing, read with `idle(5 s)` after that, is a 408 at 6 s.
+    #[tokio::test(start_paused = true)]
+    async fn an_idle_time_set_after_a_wait_is_kept_to() {
+        let started = tokio::time::Instant::now();
+        let first = stream::iter([()]).then(|()| async {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            Ok::<_, std::io::Error>(Bytes::from(vec![b'x'; 240]))
+        });
+        let mut pieces = pieces_up_to(Body::from_stream(first.chain(stream::pending())), usize::MAX);
+        assert_eq!(pieces.chunk().await.unwrap().map(|piece| piece.len()), Some(240));
+        let mut pieces = pieces.idle(std::time::Duration::from_secs(5));
+        assert!(matches!(pieces.chunk().await, Err(BodyError::Stalled)));
+        assert_eq!(started.elapsed(), std::time::Duration::from_secs(6));
     }
 
     /// Time the handler spends between reads (passing each piece on to a slow store) is not the
