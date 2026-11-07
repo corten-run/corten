@@ -12,8 +12,68 @@ class ItemSource
     public function __construct()
     {
         if (config('items.source') === 'fixture') {
-            $raw = json_decode(file_get_contents(config('items.fixture_path')), true);
-            $this->fixture = array_map(ItemView::fromApi(...), $raw);
+            $this->fixture = [];
+            self::eachItem(file_get_contents(config('items.fixture_path')), function (string $id, string $json) {
+                $this->fixture[$id] = ItemView::fromApi(json_decode($json, true, 512, JSON_THROW_ON_ERROR));
+            });
+        }
+    }
+
+    /**
+     * Each item of `{"item_1": <API response>, ...}` with its JSON, one at a time, as the Rust apps
+     * read it: decoding the whole 27.7 MB file at once takes more than PHP's default 128 MB
+     * memory_limit, which the app keeps (README, caveat 7). Only the converted items are kept.
+     *
+     * @param  callable(string, string): void  $item
+     */
+    private static function eachItem(string $json, callable $item): void
+    {
+        $i = strpos($json, '{');
+        if ($i === false) {
+            throw new \JsonException('the fixture is not a JSON object');
+        }
+        $i++;
+        while (true) {
+            $i += strspn($json, " \t\r\n,", $i);
+            if (($json[$i] ?? '}') === '}') {
+                return;
+            }
+            $keyEnd = self::stringEnd($json, $i);
+            $id = json_decode(substr($json, $i, $keyEnd - $i + 1), false, 512, JSON_THROW_ON_ERROR);
+            $i = strpos($json, ':', $keyEnd) + 1;
+            $i += strspn($json, " \t\r\n", $i);
+            // The value is an object: to the brace that closes it, past every string inside it.
+            $start = $i;
+            $depth = 0;
+            do {
+                $i += strcspn($json, '"{}[]', $i);
+                $c = $json[$i] ?? throw new \JsonException("the fixture ends inside {$id}");
+                if ($c === '"') {
+                    $i = self::stringEnd($json, $i) + 1;
+
+                    continue;
+                }
+                $depth += ($c === '{' || $c === '[') ? 1 : -1;
+                $i++;
+            } while ($depth > 0);
+            $item($id, substr($json, $start, $i - $start));
+        }
+    }
+
+    /** Where the JSON string opened at `$open` closes. */
+    private static function stringEnd(string $json, int $open): int
+    {
+        $i = $open + 1;
+        while (true) {
+            $i += strcspn($json, '"\\', $i);
+            $c = $json[$i] ?? throw new \JsonException('the fixture ends inside a string');
+            if ($c === '\\') {
+                $i += 2;
+
+                continue;
+            }
+
+            return $i;
         }
     }
 
