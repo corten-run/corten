@@ -85,7 +85,7 @@ rules something out.
 2. <a id="choice-no-wasm"></a>**No WASM.** Hydrating a WASM app costs hundreds of kilobytes before the page responds; the
    server already has the HTML, so the browser only needs behavior where there is behavior.
 
-   Stands on: measured (the README's browser table, median of 10 cold loads each: Leptos's item page
+   Stands on: measured (the browser table in performance.md, median of 10 cold loads each: Leptos's item page
    loads 305 KB of WASM and is interactive on a phone in 1,926 ms, Corten's in 468 ms); reasoned
    (the server already sends the HTML, so the browser needs only the behavior).
 
@@ -97,10 +97,10 @@ rules something out.
 
 3. <a id="choice-no-server-vdom"></a>**No virtual DOM on the server.** Frameworks that build a view tree per request and then
    serialize it pay for it in throughput (Leptos in the
-   [README benchmark](../README.md#performance)). `html!` writes straight to the
+   [server benchmark](performance.md#on-the-server)). `html!` writes straight to the
    response buffer.
 
-   Stands on: measured, of whole frameworks only (the README benchmark, median of three load passes:
+   Stands on: measured, of whole frameworks only (the server benchmark, median of three load passes:
    300 pages a second take 4.2% of a core in Corten and 25% in Leptos, which differs from Corten in
    more than its view tree); reasoned (a tree built and then serialized is work a direct write does
    not do).
@@ -119,7 +119,7 @@ rules something out.
    not another component model. Its server-rendered root id identifies the branch; existing
    `keep`, typed events and `signal` still own state, communication and cleanup.
 
-   Stands on: measured (the README's client-heavy table, round browser-3, older than today's
+   Stands on: measured (the client-heavy table in performance.md, round browser-3, older than today's
    runtime: views take over 1,000 server-rendered rows in 6.0 ms, Solid, Svelte, Vue, React and
    Remix in 19.6 to 83.5 ms, the median of 30 loads); reasoned (nested branches need the same
    typed-template check and CSP custom-property application as rows; centralizing those does not
@@ -201,7 +201,7 @@ rules something out.
 
    Stands on: bet (a page's sources are fetched together and the slowest is rarely slow enough for a
    part sent later to be worth its costs); measured (an uncompressed, untagged whole item page request
-   takes 47 µs of CPU in the README benchmark, median of three load passes); reasoned (the status
+   takes 47 µs of CPU in the server benchmark, median of three load passes); reasoned (the status
    and headers go before a streamed part exists, so its failure cannot become an error page or a
    redirect); value (a page works without a script, Values 3, where a part placed out of order would
    land at the end of the page).
@@ -244,13 +244,13 @@ rules something out.
    arrives finished, and answers what only it can: a write, and data the page does not have. What
    the page can do with what it already has (sorting, filtering, selecting, a total, showing and
    hiding) is a handler, since no render is faster than no round trip; a view makes even 1,000
-   rows fast to change ([README](../README.md#client-heavy-screens)). Rust renders on the server
+   rows fast to change ([performance](performance.md#client-heavy-screens)). Rust renders on the server
    because it is the fastest renderer there, and plain JavaScript runs in the browser because no
    framework or WASM layer is faster than the platform's own DOM calls. The scripts guide has the
    table for choosing ([Server or browser](guide/scripts.md#server-or-browser)).
 
-   Stands on: measured (views take over 1,000 server-rendered rows in 6.0 ms, the README's
-   client-heavy table, median of 30 loads, round browser-3, older than today's runtime); value
+   Stands on: measured (views take over 1,000 server-rendered rows in 6.0 ms, the client-heavy
+   table in performance.md, median of 30 loads, round browser-3, older than today's runtime); value
    (Values 1: the work goes where it is fastest for the user).
 
    Revisit when: Values 1 changes. A case measured against the scripts guide's table (Server or

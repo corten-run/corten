@@ -7,54 +7,43 @@
 
 **Fast web apps: Rust on the server, plain JavaScript in the browser, and each doing the work it is fastest at.**
 
+[![CI](https://github.com/corten-run/corten/actions/workflows/ci.yml/badge.svg)](https://github.com/corten-run/corten/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](Cargo.toml)
 
-Corten is built for [Chase Sets](https://chasesets.com).
+[Getting started](docs/guide/getting-started.md) |
+[Guides](#documentation) |
+[Examples](#examples) |
+[Performance](docs/performance.md) |
+[Changelog](CHANGELOG.md)
 
-Corten's goal is speed at the user's end. Rust renders each page on the server with `html!`, a
-JSX-like Rust macro, so the first page arrives as finished HTML. In the browser, plain JavaScript
-does what the page can do with what it already has (sort, filter, select, edit, total) with no
-request: *handlers* are functions in a script next to a component, which its Rust markup calls
-by name, and *views* are typed classes over the rows the server rendered. When the server is
-needed, a small runtime swaps pages and patches forms, and live data arrives as numbered patches
-over server-sent events. One request handler serves the browser, native apps and AI agents.
+Corten is a Rust web framework for apps where speed at the user's end matters. The server
+renders every page as finished HTML with `html!`, a JSX-like macro. In the browser, plain
+JavaScript next to each component does what the page can do with the data it already has, with
+no request. When the server is needed, a small runtime swaps pages and patches part of one, and
+live data streams in over server-sent events. One handler answers the browser, native apps and
+AI agents.
 
-- **Fast on the server.** 20,705 rendered pages a second on one CPU (uncompressed, untagged),
-  5.0x ASP.NET Core; of eighteen apps, behind axum + Maud (27,327) and ahead of Drogon (17,870).
-  The most JSON responses and item-API pages of any (26,385 and 3,669 a second), and
-  1.3 MiB of memory after the first request (measured, [below](#performance)).
-- **Light on the machine.** A page costs 47 µs of CPU (uncompressed, untagged), 5.1x less than
-  ASP.NET Core's; 300 pages a second take 4.2% of one core (ASP.NET Core 25%, Leptos 25%), and
-  each MiB of memory serves 1,234 pages a second, 14.8x Leptos. axum + Maud costs less CPU
-  (35 µs, 3.6%), and Drogon serves more per MiB (1,407) (measured,
-  [below](#cpu-and-memory-per-request)).
-- **Fast in the browser.** A 14.3 KB (gzip) runtime; the benchmark item page loaded 14.1 KB of
-  JavaScript (gzip, measured). No WASM, no virtual DOM, no hydration: a
-  script takes over 1,000 server-rendered rows in 6.0 ms, against 20-84 ms for Solid, Svelte,
-  Vue, React and Remix (measured, [below](#client-heavy-screens)).
-- **Typed end to end.** Routes, form fields, CSS classes, handler calls and the elements they
-  take, events and messages are Rust types. TypeScript types for scripts are generated from Rust.
-- **Works without JavaScript.** Links are links and forms post; scripts make a page faster and
-  richer but never hold it up.
+## Highlights
+
+- **HTML that works on its own.** Every page arrives rendered. Links are links and forms post,
+  so a page works before its scripts load, and without them.
+- **Plain JavaScript where it is fastest.** Behavior is a function in a script next to its
+  component, called from the markup by name. No WASM, no virtual DOM, no hydration.
+  A 14.3 KB (gzip) runtime.
+- **Partial updates from the same handler.** A form marked `data-patch` gets back only the
+  elements that changed; without JavaScript the same handler answers with the whole page.
+- **Live data.** `<corten-live>` fragments and keyed feeds stream numbered patches over
+  server-sent events, with replay and resume, and one feed can run across several instances.
+- **Typed end to end.** Routes, form fields, element ids, CSS classes, handler calls, events and
+  messages are Rust types, and the TypeScript types for scripts are generated from Rust. A typo
+  at any of these seams is a compile error.
+- **One server, every surface.** The same handler answers a browser with HTML, a native app
+  with JSON, and an AI agent as a Model Context Protocol tool.
 - **Production defaults.** A strict CSP, a cross-site write check, error pages, versioned
   assets, cache headers that never share one user's page with another, compression, health
   checks, graceful shutdown and an installable PWA, from `corten::serve(App::new(routes))`.
-  `corten::serve` speaks HTTP/1.1, so an app with live streams (`<corten-live>`, feeds) goes
-  behind a proxy or CDN that serves browsers HTTP/2 or HTTP/3: over HTTP/1.1 a browser opens
-  about six connections to a host, and each open stream holds one
-  ([Deploying](docs/guide/deploy.md)). Routes with no screen go in a
-  `#[corten::routes(api = ApiRoot)]` module, `.api(api::api)`, and answer only JSON.
-- **No JavaScript toolchain in the app.** One binary, with the `static/` directory compiled into it.
-
-## Status
-
-Corten is 0.1: usable and tested, on Rust 1.88 or later. A release publishes every crate at one
-version on crates.io and attaches a prebuilt `corten` for Linux, macOS and Windows to the GitHub
-release. The framework's package is `corten-run` (`corten` on crates.io is someone else's) and its
-library is `corten`, so an app depends on `corten = { package = "corten-run", version = ".." }`
-(`corten new` writes it) and its code writes `use corten::...`. The API will change before 1.0;
-[CHANGELOG.md](CHANGELOG.md) lists what changed. The runtime and `corten-ui` are tested in
-Chromium, Firefox and WebKit.
+- **One binary.** No JavaScript toolchain in the app; `static/` is compiled into the program.
 
 ## Quick start
 
@@ -66,8 +55,9 @@ cd my-app
 corten dev    # serves http://localhost:3000 and reloads on save
 ```
 
-`corten new` writes a working app: a page, a form that patches part of the page, a
-component with a script, a test and a Dockerfile. See [Getting started](docs/guide/getting-started.md).
+`corten new` writes a working app: a page, a form that patches part of the page, a component
+with a script, a test and a Dockerfile. [Getting started](docs/guide/getting-started.md) walks
+through it.
 
 ## Example
 
@@ -190,17 +180,119 @@ export function count(total) {
 `js::count` exists because the script exports `count`, and it takes `total` because the JSDoc
 says an `HTMLOutputElement` and the ref is on an `<output>`. Either mismatch is a compile error.
 
+## How it works
+
+1. **The server renders.** Each route is a typed struct with its handler. The handler returns
+   a page, a patch or a redirect, written with `html!` and components
+   ([Views](docs/guide/views.md), [Requests and forms](docs/guide/requests-and-forms.md)).
+2. **The browser acts on what it has.** Sorting, filtering, selecting, totals and editing run
+   in plain JavaScript functions next to their components; views are typed classes over the
+   rows the server rendered, so taking over a page reads it instead of rebuilding it
+   ([Scripts](docs/guide/scripts.md)).
+3. **The runtime fills the gaps.** Links swap the page's content, forms patch the elements
+   that changed, and `AbortSignal` cancels work in the browser and on the server alike
+   ([Cancellation](docs/guide/cancellation.md)).
+4. **Live data is patches.** `<corten-live>` redraws a fragment and feeds keep keyed rows in
+   step, both over server-sent events that resume where they left off
+   ([Live data](docs/guide/live-data.md)).
+5. **Every client uses the same routes.** A screen answers a request for JSON with its data,
+   actions are the same `POST`s, and `corten-protocol` gives native and agent clients the feed
+   ([Surfaces](docs/architecture.md)).
+
+## Performance
+
+Every claim about speed has a measured number behind it. The same marketplace item page, in
+eighteen apps on one CPU each (round r16; the row figures are from round browser-3):
+
+| What | Corten, measured |
+|---|---|
+| Item pages rendered from memory | 20,705 a second, 47 µs of CPU each |
+| The same item as JSON | 26,385 a second |
+| Memory after the first request | 1.3 MiB |
+| JavaScript the item page loads | 14.1 KB (gzip) |
+| Interactive on a throttled phone, on desktop | 468 ms, 59 ms |
+| Taking over 1,000 server-rendered rows | 6.0 ms, 101 bytes of memory per row |
+
+Of the eighteen, only axum + Maud renders the page from memory faster, and Corten serves the
+most JSON and item-API pages. The tables against ASP.NET Core, Next.js, Leptos, Rails and the
+rest, the method and the caveats are in [Performance](docs/performance.md).
+
 ## When to use it
 
 Corten fits apps where speed at the user's end matters: stores, marketplaces, dashboards, admin
 tools, rich editing screens, content with live parts. The server owns the data and decides what
-a write does; the browser does everything it can with the data it already has, without a round
-trip. It suits teams that want Rust on the server and the platform's own JavaScript in the
-browser, with types across the seam between them.
+a write does; the browser does everything it can with the data it already has. It suits teams
+that want Rust on the server and the platform's own JavaScript in the browser, with types across
+the seam between them.
 
 Look elsewhere for an offline-first app whose data lives on the device (Corten's offline support
 is a fallback page and cached files), for server-side TSX or React components, or for a pure
 static site (a static site generator is simpler).
+
+## Documentation
+
+| Guide | What it covers |
+|---|---|
+| [Getting started](docs/guide/getting-started.md) | the `corten` command and the parts of an app |
+| [Views](docs/guide/views.md) | `html!`, components, typed links and messages |
+| [Requests and forms](docs/guide/requests-and-forms.md) | request modes, patches, validation, redirects |
+| [Scripts](docs/guide/scripts.md) | behavior in the browser: handlers, refs, typed events, views |
+| [Styles](docs/guide/styles.md) | a scoped CSS file per component, design tokens, themes |
+| [Live data](docs/guide/live-data.md) | `<corten-live>`, feeds, running a feed across instances |
+| [Cancellation](docs/guide/cancellation.md) | `AbortSignal` in the browser and on the server, deadlines |
+| [Type safety](docs/guide/type-safety.md) | every seam between server and client, and how it is checked |
+| [The app](docs/guide/app.md) | every default `App` puts around your routes, and how to replace each |
+| [Headless components](docs/guide/ui.md) | `corten-ui`: number field, combobox, tabs, menu button, toaster, copy button, relative time, checkbox group, required-when |
+| [The UI kit](docs/guide/kit.md) | `corten ui`: theme tokens and styled components copied into the app as source |
+| [Deploying](docs/guide/deploy.md) | behind a proxy or CDN: what it must do, an nginx configuration, cache settings for Cloudflare and CloudFront; the release profile and what it costs |
+| [Surfaces](docs/architecture.md) | one server for web, native apps and agents |
+| [Design decisions and limits](docs/design.md) | why it is built this way, and what it does not do |
+| [Performance](docs/performance.md) | every benchmark table, against seventeen other apps and five client frameworks |
+
+API reference: `cargo doc --open -p corten-run`. Building an app with an AI agent? The
+[corten skill](skills/corten/SKILL.md) gives it the rules and recipes.
+
+## Examples
+
+In the order to read them; each README says how to run it and where each piece is.
+
+1. [watchlist](examples/watchlist): start here. A stock watchlist with live prices, news, price
+   alerts and an account; each route shows one piece of Corten.
+2. [card-market](examples/card-market): a card store with every production module on (security,
+   PWA, i18n, caching, JSON routes for partners and agents). Read it before you deploy.
+3. [seller-desk](examples/seller-desk): a client-heavy inventory screen, for a screen that does
+   more in the browser than forms and links.
+4. [deck-builder](examples/deck-builder): a rich client screen with drag and drop, undo and redo,
+   a chart drawn in the browser, and autosave that rolls back a change the server refuses.
+5. [auction-room](examples/auction-room): a live auction where signed-in people bid on the same
+   lots at once, with SQLite, per-bidder notices and rate limits.
+6. [ui-gallery](examples/ui-gallery): every `corten-ui` component and every UI kit component.
+7. [listings-feed](examples/listings-feed): one live feed served by several instances through
+   Postgres and NATS, with a failover benchmark that kills instances while browsers follow.
+
+## Crates
+
+| Crate | What it is |
+|---|---|
+| [`corten-run`](crates/corten) | the framework, on axum, whose library is `corten`: `App`, `Req`, `html!`, handlers, the browser runtime |
+| [`corten-cli`](crates/corten-cli) | the `corten` command: `new`, `dev`, `check`, `build` |
+| [`corten-macros`](crates/corten-macros) | the macros, on `proc_macro` alone (no `syn`) |
+| [`corten-ui`](crates/corten-ui) | optional headless components for widgets the browser lacks |
+| [`corten-feed`](crates/corten-feed) | live feeds: rows, numbered patches, replay, resume |
+| [`corten-cluster`](crates/corten-cluster) | one feed across instances: Postgres outbox, NATS JetStream |
+| [`corten-protocol`](crates/corten-protocol) | the feed wire format and a client replica, for native and agent clients |
+
+## Status
+
+Corten is 0.1: usable and tested, on Rust 1.88 or later, and built for
+[Chase Sets](https://chasesets.com). The API will change before 1.0; [CHANGELOG.md](CHANGELOG.md)
+lists what changed. A release publishes every crate at one version on crates.io and attaches a
+prebuilt `corten` for Linux, macOS and Windows to the GitHub release. The framework's package is
+`corten-run` (`corten` on crates.io is someone else's) and its library is `corten`, so an app
+depends on `corten = { package = "corten-run", version = ".." }` (`corten new` writes it) and its
+code writes `use corten::...`. The runtime and `corten-ui` are tested in Chromium, Firefox and
+WebKit. `corten::serve` speaks HTTP/1.1, so an app with live streams goes behind a proxy or CDN
+that serves browsers HTTP/2 or HTTP/3 ([Deploying](docs/guide/deploy.md)).
 
 ## Values
 
@@ -264,223 +356,6 @@ When two values conflict, this order decides:
 So the deadline timer that cost 640 ns per request was reworked rather than kept for
 convenience, and a nicer API that slows every page loses. Every pull request is reviewed against
 these values, in this order, before it merges ([CONTRIBUTING.md](CONTRIBUTING.md#review)).
-
-## Performance
-
-Measured on one DigitalOcean c-8 droplet (Xeon Platinum 8168) on 2026-11-06 to 2026-11-07 (UTC), three load-test passes
-(round r16, the tree at `eea6adb`). The
-method, every table and the caveats are in [bench/fullstack](bench/fullstack/README.md) and
-[bench/browser](bench/browser/README.md).
-
-### On the server
-
-The same item page (listings table, offers, a form that patches) and the same item as JSON in
-eighteen apps, each with its usual production settings on one CPU and 1 GiB. Requests a
-second are at 64 users; "failed" means the app could not serve the fixed rate (or start) without
-tuning.
-
-| | Pages/s, no database | JSON/s, no database | Pages/s, item API | Process start to first page | Memory after first request |
-|---|---|---|---|---|---|
-| axum 0.8 + Maud 0.27 | 27,327 | 16,977 | 1,055 | 6.3 ms | 1.34 MiB |
-| **Corten** | **20,705** | **26,385** | **3,669** | **8.6 ms** | **1.277 MiB** |
-| Drogon 1.9 | 17,870 | 2,040 | 520 | 31 ms | 3.258 MiB |
-| Topcoat 0.11 | 5,647 | 17,790 | 865 | 8.1 ms | 1.5 MiB |
-| Gin 1.12 | 4,687 | 4,052 | 761 | 10 ms | 1.941 MiB |
-| ASP.NET Core 10 | 4,115 | 12,440 | 1,292 | 724 ms | 30.67 MiB |
-| Phoenix 1.8 | 1,478 | 2,150 | 399 | 1.3 s | 125.3 MiB |
-| Leptos 0.8 | 1,356 | 15,854 | 747 | 8.0 ms | 1.488 MiB |
-| Astro 7 | 1,202 | 1,879 | 461 | 319 ms | 36.5 MiB |
-| Spring Boot 4.1 | 1,023 | 6,998 | 500 | 7.5 s | 140.8 MiB |
-| SvelteKit 3 | 815 | 3,247 | 378 | 201 ms | 25.63 MiB |
-| TanStack Start | 696 | 3,514 | 338 | 237 ms | 27.58 MiB |
-| React Router 7 | 530 | 2,313 | 293 | 357 ms | 33.17 MiB |
-| Rails 8.1 | 440 | 870 | 307 | 1.1 s | 63.83 MiB |
-| Nuxt 4 | 325 | 7,274 | 217 | 348 ms | 36.49 MiB |
-| Django 6.1 | 311 | 1,137 | 197 | 1.1 s | 65.66 MiB |
-| Next.js 16 | failed (191) | 1,101 | failed (121) | 705 ms | 52.58 MiB |
-| Laravel 13 | failed | failed | failed (110) | 863 ms | 96.2 MiB |
-
-The load asks as `curl` does (`Accept-Encoding: identity`, no `If-None-Match`), so no app
-compresses its page and Corten does not tag it (SvelteKit and Rails tag every page regardless).
-A browser's request costs Corten more than the page. Measured in process on the item page,
-hashing its `ETag` adds 27,700 user instructions to the 86,489 of the request the rounds send,
-compressing it with zstd a further 230,000, and brotli 1, for a client without zstd, about
-690,000 in place of zstd's
-([details](bench/fullstack/README.md#what-a-browsers-request-costs-corten-callgrind-2026-11-06)).
-
-With the item API every request fetches and parses about 55 KB of JSON, which bounds every app.
-Corten reads only the fields the page uses from that response, not a `serde_json::Value`, and
-serves 2.8x ASP.NET Core's pages there (3,669 a second against 1,292) at 6.0% of one core
-against 32% ([details](bench/fullstack/README.md#cortens-item-api-path)). axum + Maud renders the page
-from memory faster (27,327 against 20,705); Corten serves the most JSON (26,385) and item-API
-pages. Its JSON route costs 69,631 user instructions a request against the page's 94,677.
-Against r15 the in-memory page rose 37.1% and JSON 17.0%, while the other passing apps' medians
-rose 7.0% and 8.6%. This is not an unchanged-app control: every page app's Show all
-markup changed, and Corten now sends five offers initially instead of every offer in hidden
-templates. It still formats prices per request where the others write stored strings. The
-page improvement is therefore not a like-for-like rendering speedup. JavaScript got worse,
-13,187 to 14,392 gzip bytes (+9.1%); no other Corten regression crosses the thresholds.
-Requests a second compare only within a round, since droplets of one size differ; instruction
-counts compare across rounds. Pushing live updates
-is measured in [bench/live](bench/live/README.md): at 10,000 open connections on one core, only
-Corten and Leptos delivered all 100,000 messages a second.
-
-### CPU and memory per request
-
-Serving more is half of it; the other half is what each request costs. From the same r16 passes,
-items in memory: pages per CPU-second are requests a second at 64 users over the share of its
-core each app used, CPU for 300 pages a second is the fixed-rate phase, and pages a second per MiB
-divide the 64-user rate by the app's peak memory under that load.
-
-| | Pages per CPU-second | CPU for 300 pages a second | Pages a second per MiB | Peak memory, 64 users |
-|---|---|---|---|---|
-| axum 0.8 + Maud 0.27 | 28,300 | 3.6% | 1,697 | 16.1 MiB |
-| **Corten** | **21,195** | **4.2%** | **1,234** | **16.8 MiB** |
-| Drogon 1.9 | 18,069 | 4.3% | 1,407 | 12.8 MiB |
-| Topcoat 0.11 | 5,648 | 8.4% | 362 | 15.6 MiB |
-| Gin 1.12 | 4,687 | 8.5% | 195 | 24.1 MiB |
-| ASP.NET Core 10 | 4,118 | 25% | 47 | 88.3 MiB |
-| Phoenix 1.8 | 1,482 | 36% | 5.1 | 285.1 MiB |
-| Leptos 0.8 | 1,356 | 25% | 83 | 16.2 MiB |
-| Astro 7 | 1,203 | 29% | 8.7 | 137.6 MiB |
-| Spring Boot 4.1 | 1,023 | 51% | 2.9 | 360 MiB |
-| SvelteKit 3 | 815 | 43% | 5.6 | 144.7 MiB |
-| TanStack Start | 696 | 50% | 4.2 | 165.5 MiB |
-| React Router 7 | 530 | 61% | 3.6 | 147.8 MiB |
-| Rails 8.1 | 440 | 75% | 3.1 | 140.6 MiB |
-| Nuxt 4 | 325 | 100%, 291/s served | 2.3 | 142.8 MiB |
-| Django 6.1 | 311 | 93% | 0.9 | 346.1 MiB |
-| Next.js 16 | failed (191) | failed (89%, 159/s served) | failed (0.9) | 222.6 MiB |
-| Laravel 13 | failed | failed | failed | failed |
-
-Corten renders a page from memory with 47 µs of CPU, against ASP.NET Core's 243 µs and Leptos's
-737 µs; axum + Maud costs 35 µs and Drogon 55 µs. At 300 pages a second Corten uses
-4.2% of its core and serves 1,234 pages a second per MiB. These rows use counted cgroup CPU;
-the load sends uncompressed, untagged requests, not the costlier browser request described above.
-
-### In the browser
-
-The same item page, loaded cold in Chromium 148 from another site, median of 10 loads each. The
-phone is the Lighthouse profile: 4x CPU slowdown, 150 ms round trip, 1.6 Mbps down.
-"Interactive" is when the page's own code says it is ready; client navigation is the home page to
-the item page. Every app ran on one core with items from the item API.
-
-| | Phone: interactive | Phone: largest paint | Phone: client navigation | Desktop: interactive | Desktop: client navigation | JS heap | JavaScript, gzip |
-|---|---|---|---|---|---|---|---|
-| ASP.NET Core 10 | 447 ms | 436 ms | 242 ms | 52 ms | 17 ms | 1.7 MB | 17.0 KB |
-| Drogon 1.9 | 450 ms | 432 ms | 214 ms | 52 ms | 17 ms | 1.7 MB | 17.0 KB |
-| Django 6.1 | 451 ms | 428 ms | 248 ms | 53 ms | 20 ms | 1.7 MB | 17.0 KB |
-| Topcoat 0.11 | 455 ms | 436 ms | 218 ms | 59 ms | 15 ms | 1.9 MB | 15.0 KB |
-| **Corten** | **468 ms** | **460 ms** | **199 ms** | **59 ms** | **13 ms** | **1.6 MB** | **14.1 KB** |
-| Spring Boot 4.1 | 642 ms | 484 ms | 243 ms | 65 ms | 33 ms | 1.7 MB | 17.0 KB |
-| axum 0.8 + Maud 0.27 | 643 ms | 484 ms | 240 ms | 55 ms | 15 ms | 1.7 MB | 17.0 KB |
-| Gin 1.12 | 645 ms | 480 ms | 241 ms | 54 ms | 15 ms | 1.7 MB | 17.0 KB |
-| Astro 7 | 683 ms | 524 ms | 228 ms | 65 ms | 16 ms | 1.6 MB | 9.2 KB |
-| Laravel 13 | 884 ms | 448 ms | 213 ms | 76 ms | 24 ms | 2.2 MB | 84.3 KB |
-| SvelteKit 3 | 887 ms | 484 ms | 294 ms | 126 ms | 33 ms | 2.4 MB | 37.4 KB |
-| Phoenix 1.8 | 955 ms | 424 ms | 138 ms | 112 ms | 18 ms | 2.3 MB | 46.2 KB |
-| React Router 7 | 1,106 ms | 472 ms | 300 ms | 175 ms | 42 ms | 2.8 MB | 99.2 KB |
-| Rails 8.1 | 1,182 ms | 528 ms | 248 ms | 66 ms | 27 ms | 2.1 MB | 40.7 KB |
-| Next.js 16 | 1,437 ms | 428 ms | 520 ms | 162 ms | 140 ms | 3.3 MB | 136.2 KB |
-| Nuxt 4 | 1,563 ms | 548 ms | 265 ms | 111 ms | 21 ms | 2.9 MB | 72.9 KB |
-| Leptos 0.8 | 1,926 ms | 448 ms | 246 ms | 113 ms | 24 ms | 1.9 MB | 7.0 KB + 305 KB WASM |
-| TanStack Start | 2,401 ms | 516 ms | 341 ms | 141 ms | 27 ms | 3.1 MB | 110.7 KB |
-
-On a phone, Corten is interactive in 468 ms and on desktop in 59 ms. Its item page loads 14.1 KB of JavaScript (gzip).
-
-### Client-heavy screens
-
-A table of rows a script changes, in Chromium 148 on Linux. Each framework's app is written the
-way its keyed [js-framework-benchmark](https://github.com/krausest/js-framework-benchmark) entry
-is, built for production, and checked after every operation, so an app that skips work fails
-instead of looking fast. Times run from the click to the DOM being updated (the frames that lay
-it out and paint it are in the results): the median of 15, the slower of two rounds, or the
-range when they disagree. Takeover runs from the HTML being parsed to the app marking itself
-ready, for 1,000 rows the server rendered, less any frame the browser paints in between (the
-median of 30 loads that take turns between the apps); every framework kept the server's rows.
-Plain JavaScript is the floor: hand-written DOM code. Measured in round browser-3 (2026-10-23, at
-77002fe); Corten's runtime has grown since, so its JavaScript row is less than a page sends today
-until the next round ([#833 The README's client-heavy table is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/corten-run/corten/issues/833)).
-
-| | **Corten (views)** | Solid 1.9 | Svelte 5 | Vue 3.5 | React 19 | Remix 3 | Plain JS (floor) |
-|---|---|---|---|---|---|---|---|
-| Take over 1,000 server-rendered rows | **6.0 ms** | 19.6 ms | 25.6 ms | 28.3 ms | 60.1 ms | 83.5 ms | 1.4 ms |
-| First click on a taken-over row | **1.8 ms** | 1.1 ms | 2.9 ms | 2.5 ms | 5.3 ms | 16.3 ms | 0.4 ms |
-| Change 1 row of 10,000 | **0.2 ms** | 0.2 ms | 1.2 ms | 5.9 ms | 11.7 ms | 120 ms | 0.1 ms |
-| Change 100 rows of 10,000 | **0.9 ms** | 1.0 ms | 1.8 ms | 6.8 ms | 26.4 ms | 112 ms | 0.6 ms |
-| Update every 10th of 1,000 | **0.6 ms** | 0.9 ms | 1.0 ms | 1.6 ms | 2.0 ms | 10.0 ms | 0.4 ms |
-| Select a row | **0.2 ms** | 0.3 ms | 1.2 ms | 0.7 ms | 1.1 ms | 8.5 ms | 0.1 ms |
-| Swap two rows | **0.3 ms** | 1.0 ms | 1.0 ms | 1.0 ms | 10.1 ms | 8.6 ms | 0.2 ms |
-| Create 1,000 rows | **6.4 ms** | 5.6 ms | 6.9 ms | 12.2 ms | 14.9 ms | 15.5 ms | 5.2 ms |
-| Create 10,000 rows | **68.9 ms** | 59.2 ms | 81.9 ms | 127 ms | 351 ms | 172 ms | 48.9 ms |
-| Dashboard: 200 prices tick | **0.6 ms** | 1.0 ms | 1.6 ms | 1.3 ms | 0.9 ms | 17.2 ms | 0.4 ms |
-| Memory per row | **101 B** | 927 B | 1,229 B | 1,876 B | 2,036 B | 2,416 B | 165 B |
-| JavaScript, gzip | **8.6 KB** | 6.8 KB | 20.6 KB | 26.2 KB | 68.4 KB | 28.4 KB | 1.1 KB |
-
-Corten's rows are server-rendered `#[component(view)]` components, so taking them over is reading
-the page rather than rebuilding it, and a row costs 101 bytes of JavaScript memory against
-927-2,416 for the frameworks, which keep each row's data and bookkeeping in JavaScript. Creating
-thousands of rows in the browser is where it trails Solid and plain JavaScript (68.9 ms against
-59.2 and 48.9 ms for 10,000, down from 87.5 ms in the round before). What is left is mostly the
-cost of keeping each row's key and refs in the page, which is what makes takeover and memory
-small ([profile](bench/browser/README.md#creating-many-rows)).
-
-## Documentation
-
-| Guide | What it covers |
-|---|---|
-| [Getting started](docs/guide/getting-started.md) | the `corten` command and the parts of an app |
-| [The app](docs/guide/app.md) | every default `App` puts around your routes, and how to replace each |
-| [Deploying](docs/guide/deploy.md) | behind a proxy or CDN: what it must do, an nginx configuration, cache settings for Cloudflare and CloudFront; the release profile and what it costs |
-| [Views](docs/guide/views.md) | `html!`, components, typed links and messages |
-| [Requests and forms](docs/guide/requests-and-forms.md) | request modes, patches, validation, redirects |
-| [Scripts](docs/guide/scripts.md) | behavior in the browser: handlers, refs, typed events, views |
-| [Live data](docs/guide/live-data.md) | `<corten-live>`, feeds, running a feed across instances |
-| [Cancellation](docs/guide/cancellation.md) | `AbortSignal` in the browser and on the server, deadlines |
-| [Styles](docs/guide/styles.md) | a scoped CSS file per component, design tokens, themes |
-| [Headless components](docs/guide/ui.md) | `corten-ui`: number field, combobox, tabs, menu button, toaster, copy button, relative time, checkbox group, required-when |
-| [The UI kit](docs/guide/kit.md) | `corten ui`: theme tokens and styled components copied into the app as source |
-| [Type safety](docs/guide/type-safety.md) | every seam between server and client, and how it is checked |
-| [Design decisions and limits](docs/design.md) | why it is built this way, and what it does not do |
-| [Surfaces](docs/architecture.md) | one server for web, native apps and agents |
-
-API reference: `cargo doc --open -p corten-run`. Building an app with an AI agent? The
-[corten skill](skills/corten/SKILL.md) gives it the rules and recipes.
-
-## Crates
-
-| Crate | What it is |
-|---|---|
-| [`corten-run`](crates/corten) | the framework, on axum, whose library is `corten`: `App`, `Req`, `html!`, handlers, the browser runtime |
-| [`corten-cli`](crates/corten-cli) | the `corten` command: `new`, `dev`, `check`, `build` |
-| [`corten-macros`](crates/corten-macros) | the macros, on `proc_macro` alone (no `syn`) |
-| [`corten-ui`](crates/corten-ui) | optional headless components for widgets the browser lacks |
-| [`corten-feed`](crates/corten-feed) | live feeds: rows, numbered patches, replay, resume |
-| [`corten-cluster`](crates/corten-cluster) | one feed across instances: Postgres outbox, NATS JetStream |
-| [`corten-protocol`](crates/corten-protocol) | the feed wire format and a client replica, for native and agent clients |
-
-Examples, in the order to read them. Each has a README that says how to run it and where each piece
-is:
-
-1. [watchlist](examples/watchlist): start here. A stock watchlist with live prices, market news,
-   price alerts and an account, styled utility-first; each route shows one piece of Corten.
-2. [card-market](examples/card-market): a card store with every production module on (security,
-   PWA, i18n, caching, JSON routes for partners and agents). Read it before you deploy.
-3. [seller-desk](examples/seller-desk): a client-heavy inventory screen, for when a screen does more
-   in the browser than forms and links.
-4. [deck-builder](examples/deck-builder): a deck builder, the rich client screen: drag and drop
-   and keyboard moves, undo and redo, a chart drawn in the browser, and autosave that rolls back a
-   change the server refuses and notices another tab's edit. Read it when a screen keeps state in
-   the browser and saves it as the user works.
-5. [auction-room](examples/auction-room): a live card auction where signed-in people bid on the
-   same lots at once, with bids in SQLite, a notice only the outbid bidder sees, a per-bidder rate
-   limit and a house that only it may enter. Read it when several people act on shared data in
-   real time.
-6. [ui-gallery](examples/ui-gallery): a seller's draft listing built from every `corten-ui`
-   component and its orders, drawn by every component of the UI kit (`corten ui`).
-7. [listings-feed](examples/listings-feed): a seller's listings table kept live by one feed that
-   several instances serve (Postgres and NATS through `corten-cluster`), for when one instance is
-   not enough; its failover benchmark kills instances while browsers follow.
 
 ## Contributing
 
