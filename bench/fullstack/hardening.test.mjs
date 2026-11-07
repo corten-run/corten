@@ -150,7 +150,8 @@ test("the oversized requests' answers are each one's status, or closed", async (
       if (answered) return;
       const text = String(c);
       if (text.startsWith("POST")) { answered = true; s.end("HTTP/1.1 413 Content Too Large\r\nContent-Length: 0\r\n\r\n"); return; }
-      if (n > 64 * 1024) { s.destroy(); return; }
+      // A reset, not a close: destroy() closes gracefully once it has read all that came, a race.
+      if (n > 64 * 1024) { s.resetAndDestroy(); return; }
       if (text.includes("x-h199")) s.end("HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\n\r\n");
       else if (text.includes("\r\n\r\n")) s.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}");
     });
