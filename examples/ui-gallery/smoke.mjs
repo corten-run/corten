@@ -496,7 +496,9 @@ async function run(browser) {
         text: getComputedStyle(b).color,
         end: s.borderRightColor,
         animation: s.animationName,
-        running: document.getAnimations().filter((a) => /** @type {CSSAnimation} */ (a).animationName === "button-busy").length,
+        running: document
+          .getAnimations()
+          .filter((a) => /** @type {CSSAnimation} */ (a).animationName === "button-busy" && /** @type {KeyframeEffect} */ (a.effect)?.target === b && /** @type {KeyframeEffect} */ (a.effect)?.pseudoElement === "::after").length,
         cursor: getComputedStyle(b).cursor,
       };
     });

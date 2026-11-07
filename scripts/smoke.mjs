@@ -1334,7 +1334,14 @@ async function run(browser) {
         __html('<form id="busy-w" method="post" action="/busy-write" data-patch></form><p id="busy-w-said"></p><button id="busy-wa" form="busy-w" name="by" value="a">A</button><button id="busy-wb" form="busy-w" name="by" value="b">B</button>'),
       );
     document.querySelector("header")?.insertAdjacentHTML("beforeend", __html('<button id="busy-wgo" form="busy-w" name="by" value="go">Go</button>'));
-    /** @type {any} */ (window).__goHeld = document.getElementById("busy-wgo");
+    const held = /** @type {HTMLElement} */ (document.getElementById("busy-wgo"));
+    /** @type {any} */ (window).__goHeld = held;
+    // Whether the page the write sent the browser to was in (the form gone) when the mark went.
+    new MutationObserver((_, observer) => {
+      if (held.getAttribute("aria-busy") === "true") return;
+      /** @type {any} */ (window).__goCleared = { pageIn: !document.getElementById("busy-w") };
+      observer.disconnect();
+    }).observe(held, { attributes: true, attributeFilter: ["aria-busy"] });
   });
   const writeMarks = () => page.evaluate(() => ["busy-w", "busy-wa", "busy-wb"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
   await page.click("#busy-wa");
@@ -1355,8 +1362,13 @@ async function run(browser) {
     await page
       .waitForFunction(() => !document.getElementById("busy-w") && /** @type {any} */ (window).__goHeld.getAttribute("aria-busy") !== "true" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
       .catch(() => {});
-    const goAfter = await page.evaluate(() => ({ held: /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"), path: location.pathname, form: !!document.getElementById("busy-w") }));
-    check(redirectName, goBusy === "true" && goAfter.held === null && goAfter.path === "/" && !goAfter.form, JSON.stringify({ goBusy, goAfter }));
+    const goAfter = await page.evaluate(() => ({
+      held: /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"),
+      cleared: /** @type {any} */ (window).__goCleared ?? null,
+      path: location.pathname,
+      form: !!document.getElementById("busy-w"),
+    }));
+    check(redirectName, goBusy === "true" && goAfter.held === null && goAfter.cleared?.pageIn === true && goAfter.path === "/" && !goAfter.form, JSON.stringify({ goBusy, goAfter }));
   }
   await page.unroute("**/busy-write*");
   await page.evaluate(() => ["busy-w", "busy-w-said", "busy-wa", "busy-wb", "busy-wgo"].forEach((id) => document.getElementById(id)?.remove()));

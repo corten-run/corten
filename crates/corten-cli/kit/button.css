@@ -13,8 +13,8 @@
 .button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
 .button:disabled, .button[aria-disabled="true"] { opacity: .5; pointer-events: none; }
 /* The runtime marks the button that sent a form, or the link that started a navigation,
-   aria-busy until its answer is drawn: a ring after the label, in the text's color (so forced
-   colors keep it), turning unless the user asks for less motion. */
+   aria-busy until its answer is drawn: a ring after the label, in the text's color (the
+   system's under forced colors), turning unless the user asks for less motion. */
 .button[aria-busy="true"] { cursor: progress; }
 /* An icon button has room for one mark: the ring takes the icon's place (its name, an
    aria-label or a visually hidden text, stays). */

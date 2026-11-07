@@ -69,7 +69,9 @@ link or GET form that started it, with the form's button, until the new page is 
 the rows share) is marked as well, so the one pressed shows it is working, and the kit's `Button`
 draws that. When another navigation replaces one, or another button sends the same form by GET,
 the first one's marks go at once, and the newer one's stay. A write is never cut short that way:
-a button pressed while it is on its way is marked beside it and sends once its answer is drawn.
+a button pressed while it is on its way is marked beside it and sends once its answer is drawn
+(not after an answer that refused the state the write was made against, a 409 or 410, or a 5xx,
+which the user reads first).
 Showing which control is working is then CSS
 alone, in the component's stylesheet:
 

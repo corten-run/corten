@@ -2664,7 +2664,7 @@ addEventListener("pagehide", () => (left += 1));
  * of the form's state (409, 410), a 5xx, an answer the runtime does not draw, a redirect, a reload
  * or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, mine: object, busy: HTMLElement[] }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 
@@ -2715,7 +2715,7 @@ async function send(form, submitter, sends) {
     // button that waits is busy with the write's marks, one it replaced no longer.
     const waiting = previous.next;
     previous.next = previous.key === key ? undefined : (submitter ?? null);
-    if (waiting && waiting !== previous.next && waiting !== previous.busy[1] && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
+    if (waiting && waiting !== previous.next && waiting !== previous.by && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
     if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
     return;
   }
@@ -2729,7 +2729,7 @@ async function send(form, submitter, sends) {
   // ends.
   const mine = {};
   const busy = submitter ? [form, submitter] : [form];
-  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), mine, busy };
+  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
