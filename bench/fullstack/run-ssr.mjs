@@ -7,6 +7,8 @@
 //   passes:  each app's phases this many times, the apps taking turns (every app's first pass,
 //            then every app's second), so a slow drift of the machine falls on every app alike.
 //            Pass 1's files are named as a one-pass round's; pass 2 on add -p<pass> (passes.mjs).
+// Item pages from the item API end with the mixed phase (#813, mixed-load.js): the fixed rate as a
+// mix of pages, JSON, the home page and the page's form posted, some items answered late.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -16,6 +18,7 @@ import { edgeBase, edgeContainer, edgeCores, edgeImage, reachApp, startEdge, sto
 import { roundNameError } from "./round.mjs";
 import { cpuUsec } from "./cpu-time.mjs";
 import { passFile, passesOf } from "./passes.mjs";
+import { formEnv, slowShare } from "./mixed.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", source = "api", fixedRate = "150", appsArg = Object.keys(catalog).join(","), target = "page", passesArg] = process.argv.slice(2);
@@ -32,11 +35,12 @@ const log = (msg) => console.log(new Date().toISOString(), msg);
  * Runs one k6 phase; the CPU time k6 used, in microseconds, or null. k6 reads it from its own
  * cgroup as it ends, so a phase whose app is not busy can say whether k6 was (ssr.mjs).
  * @param {string} name @param {string} base @param {Record<string, string>} envs
+ * @param {string} [script] the k6 script: ssr-load.js, or mixed-load.js for the mixed phase
  */
-function k6(name, base, envs) {
+function k6(name, base, envs, script = "ssr-load.js") {
   const args = ["run", "--rm", "--network", network, ...k6Net, ...loadCpusFor(source), ...k6User, "-v", `${here}:/bench`, "-e", `BASE=${base}`, "-e", `TARGET=${target}`];
   for (const [k, v] of Object.entries(envs)) args.push("-e", `${k}=${v}`);
-  const run = `k6 run --quiet --summary-export /bench/results/${round}/${source}/${name}.json /bench/ssr-load.js; s=$?; echo "k6 $(grep usage_usec /sys/fs/cgroup/cpu.stat)"; exit $s`;
+  const run = `k6 run --quiet --summary-export /bench/results/${round}/${source}/${name}.json /bench/${script}; s=$?; echo "k6 $(grep usage_usec /sys/fs/cgroup/cpu.stat)"; exit $s`;
   args.push("--entrypoint", "sh", "grafana/k6:latest", "-c", run);
   const r = docker(...args);
   writeFileSync(join(results, `${name}.log`), (r.stdout ?? "") + (r.stderr ?? ""));
@@ -64,7 +68,7 @@ if (viaEdge) {
   // What the edge had, so the summary can say which phases it may have bounded (ssr.mjs).
   writeFileSync(join(results, "edge.json"), JSON.stringify({ image: edgeImage, cores: edgeCores() }));
 }
-const earlier = new RegExp(`^(${names.join("|")})${target === "json" ? "-json" : ""}-(startup|warmup|fixed|sat64|sat256)(-p\\d+)?(-stats|-cpu)?\\.(json|log)$`);
+const earlier = new RegExp(`^(${names.join("|")})${target === "json" ? "-json" : ""}-(startup|warmup|fixed|sat64|sat256|mixed)(-p\\d+)?(-stats|-cpu|-form)?\\.(json|log)$`);
 for (const file of readdirSync(results)) if (earlier.test(file)) rmSync(join(results, file));
 for (let pass = 1; pass <= passes; pass += 1) for (const name of names) {
   const app = catalog[name];
@@ -114,11 +118,30 @@ for (let pass = 1; pass <= passes; pass += 1) for (const name of names) {
   log(`${file} ${source} warmup`);
   // 30 s: long enough for the JVM's and .NET's tiered JITs to settle, the same for every app.
   k6(named("warmup"), base, { MODE: "closed", VUS: "32", DURATION: "30s" });
-  for (const [phase, envs] of [
+  /** @type {[string, Record<string, string>, string?][]} */
+  const loads = [
     ["fixed", { MODE: "open", RATE: fixedRate, DURATION: "60s" }],
     ["sat64", { MODE: "closed", VUS: "64", DURATION: "60s" }],
     ["sat256", { MODE: "closed", VUS: "256", DURATION: "60s" }],
-  ]) {
+  ];
+  // The mixed phase needs the item API, for the items it answers late, and the item page, for
+  // its form: the page and its cookies are read once, directly, and the form posted from them.
+  if (source === "api" && target === "page") {
+    let html = null;
+    let cookie = "";
+    try {
+      const r = await fetch(`http://localhost:${app.port}/items/item_1`, { headers: { accept: "text/html" } });
+      if (r.ok) html = await r.text();
+      cookie = r.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+    } catch {}
+    // Directly, k6 names the app as conform.mjs's own post does; through the edge, which names it
+    // by its container, the post's origin is that name's (mixed.mjs).
+    const own = viaEdge ? { origin: `http://fsw-${name}:8080` } : { host: `localhost:${app.port}`, origin: `http://localhost:${app.port}` };
+    const form = formEnv(html, cookie, own);
+    writeFileSync(join(results, `${named("mixed")}-form.json`), JSON.stringify("none" in form ? form : { path: form.env.FORM_PATH, type: form.env.FORM_TYPE }, null, 1));
+    loads.push(["mixed", { RATE: fixedRate, DURATION: "60s", SLOW_SHARE: String(slowShare), ...("env" in form ? form.env : {}) }, "mixed-load.js"]);
+  }
+  for (const [phase, envs, script] of loads) {
     log(`${file} ${source} ${phase}`);
     const sampled = [`fsw-${name}`, ...(source === "api" ? [apiContainer] : []), ...(viaEdge ? [edgeContainer] : [])];
     // CPU time each container used during the phase, from its cgroup's counter: what requests per
@@ -126,7 +149,7 @@ for (let pass = 1; pass <= passes; pass += 1) for (const name of names) {
     // starts, since under Docker Desktop a read takes a few seconds.
     const before = sampled.map(cpuUsec);
     const s = spawn("node", [join(here, "sample-stats.mjs"), join(results, `${named(phase)}-stats.json`), "62", ...sampled], { stdio: "ignore", windowsHide: true });
-    const k6Usec = k6(named(phase), base, envs);
+    const k6Usec = k6(named(phase), base, envs, script);
     const after = sampled.map(cpuUsec);
     const counted = Object.fromEntries(sampled.map((c, i) => [c, before[i] !== null && after[i] !== null ? { usec: after[i] - before[i] } : null]));
     // k6's own, beside the containers': what the load generator used, with the cores it had.
