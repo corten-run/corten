@@ -1099,6 +1099,24 @@ async fn the_deadline_is_the_servers_503_when_the_handler_is_not_waiting_for_the
     assert!(late.starts_with("HTTP/1.1 503"), "{late}");
 }
 
+/// A body read as it arrives (`pieces_up_to`) that is over its `max` and still being read past at
+/// the deadline is the 413 its read gives too (#1061).
+#[tokio::test(start_paused = true)]
+async fn a_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413() {
+    async fn store(request: crate::extract::Request) -> crate::Result<String> {
+        let mut pieces = crate::extract::pieces_up_to(request.into_body(), 1024);
+        while pieces.chunk().await?.is_some() {}
+        Ok("stored".into())
+    }
+    let app = || crate::App::new(crate::Routes::from(axum::Router::new().route("/up", axum::routing::post(store))));
+    let bytes = vec![7u8; 4000];
+    let (page, took) =
+        stalled_over_a_socket(app(), "/up", "accept: text/html\r\n", bytes.len(), (std::time::Duration::ZERO, &bytes[..3000]))
+            .await;
+    assert!(page.starts_with("HTTP/1.1 413"), "{page}");
+    assert_eq!(took, std::time::Duration::from_secs(30), "at the default deadline");
+}
+
 /// A body over the limit that is still being read past at the deadline is the 413 the read gives,
 /// as it is when its client stops for the idle time there (#1061).
 #[tokio::test(start_paused = true)]

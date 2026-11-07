@@ -165,7 +165,7 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
         if len > max {
             drop((pieces, small));
             // Read past, so the client reads the answer; a read that breaks here leaves the same.
-            read_past(&mut stream, len, max, &mut Idle::new(None)).await;
+            read_past(&mut stream, len, max, &mut Idle::new(None), None).await;
             return Ok(None);
         }
         if piece.len() >= SMALL_PIECE {
@@ -292,7 +292,7 @@ pub(crate) enum Waited {
 /// The limit a body read past went over, as the reader's own error says it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Over {
-    /// [`pieces_up_to`]'s or [`bytes_up_to`]'s `max`.
+    /// [`pieces_up_to`]'s `max`.
     Body(usize),
     /// [`crate::Upload::limit`].
     Upload(usize),
@@ -301,7 +301,7 @@ pub(crate) enum Over {
 /// A request body as it arrives from the connection ([`crate::serve`]), which marks a read that
 /// waits for the client, so a deadline that passes while the handler waits for the body answers
 /// as the client's (a 408), not as the server's (#1061). It allocates nothing: the mark is one
-/// thread-local flag, set only when a read waits.
+/// thread-local value, set only when a read waits.
 pub(crate) struct Arriving<B>(pub(crate) B);
 
 impl<B: HttpBody + Unpin> HttpBody for Arriving<B> {
@@ -436,7 +436,7 @@ impl Pieces {
                 // Refused first, so a read past given up on is not begun again.
                 self.end = End::Over;
                 if said <= self.max.saturating_add(READ_PAST) as u64 {
-                    read_past(&mut self.stream, 0, self.max, &mut self.idle).await;
+                    read_past(&mut self.stream, 0, self.max, &mut self.idle, Some(Over::Body(self.max))).await;
                 }
                 return Err(BodyError::TooLarge { limit: self.max });
             }
@@ -462,7 +462,7 @@ impl Pieces {
                 self.read = self.read.saturating_add(piece.len());
                 if self.read > self.max {
                     self.end = End::Over;
-                    read_past(&mut self.stream, self.read, self.max, &mut self.idle).await;
+                    read_past(&mut self.stream, self.read, self.max, &mut self.idle, Some(Over::Body(self.max))).await;
                     return Err(BodyError::TooLarge { limit: self.max });
                 }
                 Ok(Some(piece))
@@ -529,11 +529,18 @@ impl Idle {
 
 /// Reads the rest of a body over `max`, keeping nothing, until it ends, breaks, `read` (what
 /// arrived of it before) is 64 MiB past `max`, or no piece comes for `idle`, so a client still
-/// sending reads the answer.
-async fn read_past(stream: &mut BodyDataStream, mut read: usize, max: usize, idle: &mut Idle) {
+/// sending reads the answer. `over` marks a wait here for the deadline, which then answers the
+/// read's 413; `None` (for [`bytes_up_to`], whose handler answers in a shape of its own) leaves it
+/// a wait for the body, the 408.
+async fn read_past(stream: &mut BodyDataStream, mut read: usize, max: usize, idle: &mut Idle, over: Option<Over>) {
     let past = max.saturating_add(READ_PAST);
     while read <= past {
-        match reading_past(Over::Body(max), idle.next(stream)).await {
+        let next = idle.next(stream);
+        let piece = match over {
+            Some(over) => reading_past(over, next).await,
+            None => next.await,
+        };
+        match piece {
             Some(Some(Ok(piece))) => read = read.saturating_add(piece.len()),
             _ => break,
         }

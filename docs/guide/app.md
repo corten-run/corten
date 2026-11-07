@@ -105,8 +105,10 @@ waiting for the client to send the rest of the body: then the request did not ar
 and the answer is the client's 408 (`Failure::Failed`, as a stalled upload's `?` gives), so a
 client that stops sending a form is not told the server was slow. With the defaults the deadline
 (30 seconds) comes before an upload's idle time (`Upload::idle`, a minute), so it is the deadline
-that answers a stalled upload, with that 408. Only a request `corten::serve` reads from its
-connection is marked so; through `app.router()` served another way the deadline is the 503. See
+that answers a stalled upload, with that 408. A deadline that passes while a body over an
+`Upload`'s or a `pieces_up_to` limit is read past is the 413 that read gives. Only a request
+`corten::serve` reads from its connection is marked as waiting for its body; through
+`app.router()` served another way that deadline is the 503 (the 413 still holds). See
 [Cancellation](cancellation.md).
 
 ```rust,ignore

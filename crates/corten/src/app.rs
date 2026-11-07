@@ -647,8 +647,8 @@ impl<M: Middleware> App<M> {
 
     /// How long a handler may take to answer (30 seconds unless set). Past it the client gets
     /// the 503 error page (a 408 when the handler was waiting for the client to send the body, as
-    /// for an upload that stopped: the request did not arrive in time), the handler's future is
-    /// dropped, and the request's [`crate::Signal`]
+    /// for an upload that stopped: the request did not arrive in time; the 413 while a body over its
+    /// limit is read past), the handler's future is dropped, and the request's [`crate::Signal`]
     /// aborts with [`crate::Abort::Deadline`] for work the handler spawned. It bounds the time to
     /// the response's start, so a stream (a feed, server-sent events) runs as long as it needs;
     /// reading the request body counts, so an app that takes large uploads raises it. `None`
