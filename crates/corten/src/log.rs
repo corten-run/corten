@@ -1,12 +1,12 @@
 //! The subscriber [`crate::serve`] installs when the app has set none (feature `log`): each
-//! event at `INFO` or above as one line on stderr, as `tracing-subscriber`'s `fmt()` without
+//! event at `INFO` or above as one line on stdout, as `tracing-subscriber`'s `fmt()` without
 //! targets writes it (`2026-11-06T21:20:29.018154Z  WARN message key=value`), so errors,
 //! startup and shutdown print without that crate and the four only it needs. Spans are off, so an
 //! event prints without the spans it is in: an app that wants them, a filter or JSON lines sets a
 //! subscriber of its own (`tracing-subscriber`) before `serve`, which then leaves it alone.
-//! Control characters in what is printed are escaped, so text a request sent cannot move the
-//! terminal's cursor or recolor it. The level is in color when stderr is a terminal and
-//! `NO_COLOR` is unset.
+//! Control characters other than a tab are escaped wherever they are, so text a request sent
+//! cannot recolor the terminal or start a line of its own. Colors are `tracing-subscriber`'s,
+//! when stdout is a terminal and `NO_COLOR` is unset.
 
 use std::{
     fmt::{self, Write as _},
@@ -22,26 +22,28 @@ use tracing::{
     Event, Level, Metadata,
 };
 
-/// Installs [`Stderr`] as the global subscriber unless one is set already.
+/// Installs [`Stdout`] as the global subscriber unless one is set already.
 pub(crate) fn init() {
-    let color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
     let write = Box::new(|line: &[u8]| {
-        let _ = std::io::stderr().lock().write_all(line);
+        let _ = std::io::stdout().lock().write_all(line);
     });
-    let _ = tracing::subscriber::set_global_default(Stderr { color, write });
+    let _ = tracing::subscriber::set_global_default(Stdout { color, write });
 }
 
-pub(crate) struct Stderr {
+/// Where each line goes, in one write so lines from several threads do not interleave.
+type Write = Box<dyn Fn(&[u8]) + Send + Sync>;
+
+pub(crate) struct Stdout {
     color: bool,
-    /// Where each line goes, in one write so lines from several threads do not interleave.
-    write: Box<dyn Fn(&[u8]) + Send + Sync>,
+    write: Write,
 }
 
 fn wanted(meta: &Metadata<'_>) -> bool {
     meta.is_event() && *meta.level() <= Level::INFO
 }
 
-impl Subscriber for Stderr {
+impl Subscriber for Stdout {
     fn register_callsite(&self, meta: &'static Metadata<'static>) -> Interest {
         if wanted(meta) {
             Interest::always()
@@ -58,7 +60,8 @@ impl Subscriber for Stderr {
         Some(LevelFilter::INFO)
     }
 
-    // Spans are never enabled, so this is not called for one; an id is still a valid answer.
+    // A span is never enabled, so nothing records into one; an id is still a valid answer for a
+    // span made directly.
     fn new_span(&self, _: &Attributes<'_>) -> Id {
         Id::from_u64(1)
     }
@@ -69,11 +72,12 @@ impl Subscriber for Stderr {
 
     fn event(&self, event: &Event<'_>) {
         let mut line = String::with_capacity(128);
-        timestamp(&mut line, SystemTime::now());
+        let style = Style(self.color);
+        style.paint(&mut line, DIM, |out| timestamp(out, SystemTime::now()));
         line.push(' ');
-        level(&mut line, event.metadata().level(), self.color);
+        level(&mut line, event.metadata().level(), style);
         line.push(' ');
-        event.record(&mut Fields { line: &mut line, first: true });
+        event.record(&mut Fields { line: &mut line, first: true, style });
         line.push('\n');
         (self.write)(line.as_bytes());
     }
@@ -81,6 +85,25 @@ impl Subscriber for Stderr {
     fn enter(&self, _: &Id) {}
 
     fn exit(&self, _: &Id) {}
+}
+
+const DIM: &str = "2";
+const ITALIC: &str = "3";
+
+/// ANSI styles when on, `tracing-subscriber`'s: `ESC[<code>m`, the text, `ESC[0m`.
+#[derive(Clone, Copy)]
+struct Style(bool);
+
+impl Style {
+    fn paint(self, out: &mut String, code: &str, text: impl FnOnce(&mut String)) {
+        if self.0 {
+            let _ = write!(out, "\x1b[{code}m");
+        }
+        text(out);
+        if self.0 {
+            out.push_str("\x1b[0m");
+        }
+    }
 }
 
 /// `2026-11-06T21:20:29.018154Z`: UTC, to the microsecond.
@@ -99,8 +122,8 @@ fn timestamp(out: &mut String, at: SystemTime) {
     );
 }
 
-/// The level right-aligned in five columns, in `tracing-subscriber`'s colors when `color`.
-fn level(out: &mut String, level: &Level, color: bool) {
+/// The level right-aligned in five columns, in its color.
+fn level(out: &mut String, level: &Level, style: Style) {
     let (text, code) = match *level {
         Level::ERROR => ("ERROR", "31"),
         Level::WARN => (" WARN", "33"),
@@ -108,31 +131,39 @@ fn level(out: &mut String, level: &Level, color: bool) {
         Level::DEBUG => ("DEBUG", "34"),
         _ => ("TRACE", "35"),
     };
-    if color {
-        let _ = write!(out, "\x1b[{code}m{text}\x1b[0m");
-    } else {
-        out.push_str(text);
-    }
+    style.paint(out, code, |out| out.push_str(text));
 }
 
 /// The message as it is written, then `name=value` for each other field: `Debug` (a `str`
-/// quoted), and `Display` for `%value` and an error.
+/// quoted), `Display` for `%value`, and an error's `Display` with the chain of its sources.
 struct Fields<'a> {
     line: &'a mut String,
     first: bool,
+    style: Style,
 }
 
 impl Fields<'_> {
     fn field(&mut self, field: &Field, value: fmt::Arguments<'_>) {
+        let name = field.name();
+        // What the `log` crate's records carry, which `tracing-subscriber` leaves out.
+        if name.starts_with("log.") {
+            return;
+        }
         if !std::mem::take(&mut self.first) {
             self.line.push(' ');
         }
-        let name = field.name();
         if name != "message" {
-            self.line.push_str(name.strip_prefix("r#").unwrap_or(name));
-            self.line.push('=');
+            self.name(name.strip_prefix("r#").unwrap_or(name), "");
         }
         let _ = Escaped(self.line).write_fmt(value);
+    }
+
+    fn name(&mut self, name: &str, suffix: &str) {
+        self.style.paint(self.line, ITALIC, |out| out.push_str(name));
+        if !suffix.is_empty() {
+            self.style.paint(self.line, ITALIC, |out| out.push_str(suffix));
+        }
+        self.style.paint(self.line, DIM, |out| out.push('='));
     }
 }
 
@@ -146,7 +177,22 @@ impl Visit for Fields<'_> {
     }
 
     fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
-        self.field(field, format_args!("{value}"))
+        self.field(field, format_args!("{value}"));
+        let Some(mut source) = value.source() else { return };
+        self.line.push(' ');
+        self.name(field.name(), ".sources");
+        self.line.push('[');
+        loop {
+            let _ = write!(Escaped(self.line), "{source}");
+            match source.source() {
+                Some(next) => {
+                    self.line.push_str(", ");
+                    source = next;
+                }
+                None => break,
+            }
+        }
+        self.line.push(']');
     }
 
     fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
@@ -154,19 +200,21 @@ impl Visit for Fields<'_> {
     }
 }
 
-/// Text with the control characters a terminal acts on (escape, bell, backspace, form feed,
-/// delete and C1) written as escapes, as `tracing-subscriber` writes a message.
+/// Text with every control character but a tab written as an escape: `\x1b` for the escape that
+/// starts a terminal's color or cursor command, `\n` and `\r` for a line break, `\u{9b}` for a C1
+/// control.
 struct Escaped<'a>(&'a mut String);
 
 impl fmt::Write for Escaped<'_> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
         for ch in s.chars() {
             match ch {
-                '\x1b' => self.0.push_str("\\x1b"),
-                '\x07' => self.0.push_str("\\x07"),
-                '\x08' => self.0.push_str("\\x08"),
-                '\x0c' => self.0.push_str("\\x0c"),
-                '\x7f' => self.0.push_str("\\x7f"),
+                '\n' => self.0.push_str("\\n"),
+                '\r' => self.0.push_str("\\r"),
+                '\t' => self.0.push('\t'),
+                '\0'..='\x1f' | '\x7f' => {
+                    let _ = write!(self.0, "\\x{:02x}", ch as u32);
+                }
                 '\u{80}'..='\u{9f}' => {
                     let _ = write!(self.0, "\\u{{{:x}}}", ch as u32);
                 }
@@ -197,34 +245,59 @@ mod tests {
     }
 
     impl Shared {
-        /// The lines written, each without its timestamp.
+        /// The lines written, each without its timestamp (and the timestamp's style).
         fn lines(&self) -> Vec<String> {
             let text = String::from_utf8(self.0.lock().unwrap().clone()).unwrap();
-            text.lines().map(|l| l.split_once(' ').expect("a timestamp").1.to_string()).collect()
+            text.lines().map(|l| l.split_once("Z").expect("a timestamp").1.to_string()).collect()
         }
+    }
+
+    fn ours(color: bool, f: impl Fn()) -> Vec<String> {
+        let out = Shared::default();
+        let sink = out.clone();
+        let write = Box::new(move |l: &[u8]| sink.0.lock().unwrap().extend_from_slice(l));
+        tracing::subscriber::with_default(Stdout { color, write }, f);
+        out.lines()
+    }
+
+    fn theirs(color: bool, f: impl Fn()) -> Vec<String> {
+        let out = Shared::default();
+        let writer = out.clone();
+        let subscriber =
+            tracing_subscriber::fmt().with_target(false).with_ansi(color).with_writer(move || writer.clone()).finish();
+        tracing::subscriber::with_default(subscriber, f);
+        out.lines()
     }
 
     #[derive(Debug)]
-    struct Failed;
+    struct Failed(&'static str, Option<Box<Failed>>);
 
     impl fmt::Display for Failed {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            f.write_str("the store failed")
+            f.write_str(self.0)
         }
     }
 
-    impl std::error::Error for Failed {}
+    impl std::error::Error for Failed {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|e| e as _)
+        }
+    }
 
-    /// Events as Corten writes them (startup, shutdown, a handler's error, an agent tool's), with
-    /// each kind of field.
+    /// Events as Corten writes them (startup, shutdown, a handler's error, an agent tool's), and
+    /// an app's, with each kind of field.
     fn events() {
         tracing::info!("corten: listening");
         let grace = std::time::Duration::from_secs(5);
         tracing::warn!("corten: closed {} connection(s) still answering {grace:?} after shutdown began", 2);
         tracing::error!(status = 500u16, "corten: request failed: {}", "the store failed");
-        let failed = Failed;
+        let failed = Failed("the store failed", None);
         let error: &(dyn std::error::Error + 'static) = &failed;
         tracing::error!(error, tool = "lookup", "corten: agent tool failed");
+        let chained =
+            Failed("a handler failed", Some(Box::new(Failed("the store failed", Some(Box::new(Failed("reset", None)))))));
+        let error: &(dyn std::error::Error + 'static) = &chained;
+        tracing::error!(error, "an app's error with its sources");
         tracing::error!(%failed, ?failed, r#type = "x", flag = true, n = -3i64, f = 1.5f64, "a\x1b[31mred\u{9b}");
         tracing::warn!(limit_ms = 250u64, "corten: the ready check did not answer in time");
         tracing::info!(answer = 42);
@@ -236,26 +309,28 @@ mod tests {
     }
 
     /// Every line but the one in a span is the line `tracing-subscriber`'s `fmt()` without
-    /// targets writes, after its timestamp; that one prints without the span.
+    /// targets writes, after its timestamp, in color and without; that one prints without the span.
     #[test]
     fn lines_are_tracing_subscriber_s() {
-        let ours = Shared::default();
-        let sink = ours.clone();
-        let write = Box::new(move |l: &[u8]| sink.0.lock().unwrap().extend_from_slice(l));
-        tracing::subscriber::with_default(Stderr { color: false, write }, events);
+        for color in [false, true] {
+            let (mine, expected) = (ours(color, events), theirs(color, events));
+            assert_eq!(mine.len(), 9, "{mine:#?}");
+            assert_eq!(mine.len(), expected.len(), "{mine:#?}\n{expected:#?}");
+            assert_eq!(mine[..8], expected[..8], "color {color}");
+        }
+        assert_eq!(ours(false, events)[8], "  INFO inside a span");
+        assert_eq!(theirs(false, events)[8], "  INFO in_a_span{id=7}: inside a span");
+    }
 
-        let theirs = Shared::default();
-        let writer = theirs.clone();
-        let subscriber =
-            tracing_subscriber::fmt().with_target(false).with_ansi(false).with_writer(move || writer.clone()).finish();
-        tracing::subscriber::with_default(subscriber, events);
-
-        let (mine, expected) = (ours.lines(), theirs.lines());
-        assert_eq!(mine.len(), 8, "{mine:#?}");
-        assert_eq!(mine.len(), expected.len(), "{mine:#?}\n{expected:#?}");
-        assert_eq!(mine[..7], expected[..7]);
-        assert_eq!(mine[7], " INFO inside a span");
-        assert_eq!(expected[7], " INFO in_a_span{id=7}: inside a span");
+    /// Text a request sent cannot start a line or send the terminal a command, in the message or
+    /// in any other field; a tab stays.
+    #[test]
+    fn control_characters_are_escaped_in_every_field() {
+        let forged = "x\r\n2026-01-01T00:00:00.000000Z ERROR forged\x0e\x1b[2J\tend";
+        let lines = ours(false, || tracing::warn!(host = %forged, quoted = forged, "{forged}"));
+        assert_eq!(lines.len(), 1, "{lines:#?}");
+        let escaped = "x\\r\\n2026-01-01T00:00:00.000000Z ERROR forged\\x0e\\x1b[2J\tend";
+        assert_eq!(lines[0], format!("  WARN {escaped} host={escaped} quoted={:?}", forged));
     }
 
     /// What one line costs: `LOG_LINES` events (default 1,000) with this subscriber, or
@@ -274,7 +349,10 @@ mod tests {
             let subscriber = tracing_subscriber::fmt().with_target(false).with_ansi(false).with_writer(std::io::sink).finish();
             tracing::subscriber::with_default(subscriber, run);
         } else {
-            tracing::subscriber::with_default(Stderr { color: false, write: Box::new(|l| drop(std::hint::black_box(l))) }, run);
+            let write = Box::new(|l: &[u8]| {
+                std::hint::black_box(l);
+            });
+            tracing::subscriber::with_default(Stdout { color: false, write }, run);
         }
     }
 
@@ -286,13 +364,5 @@ mod tests {
         out.clear();
         timestamp(&mut out, UNIX_EPOCH);
         assert_eq!(out, "1970-01-01T00:00:00.000000Z");
-    }
-
-    #[test]
-    fn the_level_is_in_color_only_when_asked() {
-        let mut out = String::new();
-        level(&mut out, &Level::WARN, true);
-        level(&mut out, &Level::ERROR, false);
-        assert_eq!(out, "\x1b[33m WARN\x1b[0mERROR");
     }
 }

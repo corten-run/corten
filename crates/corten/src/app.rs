@@ -1316,7 +1316,7 @@ impl<M: Middleware> From<App<M>> for Router {
 /// shutdown is quick: `corten::serve(App::new(routes)).await`. Without `HOST` it listens on the
 /// loopback addresses, `127.0.0.1` and `[::1]`, so `http://localhost:PORT` answers at once
 /// however the system resolves `localhost`; `PORT` defaults to 3000. With feature `log`, prints
-/// logs to stderr (`RUST_LOG` style filtering is the app's choice: set its own subscriber first).
+/// logs to stdout (`RUST_LOG` style filtering is the app's choice: set its own subscriber first).
 ///
 /// Shutdown, on the first Ctrl-C or `SIGTERM`: the app's [tasks](App::task) are told to stop,
 /// live streams end, the listeners close, requests in progress finish (a connection still

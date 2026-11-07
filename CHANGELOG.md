@@ -3721,18 +3721,23 @@ Corten is pre-1.0, so any minor version may change the API.
 161. The `log` feature (on by default) prints with a subscriber of Corten's own instead of
     `tracing-subscriber`, so an app's default build has five crates fewer: `tracing-subscriber`,
     `sharded-slab`, `thread_local`, `nu-ansi-term` and `lazy_static` (`cargo tree -p corten-run -e
-    normal`: 53 crates before, 48 after). Each event at `INFO` or above is the line
-    `tracing_subscriber::fmt().with_target(false)` wrote, `2026-11-06T21:20:29.018154Z  WARN
-    message key=value`, which `log::tests::lines_are_tracing_subscriber_s` checks line by line
-    against it for startup, shutdown, a failed request and an agent tool's error. Three things
-    change. The spans an event is in are not printed; an app that wants them sets its own
-    subscriber before `serve` as before. The level is in color only when stderr is a terminal,
-    where it was colored in a container's logs too. Control characters are escaped in every field,
-    not only the message. A line costs 4.4% fewer instructions (callgrind, release build, 1,200
-    lines less 200 over 1,000, two runs each: about 6,177 a line against 6,460), and the template
-    app's release binary is 145,392 bytes smaller (5,908,808 against 6,054,200). Its clean build
-    time did not move beyond the machine's noise (debug, six runs each on 4 CPUs, alternating:
-    median 55.7 s against 58.0 s, ranges 50.9 to 61.3 s and 45.1 to 75.6 s)
+    normal`: 53 crates before, 48 after). Each event at `INFO` or above goes to stdout as the line
+    `tracing_subscriber::fmt().with_target(false)` wrote, colors and an error's `.sources` included
+    (`2026-11-06T21:20:29.018154Z  WARN message key=value`), which
+    `log::tests::lines_are_tracing_subscriber_s` checks line by line against it, with and without
+    color, for startup, shutdown, a failed request, an agent tool's error and an app's error with
+    sources. What changes: the spans an event is in are not printed (an app that wants them sets its
+    own subscriber before `serve`, as before); colors only when stdout is a terminal, where they
+    were written into a container's logs too; every control character but a tab is escaped in
+    every field, a line break included, where only the message's and an error's escape, bell,
+    backspace, form feed, delete and C1 controls were, so request text in a field cannot start a
+    line that reads as another event; and a `log` crate record is not printed even where another
+    crate in the build turns on `tracing-subscriber`'s `tracing-log`, which made `try_init` forward
+    them. The guide said stderr; it was and is stdout. A line costs 9.8% fewer instructions
+    (callgrind, release build, 1,200 lines less 200 over 1,000, two runs each: 6,676 and 6,682 a
+    line against 7,401 and 7,413, both with the `ansi` feature `log` turned on), and the template app's release binary is 145,392 bytes smaller (5,908,808 against
+    6,054,200). Its clean build time did not move beyond the machine's noise (debug, six runs each
+    on 4 CPUs, alternating: median 55.7 s against 58.0 s, ranges 50.9 to 61.3 s and 45.1 to 75.6 s)
     ([#764 The default log feature compiles tracing-subscriber and four crates only it needs, to print a few lines to stderr](https://github.com/corten-run/corten/issues/764)).
 
 ### Fixed

@@ -70,7 +70,7 @@ jiff = { version = "0.2", default-features = false, features = ["std", "tz-fat",
 # corten-macros has no dependencies. Everything else is opt-in except `log`.
 [features]
 default = ["log"]
-# App::serve prints logs (errors, startup, shutdown) to stderr unless the app set a subscriber:
+# App::serve prints logs (errors, startup, shutdown) to stdout unless the app set a subscriber:
 # a subscriber of Corten's own (src/log.rs), so the feature adds no dependency.
 log = []
 # Handler arguments of any Serialize type (JSON in the markup) and JSON screens for data clients.
@@ -100,4 +100,5 @@ tokio = { version = "1", features = ["io-util", "macros", "rt", "rt-multi-thread
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
 serde = { version = "1", features = ["derive"] }
-tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+# The tests compare src/log.rs's lines, colors included, with this crate's.
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }
