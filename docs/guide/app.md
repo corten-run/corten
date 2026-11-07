@@ -524,8 +524,9 @@ dev-dependencies: the one test that needs them).
 Neither starts the app's tasks, so a test of a task runs its function itself with `Signal::task()`.
 `corten check` runs `cargo test`, so it runs every test that is not `#[ignore]`d. A test is a
 debug build, so a page it asks for that renders a component its area does not get, or one the
-app does not list, answers 500 and prints why to stderr (under `corten dev`, the error page shows
-it instead): a test that asks for each screen (a step behind a query string included) checks them
+app does not list, answers 500 with why in the error page's `failure.detail()`, which the error
+page `corten new` writes shows (so a status assert that prints the body names the component), and
+prints it to stderr too: a test that asks for each screen (a step behind a query string included) checks them
 all. A component no test draws is not missed for that: before the tests, `corten check` fails,
 naming the file and line, for a component with a stylesheet, script or view that no array names
 (`pub const COMPONENTS: &[Component] = &[..]`, `.components(&[..])` or a `vec![..]` passed to
@@ -2063,7 +2064,8 @@ address the app does not serve) needs that origin in `form-action`: Chromium and
 redirects a submission follows to the form's page's policy, and stop one it does not allow there,
 on the form's page, with only a console error. A test that runs the request in process sees the
 303 either way, so a debug build checks for the browser. It answers as a 500 that names the
-origin and `Policy::form_action` (the detail under `corten dev`; it is logged either way):
+origin and `Policy::form_action` (the error page's detail in every debug build, and logged; outside
+`corten dev` it is printed to stderr too):
 
 1. a `POST` whose body a form can send (none, `application/x-www-form-urlencoded`,
    `multipart/form-data` or `text/plain`), plain or `data-patch` (the same form without
@@ -2305,7 +2307,10 @@ go on the answer as a header (which the error page keeps), but the page's body c
 When the lookup itself fails, an optional caller is `None` there, so the page is drawn signed
 out rather than not at all. Keeping the credentials for it is measured below.
 
-`failure.detail()` is what went wrong, under `corten dev` only; in production it is logged.
+`failure.detail()` is what went wrong, under `corten dev` only; in production it is logged. A
+debug build's error about the app's own code (a component it does not serve, a `Refresh`
+header, a write redirected outside `form-action`) is the exception: it is set in every debug
+build, so a router test's error page names it.
 The error page `corten new` writes names every case without `_`, so when Corten adds one the
 app stops compiling instead of showing the wrong text. A JSON route's failures, a data
 client's and every failure under `App::api` are a JSON Problem Details document instead
