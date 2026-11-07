@@ -103,25 +103,28 @@ if (summary.build) {
     console.log(line([name, `clean (deps + build) ${s(b.clean.ms)}, ${b.clean.cpuS} CPU-s`, `deps ${s(b.deps.ms)} (downloads)`, `build ${s(b.build.ms)}, ${b.build.cpuS} CPU-s, ${b.build.peakMiB} MiB`, `after the edit ${s(b.rebuild.ms)}, ${b.rebuild.cpuS} CPU-s, ${b.rebuild.peakMiB} MiB`, dev]));
   }
   const mb = (/** @type {number | null} */ bytes) => (bytes == null ? "?" : `${Math.round(bytes / 1e6)} MB`);
-  const loops = Object.entries(summary.build).filter(([, b]) => !b.failed && b.complete !== false && (b.check || b.test || b.edits || b.disk));
+  const loops = Object.entries(summary.build).filter(([, b]) => !b.failed && b.complete !== false && (b.check || b.test || b.edits || b.disk || b.loopsFailed));
+  // How many crates a step compiled, so a rebuild that compiled more than the app shows it.
+  const crates = (/** @type {{ runs?: { compiled?: string[] }[], compiled?: string[] }} */ r) => ` [${(r.runs?.[0] ?? r).compiled?.length ?? 0} crates]`;
   if (loops.length) console.log("\nEditor, tests, other edits and disk (wall time; after an edit, the median)");
   for (const [name, b] of loops) {
     console.log(line([
       name,
-      b.check ? `check ${s(b.check.clean.ms)}, after the edit ${s(b.check.again.ms)}` : "",
-      b.test ? `tests compiled ${s(b.test.clean.ms)}, after the edit ${s(b.test.rebuild.ms)}` : "",
-      ...Object.entries(b.edits ?? {}).map(([kind, e]) => `dev after a ${kind} edit ${s(e.ms)}`),
+      b.check?.again ? `check ${s(b.check.clean.ms)}, after the edit ${s(b.check.again.ms)}${crates(b.check.again)}` : "",
+      b.test?.rebuild ? `tests compiled ${s(b.test.clean.ms)}, after the edit ${s(b.test.rebuild.ms)}${crates(b.test.rebuild)}` : "",
+      ...Object.entries(b.edits ?? {}).map(([kind, e]) => `dev after a ${kind} edit ${s(e.ms)}${crates(e)}`),
+      b.loopsFailed ? `FAILED: ${b.loopsFailed.split("\n")[0]}` : "",
       b.disk ? `disk: deps ${mb(b.disk.depsBytes)}, build ${mb(b.disk.buildBytes)}, dev ${mb(b.disk.devBytes)}` : "",
     ].filter(Boolean)));
   }
   const scaled = Object.entries(summary.build).filter(([, b]) => b.scale || b.mold || b.scaleFailed);
   if (scaled.length) console.log("\nThe clean build on other cores, and the development build linked by mold");
   for (const [name, b] of scaled) {
-    if (b.scaleFailed) { console.log(line([name, `FAILED: ${b.scaleFailed.split("\n")[0]}`])); continue; }
     console.log(line([
       name,
       ...Object.entries(b.scale ?? {}).map(([on, r]) => `cores ${on}: ${s(r.ms)}, ${r.cpuS} CPU-s`),
-      b.mold ? `mold: dev ${s(b.mold.clean.ms)}, after the edit ${s(b.mold.rebuild.ms)}` : "",
+      b.mold ? `mold: dev ${s(b.mold.clean.ms)}, after the edit ${s(b.mold.rebuild.ms)} (the default build's linker: ${b.linkers?.dev ?? "?"})` : "",
+      b.scaleFailed ? `FAILED: ${b.scaleFailed.split("\n")[0]}` : "",
     ].filter(Boolean)));
   }
 }

@@ -1033,25 +1033,31 @@ passes, a separate diagnostic build of card-market's crate run after it:
       which this does not time. Topcoat's is taken as `cargo build` alone. Drogon's starts with
       Drogon itself installed (a Release build, from the dependency step), so its clean debug
       build compiles only the app, while the Rust and Go ones compile every dependency.
-    - Editor and tests, for the Rust apps: `cargo check` clean and again after the same edit,
-      which is what rust-analyzer runs for its diagnostics when a file is saved (with the
-      features Leptos's documentation has an editor set, `ssr`), and the tests compiled without
-      running them (`cargo test --no-run`) after the development build, then again after the
-      edit. Corten's card-market has tests; the other bench apps have none, so theirs is the
-      app's crate compiled in test mode with nothing to run. The language server's own analysis
-      (completions, errors before a save) is not measured.
+    - Editor and tests, for the Rust apps: `cargo check --all-targets` clean and again after the
+      same edit, which is what rust-analyzer runs for its diagnostics when a file is saved (with
+      the features Leptos's documentation has an editor set, `ssr`; Corten's checks card-market
+      alone, standing in for an app of one crate), and the tests compiled without running them
+      (`cargo test --no-run`) from the dependency step, then again after the edit; each says how
+      many crates it compiled. Corten's card-market has tests; the other bench apps have none,
+      so theirs is the app's crate compiled in test mode with nothing to run. The language
+      server's own analysis (completions, errors before a save) is not measured. These and the
+      other kinds of edit below run after the rest of the app's results are saved, and a failure
+      among them is recorded apart (`loopsFailed`), so it costs only them.
     - Other kinds of edit, for Corten (`edits` in its recipe): the development build after a
       change to a handler's body, a derive on a type the item page, its JSON and the agent tool
       share, a `messages!` entry in the English catalog, and a route added to `routes`, each
       from the clean development build.
-    - Disk: what the dependency step, the production build and the development build each add
-      to the image, from Docker's image sizes (for the Rust apps, mostly `target/`).
-    - Cores and linker, when the round sets `BENCH_BUILD_SCALE` (core sets, as `0-1,0-7`): the
-      clean production build again on each, for the apps in `BENCH_BUILD_SCALE_APPS` (Corten and
-      axum + Maud, the anchor, unless it names others), and for those the development build
-      clean and after the edit linked by mold rather than the toolchain's default (rust-lld
-      since Rust 1.90), checked by the name mold writes into each binary it links. A failure
-      here is kept apart from the other steps' results.
+    - Disk: what the dependency step, the production build and the development build each
+      wrote, the size of the step's container layer (for the Rust apps, mostly `target/`). A CI
+      cache of the dependencies and the build holds about the first two together.
+    - Cores and linker, when the round sets `BENCH_BUILD_SCALE` (vCPU sets; a round sets
+      `1-2,0-7` on a c-8, whose vCPUs are hyperthreads, so all eight may add sibling threads
+      rather than cores): the clean production build again on each, for the apps in
+      `BENCH_BUILD_SCALE_APPS` (Corten and axum + Maud, the anchor, unless it names others), and
+      for those the development build clean and after the edit linked by mold rather than the
+      toolchain's default (rust-lld since Rust 1.90). The linker each build used is read from the
+      name it writes into the binary, and the mold build must be mold's. A failure here is kept
+      apart from the other steps' results.
     - For Corten: cargo's per-crate timings of the clean build (Corten's alone runs with
       `--timings`, which records when each crate starts and ends), and rustc's passes
       (`-Ztime-passes`) and macro expansion statistics (`-Zmacro-stats`) for card-market's

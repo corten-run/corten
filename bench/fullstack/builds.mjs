@@ -68,8 +68,9 @@ const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */
  * with one of `own`.
  *
  * For the Rust apps, the editor's and the tests' loops too: `check` is what an editor runs for its
- * diagnostics after a save (rust-analyzer's check on save is `cargo check`, with the features its
- * documentation has an editor set), and `test` compiles the tests without running them. `edits`
+ * diagnostics after a save (rust-analyzer's check on save is `cargo check --all-targets`, with the
+ * features its documentation has an editor set; Corten's checks card-market alone, standing in for
+ * an app of one crate), and `test` compiles the tests without running them. `edits`
  * are other kinds of change than the button's, each measured as a development rebuild: `kind`
  * names it, `edit` is its file (relative to the context) and `from` must appear in it once.
  * @type {Record<string, Recipe>}
@@ -87,7 +88,7 @@ export const recipes = {
     deps: `cargo fetch ${hostTarget}`,
     build: "cargo build --release -p card-market",
     dev: "cargo build -p card-market",
-    check: "cargo check -p card-market",
+    check: "cargo check -p card-market --all-targets",
     test: "cargo test -p card-market --no-run",
     edit: "examples/card-market/src/views/alert.rs",
     edits: [
@@ -117,7 +118,7 @@ export const recipes = {
     build: "cargo leptos build --release",
     dev: "cargo leptos build",
     // The server's code, as Leptos's documentation has rust-analyzer check it.
-    check: "cargo check --features ssr",
+    check: "cargo check --features ssr --all-targets",
     test: "cargo test --features ssr --no-run",
     edit: "src/app.rs",
   },
@@ -129,7 +130,7 @@ export const recipes = {
     deps: `cargo fetch --locked ${hostTarget}`,
     build: "cargo build --release --locked && topcoat asset bundle --release",
     dev: "cargo build --locked",
-    check: "cargo check --locked",
+    check: "cargo check --locked --all-targets",
     test: "cargo test --locked --no-run",
     edit: "src/main.rs",
   },
@@ -140,7 +141,7 @@ export const recipes = {
     deps: `cargo fetch --locked ${hostTarget}`,
     build: "cargo build --release --locked",
     dev: "cargo build --locked",
-    check: "cargo check --locked",
+    check: "cargo check --locked --all-targets",
     test: "cargo test --locked --no-run",
     edit: "src/pages.rs",
     change: { from: 'button type="submit" {', to: 'button type="submit" title="Set the price alert" {' },

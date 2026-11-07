@@ -142,7 +142,8 @@ process.on("SIGINT", () => {
 // Cores: 0 the system and Docker, 1 the app under test, 2-3 the item API (fullstack only), the
 // rest the load; with items in memory the item API is idle, so the load also gets 2-3. Builds,
 // which run after the rest, get 1-4: the four vCPUs of a standard CI runner; Corten's and axum +
-// Maud's clean build runs again on two cores (1-2) and all eight (0-7), nothing else running then.
+// Maud's clean build runs again on two vCPUs (1-2) and on all of them, nothing else running then.
+// A droplet's vCPUs are hyperthreads, so all of them may add sibling threads rather than cores.
 // The tree goes up without .git, so the commit it is (and whether it differs from it) is said here,
 // for conform.mjs's record of what the round's images were built from.
 const treeCommit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout?.trim() || "unknown";
@@ -150,7 +151,7 @@ const treeDirty = (spawnSync("git", ["status", "--porcelain", "--", ".", ":!benc
 const imagesFrom = treeCommit + (treeDirty ? "-dirty" : "");
 const envFor = (/** @type {number} */ passes) => suite === "live"
   ? "BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=2-$(($(nproc)-1)) BENCH_LIVE_WORKERS=$(($(nproc)-2))"
-  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_BUILD_SCALE=1-2,0-7 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1)) CONFORM_IMAGES_FROM=${imagesFrom}${only ? ` BENCH_APPS=${only.join(",")}` : ""}${passes > 1 ? ` BENCH_PASSES=${passes}` : ""}`;
+  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_BUILD_SCALE=1-2,0-$(($(nproc)-1)) BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1)) CONFORM_IMAGES_FROM=${imagesFrom}${only ? ` BENCH_APPS=${only.join(",")}` : ""}${passes > 1 ? ` BENCH_PASSES=${passes}` : ""}`;
 // BatchMode: never wait at a prompt. A connection that goes silent is dropped after two minutes.
 const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"];
 const ssh = (/** @type {string} */ script, /** @type {{ quiet?: boolean, allowFail?: boolean, timeout?: number }=} */ options) => run("ssh", [...sshOptions, `root@${host}`, script], options);
