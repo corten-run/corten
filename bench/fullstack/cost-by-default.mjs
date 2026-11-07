@@ -12,7 +12,7 @@ const median = (xs) => {
   return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
 };
 
-/** One request's instructions for each build, target, encoding and repeat. */
+/** One request's instructions for each build, target and encoding, by repeat. */
 export function perRequest(tsv) {
   const [head, ...rows] = tsv.trim().split("\n").map((line) => line.split("\t"));
   const col = Object.fromEntries(head.map((name, i) => [name, i]));
@@ -25,11 +25,14 @@ export function perRequest(tsv) {
   }
   const out = new Map();
   for (const [key, sizes] of runs) {
-    const [small, large] = [...sizes.keys()].sort((a, b) => a - b);
+    const [small, large, more] = [...sizes.keys()].sort((a, b) => a - b);
     if (large === undefined) throw new Error(`${key}: one run, not two`);
-    const [variant, target, encoding] = key.split("\t");
+    if (more !== undefined) throw new Error(`${key}: more than two runs`);
+    const [variant, target, encoding, repeat] = key.split("\t");
     const group = [variant, target, encoding].join("\t");
-    out.set(group, [...(out.get(group) ?? []), (sizes.get(large) - sizes.get(small)) / (large - small)]);
+    const repeats = out.get(group) ?? new Map();
+    repeats.set(repeat, (sizes.get(large) - sizes.get(small)) / (large - small));
+    out.set(group, repeats);
   }
   return out;
 }
@@ -42,13 +45,17 @@ export function costs(tsv) {
     const [variant, target, encoding] = group.split("\t");
     const base = per.get(["as-is", target, encoding].join("\t"));
     if (!base) throw new Error(`no as-is build for ${target} ${encoding}`);
-    // Pair repeats in order: repeat k of both builds ran one after the other.
-    const deltas = values.map((v, i) => base[i] - v).filter(Number.isFinite);
+    // Repeat k of each build ran in the same pass, one after the other.
+    const deltas = [...values].map(([repeat, v]) => {
+      if (!base.has(repeat)) throw new Error(`${group}: repeat ${repeat} has no as-is run`);
+      return base.get(repeat) - v;
+    });
+    const all = [...values.values()];
     rows.push({
       variant, target, encoding,
-      request: median(values), requestRange: [Math.min(...values), Math.max(...values)],
+      request: median(all), requestRange: [Math.min(...all), Math.max(...all)],
       cost: median(deltas), costRange: [Math.min(...deltas), Math.max(...deltas)],
-      share: median(deltas) / median(base),
+      share: median(deltas) / median([...base.values()]),
     });
   }
   return rows;

@@ -2393,10 +2393,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `Cache-Control`, error pages, connection watch), and `cost-by-default.sh` counts each build's
     user instructions under callgrind only while requests are served, for the page and the JSON
     with `identity` and with a browser's `Accept-Encoding`. The README's "What each production
-    default costs" table, at `cdbe4392`, five repeats: together about 12% of the rounds' page
-    request (10,500 of 86,500) and 9% of the JSON's, the security headers and CSP the largest
-    (4,800 a page); for a browser, compression is two thirds of the request and the page's `ETag`
-    7.7% ([#810 No round says what each of Corten's production defaults costs a request, so the cost of its safety and its speed cannot be told apart](https://github.com/corten-run/corten/issues/810)).
+    default costs" table, at `cdbe4392`, five repeats: together about 12% of the page in the
+    rounds' request shape (10,500 of 86,500 user instructions on one connection) and 9% of the JSON's, the security headers and CSP the largest
+    (4,800 a page); for a browser, compression is two thirds of the page request and the page's
+    `ETag` 7.7%. Requests per CPU-second are left to
+    [#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052) ([#810 No round says what each of Corten's production defaults costs a request, so the cost of its safety and its speed cannot be told apart](https://github.com/corten-run/corten/issues/810)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

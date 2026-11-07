@@ -7,9 +7,9 @@
 # cost-by-default.mjs takes a default's cost as the build with it less the build without it. Run
 # from the repository root in an image with valgrind and curl, as the README's "What each production
 # default costs" says. Items come from /fixtures/items.json (fixtures/fetch.mjs writes it). Results go to
-# /out: results.tsv, and each build's answer headers; the builds go to /out/bins, and a build
+# /out: results.tsv, and each build's answer headers in /out/headers; the builds go to /out/bins, and a build
 # already there is used as it is, so a run that stopped after its builds starts measuring at once.
-# VARIANTS (as-is and every patch), TARGETS (page json), ENCODINGS (identity browser), REPEATS (3),
+# VARIANTS (as-is and every patch), TARGETS (page json), ENCODINGS (identity browser), REPEATS (5),
 # each passed to docker run with -e. Every request must answer 200 over one connection, or it stops.
 set -eo pipefail
 export USER=${USER:-root}
@@ -20,8 +20,15 @@ browser='gzip, deflate, br, zstd'
 variants=${VARIANTS:-"as-is $(cd /src/bench/fullstack/ablate && ls *.patch | sed 's/\.patch$//' | tr '\n' ' ')"}
 # One copy of the source to start each build from, without outputs or other rounds' results.
 bins=/out/bins
-rm -rf /tmp/pristine && mkdir -p /tmp/pristine $bins
+rm -rf /tmp/pristine && mkdir -p /tmp/pristine $bins /out/headers
 tar -C /src --exclude=./.git --exclude=./target --exclude=node_modules --exclude=./bench/fullstack/results -cf - . | tar -C /tmp/pristine -xf -
+# Builds already in /out/bins are reused only if they were built from this source: what the
+# patches and the two crates they touch read, hashed.
+source=$(cd /tmp/pristine && find Cargo.lock crates/corten crates/corten-macros examples/card-market bench/fullstack/ablate -type f \
+  ! -path '*/node_modules/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
+if [ -n "$(ls $bins)" ] && [ "$(cat $bins/source.txt 2>/dev/null)" != "$source" ]; then
+  echo "/out/bins holds builds of other source ($(cat $bins/source.txt 2>/dev/null || echo unstamped), this is $source): remove it to rebuild" >&2; exit 1
+fi
 for v in $variants; do
   [ -x $bins/$v ] && continue
   rm -rf /tmp/work && cp -a /tmp/pristine /tmp/work && cd /tmp/work
@@ -32,6 +39,7 @@ for v in $variants; do
   cargo build -q --release -p card-market
   cp $CARGO_TARGET_DIR/release/card-market $bins/$v
 done
+echo "$source" > $bins/source.txt
 cd /
 # Each patch must change the binary, or its row would measure the build as it is.
 if [ "$(cd $bins && sha256sum $variants | cut -d' ' -f1 | sort -u | wc -l)" != "$(echo $variants | wc -w)" ]; then
@@ -51,12 +59,12 @@ start() {
 for v in $variants; do
   start $bins/$v
   for target in ${TARGETS:-page json}; do for enc in ${ENCODINGS:-identity browser}; do
-    curl -sS -D /out/headers-$v-$target-$enc.txt -o /dev/null -H "accept-encoding: $(coding $enc)" "http://127.0.0.1:8080$(url $target 1)"
+    curl -sS -D /out/headers/$v-$target-$enc.txt -o /dev/null -H "accept-encoding: $(coding $enc)" "http://127.0.0.1:8080$(url $target 1)"
   done; done
   kill -TERM $server; wait $server || true
 done
 printf 'variant\ttarget\tencoding\trepeat\trequests\tinstructions\n' > /out/results.tsv
-for rep in $(seq ${REPEATS:-3}); do for v in $variants; do
+for rep in $(seq ${REPEATS:-5}); do for v in $variants; do
   for target in ${TARGETS:-page json}; do for enc in ${ENCODINGS:-identity browser}; do
     for n in 300 1300; do
       : > /tmp/run.txt
@@ -67,9 +75,9 @@ for rep in $(seq ${REPEATS:-3}); do for v in $variants; do
       rm -f /tmp/cg.out*
       start valgrind --tool=callgrind --callgrind-out-file=/tmp/cg.out $bins/$v
       # valgrind names its control pipe after `HOST`, the app's own setting, so the control asks under it.
-      HOST=127.0.0.1 callgrind_control -z $server >/dev/null 2>&1
+      HOST=127.0.0.1 callgrind_control -z $server >/dev/null 2>&1 || { echo "$v: callgrind_control could not zero the count" >&2; exit 1; }
       curl -sS -H "accept-encoding: $(coding $enc)" -w '%{http_code} %{num_connects}\n' -K /tmp/run.txt > /tmp/codes.txt
-      HOST=127.0.0.1 callgrind_control -d $server >/dev/null 2>&1
+      HOST=127.0.0.1 callgrind_control -d $server >/dev/null 2>&1 || { echo "$v: callgrind_control could not dump the count" >&2; exit 1; }
       kill -TERM $server; wait $server || true
       if grep -qv '^200 ' /tmp/codes.txt || [ "$(grep -c '^200 1' /tmp/codes.txt)" != 1 ]; then
         echo "$v $target $enc: not every request answered 200 over one connection" >&2; exit 1

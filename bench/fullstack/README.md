@@ -819,9 +819,14 @@ requests) and with a browser's `gzip, deflate, br, zstd`. Instructions are count
 the requests are served (zeroed once the server answers, dumped before it stops, so freeing the
 items at shutdown is not in them), and one request is the run of 1,300 requests less the run of
 300, over 1,000. A default's cost is the build as it is less the build without it, repeat by
-repeat: five repeats, median (range). User instructions only (callgrind does not see the
-kernel's); requests per CPU-second under load were not measured, which needs a droplet round
-([cost-by-default.sh](cost-by-default.sh), split by [cost-by-default.mjs](cost-by-default.mjs);
+repeat: five repeats, median (range); at this resolution a default's cost is good to a few
+hundred instructions (code layout moves between builds), so a row near zero, or one whose range
+crosses it, says the default costs nothing that can be seen. User instructions only (callgrind
+does not see the kernel's), on glibc's allocator and the zstd the crate bundles, where the
+rounds' image preloads jemalloc and links Debian's libzstd ([design Choice 23](../../docs/design.md#choice-jemalloc-image)
+puts this page at about 83,000 under jemalloc against 87,000), so these are the rounds' request
+shape, not their configuration. Requests per CPU-second under load were not measured, which needs
+a droplet round ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)) ([cost-by-default.sh](cost-by-default.sh), split by [cost-by-default.mjs](cost-by-default.mjs);
 results and each build's answer headers in [results/defaults1](results/defaults1/), which show each
 patch removed what it names and nothing else).
 
@@ -841,17 +846,23 @@ On the rounds' requests, every default together costs about 10,500 instructions 
 86,500 (12%) and 5,900 of the JSON's 65,600 (9%); the largest is the security headers and CSP,
 4,800 a page (5.5%), which adds seven headers, then compression's 2,700 a page, which
 compresses nothing there: it reads the body's type and size and adds `Vary: accept-encoding`.
-For a browser, compressing is two thirds of the request (233,600 of 344,400 a page with zstd 1,
-162,600 of 227,100 for the JSON) and the page's `ETag` 26,500 (7.7%, close to the 27,700 measured
+That is more than the 1,448 the by-crate split above gives not compressing (`negotiate`, `vary`,
+`finish`), though the ablated build still negotiates (the `ETag` decision reads it); the rest,
+perhaps hyper writing the extra header and a larger request future, was not measured, so it is
+unexplained. For a browser, compressing is two thirds of the page request (233,600 of 344,400 with
+zstd 1) and nearly three quarters of the JSON's (162,600 of 227,100) and the page's `ETag` 26,500 (7.7%, close to the 27,700 measured
 in process above); the JSON is not tagged, and nothing is tagged on `identity`
-([design Limit 21](../../docs/design.md#limit-etag)). The rest are each under 1.3%; the connection watch costs about
-80 a request on one kept connection, since it runs per connection, not per request. Removing
+([design Limit 21](../../docs/design.md#limit-etag)). The rest are each under 1.3%; the connection watch's 80 a request is its per-request work
+(marking the connection busy and idle, its read and write checks), since one connection's setup
+(its clock entry) cancels out between the two runs and is not in it. Removing
 every default at once was not measured, so the sum assumes they do not overlap.
 
-So a round's Corten rows carry about a tenth of their user instructions in defaults the other
-apps mostly do not have (the [feature matrix](#feature-matrix-the-bench-apps-as-written-round-conform2-2026-11-04)),
-and a matched tier ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)) would move the
-others, not Corten, by about that much. This runs outside rounds, Corten alone, when a default
+So about a tenth of a round's Corten user instructions are defaults that the other apps mostly do
+not have (the [feature matrix](#feature-matrix-the-bench-apps-as-written-round-conform2-2026-11-04)).
+A matched tier
+([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807))
+would leave Corten's rows as they are; what the same features cost the other apps, each in its
+own framework's middleware, is not measured here. This runs outside rounds, Corten alone, when a default
 changes ([#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)).
 
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
@@ -1342,7 +1353,7 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 # measured; builds go to /tmp/defaults/bins and are reused, so a stopped run measures at once:
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
-node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv
+node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
 ```
 
 ## What the repository keeps
