@@ -496,7 +496,7 @@ async function run(browser) {
         text: getComputedStyle(b).color,
         end: s.borderRightColor,
         animation: s.animationName,
-        running: b.getAnimations({ subtree: true }).length,
+        running: document.getAnimations().filter((a) => /** @type {CSSAnimation} */ (a).animationName === "button-busy").length,
         cursor: getComputedStyle(b).cursor,
       };
     });
@@ -534,7 +534,7 @@ async function run(browser) {
   const busyIcon = await page.evaluate(() => {
     const icon = /** @type {HTMLElement} */ (document.querySelector("a[aria-labelledby][interestfor]")?.cloneNode(true));
     icon.removeAttribute("interestfor");
-    icon.insertAdjacentHTML("beforeend", "<span>Orders</span>");
+    icon.append(Object.assign(document.createElement("span"), { textContent: "Orders" }));
     icon.setAttribute("aria-busy", "true");
     document.querySelector("main")?.append(icon);
     const seen = { svg: getComputedStyle(/** @type {Element} */ (icon.querySelector("svg"))).display, name: getComputedStyle(/** @type {Element} */ (icon.querySelector("span"))).display, ring: getComputedStyle(icon, "::after").content };
