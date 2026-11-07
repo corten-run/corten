@@ -47,13 +47,13 @@ test("a phase's cell says what the app did with the connections, what a good cli
     idleFlood: { opened: 2, closedBy: [], heldMs: 60_000, good: { ...good, failed: 300, ok: 0, p99: null }, after: null, running: false, oomKilled: true, memMaxMiB: 1024 },
     oversized: { statuses: { manyHeaders: 431, hugeHeader: "closed", hugeBody: "closed" }, reset: { hugeBody: "ECONNRESET" }, good, after: 200, running: true, oomKilled: false, memMaxMiB: null, cpuSeconds: 1.2, wallMs: 4000 },
     slowHead: { error: "probe failed: exit 1" },
-    slowReader: { opened: 2, closedBy: [], heldMs: 90_000, blocked: { open: 2, stalled: 1, unreadMiB: 3.1 }, good, after: 200, running: true, oomKilled: false },
+    slowReader: { opened: 2, closedBy: [], heldMs: 90_000, blocked: { open: 3, stalled: 1, silent: 1, unreadMiB: 3.1 }, good, after: 200, running: true, oomKilled: false },
   });
   assert.equal(cells.headFlood, "up: closed all 2 within 30.1 s; good p99 9 ms, 0 of 300 failed; 48.2 MiB peak");
   assert.equal(cells.idleFlood, "DOWN (out of memory): held all 2 to the end of the hold (60 s); good p99 - ms, 300 of 300 failed; 1024 MiB peak");
   assert.equal(cells.oversized, "up: 431 / closed / reset; good p99 9 ms, 0 of 300 failed; 0.3 cores");
   assert.equal(cells.slowHead, "error probe failed: exit 1");
-  assert.equal(cells.slowReader, "up: held all 2 to the end of the hold (90 s) (1 of 2 open no longer sent to); good p99 9 ms, 0 of 300 failed");
+  assert.equal(cells.slowReader, "up: held all 2 to the end of the hold (90 s) (1 of 3 open no longer sent to, 1 sent nothing); good p99 9 ms, 0 of 300 failed");
 });
 
 /**

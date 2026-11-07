@@ -82,7 +82,8 @@ export const cellsOf = (probes) => Object.fromEntries(Object.entries(probes).map
     ? Object.entries(p.statuses ?? {}).map(([k, s]) => (s === "closed" && p.reset?.[k] ? "reset" : String(s ?? "no answer"))).join(" / ")
     : closureOf(p);
   // For the clients that stop reading: of those still open, how many had a server no longer sending.
-  const stalled = p.blocked ? ` (${p.blocked.stalled} of ${p.blocked.open} open no longer sent to)` : "";
+  const silent = p.blocked?.silent ? `, ${p.blocked.silent} sent nothing` : "";
+  const stalled = p.blocked?.open ? ` (${p.blocked.stalled} of ${p.blocked.open} open no longer sent to${silent})` : "";
   const mem = p.memMaxMiB === null || p.memMaxMiB === undefined ? "" : `; ${p.memMaxMiB} MiB peak`;
   const cores = coresOf(p);
   const cpu = cores === null ? "" : `; ${cores} cores`;

@@ -13,7 +13,7 @@
 // how the server ended each oversized request's connection when it reset it (ECONNRESET or EPIPE),
 // or null, and blocked, for the clients that stop reading, how many of the connections still open
 // at the end had a server no longer sending (what they held unread did not grow over the hold's
-// second half) and the median they held unread. Phases:
+// second half), how many it had sent nothing, and the median they held unread. Phases:
 //   headFlood: `count` connections each send a request head without its blank line, then nothing.
 //   slowHead: `count` connections each send a valid head one byte every `everyMs`.
 //   slowBody: `count` POSTs to `formPath` declare a 1 MiB body and send it a byte every `everyMs`.
@@ -151,15 +151,19 @@ const holdAll = async (/** @type {NonNullable<Awaited<ReturnType<typeof open>>>[
     if (watch && mid === undefined && Date.now() >= from + (end - from) / 2) mid = unread();
     await sleep(Math.min(250, everyMs));
   }
-  /** @type {{ open: number, stalled: number, unreadMiB: number | null } | null} */
+  /** @type {{ open: number, stalled: number, silent: number, unreadMiB: number | null } | null} */
   let blocked = null;
   if (watch) {
     const last = unread();
     const open = conns.filter((c) => c.closed() === null);
     if (mid && last) {
       const ends = open.map((c) => last.get(/** @type {number} */ (c.socket.localPort)) ?? 0).sort((a, b) => a - b);
-      const stalled = open.filter((c) => { const port = /** @type {number} */ (c.socket.localPort); const a = mid?.get(port); const b = last.get(port); return a !== undefined && b !== undefined && b > 0 && b === a; }).length;
-      blocked = { open: open.length, stalled, unreadMiB: ends.length ? +(ends[Math.floor(ends.length / 2)] / 1048576).toFixed(2) : null };
+      const at = (/** @type {Map<number, number> | null | undefined} */ m, /** @type {(typeof open)[number]} */ c) => m?.get(/** @type {number} */ (c.socket.localPort));
+      // Stalled: it held the same unread bytes at both reads (the server's writes blocked);
+      // silent: it held none at either (the server sent it nothing); the rest were still being sent to.
+      const stalled = open.filter((c) => { const a = at(mid, c); const b = at(last, c); return a !== undefined && b !== undefined && b > 0 && b === a; }).length;
+      const silent = open.filter((c) => !at(mid, c) && !at(last, c)).length;
+      blocked = { open: open.length, stalled, silent, unreadMiB: ends.length ? +(ends[Math.floor(ends.length / 2)] / 1048576).toFixed(2) : null };
     }
   }
   const heldMs = Date.now() - from;
