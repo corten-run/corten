@@ -161,6 +161,7 @@ test("the oversized requests' answers are each one's status, or closed", async (
   // The huge header's server destroyed the connection while the probe was still sending.
   assert.ok(r.reset.hugeHeader === "ECONNRESET" || r.reset.hugeHeader === "EPIPE", JSON.stringify(r.reset));
   assert.equal(r.reset.hugeBody, null);
+  assert.equal(r.reset.manyHeaders, null, "a connection closed after its answer is not a reset");
   assert.equal(r.after, 200);
 });
 
