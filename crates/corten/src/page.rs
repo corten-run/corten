@@ -440,8 +440,11 @@ impl Failure {
         }
     }
 
-    /// What went wrong, for the developer: set under `corten dev` only, and logged instead in
-    /// production.
+    /// What went wrong, for the developer: set under `corten dev`, and logged instead in
+    /// production. A debug build's error about the app's own code that the page's answer raises (a
+    /// component the page draws that the app does not serve, a `Refresh` header, a write
+    /// redirected outside `form-action`) keeps it outside `corten dev` too, so an app's router
+    /// test names it; when the error page fails as well, its plain text keeps it.
     pub fn detail(&self) -> Option<&str> {
         match self {
             Failure::Rejected { detail, .. }
@@ -483,6 +486,43 @@ impl Failure {
         }
     }
 }
+
+/// A debug build's error about the app's own code (a component the app does not serve, a hint no
+/// control names, a `Refresh` header), made by [`unserved`]: its answer is marked [`KeepsDetail`].
+#[derive(Debug)]
+pub(crate) struct Unserved(String);
+
+impl std::fmt::Display for Unserved {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Unserved {}
+
+/// A debug build's error about the app's own code (`message` without the `corten: ` it is printed
+/// with): kept on the error page's [`Failure::detail`] outside `corten dev`, and printed to stderr
+/// there, since a router test has no logger.
+#[cold]
+pub(crate) fn unserved(dev: bool, message: String) -> Error {
+    print_unserved(dev, &message);
+    Error::new(Unserved(message))
+}
+
+/// Prints a debug build's error about the app's code to stderr outside `corten dev`, where a router
+/// test has no logger to show it.
+#[cold]
+fn print_unserved(dev: bool, message: &str) {
+    if !dev {
+        eprintln!("corten: {message}");
+    }
+}
+
+/// Marks a debug build's failed answer whose message describes the app's code, not the request, so
+/// the error page's [`Failure`] keeps it outside `corten dev` (where every other detail is only
+/// logged). A release build never sets it.
+#[derive(Clone, Copy)]
+pub(crate) struct KeepsDetail;
 
 /// Why a failed response failed, when its status and body do not say: set by the stage that
 /// answered it, read when the error page is chosen.
@@ -630,6 +670,9 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
     let status = failure.status();
     let waits = failure.request_at_fault();
     let mut parts = asked.parts();
+    // In a debug build, what the failure says is kept for the plain text below: an unlisted
+    // component in the layout fails the page and its error page alike.
+    let detail = if cfg!(debug_assertions) { failure.detail().map(str::to_owned) } else { None };
     // Started before the page is called, so they run beside its own reads.
     if let Some(here) = parts.extensions.get::<crate::layout::StartHere>().cloned() {
         here.at_error_page(&mut parts, waits);
@@ -641,7 +684,10 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
         // The error page itself failed (in a debug build, a component the app does not list):
         // plain text, so a broken error page cannot fail again.
         tracing::error!(status = res.status().as_u16(), "corten: the error page failed");
-        res = (status, "The page could not be shown.").into_response();
+        res = match detail {
+            Some(detail) => (status, format!("The page could not be shown.\n\n{detail}")).into_response(),
+            None => (status, "The page could not be shown.").into_response(),
+        };
     }
     // Search engines skip it, whatever the layout says: the offline page is a 200.
     res.headers_mut().insert(HeaderName::from_static("x-robots-tag"), HeaderValue::from_static("noindex"));
@@ -1580,15 +1626,13 @@ impl Req {
         }
     }
 
-    /// A debug build's error for something a page would be served without. Outside `corten dev`
-    /// the error page does not show it and a router test has no logger, so it goes to stderr too,
-    /// which a failing test shows.
+    /// A debug build's error for something a page would be served without. It describes the app's
+    /// code, not the request, so its message stays on the error page's [`Failure::detail`] outside
+    /// `corten dev` too (a router test that prints the body names what to fix), and a router test
+    /// has no logger, so it goes to stderr as well.
     #[cold]
     fn unserved(&self, message: String) -> Error {
-        if !self.shared.dev {
-            eprintln!("corten: {message}");
-        }
-        Error::new(message)
+        unserved(self.shared.dev, message)
     }
 
     /// In a debug build: the page's places for layout values are each a read the app starts, in
@@ -2343,12 +2387,13 @@ impl Req {
 /// A page with a `Refresh` header: browsers keep a full load's after the runtime navigates
 /// away, then load that URL again (Chromium, Firefox, WebKit). [`ReadAgain`] is the way.
 #[cfg(debug_assertions)]
-fn refresh_header_is_an_error(res: Response) -> Response {
+fn refresh_header_is_an_error(res: Response, dev: bool) -> Response {
     if !(res.headers().contains_key(SHELL_HEADER) && res.headers().contains_key("refresh")) {
         return res;
     }
-    Error::new(
-        "corten: this page sends a Refresh header, which the browser keeps after the runtime navigates away and then loads this URL again: put <ReadAgain after={..} /> in the page's head tags instead",
+    unserved(
+        dev,
+        "this page sends a Refresh header, which the browser keeps after the runtime navigates away and then loads this URL again: put <ReadAgain after={..} /> in the page's head tags instead".to_owned(),
     )
     .into_response()
 }
@@ -2358,7 +2403,7 @@ fn refresh_header_is_an_error(res: Response) -> Response {
 /// every test passes. A debug build answers it as an error that says so; a release build sends
 /// it as it is.
 #[cfg(debug_assertions)]
-fn redirect_outside_form_action(res: Response, check: Option<&crate::security::FormCheck>) -> Response {
+fn redirect_outside_form_action(res: Response, check: Option<&crate::security::FormCheck>, dev: bool) -> Response {
     let Some(check) = check else { return res };
     // A relayed answer is passed on as it came, under the policy it came with.
     if res.extensions().get::<crate::answer::Relayed>().is_some() {
@@ -2373,7 +2418,7 @@ fn redirect_outside_form_action(res: Response, check: Option<&crate::security::F
     // What the handler set besides the redirect (a session cookie, which the browser keeps even
     // when it stops the redirect) goes out with the error page.
     let (parts, _) = res.into_parts();
-    let mut error = Error::new(message).into_response();
+    let mut error = unserved(dev, message).into_response();
     let own: Vec<HeaderName> = error.headers().keys().cloned().collect();
     for (name, value) in &parts.headers {
         if name != header::LOCATION && name != LOCATION_HEADER && !own.contains(name) {
@@ -2406,7 +2451,7 @@ fn outside_form_action(check: &crate::security::FormCheck, to: &HeaderValue) -> 
         ""
     };
     Some(format!(
-        "corten: this write redirects to {origin}, which the form's page does not allow in its CSP's form-action, {stops} with only a console error: allow it with Policy::form_action(\"{origin}\") (Sources::form_action for an area), or redirect to a page of the app{own}"
+        "this write redirects to {origin}, which the form's page does not allow in its CSP's form-action, {stops} with only a console error: allow it with Policy::form_action(\"{origin}\") (Sources::form_action for an area), or redirect to a page of the app{own}"
     ))
 }
 
@@ -2521,9 +2566,9 @@ async fn page_or_error<S: crate::app::Steps>(
     let check = req.extensions_mut().remove::<crate::security::FormCheck>();
     let res = run(req, next, deadline, signal).await;
     #[cfg(debug_assertions)]
-    let res = refresh_header_is_an_error(res);
+    let res = refresh_header_is_an_error(res, shared.dev);
     #[cfg(debug_assertions)]
-    let mut res = redirect_outside_form_action(res, check.as_ref());
+    let mut res = redirect_outside_form_action(res, check.as_ref(), shared.dev);
     #[cfg(not(debug_assertions))]
     let mut res = res;
     let status = res.status();
@@ -2542,9 +2587,10 @@ async fn page_or_error<S: crate::app::Steps>(
         let Some(message) = sign_in_loops(asked.path(), &to) else {
             #[cfg(debug_assertions)]
             if let Some(message) = check.as_ref().and_then(|check| outside_form_action(check, &to)) {
-                tracing::error!("{message}");
+                // About the app's code, as `unserved`'s are: the detail stays outside dev too.
+                tracing::error!("corten: {message}");
+                print_unserved(shared.dev, &message);
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
-                let failure = if shared.dev { failure } else { failure.without_detail() };
                 return carried(kept, error_page(shared, asked, failure).await);
             }
             return carried(kept, redirect(mode, to));
@@ -2555,6 +2601,10 @@ async fn page_or_error<S: crate::app::Steps>(
         return carried(kept, error_page(shared, asked, failure).await);
     }
     let mut failed = res.extensions().get::<crate::Failed>().cloned();
+    // Read here, before the answer's body is taken; not in a release build, where it would be one
+    // more value every request's future holds across the await below.
+    #[cfg(debug_assertions)]
+    let keeps_detail = res.extensions().get::<KeepsDetail>().is_some();
     let cause = res.extensions().get::<Cause>().copied();
     let empty_error = res.body().size_hint().exact() == Some(0);
     // An extractor's rejection (a form field missing, a path segment that does not parse) is
@@ -2592,7 +2642,11 @@ async fn page_or_error<S: crate::app::Steps>(
             status => Failure::Failed { status, detail: None },
         },
     };
-    let failure = if shared.dev { failure } else { failure.without_detail() };
+    #[cfg(debug_assertions)]
+    let shows = shared.dev || keeps_detail;
+    #[cfg(not(debug_assertions))]
+    let shows = shared.dev;
+    let failure = if shows { failure } else { failure.without_detail() };
     carried(kept, error_page(shared, asked, failure).await)
 }
 
