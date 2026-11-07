@@ -5511,6 +5511,21 @@ Corten is pre-1.0, so any minor version may change the API.
     protocol on its own retry schedule, beside a Chromium page running `subscribe()` that lost
     nothing
     ([#1068 subscribe()'s resync paths (sync, a seq gap, a stream answered with an error) have no browser smoke check, and the failover benchmark counts a Node copy of the client](https://github.com/corten-run/corten/issues/1068)).
+191. A closed `<dialog>` an app draws in place from a breakpoint (a filters rail that is a modal
+    on a phone) was hidden by the components' stylesheet's `dialog:not([open])` rule with no error
+    and no failed check, so the rail was simply missing on wide screens. `corten dev` now warns in
+    the console of each closed dialog or popover that the rule keeps hidden while a rule inside
+    `@media` or `@container` gives it a `display`, at the width the page is at or any other,
+    nested rules included, with the selector, the query and a rule for each reading: drawn in
+    place there (`.filters:not([open],[hidden]) { display: block !important }` in that query, which
+    leaves a rail the app hides with `hidden` hidden), or the open
+    one's look, written under `[open]`, as the kit's dialog and sheet are. The page cannot tell the
+    two apart, so it is a warning, not an error. A look outside a query (a card on a dialog) and
+    one under `@supports` are still kept hidden while closed and are not reported; the styles
+    guide gives both rules. It is a check of `/corten/dev.js`, which only a dev server serves, so
+    a production page is unchanged; `scripts/smoke-dev.mjs` checks what it warns of and what it
+    does not
+    ([#1081 A closed dialog an app draws in place from a breakpoint (a filters rail) is hidden by components.css's !important dialog rule, with no error and no failed check](https://github.com/corten-run/corten/issues/1081)).
 192. Nothing answered `/favicon.ico`, which browsers ask for on their own for a PDF, an image or
     JSON opened in a tab, so each such request was the app's 404 page with its layout reads. The
     path now answers the static directory's `favicon.ico`, else its `favicon.svg` (the icon
