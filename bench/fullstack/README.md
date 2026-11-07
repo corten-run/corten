@@ -1143,15 +1143,22 @@ under r10's, and throughput 39.5% and requests per CPU-second 29.1% below r10's 
 23,898 a second, 5,274 against 7,434), which ran on a faster CPU model (Platinum 8280 against
 r14's 8168), the reason they get no verdict.
 
-The detector is not yet a schedule or a route to triage: it runs with each full round the nightly
-automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line into an issue
+The detector runs with each full round the nightly automation collects (outside this repository),
+and the round's report reads `trend.json`: a `DRIFT:` line becomes an issue, or a comment on an
+open one for the same number, and a `WARN:` line, or a trend that could not be made, goes to the
+maintainer instead. r16's report, the first to read it, found no drift and no warning
 ([#867 Small performance regressions can compound without a trend detector](https://github.com/corten-run/corten/issues/867)).
 
 ## Caveats
 
 1. One run per phase on one droplet, unless a round says it ran passes (`--passes`, Method 4):
    in a one-pass round differences under about 10% are noise. A round of passes gives each
-   number's range, and a difference whose ranges overlap is within noise. Across rounds,
+   number's range, and a difference whose ranges overlap is within noise. r16, the first round of
+   three passes, measured that noise: across the 72 app and test pairs with a range, the 64-user
+   phase's requests a second spread a median 5.3% of their median between passes (13 over 10%, the
+   widest 37.6%, Leptos's in-memory JSON), and requests per CPU-second at the fixed rate a median
+   3.0% (the widest 18.9%). So the fixed-rate cost is the steadier number, and a one-pass
+   difference under 10% is still noise. Across rounds,
    `trend.mjs` reports a sustained drift (Drift across rounds).
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
