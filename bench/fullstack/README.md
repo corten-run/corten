@@ -1634,7 +1634,9 @@ node bench/fullstack/droplet.mjs p1 --ssh-key <id> --apps corten,axum-maud --pas
 # The hardening step alone (slow clients, oversized requests, floods), every app or --apps:
 node bench/fullstack/droplet.mjs h1 --ssh-key <id> --suite harden --detach
 # A round of the matched tier (named m<n>; its apps with the production profile), and its collect:
-node bench/fullstack/droplet.mjs m1 --ssh-key <id> --tier matched --detach   # a c-16: the edge has six cores (a hardening round of the tier, with --suite harden, has no edge and runs on a c-8)
+# A c-16, as the edge has six cores; a hardening round of the tier (--suite harden) has no edge and
+# runs on a c-8.
+node bench/fullstack/droplet.mjs m1 --ssh-key <id> --tier matched --detach
 node bench/fullstack/droplet.mjs m1 --collect
 # Or by hand, from the repository root: the images, the fixture, then everything.
 docker build -f examples/card-market/Dockerfile -t cb-corten .

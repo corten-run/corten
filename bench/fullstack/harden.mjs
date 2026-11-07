@@ -125,7 +125,8 @@ const git = (/** @type {string[]} */ ...args) => {
 const head = git("rev-parse", "HEAD");
 const built = /^([0-9a-f]+)(-dirty)?$/.exec(process.env.CONFORM_IMAGES_FROM ?? "");
 const commit = head ?? built?.[1] ?? null;
-const status = head === null ? null : git("status", "--porcelain", "--", ".", ":!results");
+// The whole repository, as droplet.mjs checks it: the images are built from more than this folder.
+const status = head === null ? null : git("status", "--porcelain", "--", ":(top)", ":(top,exclude)bench/fullstack/results");
 const dirty = status !== null ? status !== "" : built ? built[2] !== undefined : null;
 const file = out ? join(here, "results", out, "hardening.json") : null;
 const previous = file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
