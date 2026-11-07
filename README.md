@@ -277,7 +277,8 @@ method, every table and the caveats are in [bench/fullstack](bench/fullstack/REA
 The same item page (listings table, offers, a form that patches) and the same item as JSON in
 eighteen apps, each with its usual production settings on one CPU and 1 GiB. Requests a
 second are at 64 users; "failed" means the app could not serve the fixed rate (or start) without
-tuning.
+tuning. Corten's maintainers wrote every app; none has yet been reviewed in full by its
+framework's maintainers, and [REVIEW.md](bench/fullstack/REVIEW.md) asks them to.
 
 | | Pages/s, no database | JSON/s, no database | Pages/s, item API | Process start to first page | Memory after first request |
 |---|---|---|---|---|---|

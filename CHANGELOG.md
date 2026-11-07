@@ -2425,6 +2425,12 @@ Corten is pre-1.0, so any minor version may change the API.
     a header timeout and a cap of 1,000 connections, which `conform-hold.mjs` probes as two new
     columns of the tier's matrix. Corten and axum-maud are in it so far (axum-maud with
     tower-http's layers); card-market reads `MAX_CONNECTIONS` into `App::max_connections`.
+269. `bench/fullstack/REVIEW.md` tells a framework's maintainers what the comparison measures,
+    what they may change in their app (settings a production deployment uses, the app's own code)
+    and what they may not (caching rendered output, skipping work, tuning past the framework's
+    guidance), and how to propose it; the README's app table says whether each app has been
+    reviewed by its maintainers (none has been reviewed in full yet)
+    ([#814 No one who maintains the other frameworks has reviewed their bench/fullstack apps, so a fair-comparison claim rests on our own reading of each](https://github.com/corten-run/corten/issues/814)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

@@ -3,27 +3,31 @@
 The same item detail page (title, images, sorted listings table, offers with "show all", a
 price-alert form that posts and patches a message), and the same item as JSON, built in:
 
-| App | Stack | Directory |
-|---|---|---|
-| corten | Corten 0.1 (Rust, axum, `html!` views, handlers) | [examples/card-market](../../examples/card-market) |
-| leptos | Leptos 0.8 (Rust, SSR plus WASM hydration, axum) | [apps/leptos](apps/leptos) |
-| topcoat | Topcoat 0.11 (Rust, `view!` components, shards and a procedure, no WASM) | [apps/topcoat](apps/topcoat) |
-| axum-maud | axum 0.8.9 and Maud 0.27 (Rust, a router and a template macro, no framework), htmx | [apps/axum-maud](apps/axum-maud) |
-| nextjs | Next.js 16.4.2, App Router, React Server Components, server action | [apps/nextjs](apps/nextjs) |
-| tanstack-start | TanStack Start 1.169.3, React 19, server functions, Nitro | [apps/tanstack-start](apps/tanstack-start) |
-| sveltekit | SvelteKit 3.1.0, Svelte 5.57, adapter-node 6, form action | [apps/sveltekit](apps/sveltekit) |
-| react-router | React Router 7.18.4 on Express | [apps/react-router](apps/react-router) |
-| astro | Astro 7.4.2, Node adapter (standalone), client router, Actions | [apps/astro](apps/astro) |
-| nuxt | Nuxt 4.6.2, Vue 3.5, Nitro | [apps/nuxt](apps/nuxt) |
-| aspnet | ASP.NET Core 10 Razor Pages on Kestrel, htmx | [apps/aspnet](apps/aspnet) |
-| aspnet-aot | ASP.NET Core 10 minimal API published with native AOT, the item as JSON only | [apps/aspnet-aot](apps/aspnet-aot) |
-| spring | Spring Boot 4.1.1, Java 25, Thymeleaf on Tomcat, htmx | [apps/spring](apps/spring) |
-| gin | Gin 1.12.0, Go 1.27, templ 0.3, htmx | [apps/gin](apps/gin) |
-| drogon | Drogon 1.9.14 (C++), CSP views, JsonCpp, htmx | [apps/drogon](apps/drogon) |
-| django | Django 6.1.2, Python 3.14, gunicorn 26 (3 sync workers), htmx | [apps/django](apps/django) |
-| rails | Rails 8.1.4, Ruby 3.4 with YJIT, Puma (3 threads), Turbo and Stimulus | [apps/rails](apps/rails) |
-| laravel | Laravel 13.38, PHP 8.4, Octane on FrankenPHP (2 workers), Livewire 4.4 | [apps/laravel](apps/laravel) |
-| phoenix | Phoenix 1.8.16, LiveView 1.2, Elixir 1.19 on OTP 28, Bandit | [apps/phoenix](apps/phoenix) |
+| App | Stack | Directory | Reviewed by its maintainers |
+|---|---|---|---|
+| corten | Corten 0.1 (Rust, axum, `html!` views, handlers) | [examples/card-market](../../examples/card-market) | Corten's own |
+| leptos | Leptos 0.8 (Rust, SSR plus WASM hydration, axum) | [apps/leptos](apps/leptos) | not yet |
+| topcoat | Topcoat 0.11 (Rust, `view!` components, shards and a procedure, no WASM) | [apps/topcoat](apps/topcoat) | not yet |
+| axum-maud | axum 0.8.9 and Maud 0.27 (Rust, a router and a template macro, no framework), htmx | [apps/axum-maud](apps/axum-maud) | not yet |
+| nextjs | Next.js 16.4.2, App Router, React Server Components, server action | [apps/nextjs](apps/nextjs) | not yet |
+| tanstack-start | TanStack Start 1.169.3, React 19, server functions, Nitro | [apps/tanstack-start](apps/tanstack-start) | not yet |
+| sveltekit | SvelteKit 3.1.0, Svelte 5.57, adapter-node 6, form action | [apps/sveltekit](apps/sveltekit) | not yet |
+| react-router | React Router 7.18.4 on Express | [apps/react-router](apps/react-router) | not yet |
+| astro | Astro 7.4.2, Node adapter (standalone), client router, Actions | [apps/astro](apps/astro) | not yet |
+| nuxt | Nuxt 4.6.2, Vue 3.5, Nitro | [apps/nuxt](apps/nuxt) | not yet |
+| aspnet | ASP.NET Core 10 Razor Pages on Kestrel, htmx | [apps/aspnet](apps/aspnet) | in part: Damian Edwards (ASP.NET Core) asked whether the app resolves services per request and whether Corten enforces limits as Kestrel does (2026-11, [#806 bench/fullstack checks that every app sends the same output but not that it does the same work, so a table can compare apps doing different jobs](https://github.com/corten-run/corten/issues/806)); the app itself not yet |
+| aspnet-aot | ASP.NET Core 10 minimal API published with native AOT, the item as JSON only | [apps/aspnet-aot](apps/aspnet-aot) | not yet |
+| spring | Spring Boot 4.1.1, Java 25, Thymeleaf on Tomcat, htmx | [apps/spring](apps/spring) | not yet |
+| gin | Gin 1.12.0, Go 1.27, templ 0.3, htmx | [apps/gin](apps/gin) | not yet |
+| drogon | Drogon 1.9.14 (C++), CSP views, JsonCpp, htmx | [apps/drogon](apps/drogon) | not yet |
+| django | Django 6.1.2, Python 3.14, gunicorn 26 (3 sync workers), htmx | [apps/django](apps/django) | not yet |
+| rails | Rails 8.1.4, Ruby 3.4 with YJIT, Puma (3 threads), Turbo and Stimulus | [apps/rails](apps/rails) | not yet |
+| laravel | Laravel 13.38, PHP 8.4, Octane on FrankenPHP (2 workers), Livewire 4.4 | [apps/laravel](apps/laravel) | not yet |
+| phoenix | Phoenix 1.8.16, LiveView 1.2, Elixir 1.19 on OTP 28, Bandit | [apps/phoenix](apps/phoenix) | not yet |
+
+Each app was written by Corten's maintainers in what we took to be its framework's usual way.
+The last column says whether someone who works on that framework has checked it;
+[REVIEW.md](REVIEW.md) says what a reviewer may change and how to propose it.
 
 Every app renders Corten's pages: the item page, the home page and the 404 page, with the same
 elements, classes and stylesheets as [card-market](../../examples/card-market), each written in the
