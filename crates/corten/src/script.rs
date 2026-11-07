@@ -847,9 +847,6 @@
 #![cfg_attr(not(feature = "json"), doc = "```ignore")]
 //! use corten::prelude::*;
 //!
-//! #[derive(ToJson)]
-//! struct Count { count: u32 }
-//!
 //! #[component(js)]
 //! fn CountBadge() -> impl Render {
 //!     let out = refs();
@@ -1522,7 +1519,7 @@ pub trait Arg<P> {
 #[diagnostic::on_unimplemented(
     message = "the script types this handler parameter so that no call can be checked against it",
     label = "the warning on this handler says why",
-    note = "a set of names, or any other JSON value, is a Rust type with a generated declaration, import(\"../types/app\").Name; a list or an optional one is a Rust type of its own; a parameter typed unknown takes any value"
+    note = "a set of names, or any other JSON value, is a Rust type with a generated declaration, import(\"../types/app\").Name, and a list or an optional one a Rust type of its own; an element or an event takes an interface the scripts guide lists as checked (several events the one they share, UIEvent or Event); a parameter typed unknown takes any argument"
 )]
 pub trait Refused: refused::Sealed {}
 

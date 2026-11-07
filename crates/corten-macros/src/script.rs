@@ -515,6 +515,12 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
             }
             // `/** @import { Saved } from "corten/events" */`: a type-only import of typed events,
             // which types parameters as an import statement does (it serves nothing).
+            if block.contains("@import *") && (block.contains("\"corten/events\"") || block.contains("'corten/events'")) {
+                return Err((
+                    start + 1,
+                    "import typed events by name: /** @import { RowToggled } from \"corten/events\" */".into(),
+                ));
+            }
             if let Some(names) = jsdoc_import(&block, "corten/events") {
                 for name in names {
                     let (class, local) =
@@ -677,12 +683,16 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         }
     };
     // Whether a type names something only the browser supplies (an element, an event, a signal).
-    let browser = |ty: &str| {
+    // A name the script defines itself (a JSON `Node` tree) is not the DOM's; a group, a message
+    // and a format are not JSON, whatever shape they are in.
+    let own: Vec<String> = typedefs.iter().map(|t| t.name.clone()).chain(aliases.iter().map(|(n, _)| n.clone())).collect();
+    let browser = |ty: &str, groups: &[ArgGroup]| {
         type_words(ty).iter().any(|w| {
-            dom::ELEMENTS.contains(&w.as_str())
-                || dom::EVENTS.contains(&w.as_str())
-                || BROWSER.contains(&w.as_str())
+            let w = w.as_str();
+            groups.iter().any(|g| g.name == w)
                 || events.iter().any(|(local, _)| local == w)
+                || (!own.iter().any(|o| o == w)
+                    && (dom::ELEMENTS.contains(&w) || dom::EVENTS.contains(&w) || BROWSER.contains(&w)))
         })
     };
     let union_error = |what: &str, ty: &str| {
@@ -724,7 +734,10 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         if let Some(((field, _), (_, t))) =
             fields.iter().zip(&props).find(|((_, p), (_, t))| *p == Param::Any && resolve(t) != UNKNOWN)
         {
-            unions.push((name.clone(), (line, format!("{name}: {field}: {}", unchecked(t, &expand(t), browser(&expand(t)))))));
+            unions.push((
+                name.clone(),
+                (line, format!("{name}: {field}: {}", unchecked(t, &expand(t), browser(&expand(t), &groups)))),
+            ));
         }
         for (field, _) in &fields {
             if !field.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
@@ -793,7 +806,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
                         Some((_, why)) => refused(why.clone()),
                         None if mentions_generated(&expanded) => refused(format!("{ty} holds a generated declaration in a shape the call is not checked against; take the generated type itself (import(\"../types/app\").Name), or declare a Rust type for the whole value (derive ToJson, add it with Types::add) and take its declaration")),
                         None if named == UNKNOWN => Param::Any,
-                        None => refused(unchecked(&ty, &expanded, browser(&expanded))),
+                        None => refused(unchecked(&ty, &expanded, browser(&expanded, &groups))),
                     },
                     other => other,
                 }
@@ -1606,13 +1619,29 @@ const UNKNOWN: &str = "unknown";
 fn unchecked(ty: &str, expanded: &str, browser: bool) -> String {
     let shown = if expanded == ty { ty.to_string() } else { format!("{ty}, which is {expanded}") };
     if browser {
-        return format!("{shown}: no call can be checked against this type, so a wrong element, event or signal would compile; take one the scripts guide lists as checked: an element type or a union of them, one event interface (for several events, the one they share, such as UIEvent or Event, narrowed in the script), AbortSignal, Holds<Row, El> or Map<string, El>; or take {UNKNOWN} and check the value in the script");
+        return format!("{shown}: no call can be checked against this type, so a wrong element, event or signal would compile; take one the scripts guide lists as checked: an element type, a union or a list of them (El[]), one event interface (for several events, the one they share, such as UIEvent or Event, narrowed in the script), AbortSignal, Holds<Row, El>, Map<string, El>, a message or a format, or a @typedef of these (a group) taken as it is, not in a list or with null; or take {UNKNOWN} and check the value in the script");
     }
     format!("{shown}: no call can be checked against this type, so a wrong argument would compile; declare a Rust type for the value (derive ToJson, add it with Types::add) and take its declaration, import(\"../types/app\").Name, use a type the scripts guide lists as checked, or take {UNKNOWN} and check the value in the script")
 }
 
 /// Names of values only the browser supplies, besides elements and events.
-const BROWSER: &[&str] = &["EventTarget", "Node", "Element", "AbortSignal", "Holds", "Map", "Window", "Document"];
+const BROWSER: &[&str] = &[
+    "EventTarget",
+    "Node",
+    "Element",
+    "AbortSignal",
+    "Holds",
+    "Map",
+    "Window",
+    "Document",
+    "HTMLElementTagNameMap",
+    "SVGElementTagNameMap",
+    "Message",
+    "NumberFormat",
+    "MoneyFormat",
+    "DateFormat",
+    "PercentFormat",
+];
 
 /// The names every JSDoc `@import { A, B as C } from "module"` of `module` in a block brings in,
 /// as written (a list over several lines, each starting `*`, read as one).
@@ -1622,7 +1651,9 @@ fn jsdoc_import(block: &str, module: &str) -> Option<Vec<String>> {
     for (at, _) in block.match_indices("@import") {
         let Some(rest) = block[at + "@import".len()..].trim_start().strip_prefix('{') else { continue };
         let Some((names, after)) = rest.split_once('}') else { continue };
-        let from = after.trim_start().strip_prefix("from").map(str::trim_start).unwrap_or("");
+        // `} from ".."` may be on the next line of the block, after its `*`.
+        let from = after.trim_start().trim_start_matches('*').trim_start();
+        let from = from.strip_prefix("from").map(str::trim_start).unwrap_or("");
         if !quoted.iter().any(|q| from.starts_with(q.as_str())) {
             continue;
         }
@@ -1939,6 +1970,19 @@ function helper() {}
             assert!(why.contains("UIEvent or Event") && !why.contains("ToJson"), "{ty}: {why}");
         }
         assert!(!refusal("/** @param {{ n: number }} a */\nexport function f(a) {}").contains("UIEvent"));
+        // A group, a message or a format in another shape is not JSON either.
+        for ty in ["Parts | null", "Parts[]", "Message<\"n\"> | null", "NumberFormat | null", "HTMLElementTagNameMap[\"dialog\"]"]
+        {
+            let source = format!(
+                "/** @typedef {{{{ box: HTMLInputElement }}}} Parts */\n/** @param {{{ty}}} a */\nexport function f(a) {{}}"
+            );
+            let why = refusal(&source);
+            assert!(why.contains("a group") && !why.contains("ToJson"), "{ty}: {why}");
+        }
+        // A JSON type of the script's own named as a DOM interface is JSON.
+        let why =
+            refusal("/** @typedef {{ id: string, children: Node[] }} Node */\n/** @param {Node} a */\nexport function f(a) {}");
+        assert!(why.contains("ToJson") && !why.contains("UIEvent"), "{why}");
         // A typedef is named as it was written, with what it stands for.
         let why = refusal("/** @typedef {{ id: string }} Level */\n/** @param {Level} a */\nexport function f(a) {}");
         assert!(why.starts_with("f: a: Level: no call"), "{why}");
@@ -1979,6 +2023,15 @@ function helper() {}
         let (handlers, _) = parse(source).unwrap();
         let params: Vec<&Param> = handlers[0].params.iter().map(|(_, p)| p).collect();
         assert_eq!(params, [&Param::Event("Saved".into()), &Param::Event("Cleared".into()), &Param::Event("RowToggled".into())]);
+        // `from` on the line after the list.
+        let (handlers, _) =
+            parse("/**\n * @import { Saved }\n * from \"corten/events\"\n */\n/** @param {Saved} a */\nexport function f(a) {}")
+                .unwrap();
+        assert_eq!(handlers[0].params[0].1, Param::Event("Saved".into()));
+        // A namespace import is refused, as an import statement's is.
+        let err = parse("/** @import * as ev from \"corten/events\" */\n/** @param {ev.Saved} a */\nexport function f(a) {}")
+            .unwrap_err();
+        assert!(err.1.starts_with("import typed events by name"), "{err:?}");
     }
 
     /// A parameter whose type no call is checked against: a call to its handler does not compile.

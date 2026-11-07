@@ -142,8 +142,8 @@ rules something out.
 
    Stands on: bet (the JSDoc types the compiler reads cover what handlers take: elements and their
    lists, maps and views (`Holds`), events, `AbortSignal`, strings and lists of them, numbers,
-   booleans, element ids, routes and feed URLs, messages, formats, and any value of a Rust type
-   through its generated declaration; a type it cannot check a call against, a set of names
+   booleans, element ids, routes and feed URLs, messages, formats, groups (a `@typedef` of these,
+   one object argument), and any value of a Rust type through its generated declaration; a type it cannot check a call against, a set of names
    written as string literals, any other JSON shape or an element or event in another shape,
    refuses the call rather than taking anything, and only `unknown` takes any argument, since it
    claims nothing the call does not check);
