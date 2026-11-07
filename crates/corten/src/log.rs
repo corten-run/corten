@@ -24,19 +24,25 @@ use tracing::{
 
 /// Installs [`Stdout`] as the global subscriber unless one is set already.
 pub(crate) fn init() {
-    let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
+    let color = colors(std::io::stdout().is_terminal(), std::env::var_os("NO_COLOR"));
     let write = Box::new(|line: &[u8]| {
         let _ = std::io::stdout().lock().write_all(line);
     });
     let _ = tracing::subscriber::set_global_default(Stdout { color, write });
 }
 
+/// Colors only on a terminal, and not when `NO_COLOR` is set to anything but an empty string
+/// (no-color.org's rule, and `tracing-subscriber`'s).
+fn colors(terminal: bool, no_color: Option<std::ffi::OsString>) -> bool {
+    terminal && no_color.is_none_or(|v| v.is_empty())
+}
+
 /// Where each line goes, in one write so lines from several threads do not interleave.
-type Write = Box<dyn Fn(&[u8]) + Send + Sync>;
+type Sink = Box<dyn Fn(&[u8]) + Send + Sync>;
 
 pub(crate) struct Stdout {
     color: bool,
-    write: Write,
+    write: Sink,
 }
 
 fn wanted(meta: &Metadata<'_>) -> bool {
@@ -145,10 +151,6 @@ struct Fields<'a> {
 impl Fields<'_> {
     fn field(&mut self, field: &Field, value: fmt::Arguments<'_>) {
         let name = field.name();
-        // What the `log` crate's records carry, which `tracing-subscriber` leaves out.
-        if name.starts_with("log.") {
-            return;
-        }
         if !std::mem::take(&mut self.first) {
             self.line.push(' ');
         }
@@ -301,6 +303,7 @@ mod tests {
         tracing::error!(%failed, ?failed, r#type = "x", flag = true, n = -3i64, f = 1.5f64, "a\x1b[31mred\u{9b}");
         tracing::warn!(limit_ms = 250u64, "corten: the ready check did not answer in time");
         tracing::info!(answer = 42);
+        tracing::info!(log.id = 3, other = 1, "a field an app named log.");
         tracing::debug!("not printed");
         tracing::trace!("not printed");
         let span = tracing::info_span!("in_a_span", id = 7);
@@ -314,12 +317,22 @@ mod tests {
     fn lines_are_tracing_subscriber_s() {
         for color in [false, true] {
             let (mine, expected) = (ours(color, events), theirs(color, events));
-            assert_eq!(mine.len(), 9, "{mine:#?}");
+            assert_eq!(mine.len(), 10, "{mine:#?}");
             assert_eq!(mine.len(), expected.len(), "{mine:#?}\n{expected:#?}");
-            assert_eq!(mine[..8], expected[..8], "color {color}");
+            assert_eq!(mine[..9], expected[..9], "color {color}");
         }
-        assert_eq!(ours(false, events)[8], "  INFO inside a span");
-        assert_eq!(theirs(false, events)[8], "  INFO in_a_span{id=7}: inside a span");
+        assert_eq!(ours(false, events)[9], "  INFO inside a span");
+        assert_eq!(theirs(false, events)[9], "  INFO in_a_span{id=7}: inside a span");
+    }
+
+    /// Colors on a terminal unless `NO_COLOR` is set to something; never off a terminal.
+    #[test]
+    fn colors_only_on_a_terminal_without_no_color() {
+        assert!(colors(true, None));
+        assert!(colors(true, Some("".into())));
+        assert!(!colors(true, Some("1".into())));
+        assert!(!colors(false, None));
+        assert!(!colors(false, Some("".into())));
     }
 
     /// Text a request sent cannot start a line or send the terminal a command, in the message or
