@@ -46,7 +46,8 @@ export const stateOf = (p) => {
 
 /**
  * What the server did with the abusive connections, each timed from its own connect:
- * "closed all 3 within 30.1 s", "closed 1 of 3 within 31.0 s, held the rest 60 s", "held all 3 60 s",
+ * "closed all 3 within 30.1 s", "closed 1 of 3 within 31.0 s, held the rest to the end of the hold
+ * (60 s)", "held all 3 to the end of the hold (60 s)",
  * and what it answered before closing when it answered any: "(429 to 80)".
  * @param {Record<string, any>} p
  */
@@ -57,8 +58,8 @@ export const closureOf = (p) => {
   const answered = Object.entries(p.answers ?? {}).filter(([k]) => k !== "none").sort(([a], [b]) => a.localeCompare(b));
   const said = answered.length ? ` (${answered.map(([k, n]) => `${k} to ${n}`).join(", ")})` : "";
   if (closed === p.opened) return `closed all ${p.opened} within ${s(p.closedBy[closed - 1])}${said}`;
-  if (closed === 0) return `held all ${p.opened} ${Math.round(p.heldMs / 1000)} s${said}`;
-  return `closed ${closed} of ${p.opened} within ${s(p.closedBy[closed - 1])}, held the rest ${Math.round(p.heldMs / 1000)} s${said}`;
+  if (closed === 0) return `held all ${p.opened} to the end of the hold (${Math.round(p.heldMs / 1000)} s)${said}`;
+  return `closed ${closed} of ${p.opened} within ${s(p.closedBy[closed - 1])}, held the rest to the end of the hold (${Math.round(p.heldMs / 1000)} s)${said}`;
 };
 
 /** The app's CPU over the phase, in cores (CPU seconds a second of the phase), or null. @param {Record<string, any>} p */
@@ -69,7 +70,8 @@ export const goodOf = (g) => (!g ? "good: not run" : `good p99 ${g.p99 ?? "-"} m
 
 /**
  * Each phase's cell: whether the app survived, what it did with the abusive connections (or the
- * oversized requests' answers, "reset" for one the server reset), the well-behaved client, and the
+ * oversized requests' answers, "reset" for one the server reset; for the clients that stop reading,
+ * how many of those still open the server had stopped sending to), the well-behaved client, and the
  * memory (sampled) and CPU it took.
  * @param {Record<string, any>} probes harden.mjs's results for one app, by phase
  * @returns {Record<string, string>}
@@ -79,8 +81,10 @@ export const cellsOf = (probes) => Object.fromEntries(Object.entries(probes).map
   const what = key === "oversized"
     ? Object.entries(p.statuses ?? {}).map(([k, s]) => (s === "closed" && p.reset?.[k] ? "reset" : String(s ?? "no answer"))).join(" / ")
     : closureOf(p);
+  // For the clients that stop reading: of those still open, how many had a server no longer sending.
+  const stalled = p.blocked ? ` (${p.blocked.stalled} of ${p.blocked.open} open no longer sent to)` : "";
   const mem = p.memMaxMiB === null || p.memMaxMiB === undefined ? "" : `; ${p.memMaxMiB} MiB peak`;
   const cores = coresOf(p);
   const cpu = cores === null ? "" : `; ${cores} cores`;
-  return [key, `${stateOf(p)}: ${what}; ${goodOf(p.good)}${mem}${cpu}`];
+  return [key, `${stateOf(p)}: ${what}${stalled}; ${goodOf(p.good)}${mem}${cpu}`];
 }));

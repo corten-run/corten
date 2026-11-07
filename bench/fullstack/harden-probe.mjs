@@ -4,13 +4,16 @@
 // phase's numbers } as JSON on stdin and writes JSON on stdout:
 //   { phase, opened, closedBy: [ms from its own connect to its close, for each abusive connection
 //     the server closed], answers: { [status or "none"]: count }, heldMs,
-//     good: { sent, ok, failed, p50, p99, max }, after, statuses?, reset? }
+//     good: { sent, ok, failed, p50, p99, max }, after, statuses?, reset?, blocked? }
 // where opened is how many abusive connections connected, answers what the server sent each one
 // before it closed (the first status line it wrote, or none), heldMs how long the hold lasted, good
 // the well-behaved client's requests (timed from before its connect; ok: answered 200 within 5 s
 // of that; failed: anything else), after the status of one request on a new connection once the
 // abuse was closed (null: no answer within 5 s), statuses the oversized phase's answers and reset
-// how the server ended the 16 MiB body's connection when it reset it (ECONNRESET or EPIPE), or null. Phases:
+// how the server ended each oversized request's connection when it reset it (ECONNRESET or EPIPE),
+// or null, and blocked, for the clients that stop reading, how many of the connections still open
+// at the end had a server no longer sending (what they held unread did not grow over the hold's
+// second half) and the median they held unread. Phases:
 //   headFlood: `count` connections each send a request head without its blank line, then nothing.
 //   slowHead: `count` connections each send a valid head one byte every `everyMs`.
 //   slowBody: `count` POSTs to `formPath` declare a 1 MiB body and send it a byte every `everyMs`.
@@ -21,6 +24,7 @@
 //     16 MiB body to `formPath`; each one's status, or "closed" when the server closed without one.
 // Every phase but oversized holds its connections for `holdMs` (or until the server has closed all
 // of them), then closes the rest.
+import { readFileSync } from "node:fs";
 import { connect } from "node:net";
 import { parseAnswer } from "./conformance.mjs";
 
@@ -62,8 +66,9 @@ const ask = async (/** @type {string} */ raw, ms = 5000) => {
   const end = at + ms;
   while (Date.now() < end && c.closed() === null && parseAnswer(Buffer.concat(c.got)) === null) await sleep(5);
   const status = parseAnswer(Buffer.concat(c.got))?.status ?? null;
+  const reset = c.reset();
   c.socket.destroy();
-  return { status: status ?? (c.closed() !== null ? "closed" : null), ms: Date.now() - at };
+  return { status: status ?? (c.closed() !== null ? "closed" : null), ms: Date.now() - at, reset };
 };
 const get = (/** @type {string} */ path) => `GET ${path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n`;
 
@@ -104,14 +109,58 @@ const openMany = async (/** @type {number} */ count, batch = 250) => {
   return all;
 };
 
-/** Holds `conns` until holdMs has passed or the server closed all of them, then closes the rest. */
-const holdAll = async (/** @type {NonNullable<Awaited<ReturnType<typeof open>>>[]} */ conns, /** @type {(() => void) | undefined} */ tick, /** @type {number} */ everyMs) => {
+/**
+ * What the kernel holds unread for each of the probe's connections to the server, by local port
+ * (/proc/net/tcp and tcp6's rx_queue: what the server sent that the probe has not read), or null
+ * where /proc is not Linux's.
+ * @returns {Map<number, number> | null}
+ */
+const unread = () => {
+  /** @type {Map<number, number>} */
+  const by = new Map();
+  try {
+    for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+      for (const line of readFileSync(file, "utf8").split("\n").slice(1)) {
+        const f = line.trim().split(/\s+/);
+        if (f.length < 5) continue;
+        const [, local, remote, , queues] = f;
+        if (parseInt(remote.split(":")[1], 16) !== r.port) continue;
+        by.set(parseInt(local.split(":")[1], 16), parseInt(queues.split(":")[1], 16));
+      }
+    }
+  } catch {
+    return null;
+  }
+  return by;
+};
+
+/**
+ * Holds `conns` until holdMs has passed or the server closed all of them, then closes the rest.
+ * With `watch`, it also reads what each open connection holds unread halfway through the hold and
+ * at its end: one whose unread bytes did not grow over the second half had a server that was no
+ * longer sending, its writes blocked on a reader that does not read.
+ */
+const holdAll = async (/** @type {NonNullable<Awaited<ReturnType<typeof open>>>[]} */ conns, /** @type {(() => void) | undefined} */ tick, /** @type {number} */ everyMs, watch = false) => {
   const from = Date.now();
   const end = from + (r.holdMs ?? 60_000);
   let next = Date.now();
+  /** @type {Map<number, number> | null | undefined} */
+  let mid;
   while (Date.now() < end && conns.some((c) => c.closed() === null)) {
     if (tick && Date.now() >= next) { tick(); next = Date.now() + everyMs; }
+    if (watch && mid === undefined && Date.now() >= from + (end - from) / 2) mid = unread();
     await sleep(Math.min(250, everyMs));
+  }
+  /** @type {{ open: number, stalled: number, unreadMiB: number | null } | null} */
+  let blocked = null;
+  if (watch) {
+    const last = unread();
+    const open = conns.filter((c) => c.closed() === null);
+    if (mid && last) {
+      const ends = open.map((c) => last.get(/** @type {number} */ (c.socket.localPort)) ?? 0).sort((a, b) => a - b);
+      const stalled = open.filter((c) => { const port = /** @type {number} */ (c.socket.localPort); const a = mid?.get(port); const b = last.get(port); return a !== undefined && b !== undefined && b > 0 && b === a; }).length;
+      blocked = { open: open.length, stalled, unreadMiB: ends.length ? +(ends[Math.floor(ends.length / 2)] / 1048576).toFixed(2) : null };
+    }
   }
   const heldMs = Date.now() - from;
   const closedBy = conns.flatMap((c) => { const t = c.closed(); return t === null ? [] : [t - c.openedAt]; }).sort((a, b) => a - b);
@@ -122,7 +171,7 @@ const holdAll = async (/** @type {NonNullable<Awaited<ReturnType<typeof open>>>[
     answers[key] = (answers[key] ?? 0) + 1;
   }
   for (const c of conns) c.socket.destroy();
-  return { heldMs, closedBy, answers };
+  return { heldMs, closedBy, answers, blocked };
 };
 
 const count = r.count ?? 0;
@@ -137,7 +186,9 @@ if (r.phase === "oversized") {
   let hugeBodyReset = null;
   const post = `POST ${r.formPath ?? "/items/item_5"} HTTP/1.1\r\nhost: localhost\r\ncontent-type: application/x-www-form-urlencoded\r\ncontent-length: ${body}\r\nconnection: close\r\n\r\n`;
   const stop = goodClient();
-  const statuses = { manyHeaders: (await ask(many)).status, hugeHeader: (await ask(huge)).status, hugeBody: await (async () => {
+  const manyAnswer = await ask(many);
+  const hugeAnswer = await ask(huge);
+  const statuses = { manyHeaders: manyAnswer.status, hugeHeader: hugeAnswer.status, hugeBody: await (async () => {
     const c = await open();
     if (!c) return null;
     c.socket.write(post);
@@ -155,7 +206,7 @@ if (r.phase === "oversized") {
     return status ?? (c.closed() !== null ? "closed" : null);
   })() };
   const good = await stop();
-  out = { phase: r.phase, statuses, reset: { hugeBody: hugeBodyReset }, good, after: (await ask(get(jsonPath))).status };
+  out = { phase: r.phase, statuses, reset: { manyHeaders: manyAnswer.reset, hugeHeader: hugeAnswer.reset, hugeBody: hugeBodyReset }, good, after: (await ask(get(jsonPath))).status };
 } else {
   const stop = goodClient();
   const conns = await openMany(count);
@@ -180,9 +231,9 @@ if (r.phase === "oversized") {
   } else if (r.phase !== "idleFlood") {
     throw new Error("unknown phase " + r.phase);
   }
-  const { heldMs, closedBy, answers } = await holdAll(conns, tick, everyMs);
+  const { heldMs, closedBy, answers, blocked } = await holdAll(conns, tick, everyMs, r.phase === "slowReader");
   const good = await stop();
   await sleep(1000);
-  out = { phase: r.phase, opened: conns.length, closedBy, answers, heldMs, good, after: (await ask(get(jsonPath))).status };
+  out = { phase: r.phase, opened: conns.length, closedBy, answers, heldMs, ...(blocked ? { blocked } : {}), good, after: (await ask(get(jsonPath))).status };
 }
 process.stdout.write(JSON.stringify(out));

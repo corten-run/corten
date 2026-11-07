@@ -35,8 +35,8 @@ test("an app survives a phase when it still runs, was not killed for memory and 
 
 test("a phase's cell says what the app did with the connections, what a good client saw and the memory it reached", () => {
   assert.equal(closureOf({ opened: 3, closedBy: [100, 29_000, 30_150], heldMs: 30_200 }), "closed all 3 within 30.1 s");
-  assert.equal(closureOf({ opened: 3, closedBy: [], heldMs: 60_010 }), "held all 3 60 s");
-  assert.equal(closureOf({ opened: 3, closedBy: [31_000], heldMs: 60_010 }), "closed 1 of 3 within 31.0 s, held the rest 60 s");
+  assert.equal(closureOf({ opened: 3, closedBy: [], heldMs: 60_010 }), "held all 3 to the end of the hold (60 s)");
+  assert.equal(closureOf({ opened: 3, closedBy: [31_000], heldMs: 60_010 }), "closed 1 of 3 within 31.0 s, held the rest to the end of the hold (60 s)");
   assert.equal(closureOf({ opened: 3, closedBy: [100, 120, 10_100], answers: { none: 1, 429: 2 }, heldMs: 10_200 }), "closed all 3 within 10.1 s (429 to 2)");
   assert.equal(coresOf({ cpuSeconds: 4.5, wallMs: 90_000 }), 0.05);
   assert.equal(coresOf({ cpuSeconds: null, wallMs: 90_000 }), null);
@@ -47,11 +47,13 @@ test("a phase's cell says what the app did with the connections, what a good cli
     idleFlood: { opened: 2, closedBy: [], heldMs: 60_000, good: { ...good, failed: 300, ok: 0, p99: null }, after: null, running: false, oomKilled: true, memMaxMiB: 1024 },
     oversized: { statuses: { manyHeaders: 431, hugeHeader: "closed", hugeBody: "closed" }, reset: { hugeBody: "ECONNRESET" }, good, after: 200, running: true, oomKilled: false, memMaxMiB: null, cpuSeconds: 1.2, wallMs: 4000 },
     slowHead: { error: "probe failed: exit 1" },
+    slowReader: { opened: 2, closedBy: [], heldMs: 90_000, blocked: { open: 2, stalled: 1, unreadMiB: 3.1 }, good, after: 200, running: true, oomKilled: false },
   });
   assert.equal(cells.headFlood, "up: closed all 2 within 30.1 s; good p99 9 ms, 0 of 300 failed; 48.2 MiB peak");
-  assert.equal(cells.idleFlood, "DOWN (out of memory): held all 2 60 s; good p99 - ms, 300 of 300 failed; 1024 MiB peak");
+  assert.equal(cells.idleFlood, "DOWN (out of memory): held all 2 to the end of the hold (60 s); good p99 - ms, 300 of 300 failed; 1024 MiB peak");
   assert.equal(cells.oversized, "up: 431 / closed / reset; good p99 9 ms, 0 of 300 failed; 0.3 cores");
   assert.equal(cells.slowHead, "error probe failed: exit 1");
+  assert.equal(cells.slowReader, "up: held all 2 to the end of the hold (90 s) (1 of 2 open no longer sent to); good p99 9 ms, 0 of 300 failed");
 });
 
 /**
@@ -135,6 +137,9 @@ test("the oversized requests' answers are each one's status, or closed", async (
   });
   const r = await probeAgainst(server, { phase: "oversized" });
   assert.deepEqual(r.statuses, { manyHeaders: 431, hugeHeader: "closed", hugeBody: 413 });
+  // The huge header's server destroyed the connection while the probe was still sending.
+  assert.ok(r.reset.hugeHeader === "ECONNRESET" || r.reset.hugeHeader === "EPIPE", JSON.stringify(r.reset));
+  assert.equal(r.reset.hugeBody, null);
   assert.equal(r.after, 200);
 });
 
