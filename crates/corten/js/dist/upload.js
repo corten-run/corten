@@ -1,0 +1,3 @@
+// Corten upload (MIT). Built from crates/corten/js/upload.js by scripts/build-js.mjs; do not edit.
+function i(p,u,d,o,l){return new Promise((c,t)=>{let e=new XMLHttpRequest;e.open(u,p),e.setRequestHeader("corten","action"),e.responseType="arraybuffer",e.upload.onprogress=l,e.onload=()=>{let r=new Headers;for(let s of e.getAllResponseHeaders().split(`\r
+`)){let n=s.indexOf(":");n>0&&r.append(s.slice(0,n),s.slice(n+1).trim())}let a=new Response([204,205,304].includes(e.status)?null:e.response,{status:e.status,statusText:e.statusText,headers:r});Object.defineProperty(a,"url",{value:e.responseURL}),c(a)},e.onerror=()=>t(new TypeError("upload failed")),e.onabort=()=>t(o.reason),o.addEventListener("abort",()=>e.abort(),{once:!0}),e.send(d)})}export{i as upload};

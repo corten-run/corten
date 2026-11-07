@@ -75,6 +75,14 @@ const scriptsDir = document.querySelector('meta[name="corten-scripts"]')?.getAtt
 // loads the handlers' own modules.
 const FORMAT = "corten-format";
 
+// A multipart submit whose progress a form's `on:corten:progress` handler is told of goes by
+// XMLHttpRequest (upload.js), a module of its own that only a page with such a form loads, as
+// soon as the form's handlers are read; fetch reports no upload progress. Without it (it did not
+// load), the submit is a fetch, with no progress.
+const UPLOAD = "corten-upload";
+/** The runtime's event on such a form, a `ProgressEvent`. */
+const PROGRESS = "corten:progress";
+
 /** Script modules by name, once imported. @type {Map<string, Record<string, unknown>>} */
 const modules = new Map();
 /** @type {Map<string, Promise<unknown>>} */
@@ -161,7 +169,10 @@ function bindings(el) {
   let entry = parsed.get(el);
   if (!entry || entry.source !== source) {
     entry = { source, list: parseOn(source) };
-    for (const b of entry.list) if (b.args.some(formatted)) formats.add(b);
+    for (const b of entry.list) {
+      if (b.args.some(formatted)) formats.add(b);
+      if (b.type === PROGRESS) load(UPLOAD);
+    }
     parsed.set(el, entry);
   }
   return entry.list;
@@ -2588,7 +2599,15 @@ async function send(form, submitter, sends) {
   };
   forget();
   try {
-    const res = await fetch(url, init);
+    // A multipart write whose form has an `on:corten:progress` handler goes by XMLHttpRequest, which
+    // reports how much of the body is sent; fetch does not. Any other submit is a fetch.
+    const progress = init.body instanceof FormData && url.origin === location.origin && bindings(form).some((b) => b.type === PROGRESS);
+    const upload = progress && (await load(UPLOAD), /** @type {typeof import("./upload.js") | undefined} */ (modules.get(UPLOAD)))?.upload;
+    const res = upload
+      ? await upload(url, method, /** @type {FormData} */ (init.body), signal, ({ loaded, total, lengthComputable }) => {
+          if (!signal.aborted) formCall(form, "dispatchEvent", new ProgressEvent(PROGRESS, { loaded, total, lengthComputable }));
+        })
+      : await fetch(url, init);
     forget();
     // A whole answer below 500 is definitive: the write applied or was refused, and the form gets
     // a new key. A 5xx (a 502 from a proxy can hide a committed write), a network error, an abort
