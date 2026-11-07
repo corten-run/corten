@@ -701,6 +701,30 @@ What is worth acting on, from these numbers:
    worth tuning before rendering and reading.
 4. On the page, locale formatting is the largest single function, ahead of HTML escaping.
 
+### Writing the item page: `html!` against Maud (callgrind, 2026-11-06)
+
+The same split for card-market and the axum + Maud app (`APP=axum-maud`), three rounds of each at
+`ff1701b8`, alternating, with each function's cost with what it calls (`INCLUSIVE=`). Rendering
+is deterministic: within 2 instructions in every round.
+
+| | card-market (`html!`) | axum + Maud (maud 0.27.0) |
+|---|---|---|
+| Writing the document (`Req::render_into`, `pages::item`) | 44,494 | 53,935 to 53,937 |
+| Escaping (`escape_into`, `escape_to_string`) | 12,881 | 38,060 |
+| The rest of writing | 31,613 | 15,877 |
+| Bytes an answer | 8,931 | 7,473 |
+| The whole request, three rounds | 94,864, 86,199, 86,224 | 72,074, 72,274, 72,244 |
+
+The pages show the same thing but are not the same work. card-market's document carries more
+(the head's description, canonical link, icon and runtime tags, a data attribute on each listing
+row) and writes prices, ratings and counts in the visitor's locale (`Formatted`, 8,701), where the
+Maud app writes the item API's strings. Maud's escaping pushes each byte on its own: the escaping
+gap (25,179) is larger than the whole difference (9,441 to 9,443), and outside escaping `html!` does
+about twice Maud's work. Each whole request has more than writing: Corten's request path adds its
+security headers, the page's key and the rest of the by-crate table above. card-market's first round
+has 8,640 to 8,665 more than the others, which `malloc_consolidate` accounts for (8,630 to 8,632
+with what it calls).
+
 ### What a browser's request costs Corten (callgrind, 2026-11-06)
 
 The rounds' page requests send `Accept-Encoding: identity` and no `If-None-Match`, the one
@@ -1224,10 +1248,12 @@ node build.mjs r16 [apps] [runs=3]   # build cost: clean, after a one-line chang
 # One request's instructions by stage and crate (callgrind), from the repository root, items in memory:
 docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
-node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-page-fixture-300.out /tmp/cg/cg-page-fixture-1300.out
+node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.out /tmp/cg/cg-card-market-page-fixture-1300.out
+# The axum + Maud app the same way: add -e APP=axum-maud (dumps cg-axum-maud-*.out). Writing each
+# page with what it calls: INCLUSIVE='render_into|^item_page_axum_maud::pages::item$' before node
 # The item fetched from the item API (running on the host at 18400, with port 8080 free, as
 # --network host serves the app there): add --network host and
-# -e SOURCE=api -e API_BASE=http://127.0.0.1:18400 -e TARGETS=page, then split cg-page-api-*.out
+# -e SOURCE=api -e API_BASE=http://127.0.0.1:18400 -e TARGETS=page, then split cg-card-market-page-api-*.out
 ```
 
 ## What the repository keeps
