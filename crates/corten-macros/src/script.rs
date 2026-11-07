@@ -517,7 +517,8 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
             // which types parameters as an import statement does (it serves nothing).
             if let Some(names) = jsdoc_import(&block, "corten/events") {
                 for name in names {
-                    let (class, local) = name.split_once(" as ").map_or((name.as_str(), name.as_str()), |(c, l)| (c.trim(), l.trim()));
+                    let (class, local) =
+                        name.split_once(" as ").map_or((name.as_str(), name.as_str()), |(c, l)| (c.trim(), l.trim()));
                     events.push((local.to_string(), class.to_string()));
                 }
             }
@@ -1920,7 +1921,8 @@ function helper() {}
         let group = "/** @typedef {{ box: HTMLInputElement, words: string[][] }} Parts */\n";
         let why = refusal(&format!("{group}/** @param {{Parts}} p */\nexport function f(p) {{}}"));
         assert!(why.starts_with("f: p: Parts: words: string[][]: no call can be checked"), "{why}");
-        let (handlers, groups) = parse(&format!("{group}/** @param {{HTMLInputElement}} b */\nexport function f(b) {{}}")).unwrap();
+        let (handlers, groups) =
+            parse(&format!("{group}/** @param {{HTMLInputElement}} b */\nexport function f(b) {{}}")).unwrap();
         assert_eq!((groups.len(), &handlers[0].params[0].1), (1, &Param::Checked("el::HTMLInputElement".into())));
         let (handlers, _) = parse(
             "/** @typedef {{ box: HTMLInputElement, raw: unknown }} Parts */\n/** @param {Parts} p */\nexport function f(p) {}",
