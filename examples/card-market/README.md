@@ -31,6 +31,7 @@ docker run --rm -p 3000:8080 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token c
 | `AGENT_TOKENS` | tokens for the MCP endpoint `/mcp`, sent as `Authorization: Bearer <token>`, comma separated | no agent may |
 | `AGENT_ORIGINS` | origins whose pages may call `/mcp` from the browser (CORS), comma separated | none |
 | `WRITES_PER_MINUTE` | writes one client address may make a minute | 20 |
+| `MAX_CONNECTIONS` | the most connections held open at once; past it, new ones wait until one closes | no limit |
 | `PROXIES` | the load balancers whose `X-Forwarded-For` is trusted: addresses or CIDRs, comma separated | the connection's address |
 | `HTTPS` | present (any value) when served over HTTPS: browsers are told to keep using it (HSTS) | not sent |
 | `HOSTS` | the host names the app answers, comma separated (`*` for any); a request for any other gets a 421 | `localhost` and names under it, IP addresses, and requests with no `Host` |

@@ -25,6 +25,26 @@ export const buildBudgetMinutes = 240;
  */
 export const compiledFirst = ["corten", "leptos", "topcoat", "axum-maud", "gin", "drogon"];
 
+/**
+ * Why a round's name does not fit its tier, or null. A full round of the defaults tier is r<n>,
+ * the rounds trend.mjs reads; a full round of the matched tier is m<n>, so its numbers, measured
+ * with the production profile, never enter the defaults tier's trend. A step run on its own (one
+ * app measured again, a matrix alone) may use another name, as the defaults tier's experiments do,
+ * but never writes the matched tier's numbers into an r<n> round or the defaults' into an m<n>.
+ * @param {string} round
+ * @param {string} tier "defaults" or "matched"
+ * @param {{ full?: boolean }=} options full: run-all.mjs, summarize.mjs and droplet.mjs, which
+ *   make or read a whole round
+ */
+export const roundNameError = (round, tier, { full = false } = {}) => {
+  if (tier === "matched") {
+    if (/^m\d+$/.test(round)) return null;
+    if (full || /^r\d+$/.test(round)) return `a matched-tier round is named m<n> (m1), not ${round}, so the defaults tier's trend (r<n>) never reads it`;
+    return null;
+  }
+  return /^m\d+$/.test(round) ? `${round} is a matched-tier round's name (m<n>): run it with BENCH_TIER=matched (droplet.mjs --tier matched), or name it otherwise` : null;
+};
+
 /** The minutes run-all.mjs may wait for each app to start before the browser step. */
 export const startMinutes = 2;
 

@@ -2417,6 +2417,14 @@ Corten is pre-1.0, so any minor version may change the API.
     and CSP the largest (4,800 a page); for a browser, compression is two thirds of the page
     request and the page's `ETag` 7.7%. Requests per CPU-second are left to
     [#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052) ([#810 No round says what each of Corten's production defaults costs a request, so the cost of its safety and its speed cannot be told apart](https://github.com/corten-run/corten/issues/810)).
+266. `bench/fullstack` has a matched tier
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)):
+    rounds named `m<n>` (`droplet.mjs --tier matched`, `BENCH_TIER=matched`) start each of its
+    apps with `PROFILE=matched`, a production profile built from its framework's own middleware,
+    and never enter the defaults tier's trend. The profile is the feature matrix's counted columns,
+    a header timeout and a cap of 1,000 connections, which `conform-hold.mjs` probes as two new
+    columns of the tier's matrix. Corten and axum-maud are in it so far (axum-maud with
+    tower-http's layers); card-market reads `MAX_CONNECTIONS` into `App::max_connections`.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -5378,6 +5386,21 @@ Corten is pre-1.0, so any minor version may change the API.
     the alert's, in each engine. An app with a copy of the kit takes it with
     `corten ui add alert --merge`
     ([#1048 Kit Alert styles its heading and paragraphs but not a list, so a list in an alert keeps the browser's 1em margin and 40px indent](https://github.com/corten-run/corten/issues/1048)).
+185. A page a click was fetching was fetched twice when it took longer than the hover's 65 ms
+    dwell to arrive: by the click, then by a prefetch that a dwell ending before it was in started
+    (the dwell the click cut short, the pointer back on its link or on a part of it), since the
+    address stays the page being left until the new page is in
+    ([#1028 A client navigation changes the address when the page's answer is in (#992)](https://github.com/corten-run/corten/pull/1028)).
+    The runtime now prefetches no page the newest visit is fetching, and a navigation ends the
+    dwell of the link followed (a link the server redirects would be fetched again otherwise).
+    Where a redirect sends it is not known until the answer, so a hover on a link to there can
+    still fetch it a second time. The watchlist smoke holds such a page's answer, moves the
+    pointer off its link and back, and checks it is fetched once (it failed on main in Chromium
+    and Firefox). The prefetch check's one-off failure in Firefox (an extra request) matches this.
+    The two Firefox checks that failed now and then say what they counted when they fail: each
+    request with its purpose, and the timed requests and console errors of the module that is
+    imported again
+    ([#1053 Two Firefox watchlist smoke checks (prefetch's newest 8, a script module imported again) each fail now and then on a branch that does not touch them](https://github.com/corten-run/corten/issues/1053)).
 
 ### Documentation
 

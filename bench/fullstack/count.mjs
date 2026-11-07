@@ -11,11 +11,14 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs } from "./apps.mjs";
+import { apps as catalog, countCpus, k6Net, k6User, loadCpus, network, runArgs, tier } from "./apps.mjs";
+import { roundNameError } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", repeats = "3", appsArg = Object.keys(catalog).join(","), targetsArg = "page,json", source = "fixture"] = process.argv.slice(2);
 if (!["fixture", "api"].includes(source)) throw new Error("source is fixture or api");
+// The matched tier's numbers never go into an r<n> round, nor the defaults' into an m<n> one.
+if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
 const suffix = source === "api" ? "/api" : "";
 const ITERATIONS = 5000;
 const docker = (...args) => spawnSync("docker", args, { encoding: "utf8" });

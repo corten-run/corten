@@ -11,6 +11,13 @@
 /** The shape of a round's conformance.json: 2 added the failed read, the log lines and a counted header limit. */
 export const format = 2;
 
+/** The production profile's connection cap (apps.mjs passes it to each app as MAX_CONNECTIONS). */
+export const maxConnections = 1000;
+/** How many idle connections conform.mjs holds to see the cap: past it, by more than a few. */
+export const capHeld = maxConnections + 50;
+/** And first, how many it holds below the cap, when a request must still be answered. */
+export const capBelow = maxConnections - 50;
+
 /** The item conform.mjs's item API (conform-items.mjs) answers 500 for: a read that fails. */
 export const brokenItem = "conform_broken";
 
@@ -105,7 +112,8 @@ export const readyPaths = ["/health/ready", "/readyz", "/actuator/health/readine
  * refused the page's own post.
  * The deadline is any 5xx within 35 seconds: Corten's default deadline is 30 (card-market sets 10),
  * gunicorn's worker timeout 30, and five seconds allow for the clock and the abort.
- * @type {{ key: string, label: string, pages?: boolean, cell: (o: Record<string, any>) => string, meets: (cell: string) => boolean }[]}
+ * A column with `tier: "matched"` is the matched tier's alone (conform.mjs probes it only there).
+ * @type {{ key: string, label: string, pages?: boolean, tier?: "matched", cell: (o: Record<string, any>) => string, meets: (cell: string) => boolean }[]}
  */
 export const features = [
   { key: "pageHeaders", label: "page security headers", pages: true, cell: (o) => securityOf(o.page), meets: (c) => c === "all" },
@@ -137,7 +145,39 @@ export const features = [
   { key: "live", label: "liveness endpoint", cell: (o) => (o.live ? o.live.path + " " + statusOf(o.live) : "none"), meets: (c) => / 200$/.test(c) },
   { key: "readyDown", label: "readiness, item API hung", cell: (o) => (!o.readyPath ? "no readiness endpoint" : o.readyPath + " " + timed(o.readyDown)), meets: (c) => within(c.replace(/^\S+ /, ""), /^[45]\d\d$/, 35) },
   { key: "deadline", label: "item API hung: page (JSON) answer", cell: (o) => timed(o.slow), meets: (c) => within(c, /^5\d\d$/, 35) },
+  // The profile's header timeout is 30 seconds; five allow for the clock, as the deadline's do.
+  { key: "unfinishedHead", label: "request head never finished: connection closed", tier: "matched", cell: (o) => unfinishedOf(o.unfinishedHead), meets: (c) => Number(/^closed in ([\d.]+) s$/.exec(c)?.[1] ?? Infinity) <= 35 },
+  { key: "connectionCap", label: `connections capped at ${maxConnections.toLocaleString("en-US")}`, tier: "matched", cell: (o) => capOf(o.cap), meets: (c) => c.startsWith("capped") },
 ];
+
+
+/** An unfinished head's cell: "closed in <s> s", "held <s> s", or how the probe failed. */
+const unfinishedOf = (/** @type {{ closedMs?: number, timedOutMs?: number, error?: string } | undefined} */ p) =>
+  !p ? "n/a: not probed" : p.error ? "error " + p.error : p.closedMs !== undefined ? "closed in " + (p.closedMs / 1000).toFixed(1) + " s" : "held " + Math.round((p.timedOutMs ?? 0) / 1000) + " s";
+
+/**
+ * The cap's cell. "capped, then <status | closed | refused | held>": a request was answered with
+ * 950 connections held, not with 1,050 held (it waited, was closed, or never connected), and the
+ * app served a request after they closed; "capped at <n> connected, then ..." the same when fewer
+ * than 1,050 but at least 950 connected at all (the rest waited in a full accept queue). Otherwise what fell short: "served with <n> held" (no
+ * cap there), "not served with <n> held" (a cap, or a pool of workers each tied up by a connection,
+ * well under the profile's), "stopped serving" (a crash or a hang, not a cap), or why the cap
+ * could not be seen (fewer connections held than it allows).
+ */
+const capOf = (/** @type {{ below?: number, belowHeld?: number | null, held?: number, whileHeld?: number | null, afterRelease?: number | string | null, afterwards?: number | null, error?: string } | undefined} */ p) => {
+  if (!p) return "n/a: not probed";
+  if (p.error) return "error " + p.error;
+  // Past the 950, connections that never connected are a full accept queue: a cap, if the rest holds.
+  if ((p.below ?? 0) < capBelow || (p.held ?? 0) < capBelow) return `n/a: held only ${p.below ?? 0} and ${p.held ?? 0} connections`;
+  if (p.belowHeld === null || p.belowHeld === undefined) return `not served with ${p.below} held`;
+  if (p.whileHeld !== null && p.whileHeld !== undefined) return `served with ${p.held} held (${p.whileHeld})`;
+  if (p.afterwards === null || p.afterwards === undefined) return `stopped serving after ${p.held} held`;
+  const then = p.afterRelease === null || p.afterRelease === undefined ? "held" : String(p.afterRelease);
+  return (p.held ?? 0) < capHeld ? `capped at ${p.held} connected, then ${then}` : "capped, then " + then;
+};
+
+/** The columns of a tier's matrix: the matched tier's own columns only in that tier. */
+export const featuresOf = (/** @type {string | undefined} */ tier) => features.filter((f) => !f.tier || f.tier === tier);
 
 /**
  * One app's row: each column's cell, and `unmet`, the counted columns whose cell does not do the
@@ -148,7 +188,7 @@ export const rowOf = (o) => {
   /** @type {Record<string, any>} */
   const row = {};
   const unmet = [];
-  for (const f of features) {
+  for (const f of featuresOf(o.tier)) {
     const cell = f.pages && !o.pages ? "n/a" : f.cell(o);
     row[f.key] = cell;
     if (!cell.startsWith("n/a") && !f.meets(cell)) unmet.push(f.key);
