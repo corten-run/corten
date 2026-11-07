@@ -2064,7 +2064,8 @@ address the app does not serve) needs that origin in `form-action`: Chromium and
 redirects a submission follows to the form's page's policy, and stop one it does not allow there,
 on the form's page, with only a console error. A test that runs the request in process sees the
 303 either way, so a debug build checks for the browser. It answers as a 500 that names the
-origin and `Policy::form_action` (the detail under `corten dev`; it is logged either way):
+origin and `Policy::form_action` (the error page's detail in every debug build, and logged; outside
+`corten dev` it is printed to stderr too):
 
 1. a `POST` whose body a form can send (none, `application/x-www-form-urlencoded`,
    `multipart/form-data` or `text/plain`), plain or `data-patch` (the same form without

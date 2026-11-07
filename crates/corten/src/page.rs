@@ -488,7 +488,7 @@ impl Failure {
 }
 
 /// A debug build's error about the app's own code (a component the app does not serve, a hint no
-/// control names), from [`Req::unserved`]: its answer is marked [`KeepsDetail`].
+/// control names, a `Refresh` header), made by [`unserved`]: its answer is marked [`KeepsDetail`].
 #[derive(Debug)]
 pub(crate) struct Unserved(String);
 
@@ -505,10 +505,17 @@ impl std::error::Error for Unserved {}
 /// there, since a router test has no logger.
 #[cold]
 pub(crate) fn unserved(dev: bool, message: String) -> Error {
+    print_unserved(dev, &message);
+    Error::new(Unserved(message))
+}
+
+/// Prints a debug build's error about the app's code to stderr outside `corten dev`, where a router
+/// test has no logger to show it.
+#[cold]
+fn print_unserved(dev: bool, message: &str) {
     if !dev {
         eprintln!("corten: {message}");
     }
-    Error::new(Unserved(message))
 }
 
 /// Marks a debug build's failed answer whose message describes the app's code, not the request, so
@@ -2582,9 +2589,7 @@ async fn page_or_error<S: crate::app::Steps>(
             if let Some(message) = check.as_ref().and_then(|check| outside_form_action(check, &to)) {
                 // About the app's code, as `unserved`'s are: the detail stays outside dev too.
                 tracing::error!("corten: {message}");
-                if !shared.dev {
-                    eprintln!("corten: {message}");
-                }
+                print_unserved(shared.dev, &message);
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
                 return carried(kept, error_page(shared, asked, failure).await);
             }
@@ -2596,7 +2601,10 @@ async fn page_or_error<S: crate::app::Steps>(
         return carried(kept, error_page(shared, asked, failure).await);
     }
     let mut failed = res.extensions().get::<crate::Failed>().cloned();
-    let keeps_detail = cfg!(debug_assertions) && res.extensions().get::<KeepsDetail>().is_some();
+    // Read here, before the answer's body is taken; not in a release build, where it would be one
+    // more value every request's future holds across the await below.
+    #[cfg(debug_assertions)]
+    let keeps_detail = res.extensions().get::<KeepsDetail>().is_some();
     let cause = res.extensions().get::<Cause>().copied();
     let empty_error = res.body().size_hint().exact() == Some(0);
     // An extractor's rejection (a form field missing, a path segment that does not parse) is
@@ -2634,7 +2642,11 @@ async fn page_or_error<S: crate::app::Steps>(
             status => Failure::Failed { status, detail: None },
         },
     };
-    let failure = if shared.dev || keeps_detail { failure } else { failure.without_detail() };
+    #[cfg(debug_assertions)]
+    let shows = shared.dev || keeps_detail;
+    #[cfg(not(debug_assertions))]
+    let shows = shared.dev;
+    let failure = if shows { failure } else { failure.without_detail() };
     carried(kept, error_page(shared, asked, failure).await)
 }
 
