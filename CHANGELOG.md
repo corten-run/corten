@@ -5476,14 +5476,17 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1068 subscribe()'s resync paths (sync, a seq gap, a stream answered with an error) have no browser smoke check, and the failover benchmark counts a Node copy of the client](https://github.com/corten-run/corten/issues/1068)).
 191. A closed `<dialog>` an app draws in place from a breakpoint (a filters rail that is a modal
     on a phone) was hidden by the components' stylesheet's `dialog:not([open])` rule with no error
-    and no failed check, so the rail was simply missing on wide screens. `corten dev` now names in
-    the console each closed dialog or popover that a rule inside `@media`, `@container` or
-    `@supports` gives a `display`, at the width the page is at or any other, with the selector,
-    the condition and the rule that draws it (`.filters:not([open]) { display: block !important }`
-    in that condition), and the styles guide gives that rule. A look that sets `display` outside
-    a condition (a card on a dialog) is still kept hidden while closed and is not reported. It
-    is a check of `/corten/dev.js`, which only a dev server serves, so a production page is
-    unchanged; `scripts/smoke-dev.mjs` checks what it reports and what it does not
+    and no failed check, so the rail was simply missing on wide screens. `corten dev` now warns in
+    the console of each closed dialog or popover that the rule keeps hidden while a rule inside
+    `@media` or `@container` gives it a `display`, at the width the page is at or any other,
+    nested rules included, with the selector, the query and a rule for each reading: drawn in
+    place there (`.filters:not([open]) { display: block !important }` in that query), or the open
+    one's look, written under `[open]`, as the kit's dialog and sheet are. The page cannot tell the
+    two apart, so it is a warning, not an error. A look outside a query (a card on a dialog) and
+    one under `@supports` are still kept hidden while closed and are not reported; the styles
+    guide gives both rules. It is a check of `/corten/dev.js`, which only a dev server serves, so
+    a production page is unchanged; `scripts/smoke-dev.mjs` checks what it warns of and what it
+    does not
     ([#1081 A closed dialog an app draws in place from a breakpoint (a filters rail) is hidden by components.css's !important dialog rule, with no error and no failed check](https://github.com/corten-run/corten/issues/1081)).
 
 ### Documentation

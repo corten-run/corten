@@ -85,9 +85,22 @@ function within(root, selector) {
 }
 
 /**
- * Each style rule of the page's stylesheets that sets `display`: its selector, the condition it
- * is inside (`@media (min-width: 64rem)`, or null) and whether it is `!important`. Read again for
- * each check, as a dev server's stylesheets change; a sheet the page may not read is skipped.
+ * A nested rule's selector as one that matches on its own: `&` is the parent's, and a selector
+ * without one is inside it.
+ * @param {string} selector
+ * @param {string | null} parent
+ */
+const resolved = (selector, parent) => {
+  if (!parent) return selector;
+  if (selector.includes("&")) return selector.replaceAll("&", `:is(${parent})`);
+  return /^\s*[>+~]/.test(selector) ? `:is(${parent}) ${selector}` : `:is(${parent}) :is(${selector})`;
+};
+
+/**
+ * Each style rule of the page's stylesheets that sets `display`: its selector, the `@media` or
+ * `@container` query it is inside (`@media (min-width: 64rem)`, or null) and whether it is
+ * `!important`. Read again for each check, as a dev server's stylesheets change; a sheet the page
+ * may not read is skipped.
  * @returns {{ selector: string, display: string, condition: string | null, important: boolean }[]}
  */
 function displays() {
@@ -98,12 +111,13 @@ function displays() {
     for (const rule of rules) {
       const style = /** @type {CSSStyleRule} */ (rule).style;
       // A nested rule's own selector, or a nested block of declarations, which has its parent's.
-      const own = rule instanceof CSSStyleRule ? rule.selectorText : selector;
+      const own = rule instanceof CSSStyleRule ? resolved(rule.selectorText, selector) : selector;
       if (style && own && style.display) found.push({ selector: own, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
-      const at = rule instanceof CSSConditionRule ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null;
-      walk(inner, condition ?? at, own);
+      // A width (or a container's size) is a breakpoint; @supports is not, and passes its own on.
+      const query = rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule);
+      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), own);
     }
   };
   for (const sheet of document.styleSheets) {
@@ -124,12 +138,13 @@ const matching = (el, selector) => {
 };
 
 /**
- * Reports each closed dialog or popover in or at `root` that a rule inside a condition (`@media`,
- * `@container`, `@supports`) gives a `display`, at the viewport's width now or any other:
- * the shape of one drawn in place from a breakpoint (a filters rail that is a modal on a phone),
- * which components.css keeps hidden while it is closed, so it is simply not drawn. A look that
- * sets `display` outside a condition (a card) is the rule's own case and is not reported, nor
- * is one the app already draws with an `!important` rule of its own.
+ * Warns of each closed dialog or popover in or at `root` that components.css keeps hidden while a
+ * rule inside `@media` or `@container` gives it a `display` (at the viewport's width now or any
+ * other) with no `[open]` or `:popover-open` in its selector. That is either one drawn in place
+ * from a breakpoint (a filters rail that is a modal on a phone), which is then simply not drawn,
+ * or the open one's look written for a width, which is right; the page cannot tell which, so the
+ * warning gives the rule for each. A look outside a query (a card) is the hidden rule's own case
+ * and is not reported, nor is one the app already draws with an `!important` rule of its own.
  * @param {Element} root
  */
 function inPlace(root) {
@@ -139,14 +154,18 @@ function inPlace(root) {
   for (const el of closed) {
     if (getComputedStyle(el).display !== "none") continue;
     const applies = rules.filter((r) => matching(el, r.selector));
+    // Hidden by components.css's rule, not only the browser's own, which an app's rule outranks.
+    if (!applies.some((r) => r.important && r.display === "none")) continue;
     const drawn = applies.find((r) => r.condition && r.display !== "none");
     if (!drawn || applies.some((r) => r.important && r.display !== "none")) continue;
     reported.add(el);
     const dialog = el.localName === "dialog" && !el.hasAttribute("popover");
-    // A component's file names its classes as written (`.filters`, which Corten prefixes, `.search-page__filters`).
-    const cls = el.classList[0]?.split("__").pop();
+    const state = dialog ? "[open]" : ":popover-open";
+    // The class as the component's file writes it (`.filters`, which Corten prefixes:
+    // `.search-page__filters`), from the rule's own selector.
+    const cls = [...drawn.selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1]).find((c) => el.classList.contains(c))?.split("__").pop();
     const named = cls ? "." + cls : el.localName + (el.id ? "#" + el.id : "");
-    console.error(`corten: ${el.id || el.localName} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.selector}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed: to draw it in place there, give it a rule of its own in that condition, \`${named}:not(${dialog ? "[open]" : ":popover-open"}) { display: ${drawn.display} !important }\``, el);
+    console.warn(`corten: ${el.id || el.localName} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.selector}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed. To draw it in place there, give it a rule of its own in that query, \`${named}:not(${state}) { display: ${drawn.display} !important }\`; if it is the open ${dialog ? "dialog" : "popover"}'s look, write it as \`${named}${state}\``, el);
   }
 }
 
@@ -176,6 +195,7 @@ ready.then(() =>
       childList: true,
       subtree: true,
       attributes: true,
+      // `open` for a dialog closed after it was drawn (a <details> toggling it reruns the checks too).
       attributeFilter: ["value", "min", "max", "step", "role", "aria-live", "open"],
     });
   }),

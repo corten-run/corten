@@ -32,7 +32,9 @@ try {
   const drawn = await browser.newPage();
   /** @type {string[]} */
   const errors = [];
-  drawn.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  /** @type {string[]} */
+  const warnings = [];
+  drawn.on("console", (m) => (m.type() === "error" ? errors : m.type() === "warning" ? warnings : []).push(m.text()));
   /** @param {string} name */
   const reportOf = (name) => drawn.waitForEvent("console", { predicate: (m) => m.text().startsWith(`corten: ${name} `), timeout: 10000 }).then(() => true, () => false);
   await drawn.route(base + "/", async (route) => {
@@ -48,12 +50,15 @@ try {
       '<div role="alert"><span id="quiet" aria-live="off">x</span></div>',
       '<div role="status" aria-live="off"><p id="silenced" role="alert">z</p></div>',
       '<div aria-live="polite" id="lasthost"><p id="lastlive" role="status">y</p></div>',
-      // Closed dialogs and popovers (#1081): one a rule inside a condition draws in place is
-      // reported, at a width the page is not at too; a card look outside a condition, one the app
-      // draws with its own !important rule, an open one and one the condition hides are not.
+      // Closed dialogs and popovers (#1081): one a rule inside @media gives a display is warned
+      // of, at the width the page is at and one it is not at, nested too; a card look outside a
+      // query, one under @supports, the open one's look, one the app draws with its own !important
+      // rule, an open one and one the query hides are not.
       '<dialog id="rail" class="rail"><p>Filters</p></dialog><dialog id="card" class="card"></dialog>',
       '<dialog id="kept" class="kept"></dialog><dialog id="shown" class="rail" open></dialog>',
-      '<dialog id="gone" class="gone"></dialog><div id="nav" class="nav" popover></div>',
+      '<dialog id="gone" class="gone"></dialog><dialog id="inplace" class="inplace"></dialog>',
+      '<dialog id="enhanced" class="enhanced"></dialog><dialog id="modal" class="modal"></dialog>',
+      '<div id="nav" class="nav" popover></div><div class="page"><dialog id="side" class="side"></dialog></div>',
       '<dialog id="lastrail" class="rail"></dialog>',
     ].join("");
     const sheet = '<link rel="stylesheet" href="/dialog-in-place.css">';
@@ -67,7 +72,10 @@ try {
         "@media (min-width: 9999px) { .rail { display: block; } }",
         "@media (min-width: 1px) { .kept { display: block; } .kept:not([open]) { display: block !important; } }",
         "@media (min-width: 1px) { .gone { display: none; } }",
-        "@supports (display: grid) { .nav { display: grid; } }",
+        "@media (min-width: 1px) { .inplace { display: block; } .modal[open] { display: grid; } }",
+        "@supports (display: grid) { .enhanced { display: grid; } }",
+        "@media (min-width: 1px) { .nav { display: grid; } }",
+        ".page { .side { @media (min-width: 1px) { display: block; } } }",
       ].join("\n"),
     }),
   );
@@ -79,20 +87,23 @@ try {
   check("dev mode reports a control drawn with a value its own attributes refuse, and only those", onLoad.join(",") === "delay,last", onLoad.join(","));
   const nestedOnLoad = (await loadedLive) ? errors.filter((e) => e.includes("is a live region inside another")).map((e) => e.split(" ")[1]) : [];
   check("dev mode reports a live region drawn inside another, and only those", nestedOnLoad.join(",") === "inner,lastlive", nestedOnLoad.join(","));
-  const railOnLoad = (await loadedRail) ? errors.filter((e) => e.includes(" is a closed ")) : [];
+  const railOnLoad = (await loadedRail) ? warnings.filter((e) => e.includes(" is a closed ")) : [];
   const railNames = railOnLoad.map((e) => e.split(" ")[1]).join(",");
-  check("dev mode reports a closed dialog or popover a rule inside a condition draws in place, and only those", railNames === "rail,nav,lastrail", railNames);
+  check("dev mode warns of a closed dialog or popover a rule inside a media query gives a display, and only those", railNames === "rail,inplace,nav,side,lastrail", railNames);
   check(
-    "its report names the rule, the condition and the rule that draws it",
-    railOnLoad[0]?.includes("`.rail` in `@media (min-width: 9999px)` gives display: block") && railOnLoad[0]?.includes("`.rail:not([open]) { display: block !important }`"),
+    "its warning names the rule, the query, the rule that draws it in place and the open one's look",
+    !!railOnLoad[0]?.includes("`.rail` in `@media (min-width: 9999px)` gives display: block") &&
+      !!railOnLoad[0]?.includes("`.rail:not([open]) { display: block !important }`") &&
+      !!railOnLoad[0]?.includes("`.rail[open]`"),
     railOnLoad[0],
   );
-  // The rule the report gives draws it: `kept` has one, `rail` stays hidden by components.css.
-  const shown = await drawn.evaluate(() => ["kept", "rail"].map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).display).join(","));
-  check("the rule it gives draws a closed dialog in place over components.css", shown === "block,none", shown);
+  // components.css's rule is what hides `inplace`, whose query holds now; the rule the warning
+  // gives draws `kept` over it.
+  const shown = await drawn.evaluate(() => ["inplace", "kept"].map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).display).join(","));
+  check("components.css hides a closed dialog a query draws, and the rule the warning gives draws it", shown === "none,block", shown);
   const patchedRail = reportOf("patchedrail");
   await drawn.evaluate(() => document.body.append(Object.assign(document.createElement("dialog"), { id: "patchedrail", className: "rail" })));
-  check("dev mode reports such a dialog a patch draws", await patchedRail);
+  check("dev mode warns of such a dialog a patch draws", await patchedRail);
   const patchedLive = reportOf("patchedlive");
   await drawn.evaluate(() => {
     const p = Object.assign(document.createElement("p"), { id: "patchedlive", textContent: "Sent." });
