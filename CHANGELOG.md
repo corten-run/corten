@@ -3898,6 +3898,25 @@ Corten is pre-1.0, so any minor version may change the API.
     against `f6d39bbd`, did not move beyond the machine's noise (debug, six runs each on 4 CPUs,
     alternating: median 55.7 s against 58.0 s, ranges 50.9 to 61.3 s and 45.1 to 75.6 s)
     ([#764 The default log feature compiles tracing-subscriber and four crates only it needs, to print a few lines to stderr](https://github.com/corten-run/corten/issues/764)).
+164. A markup call to a handler whose parameter has a JSDoc type no Rust value is checked against
+    does not compile, where it took any `ToJson` value: an object type (`{ count: number }`),
+    `number[]`, `string | null`, `object`, `any`, a `@typedef` of plain values, an unknown name, or
+    a group with a field of such a type. So does one whose parameter names an element or an event in
+    a shape no call is checked against, which took any ref or event: a union of event interfaces
+    (`MouseEvent | KeyboardEvent`; take the one they share, `UIEvent` or `Event`),
+    `HTMLElement | null`, `EventTarget`, `Node`. The warning on the call says why and what to take
+    instead: a generated declaration (`import("../types/app").Name`) for a value, a checked
+    interface for an element or an event, or `unknown` for anything the script checks itself, the
+    one type that still takes any argument (a value, a ref, `event`, `target`, `signal` or `scope`).
+    The handler itself compiles, so an export only other scripts call is typed as the script needs.
+    A typed event imported for its type alone (`/** @import { Saved } from "corten/events" */`) is
+    now its `#[event]` type, as an `import` statement's is, where it took any event: `on:click` on
+    such a handler does not compile. A JSDoc namespace import of them
+    (`/** @import * as ev from "corten/events" */`), which compiled, now stops the script compiling,
+    as a namespace `import` statement of them does. No example, kit component or template script
+    called a handler with such a parameter; six event handlers in `examples/deck-builder` and
+    `examples/seller-desk` are now checked
+    ([#1037 Unsupported handler parameter types can silently fall back to unchecked Rust-to-JS arguments](https://github.com/corten-run/corten/issues/1037)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

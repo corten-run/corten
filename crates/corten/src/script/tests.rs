@@ -703,16 +703,32 @@ fn rendering_collects_the_modules_a_page_uses() {
     assert_eq!(modules, vec!["field", "form", "line_item"]);
 }
 
+/// `shared.watch`'s argument: the Rust type of its generated declaration (`types/app.d.ts`).
+#[cfg_attr(feature = "json", derive(crate::json::ToJson))]
+#[allow(dead_code)]
+struct Options {
+    id: &'static str,
+    tags: [&'static str; 2],
+}
+
+/// The doctests' `types/app.d.ts` writes `Options` by hand: it is what `corten::types` generates.
+#[cfg(feature = "json")]
+#[test]
+fn the_hand_written_options_declaration_is_the_generated_one() {
+    let block = |ts: &str| {
+        let start = ts.find("export interface Options {").expect("an Options interface");
+        let end = start + ts[start..].find("\n}").expect("its end") + 2;
+        ts[start..end].to_string()
+    };
+    let generated = crate::types::Types::new().add::<Options>().typescript();
+    assert_eq!(block(include_str!("../types/app.d.ts")), block(&generated), "{generated}");
+}
+
 /// The strings handlers write, as the runtime's parser expects them (`wire.json`, which
 /// `scripts/wire.mjs` parses with the runtime's own parser).
 #[cfg(feature = "json")]
 #[test]
 fn handlers_write_the_shared_wire_vectors() {
-    #[derive(crate::json::ToJson)]
-    struct Options {
-        id: &'static str,
-        tags: [&'static str; 2],
-    }
     let nasty = "),{\"x\":1}\\ \u{2028} <&'> é 🦀 ,a:b";
     let pages = [
         LineItem { name: "a\"b", quantity: 2 }.to_html(),
