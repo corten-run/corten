@@ -3917,6 +3917,12 @@ Corten is pre-1.0, so any minor version may change the API.
     called a handler with such a parameter; six event handlers in `examples/deck-builder` and
     `examples/seller-desk` are now checked
     ([#1037 Unsupported handler parameter types can silently fall back to unchecked Rust-to-JS arguments](https://github.com/corten-run/corten/issues/1037)).
+165. `Feed::follow` now panics on a generation that is empty or holds anything but ASCII letters,
+    digits, `.` and `_`. It took any without `-` before; one with a character a URL encoder
+    escapes (`deploy:3`, base64) never went live under `subscribe()`, though a client that sent
+    its cursor raw (`Last-Event-ID`, `Replica::cursor`) could follow it. An app that names its
+    generation from configuration checks it against the same set (Fixed 188)
+    ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
@@ -5428,13 +5434,31 @@ Corten is pre-1.0, so any minor version may change the API.
     an event lib.dom types more narrowly cannot fall back to `Event` unnoticed, nor an arm be
     narrower than lib.dom
     ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
+188. A feed whose generation held a character `encodeURIComponent` escapes (`deploy:3`, `v 1`,
+    base64's `/` and `=`) never went live: `Since` reads `?since=` as written, so the cursor
+    `subscribe()` sent never matched, every stream answered `sync`, and each open page loaded
+    the snapshot again straight away, in a loop (544 snapshots in 3.5 s from one Chromium page,
+    measured). `Feed::follow` now panics where it is set on a generation that is not ASCII
+    letters, digits, `.` and `_`, the bytes a cursor carries as they are in a URL and an event's
+    `id:` line (a line break could also start a field of its own in every patch frame; Changed
+    165). Corten's own generations are hex, so they are unchanged. `subscribe()` now loads the
+    snapshot again after a backoff (1 s, doubling to 30 s) when a stream answers the cursor the
+    snapshot just gave with `sync` as it opens (on its first connection, within 900 ms), so a
+    feed that cannot go live for another reason (two feeds behind one URL) costs 3 snapshots in
+    the same 3.5 s in Chromium, Firefox and WebKit; a `sync` later on a stream or after a
+    reconnect (a reset) still loads it at once. The runtime is 79 B larger (gzip). The watchlist
+    smoke checks the backoff's 1 s and 2 s, that it stops on the signal, and that a `sync` later
+    or after a reconnect is not delayed
+    ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
 189. `corten-cluster` wrote what happens to a feed across instances (a gap in its patches and the
     reload it starts, a patch dropped as invalid, a failed reload, consumer or resubscribe, a feed
     loaded with no replay log, the relay going active or standing by) to stderr with `eprintln!`,
     so the app's subscriber, its filters and JSON lines never saw them. Each is now a `tracing`
     event with target `corten::feed`, as the feed's own are, with fields (`instance`, `feed`, and
     `have` and `got` for a gap): a warning, or `info` for the relay going active. A test installs
-    a subscriber and sees a gap and a dropped patch with their feed; it saw nothing before
+    a subscriber and sees a gap and a dropped patch with their feed; it saw nothing before. The
+    failover bench reads which instance ran the relay from its `/api/stats` at each kill, since the
+    first `relay active` can come before `serve` installs the default subscriber
     ([#1069 corten-cluster reports gaps, reloads and relay failover with eprintln!, so the app's tracing subscriber, filters and JSON logs never see them](https://github.com/corten-run/corten/issues/1069)).
 
 ### Documentation
