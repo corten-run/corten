@@ -959,7 +959,9 @@ rules something out.
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
     layer around the app cannot serve it; or a request outside every area costs more than twice
     the about 200 instructions measured here over the build before area middleware (the lookup
-    and any layout effect together; layout alone moved a whole request by about 280).
+    and any layout effect together; layout alone moved a whole request by about 280). Area
+    middleware has no switch, so the next check builds current main with the prefix lookup taken
+    out by hand rather than going back to `9200aae4`.
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
@@ -1108,10 +1110,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     a check that depends on the record (the author, the organization) stays in its handler, a
     check the compiler does not see. That an area's or an API's routes are under its prefix is
     checked when a routes module that holds the prefix's struct expands, `cargo check` included;
-    a route given to `Area::route` or `Api::route` otherwise is checked by a `const`
-    assertion in a generic method, which the compiler evaluates only when it generates code: when
-    it builds the app (`cargo build`, `cargo test`, `corten check`), not under `cargo check`
-    alone.
+    a route given to `Area::route` or `Api::route` by hand, or by a routes module whose prefix's
+    struct is in another module, is checked by a `const` assertion in a generic method, which
+    the compiler evaluates only when it generates code: when it builds the app (`cargo build`,
+    `cargo test`, `corten check`), not under `cargo check` alone.
 12. <a id="limit-fixed-stages"></a>The app's own steps run at one place in Corten's fixed order of stages
     ([Choice 28](#choice-fixed-stages)), not as hooks at several: a step that must see the raw
     request before every stage is a tower layer around the whole app (`.layer(l)`), and there is
