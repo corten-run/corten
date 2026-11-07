@@ -200,6 +200,24 @@ console.log(failures.length ? `\n${failures.length} failed:\n${failures.join("\n
 process.exit(failures.length ? 1 : 0);
 
 /** @param {import("@playwright/test").Browser} browser */
+/** Whether the browser lets a navigation say when its address changes: the Navigation API with `precommitHandler`. */
+function precommits() {
+  return "navigation" in window && "NavigationPrecommitController" in window;
+}
+
+/**
+ * Records in `window.__addresses` every address the page has as its history entry changes, the
+ * moment it changes (`currententrychange`), and returns how many entries it has now.
+ */
+function addressesShown() {
+  /** @type {string[]} */
+  const addresses = [location.pathname];
+  /** @type {any} */ (window).__addresses = addresses;
+  const navigation = /** @type {any} */ (window).navigation;
+  navigation?.addEventListener("currententrychange", () => addresses.push(location.pathname));
+  return navigation?.entries().length ?? 0;
+}
+
 async function run(browser) {
   // A console error the browser logs for its own bug (scripts/browser-bugs.mjs) is not the page's.
   const bug = browserBug(browser);
@@ -1756,7 +1774,7 @@ async function run(browser) {
       // while the old page is still on screen (#992). Read every frame: how long the old page was
       // shown busy at the old address, and how long the new address showed the old page (the body
       // read and the swap after the answer's headers).
-      if (await more.evaluate(() => "NavigationPrecommitController" in window)) {
+      if (await more.evaluate(precommits)) {
         /** @param {URL} url */
         const news = (url) => url.pathname === "/news" && url.search === "";
         await more.route(news, async (route) => {
@@ -2302,18 +2320,7 @@ async function run(browser) {
   check("a page whose handlers take no format does not load the format module", !(await formatLoaded()));
   // A visitor's header has no account link (the sign-in button is in its place), so the page gets one.
   await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-account" href="/account">Account</a>')));
-  // Every address the page shows on the way, and how many history entries it has.
-  const entriesBefore = await page.evaluate(() => {
-    /** @type {string[]} */
-    const addresses = [location.pathname];
-    /** @type {any} */ (window).__addresses = addresses;
-    const read = () => {
-      if (addresses.at(-1) !== location.pathname) addresses.push(location.pathname);
-      if (addresses.length < 20 && document.title !== "Stocks | Watchlist") requestAnimationFrame(read);
-    };
-    requestAnimationFrame(read);
-    return /** @type {any} */ (window).navigation?.entries().length ?? 0;
-  });
+  const entriesBefore = await page.evaluate(addressesShown);
   await page.click("#to-account");
   await page.waitForFunction(() => document.title === "Stocks | Watchlist", null, { timeout: 5000 }).catch(() => {});
   check(
@@ -2323,14 +2330,37 @@ async function run(browser) {
   );
   // Where the address waits for the answer, a redirect's target is the only address the link
   // gives, in one new history entry, as a full load's redirect is (#992).
-  if (await page.evaluate(() => "NavigationPrecommitController" in window)) {
+  if (await page.evaluate(precommits)) {
     const [addresses, entries] = await page.evaluate(() => [/** @type {any} */ (window).__addresses, /** @type {any} */ (window).navigation.entries().length]);
     check(
       "a link the server redirects shows only the redirect's address, in one history entry",
       addresses.join() === "/news,/" && entries === entriesBefore + 1,
       `${addresses.join(" -> ")}, ${entriesBefore} -> ${entries} entries`,
     );
-  } else skip("a link the server redirects shows only the redirect's address, in one history entry", "no precommitHandler: the address changes at the click");
+    // The same for a link the server sends to a place on a page (`corten-location`, which `fetch`
+    // cannot follow with its `#id`): the place's address alone, with its `#id`, in one new entry.
+    const placed = await (await browser.newContext()).newPage();
+    await placed.route(
+      (url) => url.pathname === "/to-briefing",
+      (route) => (route.request().headers().corten ? route.fulfill({ status: 204, headers: { "corten-location": "/news#briefing" } }) : route.fallback()),
+    );
+    await placed.goto(`${base}/alerts`);
+    await placed.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-briefing" href="/to-briefing">Briefing</a>')));
+    const placedBefore = await placed.evaluate(addressesShown);
+    await placed.click("#to-briefing");
+    await placed.waitForFunction(() => document.title === "News | Watchlist" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const [placedAddresses, placedEntries, hash] = await placed.evaluate(() => [/** @type {any} */ (window).__addresses, /** @type {any} */ (window).navigation.entries().length, location.hash]);
+    check(
+      "a link the server sends to a place shows only the place's address, in one history entry",
+      placedAddresses.join() === "/alerts,/news" && hash === "#briefing" && placedEntries === placedBefore + 1,
+      `${placedAddresses.join(" -> ")}${hash}, ${placedBefore} -> ${placedEntries} entries`,
+    );
+    await placed.context().close();
+  } else {
+    const why = "no precommitHandler: the address changes at the click";
+    skip("a link the server redirects shows only the redirect's address, in one history entry", why);
+    skip("a link the server sends to a place shows only the place's address, in one history entry", why);
+  }
   // The watchlist's live prices take the money format: reached from the news page, it loads the
   // module before its markup joins, and the script writes prices with it.
   const firstPrices = await prices();

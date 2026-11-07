@@ -1988,11 +1988,9 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
  *   user, handed on when the server redirects
  * @param {Element | null} [source] the link or GET form that started it, marked busy with `main`
  * @param {boolean} [written] sent by a write: the page is fetched whole and its layout drawn again
- * @param {(res?: Response) => Promise<boolean>} [commit] where the address waits for the answer
- *   ({@link interceptVisit}): commits it once the answer is in (none when there is none), at the
- *   redirect's target when the server redirected, and is true when it took that target
+ * @param {Precommit} [precommit] where the address waits for the answer ({@link interceptVisit})
  */
-async function visit(url, signal, redirected, again, place, source, written, commit) {
+async function visit(url, signal, redirected, again, place, source, written, precommit) {
   // A write's page reading itself again is read whole as well, as a browser without JavaScript
   // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
   // when the read finds it. It stays whole while the page asks to be read again.
@@ -2031,28 +2029,31 @@ async function visit(url, signal, redirected, again, place, source, written, com
       if (signal.aborted) throw error;
       // Offline or the server is unreachable: load the URL as a normal navigation, which the
       // service worker (if any) answers with the offline page, and the browser otherwise explains.
-      await commit?.();
+      await precommit?.commit();
       signal.throwIfAborted();
       reload();
       return;
     }
     signal.throwIfAborted();
+    // Sent to a place on a page (`route.at(id)`) or another site: the server names it here, since
+    // `fetch` follows a redirect but drops its `#id`, and cannot read another origin's answer.
+    // Where the address waits for the answer, this navigation has not changed it yet: the next one
+    // takes its place in history (a link's new entry) and this one ends unseen, so the link's
+    // address never shows. Elsewhere the link's address is already in, and is replaced.
+    const to = res.headers.get("corten-location");
+    if (to) {
+      go(to, { history: precommit?.history ?? "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source } });
+      return;
+    }
     // The address changes now that the answer is here, as a full load's does: whatever is done
-    // with the answer after this (a swap, a full load, a redirect to a place) starts from it.
-    const took = (await commit?.(res)) ?? false;
+    // with the answer after this (a swap, a full load) starts from it.
+    const took = (await precommit?.commit(res)) ?? false;
     signal.throwIfAborted();
     const notice = noticeOf(res);
     // A read again's notice is the one the page drew and the user has seen: a full load in its
     // place does not say it again. The answer does not say whether the notice was sent back or is
     // another tab's cookie notice for this path; that one is then not announced here either.
     if (again) notice?.set("r", "");
-    // Sent to a place on a page (`route.at(id)`): the server names it here, since `fetch` follows a
-    // redirect but drops its `#id`.
-    const to = res.headers.get("corten-location");
-    if (to) {
-      go(to, { history: "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source } });
-      return;
-    }
     if (!res.headers.has(whole ? "corten-shell" : "corten-page") || shellChanged(res)) {
       reload(notice);
       return;
@@ -2294,7 +2295,7 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
       if (at) at.scrollIntoView();
       else scrollTo(0, 0);
     };
-    interceptVisit(event, (commit) => visit(url, event.signal, redirected, false, undefined, startedBy(event), written, commit), after, { scroll: "manual" });
+    interceptVisit(event, (precommit) => visit(url, event.signal, redirected, false, undefined, startedBy(event), written, precommit), after, { scroll: "manual" });
     return;
   }
   const after = () => {
@@ -2308,7 +2309,7 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
       if (start !== null) el.setSelectionRange(start, end, direction);
     } catch {}
   };
-  const visiting = (/** @type {Parameters<typeof visit>[7]} */ commit) => visit(url, event.signal, redirected, again, place, startedBy(event), written, commit);
+  const visiting = (/** @type {Precommit | undefined} */ precommit) => visit(url, event.signal, redirected, again, place, startedBy(event), written, precommit);
   // A page reading itself again keeps its address: nothing to wait for.
   interceptVisit(event, visiting, after, { scroll: "manual", focusReset: "manual" }, !again);
 });
@@ -2332,6 +2333,14 @@ function go(url, options) {
 const PRECOMMIT = "NavigationPrecommitController" in window;
 
 /**
+ * A navigation whose address waits for its answer: `commit` changes the address once the answer
+ * is in (none when there is none), to the redirect's target when the server redirected, and is
+ * true when it took that target; `history` is how the navigation enters history, for the one
+ * that takes its place before it commits (a `corten-location`).
+ * @typedef {{ commit(res?: Response): Promise<boolean>, history: "push" | "replace" }} Precommit
+ */
+
+/**
  * Intercepts `event` with `run`, a visit, and then `after`. Where the browser lets it
  * (`precommitHandler`), the address waits for the page's answer, as a full load's does: it changes
  * when the answer is in, to the redirect's target when the server redirected (one entry, never the
@@ -2339,7 +2348,7 @@ const PRECOMMIT = "NavigationPrecommitController" in window;
  * screen (#992). `main` is busy from the click either way. Elsewhere, and for back and forward,
  * the address changes at once, as before.
  * @param {any} event
- * @param {(commit: Parameters<typeof visit>[7]) => Promise<void>} run
+ * @param {(precommit: Precommit | undefined) => Promise<void>} run
  * @param {() => void} after
  * @param {object} options
  * @param {boolean} [early] whether the address may wait for the answer (not a page read again)
@@ -2363,7 +2372,7 @@ function interceptVisit(event, run, after, options, early = true) {
     ...options,
     precommitHandler: (/** @type {any} */ controller) =>
       new Promise((answered, failed) => {
-        visiting = run(async (res) => {
+        const commit = async (/** @type {Response | undefined} */ res) => {
           let took = false;
           if (res?.redirected) {
             // `fetch` drops the `#id`; a full load's redirect keeps the link's when it names none.
@@ -2379,7 +2388,8 @@ function interceptVisit(event, run, after, options, early = true) {
           answered(undefined);
           await ready;
           return took;
-        });
+        };
+        visiting = run({ commit, history: event.navigationType === "replace" ? "replace" : "push" });
         // A visit that ends before its answer (a full load) lets the navigation end too. One left
         // for another (back, or a second link) ends quietly: the browser does not handle a
         // precommit handler's failure once its navigation is aborted, and would log it.

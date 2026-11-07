@@ -66,9 +66,10 @@ itself again marks nothing.
 
 The address changes when the page's answer is in, as a full load's does, not at the click: while a
 slow handler runs, the address still names the page on screen, so reloading, copying or sharing it
-gets that page, and a link the server redirects shows only the redirect's address, in one history
-entry. This holds where the browser lets a navigation say when its address changes (the Navigation
-API's `precommitHandler`: Chromium and Firefox). Elsewhere, and for back and forward, the address
+gets that page, and a link the server redirects, or sends to a place on a page, shows only the
+address it ends at, in one history entry. This holds where the browser lets a navigation say when
+its address changes (the Navigation API's `precommitHandler`, which the runtime looks for rather
+than for a browser). Elsewhere, and for back and forward, the address
 changes at the click while the old page is shown busy until the new one comes; `main[aria-busy]`
 is the hook for styling that wait.
 
