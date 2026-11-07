@@ -2,8 +2,7 @@
 
 [Back to the guides](../../README.md#documentation)
 
-Corten has two ways to keep a page current, both over server-sent events, and a third for a
-script of the app's own: named events of JSON.
+Corten has two ways to keep a page current, both over server-sent events.
 
 ## Fragments: `<corten-live>`
 
@@ -271,55 +270,36 @@ up other requests while its rows are read.
 Native apps and agents follow the same feed with `corten-protocol`'s `Replica`; see
 [Surfaces](../architecture.md).
 
-## Named events: `corten::event_stream`
+## Which one
 
-For a script that reads a stream itself with `EventSource` (a job's progress drawn in a bar, a
-status a native client follows), `corten::event_stream(stream)` (feature `json`) sends each
-`StreamEvent` as `event: <name>` with `data: <JSON>`. The route is a JSON route: a failure before
-the stream starts is answered as JSON. As with `corten::live`, the stream is kept alive with a
-comment every 15 seconds and ends when the app starts shutting down, so a deploy is not held open
-by its clients.
+Corten has two kinds of push of its own, chosen by who keeps what is sent:
 
-```rust,ignore
-// GET /jobs/{job}/progress: the job's state each time it moves, until it is done
-async fn progress(State(jobs): State<Jobs>, Params(at): Params<url::JobProgress>, since: LiveSince)
-    -> Result<EventStreamResponse, JsonError> {
-    let job = jobs.find(at.job).await?.ok_or(Error::status(StatusCode::NOT_FOUND))?;
-    if job.is_done() && since.0.as_deref() == Some(job.last_version().as_str()) {
-        return Ok(EventStreamResponse::ended()); // 204: the EventSource stops
-    }
-    Ok(corten::event_stream(jobs.changes(job, since).map(|state| {
-        StreamEvent::new("progress", &state).cursor(state.version.to_string())
-    })))
-}
-```
+1. The server can draw the part: `<corten-live>`. A job's progress is a `<progress value max>`
+   the stream draws again as the job moves; a growing log or a generated answer is a
+   `view::Append(id, lines)` per piece, so each event carries only what is new.
+2. A script keeps the data: a feed, whose rows are typed from the route to the script. One job
+   followed by a script is a feed of one row, keyed by the job. A feed does not end on its own:
+   the script subscribes with `AbortSignal.any([signal, done.signal])`, a controller `done` of its
+   own beside the signal it was given, and calls `done.abort()` when the row says the job is done.
 
-The markup passes the route to the script, never a URL written as text:
-`<div on:connect={js::follow(url::JobProgress { job: id }, signal)}>`.
+A stream in a format someone else defines (server-sent events a partner's client already reads)
+is that protocol, not a page's, and the app writes it: a `Relay` of its own body
+(`Body::from_stream`, `text/event-stream`). Corten adds none of what it gives its own streams,
+so the app does three things itself:
 
-```js
-/** @param {string} url @param {AbortSignal} signal */
-export function follow(url, signal) {
-  const progress = new EventSource(url);
-  signal.addEventListener("abort", () => progress.close());
-  progress.addEventListener("progress", (event) => {
-    const state = JSON.parse(event.data);
-    draw(state);
-    if (state.finished) progress.close(); // saves the reconnect ended() would answer
-  });
-}
-```
+1. Sends `X-Accel-Buffering: no` in the `Relay`'s headers and writes a comment line (`:`) on a
+   quiet stream at least every 15 seconds, or a proxy in front holds the events back or closes
+   the stream ([Deploying, Live streams](deploy.md#live-streams)).
+2. Bounds it at shutdown. Corten does not end it when shutdown begins, as it does its own
+   streams; its connection is closed after the longer of the app's grace and the deadline of the
+   route's area or API (30 seconds unless set), past `docker stop`'s 10. Put the route in an area
+   or API with a short `deadline`: the handler only has to return the stream within it, and a
+   stream still open at shutdown is closed when that bound passes.
+3. Accepts how an OpenAPI document lists it: a `Relay` is any answer of another service, and an
+   app cannot describe it as `text/event-stream` instead.
 
-An event's cursor is its `id`, which a reconnecting `EventSource` sends back as
-`Last-Event-ID`; `LiveSince` reads it (or the `since` query parameter on the URL the script
-opens first), so the handler resumes after it. An event without a cursor keeps the one before it,
-so a reconnect sends it again. When the stream ends, an `EventSource` connects again a few
-seconds later: a stream that is over answers that with `EventStreamResponse::ended()`, a `204`,
-which stops it. A name is one line of text that is not empty, and a cursor has no line break or
-NUL; another panics in debug builds, and in release the event is not sent (a bad name) or is sent
-without its cursor.
+A two-way connection is a protocol switch (`corten::upgrade`), the app guide's Other protocols.
 
-The names and the data are not checked against the script, as a feed's rows are (design, Limits;
-[#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/corten-run/corten/issues/591), not planned until an app needs it; one would start from `#[event]`). Prefer `<corten-live>` when the server can draw the part, and a feed when the script
-keeps rows: both are typed, and both resume, reconnect and stop with the element. Named events are
-for data a script of the app's own draws that neither fits.
+Corten had a third, `corten::event_stream` of named JSON events a script read with
+`EventSource`. Its names and data were strings at the seam, and nothing used it, so it was
+removed ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).

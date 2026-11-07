@@ -1880,7 +1880,7 @@ Corten is pre-1.0, so any minor version may change the API.
     instructions a byte, so one whose URL can name its content is better `Public::immutable`. The
     hash costs about 3 instructions a byte of a page, so a page tags in proportion to its size, and
     a tag pays for itself when about one compressed load in eight is answered `304`. Tags from
-    another process do not match (design, Limits 22). A page's header map still reserves 13: a
+    another process do not match (design, Limits 21). A page's header map still reserves 13: a
     compressed page with HSTS now sends 14, and 13 makes the same 24 slots ([#742 Pages have no
     ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason
     given (saves bytes but not the render) is not a recorded Choice and does not count
@@ -2367,6 +2367,15 @@ Corten is pre-1.0, so any minor version may change the API.
     `GET` form's fields its `Form` ([#207 A handler reads its path parameters with Path<String>, so nothing checks them against the route struct that declares them](https://github.com/todd-skelton/corten/issues/207)).
 12. `Route::PREFETCH`: a route says it with `Route::may_prefetch(&self)`, written by
     `#[route("..", prefetch = ..)]` (Added 218).
+13. `corten::event_stream`, `StreamEvent` and `EventStreamResponse`: named JSON events over
+    server-sent events, read by a script's own `EventSource`. Their names and data were strings at
+    the seam, and nothing outside Corten's own tests used them. A job's progress is a `<progress>` a
+    `<corten-live>` stream draws again, a growing log or answer a `view::Append` per piece, and data
+    a script keeps a feed (one job is a feed of one row); a stream in a format another party defines
+    is a `Relay` of the app's own body. Breaking for an app that used them (the live-data guide,
+    Which one). Design Limit 17, which recorded that they were untyped, is gone, so Limits 18 to 24
+    are now 17 to 23, and the other entries here that cite them say the new numbers
+    ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 
 ### Changed
 
@@ -4775,7 +4784,7 @@ Corten is pre-1.0, so any minor version may change the API.
     instructions against 42,531M, and 1 MiB of `\r` 846.6M against 1,221.6M; plain bytes and short
     heads are within 0.5%, and in 16 KiB pieces 8 MiB of plain bytes took 122.2M against 160.2M, of
     the delimiter less its last byte 245.0M against 273.7M (callgrind, release, the same in two
-    runs; design.md, Limits 23). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
+    runs; design.md, Limits 22). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
     and copies runs of smaller ones into one buffer, so a file sent in small pieces holds about its
     size, not a piece and its room for each: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB against
     277.7 MiB (peak working set, release, two runs); a file under 64 KiB that came in one piece is
@@ -5534,7 +5543,7 @@ Corten is pre-1.0, so any minor version may change the API.
 58. A deploy guide (`docs/guide/deploy.md`): what a proxy or CDN in front of the app must do (`Host`,
     `X-Forwarded-For`, HTTP/2, event streams, `Vary`, error bodies, connection reuse, health checks,
     body size), an nginx configuration the watchlist's browser smoke test passes through, and the
-    cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 21 records that a shared
+    cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 20 records that a shared
     cache must key on `Vary` and why a page's JSON stays at the page's URL
     ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
 59. The README's runtime size is the build's, 12.1 KB gzip (34,523 bytes minified, 12,427 gzipped at
@@ -5642,7 +5651,7 @@ Corten is pre-1.0, so any minor version may change the API.
     cases but makes a full load wait for the read and the page together, which in the Chase Sets
     pilot could add up to as much again to its server time (60.4 ms for the request serving the
     read, 56.2 ms for the page, debug build), so the read stays beside the handler. Choices 19 and
-    20 and Limit 23 keep their decision and the numbers that carry it, and link the pull request or
+    20 and Limit 22 keep their decision and the numbers that carry it, and link the pull request or
     guide that has the full measurement. Choice 23 cites the app guide,
     [#894 docs: a flood of unfinished heads leaves memory with glibc's allocator; size max_connections from repeated floods](https://github.com/corten-run/corten/pull/894)
     and
@@ -5650,6 +5659,14 @@ Corten is pre-1.0, so any minor version may change the API.
     for the jemalloc flood figures, which Choice 19 no longer carries
     ([#959 Design Choice 20 does not weigh awaiting a layout read before the handler, which would end its error-page cases at a latency cost; every app pays 0.3% to 0.9% a request for the current shape](https://github.com/corten-run/corten/issues/959),
     [#966 design.md's Limit 23 and Choices 19 and 20 carry whole measurement logs, which bury what was decided](https://github.com/corten-run/corten/issues/966)).
+72. Design Choice 1 states `html!`'s cost against Maud on the item page (callgrind, three rounds
+    at `ff1701b8`): 44,494 instructions a request to write card-market's document against 53,935
+    to 53,937 for the axum + Maud app's, most of Maud's in its escaping; the askama comparison,
+    one whole-app run each that showed only noise, is gone. `bench/fullstack/cost-by-crate.sh`
+    takes `APP=axum-maud`, prints each answer's bytes and names its dumps after the app, and
+    `cost-by-crate.mjs` lists a function with what it calls (`INCLUSIVE=`) and knows Maud's
+    escaping and the bench apps' files
+    ([#963 Design Choice 1 rests on an unrecorded askama comparison; it should state html!'s rendering cost against Maud on equal work](https://github.com/corten-run/corten/issues/963)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

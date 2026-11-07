@@ -57,21 +57,28 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
 
 1. <a id="choice-markup-macro"></a>**Markup is a Rust macro, not TSX.** Rendering TSX needs a JavaScript runtime on the server
    or a second toolchain in the app; `html!` keeps one language and compiles to the same string
-   writes a hand-written renderer would do. Measured on the item page, `html!` renders as fast
-   as the compiled templates it replaced (askama).
+   writes a hand-written renderer would do. On the benchmark's item page it writes the document in
+   fewer instructions than Maud, a Rust macro of the same kind, takes for the same visible page.
 
-   Stands on: measured, one run each (when `html!` replaced askama,
-   `bench/fullstack/results/askama-recheck` and `html-macro`: askama served 8,496 requests a second
-   at 64 connections and 6,087 at 256, `html!` 6,928 and 8,321; the order reversed between the two
-   loads, so the difference is noise, and no instructions were counted); value (one language and one
-   toolchain in an app, Values 6).
+   Stands on: measured (callgrind, three rounds of each at `ff1701b8`, alternating, each
+   function with what it calls: card-market's `Req::render_into`, the whole document, took 44,494
+   instructions a request in every round, with its own extra work in it, the head's tags, a data
+   attribute a listing row and prices, ratings and counts in the visitor's locale, for 8,931 bytes;
+   the axum + Maud app's `pages::item` took 53,935 to 53,937 for 7,473 bytes; Maud 0.27.0's
+   escaping, which pushes each byte on its own, is 38,060 of it against `html!`'s `escape_into`
+   at 12,881: that gap, 25,179, is larger than the whole difference of 9,441 to 9,443, and outside
+   escaping `html!` does about twice Maud's work, 31,613 against 15,877, so a Maud release that
+   escaped as cheaply would reverse it); value (one language and one toolchain in an app, Values 6).
 
-   Revisit when: callgrind on the item page (CONTRIBUTING.md, Pull requests, 2) counts more
-   instructions for `html!` than for a compiled template engine rendering the same view, by more
-   than the runs' range; or TSX compiles for the server with no JavaScript runtime and no second
-   toolchain in the app.
+   Revisit when: `Req::render_into` on card-market's item page counts more instructions than
+   `pages::item` in the axum + Maud app, or than another compiled template engine writing the
+   same page, by more than the runs' range (the benchmark README has the command); the axum + Maud
+   app moves past maud 0.27.0; or TSX compiles for the server with no JavaScript runtime and no
+   second toolchain in the app.
 
-   Last checked: 2026-10-21, the askama and `html!` runs, one each, recorded at `e8bc9236`.
+   Last checked: 2026-11-06, the callgrind rounds of card-market and axum + Maud (maud 0.27.0) at
+   `ff1701b8`
+   ([#963 Design Choice 1 rests on an unrecorded askama comparison; it should state html!'s rendering cost against Maud on equal work](https://github.com/corten-run/corten/issues/963)).
 
 2. <a id="choice-no-wasm"></a>**No WASM.** Hydrating a WASM app costs hundreds of kilobytes before the page responds; the
    server already has the HTML, so the browser only needs behavior where there is behavior.
@@ -1096,32 +1103,24 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
     Text that must match another service's is the app's own (`Raw`, or serde_json's `RawValue`
     where `Serialize` writes it), and a shared checksum is over RFC 8785 (the app guide, Numbers in
     JSON).
-17. <a id="limit-event-stream-unchecked"></a>An event stream's (`corten::event_stream`) event names and data are not checked against the
-    script that reads them, as a feed's rows are (`rows = Row`, `FeedUrl<Row>`): the script
-    listens by a name it writes and parses the data untyped. Prefer `<corten-live>` or a feed
-    where either fits. Typing them is left out until an app needs it: nothing but corten's own tests
-    and docs uses event streams, and the typing would add a route attribute, a declaration kind and runtime
-    code every page loads. An app that needs it starts from `#[event]`, whose names are checked
-    and whose shapes `corten/events` declares, rather than a second event model
-    ([#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/corten-run/corten/issues/591), closed as not planned).
-18. <a id="limit-empty-file-input"></a>A file input left empty is no file to `Upload`: the browser sends a part with an empty file
+17. <a id="limit-empty-file-input"></a>A file input left empty is no file to `Upload`: the browser sends a part with an empty file
     name and no bytes, which `FormData` keeps as an empty `File` and `next_file` passes over. A
     route cannot tell that input from one the form lacks. Handing out empty files would make every
     handler that loops over files skip them to get the same answer, and a file the user did choose
     is never both nameless and empty, so the distinction is left out. A part with bytes is a file
     whatever its name.
-19. <a id="limit-handler-props"></a>A handler passed to a component as a prop (`on:sort={..}` on the kit's `SortHeader`) is typed
+18. <a id="limit-handler-props"></a>A handler passed to a component as a prop (`on:sort={..}` on the kit's `SortHeader`) is typed
     by the prop, not by the element the component puts it on: its `event` is an `Event` and its
     `target` an `HTMLElement`, so its script narrows (`event instanceof MouseEvent`) where an
     `on:click` written on an `<a>` declares `MouseEvent` and `HTMLAnchorElement`. Typing a prop by
     the event and element it lands on would make each prop name its element's type, and the
     arguments the call passes (a column, as a Rust type) are checked either way.
-20. <a id="limit-permissions-policy"></a>The `Permissions-Policy` a document is sent (`Feature`) is enforced by Chromium-based browsers
+19. <a id="limit-permissions-policy"></a>The `Permissions-Policy` a document is sent (`Feature`) is enforced by Chromium-based browsers
     (measured in Chromium 156: with the location granted, `geolocation=()` refuses it). Firefox 157
     and WebKit 27.2 gave the location under the same header (probed), so in them the features it
     denies are the browser's to grant, as before. Chromium on Linux, without Web Bluetooth, logs one
     warning a page load for the `bluetooth` name.
-21. <a id="limit-shared-caches"></a>A shared cache in front of the app must key on `Vary` (RFC 9111). One URL answers a page's
+20. <a id="limit-shared-caches"></a>A shared cache in front of the app must key on `Vary` (RFC 9111). One URL answers a page's
     document, a client navigation, a form and a data client's JSON, so a native app or an agent
     reads the screen the browser shows at the address the browser shows, and only the document is
     ever sent public. A cache that keys on the URL alone hands that document to the other three: the
@@ -1132,7 +1131,7 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
     the headers its cache policy lists, so the deploy guide names the setting for each instead.
     Corten cannot see which cache is in front, so this is not checked; an app behind one that cannot
     key on `Vary` serves its data clients from `App::api` routes, whose URLs are their own.
-22. <a id="limit-etag"></a>The `ETag` of a page route's answer is a 64-bit hash of its body, its `Content-Type` and its
+21. <a id="limit-etag"></a>The `ETag` of a page route's answer is a 64-bit hash of its body, its `Content-Type` and its
     `corten-*` headers, made with the standard library's `RandomState`, keyed randomly when the
     process starts (SipHash 1-3 today; the standard library promises a keyed hash that resists
     chosen collisions, not the algorithm), so nobody outside the process can make two bodies share a
@@ -1156,7 +1155,7 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
     markup) makes a tag that never matches and still costs its hash; Corten skips the hash for its
     own (the nonce, a submit key), which saves time only, and not for a submit key placed as
     `raw(..)` markup.
-23. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
+22. <a id="limit-multipart-overread"></a>A multipart body is read up to 64 MiB past its limit, what a file the handler passes over
     included, so the browser is answered with the form's message rather than a reset connection.
     Each such request holds its connection and searches what it reads for the next boundary, which
     the client chose along with the bytes. The search is `memchr`'s substring search, already in
@@ -1176,7 +1175,7 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
     copied out of it, since the piece can be a slice of a read buffer of hundreds of KiB that
     keeping it would hold. The end-to-end times, the other counts and peak memory are in
     [#897 Upload: a file passed over does not count toward the limit; the reader's cost no longer depends on how the body is cut](https://github.com/corten-run/corten/pull/897).
-24. <a id="limit-csp-reports"></a>CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
+23. <a id="limit-csp-reports"></a>CSP reports (`Policy::report_to`) reach the app from Firefox and WebKit, in two shapes:
     Firefox 157 posts a batch in the Reporting API's format (`application/reports+json`, a list)
     with `Origin` set, and WebKit 27.2 posts each report alone as `application/csp-report` with
     `Origin: null` (probed; both say `Sec-Fetch-Site: same-origin`, so the write check lets them
