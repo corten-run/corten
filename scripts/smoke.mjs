@@ -2563,16 +2563,18 @@ async function run(browser) {
   // that doubles (1 s, then 2 s), not straight away in a loop, and stops when its signal aborts
   // (#1067). A `sync` that comes later on a stream (a server restarted, its cursor gone) loads the
   // snapshot at once.
-  /** @param {string} name @param {(n: number) => string} stream */
-  const feedTimes = async (name, stream) => {
+  /** @param {string} name @param {(n: number) => string} stream @param {string} [forward] a server to send the streams to instead */
+  const feedTimes = async (name, stream, forward) => {
     const times = { snapshots: /** @type {number[]} */ ([]), streams: 0 };
     await page.route(`**/feed/${name}`, (route) => {
       times.snapshots.push(Date.now());
       return route.fulfill({ status: 200, contentType: "application/json", body: '{"epoch":"a","seq":1,"rows":[]}' });
     });
-    await page.route(`**/feed/${name}/live*`, (route) =>
-      route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: stream((times.streams += 1)) }),
-    );
+    await page.route(`**/feed/${name}/live*`, (route) => {
+      times.streams += 1;
+      if (forward) return route.continue({ url: forward });
+      return route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: stream(times.streams) });
+    });
     await page.evaluate(async (name) => {
       const { subscribe } = /** @type {any} */ (await import(/** @type {string} */ ("corten")));
       const w = /** @type {any} */ (window);
@@ -2615,8 +2617,39 @@ async function run(browser) {
   await stopFeed("quiet");
   await unrouteFeed("quiet");
   const quietGap = quietFeed.snapshots.length === 2 ? quietFeed.snapshots[1] - quietFeed.snapshots[0] : NaN;
+  // A feed reset while its stream is open: the first connection stays open, and 1.5 s after it
+  // opened the server sends `sync`. A server of the smoke's own holds the stream (a route cannot
+  // answer in two parts); later streams are held open with nothing on them.
+  const resetName = "a sync on a stream open longer than its first moments loads the snapshot at once";
+  if (engine === "webkit") skip(resetName, "a routed request is cross-origin there");
+  else {
+    /** @type {number[]} */
+    const syncsSent = [];
+    /** @type {import("node:http").ServerResponse[]} */
+    const held = [];
+    const resetServer = http.createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+      res.write("retry: 60000\n\n");
+      held.push(res);
+      if (held.length === 1)
+        setTimeout(() => {
+          syncsSent.push(Date.now());
+          res.end('event: sync\ndata: {"reason":"cursor-expired"}\n\n');
+        }, 1500);
+    });
+    await new Promise((resolve) => resetServer.listen(0, "127.0.0.1", () => resolve(undefined)));
+    const resetPort = /** @type {import("node:net").AddressInfo} */ (resetServer.address()).port;
+    const resetFeed = await feedTimes("reset", () => "", `http://127.0.0.1:${resetPort}/live`);
+    for (const end = Date.now() + 5000; resetFeed.snapshots.length < 2 && Date.now() < end; ) await page.waitForTimeout(50);
+    await stopFeed("reset");
+    await unrouteFeed("reset");
+    for (const res of held) res.destroy();
+    resetServer.close();
+    const resetGap = resetFeed.snapshots.length === 2 && syncsSent.length ? resetFeed.snapshots[1] - syncsSent[0] : NaN;
+    check(resetName, resetFeed.snapshots.length === 2 && resetGap < 500, `${resetFeed.snapshots.length} snapshots, the second ${resetGap} ms after the sync was sent`);
+  }
   check(
-    "a sync that comes later on a feed's stream loads the snapshot at once, not after a backoff",
+    "a sync on a stream the browser reconnected loads the snapshot at once, not after a backoff",
     quietFeed.snapshots.length === 2 && quietFeed.streams >= 2 && quietGap < 900,
     `${quietFeed.snapshots.length} snapshots, ${quietFeed.streams} streams, the second snapshot +${quietGap} ms after the first`,
   );

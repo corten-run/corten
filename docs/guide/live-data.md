@@ -259,12 +259,12 @@ once per change too: its body is kept (in memory, the size of the JSON) until th
 `apply` or `reset`, so pages that subscribe between two writes cost no serialization. A
 subscriber gets the snapshot and then each later patch exactly once, in order; reconnects resume
 from `Last-Event-ID`, and an unknown cursor or a gap ends in a fresh snapshot. A stream that
-answers the cursor the snapshot just gave with `sync` as it first opens (two feeds behind one URL, say)
-refuses it, so `subscribe()` loads the snapshot again after a backoff that doubles from 1 s to
-30 s, not straight away; a `sync` later or after a reconnect (a `reset`) loads it at once. Against a feed
-that answers every stream with `sync`, one page made 544 snapshot requests in 3.5 s with the runtime before
-the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit 221 and 3; measured with the
-check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
+answers the cursor the snapshot just gave with `sync` as it first opens (two feeds behind one
+URL, say) refuses it, so `subscribe()` loads the snapshot again after a backoff that doubles from
+1 s to 30 s, not straight away; a `sync` later or after a reconnect (a `reset`) loads it at
+once. Against a feed that answers every stream with `sync`, one page made 544 snapshot requests
+in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit
+221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
 runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream): in the
 failover benchmark (200 clients, 50 writes a second, each instance killed and restarted under
 load), every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000
