@@ -868,7 +868,8 @@ async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_rep
 async fn a_handlers_error_keeps_its_message_off_the_page_outside_dev() {
     let page = |_: Req| async { Err::<Response, _>(Error::new("database password wrong")) };
     for dev in [true, false] {
-        let router = App::new(Routes::from(Router::new().route("/", get(page)))).dev(dev).error_page(test_error_page, ()).router();
+        let router =
+            App::new(Routes::from(Router::new().route("/", get(page)))).dev(dev).error_page(test_error_page, ()).router();
         let (status, _, body) = call(router, "GET", None).await;
         assert_eq!(status, 500, "{body}");
         assert_eq!(body.contains("database password wrong"), dev, "dev {dev}: {body}");
