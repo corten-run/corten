@@ -3804,30 +3804,63 @@ async function run(browser) {
 
   // The picture's form hears its upload's progress (`on:corten:progress`), so its multipart
   // writes go by XMLHttpRequest: the uploads above were answered through it. Each event is the
-  // browser's ProgressEvent for the whole body, while the form is busy; the bar shows only then.
+  // browser's ProgressEvent for the whole body, while the form is busy; the bar shows only then,
+  // and the component's handler (this listener runs after it) has set its value to the share sent,
+  // with none once all of it is.
   await page.evaluate(() => {
     const form = document.querySelector("main form[enctype]");
     /** @type {any} */ (window).__progress = [];
     form?.addEventListener("corten:progress", (e) => {
       const p = /** @type {ProgressEvent} */ (e);
-      const bar = form.querySelector("progress");
-      /** @type {any} */ (window).__progress.push({
+      const bar = /** @type {HTMLProgressElement | null} */ (form.querySelector("progress"));
+      const seen = {
         loaded: p.loaded,
         total: p.total,
         computable: p.lengthComputable,
         busy: form.getAttribute("aria-busy"),
         shown: bar ? getComputedStyle(bar).display !== "none" : false,
-      });
+      };
+      /** @type {any} */ (window).__progress.push(seen);
     });
+    // What the component's handler, which runs once its module's import resolves, sets the bar to.
+    /** @type {any} */ (window).__barValues = [];
+    const bar = form?.querySelector("progress");
+    if (bar) {
+      // A batch of changes gives each value set by the change after it (its old value), then the bar's.
+      new MutationObserver((records) => {
+        for (const record of records.slice(1)) /** @type {any} */ (window).__barValues.push(record.oldValue);
+        /** @type {any} */ (window).__barValues.push(bar.getAttribute("value"));
+      }).observe(bar, { attributes: true, attributeFilter: ["value"], attributeOldValue: true });
+    }
   });
+  // Chromium sends it slowly (2 MB/s up), so the bar is seen part way; the other engines have no
+  // throttle a script can set, and send it at localhost's speed.
+  const throttle = engine === "chromium" ? await page.context().newCDPSession(page) : null;
+  await throttle?.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: 2 << 20 });
   const progressed = await upload({ name: "slow.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(600 << 10, 7) });
+  await throttle?.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  await throttle?.detach();
   /** @type {{ loaded: number, total: number, computable: boolean, busy: string | null, shown: boolean }[]} */
   const events = await page.evaluate(() => /** @type {any} */ (window).__progress);
+  /** @type {(string | null)[]} */
+  const barValues = await page.evaluate(() => /** @type {any} */ (window).__barValues);
   const last = events.at(-1);
   check(
     "a form's on:corten:progress hears its whole body sent, while it is busy and its bar shows",
     !!last && last.computable && last.loaded === last.total && last.total > 600 << 10 && events.every((e) => e.busy === "true" && e.shown) && progressed.startsWith("The picture is over 64 KB"),
     `${events.length} events, last ${JSON.stringify(last)}, ${progressed}`,
+  );
+  check(
+    "the handler the form names fills the bar with the share sent, and leaves it indeterminate once all is",
+    // Firefox reports only the last step of a body sent at localhost's speed: the bar is never
+    // given a value then.
+    (barValues.length === 0 || barValues.at(-1) === null) &&
+      events.some((e) => e.computable && e.loaded === e.total) &&
+      events
+        .filter((e) => e.computable && e.loaded < e.total)
+        .every((e) => barValues.some((v) => v !== null && Math.abs(Number(v) - e.loaded / e.total) < 0.001)) &&
+      (engine !== "chromium" || events.some((e) => e.computable && e.loaded > 0 && e.loaded < e.total)),
+    JSON.stringify({ events: events.map((e) => [e.loaded, e.total]), bar: barValues }),
   );
   const barAfter = await page.evaluate(() => {
     const form = document.querySelector("main form[enctype]");
@@ -3850,25 +3883,144 @@ async function run(browser) {
   await page.click("main form[enctype] button");
   check("an upload the network fails dispatches corten:error with status 0", (await uploadFailed) === 0, String(await uploadFailed));
   await page.unroute("**/avatar");
-  // A navigation abandons an upload still waiting for its answer: no progress reaches the form after it.
+  // A followed redirect on the progress path: the answer the upload module hands the runtime has
+  // the redirect's URL (`responseURL`), as fetch's has, which the runtime reads to know the answer
+  // is this origin's before it draws it. The module is called as the runtime calls it, and its
+  // POST answered with a 303 to the news page. Playwright's WebKit cannot answer a request with a
+  // redirect.
+  if (engine === "webkit") skip("an upload's answer after a followed redirect has the redirect's URL, as fetch's does", "Playwright cannot fulfill a redirect in WebKit");
+  else {
+    const redirectContext = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext();
+    await redirectContext.addCookies(await page.context().cookies());
+    const redirected = await redirectContext.newPage();
+    await redirected.route("**/avatar", (route) => route.fulfill({ status: 303, headers: { location: "/news" } }));
+    await redirected.goto(`${base}/account`);
+    const answered = await redirected.evaluate(async () => {
+      const url = performance
+        .getEntriesByType("resource")
+        .map((e) => e.name)
+        .find((name) => /\/corten-upload\.js(\?|$)/.test(name));
+      if (!url) return { url: "", status: 0, path: "no module loaded" };
+      /** @type {typeof import("../crates/corten/js/upload.js")} */
+      const module = await import(url);
+      const body = new FormData(/** @type {HTMLFormElement} */ (document.querySelector("main form[enctype]")));
+      const res = await module.upload(new URL("/avatar", location.href), "POST", body, new AbortController().signal, () => {});
+      return { url: res.url, status: res.status, path: new URL(res.url, location.href).pathname };
+    });
+    await redirectContext.close();
+    check(
+      "an upload's answer after a followed redirect has the redirect's URL, as fetch's does",
+      answered.status === 200 && answered.path === "/news" && answered.url.startsWith(base),
+      JSON.stringify(answered),
+    );
+  }
+  // A navigation abandons an upload still waiting for its answer: no progress reaches the form after
+  // it, nor its answer the page. In a context of its own (with the session's cookie), closed after,
+  // since a request Playwright held and answered after the page let it go leaves the context's
+  // next request to the same path unanswered.
+  const leaveContext = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext();
+  await leaveContext.addCookies(await page.context().cookies());
+  const leave = await leaveContext.newPage();
+  await leave.goto(`${base}/account`);
+  await leave.evaluate(() => {
+    /** @type {any} */ (window).__progress = 0;
+    document.querySelector("main form[enctype]")?.addEventListener("corten:progress", () => (/** @type {any} */ (window).__progress += 1));
+  });
   /** @type {import("playwright").Route[]} */
   const heldUploads = [];
-  await page.route("**/avatar", (route) => {
+  await leave.route("**/avatar", (route) => {
     heldUploads.push(route);
   });
-  await page.evaluate(() => (/** @type {any} */ (window).__progress = []));
-  await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
-  await page.click("main form[enctype] button");
-  await page.waitForFunction(() => document.querySelector("main form[enctype]")?.getAttribute("aria-busy") === "true", null, { timeout: 4000 }).catch(() => {});
-  const beforeLeaving = await page.evaluate(() => /** @type {any} */ (window).__progress.length);
-  await page.click('header a[href="/"]');
-  await page.waitForFunction(() => !document.querySelector("main form[enctype]"), null, { timeout: 5000 }).catch(() => {});
-  await page.waitForTimeout(300);
-  const afterLeaving = await page.evaluate(() => /** @type {any} */ (window).__progress?.length ?? 0);
-  check("a navigation abandons a waiting upload and its progress", afterLeaving === beforeLeaving && !(await page.$("main form[enctype]")), `${beforeLeaving} then ${afterLeaving}`);
-  await page.unroute("**/avatar", { behavior: "ignoreErrors" });
-  for (const route of heldUploads) await route.abort().catch(() => {});
+  await leave.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+  await leave.click("main form[enctype] button");
+  const wasBusy = await leave
+    .waitForFunction(() => document.querySelector("main form[enctype]")?.getAttribute("aria-busy") === "true", null, { timeout: 4000 })
+    .then(() => true)
+    .catch(() => false);
+  const beforeLeaving = await leave.evaluate(() => /** @type {any} */ (window).__progress);
+  await leave.click('header a[href="/"]');
+  await leave.waitForFunction(() => !document.querySelector("main form[enctype]"), null, { timeout: 5000 }).catch(() => {});
+  // The held upload then answers, sending the page elsewhere: an upload still listened to would
+  // take the page there.
+  for (const route of heldUploads) await route.fulfill({ status: 204, headers: { "corten-location": "/news" } }).catch(() => {});
+  await leave.waitForTimeout(500);
+  const afterLeaving = await leave.evaluate(() => /** @type {any} */ (window).__progress);
+  const leftFor = await leave.evaluate(() => location.pathname);
+  const formLeft = !!(await leave.$("main form[enctype]"));
+  await leaveContext.close();
+  check(
+    "a navigation abandons a waiting upload, its progress and its answer",
+    wasBusy && heldUploads.length === 1 && afterLeaving === beforeLeaving && leftFor === "/" && !formLeft,
+    `busy ${wasBusy}, ${heldUploads.length} held, ${beforeLeaving} then ${afterLeaving} events, at ${leftFor}`,
+  );
+  // A navigation while the upload module is still loading: the upload is never sent, as a fetch
+  // is never sent with an aborted signal, and its answer cannot take the page.
+  // In a context of its own (with the session's cookie), closed after, so nothing it holds reaches
+  // the pages after it.
+  const raceContext = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext();
+  await raceContext.addCookies(await page.context().cookies());
+  const race = await raceContext.newPage();
+  /** @type {import("playwright").Route[]} */
+  const heldModules = [];
+  await race.route("**/corten-upload*", (route) => {
+    heldModules.push(route);
+  });
+  let sentUploads = 0;
+  /** @param {import("playwright").Request} request */
+  const countUpload = (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/avatar") sentUploads += 1;
+  };
+  race.on("request", countUpload);
+  // The form is put on a page that did not load the module (as a script or a patch may add one),
+  // so its first submit waits for the module to load.
+  const accountPage = await (await race.request.get(`${base}/account`)).text();
+  const pictureForm = /<form[^>]*enctype="multipart\/form-data"[\s\S]*?<\/form>/.exec(accountPage)?.[0] ?? "";
+  await race.goto(`${base}/`);
+  await race.evaluate((html) => {
+    const holder = document.createElement("div");
+    holder.id = "smoke-upload-race";
+    holder.innerHTML = /** @type {any} */ (/** @type {any} */ (window).__html(html));
+    document.querySelector("main")?.append(holder);
+  }, pictureForm);
+  await race.waitForTimeout(100);
+  await race.setInputFiles("#smoke-upload-race input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+  await race.click("#smoke-upload-race button");
+  await race.waitForTimeout(200);
+  await race.click('header a[href="/news"]');
+  await race.waitForFunction(() => location.pathname === "/news" && !document.querySelector("#smoke-upload-race"), null, { timeout: 5000 }).catch(() => {});
+  const moduleHeld = heldModules.length;
+  // Answered from a request of the test's own, so the held request ends here whatever the page did.
+  for (const route of heldModules) {
+    const module = await race.request.get(route.request().url());
+    await route.fulfill({ response: module }).catch(() => {});
+  }
+  await race.unroute("**/corten-upload*", { behavior: "ignoreErrors" });
+  await race.waitForTimeout(500);
+  race.off("request", countUpload);
+  const landed = await race.evaluate(() => location.pathname);
+  await raceContext.close();
+  check("an upload left while its module loads is never sent", moduleHeld > 0 && sentUploads === 0 && landed === "/news", `${moduleHeld} module requests held, ${sentUploads} uploads sent, at ${landed}`);
   await page.goto(`${base}/account`);
+  // A multipart form with no progress handler and a control named getAttribute is still sent (by
+  // fetch): the submit's check for a progress handler reads the form through Element's methods.
+  await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+  const ordinary = await page.evaluate(async () => {
+    const form = /** @type {HTMLFormElement} */ (document.querySelector("main form[enctype]"));
+    form.removeAttribute("data-on");
+    const shadow = document.createElement("input");
+    shadow.type = "hidden";
+    shadow.name = "getAttribute";
+    form.prepend(shadow);
+    const result = document.querySelector("#avatar-result");
+    if (result) result.textContent = "";
+    /** @type {string[]} */
+    const failed = [];
+    form.addEventListener("corten:error", (e) => failed.push(String(/** @type {CustomEvent} */ (e).detail?.status)), { once: true });
+    HTMLFormElement.prototype.requestSubmit.call(form);
+    for (let i = 0; i < 80 && !document.querySelector("#avatar-result")?.textContent && !failed.length; i++) await new Promise((r) => setTimeout(r, 100));
+    return { answer: document.querySelector("#avatar-result")?.textContent ?? "", failed, busy: Element.prototype.getAttribute.call(form, "aria-busy"), files: /** @type {HTMLInputElement | null} */ (form.querySelector("input[type=file]"))?.files?.length ?? -1 };
+  });
+  check("a multipart form without a progress handler, with a control named getAttribute, is still sent", ordinary.answer !== "" && !ordinary.failed.length, JSON.stringify(ordinary));
   errors.splice(failedOnPurpose, errors.length, ...errors.slice(failedOnPurpose).filter((e) => !/ERR_FAILED|ERR_ABORTED|NS_BINDING_ABORTED|cancelled/i.test(e)));
   if (!signsIn) await page.context().clearCookies({ name: "session" });
 

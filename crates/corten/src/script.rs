@@ -676,12 +676,73 @@
 //!
 //! #[component(js)]
 //! fn CartLine() -> impl Render {
-//!     html! { <li><form on:corten:progress={js::failed(event, target)}></form></li> }
+//!     html! { <li><form data-patch method="post" enctype="multipart/form-data" on:corten:progress={js::failed(event, target)}></form></li> }
 //! }
 //! # fn main() {}
 //! ```
 //!
-//! Nor is it heard on another element, or on the document:
+//! Nor is it heard on a form the runtime sends without it (one without `data-patch`, a GET form, or
+//! one whose body is not `multipart/form-data`), on another element, or on the document:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form method="post" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="get" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="dialog" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="post" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
 //!
 //! ```compile_fail
 //! use corten::prelude::*;

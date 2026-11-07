@@ -165,7 +165,8 @@ const parsed = new WeakMap();
 
 /** @param {Element} el */
 function bindings(el) {
-  const source = el.getAttribute("data-on") ?? "";
+  // Read through Element's own method: a form control named getAttribute shadows the form's.
+  const source = Element.prototype.getAttribute.call(el, "data-on") ?? "";
   let entry = parsed.get(el);
   if (!entry || entry.source !== source) {
     entry = { source, list: parseOn(source) };
@@ -2702,8 +2703,12 @@ async function send(form, submitter, sends) {
   try {
     // A multipart write whose form has an `on:corten:progress` handler goes by XMLHttpRequest, which
     // reports how much of the body is sent; fetch does not. Any other submit is a fetch.
-    const progress = init.body instanceof FormData && url.origin === location.origin && bindings(form).some((b) => b.type === PROGRESS);
+    const progress =
+      init.body instanceof FormData && url.origin === location.origin && !!formCall(form, "hasAttribute", "data-on") && bindings(form).some((b) => b.type === PROGRESS);
     const upload = progress && (await load(UPLOAD), /** @type {typeof import("./upload.js") | undefined} */ (modules.get(UPLOAD)))?.upload;
+    // Left while the module loaded (a navigation; a newer submit of a write waits for this one):
+    // nothing is sent.
+    signal.throwIfAborted();
     const res = upload
       ? await upload(url, method, /** @type {FormData} */ (init.body), signal, ({ loaded, total, lengthComputable }) => {
           if (!signal.aborted) formCall(form, "dispatchEvent", new ProgressEvent(PROGRESS, { loaded, total, lengthComputable }));

@@ -634,6 +634,47 @@ enum Attr {
     Page(Span),
 }
 
+/// Why a `<form>` with `on:corten:progress` would never hear it: the runtime reports progress only
+/// for a `data-patch` form it sends as `multipart/form-data` by a method other than GET. Attributes
+/// a spread may write are not known here, so a form with one is left to the runtime.
+fn progress_unsent(attrs: &[Attr]) -> Option<&'static str> {
+    if !attrs.iter().any(|a| matches!(a, Attr::On(event, ..) if event == "corten:progress")) {
+        return None;
+    }
+    if attrs.iter().any(|a| matches!(a, Attr::Spread(_))) {
+        return None;
+    }
+    // `None`: not written; `Some(None)`: written as an expression, so not known here.
+    let named = |want: &str| {
+        attrs.iter().find_map(|a| match a {
+            Attr::Bare(n) if n.eq_ignore_ascii_case(want) => Some(Some("")),
+            Attr::Static(n, v) if n.eq_ignore_ascii_case(want) => Some(Some(v.as_str())),
+            Attr::Expr(n, _) if n.eq_ignore_ascii_case(want) => Some(None),
+            _ => None,
+        })
+    };
+    if named("data-patch").is_none() {
+        return Some("on:corten:progress: the runtime reports an upload's progress only for a data-patch form (a form without it is sent by the browser, which reports none): add data-patch");
+    }
+    let multipart = match named("enctype") {
+        Some(Some(v)) => v.eq_ignore_ascii_case("multipart/form-data"),
+        Some(None) => true,
+        None => false,
+    };
+    if !multipart {
+        return Some("on:corten:progress: only a multipart body is sent with its progress: add enctype=\"multipart/form-data\"");
+    }
+    let sends_body = match named("method") {
+        Some(Some(v)) => !v.is_empty() && !v.eq_ignore_ascii_case("get") && !v.eq_ignore_ascii_case("dialog"),
+        Some(None) => true,
+        None => false,
+    };
+    if !sends_body {
+        return Some("on:corten:progress: a GET or dialog form sends no body, so it has no upload progress: give the form method=\"post\"");
+    }
+    None
+}
+
 /// The attribute an element is named by for assistive technology, `aria-label` or
 /// `aria-labelledby`, unless the element takes its role from elsewhere (a `role` of its own, or
 /// a spread, which may write one).
@@ -1073,6 +1114,11 @@ impl Cursor {
         };
         if !component && !self.svg {
             if let Some(why) = unnamed_label(&name, &attrs) {
+                return err(name_span, why);
+            }
+        }
+        if is_form {
+            if let Some(why) = progress_unsent(&attrs) {
                 return err(name_span, why);
             }
         }
@@ -1644,7 +1690,9 @@ impl Gen {
                         let expr = keywords(expr.clone(), &ty, &target);
                         binds.extend(q("(__A0, &(__A1) as &dyn ::corten::script::Bind),", &[printed, expr]));
                     }
-                    self.code(binds_before);
+                    if !binds_before.is_empty() {
+                        self.code(binds_before);
+                    }
                     self.code(q("::corten::script::__private::data_on(__OUT, &[__A0]);", &[binds]));
                 }
                 // Classes are a list (see `corten::style::ClassList`): `class={(Row, hot.then_some(Hot))}`.

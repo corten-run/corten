@@ -79,15 +79,19 @@ itself again marks nothing.
 A `data-patch` form that sends files can also show how much of its body is sent. Its
 `on:corten:progress` handler is called with the browser's `ProgressEvent` while the multipart body
 goes out: `loaded` and `total` count the whole request, not one file, and `lengthComputable` says
-whether `total` is known. The app draws a native `<progress>` and fills it, and no other form pays
-for it. Only a page with such a form loads the module that sends it, by `XMLHttpRequest`, since
+whether `total` is known. The app draws a native `<progress>` and fills it. Only a page with such
+a form loads the module that sends it (every page's runtime carries the few lines that load it), by `XMLHttpRequest`, since
 `fetch` reports no upload progress; every other submit is still a `fetch`. The answer is handled
 as any submit's is (a patch, a refusal, a redirect, `corten:error`), and the form stays
 `aria-busy` until it is drawn. So "all of it is sent" is not "saved": once `loaded` reaches
-`total`, the server is still working, and a bar with no `value` says so. A navigation or a newer
-submit that abandons the upload stops its events. Without JavaScript the form posts as it always
-does. The handler is checked like any other: one that takes a `ProgressEvent` takes no other event,
-and `corten:progress` is heard only on the `<form>` (it does not bubble). The watchlist's profile
+`total`, the server is still working, and a bar with no `value` says so. A navigation abandons the
+upload: its events stop, and its answer is not drawn (one left before it was sent is never sent). A
+newer submit of the same form waits for it, as any write's does. Without JavaScript the form posts
+as it always does. The handler is checked like any other: one that takes a `ProgressEvent` takes no
+other event, and `corten:progress` is heard only on a `<form>` the runtime sends with it (it does
+not bubble): one with `data-patch`, `method="post"` (or another method with a body) and
+`enctype="multipart/form-data"`, so a form that would never report progress does not compile.
+The form itself carries them: a button's `formmethod` or `formenctype` is not read for the check. The watchlist's profile
 picture (`examples/watchlist/src/account.rs`, `picture_upload.js`) shows the bar only while the form
 is busy:
 
