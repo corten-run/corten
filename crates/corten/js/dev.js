@@ -206,8 +206,9 @@ ready.then(() =>
       childList: true,
       subtree: true,
       attributes: true,
-      // `open` for a dialog closed after it was drawn (a <details> toggling it reruns the checks too).
-      attributeFilter: ["value", "min", "max", "step", "role", "aria-live", "open"],
+      // `open` for a dialog closed after it was drawn (a <details> toggling it reruns the checks
+      // too), `hidden` for one a script shows.
+      attributeFilter: ["value", "min", "max", "step", "role", "aria-live", "open", "hidden"],
     });
   }),
 );

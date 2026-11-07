@@ -104,6 +104,14 @@ try {
   const patchedRail = reportOf("patchedrail");
   await drawn.evaluate(() => document.body.append(Object.assign(document.createElement("dialog"), { id: "patchedrail", className: "rail" })));
   check("dev mode warns of such a dialog a patch draws", await patchedRail);
+  // One drawn with `hidden` is meant hidden and not warned of, until a script shows it.
+  await drawn.evaluate(() => document.body.append(Object.assign(document.createElement("dialog"), { id: "hiddenrail", className: "rail", hidden: true })));
+  const quiet = reportOf("hiddenquiet");
+  await drawn.evaluate(() => document.body.append(Object.assign(document.createElement("dialog"), { id: "hiddenquiet", className: "rail" })));
+  const whileHidden = (await quiet) && !warnings.some((w) => w.startsWith("corten: hiddenrail "));
+  const unhidden = reportOf("hiddenrail");
+  await drawn.evaluate(() => ((/** @type {HTMLElement} */ (document.getElementById("hiddenrail"))).hidden = false));
+  check("dev mode warns of such a dialog once a script shows it, not while it has hidden", whileHidden && (await unhidden));
   const patchedLive = reportOf("patchedlive");
   await drawn.evaluate(() => {
     const p = Object.assign(document.createElement("p"), { id: "patchedlive", textContent: "Sent." });
