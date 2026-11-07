@@ -1,0 +1,14 @@
+diff --git a/crates/corten/src/app.rs b/crates/corten/src/app.rs
+index 78188364..189d280f 100644
+--- a/crates/corten/src/app.rs
++++ b/crates/corten/src/app.rs
+@@ -1884,7 +1884,8 @@ impl<S: Steps> Layer<S> {
+         let worth_a_tag = true;
+         let res = self.secure(req, route, worth_a_tag).await;
+         #[cfg(feature = "compress")]
+-        let res = crate::compress::finish(res, coding).await;
++        // Ablation: the answer as it is, though the client accepts compression.
++        let _ = coding;
+         res
+     }
+ 

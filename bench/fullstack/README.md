@@ -808,6 +808,83 @@ that they do so on `identity` too is inferred), so under the rounds' requests th
 that Corten skips, which favors Corten's rows; it does not change their places (773 and 417 pages
 a second against 15,103 in r15). No other app sent an `ETag` on that probe.
 
+### What each production default costs (callgrind, 2026-11-07)
+
+Corten's production defaults run on every request, so its rows include their cost; this says
+how much each one is. card-market's release build at `cdbe4392` was built as it is and eight times
+more, each with one default removed by a patch in [ablate/](ablate/) (no off switch exists or is
+proposed for most of them), and each build served the item page and its JSON over one keep-alive
+connection under callgrind, items in memory, with `Accept-Encoding: identity` (the rounds'
+requests) and with a browser's `gzip, deflate, br, zstd`. Instructions are counted only while
+the requests are served (zeroed once the server answers, dumped before it stops, so freeing the
+items at shutdown is not in them), and one request is the run of 1,300 requests less the run of
+300, over 1,000. A default's cost is the build as it is less the build without it, repeat by
+repeat: five repeats, median (range); at this resolution a default's cost is good to a few
+hundred instructions (code layout moves between builds, and now and then one run's fixed part
+jumps by about a million, which moves that repeat by about 1,000 and the median not at all), so a
+row near zero, or one whose range crosses it, says the default costs nothing that can be seen.
+User instructions only (callgrind does not see the kernel's), on glibc's allocator and the zstd the
+crate bundles, where the rounds' image preloads jemalloc and links Debian's libzstd
+([design Choice 23](../../docs/design.md#choice-jemalloc-image) puts this page at about 83,000
+under jemalloc against 87,000), so these are the rounds' request shape, not their configuration.
+Requests per CPU-second under load were not measured, which needs a droplet round ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)) ([cost-by-default.sh](cost-by-default.sh), split by [cost-by-default.mjs](cost-by-default.mjs);
+results and each build's answer headers in [results/defaults1](results/defaults1/)). The headers
+show what four patches remove: the security headers patch seven headers on the page and five on
+the JSON, the `Cache-Control` patch that header, the `ETag` patch the page's tag for a browser
+(nothing else is tagged), and the compression patch `Vary: accept-encoding`, with
+`Content-Encoding` and the compressed length for a browser. Every other header and every
+`Content-Length` but compression's matches the build as it is, and the other four patches answer
+as it does. The `ETag`'s value is keyed per process, so it differs between every two files and
+says nothing. What says those four remove only their default is the patch's text alone (the
+script's check that every build is a different binary says only that each patch changed
+something). The results were counted by an earlier version of the script, which zeroed the count
+where this one dumps it, did not check the zero, and did not stamp its builds; each 300-request
+run there is 300 requests' cost and a fixed part of about 1.1 million instructions (5.8 million
+with zstd), so no startup is in them. Zeroing and dumping were compared once, one repeat of the
+page for a browser, as it is and without the `ETag`, on the same two builds (of `f3291094`, not
+`cdbe4392`): 344,746 against 344,744 a request, the `ETag` 26,215 against 26,522, within the
+resolution above.
+
+| Default removed | Page, `identity` | Page, browser | JSON, `identity` | JSON, browser |
+|---|---|---|---|---|
+| None: instructions a request | 86,500 | 344,393 | 65,558 | 227,082 |
+| Security headers and the CSP (the page's nonce too, where it has one) | 4,789 (4,775-4,850) | 5,162 (4,635-5,576) | 2,343 (2,274-2,428) | 2,319 (1,222-2,328) |
+| The host check and the same-origin write check | 610 (471-1,264) | 609 (128-634) | 634 (555-758) | 620 (387-665) |
+| The deadline and the panic catch | 414 (406-424) | 421 (251-793) | 54 (1-87) | -122 (-291 to -70) |
+| Compression | 2,733 (2,676-3,331) | 233,554 (233,261-233,940) | 1,712 (1,687-1,941) | 162,649 (162,624-162,665) |
+| The `ETag` | 8 (-47 to 46) | 26,536 (26,409-26,956) | 50 (-3 to 71) | 24 (12-36) |
+| Setting `Cache-Control` | 777 (758-824) | 1,226 (809-1,795) | 808 (746-1,081) | 792 (418-938) |
+| Error pages and problem+json (on a success) | 1,076 (1,061-1,092) | 1,072 (521-1,646) | 188 (156-222) | 151 (-348 to 185) |
+| The header and send timeouts' connection watch | 83 (7-97) | 79 (-74 to 1,017) | 97 (22-143) | 71 (64-154) |
+
+On the rounds' requests, every default together costs about 10,500 instructions of the page's
+86,500 (12%) and 5,900 of the JSON's 65,600 (9%); the largest is the security headers and CSP,
+4,800 a page (5.5%), which adds seven headers, then compression's 2,700 a page, which
+compresses nothing there: it reads the body's type and size and adds `Vary: accept-encoding`.
+That is more than the 1,448 the by-crate split above gives not compressing (`negotiate`, `vary`,
+`finish`), though the ablated build still negotiates (the `ETag` decision reads it); the rest,
+perhaps hyper writing the extra header and a larger request future, was not measured, so it is
+unexplained. For a browser, compressing is two thirds of the page request (233,600 of 344,400
+with zstd 1) and nearly three quarters of the JSON's (162,600 of 227,100) and the page's `ETag`
+26,500 (7.7%, close to the 27,700 measured in process above); the JSON is not tagged, and nothing
+is tagged on `identity` ([design Limit 21](../../docs/design.md#limit-etag)). The rest are each
+under 1.3% of a request on `identity`; for a browser the security headers are 1.5% of the page
+and 1.0% of the JSON, and the rest under 0.4%. The connection watch's 80 a request is at the edge of
+this resolution (its browser range crosses zero); it would be per-request work, marking the
+connection busy and idle and its read and write checks, by reading the code rather than by a count,
+since one connection's setup (its clock entry) cancels out between the two runs, though the clock's
+once-a-second tick, which grows with a run's length, is in it. Removing every default at once was
+not measured, so the sum assumes they do not overlap.
+
+So about a tenth of a round's Corten user instructions are defaults that the other apps mostly do
+not have ([feature matrix](#feature-matrix-the-bench-apps-as-written-round-conform2-2026-11-04)).
+A matched tier
+([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807))
+would leave Corten's rows as they are; what the same features cost the other apps, each in its
+own framework's middleware, is not measured here. This runs outside rounds, Corten alone, when
+a default changes
+([#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)).
+
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
 
 `ab.mjs` runs the image Corten's first r1 rows were measured with (`cb-corten`) and the current build
@@ -1301,6 +1378,11 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 # The item fetched from the item API (running on the host at 18400, with port 8080 free, as
 # --network host serves the app there): add --network host and
 # -e SOURCE=api -e API_BASE=http://127.0.0.1:18400 -e TARGETS=page, then split cg-card-market-page-api-*.out
+# What each production default costs: card-market built as it is and with each ablate/ patch, then
+# measured; builds go to /tmp/defaults/bins and are reused, so a stopped run measures at once:
+docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
+  -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
+node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
 ```
 
 ## What the repository keeps
