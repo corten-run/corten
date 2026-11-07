@@ -53,8 +53,8 @@ here or a value before another kind, a Last checked entry without a date no late
 commit or versions, and Choices out of order (`scripts/choices.mjs`).
 
 The Rules and Limits below have none of the three: a Rule applies the values to code and changes
-with them, and a Limit is what Corten does not do, saying what would lift it or why it is so by
-design. A decision about the framework's shape is a Choice, even where it rules something out.
+with them, and a Limit is what Corten does not do, saying, where it is known, what would lift it
+or why it is so by design. A decision about the framework's shape is a Choice, even where it rules something out.
 
 1. <a id="choice-markup-macro"></a>**Markup is a Rust macro, not TSX.** Rendering TSX needs a JavaScript runtime on the server
    or a second toolchain in the app; `html!` keeps one language and compiles to the same string
@@ -911,21 +911,22 @@ design. A decision about the framework's shape is a Choice, even where it rules 
     `Methods`, made by Corten's `get`, `post` and the others, which check the same things. A plain
     axum `Router` or method router does not fit any of them, so no route given to the `App` is
     unchecked (what an app adds to the `Router` that `App::router()` hands out for serving it
-    another way, or answers in a `.layer(l)` around it, is its own). A
-    WebSocket (`Upgrade`) and another server's answer passed on (`Relay`) are such routes too.
-    Not chosen: guards and a context object checked per request (`App::guard`, `Area::guard`,
-    `App<C>`), which Corten had and removed (CHANGELOG Removed 5). They covered a URL prefix, so
-    a route added under it was covered, but one outside the prefix or opened with
-    `App::unguarded` was open, nothing in its handler's type said so, and only a request found
-    it. What the type cannot see stays the handler's
+    another way, or answers in a `.layer(l)` around it, is its own). A WebSocket (`Upgrade`)
+    and another server's answer passed on (`Relay`) are such routes too. Not chosen: guards and
+    a context object checked per request (`App::guard`, `Area::guard`, `App<C>`), which Corten
+    had and removed in
+    [#81 A route's handler says what it answers, who may call it and how it caches, checked for every route](https://github.com/corten-run/corten/pull/81).
+    They covered a URL prefix, so a route added under it was covered, but one outside the prefix
+    or opened with `App::unguarded` was open, nothing in its handler's type said so, and only a
+    request found it. What the type cannot see stays the handler's
     ([Limit 11](#limit-caller-types)).
 
     Stands on: reasoned (a handler's arguments and return type are checked where the routes module
     is compiled, so a module's `caller = T`, `Public` and `no_store` hold every handler in it,
     and `Routes` and `Methods` are the only types `App::new`, `Area::route` and `Api::route`
-    take, so no route given to the `App` skips them); bet (most of an app's access rules are about who is asking,
-    which a type can name, and the rest depend on the record, which the handler reads anyway);
-    value (mistakes fail at compile time, Value 4).
+    take, so no route given to the `App` skips them); bet (most of an app's access rules are
+    about who is asking, which a type can name, and the rest depend on the record, which the
+    handler reads anyway); value (mistakes fail at compile time, Value 4).
 
     Revisit when: an app needs an access rule a type cannot name and a handler cannot check
     without repeating it in every handler of a module; or a way to give the `App` a route is
@@ -944,22 +945,25 @@ design. A decision about the framework's shape is a Choice, even where it rules 
     place an app's step could run and a reader of the app would have to check; what must see the
     raw request first is a tower layer around the whole app ([Limit 12](#limit-fixed-stages)).
 
-    Stands on: measured (callgrind, release, five runs each, on a bench binary against main
-    `9200aae4`: a request in an area with a pass-through middleware, one boxed future, 21,374 to
-    21,511 instructions against 20,497 to 20,646 with none; a request outside that area 19,909 to
-    19,913 against 19,706, so the prefix lookup is about 200; an app whose areas and APIs have
-    none runs Corten's own code within 18 instructions of before, while its whole request rose
-    from 19,696 to 19,976 to 19,988 in the allocator with the same allocations, which the whole
-    count does not separate from heap layout); measured (a pass-through step in the app's tuple
-    costs about 230 instructions, where axum's `from_fn` costs about 700, CHANGELOG Added 64);
-    reasoned (one place for the app's steps is one order to read); value (one way to do each thing, Value 5, and good defaults with easy overrides, Value 7).
+    Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
+    repository, against main `9200aae4`: a request in an area with a pass-through middleware,
+    one boxed future, 21,374 to 21,511 instructions against 20,497 to 20,646 with none; a request
+    outside that area 19,909 to 19,913 against 19,706; an app whose areas and APIs have none runs
+    Corten's own code within 18 instructions of before, while its whole request rose from 19,696
+    to 19,976 to 19,988 in the allocator with the same allocations, so the whole count does not
+    separate the prefix lookup from heap layout); reasoned (one place for the app's steps is one
+    order to read, and a tuple resolved at compile time costs no box); value (one way to do each
+    thing, Value 5, and good defaults with easy overrides, Value 7).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
-    layer around the app cannot serve it; or the prefix lookup costs a request outside every area
-    more than the about 200 instructions measured here.
+    layer around the app cannot serve it; or a request outside every area costs more than about
+    200 instructions over the same app with no area middleware (the lookup and layout together,
+    as measured here).
 
-    Last checked: 2026-10-29, the area middleware runs recorded at `04c2393f` (the pull request
-    that added `Area::middleware`, which compared against main `9200aae4`).
+    Last checked: 2026-10-29, the area middleware runs of
+    [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
+    (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
+    own).
 
 ## Rules
 

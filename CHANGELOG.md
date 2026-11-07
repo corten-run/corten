@@ -5685,8 +5685,9 @@ Corten is pre-1.0, so any minor version may change the API.
 73. design.md: Limits 11 and 12 described decisions (who may use a route is in its handler's
     type; a request's fixed stages, with the app's steps at one place), so they are Choices 27
     and 28, with what they stand on, and Limits 11 and 12 keep only what Corten does not do (a
-    check on the record stays in the handler, and an area's prefix check needs a build, not
-    `cargo check`; no hooks at several stages, and no step for one route). Their anchors stay, so no citation moves. The
+    check on the record stays in the handler, and a route added outside a routes module that
+    holds its prefix is checked against the prefix by a build, not `cargo check`; no hooks at
+    several stages, and no step for one route). Their anchors stay, so no citation moves. The
     intro and the Limits section no longer say every limit is "yet": some wait on the platform or
     an app, others are so by design
     ([#967 design.md's Limits 11 and 12 are decisions, not limits, and its intro calls every limit something Corten does not do yet](https://github.com/corten-run/corten/issues/967)).
