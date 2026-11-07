@@ -21,7 +21,7 @@ your routes. Each default can be replaced in one line.
 | WebSockets and relays | none | a handler takes `Upgrade` and returns its `websocket(..)` or `switch(..)`; `Relay` passes another server's answer on as it came ([below](#websockets-and-relays)) |
 | Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies 16 powerful features (camera, microphone, screen recording, location, motion sensors, installed fonts, idle detection, window placement, payment, and devices: USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
 | Caching | static files and the runtime cached forever; everything rendered `private, no-cache` ([below](#caching)) | return `Public<HtmlResult>` (or `Public<JsonResult<T>>`) for an answer that is the same for everyone |
-| Static files | component scripts and the components' stylesheets (one file, plus one per area that lists components and one per set of areas that list the same components) at content-hashed, immutable URLs; each script loaded by the pages whose handlers use it | `.assets(Static)`: `static/`, compiled into the program by `corten::assets::embed!` (a constant per file, `req.asset(Static::STYLE_CSS)`) and served the same way ([below](#static-files)); `.components(&[..])`, `Area::components(&[..])` ([styles](styles.md#areas)) |
+| Static files | component scripts and the components' stylesheets (one file, plus one per area that lists components and one per set of areas that list the same components) at content-hashed, immutable URLs; each script loaded by the pages whose handlers use it | `.assets(Static)`: `static/`, compiled into the program by `corten::assets::embed!` (a constant per file, `req.asset(Static::STYLE_CSS)`) and served the same way ([below](#static-files)); `/favicon.ico` answers the directory's `favicon.ico`, else its `favicon.svg`, cached a day, unless a route of the app's is there; `.components(&[..])`, `Area::components(&[..])` ([styles](styles.md#areas)) |
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
@@ -924,10 +924,20 @@ names are URLs, so they are letters, digits and `- _ . ~ @ + , = !`; another cha
 compile error. A program with two apps gives
 each its own `embed!`. Dotfiles are left out.
 
+Browsers still ask for `/favicon.ico` on their own for a document that names no icon (a PDF, an
+image or JSON opened in a tab), and so do feed readers and crawlers. Corten answers that path
+from the directory: its `favicon.ico` (`image/x-icon`) when it has one, else its `favicon.svg`
+(`image/svg+xml`, the file itself rather than a redirect to its versioned URL,
+[design](../design.md#choice-favicon-path)), each sent `public, max-age=86400` with its ETag, so
+a browser asks again after a day and gets a 304. With neither it is a 404 with no body. Either
+way no layout read starts and no page is drawn. The file is chosen
+when the app starts. A page or API route of the app's at `/favicon.ico` takes the path instead.
+
 ## Caching
 
 Static files, component scripts, the components' stylesheet and the runtime have content-hashed
-URLs and are sent `public, max-age=31536000, immutable`; the PWA's worker keeps them. Everything
+URLs and are sent `public, max-age=31536000, immutable`; the PWA's worker keeps them. The icon at
+`/favicon.ico`, a fixed path, is sent `public, max-age=86400` ([above](#static-files)). Everything
 else `App` serves that does not set `Cache-Control` is sent `private, no-cache`: the browser
 may keep it but asks again before using it, and no shared cache (a CDN, a proxy) stores it. A
 page's layout may show who is asking, so a shared copy could show one user's page to another.

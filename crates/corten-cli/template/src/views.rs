@@ -4,6 +4,8 @@ use crate::{GreetForm, url};
 
 corten::assets::embed! {
     /// The files in `static/`, compiled into the program: `Static::STYLE_CSS` is `static/style.css`.
+    /// Corten also answers `/favicon.ico` with `favicon.svg` (or a `favicon.ico` added here), for
+    /// a tab that shows a PDF or an image, which names no icon.
     pub struct Static = "static";
 }
 

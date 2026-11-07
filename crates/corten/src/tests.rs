@@ -9612,6 +9612,48 @@ impl crate::Middleware for DenyMore {
 }
 
 crate::assets::embed!(struct RefusedStatic = "src/assets/fixture");
+crate::assets::embed!(struct IconStatic = "src/assets/favicon-ico");
+crate::assets::embed!(struct SvgIconStatic = "src/assets/favicon-svg");
+
+#[crate::routes]
+mod favicon_url {
+    #[route("/favicon.ico", get = own_icon)]
+    pub struct OwnIcon;
+}
+
+async fn own_icon() -> &'static str {
+    "the app's own"
+}
+
+/// `/favicon.ico`, which browsers ask for on their own, is the static directory's icon at a fixed
+/// path: its `favicon.ico` when it has one, else its `favicon.svg`, each as its type with a
+/// day's cache and its ETag, and a 304 for a cache that has it. No page is drawn (#1056).
+#[tokio::test]
+async fn the_favicon_path_is_the_static_directory_s_icon() {
+    let ico = App::new(policy_url::router()).assets(IconStatic).router();
+    let svg = App::new(policy_url::router()).assets(SvgIconStatic).router();
+    for (router, kind, bytes) in [
+        (ico, "image/x-icon", &include_bytes!("assets/favicon-ico/favicon.ico")[..]),
+        (svg, "image/svg+xml", &include_bytes!("assets/favicon-svg/favicon.svg")[..]),
+    ] {
+        let res = router.clone().oneshot(Request::get("/favicon.ico").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{kind}");
+        assert_eq!(res.headers()[header::CONTENT_TYPE], kind);
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "public, max-age=86400", "{kind}");
+        let etag = res.headers()[header::ETAG].clone();
+        assert_eq!(&res.into_body().collect().await.unwrap().to_bytes()[..], bytes, "{kind}");
+        let again = Request::get("/favicon.ico").header(header::IF_NONE_MATCH, etag).body(Body::empty()).unwrap();
+        assert_eq!(router.oneshot(again).await.unwrap().status(), StatusCode::NOT_MODIFIED, "{kind}");
+    }
+}
+
+/// A route of the app's at `/favicon.ico` answers it, not Corten's (#1056).
+#[tokio::test]
+async fn an_app_route_at_the_favicon_path_takes_it() {
+    let router = App::new(favicon_url::router()).assets(IconStatic).router();
+    let (status, _, body) = call_with(router, "GET", "/favicon.ico", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "the app's own"));
+}
 
 /// An error page whose layout names a static file, as an app's does.
 async fn asset_error_page(failure: Failure, req: Req) -> HtmlResult {
@@ -10755,6 +10797,24 @@ mod layout_reads {
             .layout_read(SignedIn)
             .middleware(AsViewer(Some("ada")))
             .router()
+    }
+
+    /// With no icon in the static directory, `/favicon.ico` is a 404 with no body that starts no
+    /// layout read and draws no page, where any other unknown URL is the error page in the layout
+    /// with its reads (#1056).
+    #[tokio::test]
+    async fn the_favicon_path_without_an_icon_is_a_404_that_reads_nothing() {
+        let count = CartCount::default();
+        let req = Request::get("/favicon.ico").header("accept", "image/avif,image/webp,*/*").body(Body::empty()).unwrap();
+        let res = shop(count.clone(), Duration::ZERO).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "public, max-age=86400");
+        assert!(res.into_body().collect().await.unwrap().to_bytes().is_empty(), "no page");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0, "no layout read");
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/no-such-page", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "another unknown URL reads the layout's values");
     }
 
     #[tokio::test]

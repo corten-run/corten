@@ -2513,6 +2513,12 @@ fn unserved_module(name: &str) -> String {
     )
 }
 
+/// A failure a route of Corten's own answers as it is, not as the error page: `/favicon.ico`'s
+/// 404 when the app has no icon, which no person reads and which must start no layout read
+/// (#1056).
+#[derive(Clone, Copy)]
+pub(crate) struct AsIs;
+
 /// Middleware the app installs: a failed request (an [`Error`] from a handler, or an empty error
 /// response such as axum's 404 for an unknown URL or 405 for a wrong method) renders the error
 /// page in the request's mode, and the PWA's offline path gets Corten's offline page when the app
@@ -2581,7 +2587,7 @@ async fn page_or_error<S: crate::app::Steps>(
     let mut res = res;
     let status = res.status();
     let error = status.is_client_error() || status.is_server_error();
-    if !error || res.extensions().get::<crate::answer::Relayed>().is_some() {
+    if !error || res.extensions().get::<crate::answer::Relayed>().is_some() || res.extensions().get::<AsIs>().is_some() {
         return res;
     }
     // A JSON route answers every failure as JSON, a path that did not parse included.

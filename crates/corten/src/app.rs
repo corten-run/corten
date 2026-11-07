@@ -1142,6 +1142,14 @@ impl<M: Middleware> App<M> {
             own.prefixes.push(assets.mount_prefix());
             routes = routes.merge(assets.routes());
         }
+        // The icon browsers ask for on their own, unless a route of the app's answers it.
+        let favicon = crate::assets::FAVICON_PATH;
+        if !self.pages.iter().chain(self.areas.iter().flat_map(|area| &area.pages)).any(|(path, _)| *path == favicon)
+            && !self.api_paths.contains(&favicon)
+        {
+            own.exact.push(favicon);
+            routes = routes.merge(crate::assets::favicon(assets.as_ref()));
+        }
         routes = routes.merge(match self.ready {
             None => crate::health(|| async { true }),
             Some(ready) => {

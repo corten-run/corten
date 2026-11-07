@@ -197,6 +197,41 @@ const event = (type) =>
 /// Cache header for a URL that can never change.
 pub(crate) const IMMUTABLE: HeaderValue = HeaderValue::from_static("public, max-age=31536000, immutable");
 
+/// The path browsers ask for an icon on their own, for a document that names none (a PDF, an
+/// image or JSON opened in a tab), and feed readers and crawlers too.
+pub(crate) const FAVICON_PATH: &str = "/favicon.ico";
+
+/// How long a cache keeps the answer at [`FAVICON_PATH`]: a day, since the path never changes
+/// as a versioned URL does; with its ETag, a cache then asks again for a 304.
+const FAVICON_CACHE: HeaderValue = HeaderValue::from_static("public, max-age=86400");
+
+/// The route Corten adds at [`FAVICON_PATH`] when no route of the app's is there: the static
+/// directory's `favicon.ico` (`image/x-icon`), else its `favicon.svg` (`image/svg+xml`), each
+/// with its ETag and a day's cache; with neither, a 404 with no body. Chosen once, at startup, and
+/// no layout read or page runs for it (#1056).
+pub(crate) fn favicon<S: Clone + Send + Sync + 'static>(assets: Option<&Arc<Assets>>) -> Router<S> {
+    let icon = assets.and_then(|assets| {
+        let path = ["favicon.ico", "favicon.svg"].into_iter().find(|path| assets.files.contains_key(*path))?;
+        Some((assets.clone(), path))
+    });
+    Router::new().route(
+        FAVICON_PATH,
+        get(move |headers: HeaderMap| {
+            let icon = icon.clone();
+            async move {
+                match icon {
+                    Some((assets, path)) => assets.serve(path, &headers, FAVICON_CACHE),
+                    None => {
+                        let mut res = (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, FAVICON_CACHE)]).into_response();
+                        res.extensions_mut().insert(crate::page::AsIs);
+                        res
+                    }
+                }
+            }
+        }),
+    )
+}
+
 struct File {
     #[cfg(not(feature = "compress"))]
     body: Bytes,
@@ -749,16 +784,18 @@ impl Assets {
             &format!("{}/{{version}}/{{*path}}", self.mount),
             get(move |UrlPath((version, path)): UrlPath<(String, String)>, headers: HeaderMap| {
                 let assets = assets.clone();
-                async move { assets.serve(&version, &path, &headers) }
+                async move {
+                    let cache = if version == assets.version { IMMUTABLE } else { HeaderValue::from_static("no-cache") };
+                    assets.serve(&path, &headers, cache)
+                }
             }),
         )
     }
 
-    fn serve(&self, version: &str, path: &str, headers: &HeaderMap) -> Response {
+    fn serve(&self, path: &str, headers: &HeaderMap, cache: HeaderValue) -> Response {
         let Some(file) = self.files.get(path) else {
             return StatusCode::NOT_FOUND.into_response();
         };
-        let cache = if version == self.version { IMMUTABLE } else { HeaderValue::from_static("no-cache") };
         // Each coding of the file is a different representation, so it has its own tag.
         #[cfg(feature = "compress")]
         let (body, coding) = file.body.pick(headers);
