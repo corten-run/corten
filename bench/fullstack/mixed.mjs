@@ -13,10 +13,20 @@ export const kinds = /** @type {const} */ (["page", "slow", "json", "home", "pos
 export const classes = /** @type {const} */ (["ok", "limited", "refused", "failed", "none"]);
 /**
  * The share of the item pages whose item the item API answers late (item-api/server.mjs's
- * `item_slow_<n>`, after 15 s): about 2 a second at 150/s, enough for a deadline to fire every
- * second without the slow requests' held connections being most of what the app holds.
+ * `item_slow_<n>`): about 2 a second at 150/s, enough for a deadline to fire every second without
+ * the late requests' held connections being most of what the app holds.
  */
 export const slowShare = 0.02;
+/**
+ * How late it answers them: past the 35 s within which the matched profile's deadline must answer
+ * (README, The matched tier), so every app with one answers before the item does, and inside the
+ * 60 s after which k6 and the edge's nginx give up, so an app with none is seen answering it.
+ */
+export const slowMs = 40_000;
+/** The phase's length: what its rate and CPU are over, not the wait for its last late answers after it. */
+export const mixedSeconds = 60;
+/** How long the phase waits for the answers still to come when its time is up: past `slowMs`. */
+export const tailSeconds = 45;
 
 /**
  * What mixed-load.js needs to post the item page's price-alert form as the page posts it: its
@@ -64,13 +74,16 @@ export function mixedOf(folder, name, base) {
     byKind[kind] = { sent, p50: ms ? +ms["p(50)"].toFixed(1) : null, p99: ms ? +ms["p(99)"].toFixed(1) : null, ...answers };
   }
   const offered = m.http_reqs.count + (m.dropped_iterations?.count ?? 0);
-  const seconds = m.http_reqs.count / m.http_reqs.rate;
+  // Over the phase's own length: k6's rate is over the run, which waits for the late answers after
+  // it, longer for an app with no deadline.
+  const seconds = mixedSeconds;
   const usec = read(join(folder, `${base}-cpu.json`))?.[`fsw-${name}`]?.usec;
   const stats = read(join(folder, `${base}-stats.json`))?.[`fsw-${name}`];
   return {
-    rps: +m.http_reqs.rate.toFixed(0),
+    rps: +(m.http_reqs.count / seconds).toFixed(0),
     unsentPct: +((100 * (m.dropped_iterations?.count ?? 0)) / offered).toFixed(2),
-    // The share of a CPU the app used over the phase, from its counted CPU time.
+    // The share of a CPU the app used over the phase, from its counted CPU time (the late answers'
+    // wait after it included, which is little work).
     cpuUsedPct: usec > 0 && seconds > 0 ? +((100 * usec) / 1e6 / seconds).toFixed(1) : null,
     memMaxMiB: stats?.memMaxMiB ?? null,
     byKind,
@@ -79,8 +92,8 @@ export function mixedOf(folder, name, base) {
 }
 
 /**
- * Several passes of the mixed phase: each number the passes' median (one a pass measured), the
- * form as pass 1 found it, `passes` how many measured it and `asked` how many were asked for when
+ * Several passes of the mixed phase: each number the passes' median (one a pass measured), with no
+ * range (the table shows the median alone), the form as the first pass with files found it, `passes` how many measured it and `asked` how many were asked for when
  * that is more. A kind one pass did not send is the median of those that did.
  * @param {NonNullable<ReturnType<typeof mixedOf>>[]} runs @param {number} asked
  */

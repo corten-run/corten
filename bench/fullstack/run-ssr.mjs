@@ -18,7 +18,7 @@ import { edgeBase, edgeContainer, edgeCores, edgeImage, reachApp, startEdge, sto
 import { roundNameError } from "./round.mjs";
 import { cpuUsec } from "./cpu-time.mjs";
 import { passFile, passesOf } from "./passes.mjs";
-import { formEnv, slowShare } from "./mixed.mjs";
+import { formEnv, mixedSeconds, slowShare, tailSeconds } from "./mixed.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", source = "api", fixedRate = "150", appsArg = Object.keys(catalog).join(","), target = "page", passesArg] = process.argv.slice(2);
@@ -48,6 +48,43 @@ function k6(name, base, envs, script = "ssr-load.js") {
   if (!existsSync(join(results, `${name}.json`))) log(`k6 wrote no summary for ${name}; see ${name}.log`);
   const used = /^k6 usage_usec (\d+)$/m.exec(r.stdout ?? "");
   return used ? Number(used[1]) : null;
+}
+
+/**
+ * The mixed phase's env (mixed-load.js), from the item page read just before it, directly: the
+ * form and its cookies, and the rate. One post is sent first, directly and as k6 sends them, and
+ * its status kept in `-form.json` beside the form, so a post the harness built wrong is seen
+ * before its answers are read as the app's. Directly, k6 names the app as conform.mjs's own post
+ * does; through the edge, which names it by its container, the post's origin is that name's.
+ * @param {string} name @param {{ port: number }} app @param {string} file the phase's files' name
+ */
+async function mixedEnv(name, app, file) {
+  const at = `http://localhost:${app.port}`;
+  let html = null;
+  let cookie = "";
+  try {
+    const r = await fetch(`${at}/items/item_1`, { headers: { accept: "text/html" } });
+    if (r.ok) html = await r.text();
+    cookie = r.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+  } catch {}
+  const own = viaEdge ? { origin: `http://fsw-${name}:8080` } : { host: `localhost:${app.port}`, origin: at };
+  const form = formEnv(html, cookie, own);
+  /** @type {Record<string, unknown>} */
+  let record = { ...form };
+  if ("env" in form) {
+    const e = form.env;
+    /** @type {number | string} */
+    let check;
+    try {
+      const headers = { "content-type": e.FORM_TYPE, accept: "text/html", origin: at, "sec-fetch-site": "same-origin", "sec-fetch-mode": "navigate", ...(e.FORM_COOKIE ? { cookie: e.FORM_COOKIE } : {}) };
+      check = (await fetch(`${at}${e.FORM_PATH}`, { method: "POST", headers, body: e.FORM_BODY, redirect: "manual" })).status;
+    } catch (err) {
+      check = String(err);
+    }
+    record = { path: e.FORM_PATH, type: e.FORM_TYPE, check };
+  }
+  writeFileSync(join(results, `${file}-form.json`), JSON.stringify(record, null, 1));
+  return { RATE: fixedRate, DURATION: `${mixedSeconds}s`, TAIL: `${tailSeconds}s`, SLOW_SHARE: String(slowShare), ...("env" in form ? form.env : {}) };
 }
 
 const names = appsArg.split(",");
@@ -118,37 +155,24 @@ for (let pass = 1; pass <= passes; pass += 1) for (const name of names) {
   log(`${file} ${source} warmup`);
   // 30 s: long enough for the JVM's and .NET's tiered JITs to settle, the same for every app.
   k6(named("warmup"), base, { MODE: "closed", VUS: "32", DURATION: "30s" });
-  /** @type {[string, Record<string, string>, string?][]} */
+  /** @type {[string, Record<string, string> | (() => Promise<Record<string, string>>), string?, number?][]} */
   const loads = [
     ["fixed", { MODE: "open", RATE: fixedRate, DURATION: "60s" }],
     ["sat64", { MODE: "closed", VUS: "64", DURATION: "60s" }],
     ["sat256", { MODE: "closed", VUS: "256", DURATION: "60s" }],
   ];
-  // The mixed phase needs the item API, for the items it answers late, and the item page, for
-  // its form: the page and its cookies are read once, directly, and the form posted from them.
-  if (source === "api" && target === "page") {
-    let html = null;
-    let cookie = "";
-    try {
-      const r = await fetch(`http://localhost:${app.port}/items/item_1`, { headers: { accept: "text/html" } });
-      if (r.ok) html = await r.text();
-      cookie = r.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
-    } catch {}
-    // Directly, k6 names the app as conform.mjs's own post does; through the edge, which names it
-    // by its container, the post's origin is that name's (mixed.mjs).
-    const own = viaEdge ? { origin: `http://fsw-${name}:8080` } : { host: `localhost:${app.port}`, origin: `http://localhost:${app.port}` };
-    const form = formEnv(html, cookie, own);
-    writeFileSync(join(results, `${named("mixed")}-form.json`), JSON.stringify("none" in form ? form : { path: form.env.FORM_PATH, type: form.env.FORM_TYPE }, null, 1));
-    loads.push(["mixed", { RATE: fixedRate, DURATION: "60s", SLOW_SHARE: String(slowShare), ...("env" in form ? form.env : {}) }, "mixed-load.js"]);
-  }
-  for (const [phase, envs, script] of loads) {
+  // The mixed phase needs the item API, for the items it answers late, and the item page, for its
+  // form; it is sampled until its last late answers are in.
+  if (source === "api" && target === "page") loads.push(["mixed", () => mixedEnv(name, app, named("mixed")), "mixed-load.js", mixedSeconds + tailSeconds + 2]);
+  for (const [phase, given, script, seconds = 62] of loads) {
+    const envs = typeof given === "function" ? await given() : given;
     log(`${file} ${source} ${phase}`);
     const sampled = [`fsw-${name}`, ...(source === "api" ? [apiContainer] : []), ...(viaEdge ? [edgeContainer] : [])];
     // CPU time each container used during the phase, from its cgroup's counter: what requests per
     // CPU-second divides by. Null where the counter could not be read. Read before the sampler
     // starts, since under Docker Desktop a read takes a few seconds.
     const before = sampled.map(cpuUsec);
-    const s = spawn("node", [join(here, "sample-stats.mjs"), join(results, `${named(phase)}-stats.json`), "62", ...sampled], { stdio: "ignore", windowsHide: true });
+    const s = spawn("node", [join(here, "sample-stats.mjs"), join(results, `${named(phase)}-stats.json`), String(seconds), ...sampled], { stdio: "ignore", windowsHide: true });
     const k6Usec = k6(named(phase), base, envs, script);
     const after = sampled.map(cpuUsec);
     const counted = Object.fromEntries(sampled.map((c, i) => [c, before[i] !== null && after[i] !== null ? { usec: after[i] - before[i] } : null]));

@@ -2465,11 +2465,13 @@ Corten is pre-1.0, so any minor version may change the API.
 270. `bench/fullstack` has a mixed load phase
     ([#813 Every bench/fullstack load phase hits one endpoint, so no phase exercises deadlines, write limits and caching together as a real site would](https://github.com/corten-run/corten/issues/813)):
     with items from the item API, each app's item-page phases end with 60 s at the fixed rate as
-    70% item pages (2% of them an item the item API answers in 15 s, past a deadline), 20% JSON,
-    5% the home page and 5% the item page's form posted from k6's one address, asking for
-    compression, so a deadline, a write limit and compression act under load together (`mixed-load.js`, `mixed.mjs`). The summary's Mixed table
-    gives each kind of request its latency and its answers by class (2xx and 3xx, 429, other 4xx,
-    5xx, none), with the app's CPU and peak memory.
+    70% item pages (2% of them an item the item API answers in 40 s, past the 35 s the matched
+    profile's deadline must answer within), 20% JSON, 5% the home page and 5% the item page's form
+    posted from k6's one address, all asking for compression, so a deadline, a write limit and
+    compression act under load together (`mixed-load.js`, `mixed.mjs`). One post is checked
+    before the phase. The summary's Mixed table gives each kind of request its latency and its
+    answers by class (2xx and 3xx, 429, other 4xx, 5xx, none), with the app's CPU and peak memory.
+    A round's api page call has 200 minutes and its unit 22 hours.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

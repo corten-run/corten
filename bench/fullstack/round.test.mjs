@@ -133,7 +133,7 @@ test("the summary is not a step: a restart in it runs the summary again", () => 
 test("every step has calls, each with a time limit, in the steps' order", () => {
   const all = calls("r10", "10", ["corten", "nextjs"], ["http://localhost:18410", "http://localhost:18411"]);
   assert.deepEqual([...new Set(all.map(([step]) => step))], steps);
-  for (const [, limit] of all) assert.ok(limit > 0 && limit <= 150);
+  for (const [, limit] of all) assert.ok(limit > 0 && limit <= 200);
   const browser = all.filter(([step]) => step === "browser").at(-1);
   assert.deepEqual(browser?.slice(2), ["browser.mjs", "corten=http://localhost:18410", "nextjs=http://localhost:18411", "runs=10", "out=r10/browser.json"]);
 });

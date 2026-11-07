@@ -1161,22 +1161,33 @@ passes, a separate diagnostic build of card-market's crate run after it:
      the framework's usual JSON path. Same lookup as the page; only the output differs.
    - Mixed: with items from the item API, the item page's phases end with 60 s at the fixed rate
      (150/s) as a site gets it (`mixed-load.js`), so the features that matter only together are
-     under load at once: 70% item pages, 2% of them for an item the item API answers in 15 s
-     (`item_slow_<n>`, past card-market's 10 s deadline and inside k6's 60 s timeout), 20% the item
-     as JSON, 5% the home page, and 5% the item page's price-alert form posted where and as the
-     page posts it, hidden fields and cookies included (`formOf` and `formBody`, as
-     `conform.mjs`'s own post, from the page read once before the phase). Every request comes from
-     k6's one address, so a write limit per client (card-market's 20 a minute) is met and its 429s
-     counted, and asks for compression (`Accept-Encoding: br, gzip`, where the other phases ask
-     for none), so each kind of answer is compressed as the app compresses it for a browser. An app whose form its script sends (Livewire, LiveView) has no post; that share asks
-     for item pages, and the table says why. The summary's Mixed table gives each kind of request
-     its median and p99 latency and its answers by class (2xx and 3xx, 429, other 4xx, 5xx, none),
-     with the app's CPU and peak memory over the phase (`mixed.mjs`; `<app>-mixed.json`, and
-     `-cpu`, `-stats` and `-form` beside it). It adds about a minute an app a pass. It runs in
-     both tiers, but its deadline column compares like with like only in the matched tier, where
-     every app has a deadline; the matched profile has no write limit, so only an app with one of
-     its own answers 429. k6 keeps no cache, so the phase does not see a `Cache-Control` policy at
-     work; the feature matrix checks each app's.
+     under load at once: 70% item pages, 2% of them for an item the item API answers in 40 s
+     (`item_slow_<n>`: past the 35 s within which the matched profile's deadline must answer, and
+     inside the 60 s after which k6 and the edge give up, so an app with no deadline is seen
+     answering it), 20% the item as JSON, 5% the home page, and 5% the item page's price-alert form
+     posted where and as the page posts it, hidden fields and cookies included (`formOf` and
+     `formBody`, as `conform.mjs`'s own post), from the page read just before the phase. Pages and
+     posts are sent as a browser's navigations and JSON as a script's request, all asking for
+     compression (`Accept-Encoding: br, gzip`, where the other phases ask for none), so each kind
+     of answer is compressed as the app compresses it for a browser. Every request comes from k6's
+     one address, so a write limit per client (card-market's 20 a minute) is met and its 429s
+     counted. One post is sent first, directly, and its status kept (`<app>-mixed-form.json`): the
+     table marks the posts' column `CHECK POST <status>` when it was not taken, so a post the
+     harness built wrong is not read as the app's refusal. An app whose form its script sends
+     (Livewire, LiveView) has no post; that share asks for item pages, and the table says why.
+     When the 60 s are up, the requests still waiting are kept up to 45 s for their answers, so
+     every late item's answer, or its deadline's, is counted; the rate and the app's CPU are over
+     the 60 s, so an app is not shown slower for the wait. The summary's Mixed table gives each
+     kind of request its median and p99 latency and its answers by class (2xx and 3xx, 429, other
+     4xx, 5xx, none), with the app's CPU and peak memory over the phase (`mixed.mjs`;
+     `<app>-mixed.json`, and `-cpu`, `-stats` and `-form` beside it). It adds about 1.8 minutes
+     an app a pass (estimated). It runs in both tiers; only in the matched tier has every app a
+     deadline, and the deadlines differ (card-market's and axum-maud's are 10 s), so the late
+     items' latency is each app's own deadline, not a comparison of speed. The matched profile has
+     no write limit, so only an app with one of its own answers 429, and k6 keeps no cache, so the
+     phase does not see a `Cache-Control` policy at work (the feature matrix checks each app's).
+     Late items come from `item-api/server.mjs`, the bench host's item API; the Rust item API a
+     local round uses unless `BENCH_API_CONTAINER=item-api` has none, and answers them 404.
 5. Instructions per request (`count.mjs`): `perf stat` counts the app container's user and
    kernel instructions while 4 users make 5,000 requests (items in memory) after a 30 s warmup;
    median of 3. On a bench host the counters are on the app's pinned cores only (`-C` with

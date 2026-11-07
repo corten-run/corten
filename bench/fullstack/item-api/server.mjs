@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
+import { slowMs as lateMs } from "../mixed.mjs";
 
 const [file = "/fixtures/items.json", port = "8080", processes = String(availableParallelism())] = process.argv.slice(2);
 const count = Math.max(1, Math.floor(Number(processes)) || 1);
@@ -33,9 +34,9 @@ if (count > 1 && !process.env.ITEM_API_SERVER) {
 } else {
   const items = new Map(Object.entries(JSON.parse(readFileSync(file, "utf8"))).map(([id, item]) => [id, Buffer.from(JSON.stringify(item))]));
   const prefix = "/api/discovery/items/";
-  // An upstream that answers late (the mixed phase, run-ssr.mjs): `item_slow_<n>` is item_<n>,
-  // answered after SLOW_MS (15 s by default, past the matched tier's 10 s request deadline).
-  const slowMs = Number(process.env.SLOW_MS ?? 15_000);
+  // An upstream that answers late (the mixed phase, mixed.mjs): `item_slow_<n>` is item_<n>,
+  // answered after SLOW_MS (mixed.mjs's `slowMs` unless set, for a test).
+  const slowMs = Number(process.env.SLOW_MS ?? lateMs);
   createServer((req, res) => {
     const id = req.url?.startsWith(prefix) ? decodeURIComponent(req.url.slice(prefix.length)) : "";
     const slow = /^item_slow_(\d+)$/.exec(id);

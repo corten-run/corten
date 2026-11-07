@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { formEnv, mergedMixed, mixedOf } from "./mixed.mjs";
+import { fileURLToPath } from "node:url";
+import { classes, formEnv, kinds, mergedMixed, mixedOf } from "./mixed.mjs";
 import { ssrOf } from "./ssr.mjs";
 
 const page = '<form method="post" action="/items/item_1/alerts"><input type="hidden" name="csrf" value="t"><input name="price"></form>';
@@ -28,11 +31,14 @@ test("with no form to post, it says why, and the posts' share asks for pages", (
   assert.deepEqual(formEnv('<form method="post" phx-submit="alert"></form>', "", own), { none: "phx-submit (sent by its script)" });
 });
 
-/** A k6 summary of the mixed phase: `counts` its counters, every kind's latency 1/9 ms. */
+/**
+ * A k6 summary of the mixed phase: `counts` its counters, every kind's latency 1/9 ms. Its run
+ * took 75 s, the phase's 60 and 15 waiting for late answers, which k6's rate is over.
+ */
 const k6 = (/** @type {Record<string, number>} */ counts, dropped = 0) => {
   const sent = Object.values(counts).reduce((a, b) => a + b, 0);
   /** @type {Record<string, any>} */
-  const metrics = { http_reqs: { count: sent, rate: sent / 60 }, dropped_iterations: { count: dropped } };
+  const metrics = { http_reqs: { count: sent, rate: sent / 75 }, dropped_iterations: { count: dropped } };
   for (const [key, count] of Object.entries(counts)) {
     metrics[key] = { count, rate: count / 60 };
     metrics[key.replace(/_[a-z]+$/, "_ms")] = { "p(50)": 1, "p(99)": 9 };
@@ -59,6 +65,7 @@ test("a pass reads each kind's latency and answers, the rate, and the app's CPU 
     put("corten-mixed-stats.json", { "fsw-corten": { memMaxMiB: 40 } });
     put("corten-mixed-form.json", { path: "/items/item_1/alerts", type: "application/x-www-form-urlencoded" });
     const m = /** @type {NonNullable<ReturnType<typeof mixedOf>>} */ (mixedOf(join(raw, "api"), "corten", "corten-mixed"));
+    // Over the phase's 60 s, not the 75 the run took: the wait for late answers is not a shortfall.
     assert.equal(m.rps, 150);
     assert.equal(m.unsentPct, 0.1);
     // 12 CPU-seconds over 60 seconds.
@@ -106,4 +113,42 @@ test("the summary has the mixed phase for item pages from the item API only", ()
     assert.equal(ssr.api.corten.mixed.byKind.page.sent, 9000);
     assert.equal(ssr["api-json"].corten, undefined, "the JSON source has no mixed phase");
   });
+});
+
+test("mixed-load.js sends and counts the kinds and classes this module reads", () => {
+  const script = readFileSync(fileURLToPath(new URL("./mixed-load.js", import.meta.url)), "utf8");
+  assert.ok(script.includes(`const kinds = ${JSON.stringify(kinds).replaceAll(",", ", ")};`), "mixed-load.js's kinds");
+  assert.ok(script.includes(`const classes = ${JSON.stringify(classes).replaceAll(",", ", ")};`), "mixed-load.js's classes");
+});
+
+test("the item API answers a late item as the item, after SLOW_MS, and an unknown one at once", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "mixed-api-"));
+  const items = join(dir, "items.json");
+  writeFileSync(items, JSON.stringify({ item_3: { id: "item_3" } }));
+  // A port free a moment ago, for the server to listen on.
+  const port = await new Promise((done) => {
+    const probe = createServer().listen(0, "127.0.0.1", () => {
+      const { port } = /** @type {import("node:net").AddressInfo} */ (probe.address());
+      probe.close(() => done(port));
+    });
+  });
+  const server = spawn(process.execPath, [fileURLToPath(new URL("./item-api/server.mjs", import.meta.url)), items, String(port), "1"], { env: { ...process.env, SLOW_MS: "300" }, stdio: ["ignore", "pipe", "inherit"] });
+  try {
+    // It says how many items it serves once it listens.
+    await new Promise((ready) => server.stdout.once("data", ready));
+    const at = async (/** @type {string} */ id) => {
+      const started = Date.now();
+      const r = await fetch(`http://127.0.0.1:${port}/api/discovery/items/${id}`);
+      return { status: r.status, body: await r.text(), ms: Date.now() - started };
+    };
+    const [now, late, unknown] = await Promise.all([at("item_3"), at("item_slow_3"), at("item_slow_9")]);
+    assert.equal(now.status, 200);
+    assert.equal(late.status, 200);
+    assert.equal(late.body, now.body, "the late item is the item");
+    assert.ok(late.ms >= 290 && now.ms < 290, `late ${late.ms} ms, at once ${now.ms} ms`);
+    assert.equal(unknown.status, 404);
+  } finally {
+    server.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
