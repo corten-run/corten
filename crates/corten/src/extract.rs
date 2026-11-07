@@ -932,7 +932,8 @@ mod tests {
         assert!(read.is_err(), "still reading after an hour");
         // A longer idle time is a longer allowance: two minutes, about twice as long.
         let started = tokio::time::Instant::now();
-        let mut longer = pieces_up_to(sent_every(10_000, 1, std::time::Duration::from_secs(1)), usize::MAX).idle(std::time::Duration::from_secs(120));
+        let mut longer = pieces_up_to(sent_every(10_000, 1, std::time::Duration::from_secs(1)), usize::MAX)
+            .idle(std::time::Duration::from_secs(120));
         assert_eq!(read_all(&mut longer).await.0, 120);
         let took = started.elapsed().as_millis();
         assert!((120_499..=120_501).contains(&took), "{took} ms");
