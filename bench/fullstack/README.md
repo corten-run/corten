@@ -701,10 +701,34 @@ What is worth acting on, from these numbers:
    worth tuning before rendering and reading.
 4. On the page, locale formatting is the largest single function, ahead of HTML escaping.
 
+### Writing the item page: `html!` against Maud (callgrind, 2026-11-06)
+
+The same split for card-market and the axum + Maud app (`APP=axum-maud`), three rounds of each at
+`ff1701b8`, alternating, with each function's cost with what it calls (`INCLUSIVE=`). Rendering
+is deterministic: within 2 instructions in every round.
+
+| | card-market (`html!`) | axum + Maud (maud 0.27.0) |
+|---|---|---|
+| Writing the document (`Req::render_into`, `pages::item`) | 44,494 | 53,935 to 53,937 |
+| Escaping (`escape_into`, `escape_to_string`) | 12,881 | 38,060 |
+| The rest of writing | 31,613 | 15,877 |
+| Bytes an answer | 8,931 | 7,473 |
+| The whole request, three rounds | 94,864, 86,199, 86,224 | 72,074, 72,274, 72,244 |
+
+The pages show the same thing but are not the same work. card-market's document carries more
+(the head's description, canonical link, icon and runtime tags, a data attribute on each listing
+row) and writes prices, ratings and counts in the visitor's locale (`Formatted`, 8,701), where the
+Maud app writes the item API's strings. Maud's escaping pushes each byte on its own: the escaping
+gap (25,179) is larger than the whole difference (9,441 to 9,443), and outside escaping `html!` does
+about twice Maud's work. Each whole request has more than writing: Corten's request path adds its
+security headers, the page's key and the rest of the by-crate table above. card-market's first round
+has 8,640 to 8,665 more than the others, which `malloc_consolidate` accounts for (8,630 to 8,632
+with what it calls).
+
 ### What a browser's request costs Corten (callgrind, 2026-11-06)
 
 The rounds' page requests send `Accept-Encoding: identity` and no `If-None-Match`, the one
-request Corten neither tags nor compresses ([design Limit 22](../../docs/design.md#limit-etag): a client that accepts no compression
+request Corten neither tags nor compresses ([design Limit 21](../../docs/design.md#limit-etag): a client that accepts no compression
 and names no tag is not a browser keeping pages). Every browser names a compression, so its page
 has its `ETag` hashed and its body compressed as well. Measured on this branch's base, main
 `a17f1775`, with `route_loop`'s `LOOP_ENCODING` and `LOOP_TAG` added: card-market's release
@@ -724,7 +748,7 @@ for the hash alone); requests a second under load were not measured.
 | `gzip, deflate, br` | renders, hashes, brotli 2 | 1,336,000 (1,335,086-1,336,899) | 283-301 µs |
 
 So hashing the tag adds 27,700 instructions (32% of the in-process request, close to the third of
-the render [Limit 22](../../docs/design.md#limit-etag) gives), zstd 1 a further 230,000 (the page averages 8.8 KB, about 2.2 KB once
+the render [Limit 21](../../docs/design.md#limit-etag) gives), zstd 1 a further 230,000 (the page averages 8.8 KB, about 2.2 KB once
 compressed), and brotli 2, the level until the change below, a further 1.22 million in place of
 zstd's. Under zstd, 98% of the compression is the zstd library's own work (of `ZSTD_compress2`:
 `ZSTD_compressBlock_fast` 44%, Huffman coding of the literals 21%, the sequences 20%). In process,
@@ -1188,7 +1212,7 @@ automation collects, but nothing yet reads `trend.json` or turns a `DRIFT:` line
     round after r15 it sends five, as the others do.
 
 17. The rounds' page requests send `Accept-Encoding: identity` and no `If-None-Match`, so no app
-    compresses its page and Corten does not hash an `ETag` for it ([design Limit 22](../../docs/design.md#limit-etag)), but SvelteKit
+    compresses its page and Corten does not hash an `ETag` for it ([design Limit 21](../../docs/design.md#limit-etag)), but SvelteKit
     and Rails tag every page anyway (round conform2, on a request that named no encoding), a hash
     Corten skips: it favors Corten's rows
     by whatever that hash costs them, not enough to change their places (773 and 417 pages a
@@ -1224,10 +1248,12 @@ node build.mjs r16 [apps] [runs=3]   # build cost: clean, after a one-line chang
 # One request's instructions by stage and crate (callgrind), from the repository root, items in memory:
 docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
-node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-page-fixture-300.out /tmp/cg/cg-page-fixture-1300.out
+node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.out /tmp/cg/cg-card-market-page-fixture-1300.out
+# The axum + Maud app the same way: add -e APP=axum-maud (dumps cg-axum-maud-*.out). Writing each
+# page with what it calls: INCLUSIVE='render_into|^item_page_axum_maud::pages::item$' before node
 # The item fetched from the item API (running on the host at 18400, with port 8080 free, as
 # --network host serves the app there): add --network host and
-# -e SOURCE=api -e API_BASE=http://127.0.0.1:18400 -e TARGETS=page, then split cg-page-api-*.out
+# -e SOURCE=api -e API_BASE=http://127.0.0.1:18400 -e TARGETS=page, then split cg-card-market-page-api-*.out
 ```
 
 ## What the repository keeps

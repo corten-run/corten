@@ -21,18 +21,18 @@ the release profile an app builds with.
 | 7 | reuse a connection to the app for less time than `App::header_timeout` | the app closes an idle connection after it (30 seconds), and a request the proxy sends on it as it closes fails; nginx 1.29.7 and later reuse upstream connections by default, for 60 seconds, so set `keepalive_timeout` in the `upstream` block (below) |
 | 8 | expect a connection to the app per open stream | streams multiplexed over one HTTP/2 connection to the proxy still each hold an HTTP/1.1 connection to the app, so `App::max_connections`, if set, counts them |
 | 9 | check `/health/live` and `/health/ready` | both answer to an IP address or `localhost` as the host, so a health check needs no name; `/health/ready` answers within 800 ms (`App::ready_within`), so a probe timeout of one second or more reads its answer ([Health](app.md#health)) |
-| 10 | allow request bodies as large as the app's largest form | nginx refuses a body over `client_max_body_size` (1 MB) with a page of its own, before the app can answer it in the form |
+| 10 | allow request bodies as large as the app's largest form, and pass a large upload on as it arrives | nginx refuses a body over `client_max_body_size` (1 MB) with a page of its own, before the app can answer it in the form; and it holds the whole body before passing it on (`proxy_request_buffering on`), so a route that reads a body as it arrives (`pieces_up_to`) gets a `location` of its own with its limit and `proxy_request_buffering off` (below) |
 | 11 | keep a quiet WebSocket open, or let the app ping it | nginx closes a proxied connection that sends nothing for `proxy_read_timeout` (60 seconds), a WebSocket included; Corten's `Upgrade` sends no pings of its own, so a socket that may go quiet longer pings from the app or gets a longer timeout in its `location` |
 
 ### Live streams
 
-`<corten-live>`, feeds and `corten::event_stream` answer `text/event-stream` with
-`X-Accel-Buffering: no`, which tells nginx not to buffer that response whatever `proxy_buffering`
-says, and write a keep-alive comment on a quiet stream every 15 seconds, under nginx's 60-second
-`proxy_read_timeout`. Measured with `examples/watchlist`'s `/live/trades` (an event a second)
-through nginx 1.27: without the header, nginx's default there (HTTP/1.0 to the app,
-`proxy_buffering on`) and `gzip on` for `text/event-stream` each sent no byte in 25 seconds; with it, every case
-delivered events 1,000 ms apart, as the app wrote them, compressed or not. A CDN must not cache a
+`<corten-live>` and feeds answer `text/event-stream` with `X-Accel-Buffering: no`, which tells
+nginx not to buffer that response whatever `proxy_buffering` says, and write a keep-alive comment
+on a quiet stream every 15 seconds, under nginx's 60-second `proxy_read_timeout`. Measured with
+`examples/watchlist`'s `/live/trades` (an event a second) through nginx 1.27: without the header,
+nginx's default there (HTTP/1.0 to the app, `proxy_buffering on`) and `gzip on` for
+`text/event-stream` each sent no byte in 25 seconds; with it, every case delivered events 1,000 ms
+apart, as the app wrote them, compressed or not. A CDN must not cache a
 stream either; Corten sends it `no-cache`. A `Relay` passes an upstream's stream on with the
 upstream's headers, so one without the header is buffered unless its `location` says
 `proxy_buffering off`.
@@ -76,6 +76,27 @@ server {
         proxy_cache app;       # keys on Vary; stores only answers sent public
     }
 }
+```
+
+A route that reads a large body as it arrives (a file `PUT` read with
+`corten::extract::pieces_up_to`) gets a `location` of its own in the same `server`, so nginx
+neither refuses it at the forms' limit nor holds all of it before the app sees a byte. Its
+`client_max_body_size` is the route's `max` and the 64 MiB the app reads past (or `0`), so the
+app's own 413 (the API's shape, or the handler's) is what the browser reads for a body up to
+that size (a limit of only `max` would have nginx refuse first); past it, the browser reads
+nginx's page. A prefix that also serves downloads keeps
+`proxy_cache app;` here too:
+
+```nginx
+    location /files/ {
+        client_max_body_size 1088m;     # the route's max (1 GiB) and the 64 MiB the app reads past
+        proxy_request_buffering off;    # pass each piece on as it arrives
+        proxy_pass http://app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Connection "";
+    }
 ```
 
 `keepalive` needs `proxy_http_version 1.1` and a `Connection` header other than `close`, which

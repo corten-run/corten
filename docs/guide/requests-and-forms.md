@@ -19,7 +19,19 @@ body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listene
 and types, named from Corten so the app imports one crate
 ([design Choice 21](../design.md#choice-own-extractors)). A handler that takes the whole `Request` and answers
 a body over a limit of its own itself (a route that keeps another server's error shape) reads it
-with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A route's
+with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A body too
+large to hold (a file `PUT` as `application/octet-stream`) is passed on as it arrives instead:
+`let mut pieces = corten::extract::pieces_up_to(request.into_body(), max)`, then
+`while let Some(piece) = pieces.chunk().await? { .. }`, writing each piece to the disk or store
+before asking for the next, so the request holds one piece, not the body. It counts what arrives,
+whatever the length says, and refuses a body over `max` as `bytes_up_to` does, reading past the
+rest until the body has sent 64 MiB more than `max`, so a browser, which sends the whole body
+before it reads, gets the 413 rather than a closed connection. A client that sends nothing for a
+minute (`.idle(d)` to change it) is a 408 (still the 413 when it stops past the limit), and a
+body that breaks is a 400; each is a
+`corten::extract::BodyError` to match or pass on with `?`. The handler removes what it wrote of a
+body it does not finish, and puts the route in an API with a `deadline` that leaves time to read
+it, which shutdown also waits for. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
 path and query are read as its `Params`, never another way. `corten::axum` stays for a stand-in
 server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-app)).
 
@@ -34,7 +46,6 @@ server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-a
 | any, `Accept: application/json` | native screen, agent, test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
 | any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
 | SSE | `<corten-live src>` | `corten::live(stream_of_views)` | applies each like a patch |
-| SSE of JSON | the app's script (`EventSource`), a native client | `corten::event_stream(stream_of_events)`: `event: <name>`, `data: <JSON>`; `EventStreamResponse::ended()` (204) when it is over | reads each by name |
 | `GET {feed}`, `{feed}/live` | a handler's `subscribe()`, or `Replica` | `feed.snapshot()`, `feed.live(since)` | snapshot, then ordered patches |
 
 One handler serves every mode, and `req.mode` says which. A `data-patch` form's handler answers
@@ -64,6 +75,15 @@ alone, in the component's stylesheet:
 
 Back and forward mark only `<main>`, since nothing on the page started them, and a page reading
 itself again marks nothing.
+
+The address changes when the page's answer is in, as a full load's does, not at the click: while a
+slow handler runs, the address still names the page on screen, so reloading, copying or sharing it
+gets that page, and a link the server redirects, or sends to a place on a page, shows only the
+address it ends at, in one history entry. This holds where the browser lets a navigation say when
+its address changes (the Navigation API's `precommitHandler`; the runtime checks for the feature,
+not for a browser). Elsewhere, and for back and forward, the address changes at the click while
+the old page is shown busy until the new one comes; `main[aria-busy]` is the hook for styling
+that wait.
 
 Back and forward draw the page again from the server, as a link does, and put back what the user
 typed or chose in it, as the browser does for a page it loaded: each field of `<main>` the user
@@ -1620,7 +1640,10 @@ status. A handler that refuses the caller (the record is not theirs) returns the
 extractor gives, `Err(Refused::forbidden())?`, which the error page treats as the request's
 fault; `.with_status(..)` on it makes it a plain failure at that status. The app's error page is
 rendered in the request's mode (a page or a swap) and the message is logged, never shown, except
-under `corten dev`. An extractor's own rejection (a
+under `corten dev`. A handler that answers in a shape of its own reads both: `error.to_string()`
+is the message the log has, and `error.status_code()` the status. The message is written for the
+log, so it can name a 5xx's internals or the cause a `.with_status(..)` hid (a refusal answered as
+a 404 says `refused: 403 Forbidden`); send it only where the error is meant for the client. An extractor's own rejection (a
 path segment that does not parse, a form of the wrong type) gets the error page too when a
 browser asked; a field the user types is text or an `Entry`, so its mistake is a message
 instead. The page is given a `Failure` that says which case it is

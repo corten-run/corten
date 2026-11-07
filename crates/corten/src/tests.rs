@@ -543,109 +543,6 @@ fn what_a_change_costs_live_watch() {
     }
 }
 
-/// Named events of the app's own JSON, each with its cursor when it has one; a line break in the
-/// JSON is split into data lines, which a client joins back.
-#[cfg(feature = "json")]
-#[tokio::test]
-async fn an_event_stream_sends_named_json_with_its_cursor() {
-    use crate::StreamEvent;
-    #[derive(crate::ToJson)]
-    struct Batch {
-        done: u32,
-        note: &'static str,
-    }
-    let messages = || {
-        futures_util::stream::iter([
-            StreamEvent::new("batch", &Batch { done: 3, note: "a" }).cursor("v3"),
-            StreamEvent::new("error", "no such batch"),
-            StreamEvent::new("raw", &crate::json::Raw::new(b"{\n\"a\": 1}".to_vec()).unwrap()),
-        ])
-    };
-    let router = Router::new().route("/", get(move || async move { crate::event_stream(messages()) }));
-    let (status, headers, body) = call(router, "GET", None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(headers["content-type"], "text/event-stream");
-    assert_eq!(headers["x-accel-buffering"], "no");
-    assert_eq!(
-        body,
-        "event: batch\nid: v3\ndata: {\"done\":3,\"note\":\"a\"}\n\nevent: error\ndata: \"no such batch\"\n\nevent: raw\ndata: {\ndata: \"a\": 1}\n\n",
-        "no end event of Corten's: the app's script reads only its own"
-    );
-}
-
-#[cfg(all(feature = "json", debug_assertions))]
-#[test]
-#[should_panic(expected = "one line of text that is not empty")]
-fn an_event_name_is_one_line() {
-    let _ = crate::StreamEvent::new("batch\nevent: other", &1);
-}
-
-#[cfg(all(feature = "json", debug_assertions))]
-#[test]
-#[should_panic(expected = "one line of text that is not empty")]
-fn an_event_name_is_not_empty() {
-    let _ = crate::StreamEvent::new("", &1);
-}
-
-/// In release, an event whose name would break the stream is not sent; the others are.
-#[cfg(all(feature = "json", not(debug_assertions)))]
-#[tokio::test]
-async fn an_event_with_a_broken_name_is_not_sent() {
-    use crate::StreamEvent;
-    let events = || {
-        futures_util::stream::iter([
-            StreamEvent::new("batch\nevent: other", &1),
-            StreamEvent::new("", &2),
-            StreamEvent::new("kept", &3),
-        ])
-    };
-    let router = Router::new().route("/", get(move || async move { crate::event_stream(events()) }));
-    let (_, _, body) = call(router, "GET", None).await;
-    assert_eq!(body, "event: kept\ndata: 3\n\n");
-}
-
-/// An event stream in a routes module: a failure before it starts is JSON, as on any JSON route,
-/// and a stream that is over answers a reconnect `204`, which an `EventSource` does not retry.
-#[cfg(feature = "json")]
-#[tokio::test]
-async fn an_event_stream_route_fails_as_json_and_ends_with_204() {
-    let router = App::new(event_stream_url::router()).router();
-    let (status, headers, body) = call_with(router.clone(), "GET", "/jobs/7/progress", None, Some("text/html")).await;
-    assert_eq!(
-        (status, headers["content-type"].to_str().unwrap()),
-        (StatusCode::NOT_FOUND, "application/problem+json"),
-        "{body}"
-    );
-    let (status, _, body) = call_with(router.clone(), "GET", "/jobs/1/progress", None, None).await;
-    assert_eq!((status, &body[..]), (StatusCode::OK, "event: progress\nid: 3\ndata: 3\n\n"));
-    let res =
-        router.oneshot(Request::get("/jobs/1/progress").header("last-event-id", "3").body(Body::empty()).unwrap()).await.unwrap();
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
-}
-
-#[cfg(feature = "json")]
-#[crate::routes]
-mod event_stream_url {
-    #[route("/jobs/{job}/progress", get = job_progress)]
-    pub struct JobProgress {
-        pub job: u32,
-    }
-}
-
-#[cfg(feature = "json")]
-async fn job_progress(
-    crate::Params(at): crate::Params<event_stream_url::JobProgress>,
-    since: crate::LiveSince,
-) -> Result<crate::EventStreamResponse, JsonError> {
-    if at.job != 1 {
-        return Err(Error::status(StatusCode::NOT_FOUND).into());
-    }
-    if since.0.as_deref() == Some("3") {
-        return Ok(crate::EventStreamResponse::ended());
-    }
-    Ok(crate::event_stream(futures_util::stream::iter([crate::StreamEvent::new("progress", &3).cursor("3")])))
-}
-
 #[tokio::test]
 async fn a_live_fragment_carries_its_cursor_and_a_reconnect_reads_it_back() {
     use crate::{Fragment, LiveSince};
@@ -6173,6 +6070,148 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
         assert_eq!(headers[header::CONTENT_LENGTH], length.to_string());
         assert_eq!(body, csv.as_bytes());
     }
+}
+
+/// Over a socket, a body read as it arrives (`pieces_up_to`, #1003): the handler has its first
+/// piece before the client has sent the rest, and a client that sends the whole body before it
+/// reads, as a browser does, reads the 413 of one over the limit, whether it sent its length or
+/// sent it chunked, rather than a closed connection.
+#[tokio::test]
+async fn a_body_read_as_it_arrives_is_read_before_it_ends_and_refused_where_a_browser_reads_it() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const MAX: usize = 1 << 20;
+    let (first, mut got_first) = tokio::sync::mpsc::unbounded_channel::<usize>();
+    let routes = Router::new().route(
+        "/up",
+        axum::routing::put(move |request: crate::extract::Request| {
+            let first = first.clone();
+            async move {
+                let mut pieces = crate::extract::pieces_up_to(request.into_body(), MAX);
+                let mut stored = 0;
+                while let Some(piece) = pieces.chunk().await? {
+                    if stored == 0 {
+                        let _ = first.send(piece.len());
+                    }
+                    stored += piece.len();
+                }
+                Ok::<_, Error>(stored.to_string())
+            }
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+        let _ = stopped.await;
+    }));
+    let answer = |mut stream: tokio::net::TcpStream| async move {
+        let mut read = Vec::new();
+        stream.read_to_end(&mut read).await.expect("the answer, not a reset connection");
+        String::from_utf8_lossy(&read).into_owned()
+    };
+
+    // Half the body, then the rest only once the handler has a piece of it.
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let head = format!("PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: {MAX}\r\n\r\n");
+    stream.write_all(head.as_bytes()).await.unwrap();
+    stream.write_all(&vec![7u8; MAX / 2]).await.unwrap();
+    let piece = tokio::time::timeout(Duration::from_secs(10), got_first.recv()).await.expect("a piece before the end");
+    assert!(piece.is_some_and(|len| len > 0 && len <= MAX / 2));
+    stream.write_all(&vec![7u8; MAX / 2]).await.unwrap();
+    let got = answer(stream).await;
+    assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(&MAX.to_string()), "{got}");
+
+    // Over the limit, with its length (a byte over, and 8 MiB over) and chunked: all of it sent
+    // before the answer is read.
+    for over in [1, 8 << 20] {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let len = MAX + over;
+        let head = format!("PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: {len}\r\n\r\n");
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream.write_all(&vec![7u8; len]).await.unwrap();
+        let got = answer(stream).await;
+        assert!(got.starts_with("HTTP/1.1 413"), "{over} over, with its length: {got}");
+    }
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ntransfer-encoding: chunked\r\n\r\n")
+        .await
+        .unwrap();
+    let piece = vec![7u8; 64 << 10];
+    for _ in 0..(2 * MAX / piece.len()) {
+        stream.write_all(format!("{:x}\r\n", piece.len()).as_bytes()).await.unwrap();
+        stream.write_all(&piece).await.unwrap();
+        stream.write_all(b"\r\n").await.unwrap();
+    }
+    stream.write_all(b"0\r\n\r\n").await.unwrap();
+    let got = answer(stream).await;
+    assert!(got.starts_with("HTTP/1.1 413"), "chunked: {got}");
+
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// What a large upload read as it arrives (`pieces_up_to`) costs the server: `UPLOAD_MIB` (1024)
+/// over a socket as fast as the client sends, each piece dropped as a store would take it. Prints
+/// the time and the process's peak resident memory before and after (`VmHWM`, Linux). In release:
+/// `cargo test --release -p corten-run --all-features --lib -- --ignored what_a_large_upload_costs --nocapture`
+/// (#1003).
+#[tokio::test]
+#[ignore]
+async fn what_a_large_upload_costs() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mib: usize = std::env::var("UPLOAD_MIB").ok().and_then(|n| n.parse().ok()).unwrap_or(1024);
+    let peak = || {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find(|l| l.starts_with("VmHWM:"))
+                    .map(|l| l.split_whitespace().nth(1).unwrap_or("0").parse::<u64>().unwrap_or(0) / 1024)
+            })
+            .unwrap_or(0)
+    };
+    let routes = Router::new().route(
+        "/up",
+        axum::routing::put(|request: crate::extract::Request| async move {
+            let mut pieces = crate::extract::pieces_up_to(request.into_body(), usize::MAX);
+            let (mut stored, mut largest) = (0usize, 0usize);
+            while let Some(piece) = pieces.chunk().await? {
+                stored += piece.len();
+                largest = largest.max(piece.len());
+            }
+            Ok::<_, Error>(format!("{stored} {largest}"))
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).deadline(None);
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let before = peak();
+    let started = std::time::Instant::now();
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let len = mib << 20;
+    let head = format!("PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: {len}\r\n\r\n");
+    stream.write_all(head.as_bytes()).await.unwrap();
+    let piece = vec![7u8; 256 << 10];
+    for _ in 0..len / piece.len() {
+        stream.write_all(&piece).await.unwrap();
+    }
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).await.unwrap();
+    let last = answer.lines().last().unwrap_or_default().to_owned();
+    println!(
+        "{mib} MiB up in {:?}: stored and largest piece {last}; peak resident {} MiB (before the request {before} MiB)",
+        started.elapsed(),
+        peak()
+    );
+    assert!(last.starts_with(&len.to_string()), "{answer}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
 }
 
 /// What a large download costs the server, streamed (`Media::stream`) and held (`Media::new`):
@@ -11947,4 +11986,67 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
             .collect()
     ));
     assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
+}
+
+/// An error's message (`Display`) is its source's, what the log says, and `status_code` the
+/// status of the answer it makes, for each way an error is made: checked against the answer, so
+/// the two cannot drift apart.
+#[test]
+fn an_error_says_its_message_and_status() {
+    let sign_in: axum::http::Uri = "https://id.example/sign-in".parse().unwrap();
+    /// What it is, how it is made, its message and its status.
+    type Case = (&'static str, Box<dyn Fn() -> Error>, &'static str, StatusCode);
+    let cases: Vec<Case> = vec![
+        ("new", Box::new(|| Error::new("no item 7")), "no item 7", StatusCode::INTERNAL_SERVER_ERROR),
+        (
+            "with_status",
+            Box::new(|| Error::new("no item 7").with_status(StatusCode::NOT_FOUND)),
+            "no item 7",
+            StatusCode::NOT_FOUND,
+        ),
+        ("not_found", Box::new(Error::not_found), "Not Found", StatusCode::NOT_FOUND),
+        ("status", Box::new(|| Error::status(StatusCode::CONFLICT)), "Conflict", StatusCode::CONFLICT),
+        (
+            "?",
+            Box::new(|| std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset").into()),
+            "connection reset",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "refused, said",
+            Box::new(|| crate::Refused::forbidden().message("not yours").into()),
+            "not yours",
+            StatusCode::FORBIDDEN,
+        ),
+        ("refused", Box::new(|| crate::Refused::forbidden().into()), "refused: 403 Forbidden", StatusCode::FORBIDDEN),
+        // The log keeps the cause a 404 hides from the client: the app's to send or not.
+        (
+            "refused, hidden",
+            Box::new(|| Error::from(crate::Refused::forbidden()).with_status(StatusCode::NOT_FOUND)),
+            "refused: 403 Forbidden",
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "sign-in",
+            Box::new(move || crate::Refused::sign_in(&sign_in).into()),
+            "refused: 401 Unauthorized",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "too many",
+            Box::new(|| crate::Refused::too_many(Duration::from_secs(30)).into()),
+            "refused: 429 Too Many Requests",
+            StatusCode::TOO_MANY_REQUESTS,
+        ),
+        (
+            "unavailable",
+            Box::new(|| crate::Refused::unavailable("sessions are down").into()),
+            "who is asking cannot be known: sessions are down",
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ];
+    for (case, error, message, status) in cases {
+        assert_eq!((error().to_string().as_str(), error().status_code()), (message, status), "{case}");
+        assert_eq!(error().into_response().status(), status, "{case}: the answer has the status read");
+    }
 }

@@ -1,4 +1,5 @@
-# Profiles card-market's release build under callgrind serving the item page and its JSON over one
+# Profiles an item-page app's release build (APP: card-market, the default, or axum-maud, the
+# benchmark's axum + Maud app) under callgrind serving the item page and its JSON over one
 # keep-alive connection, uncompressed, as N1 and then N2 requests in two runs, so the difference
 # divided by N2 - N1 is one request's cost with startup and shutdown cancelled out; then split it
 # by crate with cost-by-crate.mjs. Run from the repository root in rust:1-bookworm, as the
@@ -8,25 +9,32 @@
 set -eo pipefail
 if [ "${SOURCE:-fixture}" = api ] && [ -z "${API_BASE:-}" ]; then echo "SOURCE=api needs API_BASE" >&2; exit 1; fi
 apt-get update -qq >/dev/null && apt-get install -y -qq valgrind curl >/dev/null 2>&1
-cd /src
+app=${APP:-card-market}
 # Line tables only: the same code, with each instruction's source file for the split.
-CARGO_PROFILE_RELEASE_DEBUG=line-tables-only cargo build -q --release -p card-market
-bin=$CARGO_TARGET_DIR/release/card-market
+case $app in
+  card-market) cd /src; CARGO_PROFILE_RELEASE_DEBUG=line-tables-only cargo build -q --release -p card-market
+    bin=$CARGO_TARGET_DIR/release/card-market; ready=/health/live ;;
+  # Not in the workspace: its own lock file, and static/ served from its directory.
+  axum-maud) cd /src/bench/fullstack/apps/axum-maud; CARGO_PROFILE_RELEASE_DEBUG=line-tables-only cargo build -q --release --locked
+    bin=$CARGO_TARGET_DIR/release/item-page-axum-maud; ready=/ ;;
+  *) echo "APP is card-market or axum-maud" >&2; exit 1 ;;
+esac
 for target in ${TARGETS:-page json}; do
   p=/items/item_; [ $target = json ] && p=/api/items/item_
   for n in 300 1300; do
     : > /tmp/run.txt
     for i in $(seq $n); do printf 'url = "http://localhost:8080%s%s"\noutput = /dev/null\n' "$p" "$(( (i % 500) + 1 ))" >> /tmp/run.txt; done
-    out=/out/cg-$target-${SOURCE:-fixture}-$n.out
+    out=/out/cg-$app-$target-${SOURCE:-fixture}-$n.out
     HOST=127.0.0.1 PORT=8080 ITEM_SOURCE=${SOURCE:-fixture} FIXTURE_PATH=/fixtures/items.json API_BASE=${API_BASE:-} \
       valgrind --tool=callgrind --callgrind-out-file=$out $bin >/tmp/server-$target-$n.log 2>&1 &
     vg=$!
-    until curl -s -o /dev/null http://127.0.0.1:8080/health/live; do sleep 1; done
+    until curl -s -o /dev/null http://127.0.0.1:8080$ready; do sleep 1; done
     # One keep-alive connection, uncompressed, as the benchmark asks: each answer's status and
     # whether it opened a connection (only the first may).
-    curl -sS -H 'accept-encoding: identity' -w '%{http_code} %{num_connects}\n' -K /tmp/run.txt > /tmp/codes.txt
-    sort /tmp/codes.txt | uniq -c
-    if grep -qv '^200 ' /tmp/codes.txt || [ "$(grep -c ' 1$' /tmp/codes.txt)" != 1 ]; then
+    curl -sS -H 'accept-encoding: identity' -w '%{http_code} %{num_connects} %{size_download}\n' -K /tmp/run.txt > /tmp/codes.txt
+    cut -d' ' -f1,2 /tmp/codes.txt | sort | uniq -c
+    awk '{ b += $3 } END { printf "%d bytes an answer\n", b / NR }' /tmp/codes.txt
+    if grep -qv '^200 ' /tmp/codes.txt || [ "$(grep -c '^200 1 ' /tmp/codes.txt)" != 1 ]; then
       echo "not every request answered 200 over one connection" >&2; kill -TERM $vg; exit 1
     fi
     kill -TERM $vg; wait $vg || true

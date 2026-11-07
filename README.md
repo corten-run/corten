@@ -29,7 +29,7 @@ over server-sent events. One request handler serves the browser, native apps and
   each MiB of memory serves 894 pages a second, 11x Leptos. axum + Maud costs less on all three
   (44 µs, 3.5%, 1,376 pages per MiB), and Drogon on the last two (4.2%, 1,159) (measured,
   [below](#cpu-and-memory-per-request)).
-- **Fast in the browser.** A 13.9 KB (gzip) runtime; the benchmark item page loaded 12.9 KB of
+- **Fast in the browser.** A 14.2 KB (gzip) runtime; the benchmark item page loaded 12.9 KB of
   JavaScript with a 12.2 KB runtime (gzip, measured). No WASM, no virtual DOM, no hydration: a
   script takes over 1,000 server-rendered rows in 6.0 ms, against 20-84 ms for Solid, Svelte,
   Vue, React and Remix (measured, [below](#client-heavy-screens)).
@@ -40,9 +40,9 @@ over server-sent events. One request handler serves the browser, native apps and
 - **Production defaults.** A strict CSP, a cross-site write check, error pages, versioned
   assets, cache headers that never share one user's page with another, compression, health
   checks, graceful shutdown and an installable PWA, from `corten::serve(App::new(routes))`.
-  `corten::serve` speaks HTTP/1.1, so an app with live streams (`<corten-live>`, feeds,
-  `corten::event_stream`) goes behind a proxy or CDN that serves browsers HTTP/2 or HTTP/3: over
-  HTTP/1.1 a browser opens about six connections to a host, and each open stream holds one
+  `corten::serve` speaks HTTP/1.1, so an app with live streams (`<corten-live>`, feeds) goes
+  behind a proxy or CDN that serves browsers HTTP/2 or HTTP/3: over HTTP/1.1 a browser opens
+  about six connections to a host, and each open stream holds one
   ([Deploying](docs/guide/deploy.md)). Routes with no screen go in a
   `#[corten::routes(api = ApiRoot)]` module, `.api(api::api)`, and answer only JSON.
 - **No JavaScript toolchain in the app.** One binary, with the `static/` directory compiled into it.

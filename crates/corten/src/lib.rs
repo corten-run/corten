@@ -122,6 +122,8 @@ pub mod i18n;
 #[cfg(feature = "json")]
 pub mod json;
 mod layout;
+#[cfg(feature = "log")]
+mod log;
 pub mod middleware;
 #[cfg(feature = "types")]
 pub mod openapi;
@@ -162,7 +164,7 @@ pub use answer::{
     Answer, FileAnswer, ForAll, ForOne, HtmlResponse, HtmlResult, LiveResponse, Media, NoStore, PageOr, Public, Relay,
 };
 #[cfg(feature = "json")]
-pub use answer::{EventStreamResponse, JsonError, JsonResponse, JsonResult};
+pub use answer::{JsonError, JsonResponse, JsonResult};
 pub use api::Api;
 pub use app::{listeners, serve, serve_on, serve_wrapped, App, Area};
 /// The axum version Corten is built on, so an app never depends on a second one.
@@ -604,57 +606,6 @@ fn event_cursor(cursor: String, of: &str) -> Option<String> {
     Some(cursor)
 }
 
-/// Streams named events of JSON, server-sent events the app's own script (`EventSource`), a
-/// native client or an agent reads: a job's progress, a status that changes. Each item is a
-/// [`StreamEvent`], `event: <name>` with `data: <JSON>`, and its cursor, if any, as the event's
-/// `id`, which a reconnecting client sends back as `Last-Event-ID` ([`LiveSince`]). As with
-/// [`live`], the stream is kept alive with a comment every 15 seconds, and it ends when the app
-/// starts shutting down, so a graceful shutdown is not held open by its clients (an `EventSource`
-/// reconnects, to another instance or this one restarted).
-///
-/// When `events` ends, the response ends, and an `EventSource` connects again a few seconds
-/// later. A stream that is over (the job is done) answers that reconnect with
-/// [`EventStreamResponse::ended`], a `204`, which the standard says stops it: send the last event
-/// with its cursor, and answer `ended()` to a `LiveSince` at that cursor. A script that closes
-/// its `EventSource` on the last event saves the request.
-///
-/// The event names and their data are not checked against the script that reads them (see
-/// `docs/design.md`, Limits).
-///
-/// ```
-/// use corten::{prelude::*, EventStreamResponse, StreamEvent};
-/// use futures_util::stream;
-///
-/// #[derive(ToJson)]
-/// struct Progress { done: u32, of: u32 }
-///
-/// async fn progress() -> EventStreamResponse {
-///     corten::event_stream(stream::iter((1..=3).map(|done| StreamEvent::new("progress", &Progress { done, of: 3 }).cursor(done.to_string()))))
-/// }
-/// ```
-///
-/// A route answering it is a JSON route: a failure before the stream starts is answered as JSON.
-#[cfg(feature = "json")]
-pub fn event_stream<S>(events: S) -> crate::EventStreamResponse
-where
-    S: Stream<Item = StreamEvent> + Send + 'static,
-{
-    let events = events.filter_map(|StreamEvent { name, data, cursor }| async move {
-        let name = name?;
-        let event = Event::default().event(name);
-        Some(Ok::<_, Infallible>(
-            match cursor {
-                Some(cursor) => event.id(cursor),
-                None => event,
-            }
-            .data(data),
-        ))
-    });
-    crate::answer::EventStreamResponse(unbuffered(
-        Sse::new(events.take_until(draining())).keep_alive(KeepAlive::default()).into_response(),
-    ))
-}
-
 /// An event stream that asks a proxy in front of the app to pass each event on as it is written:
 /// nginx holds a stream it buffers (or gzips) until the buffer fills, and reads
 /// `X-Accel-Buffering: no` per response (and does not send it on to the browser). Only event
@@ -665,56 +616,16 @@ pub(crate) fn unbuffered(mut res: Response) -> Response {
     res
 }
 
-/// One event of an [`event_stream`]: its name, its data as JSON and the app's cursor after it.
-#[cfg(feature = "json")]
-pub struct StreamEvent {
-    /// None for a name that would break the stream, which is not sent.
-    name: Option<&'static str>,
-    data: String,
-    cursor: Option<String>,
-}
-
-#[cfg(feature = "json")]
-impl StreamEvent {
-    /// The event `name` (what `addEventListener(name, ..)` listens for) with `data`'s JSON. A name
-    /// is one line of text that is not empty: another would end the event or be read as the
-    /// default `message`, so it panics in debug builds, and in release the event is not sent
-    /// (logged).
-    pub fn new(name: &'static str, data: &(impl crate::ToJson + ?Sized)) -> Self {
-        let name = if name.is_empty() || name.contains(['\n', '\r', '\0']) {
-            let message = format!("corten: an event's name is one line of text that is not empty: {name:?}");
-            if cfg!(debug_assertions) {
-                panic!("{message}");
-            }
-            tracing::error!("{message}");
-            None
-        } else {
-            Some(name)
-        };
-        StreamEvent { name, data: data.to_json(), cursor: None }
-    }
-
-    /// The app's cursor after this event: the point in its data a reconnect resumes from
-    /// ([`LiveSince`]). An event without one keeps the cursor before it, so a reconnect sends it
-    /// again. A cursor cannot hold a line break or a NUL: that panics in debug builds, and in
-    /// release the event is sent without it (logged).
-    pub fn cursor(mut self, cursor: impl Into<String>) -> Self {
-        self.cursor = event_cursor(cursor.into(), "stream event");
-        self
-    }
-}
-
 impl From<String> for Fragment {
     fn from(html: String) -> Self {
         Fragment::new(html)
     }
 }
 
-/// Where a [`live`] or [`event_stream`] stream resumes: the cursor of the last event the client
-/// received, from `Last-Event-ID` when it reconnects, or else the `since` query parameter on the
-/// first connection: the one the page gave its element, `<corten-live src={..} since={cursor}>`,
-/// or, for an event stream, the one on the URL the script opens. `None` when there is
-/// neither, and the handler draws the part as it is now.
+/// Where a [`live`] stream resumes: the cursor of the last event the client received, from
+/// `Last-Event-ID` when it reconnects, or else the `since` query parameter on the first
+/// connection: the one the page gave its element, `<corten-live src={..} since={cursor}>`.
+/// `None` when there is neither, and the handler draws the part as it is now.
 ///
 /// A handler sends what changed after the cursor, or nothing until the next change when the
 /// cursor is current, so a page view or a reconnect costs no extra read or render.
@@ -928,7 +839,12 @@ pub async fn shutdown_signal() {
 
 /// An error that ends the request with a status (500 unless set). The message is logged with
 /// `tracing` and never sent to the browser (except under `corten dev`); the app's error page is
-/// what the user sees.
+/// what the user sees. A handler that answers in a shape of its own reads the message with
+/// `Display` (`error.to_string()`) and the status with [`Error::status_code`]. The message is the
+/// log's, written for the app's developers: it can name a 5xx's internals, or a cause a
+/// [`Error::with_status`] hid (a [`Refused`] answered as a 404 still says `refused: 403
+/// Forbidden`), so sending it, in a body of the app's own or written into markup (`{error}`),
+/// is the app's choice, made where it knows the error is meant for the client.
 #[derive(Debug)]
 pub struct Error {
     status: StatusCode,
@@ -975,6 +891,29 @@ impl Error {
     pub fn with_status(mut self, status: StatusCode) -> Self {
         self.status = status;
         self
+    }
+
+    /// The status of the answer the error makes: 500 for [`Error::new`] and an error converted
+    /// with `?`, the one given to [`Error::status`] or [`Error::with_status`], a [`Refused`]'s own
+    /// (a sign-in's 401, which a browser is then sent to sign in from as a redirect). Named apart
+    /// from [`Error::status`], which makes an error.
+    ///
+    /// ```
+    /// use corten::{http::StatusCode, Error};
+    ///
+    /// let missing = Error::new("no item 7").with_status(StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.status_code(), StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.to_string(), "no item 7");
+    /// ```
+    pub fn status_code(&self) -> StatusCode {
+        self.status
+    }
+}
+
+/// The error's message, as it is logged: the source's own `Display`.
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.source, f)
     }
 }
 

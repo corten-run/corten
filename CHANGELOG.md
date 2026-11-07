@@ -1880,7 +1880,7 @@ Corten is pre-1.0, so any minor version may change the API.
     instructions a byte, so one whose URL can name its content is better `Public::immutable`. The
     hash costs about 3 instructions a byte of a page, so a page tags in proportion to its size, and
     a tag pays for itself when about one compressed load in eight is answered `304`. Tags from
-    another process do not match (design, Limits 22). A page's header map still reserves 13: a
+    another process do not match (design, Limits 21). A page's header map still reserves 13: a
     compressed page with HSTS now sends 14, and 13 makes the same 24 slots ([#742 Pages have no
     ETag, so a private, no-cache page the browser keeps is always sent whole again, and the reason
     given (saves bytes but not the render) is not a recorded Choice and does not count
@@ -2312,6 +2312,39 @@ Corten is pre-1.0, so any minor version may change the API.
     event with zstd on main and 100,474 on this branch (+0.09%), brotli 213,884 against 213,716
     (-0.08%), and the stream is 3 bytes longer, its frame's end
     ([#1001 Media only accepts buffered bytes, so a large generated download needs Relay instead of an app-owned streaming answer](https://github.com/corten-run/corten/issues/1001)).
+260. `corten::Error` implements `Display`, writing its source's message (what the log says), and
+    `Error::status_code()` returns the status of the answer it makes (a sign-in's 401, which a
+    browser gets as a redirect), so a handler that answers in
+    a shape of its own (a route keeping another server's `{"error": ..}` bodies) can say why a
+    step failed: `extract::bytes_up_to`'s `Err` for a body that could not be read, which it could
+    only answer with a fixed message before. The accessor is named apart from `Error::status`,
+    which makes an error. `std::error::Error` stays unimplemented, since the conversion from any
+    error (`From<E: std::error::Error>`) would then include `Error` itself. Corten still never
+    sends a 5xx message to a browser. The message is the log's, so it can name what a
+    `with_status` hid (a refusal answered as a 404 says `refused: 403 Forbidden`); an app that
+    sends it, in its own body or in markup, chooses to
+    ([#995 corten::Error has no Display or status accessor, so a handler answering in its own JSON shape cannot say why a body read failed](https://github.com/corten-run/corten/issues/995)).
+261. `corten::extract::pieces_up_to(body, max)`: a body too large to hold (a file `PUT` as
+    `application/octet-stream` to a disk or an object store) read as it arrives, one piece at a
+    time with `chunk()`, as an upload's file is. It counts what arrives, whatever the
+    `Content-Length` says, and refuses a body over `max` (`BodyError::TooLarge`, a 413) as
+    `bytes_up_to` does, reading past the rest until the body has sent 64 MiB more than `max`, so
+    a browser, which sends the whole body before it reads the answer, reads the 413 rather than a
+    closed connection; a body whose length says it is over is refused before a piece is handed
+    out. A client that sends nothing for a minute (`Pieces::idle`, nginx's
+    `client_body_timeout`) is `Stalled`, a 408; the minute holds for each piece while reading
+    past too, so a slow client still sending is not cut off for the read past in all (one that
+    stops there is still the 413), and one that breaks is `Broken`, a 400. The deploy guide's
+    nginx setup gives such a route a `location` whose limit is `max` and the read-past, with
+    `proxy_request_buffering off`. Counting the body stream by hand, the first shape tried,
+    stops at the limit, which a raw-socket client that sends its body before reading (as a
+    browser does) saw as a dropped connection 6 times of 6, where `bytes_up_to` answered 9 of 9;
+    a reader keeps that read-past in one place. Measured with `what_a_large_upload_costs` (1 GiB
+    over a socket, release, three runs, with the idle timer on each piece): 262 to 286 ms, the
+    process peaking at 10 MiB resident (7 MiB before the request), the largest piece 496 KiB.
+    Nothing else on the request path changes: `bytes_up_to` calls the same read-past, moved into
+    a function, only for a body over its limit
+    ([#1003 Evaluate a bounded raw-body chunk reader for large PUT and POST uploads without buffering or duplicating limit handling](https://github.com/corten-run/corten/issues/1003)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2352,6 +2385,15 @@ Corten is pre-1.0, so any minor version may change the API.
     `GET` form's fields its `Form` ([#207 A handler reads its path parameters with Path<String>, so nothing checks them against the route struct that declares them](https://github.com/todd-skelton/corten/issues/207)).
 12. `Route::PREFETCH`: a route says it with `Route::may_prefetch(&self)`, written by
     `#[route("..", prefetch = ..)]` (Added 218).
+13. `corten::event_stream`, `StreamEvent` and `EventStreamResponse`: named JSON events over
+    server-sent events, read by a script's own `EventSource`. Their names and data were strings at
+    the seam, and nothing outside Corten's own tests used them. A job's progress is a `<progress>` a
+    `<corten-live>` stream draws again, a growing log or answer a `view::Append` per piece, and data
+    a script keeps a feed (one job is a feed of one row); a stream in a format another party defines
+    is a `Relay` of the app's own body. Breaking for an app that used them (the live-data guide,
+    Which one). Design Limit 17, which recorded that they were untyped, is gone, so Limits 18 to 24
+    are now 17 to 23, and the other entries here that cite them say the new numbers
+    ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 
 ### Changed
 
@@ -3718,6 +3760,64 @@ Corten is pre-1.0, so any minor version may change the API.
     costs the same (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each:
     9,241 instructions a read before and after)
     ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
+160. A value that is not a link where an `Href` is expected (a `&dyn Href`, `req.redirect`, a
+    `#[derive(Href)]` variant) fails with "`..` is not a link" and notes that say what a link is,
+    that text from outside the code is `Local::parse(text)` and that a boxed route is passed as the
+    route itself or as a `Box<dyn Href>`, where before the error ended in a long list of types
+    ([#974 Href has no on_unimplemented note, so a value that is not a link (a Box of a route) fails with E0277 listing 120 impls](https://github.com/corten-run/corten/issues/974)).
+161. The runtime's declarations for `corten/views` (`rows()`, `view()`, `Holds`, `ViewClass`,
+    `Rows` and the rest) ship with the crate in `js/views.d.ts`, which `corten check` already
+    gives `tsc`, instead of being written into each app's `types/app.d.ts`. The app's file holds
+    only what its own types, events and views produce, so a release that changes the runtime's
+    declarations no longer fails the app's types test once and leaves framework text to commit
+    with the pin. An app with views gets that failure one last time when it moves to this
+    release, as `Types::sync` drops the runtime's block from its file. Since `tsc` now sees
+    `rows()` and `view()` declared for every app while the import map names `corten/views` only for
+    an app with a view, a script of an app without one that imports it is an error when the app
+    starts, as an import of `corten/keys` with nothing serving it is, rather than in the browser.
+    `Types::sync`'s message says the file may be out of date with how the Corten release declares
+    the app's types as well as with the types
+    ([#1020 A pin bump fails the app's corten check once when Corten's own script declarations change, blaming the app's Rust types](https://github.com/corten-run/corten/issues/1020)).
+162. A client navigation changes the address when the page's answer is in, as a full load's does,
+    not at the click: while a slow handler runs, the address still names the page on screen, so
+    reloading, copying or sharing it gets that page, and a link the server redirects shows only
+    the redirect's address (keeping the link's `#id` when it names none), in one history entry
+    instead of the link's address replaced by the target's; a link the server sends to a place
+    on a page or another site (`corten-location`) shows only that address too, the next
+    navigation taking this one's place in history before its address changes. `main` and the
+    link are busy from the click as before. It holds where the browser has the Navigation API's
+    `precommitHandler`, which the runtime detects; elsewhere, and for back and forward, the
+    address changes at the click as before. The runtime's own navigations (a redirect followed,
+    a write's page) handle their `committed` promise, which a navigation replaced before its
+    address changes rejects.
+    In the watchlist's smoke, a page held 800 ms showed the old page busy at the old address for
+    781 to 800 ms and the new address on the old page for 0 ms, in Chromium and Firefox; the
+    issue measured the address changing 29 ms after the click and the page 255 ms after. The
+    minified runtime is 789 bytes larger (40,232; 301 more gzip at level 9, 272 brotli, 301 zstd)
+    ([#992 A client navigation changes the address before the page arrives, so the address names a page the screen does not show for the handler's whole time](https://github.com/corten-run/corten/issues/992)).
+163. The `log` feature (on by default) prints with a subscriber of Corten's own instead of
+    `tracing-subscriber`, so an app's default build has five crates fewer: `tracing-subscriber`,
+    `sharded-slab`, `thread_local`, `nu-ansi-term` and `lazy_static` (`cargo tree -p corten-run -e
+    normal`: 53 crates before, 48 after). Each event at `INFO` or above goes to stdout as the line
+    `tracing_subscriber::fmt().with_target(false)` wrote, colors and an error's `.sources` included
+    (`2026-11-06T21:20:29.018154Z  WARN message key=value`), which
+    `log::tests::lines_are_tracing_subscriber_s` checks line by line against it, with and without
+    color, for startup, shutdown, a failed request, an agent tool's error and an app's error with
+    sources. What changes: the spans an event is in are not printed (an app that wants them sets its
+    own subscriber before `serve`, as before); colors only when stdout is a terminal, where they
+    were written into a container's logs too; every control character but a tab is escaped in
+    every field, a line break included, where only the message's and an error's escape, bell,
+    backspace, form feed, delete and C1 controls were, so request text in a field cannot start a
+    line that reads as another event; and a `log` crate record is not printed even where another
+    crate in the build turns on `tracing-subscriber`'s `tracing-log`, which made `try_init` forward
+    them. The guide said stderr; it was and is stdout. A line costs 10.4% fewer instructions
+    (callgrind, release build, 1,200 lines less 200 over 1,000, two runs each: 6,619 and 6,627 a
+    line against 7,363 and 7,414 for `tracing-subscriber` with the `ansi` feature `log` turned on
+    in it), and the template app's release binary is 151,672 bytes smaller (5,903,632 against
+    6,055,304 at `bcd31ffe`). Its clean build time, measured on the first version of this change
+    against `f6d39bbd`, did not move beyond the machine's noise (debug, six runs each on 4 CPUs,
+    alternating: median 55.7 s against 58.0 s, ranges 50.9 to 61.3 s and 45.1 to 75.6 s)
+    ([#764 The default log feature compiles tracing-subscriber and four crates only it needs, to print a few lines to stderr](https://github.com/corten-run/corten/issues/764)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
@@ -4760,7 +4860,7 @@ Corten is pre-1.0, so any minor version may change the API.
     instructions against 42,531M, and 1 MiB of `\r` 846.6M against 1,221.6M; plain bytes and short
     heads are within 0.5%, and in 16 KiB pieces 8 MiB of plain bytes took 122.2M against 160.2M, of
     the delimiter less its last byte 245.0M against 273.7M (callgrind, release, the same in two
-    runs; design.md, Limits 23). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
+    runs; design.md, Limits 22). `bytes_up_to` keeps a file's pieces of 1 KiB or more as they came
     and copies runs of smaller ones into one buffer, so a file sent in small pieces holds about its
     size, not a piece and its room for each: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB against
     277.7 MiB (peak working set, release, two runs); a file under 64 KiB that came in one piece is
@@ -5519,7 +5619,7 @@ Corten is pre-1.0, so any minor version may change the API.
 58. A deploy guide (`docs/guide/deploy.md`): what a proxy or CDN in front of the app must do (`Host`,
     `X-Forwarded-For`, HTTP/2, event streams, `Vary`, error bodies, connection reuse, health checks,
     body size), an nginx configuration the watchlist's browser smoke test passes through, and the
-    cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 21 records that a shared
+    cache settings for Cloudflare and CloudFront. `docs/design.md` Limits 20 records that a shared
     cache must key on `Vary` and why a page's JSON stays at the page's URL
     ([#783 A Public page is safe behind a CDN only if the CDN keys on Vary, which Cloudflare and CloudFront do not by default, so a JSON client of a page route can get the cached HTML](https://github.com/todd-skelton/corten/issues/783)).
 59. The README's runtime size is the build's, 12.1 KB gzip (34,523 bytes minified, 12,427 gzipped at
@@ -5627,7 +5727,7 @@ Corten is pre-1.0, so any minor version may change the API.
     cases but makes a full load wait for the read and the page together, which in the Chase Sets
     pilot could add up to as much again to its server time (60.4 ms for the request serving the
     read, 56.2 ms for the page, debug build), so the read stays beside the handler. Choices 19 and
-    20 and Limit 23 keep their decision and the numbers that carry it, and link the pull request or
+    20 and Limit 22 keep their decision and the numbers that carry it, and link the pull request or
     guide that has the full measurement. Choice 23 cites the app guide,
     [#894 docs: a flood of unfinished heads leaves memory with glibc's allocator; size max_connections from repeated floods](https://github.com/corten-run/corten/pull/894)
     and
@@ -5635,6 +5735,23 @@ Corten is pre-1.0, so any minor version may change the API.
     for the jemalloc flood figures, which Choice 19 no longer carries
     ([#959 Design Choice 20 does not weigh awaiting a layout read before the handler, which would end its error-page cases at a latency cost; every app pays 0.3% to 0.9% a request for the current shape](https://github.com/corten-run/corten/issues/959),
     [#966 design.md's Limit 23 and Choices 19 and 20 carry whole measurement logs, which bury what was decided](https://github.com/corten-run/corten/issues/966)).
+72. Design Choice 1 states `html!`'s cost against Maud on the item page (callgrind, three rounds
+    at `ff1701b8`): 44,494 instructions a request to write card-market's document against 53,935
+    to 53,937 for the axum + Maud app's, most of Maud's in its escaping; the askama comparison,
+    one whole-app run each that showed only noise, is gone. `bench/fullstack/cost-by-crate.sh`
+    takes `APP=axum-maud`, prints each answer's bytes and names its dumps after the app, and
+    `cost-by-crate.mjs` lists a function with what it calls (`INCLUSIVE=`) and knows Maud's
+    escaping and the bench apps' files
+    ([#963 Design Choice 1 rests on an unrecorded askama comparison; it should state html!'s rendering cost against Maud on equal work](https://github.com/corten-run/corten/issues/963)).
+73. design.md: Limits 11 and 12 described decisions (who may use a route is in its handler's
+    type; a request's fixed stages, with the app's steps at one place), so they are Choices 27
+    and 28, with what they stand on, and Limits 11 and 12 keep only what Corten does not do (a
+    check on the record stays in the handler, and a route added outside a routes module that
+    holds its prefix is checked against the prefix by a build, not `cargo check`; no hooks at
+    several stages, and no step for one route). Their anchors stay, so no citation moves. The
+    intro and the Limits section no longer say every limit is "yet": some wait on the platform or
+    an app, others are so by design
+    ([#967 design.md's Limits 11 and 12 are decisions, not limits, and its intro calls every limit something Corten does not do yet](https://github.com/corten-run/corten/issues/967)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
