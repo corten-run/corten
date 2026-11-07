@@ -109,7 +109,7 @@ rules something out.
    direct writes, or a feature needs the tree on the server, such as computing patches by diffing
    two renders.
 
-   Last checked: 2026-11-07, round r16, three load passes, on `eea6adb`.
+   Last checked: 2026-11-06, round r16, three load passes, on `eea6adb`.
 
 4. <a id="choice-plain-functions"></a>**Plain functions, not a client framework, by default.** A handler is an exported function the
    markup calls with the elements it uses, run by one delegated listener per event type; there
@@ -196,7 +196,7 @@ rules something out.
    measures a first paint that streaming would bring forward by more than a `<corten-live>` part
    does.
 
-   Last checked: 2026-11-07, round r16, three load passes, on `eea6adb`.
+   Last checked: 2026-11-06, round r16, three load passes, on `eea6adb`.
 
 8. <a id="choice-compiled-static-files"></a>**Static files are compiled into the program, a constant per file.** `embed!(pub struct
    Static = "static")` includes the directory when the crate compiles, so the binary is the
