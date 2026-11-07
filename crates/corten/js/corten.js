@@ -752,7 +752,7 @@ export function subscribe(url, handlers, { signal } = {}) {
     } catch (error) {
       if (current.signal.aborted) return;
       console.error(error);
-      retry(sync);
+      retry(() => sync(true));
     }
   }
 

@@ -2,9 +2,12 @@
 // socket mounted so it can stop and restart instances on the same clock it measures with.
 //
 // CLIENTS subscribers (split over WORKERS threads, so the load generator is not the bottleneck)
-// follow feed s1 through the load balancer exactly like EventSource + corten.js: snapshot, then
-// /live?since=cursor; on a dropped stream, reconnect after the server's `retry` with
-// Last-Event-ID; on an HTTP error, back off and reconnect. The main thread commits WPS market
+// follow feed s1 through the load balancer with the requests EventSource + corten.js make:
+// snapshot, then /live?since=cursor; on a dropped stream, reconnect after the server's `retry`
+// with Last-Event-ID; on an HTTP error, back off and reconnect. They are a client of this file's
+// own, not the runtime (corten.js needs a DOM), so they count what the server sends; the
+// runtime's own recovery paths (sync, a seq gap, a stream's HTTP error, a failed snapshot) are
+// checked in browsers by scripts/smoke.mjs. The main thread commits WPS market
 // writes per second (N listings each) through the load balancer and runs the schedule (default:
 // kill a, start a, kill b, start b; kills are SIGKILL). At the end every client must account for
 // every committed seq after its first snapshot, in order: as a patch, or inside a newer snapshot.
