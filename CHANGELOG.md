@@ -2312,6 +2312,18 @@ Corten is pre-1.0, so any minor version may change the API.
     event with zstd on main and 100,474 on this branch (+0.09%), brotli 213,884 against 213,716
     (-0.08%), and the stream is 3 bytes longer, its frame's end
     ([#1001 Media only accepts buffered bytes, so a large generated download needs Relay instead of an app-owned streaming answer](https://github.com/corten-run/corten/issues/1001)).
+260. `corten::Error` implements `Display`, writing its source's message (what the log says), and
+    `Error::status_code()` returns the status of the answer it makes (a sign-in's 401, which a
+    browser gets as a redirect), so a handler that answers in
+    a shape of its own (a route keeping another server's `{"error": ..}` bodies) can say why a
+    step failed: `extract::bytes_up_to`'s `Err` for a body that could not be read, which it could
+    only answer with a fixed message before. The accessor is named apart from `Error::status`,
+    which makes an error. `std::error::Error` stays unimplemented, since the conversion from any
+    error (`From<E: std::error::Error>`) would then include `Error` itself. Corten still never
+    sends a 5xx message to a browser. The message is the log's, so it can name what a
+    `with_status` hid (a refusal answered as a 404 says `refused: 403 Forbidden`); an app that
+    sends it, in its own body or in markup, chooses to
+    ([#995 corten::Error has no Display or status accessor, so a handler answering in its own JSON shape cannot say why a body read failed](https://github.com/corten-run/corten/issues/995)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -5658,6 +5670,14 @@ Corten is pre-1.0, so any minor version may change the API.
     for the jemalloc flood figures, which Choice 19 no longer carries
     ([#959 Design Choice 20 does not weigh awaiting a layout read before the handler, which would end its error-page cases at a latency cost; every app pays 0.3% to 0.9% a request for the current shape](https://github.com/corten-run/corten/issues/959),
     [#966 design.md's Limit 23 and Choices 19 and 20 carry whole measurement logs, which bury what was decided](https://github.com/corten-run/corten/issues/966)).
+72. Design Choice 1 states `html!`'s cost against Maud on the item page (callgrind, three rounds
+    at `ff1701b8`): 44,494 instructions a request to write card-market's document against 53,935
+    to 53,937 for the axum + Maud app's, most of Maud's in its escaping; the askama comparison,
+    one whole-app run each that showed only noise, is gone. `bench/fullstack/cost-by-crate.sh`
+    takes `APP=axum-maud`, prints each answer's bytes and names its dumps after the app, and
+    `cost-by-crate.mjs` lists a function with what it calls (`INCLUSIVE=`) and knows Maud's
+    escaping and the bench apps' files
+    ([#963 Design Choice 1 rests on an unrecorded askama comparison; it should state html!'s rendering cost against Maud on equal work](https://github.com/corten-run/corten/issues/963)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
