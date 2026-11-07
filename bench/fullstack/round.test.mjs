@@ -33,7 +33,7 @@ test("a restart in the build step goes on there, skipping the app that was build
 });
 
 test("the builds left are the build calls' apps not yet started, in their order", () => {
-  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], [1, 2, 3, 4]);
+  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], ["u1", "u2", "u3", "u4"]);
   assert.deepEqual(buildsLeft(all, []), ["corten", "gin", "nextjs", "django"]);
   assert.deepEqual(buildsLeft(all, ["corten", "nextjs"]), ["gin", "django"]);
   assert.deepEqual(buildsLeft(all, ["corten", "gin", "nextjs", "django"]), []);
@@ -47,7 +47,7 @@ test("the builds left are the build calls' apps not yet started, in their order"
  * @param {number[]} [clock]
  */
 async function runBuilds(built, outcomes = {}, clock = []) {
-  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], [1, 2, 3, 4]);
+  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], ["u1", "u2", "u3", "u4"]);
   /** @type {string[]} */
   const log = [];
   let turn = 0;
@@ -131,7 +131,7 @@ test("the summary is not a step: a restart in it runs the summary again", () => 
 });
 
 test("every step has calls, each with a time limit, in the steps' order", () => {
-  const all = calls("r10", "10", ["corten", "nextjs"], [18410, 18411]);
+  const all = calls("r10", "10", ["corten", "nextjs"], ["http://localhost:18410", "http://localhost:18411"]);
   assert.deepEqual([...new Set(all.map(([step]) => step))], steps);
   for (const [, limit] of all) assert.ok(limit > 0 && limit <= 150);
   const browser = all.filter(([step]) => step === "browser").at(-1);
@@ -139,14 +139,14 @@ test("every step has calls, each with a time limit, in the steps' order", () => 
 });
 
 test("the builds come last, one call an app", () => {
-  const all = calls("r13", "10", ["corten", "nextjs"], [18410, 18411]);
+  const all = calls("r13", "10", ["corten", "nextjs"], ["http://localhost:18410", "http://localhost:18411"]);
   assert.equal(steps.at(-1), "build");
   assert.deepEqual(all.filter(([step]) => step === "build").map((c) => c.slice(2)), [["build.mjs", "r13", "corten"], ["build.mjs", "r13", "nextjs"]]);
 });
 
 test("the compiled apps build first, the others in the order given", () => {
   for (const name of compiledFirst) assert.ok(name in apps, `${name} is not an app`);
-  const order = calls("r13", "10", ["nextjs", "django", "gin", "corten", "leptos"], [1, 2, 3, 4, 5]).filter(([step]) => step === "build").map((c) => c.at(-1));
+  const order = calls("r13", "10", ["nextjs", "django", "gin", "corten", "leptos"], ["u1", "u2", "u3", "u4", "u5"]).filter(([step]) => step === "build").map((c) => c.at(-1));
   assert.deepEqual(order, ["corten", "leptos", "gin", "nextjs", "django"]);
 });
 
@@ -154,7 +154,7 @@ test("a full-stack round's calls and its build budget fit in its unit's hours, f
   const names = Object.keys(apps);
   assert.equal(hoursFor(1), fullstackHours);
   for (let passes = 1; passes <= maxPasses; passes += 1) {
-    const all = calls("r13", "10", names, names.map((_, i) => i), [], passes);
+    const all = calls("r13", "10", names, names.map((_, i) => `u${i}`), [], passes);
     // Every app may take its full wait to start before the browser step.
     const measuring = all.filter(([step]) => step !== "build").reduce((n, [, limit]) => n + limit, 0) + names.length * startMinutes;
     // The budget stops new builds; the last one started may still run to its own limit.
@@ -165,8 +165,8 @@ test("a full-stack round's calls and its build budget fit in its unit's hours, f
 });
 
 test("each load call runs the round's passes, with that many times one pass's limit", () => {
-  const one = calls("r15", "10", ["corten"], [1]).filter(([, , script]) => script === "run-ssr.mjs");
-  const three = calls("r15", "10", ["corten"], [1], [], 3).filter(([, , script]) => script === "run-ssr.mjs");
+  const one = calls("r15", "10", ["corten"], ["u1"]).filter(([, , script]) => script === "run-ssr.mjs");
+  const three = calls("r15", "10", ["corten"], ["u1"], [], 3).filter(([, , script]) => script === "run-ssr.mjs");
   assert.equal(one.length, 4);
   for (const [i, call] of three.entries()) {
     assert.equal(call[1], one[i][1] * 3);
@@ -197,7 +197,7 @@ test("count.mjs has perf watch the app's pinned cores on a bench host, and every
 });
 
 test("an app that serves only the JSON is in the JSON phases, cold start and count, not the pages", () => {
-  const all = calls("r13", "10", ["corten"], [18410], ["aspnet-aot"]);
+  const all = calls("r13", "10", ["corten"], ["http://localhost:18410"], ["aspnet-aot"]);
   const named = (/** @type {string} */ script, /** @type {string=} */ target) => all.filter(([, , s, ...rest]) => s === script && (!target || rest.at(-1) === target)).map((c) => c.join(" "));
   for (const c of [...named("run-ssr.mjs", "json"), ...named("cold-start.mjs"), ...named("count.mjs")]) assert.match(c, /corten,aspnet-aot/);
   for (const c of [...named("run-ssr.mjs", "page"), ...named("browser.mjs")]) assert.doesNotMatch(c, /aspnet-aot/);

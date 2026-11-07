@@ -1,8 +1,9 @@
 // The server-rendering part of a round's summary (run-ssr.mjs's files): each app's phases, their
 // passes merged, which apps failed, and which numbers are within noise of Corten's. summarize.mjs
 // writes it; ssr.test.mjs tests it on files it writes itself.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { edgeBound, edgeContainer } from "./edge.mjs";
 import { passFile, passesOf, spread, withinNoise } from "./passes.mjs";
 
 const read = (/** @type {string} */ file) => (existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null);
@@ -27,13 +28,23 @@ export function phaseOf(folder, name, base) {
   const d = k6.metrics.http_req_duration;
   const sampled = read(join(folder, `${base}-stats.json`));
   const stats = sampled?.[`fsw-${name}`];
-  // The item API's samples, where it was sampled: the entry that is not the app's.
-  const api = Object.entries(sampled ?? {}).find(([c]) => c !== `fsw-${name}`)?.[1];
+  // The item API's samples, where it was sampled: the entry that is neither the app's nor the edge's.
+  const api = Object.entries(sampled ?? {}).find(([c]) => c !== `fsw-${name}` && c !== edgeContainer)?.[1];
   // CPU time the app's container used in the phase, from its cgroup counter (run-ssr writes it
   // from r7 on); before that, the sampled average stands in for it.
-  const usec = read(join(folder, `${base}-cpu.json`))?.[`fsw-${name}`]?.usec;
+  const cpu = read(join(folder, `${base}-cpu.json`));
+  const usec = cpu?.[`fsw-${name}`]?.usec;
+  // The matched tier's edge (edge.mjs), where the app was reached through it: its counted CPU time.
+  const edgeUsec = cpu?.[edgeContainer]?.usec;
+  // k6's own CPU time and the cores it had (run-ssr writes them in every tier, from #809 on).
+  const k6Usec = cpu?.k6?.usec;
+  const k6Cores = cpu?.k6?.cores;
+  // The cores the edge had (run-ssr.mjs's edge.json), to say whether it may have bounded the phase.
+  const edgeCores = read(join(folder, "edge.json"))?.cores;
   const rps = k6.metrics.http_reqs.rate;
   const offered = k6.metrics.http_reqs.count + (k6.metrics.dropped_iterations?.count ?? 0);
+  const edgePct = edgeUsec > 0 ? +((100 * +rps.toFixed(0)) / (k6.metrics.http_reqs.count / (edgeUsec / 1e6))).toFixed(1) : null;
+  const k6Pct = k6Usec > 0 ? +((100 * +rps.toFixed(0)) / (k6.metrics.http_reqs.count / (k6Usec / 1e6))).toFixed(1) : null;
   const perCpuSecond = usec > 0 ? Math.round(k6.metrics.http_reqs.count / (usec / 1e6)) : stats?.cpuAvgPct > 0 ? Math.round(rps / (stats.cpuAvgPct / 100)) : null;
   return {
     rps: +k6.metrics.http_reqs.rate.toFixed(0),
@@ -54,11 +65,32 @@ export function phaseOf(folder, name, base) {
     cpuUsedPct: usec > 0 && perCpuSecond ? +((100 * +rps.toFixed(0)) / perCpuSecond).toFixed(1) : stats?.cpuAvgPct ?? null,
     perMiB: stats?.memMaxMiB > 0 ? +(rps / stats.memMaxMiB).toFixed(1) : null,
     apiCpuPct: api?.cpuAvgPct ?? null,
+    // Requests per second of the edge's CPU time and the share of a CPU it used: what the
+    // deployed shape adds to each request, beside the app's own.
+    edgePerCpuSecond: edgeUsec > 0 ? Math.round(k6.metrics.http_reqs.count / (edgeUsec / 1e6)) : null,
+    edgeCpuUsedPct: edgePct,
+    // True when the edge used at least 90% of its cores: the phase measured the edge, not the app.
+    edgeBound: edgeCores > 0 ? edgeBound(edgePct, edgeCores) : null,
+    // The share of a CPU k6 used, and whether it used 90% of the cores it had (then k6 set the rate).
+    k6CpuUsedPct: k6Pct,
+    loadBound: k6Cores > 0 && k6Pct !== null ? k6Pct >= 90 * k6Cores : null,
+    // In a saturation phase reached through the edge, whether the app used less than 90% of its one
+    // core: then the edge, k6, the machine or the app's own concurrency set the rate, not its CPU.
+    // The fixed rate's app is meant to be idle, and directly (the defaults tier) it is not said.
+    appIdle: /-sat\d+(-p\d+)?$/.test(base) && edgeUsec > 0 && usec > 0 && perCpuSecond ? (100 * +rps.toFixed(0)) / perCpuSecond < 90 : null,
   };
 }
 
+/**
+ * Whether a round reached its apps through the edge: run-ssr.mjs writes edge.json into a load
+ * folder only then, so a matched round run with BENCH_EDGE=off has none.
+ * @param {string} raw the round's raw folder
+ */
+export const edgeOf = (raw) =>
+  existsSync(raw) && readdirSync(raw, { withFileTypes: true }).some((d) => d.isDirectory() && existsSync(join(raw, d.name, "edge.json")));
+
 /** The numbers a phase of several passes gives as their median, with `range` their spread. */
-const spreadKeys = ["rps", "unsentPct", "p50", "p95", "p99", "failedPct", "cpuPct", "memMiB", "memMaxMiB", "perCpuSecond", "cpuUsedPct", "perMiB", "apiCpuPct"];
+const spreadKeys = ["rps", "unsentPct", "p50", "p95", "p99", "failedPct", "cpuPct", "memMiB", "memMaxMiB", "perCpuSecond", "cpuUsedPct", "perMiB", "apiCpuPct", "edgePerCpuSecond", "edgeCpuUsedPct", "k6CpuUsedPct"];
 
 /**
  * Several passes of one phase: each number the passes' median (one a pass measured), `range`
@@ -79,6 +111,9 @@ export function merged(runs, asked) {
   out.unsentPct = Math.max(...runs.map((r) => r.unsentPct));
   out.failedPct = Math.max(...runs.map((r) => r.failedPct));
   out.cpuCounted = runs.every((r) => r.cpuCounted);
+  for (const flag of /** @type {const} */ (["edgeBound", "loadBound", "appIdle"])) {
+    if (runs.some((r) => r[flag] !== null && r[flag] !== undefined)) out[flag] = runs.some((r) => r[flag] === true);
+  }
   return out;
 }
 
