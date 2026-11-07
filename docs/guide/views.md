@@ -132,8 +132,8 @@ The runtime fetches a same-origin link's page after the pointer rests on it for 
 touch starts), so the click shows it at once; it keeps the 8 newest for 10 seconds and aborts
 the request of one it drops, so the server sees the client go. The page a clicked link names is
 fetched once, by the click: no hover until it is in (the dwell the click cut short, the pointer
-back on its link) prefetches it. A page that is costly to draw (a
-report that takes seconds) says so on its route, `#[route("/reports/suggested", get = suggested,
+back on its link) prefetches it. A page that is costly to draw (a report that takes seconds)
+says so on its route, `#[route("/reports/suggested", get = suggested,
 prefetch = false)]`: every `href={..}` to it, a route held as `&dyn Href` included, is written
 with `data-no-prefetch`, and only a click starts its work. A route costly only for some of its
 URLs (a workflow step that calls another service) names a function of the route that says which
