@@ -6236,7 +6236,10 @@ async fn a_body_read_as_it_arrives_is_read_before_it_ends_and_refused_where_a_br
         assert!(got.starts_with("HTTP/1.1 413"), "{over} over, with its length: {got}");
     }
     let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
-    stream.write_all(b"PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ntransfer-encoding: chunked\r\n\r\n").await.unwrap();
+    stream
+        .write_all(b"PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ntransfer-encoding: chunked\r\n\r\n")
+        .await
+        .unwrap();
     let piece = vec![7u8; 64 << 10];
     for _ in 0..(2 * MAX / piece.len()) {
         stream.write_all(format!("{:x}\r\n", piece.len()).as_bytes()).await.unwrap();
