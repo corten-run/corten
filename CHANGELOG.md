@@ -3837,9 +3837,14 @@ Corten is pre-1.0, so any minor version may change the API.
 164. A markup call to a handler whose parameter has a JSDoc type no Rust value is checked against
     does not compile, where it took any `ToJson` value: an object type (`{ count: number }`),
     `number[]`, `string | null`, `object`, `any`, a `@typedef` of plain values, an unknown
-    name, or a group with a field of such a type. The warning on the call says why; type the value
-    with a generated declaration (`import("../types/app").Name`), or `unknown` for a value the
-    script checks itself, the one type that still takes any value. The handler itself compiles, so
+    name, or a group with a field of such a type. So does one whose parameter names an element or
+    an event in a shape no call is checked against, which took any ref or event: a union of event
+    interfaces (`MouseEvent | KeyboardEvent`; take the one they share, `UIEvent` or `Event`),
+    `HTMLElement | null`, `EventTarget`, `Node`. The warning on the call says why and what to take
+    instead: a generated declaration (`import("../types/app").Name`) for a value, a checked
+    interface for an element or an event, or `unknown` for anything the script checks itself, the
+    one type that still takes any argument (a value, a ref, `event`, `target`, `signal` or
+    `scope`). The handler itself compiles, so
     an export only other scripts call is typed as the script needs. A typed event imported for
     its type alone (`/** @import { Saved } from "corten/events" */`) is now its `#[event]` type,
     as an `import` statement's is, where it took any event: `on:click` on such a handler does not

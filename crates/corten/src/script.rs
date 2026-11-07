@@ -809,6 +809,56 @@
 //! # fn main() {}
 //! ```
 //!
+//! nor a value of the right shape, since nothing checks the shape:
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! struct Count { count: u32 }
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::show(target, Count { count: 3 })}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! nor through a `@typedef` of plain values (`counted` takes a `Count`, `{ count: number }`):
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! struct Count { count: u32 }
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::counted(target, Count { count: 3 })}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! nor a group with a field of such a type (`tally` takes a `Badge`, whose `ids` is `number[]`):
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! struct Count { count: u32 }
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     let out = refs();
+//!     let badge = js::Badge { out, ids: [1, 2] };
+//!     html! { <p on:click={js::tally(badge)}><output ref={out}></output></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
 //! A parameter typed `unknown` claims nothing the call does not check: it takes any `ToJson`
 //! value, and the script narrows it before using it:
 //!
@@ -854,7 +904,7 @@
 //! The same with the class imported for its type alone (`/** @import { RowToggled } from
 //! "corten/events" */`, `toggle_note.js`):
 //!
-//! ```compile_fail
+//! ```compile_fail,E0277
 //! use corten::prelude::*;
 //!
 //! #[corten::script::event]

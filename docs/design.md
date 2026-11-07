@@ -139,16 +139,18 @@ rules something out.
    a handler the script does not export fails to compile at the call. No generated declarations
    are needed between markup and script, and none can be stale.
 
-   Stands on: bet (the JSDoc types the compiler reads cover what handlers take: elements, events,
-   strings, numbers, booleans, routes, messages, formats, and any value of a Rust type through its
-   generated declaration; a type it cannot check a call against, a set of names written as string
-   literals or any other JSON shape, refuses the call rather than taking any value, and only
-   `unknown` takes one, since it claims nothing the call does not check);
+   Stands on: bet (the JSDoc types the compiler reads cover what handlers take: elements and their
+   lists, maps and views (`Holds`), events, `AbortSignal`, strings and lists of them, numbers,
+   booleans, element ids, routes and feed URLs, messages, formats, and any value of a Rust type
+   through its generated declaration; a type it cannot check a call against, a set of names
+   written as string literals, any other JSON shape or an element or event in another shape,
+   refuses the call rather than taking anything, and only `unknown` takes any argument, since it
+   claims nothing the call does not check);
    reasoned (with the check at the call, no declarations sit between markup and script to go stale);
    value (a wrong call fails to compile, Values 4).
 
-   Revisit when: an example or a kit component has to take a type the compiler reads loosely,
-   because the guide's workaround does not fit, so a wrong call compiles; or JavaScript gains type
+   Revisit when: an example or a kit component has to take `unknown` where a precise type would
+   serve it, because no checked type or generated declaration fits, so a wrong call compiles; or JavaScript gains type
    syntax of its own (TC39's type annotations proposal), which a script could carry in place of
    JSDoc.
 

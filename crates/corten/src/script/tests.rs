@@ -703,8 +703,6 @@ fn rendering_collects_the_modules_a_page_uses() {
     assert_eq!(modules, vec!["field", "form", "line_item"]);
 }
 
-/// The strings handlers write, as the runtime's parser expects them (`wire.json`, which
-/// `scripts/wire.mjs` parses with the runtime's own parser).
 /// `shared.watch`'s argument: the Rust type of its generated declaration (`types/app.d.ts`).
 #[cfg_attr(feature = "json", derive(crate::json::ToJson))]
 #[allow(dead_code)]
@@ -713,6 +711,8 @@ struct Options {
     tags: [&'static str; 2],
 }
 
+/// The strings handlers write, as the runtime's parser expects them (`wire.json`, which
+/// `scripts/wire.mjs` parses with the runtime's own parser).
 #[cfg(feature = "json")]
 #[test]
 fn handlers_write_the_shared_wire_vectors() {
