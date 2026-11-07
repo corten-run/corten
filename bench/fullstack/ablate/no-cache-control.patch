@@ -1,0 +1,14 @@
+diff --git a/crates/corten/src/app.rs b/crates/corten/src/app.rs
+index 78188364..8d382432 100644
+--- a/crates/corten/src/app.rs
++++ b/crates/corten/src/app.rs
+@@ -2019,7 +2019,8 @@ impl<S: Steps> Layer<S> {
+         };
+         // Corten's own routes (assets, the runtime) are settled the same way: they say what they
+         // are, and anything that does not gets the default.
+-        cache::settle(&mut res, seen, path.as_deref().unwrap_or(""));
++        // Ablation: no Cache-Control decided.
++        let _ = (seen, &path);
+         // A body with this request's nonce differs every time, so its tag would never match.
+         if tagged && !nonced {
+             res = cache::tag(res, &has).await;
