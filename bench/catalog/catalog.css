@@ -1,0 +1,33 @@
+/* Shared byte-for-byte by the catalog pages in every framework. */
+article[aria-label="Catalog record"] {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+article[aria-label="Catalog record"] > ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  padding: 0;
+  list-style: none;
+}
+article[aria-label="Catalog record"] form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+article[aria-label="Catalog record"] table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.5rem 0;
+}
+article[aria-label="Catalog record"] th,
+article[aria-label="Catalog record"] td {
+  padding: .5rem;
+  border-bottom: 1px solid currentColor;
+  text-align: start;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+}

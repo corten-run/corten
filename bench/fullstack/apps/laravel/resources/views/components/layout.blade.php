@@ -7,6 +7,7 @@
 <title>{{ $title }}</title>
 <link rel="stylesheet" href="{{ asset('style.css') }}">
 <link rel="stylesheet" href="{{ asset('components.css') }}">
+{{ $head ?? '' }}
 @livewireStyles
 <script>
 // The browser benchmark reads this mark: Livewire and Alpine have started.

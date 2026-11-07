@@ -3,6 +3,8 @@
 //! item as JSON, and the live benchmark's stream and publisher. With PROFILE=matched it adds the
 //! matched tier's production profile that tower-http has a layer for (bench/fullstack/README.md,
 //! "The matched tier"); the rest of the profile axum and tower-http have nothing for.
+mod catalog;
+mod catalog_page;
 mod items;
 mod model;
 mod pages;
@@ -44,12 +46,15 @@ type AppState = State<Arc<App>>;
 #[tokio::main]
 async fn main() {
     // Load the fixture (if any) before listening, like the other apps.
+    catalog::source::init();
     let app = Arc::new(App { items: Items::from_env(), prices: broadcast::channel(1024).0 });
     let profile = std::env::var("PROFILE").as_deref() == Ok("matched");
     let routes = Router::new()
         .route("/", get(home))
         .route("/items/{id}", get(item_page).post(create_alert))
         .route("/api/items/{id}", get(item_json))
+        .route("/catalog/{id}", get(catalog_page))
+        .route("/api/catalog/{id}", get(catalog_json))
         .route("/live/prices", get(live_prices))
         .route("/live/publish", post(live_publish))
         .fallback(async || not_found());
@@ -92,6 +97,28 @@ fn matched(router: Router) -> Router {
 
 async fn home(State(app): AppState) -> Markup {
     pages::home(&app.items.shelf())
+}
+
+#[derive(Deserialize)]
+struct CatalogQuery {
+    #[serde(default)]
+    field: String,
+}
+
+async fn catalog_page(Path(id): Path<String>, Query(query): Query<CatalogQuery>) -> Response {
+    match catalog::source::get(&id).await {
+        Ok(Some(record)) => catalog_page::render(&record, &query.field).into_response(),
+        Ok(None) => not_found(),
+        Err(_) => (StatusCode::BAD_GATEWAY, "The catalog API did not answer.").into_response(),
+    }
+}
+
+async fn catalog_json(Path(id): Path<String>) -> Response {
+    match catalog::source::get(&id).await {
+        Ok(Some(record)) => Json(record).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(_) => (StatusCode::BAD_GATEWAY, "The catalog API did not answer.").into_response(),
+    }
 }
 
 #[derive(Deserialize)]

@@ -34,8 +34,14 @@ func main() {
 		log.Fatal(err)
 	}
 	live := newLivePrices()
+	catalog, err := newCatalogSource()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	r := gin.Default()
+	r.StaticFile("/catalog.css", "static/catalog.css")
+	catalog.routes(r)
 	for _, name := range []string{"style.css", "components.css", "htmx.min.js", "item.js"} {
 		r.StaticFile("/"+name, "static/"+name)
 	}

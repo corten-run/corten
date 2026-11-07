@@ -13,15 +13,19 @@ builder.Services.Configure<WebEncoderOptions>(o => o.TextEncoderSettings = new T
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower);
 builder.Services.AddHttpClient<ItemSource>(c => c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080"));
 builder.Services.AddSingleton<ItemSource>();
+builder.Services.AddHttpClient<CatalogSource>(c => c.BaseAddress = new Uri(Environment.GetEnvironmentVariable("API_BASE") ?? "http://localhost:8080"));
+builder.Services.AddSingleton<CatalogSource>();
 builder.Services.AddSingleton<LivePrices>();
 
 var app = builder.Build();
 // Load the fixture before the first request.
 app.Services.GetRequiredService<ItemSource>();
+app.Services.GetRequiredService<CatalogSource>();
 app.MapStaticAssets();
 app.MapRazorPages().WithStaticAssets();
 // The item as JSON for other services: the same data the page renders.
 app.MapGet("/api/items/{id}", async (string id, ItemSource items) => await items.Get(id) is { } item ? Results.Ok(item) : Results.NotFound());
+app.MapGet("/api/catalog/{id}", async (string id, CatalogSource catalog) => await catalog.Get(id) is { } record ? Results.Ok(record) : Results.NotFound());
 // The live benchmark (bench/live): server-sent events, and the publisher that feeds them.
 app.MapGet("/live/prices", (LivePrices live, CancellationToken cancel) => TypedResults.ServerSentEvents(live.Subscribe(cancel)));
 app.MapPost("/live/publish", async (HttpRequest request, LivePrices live) =>
