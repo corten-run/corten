@@ -37,7 +37,7 @@ test("a rerun keeps the phases it does not run with the commit they were taken a
   const header = { commit: "aaa", dirty: true, date: "2026-11-07T17:38:27Z" };
   const fresh = { taken: { commit: "bbb", dirty: false, date: "2026-11-07T18:00:00Z" }, cpuSeconds: 2 };
   const kept = keptFrom({ corten: { probes: { headFlood: { cpuSeconds: 1 }, slowReader: fresh, slowHead: { error: "probe failed" } }, cells: {} } }, header);
-  assert.deepEqual(kept.corten.probes.headFlood.taken, header, "an old phase is given the header it was written with");
+  assert.deepEqual(kept.corten.probes.headFlood.taken, { ...header, fromHeader: true }, "an old phase is given the file's header, marked as such");
   assert.equal(kept.corten.probes.slowReader, fresh, "one with its own taken keeps it");
   assert.equal(kept.corten.probes.slowHead.taken, undefined, "an error was not taken");
   assert.deepEqual(kept.corten.cells, {});
@@ -47,6 +47,10 @@ test("a rerun keeps the phases it does not run with the commit they were taken a
   const twice = replacing(once, { ...fresh, cpuSeconds: 3 });
   assert.deepEqual(twice.earlier.map((/** @type {any} */ p) => p.cpuSeconds), [1, 2], "oldest first, none nested");
   assert.equal(twice.earlier[1].earlier, undefined);
+  // An app that did not start is a pass too: the result it replaces is kept.
+  const failed = replacing(twice, { error: "did not answer in 120 s", taken: fresh.taken });
+  assert.equal(failed.error, "did not answer in 120 s");
+  assert.deepEqual(failed.earlier.map((/** @type {any} */ p) => p.cpuSeconds), [1, 2, 3]);
 });
 
 test("a phase's cell says what the app did with the connections, what a good client saw and the memory it reached", () => {

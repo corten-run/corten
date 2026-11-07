@@ -620,7 +620,8 @@ Windows, one run each, with Rust builds running on the machine, so the well-beha
 latencies are indicative; `results/harden-local3/hardening.json`, where each phase's `taken` says
 the commit it ran at: the first four phases at `d456063e` with local changes, this step's probe
 before the commit that adds it, and the clients that stop reading and the oversized requests run
-again at `330ff623` with none, each keeping its first pass in `earlier`): Corten,
+again at `330ff623` with none, each keeping its first pass in `earlier`; the first pass's `taken`
+is the file's header from then, marked `fromHeader`, whose time is when it was last written): Corten,
 axum-maud and the six other apps the matched tier names, ASP.NET Core as both its Razor Pages app
 and aspnet-aot. Corten is card-market, with its own 10 s request deadline and its write limit
 raised for the probe (Method, The hardening step). The images
@@ -635,7 +636,10 @@ the next phase starts the app again). Each cell: what the app did with the abusi
 held, to the end of the phase's hold; for the clients that stop reading, whether the server was
 still sending to those it held), the well-behaved client's p99 and its failures (none unless said),
 the app's peak memory and its CPU in cores. Times are to about a second: a connection's open is
-seen when the probe's event loop gets to it.
+seen when the probe's event loop gets to it. The probe that ran the clients that stop reading
+counted only what the kernel held unread, not what a paused socket had already read into its own
+buffer (up to 64 KiB, counted since), so a connection sent less than that reads as sent nothing,
+and Django's "none unread at the median" may be up to 64 KiB each.
 
 | App | 2,000 unfinished heads | 200 heads, a byte a second | 100 bodies, a byte a second | 200 clients that stop reading | 5,000 idle connections |
 |---|---|---|---|---|---|
@@ -676,10 +680,13 @@ each (0.63 and 0.87 in the first pass), Leptos 0.49 (0.69), aspnet-aot 0.54 (0.6
 app 0.92 (1.00) and Spring 0.99 in both (still sending at the end: none of its 200 held the same
 unread bytes at both reads, so its 90 s measures its pipelined throughput as much as a slow
 reader); Django took 0.1 (0.11) with 894 of 895 of the well-behaved client's requests failing. The
-two passes ran within the hour on the same images and differ up to fourfold for the hyper apps,
-so the order holds in both but the ratios are not settled by two runs. Estimated, not measured:
-most of the gap is the pages each server rendered before its writes blocked, which the probe does
-not count. Where it falls short:
+two passes ran the same day on the same images and differ up to fourfold for the hyper apps: in
+both Corten took the least and Django the next least, but the other apps' order changed between
+them, and two runs do not settle the ratios. Estimated, not measured: at the item-API page's cost
+in the Efficiency table (3,670 pages per CPU-second for Corten, 865 for Topcoat, 1,055 for
+axum-maud), the rerun's CPU is about 69, 93 and 112 pages for each of the 200 connections, counts
+close enough that most of the gap would be what each page costs, not how many each server sent
+before its writes blocked. Where it falls short:
 
 1. A body sent a byte a second is closed by the request deadline (card-market's 10 s, with a 503;
    30 s by default), not by a rate: Kestrel closed it within 5.4 to 6.8 s, by its minimum request
@@ -692,13 +699,13 @@ not count. Where it falls short:
    chose over Kestrel's minimum response rate ([Limit 14](../../docs/design.md#limit-http1)):
    aspnet-aot, sent the 9 KB JSON, closed its slow readers within 25.5 s, while the Razor Pages
    app, sent the page as Corten was, held them all 90 s.
-3. The 16 MiB body can reach the client as a closed connection instead of the 413: in 2 of 4 local
-   passes Corten's connection closed while the probe was still sending and no 413 was read
-   (harden-local3's first pass, in `earlier`, where the write failed with `EPIPE`, and a run not
-   committed, whose slow bodies met card-market's write limit and which did not record resets), and
-   the 413 arrived in the other 2 (harden-local1 and harden-local3's rerun). Kestrel (both apps) and
-   Spring answered all three requests in each of the three passes that ran them, with no reset in
-   the two that recorded resets. It is the race described above, which hyper's close without reading the rest of the body
+3. The 16 MiB body can reach the client as a closed connection instead of the 413: in 1 of the 3
+   committed local passes, harden-local3's first (in `earlier`), Corten's connection closed while
+   the probe was still sending (the write failed with `EPIPE`) and no 413 was read, and the 413
+   arrived in the other 2 (harden-local1 and harden-local3's rerun); a fourth local run, not kept,
+   also read the body's connection closed. In that first pass the 1 MiB header's 431 was lost the
+   same way (`closed`). Kestrel (both apps) and Spring answered all three requests in both of
+   harden-local3's passes, with no reset. It is the race described above, which hyper's close without reading the rest of the body
    decides.
 
 The table has no droplet round yet: `droplet.mjs <round> --suite harden` runs it (Running it).

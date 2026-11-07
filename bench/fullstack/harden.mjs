@@ -140,7 +140,7 @@ for (const name of names) {
   started.add(name);
   for (const p of run) {
     const failed = start(name);
-    if (failed || !(await up(name))) { o[p.key] = { error: failed ?? "did not answer in 120 s" }; continue; }
+    if (failed || !(await up(name))) { o[p.key] = replacing(o[p.key], { error: failed ?? "did not answer in 120 s", taken: { commit, dirty, date: new Date().toISOString() } }); continue; }
     const container = "fsw-" + name;
     const memBefore = memoryNow(container);
     const cpuBefore = cpuUsec(container);

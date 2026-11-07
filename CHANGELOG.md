@@ -2444,7 +2444,7 @@ Corten is pre-1.0, so any minor version may change the API.
     and it falls short where a trickled body is closed by the deadline (10 s in card-market) and
     not a minimum rate, a client that stops reading by the 60 s send timeout, where Kestrel's
     minimum rates close both sooner, and a 16 MiB body's 413 was lost to the connection closing in
-    2 of 4 local passes.
+    1 of the 3 committed local passes.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

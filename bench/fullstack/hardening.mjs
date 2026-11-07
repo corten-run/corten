@@ -18,8 +18,8 @@ export const phases = [
   { key: "slowHead", label: "200 heads a byte a second", input: { count: 200, everyMs: 1000, holdMs: 60_000 }, limitMs: 150_000 },
   { key: "slowBody", label: "100 bodies a byte a second", input: { count: 100, everyMs: 1000, holdMs: 90_000 }, limitMs: 180_000 },
   // 1,000 pipelined pages a connection are more than the socket buffers between two containers
-  // hold, so the server's writes do block (in harden-local3, a connection whose server had stopped
-  // sending held 0.12 to 0.71 MiB unread in the kernel at each app's median).
+  // hold, so the server's writes do block (in harden-local3, the median of each app's connections
+  // still open at the end held 0.12 to 0.71 MiB unread in the kernel).
   { key: "slowReader", label: "200 clients that stop reading", input: { count: 200, pipelined: 1000, holdMs: 90_000 }, limitMs: 180_000 },
   { key: "idleFlood", label: "5,000 idle connections", input: { count: 5000, holdMs: 60_000 }, limitMs: 240_000 },
   { key: "oversized", label: "200 headers / 1 MiB header / 16 MiB body", input: {}, limitMs: 120_000 },
@@ -93,14 +93,15 @@ export const cellsOf = (probes) => Object.fromEntries(Object.entries(probes).map
 
 /**
  * A round's results as a rerun of some phases keeps them: each phase without its own `taken` (one
- * from before phases kept it) is given the file's header, which was written when it was taken.
+ * from before phases kept it) is given the file's header, marked `fromHeader`: the commit it ran
+ * at, and the time the file was last written, which is when its last phase ran, not necessarily it.
  * @param {Record<string, any>} results hardening.json's results, by app
  * @param {{ commit: string | null, dirty: boolean | null, date: string }} header the file's own
  * @returns {Record<string, any>}
  */
 export const keptFrom = (results, header) => Object.fromEntries(Object.entries(results).map(([app, r]) => [app, {
   ...r,
-  probes: Object.fromEntries(Object.entries(r.probes ?? {}).map(([key, p]) => [key, p.taken || p.error ? p : { ...p, taken: { commit: header.commit, dirty: header.dirty, date: header.date } }])),
+  probes: Object.fromEntries(Object.entries(r.probes ?? {}).map(([key, p]) => [key, p.taken || p.error ? p : { ...p, taken: { commit: header.commit, dirty: header.dirty, date: header.date, fromHeader: true } }])),
 }]));
 
 /**
