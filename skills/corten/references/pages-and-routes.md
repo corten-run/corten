@@ -270,7 +270,9 @@ or write an error enum of your own for clippy's `result_large_err`.
 
 A binary or XML body, a webhook (check its signature on the bytes `bytes_up_to` read, then parse)
 and GraphQL are routes under `App::api` whose handler takes `Request`; the answer is
-`Media::new(type, bytes)` or JSON. gRPC (HTTP/2, which Corten does not serve) and a raw TCP or UDP
+`Media::new(type, bytes)` or JSON. A body too large to hold (a file `PUT` to a store) is read as it
+arrives with `pieces_up_to(request.into_body(), max)` and `chunk()` (a `BodyError` over `max`, when
+the client stalls, or when it breaks), under an API whose `deadline` leaves time for it. gRPC (HTTP/2, which Corten does not serve) and a raw TCP or UDP
 listener run in an `App::task`, their socket bound before `serve` where `main` builds the app (so a
 taken port fails at startup, and the app tests build binds none) and ending when the signal aborts.
 A webhook that needs `Api::allow_origin` gets an API of its own. Never start a second server or
