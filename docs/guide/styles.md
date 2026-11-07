@@ -407,7 +407,9 @@ utilities for layout that varies from page to page, and a component's stylesheet
 A value's own function (`gap_3()`) is its class as static text, with no match: moving the
 watchlist's fixed values to them took its home page from 62,827 instructions a request to 62,162.
 A helper that takes a value (`stack(space)`) keeps the utility's function, which costs a match
-and keeps the scale's type. States a utility cannot
+and keeps the scale's type. An app with the kit's `Stack` and `Cluster` builds such a helper on
+them, `(Cluster { gap: Gap::App }, gap(space))`, so the row keeps the kit's layout and dropped
+child margins and its gap is the utility's ([kit guide](kit.md)). States a utility cannot
 say (hover, focus, the current link) and element defaults stay in `static/style.css`, and a
 component with rules of its own (`LivePrices`) keeps its stylesheet. A utility function's
 classes are static text chosen by a match, so writing them costs what writing a class does.
