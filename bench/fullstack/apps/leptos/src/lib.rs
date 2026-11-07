@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 pub mod app;
+pub mod catalog;
+pub mod catalog_page;
 pub mod model;
 
 #[cfg(feature = "hydrate")]

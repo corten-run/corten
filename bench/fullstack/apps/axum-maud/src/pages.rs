@@ -6,6 +6,10 @@ use crate::model::{ContentLine, ItemView, sort_listings};
 
 /// The document every page shares. htmx boosts links and forms; item.js sorts the listings.
 fn layout(title: &str, content: Markup) -> Markup {
+    document(title, content, false)
+}
+
+pub(crate) fn document(title: &str, content: Markup, catalog: bool) -> Markup {
     html! {
         (DOCTYPE)
         html lang="en" {
@@ -15,6 +19,9 @@ fn layout(title: &str, content: Markup) -> Markup {
                 title { (title) }
                 link rel="stylesheet" href="/static/style.css";
                 link rel="stylesheet" href="/static/components.css";
+                @if catalog {
+                    link rel="stylesheet" href="/static/catalog.css";
+                }
                 script src="/static/htmx.min.js" defer {}
                 script src="/static/item.js" defer {}
             }

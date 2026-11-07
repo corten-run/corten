@@ -272,6 +272,11 @@ Measured on one DigitalOcean c-8 droplet (Xeon Platinum 8168) on 2026-11-06 to 2
 method, every table and the caveats are in [bench/fullstack](bench/fullstack/README.md) and
 [bench/browser](bench/browser/README.md).
 
+These are historical marketplace measurements, including localized prices in Corten's
+example. The new [catalog benchmark](bench/catalog/README.md) measures a strings-only
+record-detail page in the same eighteen frameworks, with no locale formatting in any app.
+It has a separate baseline; its throughput has not been measured yet.
+
 ### On the server
 
 The same item page (listings table, offers, a form that patches) and the same item as JSON in

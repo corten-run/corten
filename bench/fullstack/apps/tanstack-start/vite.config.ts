@@ -4,5 +4,5 @@ import { nitro } from "nitro/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  plugins: [tanstackStart({ srcDirectory: "src" }), viteReact(), nitro()],
+  plugins: [tanstackStart({ srcDirectory: "src" }), viteReact(), nitro({ plugins: ["./src/catalog-plugin.ts"] })],
 });
