@@ -1580,9 +1580,12 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    answered. From
    [#981 bench: Laravel cannot start with items in memory, so check-app.mjs laravel fails: decoding the 27.7 MB fixture passes PHP's 128 MB memory_limit](https://github.com/corten-run/corten/issues/981)
    it reads the fixture one item at a time, as the Rust apps do, keeping only each item's view, and
-   starts with the same default (measured locally: the old image never answered in 60 s, the new
-   one answered in 2 s at 153 MiB for the container, and `check-app.mjs laravel` passes). So a round
-   from then on has Laravel's in-memory numbers, which no earlier round has.
+   starts with the same default. It checks the whole file with `json_validate` first, so with a damaged
+   fixture the server exits at startup instead of serving part of the items (`tests/items.php`, run in the
+   image with `php tests/items.php`). Measured locally with one CPU on a loaded machine: the old
+   image never answered in 60 s; the new one answered its first item page 5.5 to 7.1 s after
+   `docker run` in three runs, at 132 to 133 MiB for the container, and `check-app.mjs laravel`
+   passes. So a round from then on has Laravel's in-memory numbers, which no earlier round has.
 8. r4's droplet had a slower CPU than r3's (Platinum 8168 against 8280). Django and Nuxt, which
    passed r3's in-memory page test near their limit, failed it on r4's; their settings did not
    change. r3's numbers stay in `results/r3/`. In r5, on the same CPU model as r4, Django passed

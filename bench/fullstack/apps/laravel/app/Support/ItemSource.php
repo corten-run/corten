@@ -23,13 +23,15 @@ class ItemSource
      * Each item of `{"item_1": <API response>, ...}` with its JSON, one at a time, as the Rust apps
      * read it: decoding the whole 27.7 MB file at once takes more than PHP's default 128 MB
      * memory_limit, which the app keeps (README, caveat 7). Only the converted items are kept.
+     * json_validate checks the whole file first without building it, so a cut-off or malformed
+     * fixture fails at boot instead of loading the items before the damage.
      *
      * @param  callable(string, string): void  $item
      */
     private static function eachItem(string $json, callable $item): void
     {
-        $i = strpos($json, '{');
-        if ($i === false) {
+        $i = strspn($json, " \t\r\n");
+        if (! json_validate($json) || ($json[$i] ?? '') !== '{') {
             throw new \JsonException('the fixture is not a JSON object');
         }
         $i++;
