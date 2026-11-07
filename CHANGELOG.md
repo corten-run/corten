@@ -5332,7 +5332,7 @@ Corten is pre-1.0, so any minor version may change the API.
 185. A link clicked before the hover's 65 ms dwell was up fetched its page twice when that page took
     longer than the rest of the dwell to arrive: the click's request, then a prefetch the dwell
     started once it ended, since the address stays the page being left until the new page is in
-    ([#1028 A client navigation changes the address when the page's answer is in (#992)](https://github.com/corten-run/corten/pull/1028)). A press or a navigation now ends the dwell. The watchlist smoke holds such a page's
+    ([#1028 A client navigation changes the address when the page's answer is in (#992)](https://github.com/corten-run/corten/pull/1028)). A navigation the runtime takes now ends the dwell. The watchlist smoke holds such a page's
     answer and checks it is fetched once (it failed on main in Chromium and Firefox), and the two
     Firefox checks that failed now and then say what they counted when they fail; the prefetch
     check's one-off failure (an extra request) was this
