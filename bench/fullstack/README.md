@@ -822,19 +822,21 @@ items at shutdown is not in them), and one request is the run of 1,300 requests 
 repeat: five repeats, median (range); at this resolution a default's cost is good to a few
 hundred instructions (code layout moves between builds, and now and then one run's fixed part
 jumps by about a million, which moves that repeat by about 1,000 and the median not at all), so a
-row near zero, or one whose range crosses it, says the default costs nothing that can be seen. User instructions only (callgrind
-does not see the kernel's), on glibc's allocator and the zstd the crate bundles, where the
+row near zero, or one whose range crosses it, says the default costs nothing that can be seen.
+User instructions only (callgrind does not see the kernel's), on glibc's allocator and the zstd the crate bundles, where the
 rounds' image preloads jemalloc and links Debian's libzstd ([design Choice 23](../../docs/design.md#choice-jemalloc-image)
 puts this page at about 83,000 under jemalloc against 87,000), so these are the rounds' request
 shape, not their configuration. Requests per CPU-second under load were not measured, which needs
 a droplet round ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)) ([cost-by-default.sh](cost-by-default.sh), split by [cost-by-default.mjs](cost-by-default.mjs);
 results and each build's answer headers in [results/defaults1](results/defaults1/)). The headers
 show the security headers, compression, `ETag` and `Cache-Control` patches each removing only the
-headers it names, with the same body; the other four answer as the build as it is does, so what
-says they remove only their default is the patch itself, and the script's check that every build
-is a different binary. The results were counted by the script before it refused a failed zero or
-dump and stamped its builds; each 300-request run is 300 requests' cost and a fixed part of about
-1.1 million instructions (5.8 million with zstd), so no startup is in them.
+headers it names, with the same `content-length`; the other four answer as the build as it is
+does, so what says they remove only their default is the patch's text alone (the script's check
+that every build is a different binary says only that each patch changed something). The
+results were counted by an earlier version of the script, which zeroed the count where this one
+dumps it, checked neither, and did not stamp its builds; each 300-request run there is 300
+requests' cost and a fixed part of about 1.1 million instructions (5.8 million with zstd), so no
+startup is in them.
 
 | Default removed | Page, `identity` | Page, browser | JSON, `identity` | JSON, browser |
 |---|---|---|---|---|
@@ -844,7 +846,7 @@ dump and stamped its builds; each 300-request run is 300 requests' cost and a fi
 | The deadline and the panic catch | 414 (406-424) | 421 (251-793) | 54 (1-87) | -122 (-291 to -70) |
 | Compression | 2,733 (2,676-3,331) | 233,554 (233,261-233,940) | 1,712 (1,687-1,941) | 162,649 (162,624-162,665) |
 | The `ETag` | 8 (-47 to 46) | 26,536 (26,409-26,956) | 50 (-3 to 71) | 24 (12-36) |
-| `Cache-Control` decisions | 777 (758-824) | 1,226 (809-1,795) | 808 (746-1,081) | 792 (418-938) |
+| Setting `Cache-Control` | 777 (758-824) | 1,226 (809-1,795) | 808 (746-1,081) | 792 (418-938) |
 | Error pages and problem+json (on a success) | 1,076 (1,061-1,092) | 1,072 (521-1,646) | 188 (156-222) | 151 (-348 to 185) |
 | The header and send timeouts' connection watch | 83 (7-97) | 79 (-74 to 1,017) | 97 (22-143) | 71 (64-154) |
 
@@ -867,13 +869,13 @@ grows with a run's length, is in it. Removing every default at once was not meas
 assumes they do not overlap.
 
 So about a tenth of a round's Corten user instructions are defaults that the other apps mostly do
-not have (the [feature matrix](#feature-matrix-the-bench-apps-as-written-round-conform2-2026-11-04)).
+not have ([feature matrix](#feature-matrix-the-bench-apps-as-written-round-conform2-2026-11-04)).
 A matched tier
 ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807))
 would leave Corten's rows as they are; what the same features cost the other apps, each in its
-own framework's middleware, is not measured here. This runs outside rounds, Corten alone, when a
-default
-changes ([#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)).
+own framework's middleware, is not measured here. This runs outside rounds, Corten alone, when
+a default changes
+([#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)).
 
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
 

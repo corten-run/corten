@@ -26,6 +26,15 @@ test("a default costs the build as it is less the build without it, repeat by re
   assert.equal(row.share.toFixed(3), (11 / 102).toFixed(3));
 });
 
+test("a default's cost is the median of the repeats' differences, not the difference of medians", () => {
+  // as-is 100, 110, 130 a request; without the default 90, 80, 125: differences 10, 30, 5.
+  const rows = [["as-is", [100, 110, 130]], ["no-x", [90, 80, 125]]].flatMap(([variant, per]) =>
+    per.flatMap((v, i) => [`${variant}\tpage\tidentity\t${i + 1}\t300\t1000`, `${variant}\tpage\tidentity\t${i + 1}\t1300\t${1000 + v * 1000}`]));
+  const row = costs(["variant\ttarget\tencoding\trepeat\trequests\tinstructions", ...rows].join("\n")).find((r) => r.variant === "no-x");
+  // The difference of the medians would be 110 - 90 = 20.
+  assert.deepEqual([row.cost, row.costRange], [10, [5, 30]]);
+});
+
 test("repeats are paired by number, not by where they are in the file", () => {
   const lines = tsv.split("\n");
   // no-x's repeat 2 first: the pairing must not change.

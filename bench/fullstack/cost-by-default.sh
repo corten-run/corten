@@ -20,7 +20,7 @@ browser='gzip, deflate, br, zstd'
 variants=${VARIANTS:-"as-is $(cd /src/bench/fullstack/ablate && ls *.patch | sed 's/\.patch$//' | tr '\n' ' ')"}
 # One copy of the source to start each build from, without outputs or other rounds' results.
 bins=/out/bins
-rm -rf /tmp/pristine /out/headers && mkdir -p /tmp/pristine $bins /out/headers
+rm -rf /tmp/pristine && mkdir -p /tmp/pristine $bins
 tar -C /src --exclude=./.git --exclude=./target --exclude=node_modules --exclude=./bench/fullstack/results -cf - . | tar -C /tmp/pristine -xf -
 # Builds already in /out/bins are reused only if they were built from this source and compiler:
 # what the patches and the two crates they touch read, the release profile, and rustc's version.
@@ -30,6 +30,10 @@ source=$( (cd /tmp/pristine && find Cargo.toml Cargo.lock crates/corten crates/c
 if [ -n "$(ls $bins)" ] && [ "$(cat $bins/source.txt 2>/dev/null)" != "$source" ]; then
   echo "/out/bins holds builds of other source ($(cat $bins/source.txt 2>/dev/null || echo unstamped), this is $source): remove it to rebuild" >&2; exit 1
 fi
+# Stamped before building, and each build moved in only when whole, so a run stopped partway
+# keeps the builds it finished.
+echo "$source" > $bins/source.txt
+rm -rf /out/headers && mkdir -p /out/headers
 for v in $variants; do
   [ -x $bins/$v ] && continue
   rm -rf /tmp/work && cp -a /tmp/pristine /tmp/work && cd /tmp/work
@@ -38,9 +42,8 @@ for v in $variants; do
   # recompiles the two crates the patches touch.
   find crates/corten/src examples/card-market/src -name '*.rs' -exec touch {} +
   cargo build -q --release -p card-market
-  cp $CARGO_TARGET_DIR/release/card-market $bins/$v
+  cp $CARGO_TARGET_DIR/release/card-market $bins/.$v.tmp && mv $bins/.$v.tmp $bins/$v
 done
-echo "$source" > $bins/source.txt
 cd /
 # Each patch must change the binary, or its row would measure the build as it is.
 if [ "$(cd $bins && sha256sum $variants | cut -d' ' -f1 | sort -u | wc -l)" != "$(echo $variants | wc -w)" ]; then
@@ -71,20 +74,24 @@ for rep in $(seq ${REPEATS:-5}); do for v in $variants; do
     for n in 300 1300; do
       : > /tmp/run.txt
       for i in $(seq $n); do printf 'url = "http://127.0.0.1:8080%s"\noutput = /dev/null\n' "$(url $target $(( (i % 500) + 1 )))" >> /tmp/run.txt; done
-      # Counted only while the requests are served: zeroed once the server answers and dumped
-      # before it stops, so startup and shutdown (freeing the 27 MB of items, which glibc
-      # consolidates in some runs and not others, about 8.6 million instructions) are not in it.
+      # Counted only while the requests are served: dumped once the server answers (a dump
+      # resets the count) and again before it stops, so startup and shutdown (freeing the 27 MB of
+      # items, which glibc consolidates in some runs and not others, about 8.6 million
+      # instructions) are not in the second dump. callgrind_control exits 0 whether or not it
+      # reached the process, so each dump is checked by its file.
       rm -f /tmp/cg.out*
       start valgrind --tool=callgrind --callgrind-out-file=/tmp/cg.out $bins/$v
       # valgrind names its control pipe after `HOST`, the app's own setting, so the control asks under it.
-      HOST=127.0.0.1 callgrind_control -z $server >/dev/null 2>&1 || { echo "$v: callgrind_control could not zero the count" >&2; exit 1; }
+      HOST=127.0.0.1 callgrind_control -d $server >/dev/null 2>&1 || true
+      [ -s /tmp/cg.out.1 ] || { echo "$v: callgrind_control did not dump the startup count" >&2; exit 1; }
       curl -sS -H "accept-encoding: $(coding $enc)" -w '%{http_code} %{num_connects}\n' -K /tmp/run.txt > /tmp/codes.txt
-      HOST=127.0.0.1 callgrind_control -d $server >/dev/null 2>&1 || { echo "$v: callgrind_control could not dump the count" >&2; exit 1; }
+      HOST=127.0.0.1 callgrind_control -d $server >/dev/null 2>&1 || true
+      [ -s /tmp/cg.out.2 ] || { echo "$v: callgrind_control did not dump the requests' count" >&2; exit 1; }
       kill -TERM $server; wait $server || true
       if grep -qv '^200 ' /tmp/codes.txt || [ "$(grep -c '^200 1' /tmp/codes.txt)" != 1 ]; then
         echo "$v $target $enc: not every request answered 200 over one connection" >&2; exit 1
       fi
-      total=$(sed -n 's/^summary: *\([0-9]*\).*/\1/p' /tmp/cg.out.1 2>/dev/null || true)
+      total=$(sed -n 's/^summary: *\([0-9]*\).*/\1/p' /tmp/cg.out.2 2>/dev/null || true)
       [ -n "$total" ] || { echo "$v $target $enc: no callgrind count" >&2; cat /tmp/server.log >&2; exit 1; }
       printf '%s\t%s\t%s\t%s\t%s\t%s\n' $v $target $enc $rep $n $total | tee -a /out/results.tsv
     done
