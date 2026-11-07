@@ -199,17 +199,17 @@ if (skipped.length) console.log(`\n${skipped.length} skipped`);
 console.log(failures.length ? `\n${failures.length} failed:\n${failures.join("\n")}` : "\nall passed");
 process.exit(failures.length ? 1 : 0);
 
-/** @param {import("@playwright/test").Browser} browser */
 /** Whether the browser lets a navigation say when its address changes: the Navigation API with `precommitHandler`. */
 function precommits() {
   return "navigation" in window && "NavigationPrecommitController" in window;
 }
 
 /**
- * Records in `window.__addresses` every address the page has as its history entry changes, the
- * moment it changes (`currententrychange`), and returns how many entries it has now.
+ * Starts recording in `window.__addresses` every address the page has as its history entry
+ * changes, the moment it changes (`currententrychange`). Returns how many history entries there
+ * are when it starts, for the check to count the ones the navigation adds.
  */
-function addressesShown() {
+function entriesWhileRecordingAddresses() {
   /** @type {string[]} */
   const addresses = [location.pathname];
   /** @type {any} */ (window).__addresses = addresses;
@@ -218,6 +218,7 @@ function addressesShown() {
   return navigation?.entries().length ?? 0;
 }
 
+/** @param {import("@playwright/test").Browser} browser */
 async function run(browser) {
   // A console error the browser logs for its own bug (scripts/browser-bugs.mjs) is not the page's.
   const bug = browserBug(browser);
@@ -1868,6 +1869,7 @@ async function run(browser) {
     const away = await browser.newPage();
     const awayErrors = [];
     away.on("console", (m) => m.type() === "error" && !bug(m.text()) && awayErrors.push(m.text()));
+    away.on("pageerror", (e) => awayErrors.push(e.message));
     await away.route("https://news.example.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>Elsewhere</title>" }));
     let asked = 0;
     away.on("request", (r) => new URL(r.url()).pathname === "/news/acme-outlook/read" && asked++);
@@ -2320,7 +2322,7 @@ async function run(browser) {
   check("a page whose handlers take no format does not load the format module", !(await formatLoaded()));
   // A visitor's header has no account link (the sign-in button is in its place), so the page gets one.
   await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-account" href="/account">Account</a>')));
-  const entriesBefore = await page.evaluate(addressesShown);
+  const entriesBefore = await page.evaluate(entriesWhileRecordingAddresses);
   await page.click("#to-account");
   await page.waitForFunction(() => document.title === "Stocks | Watchlist", null, { timeout: 5000 }).catch(() => {});
   check(
@@ -2331,7 +2333,8 @@ async function run(browser) {
   // Where the address waits for the answer, a redirect's target is the only address the link
   // gives, in one new history entry, as a full load's redirect is (#992).
   if (await page.evaluate(precommits)) {
-    const [addresses, entries] = await page.evaluate(() => [/** @type {any} */ (window).__addresses, /** @type {any} */ (window).navigation.entries().length]);
+    // A page loaded in full in its place has no record: none, which fails the check.
+    const [addresses, entries] = await page.evaluate(() => [/** @type {any} */ (window).__addresses ?? [], /** @type {any} */ (window).navigation.entries().length]);
     check(
       "a link the server redirects shows only the redirect's address, in one history entry",
       addresses.join() === "/news,/" && entries === entriesBefore + 1,
@@ -2340,20 +2343,31 @@ async function run(browser) {
     // The same for a link the server sends to a place on a page (`corten-location`, which `fetch`
     // cannot follow with its `#id`): the place's address alone, with its `#id`, in one new entry.
     const placed = await (await browser.newContext()).newPage();
+    /** @type {string[]} */
+    const placedErrors = [];
+    placed.on("console", (m) => m.type() === "error" && !bug(m.text()) && placedErrors.push(m.text()));
+    placed.on("pageerror", (e) => placedErrors.push(e.message));
     await placed.route(
       (url) => url.pathname === "/to-briefing",
       (route) => (route.request().headers().corten ? route.fulfill({ status: 204, headers: { "corten-location": "/news#briefing" } }) : route.fallback()),
     );
     await placed.goto(`${base}/alerts`);
     await placed.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-briefing" href="/to-briefing">Briefing</a>')));
-    const placedBefore = await placed.evaluate(addressesShown);
+    const placedBefore = await placed.evaluate(entriesWhileRecordingAddresses);
     await placed.click("#to-briefing");
-    await placed.waitForFunction(() => document.title === "News | Watchlist" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
-    const [placedAddresses, placedEntries, hash] = await placed.evaluate(() => [/** @type {any} */ (window).__addresses, /** @type {any} */ (window).navigation.entries().length, location.hash]);
+    await placed.waitForFunction(() => document.title === "News | Watchlist" && !document.querySelector("[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const [placedAddresses, placedEntries, hash, busy] = await placed.evaluate(() => [
+      /** @type {any} */ (window).__addresses ?? [],
+      /** @type {any} */ (window).navigation.entries().length,
+      location.hash,
+      document.querySelectorAll("[aria-busy]").length,
+    ]);
+    // The link's navigation is left for the place's before its address changes: it ends quietly,
+    // with nothing left busy.
     check(
       "a link the server sends to a place shows only the place's address, in one history entry",
-      placedAddresses.join() === "/alerts,/news" && hash === "#briefing" && placedEntries === placedBefore + 1,
-      `${placedAddresses.join(" -> ")}${hash}, ${placedBefore} -> ${placedEntries} entries`,
+      placedAddresses.join() === "/alerts,/news" && hash === "#briefing" && placedEntries === placedBefore + 1 && busy === 0 && placedErrors.length === 0,
+      `${placedAddresses.join(" -> ")}${hash}, ${placedBefore} -> ${placedEntries} entries, ${busy} busy, errors: ${placedErrors.join(" | ")}`,
     );
     await placed.context().close();
   } else {

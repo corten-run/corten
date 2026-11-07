@@ -2040,9 +2040,10 @@ async function visit(url, signal, redirected, again, place, source, written, pre
     // Where the address waits for the answer, this navigation has not changed it yet: the next one
     // takes its place in history (a link's new entry) and this one ends unseen, so the link's
     // address never shows. Elsewhere the link's address is already in, and is replaced.
+    // Read against the answer's URL, as a full load's redirect is, whatever the address is now.
     const to = res.headers.get("corten-location");
     if (to) {
-      go(to, { history: precommit?.history ?? "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source } });
+      go(new URL(to, res.url).href, { history: precommit?.history ?? "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source } });
       return;
     }
     // The address changes now that the answer is here, as a full load's does: whatever is done
@@ -2315,10 +2316,10 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
 });
 
 /**
- * The runtime's own navigation (a redirect followed, a write's page): `navigation.navigate`, with
- * its `committed` promise handled, since one that another navigation replaces before its address
- * changes (the user clicks on while the page is on its way) rejects it, which the browser would
- * log as uncaught. Returns `finished`, for the caller that wants to know how it ended.
+ * The runtime's own navigation (a redirect followed, a `corten-location`, a write's page):
+ * `navigation.navigate`, with its `committed` promise handled, since one that another navigation
+ * replaces before its address changes (the user clicks on while the page is on its way) rejects
+ * it, which the browser would log as uncaught. Returns `finished`, for the caller that wants to know how it ended.
  * @param {string} url
  * @param {object} options
  * @returns {Promise<unknown>}
@@ -2345,8 +2346,10 @@ const PRECOMMIT = "NavigationPrecommitController" in window;
  * (`precommitHandler`), the address waits for the page's answer, as a full load's does: it changes
  * when the answer is in, to the redirect's target when the server redirected (one entry, never the
  * link's), so reloading, copying or sharing the address during a slow handler gets the page on
- * screen (#992). `main` is busy from the click either way. Elsewhere, and for back and forward,
- * the address changes at once, as before.
+ * screen (#992). A `corten-location` answer is followed before the address changes, by a
+ * navigation that takes this one's place in history (`Precommit.history`), so the link's address
+ * never shows. `main` is busy from the click either way. Elsewhere, and for back and forward, the
+ * address changes at once, as before.
  * @param {any} event
  * @param {(precommit: Precommit | undefined) => Promise<void>} run
  * @param {() => void} after

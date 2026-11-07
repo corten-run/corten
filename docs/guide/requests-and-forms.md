@@ -68,10 +68,10 @@ The address changes when the page's answer is in, as a full load's does, not at 
 slow handler runs, the address still names the page on screen, so reloading, copying or sharing it
 gets that page, and a link the server redirects, or sends to a place on a page, shows only the
 address it ends at, in one history entry. This holds where the browser lets a navigation say when
-its address changes (the Navigation API's `precommitHandler`, which the runtime looks for rather
-than for a browser). Elsewhere, and for back and forward, the address
-changes at the click while the old page is shown busy until the new one comes; `main[aria-busy]`
-is the hook for styling that wait.
+its address changes (the Navigation API's `precommitHandler`; the runtime checks for the feature,
+not for a browser). Elsewhere, and for back and forward, the address changes at the click while
+the old page is shown busy until the new one comes; `main[aria-busy]` is the hook for styling
+that wait.
 
 Back and forward draw the page again from the server, as a link does, and put back what the user
 typed or chose in it, as the browser does for a page it loaded: each field of `<main>` the user
