@@ -1697,8 +1697,11 @@ fn jsdoc_namespace_import(block: &str, module: &str) -> bool {
     let starts: Vec<usize> = block.match_indices("@import").map(|(at, _)| at).collect();
     starts.iter().enumerate().any(|(n, &at)| {
         let end = starts.get(n + 1).copied().unwrap_or(block.len());
-        // `* as name from "module"`, spaced as TypeScript reads it (`*as ev`, `from"m"`).
+        // `* as name from "module"`, spaced as TypeScript reads it (`*as ev`, `from"m"`), after
+        // a default import if there is one (`Def, * as ev`).
         let rest = block[at + "@import".len()..end].trim_start();
+        let word = rest.find(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).unwrap_or(rest.len());
+        let rest = rest[word..].trim_start().strip_prefix(',').filter(|_| word > 0).map_or(rest, str::trim_start);
         let Some(rest) = rest.strip_prefix('*').map(str::trim_start) else { return false };
         let Some(rest) = rest.strip_prefix("as").filter(|r| r.starts_with(char::is_whitespace)) else { return false };
         let rest = rest.trim_start();
@@ -2093,8 +2096,16 @@ function helper() {}
             "/**\n * @import\n * * as ev from \"corten/events\"\n */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
             "/**\n * @import *\n * as ev from \"corten/events\"\n */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
             "/** @import * as fromEvents from \"corten/events\" */\n/** @param {fromEvents.Saved} a */\nexport function f(a) {}",
+        ] {
+            let err = parse(source).unwrap_err();
+            assert!(err.1.starts_with("import typed events by name"), "{source}: {err:?}");
+        }
+        // With no space where TypeScript needs none, and after a default import.
+        for source in [
             "/** @import *as ev from \"corten/events\" */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
             "/** @import * as ev from\"corten/events\" */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
+            "/** @import Def, * as ev from \"corten/events\" */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
+            "/** @import Def,* as ev from \"corten/events\" */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
         ] {
             let err = parse(source).unwrap_err();
             assert!(err.1.starts_with("import typed events by name"), "{source}: {err:?}");
@@ -2111,6 +2122,20 @@ function helper() {}
         let (handlers, _) = parse("/**\n * @import { Saved  as\tDone,\n *   RowToggled\n *   as Toggled } from \"corten/events\"\n */\n/** @param {Done} a @param {Toggled} b */\nexport function f(a, b) {}").unwrap();
         let params: Vec<&Param> = handlers[0].params.iter().map(|(_, p)| p).collect();
         assert_eq!(params, [&Param::Event("Saved".into()), &Param::Event("RowToggled".into())]);
+        // Only that module: one whose name starts with it, a named import, or a malformed tag is not one.
+        for block in [
+            "/** @import * as ev from \"corten/events-extra\" */",
+            "/** @import * as ev from \"corten/events/x\" */",
+            "/** @import { Saved } from \"corten/events\" */",
+            "/** @import * */",
+            "/** @import * as */",
+            "/** @import * as ev from \"corten/events */",
+            "/** @import , * as ev from \"corten/events\" */",
+            "/** @import * as \u{e9} */",
+            "/** @import",
+        ] {
+            assert!(!jsdoc_namespace_import(block, "corten/events"), "{block}");
+        }
         // A namespace import of another module beside a named import of typed events is not one.
         let (handlers, _) = parse("/**\n * @import * as app from \"../types/app\"\n * @import { Saved } from \"corten/events\"\n */\n/** @param {Saved} a */\nexport function f(a) {}")
             .unwrap();
