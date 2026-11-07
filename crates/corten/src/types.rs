@@ -165,7 +165,10 @@ impl Types {
             std::fs::create_dir_all(dir).expect("create the types directory");
         }
         std::fs::write(path, &text).expect("write the types file");
-        panic!("{} was out of date with the Rust types and has been rewritten; run npm run check and commit it", path.display());
+        panic!(
+            "{} was out of date with the app's Rust types, or with how this Corten release declares them, and has been rewritten; run npm run check and commit it",
+            path.display()
+        );
     }
 }
 

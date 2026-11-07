@@ -457,7 +457,8 @@ impl Assets {
         }
         // A static script a listed one imports (`scripts/helper.js`) is not read when the crate
         // compiles, so whether it imports the views is found here. It is read as written,
-        // comments included: a commented-out import costs one needless preload, never a failure.
+        // comments included: in an app with views, a commented-out import costs one needless
+        // preload; in one without, it is refused below, as an import of `corten/keys` is.
         for (url, body) in &sources {
             let Some(name) = url.strip_prefix("scripts/").and_then(|n| n.strip_suffix(".js")) else { continue };
             if !registered.contains(name) && names(body, "corten/views") {
@@ -476,6 +477,14 @@ impl Assets {
                 return Err(clash(format!("the static directory has a {VIEWS}, the name of the views' module")));
             }
             sources.push((VIEWS.to_string(), views.into_bytes().into()));
+        } else if let Some(name) = imports_views.iter().min() {
+            // `tsc` sees `rows()` and `view()` declared for every app (they ship with the crate),
+            // but the import map names `corten/views` only for an app with a view, so the import
+            // would fail in the browser.
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("scripts/{name}.js imports corten/views, which Corten serves only to an app that lists a #[component(view)]: list the view's component, or import nothing from corten/views"),
+            ));
         }
         let styles: Vec<(&str, crate::Style)> = seen.iter().filter_map(|(c, _)| Some((c.name, c.style?))).collect();
         undeclared_properties(&sheets, &sources, &styles, sections)?;
@@ -1173,6 +1182,42 @@ mod tests {
         let error = Assets::build_with(taken, &[PLAIN], &[], "/assets").err().expect("the name is Corten's");
         assert!(error.to_string().contains("Corten's keys module"), "{error}");
     }
+
+    /// `corten/views` is mapped only for an app with a view, though `tsc` sees `rows()` and
+    /// `view()` declared for every app: a script of an app without one that imports it is an
+    /// error when the app starts, not in the browser.
+    #[test]
+    fn corten_views_imported_by_an_app_without_a_view_is_refused() {
+        const PLAIN: Component = Component {
+            name: "plain",
+            script: Some(crate::Script { name: "plain", file: "plain", source: "", handlers: &[], events: &[], imports: &[] }),
+            style: None,
+            event: None,
+            view: None,
+            anchor: &0,
+        };
+        const VIEWING: Component = Component {
+            name: "viewing",
+            script: Some(crate::Script {
+                name: "viewing",
+                file: "viewing",
+                source: "import { view } from \"corten/views\";",
+                handlers: &[],
+                events: &[],
+                imports: &[],
+            }),
+            style: None,
+            event: None,
+            view: None,
+            anchor: &0,
+        };
+        let error = Assets::build(None, &[VIEWING], "/assets").err().expect("nothing serves corten/views");
+        assert!(error.to_string().contains("scripts/viewing.js imports corten/views"), "{error}");
+        let importer = vec![("scripts/helper.js".to_string(), Bytes::from_static(b"import { rows } from \"corten/views\";"))];
+        let error = Assets::build_with(importer, &[PLAIN], &[], "/assets").err().expect("nothing serves corten/views");
+        assert!(error.to_string().contains("scripts/helper.js imports corten/views"), "{error}");
+        assert!(Assets::build(None, &[PLAIN], "/assets").is_ok());
+    }
     /// A script that imports another of its directory has it preloaded with it, and its imports
     /// in turn; a page that loads the importer fetches them at once, not once it has arrived.
     #[test]
@@ -1207,10 +1252,18 @@ mod tests {
         let assets = Assets::build_with(files, &[ENTRY], &[], "/assets").unwrap();
         assert!(assets.module("entry").unwrap().0.ends_with("stripe.js\">"));
         assert!(!assets.module("entry").unwrap().2, "nothing imports the views");
-        // One that imports the views makes the listed module's pages preload them, though the
-        // crate never read it.
+        // One that imports the views (of an app with one) makes the listed module's pages preload
+        // them, though the crate never read it.
+        const ROW: Component = Component {
+            name: "Row",
+            script: None,
+            style: None,
+            event: None,
+            view: Some(crate::script::ViewDef { class: "Row", js: "export class Row {}\n", ts: "" }),
+            anchor: &0,
+        };
         let files = vec![("scripts/stripe.js".to_string(), Bytes::from_static(b"import { list } from 'corten/views';"))];
-        let assets = Assets::build_with(files, &[ENTRY], &[], "/assets").unwrap();
+        let assets = Assets::build_with(files, &[ENTRY, ROW], &[], "/assets").unwrap();
         assert!(assets.module("entry").unwrap().2 && assets.swap_imports("entry").unwrap().2);
         // A module that imports one that uses the typed events has them preloaded too.
         const SAVED: Component = Component {

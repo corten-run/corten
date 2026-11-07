@@ -3724,7 +3724,12 @@ Corten is pre-1.0, so any minor version may change the API.
     only what its own types, events and views produce, so a release that changes the runtime's
     declarations no longer fails the app's types test once and leaves framework text to commit
     with the pin. An app with views gets that failure one last time when it moves to this
-    release, as `Types::sync` drops the runtime's block from its file
+    release, as `Types::sync` drops the runtime's block from its file. Since `tsc` now sees
+    `rows()` and `view()` declared for every app while the import map names `corten/views` only for
+    an app with a view, a script of an app without one that imports it is an error when the app
+    starts, as an import of `corten/keys` with nothing serving it is, rather than in the browser.
+    `Types::sync`'s message says the file may be out of date with how the Corten release declares
+    the app's types as well as with the types
     ([#1020 A pin bump fails the app's corten check once when Corten's own script declarations change, blaming the app's Rust types](https://github.com/corten-run/corten/issues/1020)).
 
 ### Fixed

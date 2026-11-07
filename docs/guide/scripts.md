@@ -744,8 +744,9 @@ it to both `App::components` and the types test. A view has a constant of its ow
 shares its owner's stylesheet (`#[component(view, css = Owner)]`), and a debug build (a router test,
 `corten dev`) names a rendered component that is not listed. `corten check` runs the tests before `tsc`, so a new view
 is declared before a script's import of it is checked; the types test fails once, saying it
-rewrote `types/app.d.ts`, and the next check passes. Moving to another Corten release does not:
-the file holds only what the app's own types, events and views produce.
+rewrote `types/app.d.ts`, and the next check passes. A Corten release that changes only the
+runtime's declarations (`rows()`, `view()`, `Holds`) does not, since they ship with the crate; one
+that changes how the app's own types, events or views are declared does, once, as the message says.
 
 ## Live rows
 
