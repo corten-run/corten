@@ -173,15 +173,18 @@ pub fn event(name: &str) -> &'static str {
         // The runtime's own, each a `CustomEvent` whose `detail` corten.js declares.
         "corten:error" => "CortenError",
         "corten:notice" => "CortenNotice",
+        // A `data-patch` form's upload progress: a `ProgressEvent` of the multipart body sent.
+        "corten:progress" => "ProgressEvent",
         _ => "Event",
     }
 }
 
 /// Whether `name` is an event the runtime dispatches: `corten:error` on a `data-patch` form that
 /// got no answer it can draw (it bubbles), `corten:notice` on the document for a redirect's notice
-/// the page did not draw. The only event names with a colon an `on:` takes.
+/// the page did not draw, `corten:progress` on a `data-patch` form while its multipart body is
+/// sent. The only event names with a colon an `on:` takes.
 pub fn is_runtime_event(name: &str) -> bool {
-    matches!(name, "corten:error" | "corten:notice")
+    matches!(name, "corten:error" | "corten:notice" | "corten:progress")
 }
 
 /// Whether a browser event of this name bubbles to the document, so a listener there hears it
@@ -275,4 +278,5 @@ pub const EVENTS: &[&str] = &[
     "CustomEvent",
     "CortenError",
     "CortenNotice",
+    "ProgressEvent",
 ];

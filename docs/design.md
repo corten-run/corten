@@ -406,7 +406,9 @@ rules something out.
    itself rides to the page in the `__Host-corten-notice` cookie, since `fetch` follows the redirect
    (in `corten-notice`, read only without `Sec-Fetch-Site`, for a write from a plain `http://`
    origin off loopback, which refuses a `Secure` cookie; never with `Policy::hsts`). Corten would
-   move to `Location` once `fetch` can read a redirect's target without following it. The runtime
+   move to `Location` once `fetch` can read a redirect's target without following it, except for
+   a write sent with its progress by `XMLHttpRequest` ([Choice 29](#choice-upload-xhr)), which
+   cannot read it either and keeps `corten-location` until it is sent by `fetch`. The runtime
    sends `corten-notice` back, with the page's path, when a page it swapped in reads itself again
    (`ReadAgain`): the cookie is gone by then, and without the notice the read would differ from the
    page on screen and replace it, losing what the user typed. Only a `GET` for that path not from
@@ -978,6 +980,34 @@ rules something out.
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
     own).
+
+29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
+    `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
+    nothing of a request body as it is sent, and `XMLHttpRequest`'s `upload` reports each step as
+    the browser's `ProgressEvent`. Only a same-origin `data-patch` form sent as
+    `multipart/form-data` with a progress handler goes this way, so other forms keep `fetch`'s
+    behavior, and `html!` refuses the handler on a form the runtime would never send so. The module
+    (`corten-upload`) is loaded by the pages with such a form; every page's runtime carries the few
+    lines that load it and hand it the form. Its answer is made a `Response` and read by the same
+    code as `fetch`'s, with the same abort (never sent once the signal is aborted) and the same
+    failure for a network error; a status a `Response` cannot have (above 599) is that failure
+    too, `corten:error` with status 0, where `fetch` would hand it on. Not chosen: a streamed request body (`ReadableStream` with
+    `duplex: "half"`), whose reads say what the browser took from the stream, not what was sent,
+    and which needs HTTP/2 or later in Chromium and is not sent by Firefox or WebKit; counting
+    bytes in a service worker, which sees the same stream.
+
+    Stands on: platform (`fetch` has no upload progress, and a streamed request body is not sent
+    by every engine; read in the Fetch standard and MDN, not probed for this choice); reasoned
+    (one module only the pages that need it load keeps the cost off every other page; the
+    `Response` it hands back keeps one reading of an answer).
+
+    Revisit when: `fetch` reports a request body's progress in every engine the runtime supports
+    (the Fetch standard's `FetchObserver` or a successor); the module then goes, the submit is a
+    `fetch` again, and its redirects follow [Choice 15](#choice-corten-answer-headers).
+
+    Last checked: 2026-11-07, upload progress by `XMLHttpRequest`, probed in Chromium 156, Firefox
+    157 and WebKit 27.2 by the watchlist smoke test (`fetch` and streamed bodies read in the Fetch
+    standard and MDN, not probed).
 
 ## Rules
 

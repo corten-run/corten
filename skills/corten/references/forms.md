@@ -100,6 +100,13 @@ statuses or check `Content-Length` by hand.
 Types, counts and per-file sizes are the handler's checks, reported with `errors.add(f.photos, ..)`
 so the form is drawn again with the message beside the input.
 
+To show how much of an upload is sent, put `on:corten:progress={js::sending(event, bar)}` on the
+`data-patch` `<form method="post" enctype="multipart/form-data">` (each required at compile time; never on another element or `on:document:`; it does not bubble) and fill a
+native `<progress ref={bar}>` in a handler typed `@param {ProgressEvent} event`: `loaded` and
+`total` count the whole request. Once `loaded` reaches `total` the server is still working, so
+drop the bar's `value` (indeterminate) rather than say it is done; the form stays `aria-busy` until
+the answer is drawn. Never send the form with your own `XMLHttpRequest` or `fetch`.
+
 To serve an upload back, read its type from its first bytes (never `file.content_type()`, which is
 the client's word) and return `corten::Media::new("image/png", bytes)`. At a URL that names the
 bytes (a hash), return `Public::immutable(answer)` so every cache keeps it for a year; its handler

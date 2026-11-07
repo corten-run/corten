@@ -636,6 +636,136 @@
 //! # fn main() {}
 //! ```
 //!
+//! `corten:progress` is a `data-patch` form's upload progress: while a multipart write is sent, the
+//! form gets the browser's `ProgressEvent` (`loaded`, `total`, `lengthComputable`, counting the
+//! whole request's body), and a page with such a form loads the upload module that sends it. It
+//! does not bubble, so it is heard on the `<form>` alone:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="post" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {
+//! assert!(CartLine {}.to_html().contains(r#"corten:progress:cart_line.progressed($e,"#));
+//! # }
+//! ```
+//!
+//! A `ProgressEvent` handler takes nothing else, and another event's handler does not take it:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! { <li><form on:submit={js::progressed(event, bar)}><progress ref={bar}></progress></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form data-patch method="post" enctype="multipart/form-data" on:corten:progress={js::failed(event, target)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Nor is it heard on a form the runtime sends without it (one without `data-patch`, a GET form, or
+//! one whose body is not `multipart/form-data`), on another element, or on the document:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form method="post" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="get" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="dialog" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="post" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! { <li on:corten:progress={js::progressed(event, bar)}><progress ref={bar}></progress></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! { <li on:document:corten:progress={js::progressed(event, bar)}><progress ref={bar}></progress></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
 //! `on:` takes no other name with a colon, so the same markup with `corten:notice` (no element
 //! hears it) or any other does not compile; a component's own event is an `#[event]` type, and
 //! another library's is heard by a listener its script adds:
@@ -1676,6 +1806,8 @@ pub mod ev {
     // `data-patch` form whose submit got no answer it can draw, `corten:notice` on the document.
     events!(CortenError: CortenError, CustomEvent, Event);
     events!(CortenNotice: CortenNotice, CustomEvent, Event);
+    // A `data-patch` form's upload progress (`corten:progress`): the browser's own interface.
+    events!(ProgressEvent: ProgressEvent, Event);
 
     /// A typed event from `#[event]` is an `Event`.
     impl<E: super::DomEvent> SubOf<Event> for E {}
@@ -1864,6 +1996,15 @@ pub(crate) const KEYS_MODULE: &str = "corten-keys";
 /// [`KEYS_MODULE`]'s source.
 pub(crate) const KEYS_JS: &str = include_str!("../js/dist/keys.js");
 
+/// The module that sends a `data-patch` form's multipart body by `XMLHttpRequest` to report its
+/// progress (`js/upload.js`, minified into `js/dist/upload.js`): served with the app's scripts,
+/// and loaded by the pages with a form that has an `on:corten:progress` handler, not by every
+/// page with the runtime.
+pub(crate) const UPLOAD_MODULE: &str = "corten-upload";
+
+/// [`UPLOAD_MODULE`]'s source.
+pub(crate) const UPLOAD_JS: &str = include_str!("../js/dist/upload.js");
+
 /// Notes that the page rendering uses script module `name`, so its head loads it.
 pub(crate) fn uses(name: &'static str) {
     MODULES.with(|m| {
@@ -1885,6 +2026,12 @@ pub(crate) fn collect<T>(render: impl FnOnce() -> T) -> (T, Vec<&'static str>) {
 #[doc(hidden)]
 pub mod __private {
     use super::*;
+
+    /// A form on the page has an `on:corten:progress` handler, so the page loads the upload module.
+    #[inline]
+    pub fn uses_upload() {
+        uses(UPLOAD_MODULE);
+    }
 
     /// Where an argument is written: the component rendering and the one that made the handler.
     pub struct Ctx {
