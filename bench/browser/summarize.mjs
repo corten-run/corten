@@ -1,4 +1,4 @@
-// Prints the README's client-side table from results/<round>/ (ops.json, ssr.json, dashboard.json)
+// Prints docs/performance.md's client-heavy table from results/<round>/ (ops.json, ssr.json, dashboard.json)
 // and writes results/<round>/summary.json. Each cell is the median; with two rounds of the
 // operations, the cell is the higher of the two rounds' medians (the slower round), or both as a
 // range when they differ by more than half and at least a millisecond.
