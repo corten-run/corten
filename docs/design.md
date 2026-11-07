@@ -1264,8 +1264,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     counts taking in the benchmark's making of each body). So a request that keeps sending is
     bounded by its size (its limit plus 64 MiB), not by a time; one that stops for `Upload::idle`
     (a minute unless set) is let go, and `App::max_connections`, when set, bounds how many are read
-    at once. A file read with `bytes_up_to` keeps its pieces of 1 KiB or more as they came (slices of buffers already held) and copies runs of smaller ones into one buffer, so a file sent
-    a few bytes at a time holds about its size: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB,
+    at once. A file read with `bytes_up_to` keeps its pieces of 1 KiB or more as they came (slices
+    of buffers already held) and copies runs of smaller ones into one buffer, so a file sent a few
+    bytes at a time holds about its size: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB,
     against 277.7 MiB in the reader it replaced. A file under 64 KiB that came in one piece is
     copied out of it, since the piece can be a slice of a read buffer of hundreds of KiB that
     keeping it would hold. The end-to-end times, the other counts and peak memory are in
