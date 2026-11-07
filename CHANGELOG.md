@@ -2387,6 +2387,16 @@ Corten is pre-1.0, so any minor version may change the API.
     own analysis and a Docker build with BuildKit's cache warm are left to
     [#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)
     ([#774 bench/fullstack measures no editor, test-build, save-to-reload, disk or core-scaling cost, so where a Corten app is slow to work on is still partly unmeasured](https://github.com/corten-run/corten/issues/774)).
+265. `bench/fullstack` says what each of Corten's production defaults costs a request: card-market
+    is built as it is and with one default removed by each patch in `ablate/` (security headers
+    and CSP, host and same-origin checks, deadline and panic catch, compression, `ETag`,
+    `Cache-Control`, error pages, connection watch), and `cost-by-default.sh` counts each build's
+    user instructions under callgrind only while requests are served, for the page and the JSON
+    with `identity` and with a browser's `Accept-Encoding`. The README's "What each production
+    default costs" table, at `cdbe4392`, five repeats: together about 12% of the rounds' page
+    request (10,500 of 86,500) and 9% of the JSON's, the security headers and CSP the largest
+    (4,800 a page); for a browser, compression is two thirds of the request and the page's `ETag`
+    7.7% ([#810 No round says what each of Corten's production defaults costs a request, so the cost of its safety and its speed cannot be told apart](https://github.com/corten-run/corten/issues/810)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
