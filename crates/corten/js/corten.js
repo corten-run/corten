@@ -2279,6 +2279,9 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
     event.navigationType === "reload" ||
     event.sourceElement?.closest?.("[data-reload]");
   if (skip) return;
+  // A hover's prefetch not yet started is not started now: until the page is in, the address is
+  // still this page's, so it would fetch the page this navigation is fetching.
+  clearTimeout(hoverTimer);
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
   // The page is about to change: replies to its pending submits would patch the wrong page.

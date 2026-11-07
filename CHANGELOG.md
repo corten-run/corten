@@ -5329,6 +5329,14 @@ Corten is pre-1.0, so any minor version may change the API.
     the alert's, in each engine. An app with a copy of the kit takes it with
     `corten ui add alert --merge`
     ([#1048 Kit Alert styles its heading and paragraphs but not a list, so a list in an alert keeps the browser's 1em margin and 40px indent](https://github.com/corten-run/corten/issues/1048)).
+185. A link clicked before the hover's 65 ms dwell was up fetched its page twice when that page took
+    longer than the rest of the dwell to arrive: the click's request, then a prefetch the dwell
+    started once it ended, since the address stays the page being left until the new page is in
+    ([#1028 A client navigation changes the address when the page's answer is in (#992)](https://github.com/corten-run/corten/pull/1028)). A press or a navigation now ends the dwell. The watchlist smoke holds such a page's
+    answer and checks it is fetched once (it failed on main in Chromium and Firefox), and the two
+    Firefox checks that failed now and then say what they counted when they fail; the prefetch
+    check's one-off failure (an extra request) was this
+    ([#1053 Two Firefox watchlist smoke checks (prefetch's newest 8, a script module imported again) each fail now and then on a branch that does not touch them](https://github.com/corten-run/corten/issues/1053)).
 
 ### Documentation
 
