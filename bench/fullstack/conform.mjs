@@ -52,6 +52,12 @@ const here = dirname(fileURLToPath(import.meta.url));
 const [appsArg, out] = process.argv.slice(2);
 // The matched tier's matrix never goes into an r<n> round, nor the defaults' into an m<n> one.
 if (out && roundNameError(out, tier)) throw new Error(/** @type {string} */ (roundNameError(out, tier)));
+// Nor overwrites a stored matrix of the other tier.
+{
+  const stored = out ? join(here, "results", out, "conformance.json") : null;
+  const was = stored && existsSync(stored) ? JSON.parse(readFileSync(stored, "utf8")).tier ?? "defaults" : tier;
+  if (was !== tier) throw new Error(`results/${out}/conformance.json is of the ${was} tier, not ${tier}: name this run otherwise, or set BENCH_TIER=${was}`);
+}
 const names = appsArg && appsArg !== "all" ? appsArg.split(",") : Object.keys(all);
 for (const n of names) if (!(n in all)) throw new Error("unknown app " + n + (tier === "matched" ? " in the matched tier" : ""));
 /** In the matched tier, the app and fsw-probe may hold this many files (the cap probe holds 1,050 connections). */

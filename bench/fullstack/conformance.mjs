@@ -158,7 +158,8 @@ const unfinishedOf = (/** @type {{ closedMs?: number, timedOutMs?: number, error
 /**
  * The cap's cell. "capped, then <status | closed | refused | held>": a request was answered with
  * 950 connections held, not with 1,050 held (it waited, was closed, or never connected), and the
- * app served a request after they closed. Otherwise what fell short: "served with <n> held" (no
+ * app served a request after they closed; "capped at <n> connected, then ..." the same when fewer
+ * than 1,050 but at least 950 connected at all (the rest waited in a full accept queue). Otherwise what fell short: "served with <n> held" (no
  * cap there), "not served with <n> held" (a cap, or a pool of workers each tied up by a connection,
  * well under the profile's), "stopped serving" (a crash or a hang, not a cap), or why the cap
  * could not be seen (fewer connections held than it allows).
@@ -166,11 +167,13 @@ const unfinishedOf = (/** @type {{ closedMs?: number, timedOutMs?: number, error
 const capOf = (/** @type {{ below?: number, belowHeld?: number | null, held?: number, whileHeld?: number | null, afterRelease?: number | string | null, afterwards?: number | null, error?: string } | undefined} */ p) => {
   if (!p) return "n/a: not probed";
   if (p.error) return "error " + p.error;
-  if ((p.below ?? 0) < capBelow || (p.held ?? 0) < capHeld) return `n/a: held only ${p.below ?? 0} and ${p.held ?? 0} connections`;
+  // Past the 950, connections that never connected are a full accept queue: a cap, if the rest holds.
+  if ((p.below ?? 0) < capBelow || (p.held ?? 0) < capBelow) return `n/a: held only ${p.below ?? 0} and ${p.held ?? 0} connections`;
   if (p.belowHeld === null || p.belowHeld === undefined) return `not served with ${p.below} held`;
   if (p.whileHeld !== null && p.whileHeld !== undefined) return `served with ${p.held} held (${p.whileHeld})`;
   if (p.afterwards === null || p.afterwards === undefined) return `stopped serving after ${p.held} held`;
-  return "capped, then " + (p.afterRelease === null || p.afterRelease === undefined ? "held" : String(p.afterRelease));
+  const then = p.afterRelease === null || p.afterRelease === undefined ? "held" : String(p.afterRelease);
+  return (p.held ?? 0) < capHeld ? `capped at ${p.held} connected, then ${then}` : "capped, then " + then;
 };
 
 /** The columns of a tier's matrix: the matched tier's own columns only in that tier. */

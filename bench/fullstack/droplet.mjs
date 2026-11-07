@@ -55,7 +55,7 @@ const suite = flag("suite", "fullstack") ?? "fullstack";
 // An m<n> round is the matched tier's, so --collect and --attach need no --tier for it.
 const tier = flag("tier") ?? (/^m\d+$/.test(round) ? "matched" : "defaults");
 if (tier !== "defaults" && tier !== "matched") throw new Error("--tier is defaults or matched");
-if (tier !== "defaults" && suite !== "fullstack") throw new Error("--tier is for a full-stack round");
+if (tier !== "defaults" && suite !== "fullstack") throw new Error(flag("tier") ? "--tier is for a full-stack round" : `${round} is a matched-tier round's name (m<n>), and that tier is a full-stack round's: name this one otherwise`);
 if (suite === "fullstack" && roundNameError(round, tier, { full: true })) throw new Error(/** @type {string} */ (roundNameError(round, tier, { full: true })));
 // The tier's apps, whatever BENCH_TIER says here: the droplet's run reads it from the round's env.
 const apps = tier === "matched" ? Object.fromEntries(Object.entries(allApps).filter(([, app]) => /** @type {{ matched?: boolean }} */ (app).matched)) : allApps;

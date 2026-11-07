@@ -301,6 +301,10 @@ test("an unfinished head counts when closed within 35 seconds; the cap when a re
   const crashed = row({ cap: { ...capped, afterRelease: "closed", afterwards: null } });
   assert.equal(crashed.connectionCap, `stopped serving after ${capHeld} held`);
   assert.ok(crashed.unmet.includes("connectionCap"));
+  // Fewer than 1,050 connected but at least 950 (the rest in a full accept queue) is a cap too.
+  const queued = row({ cap: { ...capped, held: 1000, afterRelease: "refused" } });
+  assert.equal(queued.connectionCap, "capped at 1000 connected, then refused");
+  assert.ok(!queued.unmet.includes("connectionCap"));
   // Too few held to see a cap, a failed probe, or no probe at all: not counted, or an error.
   const unseen = row({ cap: { ...capped, held: 900 } });
   assert.equal(unseen.connectionCap, `n/a: held only ${capBelow} and 900 connections`);

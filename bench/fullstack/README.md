@@ -1199,7 +1199,8 @@ The profile:
    `conform-hold.mjs` holds 950 idle connections and sends a request on one more, which must be
    answered (a pool of workers each tied up by an idle connection, or a far lower cap, is not the
    profile's cap); then holds 1,050 and sends one more, which must not be answered while they are
-   held (it waits, is closed, or never connects); then, once they are closed, a request on a new
+   held (it waits, is closed, or never connects, and connections past 950 that never connect are
+   a full accept queue, so a cap too); then, once they are closed, a request on a new
    connection must be answered, so a crash or a hang is not read as a cap. The app and the probe
    may hold 65,536 files there, so a file limit is not read as a cap.
 
@@ -1219,16 +1220,18 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
 2. `axum-maud`: tower-http's layers add the security headers, `Cache-Control: private, no-cache`
    on the pages and the JSON (not `/static`), compression, a 503 past 10 s (`TimeoutLayer`) and a
    2 MiB body limit (`RequestBodyLimitLayer`). axum and tower-http have no host list, same-origin
-   check, ETag for a rendered answer, liveness or readiness endpoint, or connection cap; an HTML
-   page for a failed read and problem+json for a missing item or a wrong method would be error
-   mappers the app writes; and `axum::serve` has no header timeout or head size setting (hyper's
-   are reached by writing the accept loop on hyper-util). Those columns stay unmet.
+   check, ETag for a rendered answer, liveness or readiness endpoint, or connection cap; its error
+   answers (a failed read as a 502 `text/plain`, a missing item as an empty 404, axum's empty 405)
+   are the app's own code, which the profile does not change, as no framework's error pages are
+   rewritten by hand; and `axum::serve` has no header timeout or head size setting (hyper's are
+   reached by writing the accept loop on hyper-util). Those columns stay unmet.
 3. `nextjs`, `leptos`, `django`, `aspnet` (and `aspnet-aot`), `spring` and `topcoat` are not
    in it yet: each joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
-at `720c8a88` with no local changes (`commit` in `results/conform-matched1/conformance.json`):
+from the tree `conform.mjs` ran from, `720c8a88` with no local changes (its `commit` and `dirty`
+in `results/conform-matched1/conformance.json`; `imagesFrom` is set only by a droplet round):
 of the 24 counted columns Corten met all, its unfinished head closed in 29.3 s, a request was
 answered with 950 connections held, and one past 1,050 waited until they closed (then a 200);
 axum-maud met 12 and missed 12:
