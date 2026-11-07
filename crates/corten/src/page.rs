@@ -57,7 +57,8 @@ const VARY_LANGUAGE: &str = "corten, accept, accept-language";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// A normal browser request: first load, reload, or any request without JavaScript; also the
-    /// runtime's fetch of the page a write redirects to, whose layout it draws again.
+    /// runtime's fetch of the page a write redirects to, whose layout it draws again (`corten:
+    /// page`).
     Document,
     /// The runtime is navigating to a page and will swap it into `<main>`.
     Navigation,
@@ -98,6 +99,7 @@ impl Mode {
         match headers.get(MODE_HEADER).map(HeaderValue::as_bytes) {
             Some(b"nav") => Mode::Navigation,
             Some(b"action") => Mode::Action,
+            Some(b"page") => Mode::Document,
             _ if accepts_json(headers) => Mode::Data,
             _ => Mode::Document,
         }
@@ -919,6 +921,9 @@ pub struct Req {
     plain_write: bool,
     /// The request is a write (not `GET` or `HEAD`), which [`Req::resend_to`] needs.
     write: bool,
+    /// The runtime fetched it (a `corten` header): a redirect to a place or another site is
+    /// then named in `corten-location`, as `fetch` cannot follow one (#1034).
+    fetched: bool,
     /// Corten fills the page's places for layout reads ([`crate::later`]): a whole document in an
     /// app with some. Otherwise they are removed as the page is rendered.
     fills: bool,
@@ -1141,6 +1146,7 @@ impl Req {
             },
             plain_write: write && shared.plain_notice && plain_origin(headers),
             write,
+            fetched: headers.contains_key(MODE_HEADER),
             fills: !shared.layout_reads.is_empty() && extensions.get::<crate::layout::StartHere>().is_some(),
             shared,
             signal,
@@ -2162,7 +2168,7 @@ impl Req {
     /// JavaScript.
     pub fn redirect<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
         let value = crate::route::header_value(to).map_err(Error::new)?;
-        Ok(HtmlResponse::new(redirect(self.mode, value)))
+        Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)))
     }
 
     /// Send the same form to `to`, whose handler answers it: `307 Temporary Redirect`, which the
@@ -2320,7 +2326,7 @@ impl Req {
             crate::security::cookie::SetCookie::new(NOTICE_COOKIE, &cookie)
         };
         let cookie = cookie.max_age(60);
-        Ok(HtmlResponse::new(redirect(self.mode, value)).with_cookie(cookie))
+        Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)).with_cookie(cookie))
     }
 
     /// The notice the write that redirected here left for this page ([`Req::redirect_with_notice`]),
@@ -2384,8 +2390,8 @@ impl Req {
     /// (`#[route(prefix = ..)]` for ones named by data), so only the ones it knows move with it.
     pub fn moved<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
         let value = crate::route::header_value(to).map_err(Error::new)?;
-        if self.mode == Mode::Action || (self.mode == Mode::Navigation && (has_fragment(&value) || elsewhere(&value))) {
-            return Ok(HtmlResponse::new(redirect(self.mode, value)));
+        if self.mode == Mode::Action || (self.fetched && (has_fragment(&value) || elsewhere(&value))) {
+            return Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)));
         }
         let headers = [(header::LOCATION, value), (header::CACHE_CONTROL, HeaderValue::from_static(MOVED_CACHE))];
         Ok(HtmlResponse::new((StatusCode::MOVED_PERMANENTLY, headers).into_response()))
@@ -2470,14 +2476,13 @@ const MOVED_CACHE: &str = "private, max-age=86400";
 /// otherwise. A client navigation sent to a place on a page (`#id`) or to another site gets
 /// `corten-location` too: `fetch` follows a 303 but drops its fragment, so the runtime would not
 /// know where to scroll, and may not read another origin's answer.
-pub(crate) fn redirect(mode: Mode, to: HeaderValue) -> Response {
+pub(crate) fn redirect(mode: Mode, fetched: bool, to: HeaderValue) -> Response {
     match mode {
         Mode::Action => (StatusCode::NO_CONTENT, [(LOCATION_HEADER, to)]).into_response(),
         // `fetch` follows a redirect but drops its `#id`, and one to another origin is refused
-        // (the CSP's `connect-src`, else CORS): the runtime navigates there itself.
-        Mode::Navigation if has_fragment(&to) || elsewhere(&to) => {
-            (StatusCode::NO_CONTENT, [(LOCATION_HEADER, to)]).into_response()
-        }
+        // (the CSP's `connect-src`, else CORS): the runtime navigates there itself. So for any
+        // fetch of the runtime's, a navigation or the whole page after a write (#1034).
+        _ if fetched && (has_fragment(&to) || elsewhere(&to)) => (StatusCode::NO_CONTENT, [(LOCATION_HEADER, to)]).into_response(),
         _ => (StatusCode::SEE_OTHER, [(header::LOCATION, to)]).into_response(),
     }
 }
@@ -2574,6 +2579,7 @@ async fn page_or_error<S: crate::app::Steps>(
     let browser = matches!(mode, Mode::Navigation | Mode::Action) || (mode == Mode::Document && accepts_html(req.headers()));
     // Taken now, while the request (its nonce, its credentials) is here; it allocates nothing.
     let asked = Asked::new(&req, shared, Credentials::of(req.headers()), mode);
+    let fetched = req.headers().contains_key(MODE_HEADER);
     #[cfg(debug_assertions)]
     let mut req = req;
     #[cfg(debug_assertions)]
@@ -2607,7 +2613,7 @@ async fn page_or_error<S: crate::app::Steps>(
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
                 return carried(kept, error_page(shared, asked, failure).await);
             }
-            return carried(kept, redirect(mode, to));
+            return carried(kept, redirect(mode, fetched, to));
         };
         tracing::error!("corten: {message}");
         let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };

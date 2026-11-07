@@ -2396,6 +2396,43 @@ async function run(browser) {
     skip("a link the server redirects shows only the redirect's address, in one history entry", why);
     skip("a link the server sends to a place shows only the place's address, in one history entry", why);
   }
+  // After a write, the page it sends the browser to is fetched whole; when that page's handler
+  // sends it on to a place, the server names the place (`corten-location`, for the runtime's
+  // `corten: page`), so it keeps its `#id` rather than `fetch` following a 303 without it
+  // (#1034). The stand-in answers as the server does: `corten-location` to the runtime's
+  // fetches, a 303 to any other.
+  const wholePlaceName = "a page fetched whole after a write that sends the browser to a place lands on the place";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(wholePlaceName, "without the Navigation API a write's page is a full load");
+  else {
+    const whole = await (await browser.newContext()).newPage();
+    /** @type {string[]} */
+    const asked = [];
+    await whole.route(
+      (url) => url.pathname === "/whole-write",
+      (route) => route.fulfill({ status: 204, headers: { "corten-location": "/whole-next" } }),
+    );
+    await whole.route(
+      (url) => url.pathname === "/whole-next",
+      (route) => {
+        const mode = route.request().headers().corten;
+        asked.push(mode ?? "-");
+        return mode
+          ? route.fulfill({ status: 204, headers: { "corten-location": "/news#briefing" } })
+          : route.fulfill({ status: 303, headers: { location: "/news#briefing" } });
+      },
+    );
+    await whole.goto(`${base}/alerts`);
+    await whole.evaluate(() =>
+      document
+        .querySelector("main")
+        ?.insertAdjacentHTML("afterbegin", __html('<form id="whole-write" method="post" action="/whole-write" data-patch><button id="whole-go">Save</button></form>')),
+    );
+    await whole.click("#whole-go");
+    await whole.waitForFunction(() => document.title === "News | Watchlist" && !document.querySelector("[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const landed = await whole.evaluate(() => ({ path: location.pathname, hash: location.hash }));
+    check(wholePlaceName, landed.path === "/news" && landed.hash === "#briefing" && asked.join() === "page", JSON.stringify({ landed, asked }));
+    await whole.context().close();
+  }
   // The watchlist's live prices take the money format: reached from the news page, it loads the
   // module before its markup joins, and the script writes prices with it.
   const firstPrices = await prices();

@@ -2090,7 +2090,7 @@ async function visit(url, signal, redirected, again, place, source, written, pre
     // Read against the answer's URL, as a full load's redirect is, whatever the address is now.
     const to = res.headers.get("corten-location");
     if (to) {
-      go(new URL(to, res.url).href, { history: precommit?.history ?? "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source } });
+      go(new URL(to, res.url).href, { history: precommit?.history ?? "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source, [WRITTEN]: whole } });
       return;
     }
     // The address changes now that the answer is here, as a full load's does: whatever is done
@@ -2136,13 +2136,15 @@ async function visit(url, signal, redirected, again, place, source, written, pre
 }
 
 /**
- * A visit's request headers: `corten: nav` for `<main>` alone, none for the whole document, and
- * on a read again the notice the page on screen drew ({@link shown}), with the page it is for.
+ * A visit's request headers: `corten: nav` for `<main>` alone, `corten: page` for the whole
+ * document (rendered as a full load's, but a redirect to a place or another site is named in
+ * `corten-location`, which `fetch` cannot follow with its `#id`), and on a read again the notice
+ * the page on screen drew ({@link shown}), with the page it is for.
  * @param {boolean} whole @param {boolean | undefined} again @returns {Record<string, string>}
  */
 function readHeaders(whole, again) {
   /** @type {Record<string, string>} */
-  const headers = whole ? {} : { corten: "nav" };
+  const headers = { corten: whole ? "page" : "nav" };
   if (again && shown !== null) headers[NOTICE] = new URLSearchParams({ p: location.pathname, m: shown }).toString();
   return headers;
 }

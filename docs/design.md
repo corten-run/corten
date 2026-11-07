@@ -294,8 +294,11 @@ rules something out.
    tell a navigation from a `fetch` but not a navigation from an action, a script cannot set
    them, and data clients do not send them. With a header of its own, its absence is the safe
    answer: a browser request without it (and not asking for JSON) gets the whole document, as a
-   browser without JavaScript needs. The mode would move to a standard header that says "part of
-   a page" and that a script may set.
+   browser without JavaScript needs. The page the runtime fetches whole after a write asks with
+   `corten: page`: it is the whole document too, but a redirect to a place or to another site is
+   named to it in `corten-location`, as to a navigation, since `fetch` follows a 303 without its
+   `#id` and cannot read another origin's answer. The mode would move to a standard header that
+   says "part of a page" and that a script may set.
 
    Stands on: platform (no registered media type tells a navigation from an action; a script cannot
    set `Sec-Fetch-*`, and data clients send none); reasoned (a media type parameter would mix the

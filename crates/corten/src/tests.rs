@@ -2820,13 +2820,17 @@ async fn a_redirect_to_a_place_keeps_its_fragment_in_every_mode() {
     let place = "/items/pika%20chu#place-7%20%26%208";
     let (status, headers, _) = call(app(routes.clone(), None), "GET", None).await;
     assert_eq!((status, &headers["location"]), (StatusCode::SEE_OTHER, &place.parse().unwrap()), "a full load follows it");
-    // fetch would follow a 303 and drop the fragment, so the runtime is told where to go.
-    for mode in ["nav", "action"] {
+    // fetch would follow a 303 and drop the fragment, so the runtime is told where to go: for a
+    // navigation, a patch's read, and the whole page it fetches after a write (`corten: page`,
+    // #1034).
+    for mode in ["nav", "action", "page"] {
         let (status, headers, _) = call(app(routes.clone(), None), "GET", Some(mode)).await;
         assert_eq!((status, &headers["corten-location"]), (StatusCode::NO_CONTENT, &place.parse().unwrap()), "{mode}");
     }
-    let (status, headers, _) = call_with(app(routes.clone(), None), "GET", "/old", Some("nav"), None).await;
-    assert_eq!((status, &headers["corten-location"]), (StatusCode::NO_CONTENT, &"/items/pika#place-7".parse().unwrap()));
+    for mode in ["nav", "page"] {
+        let (status, headers, _) = call_with(app(routes.clone(), None), "GET", "/old", Some(mode), None).await;
+        assert_eq!((status, &headers["corten-location"]), (StatusCode::NO_CONTENT, &"/items/pika#place-7".parse().unwrap()), "{mode}");
+    }
     let (status, headers, _) = call_with(app(routes, None), "GET", "/old", None, Some("text/html")).await;
     assert_eq!((status, &headers["location"]), (StatusCode::MOVED_PERMANENTLY, &"/items/pika#place-7".parse().unwrap()));
 }
@@ -2848,7 +2852,7 @@ async fn a_redirect_to_another_origin_is_named_to_a_client_navigation() {
         ("/away", "https://shop.example/sales?x=1", StatusCode::SEE_OTHER),
         ("/moved", "//shop.example/sales", StatusCode::MOVED_PERMANENTLY),
     ] {
-        for mode in ["nav", "action"] {
+        for mode in ["nav", "action", "page"] {
             let (status, headers, _) = call_with(app(routes.clone(), None), "GET", uri, Some(mode), None).await;
             assert_eq!((status, &headers["corten-location"]), (StatusCode::NO_CONTENT, &to.parse().unwrap()), "{uri} {mode}");
             assert!(!headers.contains_key("location"), "{uri} {mode}: nothing for fetch to follow");
@@ -2857,9 +2861,25 @@ async fn a_redirect_to_another_origin_is_named_to_a_client_navigation() {
         assert_eq!((status, &headers["location"]), (full, &to.parse().unwrap()), "{uri}: a full load follows it");
     }
     // A path on this origin is still a redirect fetch follows, in one round trip.
-    let (status, headers, _) = call_with(app(routes, None), "GET", "/here", Some("nav"), None).await;
-    assert_eq!(status, StatusCode::SEE_OTHER);
-    assert!(!headers.contains_key("corten-location"));
+    for mode in ["nav", "page"] {
+        let (status, headers, _) = call_with(app(routes.clone(), None), "GET", "/here", Some(mode), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{mode}");
+        assert!(!headers.contains_key("corten-location"), "{mode}");
+    }
+}
+
+/// The whole page the runtime fetches after a write (`corten: page`) is drawn as a full load's,
+/// its layout and `corten-shell` included, not as a navigation's `<main>` (#1034).
+#[tokio::test]
+async fn the_whole_page_after_a_write_is_drawn_as_a_full_load() {
+    let routes = Router::new().route("/", get(|req: Req| async move { req.page::<ForOne>(Shell { req: &req, title: "A", head: "", children: "a" }) }));
+    let (status, headers, body) = call(app(routes.clone(), None), "GET", Some("page")).await;
+    let (_, _, full) = call(app(routes.clone(), None), "GET", None).await;
+    let (_, _, nav) = call(app(routes, None), "GET", Some("nav")).await;
+    assert_eq!(status, StatusCode::OK);
+    let key = headers["corten-shell"].to_str().unwrap();
+    assert_eq!(meta_content(&body, "corten-shell"), key, "the document, as a full load gets it");
+    assert!(body.starts_with("<!DOCTYPE html>") && full.starts_with("<!DOCTYPE html>") && !nav.starts_with("<!DOCTYPE html>"), "{body}");
 }
 
 /// A place on a page outside the app keeps its `#fragment` through `moved` and `redirect`, which

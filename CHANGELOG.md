@@ -5538,6 +5538,14 @@ Corten is pre-1.0, so any minor version may change the API.
     ETag is now compared as `If-None-Match` is, weakly and in a list or as `*`, so a proxy that
     marks it weak gets a 304 where it got the whole file
     ([#1056 Nothing answers /favicon.ico, so each browser request for it is the app's 404 page with its layout reads](https://github.com/corten-run/corten/issues/1056)).
+193. A page the runtime fetched whole after a write, whose handler sent the browser on to a place
+    (`req.redirect(&route.at(id))`), landed at the path without its `#id`: the fetch said
+    nothing, so the server answered a 303, and `fetch` follows one without its fragment. The
+    runtime now asks for that page with `corten: page`, which the server answers as the whole
+    document, as before, and to which a redirect to a place or to another site is named in
+    `corten-location`, as to a navigation; one to another site no longer costs a refused fetch
+    and a reload
+    ([#1034 A page fetched whole after a write that redirects to a place loses its #id: the fetch sends no corten header, so the redirect is a 303 that fetch follows without the fragment](https://github.com/corten-run/corten/issues/1034)).
 
 ### Documentation
 
