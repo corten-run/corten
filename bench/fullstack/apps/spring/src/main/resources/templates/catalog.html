@@ -1,0 +1,19 @@
+<!doctype html>
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(${pageTitle}, ~{::main})}">
+<main><article aria-label="Catalog record">
+<h1 th:text="${catalog.title}"></h1>
+<p th:text="${catalog.subtitle}"></p>
+<p th:text="${catalog.description}"></p>
+<ul aria-label="Tags"><li th:each="tag : ${catalog.tags}" th:text="${tag}"></li></ul>
+<form method="get" th:action="@{/catalog/{id}(id=${catalog.id})}">
+<label>Field name <input name="field" th:value="${prefix}"></label>
+<button type="submit">Filter</button>
+</form>
+<table>
+<caption>Record fields</caption>
+<thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+<tbody><tr th:each="field : ${fields}"><th scope="row" th:text="${field.name}"></th><td th:text="${field.value}"></td></tr></tbody>
+</table>
+<nav aria-label="Related records"><ul><li th:each="related : ${catalog.related}"><a th:href="@{/catalog/{id}(id=${related.id})}" th:text="${related.title}"></a></li></ul></nav>
+</article></main>
+</html>

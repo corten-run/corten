@@ -9,7 +9,7 @@ endif()
 
 find_package(Drogon CONFIG REQUIRED)
 
-add_executable(server src/main.cc src/model.cc src/items.cc src/live.cc)
+add_executable(server src/main.cc src/model.cc src/items.cc src/live.cc src/catalog.cc)
 target_include_directories(server PRIVATE src)
 target_link_libraries(server PRIVATE Drogon::Drogon)
 # The .csp views compile to C++ classes (drogon_ctl create view) when the server builds.

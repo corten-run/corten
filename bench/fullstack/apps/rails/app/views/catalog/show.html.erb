@@ -1,0 +1,18 @@
+<% content_for :title, @record.title %>
+<% content_for :head do %><%= stylesheet_link_tag "catalog", "data-turbo-track": "reload" %><% end %>
+<article aria-label="Catalog record">
+  <h1><%= @record.title %></h1>
+  <p><%= @record.subtitle %></p>
+  <p><%= @record.description %></p>
+  <ul aria-label="Tags"><% @record.tags.each do |tag| %><li><%= tag %></li><% end %></ul>
+  <%= form_with url: catalog_path(@record.id), method: :get do %>
+    <label>Field name <input name="field" value="<%= @prefix %>"></label>
+    <button type="submit">Filter</button>
+  <% end %>
+  <table>
+    <caption>Record fields</caption>
+    <thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+    <tbody><% @fields.each do |field| %><tr><th scope="row"><%= field.name %></th><td><%= field.value %></td></tr><% end %></tbody>
+  </table>
+  <nav aria-label="Related records"><ul><% @record.related.each do |row| %><li><%= link_to row.title, catalog_path(row.id) %></li><% end %></ul></nav>
+</article>
