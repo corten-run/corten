@@ -306,7 +306,7 @@ async function run(browser) {
   // Navigation requests the runtime sends (`corten: nav`), prefetches included.
   /** @type {string[]} */
   const navRequests = [];
-  page.on("request", (request) => request.headers()["corten"] === "nav" && navRequests.push(request.url()));
+  page.on("request", (request) => request.headers()["corten"] === "nav" && navRequests.push(`${request.url()}${request.headers()["purpose"] === "prefetch" ? " (prefetch)" : ""}`));
   page.on("requestfailed", (request) => {
     const error = request.failure()?.errorText ?? "";
     if (request.url().endsWith("/watch") && !offline.has(request)) abandoned.push(error);
@@ -413,8 +413,20 @@ async function run(browser) {
     const dropped = await browser.newPage();
     let tries = 0;
     let status = null;
+    // What happened when, said only when the check fails, so a failure names its cause (#1053).
+    /** @type {string[]} */
+    const seen = [];
+    const started = Date.now();
+    dropped.on("console", (m) => m.type() === "error" && seen.push(`${Date.now() - started} ms: ${m.text().slice(0, 200)}`));
     try {
-      await dropped.route((url) => url.pathname.endsWith("/scripts/live_prices.js"), (route) => ((tries += 1) <= 2 ? route.abort("internetdisconnected") : route.continue()));
+      await dropped.route(
+        (url) => url.pathname.endsWith("/scripts/live_prices.js"),
+        (route) => {
+          tries += 1;
+          seen.push(`${Date.now() - started} ms: request ${tries} (${route.request().resourceType()})`);
+          return tries <= 2 ? route.abort("internetdisconnected") : route.continue();
+        },
+      );
       await dropped.goto(base);
       // The script tag fails, then the runtime's import; it is tried again 0.5 s after the import fails.
       await dropped.waitForSelector(`${live}[data-status="live"]`, { timeout: 15_000 }).catch(() => {});
@@ -422,7 +434,8 @@ async function run(browser) {
     } finally {
       await dropped.close();
     }
-    check("a script module whose first two requests fail is imported again, and its on:connect handler runs", status === "live" && tries > 2, `${status}, ${tries} requests`);
+    const imported = status === "live" && tries > 2;
+    check("a script module whose first two requests fail is imported again, and its on:connect handler runs", imported, `${status}, ${tries} requests${imported ? "" : `: ${seen.join("; ")}`}`);
   }
 
   const prices = () => page.$$eval('[data-ref="price"]', (cells) => cells.map((c) => c.textContent));
@@ -3229,13 +3242,37 @@ async function run(browser) {
     const afterNewest = navRequests.length;
     await page.click('header a.hovered[href="/news?p=0"]');
     await page.waitForFunction(() => location.search === "?p=0");
-    // The address changes when the navigation starts, before the runtime sends its request.
+    // Playwright can report the request after the address changes.
     for (let waited = 0; navRequests.length < 11 && waited < 2000; waited += 50) await page.waitForTimeout(50);
     check(
       "prefetch keeps the 8 newest pages: the newest is reused, the oldest is fetched again",
       hoveredCount === 10 && afterNewest === 10 && navRequests.length === 11,
-      `${hoveredCount}, ${afterNewest}, ${navRequests.length}`,
+      `${hoveredCount}, ${afterNewest}, ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
     );
+
+    // The page a visit is fetching is not prefetched as well, by the dwell the click cut short or
+    // by the pointer leaving its link and coming back: the address stays this page's until that
+    // page is in, so the prefetch would fetch it a second time (#1053). Its answer is held so both
+    // dwells end while it is fetched.
+    await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?p=held">held</a>')));
+    /** @param {URL} url */
+    const heldPage = (url) => url.pathname === "/news" && url.searchParams.get("p") === "held";
+    await page.route(heldPage, async (route) => {
+      if (route.request().headers()["purpose"] !== "prefetch") await new Promise((resolve) => setTimeout(resolve, 600));
+      await route.continue().catch(() => {});
+    });
+    navRequests.length = 0;
+    await page.click('header a.hovered[href="/news?p=held"]');
+    await page.mouse.move(0, 0);
+    await page.hover('header a.hovered[href="/news?p=held"]');
+    await page.waitForTimeout(150);
+    await page.waitForFunction(() => location.search === "?p=held");
+    check(
+      "a link followed during its hover's dwell is fetched once, with no prefetch of its page",
+      navRequests.length === 1,
+      navRequests.map((u) => u.replace(base, "")).join(" ") || "none",
+    );
+    await page.unroute(heldPage);
     await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
 
     // A prefetch pushed out while its answer is still coming is aborted, so the server sees the
@@ -3358,6 +3395,7 @@ async function run(browser) {
       'data-nav="section" marks the link on pages under it',
       "data-no-prefetch: hovering the link fetches nothing",
       "prefetch keeps the 8 newest pages",
+      "a link followed during its hover's dwell is fetched once, with no prefetch of its page",
       "a prefetch dropped before it answers is aborted",
       "a hover's prefetch says so (purpose: prefetch), and the click uses it",
       "a prefetch answered with no page is not asked for again on a hover, is fetched again on the click, and swapped in",
