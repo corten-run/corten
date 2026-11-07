@@ -47,17 +47,27 @@ pub fn record<'a>(record: &'a Record, prefix: &'a str) -> impl Render + 'a {
             </form>
             <table>
                 <caption>"Record fields"</caption>
-                <thead><tr><th scope="col">"Name"</th><th scope="col">"Value"</th></tr></thead>
+                <thead>
+                    <tr>
+                        <th scope="col">"Name"</th>
+                        <th scope="col">"Value"</th>
+                    </tr>
+                </thead>
                 <tbody>
                     for field in record.fields.iter().filter(|field| field.name.starts_with(prefix)) {
-                        <tr><th scope="row">{&field.name}</th><td>{&field.value}</td></tr>
+                        <tr>
+                            <th scope="row">{&field.name}</th>
+                            <td>{&field.value}</td>
+                        </tr>
                     }
                 </tbody>
             </table>
             <nav aria-label="Related records">
                 <ul>
                     for related in &record.related {
-                        <li><a href={routes::Catalog { id: &related.id, query: CatalogQuery::default() }}>{&related.title}</a></li>
+                        <li>
+                            <a href={routes::Catalog { id: &related.id, query: CatalogQuery::default() }}>{&related.title}</a>
+                        </li>
                     }
                 </ul>
             </nav>

@@ -7,12 +7,20 @@ import { steady } from "../../scripts/steady.mjs";
 import { records } from "./fixtures.mjs";
 import { expectedArticle } from "./contract.mjs";
 import { catalogServer } from "./upstream.mjs";
-import { checkApp, compareStyle, intentionalDisabledPreload, referenceHtml, snapshotArticle } from "./check.mjs";
+import { checkApp, compareStyle, intentionalDisabledPreload, isScriptPreload, referenceHtml, snapshotArticle } from "./check.mjs";
 
-test("only Chromium's policy-free, JS-disabled modulepreload block is intentional", () => {
-  const failure = { javaScriptEnabled: false, resourceType: "script", errorText: "csp", modulePreload: true, hasCsp: false };
-  assert.equal(intentionalDisabledPreload(failure), true);
-  for (const change of [{ javaScriptEnabled: true }, { resourceType: "stylesheet" }, { errorText: "net::ERR_FAILED" }, { modulePreload: false }, { hasCsp: true }]) assert.equal(intentionalDisabledPreload({ ...failure, ...change }), false);
+test("only explicit script preloads blocked with JS disabled and no actual CSP are intentional", () => {
+  const failure = { javaScriptEnabled: false, resourceType: "script", errorText: "csp", scriptPreload: true, hasCsp: false };
+  for (const link of [{ rel: "modulepreload" }, { rel: "preload", as: "script" }, { rel: "PRELOAD", as: "SCRIPT" }]) {
+    assert.equal(isScriptPreload(link), true);
+    assert.equal(intentionalDisabledPreload({ ...failure, scriptPreload: isScriptPreload(link) }), true);
+    assert.equal(intentionalDisabledPreload({ ...failure, scriptPreload: isScriptPreload(link), hasCsp: true }), false);
+  }
+  for (const link of [{ rel: "preload", as: "style" }, { rel: "preload", as: "font" }, { rel: "preload" }, { rel: "stylesheet", as: "script" }, { rel: "notmodulepreload" }, {}]) {
+    assert.equal(isScriptPreload(link), false);
+    assert.equal(intentionalDisabledPreload({ ...failure, scriptPreload: isScriptPreload(link) }), false);
+  }
+  for (const change of [{ javaScriptEnabled: true }, { resourceType: "stylesheet" }, { errorText: "net::ERR_FAILED" }, { scriptPreload: false }, { hasCsp: true }]) assert.equal(intentionalDisabledPreload({ ...failure, ...change }), false);
 });
 
 test("browser outline detects extra native markup, text, hidden rows, wrong scope, and escaping", { timeout: 60000 }, async () => {

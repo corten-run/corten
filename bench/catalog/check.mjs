@@ -10,10 +10,14 @@ export async function get(url, accept = "application/json") {
   const response = await fetch(url, { headers: { Accept: accept, "Accept-Encoding": "identity" }, redirect: "manual", signal: AbortSignal.timeout(10000) });
   return { status: response.status, type: response.headers.get("content-type"), body: await response.text() };
 }
-export function intentionalDisabledPreload({ javaScriptEnabled, resourceType, errorText, modulePreload, hasCsp }) {
+export function isScriptPreload({ rel = "", as = "" }) {
+  const tokens = rel.toLowerCase().split(/\s+/);
+  return tokens.includes("modulepreload") || (tokens.includes("preload") && as.toLowerCase() === "script");
+}
+export function intentionalDisabledPreload({ javaScriptEnabled, resourceType, errorText, scriptPreload, hasCsp }) {
   // Chromium reports an intentionally disabled modulepreload as "csp" even
   // without a CSP. Never suppress real policies, stylesheet failures, or JS-on errors.
-  return !javaScriptEnabled && resourceType === "script" && errorText === "csp" && modulePreload && !hasCsp;
+  return !javaScriptEnabled && resourceType === "script" && errorText === "csp" && scriptPreload && !hasCsp;
 }
 
 // Executed in the browser. Only framework wrappers/metadata are transparent, not native
@@ -124,7 +128,7 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
       const failures = [];
       const failedResources = [];
       const documentResponses = [];
-      const modulePreloads = new Set();
+      const scriptPreloads = new Set();
       let metaCsp = false;
       page.on("pageerror", (error) => failures.push(error.message));
       page.on("console", (message) => { if (message.type() === "error") failures.push(message.text()); });
@@ -139,7 +143,9 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
         assert.equal(response?.status(), 200, path);
         await page.waitForFunction(() => [...document.querySelectorAll('link[rel="stylesheet"]')].every((l) => l.sheet));
         await page.evaluate(() => document.fonts.ready);
-        for (const url of await page.locator('link[rel~="modulepreload"]').evaluateAll((links) => links.map((link) => link.href))) modulePreloads.add(url);
+        for (const link of await page.locator('link[rel]').evaluateAll((links) => links.map((link) => ({ href: link.href, rel: link.rel, as: link.as })))) {
+          if (isScriptPreload(link)) scriptPreloads.add(link.href);
+        }
         metaCsp ||= await page.locator('meta[http-equiv="Content-Security-Policy" i]').count() > 0;
         assert.deepEqual(await page.evaluate(snapshotArticle), expectedArticle(r, prefix), `${profile} js=${javaScriptEnabled} ${path}`);
         result.pages++;
@@ -168,13 +174,13 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
         await page.waitForFunction((title) => document.querySelector("article h1")?.textContent === title, catalog[related.id].title);
         assert.deepEqual(await page.evaluate(snapshotArticle), expectedArticle(catalog[related.id]), "related navigation");
         const hasCsp = metaCsp || (await page.locator('meta[http-equiv="Content-Security-Policy" i]').count() > 0) || (await Promise.all(documentResponses.map((response) => response.headerValue("content-security-policy")))).some(Boolean);
-        const disabledModulePreloads = [];
+        const disabledScriptPreloads = [];
         for (const failure of failedResources) {
-          if (intentionalDisabledPreload({ ...failure, javaScriptEnabled, modulePreload: modulePreloads.has(failure.url), hasCsp })) disabledModulePreloads.push(failure.url);
+          if (intentionalDisabledPreload({ ...failure, javaScriptEnabled, scriptPreload: scriptPreloads.has(failure.url), hasCsp })) disabledScriptPreloads.push(failure.url);
           else failures.push(`${failure.url}: ${failure.errorText}`);
         }
         assert.deepEqual(failures, [], `${profile}: browser/resource errors`);
-        result.profiles.push({ profile, javaScriptEnabled, forms: true, related: true, styles: true, disabledModulePreloads: [...new Set(disabledModulePreloads)] });
+        result.profiles.push({ profile, javaScriptEnabled, forms: true, related: true, styles: true, disabledScriptPreloads: [...new Set(disabledScriptPreloads)] });
       } finally { await context.close(); }
     }
   }

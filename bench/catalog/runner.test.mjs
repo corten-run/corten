@@ -40,6 +40,7 @@ test("catalog CI covers exactly the registry's eighteen page apps and both sourc
   assert.equal(names.length, 18);
   assert.deepEqual(names.sort(), Object.entries(allApps).filter(([, app]) => app.pages !== false).map(([name]) => name).sort());
   assert.match(workflow, /run\.mjs c1 --apps \$\{\{ matrix\.app \}\} --build --check-only/);
+  assert.match(workflow, /CATALOG_DOCKER_TESTS:\s*"1"/, "Linux CI must execute the cleanup regression rather than skip it");
   assert.ok(!/schedule:|droplet\.mjs|run-all\.mjs|trend\.mjs|BENCH_TIER|BENCH_NETWORK/.test(workflow));
   const runner = readFileSync(join(here, "run.mjs"), "utf8");
   assert.match(runner, /for \(const source of sources\)/);
