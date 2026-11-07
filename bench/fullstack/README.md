@@ -617,9 +617,10 @@ and checking that each app does the same work is
 How each app holds up against slow clients, oversized requests and connection floods, as its
 framework starts it (the step is Method, The hardening step). Measured locally (Docker Desktop on
 Windows, one run each, with Rust builds running on the machine, so the well-behaved client's
-latencies are indicative; `results/harden-local3/hardening.json`, whose `dirty` is true: it was
-taken with this step's probe before the commit that adds it, and whose clients that stop reading
-and oversized requests were run again at `330ff623`, recorded in each phase's `taken`): Corten,
+latencies are indicative; `results/harden-local3/hardening.json`, where each phase's `taken` says
+the commit it ran at: the first four phases at `d456063e` with local changes, this step's probe
+before the commit that adds it, and the clients that stop reading and the oversized requests run
+again at `330ff623` with none, each keeping its first pass in `earlier`): Corten,
 axum-maud and the six other apps the matched tier names, ASP.NET Core as both its Razor Pages app
 and aspnet-aot. Corten is card-market, with its own 10 s request deadline and its write limit
 raised for the probe (Method, The hardening step). The images
@@ -669,12 +670,16 @@ well-behaved client's p99 stayed under 500 ms throughout. Its idle connections w
 header timeout in 30 s, where both Kestrel apps held all 5,000 for the phase's 60 s:
 `App::max_connections` is unbounded by default, as Kestrel's is
 ([Choice 19](../../docs/design.md#choice-head-size)), and the timeout is what bounds them. Against
-the clients that stop reading it took 0.06 cores, where Topcoat and axum-maud (also hyper, whose
-writes to every one were blocked by the hold's second half) took 0.23, Leptos 0.49, aspnet-aot
-0.54, the Razor Pages app 0.92 and Spring 0.99 (still sending at the end: none of its 200 held the same
-unread bytes at both reads, so its 90 s measures its pipelined throughput as much as a slow reader); Django took 0.1 with 894 of
-895 of the well-behaved client's requests failing. Why Corten's is lower than its hyper peers' is
-not measured here. Where it falls short:
+the clients that stop reading it took 0.06 cores (0.08 in the first pass), where Topcoat and
+axum-maud (also hyper, whose writes to every one were blocked by the hold's second half) took 0.23
+each (0.63 and 0.87 in the first pass), Leptos 0.49 (0.69), aspnet-aot 0.54 (0.60), the Razor Pages
+app 0.92 (1.00) and Spring 0.99 in both (still sending at the end: none of its 200 held the same
+unread bytes at both reads, so its 90 s measures its pipelined throughput as much as a slow
+reader); Django took 0.1 (0.11) with 894 of 895 of the well-behaved client's requests failing. The
+two passes ran within the hour on the same images and differ up to fourfold for the hyper apps,
+so the order holds in both but the ratios are not settled by two runs. Estimated, not measured:
+most of the gap is the pages each server rendered before its writes blocked, which the probe does
+not count. Where it falls short:
 
 1. A body sent a byte a second is closed by the request deadline (card-market's 10 s, with a 503;
    30 s by default), not by a rate: Kestrel closed it within 5.4 to 6.8 s, by its minimum request
@@ -687,6 +692,14 @@ not measured here. Where it falls short:
    chose over Kestrel's minimum response rate ([Limit 14](../../docs/design.md#limit-http1)):
    aspnet-aot, sent the 9 KB JSON, closed its slow readers within 25.5 s, while the Razor Pages
    app, sent the page as Corten was, held them all 90 s.
+3. The 16 MiB body can reach the client as a closed connection instead of the 413: in 2 of 4 local
+   passes Corten's connection closed while the probe was still sending and no 413 was read
+   (harden-local3's first pass, in `earlier`, where the write failed with `EPIPE`, and a run not
+   committed, whose slow bodies met card-market's write limit and which did not record resets), and
+   the 413 arrived in the other 2 (harden-local1 and harden-local3's rerun). Kestrel (both apps) and
+   Spring answered all three requests in each of the three passes that ran them, with no reset in
+   the two that recorded resets. It is the race described above, which hyper's close without reading the rest of the body
+   decides.
 
 The table has no droplet round yet: `droplet.mjs <round> --suite harden` runs it (Running it).
 

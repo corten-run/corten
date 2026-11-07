@@ -2031,7 +2031,12 @@
           "memMaxMiB": 49.2,
           "cpuSeconds": 0.8,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowHead": {
           "phase": "slowHead",
@@ -2256,7 +2261,12 @@
           "memMaxMiB": 8.4,
           "cpuSeconds": 0.45,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowBody": {
           "phase": "slowBody",
@@ -2381,7 +2391,12 @@
           "memMaxMiB": 12.4,
           "cpuSeconds": 0.2,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowReader": {
           "phase": "slowReader",
@@ -2616,7 +2631,239 @@
           "memMaxMiB": 79,
           "cpuSeconds": 3.76,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "slowReader",
+              "opened": 200,
+              "closedBy": [
+                64040,
+                64040,
+                64040,
+                64042,
+                64042,
+                64053,
+                65074,
+                65074,
+                65074,
+                65074,
+                65074,
+                65074,
+                65074,
+                65074,
+                65074,
+                65074,
+                65077,
+                65077,
+                65077,
+                65077,
+                65078,
+                65078,
+                65078,
+                65078,
+                65078,
+                65078,
+                65079,
+                65079,
+                65079,
+                65079,
+                65079,
+                65079,
+                65079,
+                65079,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65080,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65081,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65082,
+                65083,
+                65083,
+                65083,
+                65083,
+                65083,
+                65083,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65093,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65094,
+                65095,
+                65095,
+                65095,
+                65095,
+                65095,
+                65095,
+                65096,
+                65096,
+                65096,
+                65096,
+                65096,
+                65096,
+                65096,
+                65096,
+                65096,
+                65096,
+                65096,
+                65096,
+                65096,
+                65096,
+                65097,
+                65097,
+                65098,
+                65098,
+                65098,
+                65098,
+                65098,
+                66084
+              ],
+              "answers": {
+                "none": 200
+              },
+              "heldMs": 66187,
+              "good": {
+                "sent": 650,
+                "ok": 650,
+                "failed": 0,
+                "p50": 9,
+                "p99": 455,
+                "max": 665
+              },
+              "after": 200,
+              "wallMs": 68455,
+              "memBeforeMiB": 2.8,
+              "memMaxMiB": 79.2,
+              "cpuSeconds": 5.64,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         },
         "idleFlood": {
           "phase": "idleFlood",
@@ -7641,7 +7888,12 @@
           "memMaxMiB": 41.3,
           "cpuSeconds": 1.6,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "oversized": {
           "phase": "oversized",
@@ -7674,7 +7926,40 @@
           "memMaxMiB": 4.2,
           "cpuSeconds": 0.01,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "oversized",
+              "statuses": {
+                "manyHeaders": 431,
+                "hugeHeader": "closed",
+                "hugeBody": "closed"
+              },
+              "reset": {
+                "hugeBody": "EPIPE"
+              },
+              "good": {
+                "sent": 1,
+                "ok": 1,
+                "failed": 0,
+                "p50": 44,
+                "p99": 44,
+                "max": 44
+              },
+              "after": 200,
+              "wallMs": 1265,
+              "memBeforeMiB": 3,
+              "memMaxMiB": 3,
+              "cpuSeconds": 0.01,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         }
       },
       "cells": {
@@ -9711,7 +9996,12 @@
           "memMaxMiB": 55.1,
           "cpuSeconds": 2.15,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowHead": {
           "phase": "slowHead",
@@ -9936,7 +10226,12 @@
           "memMaxMiB": 23.4,
           "cpuSeconds": 1.3,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowBody": {
           "phase": "slowBody",
@@ -10061,7 +10356,12 @@
           "memMaxMiB": 19.9,
           "cpuSeconds": 0.27,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowReader": {
           "phase": "slowReader",
@@ -10291,7 +10591,239 @@
           "memMaxMiB": 104.9,
           "cpuSeconds": 15.16,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "slowReader",
+              "opened": 200,
+              "closedBy": [
+                21635,
+                21636,
+                22645,
+                22648,
+                22649,
+                22649,
+                22649,
+                23658,
+                23659,
+                23660,
+                23661,
+                23661,
+                23661,
+                23663,
+                24671,
+                24671,
+                24671,
+                24671,
+                24672,
+                24674,
+                24674,
+                24674,
+                24674,
+                24674,
+                24674,
+                24675,
+                24675,
+                24676,
+                24676,
+                24677,
+                25688,
+                25688,
+                25689,
+                25689,
+                25689,
+                25689,
+                25689,
+                25690,
+                25690,
+                25690,
+                25690,
+                25690,
+                25691,
+                25692,
+                25692,
+                25692,
+                25692,
+                25692,
+                25692,
+                25692,
+                25693,
+                25693,
+                25693,
+                25693,
+                25693,
+                25693,
+                25694,
+                25694,
+                25694,
+                26700,
+                26700,
+                26701,
+                26701,
+                26701,
+                26701,
+                26701,
+                26701,
+                26701,
+                26702,
+                26702,
+                26702,
+                26702,
+                26702,
+                26704,
+                26704,
+                26704,
+                26704,
+                26704,
+                26704,
+                26704,
+                26704,
+                26704,
+                26704,
+                26704,
+                26704,
+                26705,
+                26705,
+                26705,
+                26705,
+                26705,
+                26705,
+                26706,
+                26706,
+                26706,
+                26706,
+                26706,
+                27960,
+                27960,
+                27960,
+                27960,
+                27960,
+                27960,
+                27960,
+                27960,
+                27960,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27961,
+                27962,
+                27962,
+                27962,
+                27962,
+                27962,
+                27962,
+                27962,
+                27962,
+                27962,
+                27962,
+                27962,
+                27963,
+                27963,
+                27963,
+                27963,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27964,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27965,
+                27966,
+                27966,
+                27966,
+                27966,
+                27966,
+                27966,
+                27966,
+                27966,
+                28957,
+                28958,
+                28958,
+                28958,
+                28958,
+                28959,
+                28959,
+                28961,
+                28963
+              ],
+              "answers": {
+                "none": 200
+              },
+              "heldMs": 29119,
+              "good": {
+                "sent": 290,
+                "ok": 290,
+                "failed": 0,
+                "p50": 248,
+                "p99": 905,
+                "max": 1118
+              },
+              "after": 200,
+              "wallMs": 30987,
+              "memBeforeMiB": 16.3,
+              "memMaxMiB": 99,
+              "cpuSeconds": 18.55,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         },
         "idleFlood": {
           "phase": "idleFlood",
@@ -10315,7 +10847,12 @@
           "memMaxMiB": 85.2,
           "cpuSeconds": 3.24,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "oversized": {
           "phase": "oversized",
@@ -10348,7 +10885,40 @@
           "memMaxMiB": null,
           "cpuSeconds": 0.02,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "oversized",
+              "statuses": {
+                "manyHeaders": 431,
+                "hugeHeader": 431,
+                "hugeBody": 405
+              },
+              "reset": {
+                "hugeBody": null
+              },
+              "good": {
+                "sent": 1,
+                "ok": 1,
+                "failed": 0,
+                "p50": 80,
+                "p99": 80,
+                "max": 80
+              },
+              "after": 200,
+              "wallMs": 1051,
+              "memBeforeMiB": 17,
+              "memMaxMiB": 17,
+              "cpuSeconds": 0.04,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         }
       },
       "cells": {
@@ -12385,7 +12955,12 @@
           "memMaxMiB": 89.6,
           "cpuSeconds": 5.79,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowHead": {
           "phase": "slowHead",
@@ -12610,7 +13185,12 @@
           "memMaxMiB": 59.2,
           "cpuSeconds": 4.57,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowBody": {
           "phase": "slowBody",
@@ -12735,7 +13315,12 @@
           "memMaxMiB": 45.5,
           "cpuSeconds": 2.08,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowReader": {
           "phase": "slowReader",
@@ -12769,7 +13354,38 @@
           "memMaxMiB": 176.1,
           "cpuSeconds": 84.43,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "slowReader",
+              "opened": 200,
+              "closedBy": [],
+              "answers": {
+                "none": 200
+              },
+              "heldMs": 90012,
+              "good": {
+                "sent": 892,
+                "ok": 892,
+                "failed": 0,
+                "p50": 957,
+                "p99": 3792,
+                "max": 4108
+              },
+              "after": 200,
+              "wallMs": 92079,
+              "memBeforeMiB": 30.6,
+              "memMaxMiB": 161.8,
+              "cpuSeconds": 92.47,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         },
         "idleFlood": {
           "phase": "idleFlood",
@@ -12793,7 +13409,12 @@
           "memMaxMiB": 120.5,
           "cpuSeconds": 11.41,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "oversized": {
           "phase": "oversized",
@@ -12826,7 +13447,40 @@
           "memMaxMiB": 34.9,
           "cpuSeconds": 0.23,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "oversized",
+              "statuses": {
+                "manyHeaders": 431,
+                "hugeHeader": 431,
+                "hugeBody": 400
+              },
+              "reset": {
+                "hugeBody": null
+              },
+              "good": {
+                "sent": 5,
+                "ok": 5,
+                "failed": 0,
+                "p50": 107,
+                "p99": 154,
+                "max": 154
+              },
+              "after": 200,
+              "wallMs": 2377,
+              "memBeforeMiB": 30.9,
+              "memMaxMiB": 32.5,
+              "cpuSeconds": 1.12,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         }
       },
       "cells": {
@@ -14863,7 +15517,12 @@
           "memMaxMiB": 40.1,
           "cpuSeconds": 1.28,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowHead": {
           "phase": "slowHead",
@@ -15088,7 +15747,12 @@
           "memMaxMiB": 7,
           "cpuSeconds": 0.98,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowBody": {
           "phase": "slowBody",
@@ -15112,7 +15776,12 @@
           "memMaxMiB": 6.2,
           "cpuSeconds": 3.05,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowReader": {
           "phase": "slowReader",
@@ -15146,7 +15815,38 @@
           "memMaxMiB": 84.6,
           "cpuSeconds": 21.51,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "slowReader",
+              "opened": 200,
+              "closedBy": [],
+              "answers": {
+                "none": 200
+              },
+              "heldMs": 90120,
+              "good": {
+                "sent": 884,
+                "ok": 884,
+                "failed": 0,
+                "p50": 584,
+                "p99": 1609,
+                "max": 2696
+              },
+              "after": 200,
+              "wallMs": 92670,
+              "memBeforeMiB": 3.9,
+              "memMaxMiB": 81.1,
+              "cpuSeconds": 58.55,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         },
         "idleFlood": {
           "phase": "idleFlood",
@@ -15170,7 +15870,12 @@
           "memMaxMiB": 35.9,
           "cpuSeconds": 2.45,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "oversized": {
           "phase": "oversized",
@@ -15203,7 +15908,40 @@
           "memMaxMiB": null,
           "cpuSeconds": 0.01,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "oversized",
+              "statuses": {
+                "manyHeaders": 431,
+                "hugeHeader": 431,
+                "hugeBody": "closed"
+              },
+              "reset": {
+                "hugeBody": "EPIPE"
+              },
+              "good": {
+                "sent": 1,
+                "ok": 1,
+                "failed": 0,
+                "p50": 38,
+                "p99": 38,
+                "max": 38
+              },
+              "after": 200,
+              "wallMs": 1124,
+              "memBeforeMiB": 1.7,
+              "memMaxMiB": 1.7,
+              "cpuSeconds": 0.01,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         }
       },
       "cells": {
@@ -15239,7 +15977,12 @@
           "memMaxMiB": 51.6,
           "cpuSeconds": 1.45,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowHead": {
           "phase": "slowHead",
@@ -15263,7 +16006,12 @@
           "memMaxMiB": 8.2,
           "cpuSeconds": 2.23,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowBody": {
           "phase": "slowBody",
@@ -15287,7 +16035,12 @@
           "memMaxMiB": 6.5,
           "cpuSeconds": 2.52,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowReader": {
           "phase": "slowReader",
@@ -15321,7 +16074,38 @@
           "memMaxMiB": 83.9,
           "cpuSeconds": 21.19,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "slowReader",
+              "opened": 200,
+              "closedBy": [],
+              "answers": {
+                "none": 200
+              },
+              "heldMs": 90191,
+              "good": {
+                "sent": 895,
+                "ok": 895,
+                "failed": 0,
+                "p50": 492,
+                "p99": 1743,
+                "max": 2543
+              },
+              "after": 200,
+              "wallMs": 93050,
+              "memBeforeMiB": 1.4,
+              "memMaxMiB": 83,
+              "cpuSeconds": 80.73,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         },
         "idleFlood": {
           "phase": "idleFlood",
@@ -15345,7 +16129,12 @@
           "memMaxMiB": 62.4,
           "cpuSeconds": 2.93,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "oversized": {
           "phase": "oversized",
@@ -15378,7 +16167,40 @@
           "memMaxMiB": 1.4,
           "cpuSeconds": 0.01,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "oversized",
+              "statuses": {
+                "manyHeaders": 431,
+                "hugeHeader": 431,
+                "hugeBody": "closed"
+              },
+              "reset": {
+                "hugeBody": "EPIPE"
+              },
+              "good": {
+                "sent": 1,
+                "ok": 1,
+                "failed": 0,
+                "p50": 59,
+                "p99": 59,
+                "max": 59
+              },
+              "after": 200,
+              "wallMs": 1504,
+              "memBeforeMiB": 1.7,
+              "memMaxMiB": 1.4,
+              "cpuSeconds": 0.02,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         }
       },
       "cells": {
@@ -15414,7 +16236,12 @@
           "memMaxMiB": 39.4,
           "cpuSeconds": 2.06,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowHead": {
           "phase": "slowHead",
@@ -15438,7 +16265,12 @@
           "memMaxMiB": 6.4,
           "cpuSeconds": 2.14,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowBody": {
           "phase": "slowBody",
@@ -15563,7 +16395,12 @@
           "memMaxMiB": 4,
           "cpuSeconds": 0.03,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowReader": {
           "phase": "slowReader",
@@ -15597,7 +16434,38 @@
           "memMaxMiB": 82.8,
           "cpuSeconds": 45.35,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "slowReader",
+              "opened": 200,
+              "closedBy": [],
+              "answers": {
+                "none": 200
+              },
+              "heldMs": 90112,
+              "good": {
+                "sent": 859,
+                "ok": 846,
+                "failed": 13,
+                "p50": 2218,
+                "p99": 4844,
+                "max": 5014
+              },
+              "after": 200,
+              "wallMs": 94249,
+              "memBeforeMiB": 5.3,
+              "memMaxMiB": 71.5,
+              "cpuSeconds": 64.68,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         },
         "idleFlood": {
           "phase": "idleFlood",
@@ -15621,7 +16489,12 @@
           "memMaxMiB": 34.4,
           "cpuSeconds": 3.06,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "oversized": {
           "phase": "oversized",
@@ -15654,7 +16527,40 @@
           "memMaxMiB": 1.6,
           "cpuSeconds": 0.01,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "oversized",
+              "statuses": {
+                "manyHeaders": 431,
+                "hugeHeader": 431,
+                "hugeBody": 405
+              },
+              "reset": {
+                "hugeBody": "EPIPE"
+              },
+              "good": {
+                "sent": 1,
+                "ok": 1,
+                "failed": 0,
+                "p50": 64,
+                "p99": 64,
+                "max": 64
+              },
+              "after": 200,
+              "wallMs": 1326,
+              "memBeforeMiB": 2,
+              "memMaxMiB": 1.6,
+              "cpuSeconds": 0.01,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         }
       },
       "cells": {
@@ -15690,7 +16596,12 @@
           "memMaxMiB": 153.9,
           "cpuSeconds": 9.79,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowHead": {
           "phase": "slowHead",
@@ -15714,7 +16625,12 @@
           "memMaxMiB": 144.9,
           "cpuSeconds": 12.39,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowBody": {
           "phase": "slowBody",
@@ -15738,7 +16654,12 @@
           "memMaxMiB": 171.1,
           "cpuSeconds": 20.28,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowReader": {
           "phase": "slowReader",
@@ -15981,6 +16902,246 @@
             " 8: 0xefaed0  [next-server (v]",
             " 9: 0x13f3058  [next-server (v]",
             "10: 0x1b079b6  [next-server (v]"
+          ],
+          "earlier": [
+            {
+              "phase": "slowReader",
+              "opened": 200,
+              "closedBy": [
+                87934,
+                87934,
+                87934,
+                87934,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87937,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87938,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87954,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87955,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87959,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87960,
+                87961,
+                87961,
+                87961,
+                87961
+              ],
+              "answers": {
+                "none": 200
+              },
+              "heldMs": 88085,
+              "good": {
+                "sent": 867,
+                "ok": 0,
+                "failed": 867,
+                "p50": null,
+                "p99": null,
+                "max": null
+              },
+              "after": null,
+              "wallMs": 99711,
+              "memBeforeMiB": 71.4,
+              "memMaxMiB": 654.3,
+              "cpuSeconds": null,
+              "running": false,
+              "oomKilled": false,
+              "exitCode": 139,
+              "logTail": [
+                "6: 0xf3e5d2  [next-server (v]",
+                " 7: 0xf3e8ca  [next-server (v]",
+                " 8: 0xf4f5ca  [next-server (v]",
+                " 9: 0xf53970  [next-server (v]",
+                "10: 0x19f1e81  [next-server (v]"
+              ],
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
           ]
         },
         "idleFlood": {
@@ -16005,7 +17166,12 @@
           "memMaxMiB": 198,
           "cpuSeconds": 15.35,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "oversized": {
           "phase": "oversized",
@@ -16038,7 +17204,40 @@
           "memMaxMiB": 47.6,
           "cpuSeconds": 0.71,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "oversized",
+              "statuses": {
+                "manyHeaders": 200,
+                "hugeHeader": 431,
+                "hugeBody": 200
+              },
+              "reset": {
+                "hugeBody": "EPIPE"
+              },
+              "good": {
+                "sent": 7,
+                "ok": 7,
+                "failed": 0,
+                "p50": 186,
+                "p99": 359,
+                "max": 359
+              },
+              "after": 200,
+              "wallMs": 1626,
+              "memBeforeMiB": 50.2,
+              "memMaxMiB": 50.3,
+              "cpuSeconds": 0.69,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         }
       },
       "cells": {
@@ -16074,7 +17273,12 @@
           "memMaxMiB": 308.9,
           "cpuSeconds": 21.76,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowHead": {
           "phase": "slowHead",
@@ -16098,7 +17302,12 @@
           "memMaxMiB": 171.7,
           "cpuSeconds": 23.39,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowBody": {
           "phase": "slowBody",
@@ -16122,7 +17331,12 @@
           "memMaxMiB": 284.4,
           "cpuSeconds": 29.84,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowReader": {
           "phase": "slowReader",
@@ -16156,7 +17370,38 @@
           "memMaxMiB": 477.7,
           "cpuSeconds": 96.55,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "slowReader",
+              "opened": 200,
+              "closedBy": [],
+              "answers": {
+                "none": 200
+              },
+              "heldMs": 90000,
+              "good": {
+                "sent": 895,
+                "ok": 2,
+                "failed": 893,
+                "p50": 1821,
+                "p99": 1821,
+                "max": 1821
+              },
+              "after": 200,
+              "wallMs": 97477,
+              "memBeforeMiB": 146.3,
+              "memMaxMiB": 493.7,
+              "cpuSeconds": 96.88,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         },
         "idleFlood": {
           "phase": "idleFlood",
@@ -21181,7 +22426,12 @@
           "memMaxMiB": 258.9,
           "cpuSeconds": 15.27,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "oversized": {
           "phase": "oversized",
@@ -21214,7 +22464,40 @@
           "memMaxMiB": 132.3,
           "cpuSeconds": 0.44,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "oversized",
+              "statuses": {
+                "manyHeaders": 400,
+                "hugeHeader": 400,
+                "hugeBody": 413
+              },
+              "reset": {
+                "hugeBody": null
+              },
+              "good": {
+                "sent": 2,
+                "ok": 2,
+                "failed": 0,
+                "p50": 78,
+                "p99": 78,
+                "max": 78
+              },
+              "after": 200,
+              "wallMs": 832,
+              "memBeforeMiB": 146.8,
+              "memMaxMiB": 139.6,
+              "cpuSeconds": 0.36,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         }
       },
       "cells": {
@@ -21255,7 +22538,12 @@
           "memMaxMiB": 152,
           "cpuSeconds": 2.54,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowHead": {
           "phase": "slowHead",
@@ -21284,7 +22572,12 @@
           "memMaxMiB": 127.9,
           "cpuSeconds": 5.39,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowBody": {
           "phase": "slowBody",
@@ -21409,7 +22702,12 @@
           "memMaxMiB": 97.2,
           "cpuSeconds": 0.42,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "slowReader": {
           "phase": "slowReader",
@@ -21573,7 +22871,169 @@
           "memMaxMiB": 94.1,
           "cpuSeconds": 9.39,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "slowReader",
+              "opened": 200,
+              "closedBy": [
+                4227,
+                4227,
+                4228,
+                6494,
+                6494,
+                6494,
+                7488,
+                7489,
+                7499,
+                9529,
+                9529,
+                9529,
+                11540,
+                11540,
+                11540,
+                13552,
+                13552,
+                13552,
+                15568,
+                15568,
+                15568,
+                17584,
+                17584,
+                17585,
+                19611,
+                19611,
+                19611,
+                21642,
+                21642,
+                21642,
+                23646,
+                23646,
+                23646,
+                25659,
+                25659,
+                25659,
+                27685,
+                27685,
+                27685,
+                29703,
+                29703,
+                29703,
+                31727,
+                31727,
+                31727,
+                33746,
+                33746,
+                33746,
+                36008,
+                36008,
+                36008,
+                38035,
+                38035,
+                38035,
+                40069,
+                40069,
+                40069,
+                42060,
+                42060,
+                42060,
+                44081,
+                44081,
+                44081,
+                46120,
+                46120,
+                46120,
+                48135,
+                48135,
+                48135,
+                50158,
+                50158,
+                50158,
+                52170,
+                52171,
+                52171,
+                54186,
+                54186,
+                54186,
+                56205,
+                56205,
+                56205,
+                58466,
+                58467,
+                58467,
+                60491,
+                60491,
+                60491,
+                62509,
+                62509,
+                62509,
+                64532,
+                64532,
+                64532,
+                66823,
+                66823,
+                66823,
+                67835,
+                68874,
+                68874,
+                69886,
+                70902,
+                70902,
+                71909,
+                72914,
+                72914,
+                73917,
+                74925,
+                74925,
+                75929,
+                76939,
+                76939,
+                77949,
+                78961,
+                78961,
+                79979,
+                80991,
+                80991,
+                82027,
+                83045,
+                83047,
+                84054,
+                85058,
+                85059,
+                86071,
+                87074,
+                87074,
+                88077,
+                89081,
+                89081,
+                90084
+              ],
+              "answers": {
+                "none": 200
+              },
+              "heldMs": 90208,
+              "good": {
+                "sent": 892,
+                "ok": 1,
+                "failed": 891,
+                "p50": 206,
+                "p99": 206,
+                "max": 206
+              },
+              "after": 200,
+              "wallMs": 99891,
+              "memBeforeMiB": 61.7,
+              "memMaxMiB": 95.6,
+              "cpuSeconds": 11.08,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         },
         "idleFlood": {
           "phase": "idleFlood",
@@ -21608,7 +23068,12 @@
           "memMaxMiB": 146.4,
           "cpuSeconds": 3.37,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "taken": {
+            "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+            "dirty": true,
+            "date": "2026-11-07T17:38:27.331Z"
+          }
         },
         "oversized": {
           "phase": "oversized",
@@ -21641,7 +23106,40 @@
           "memMaxMiB": 59.6,
           "cpuSeconds": 0.21,
           "running": true,
-          "oomKilled": false
+          "oomKilled": false,
+          "earlier": [
+            {
+              "phase": "oversized",
+              "statuses": {
+                "manyHeaders": 431,
+                "hugeHeader": 431,
+                "hugeBody": 403
+              },
+              "reset": {
+                "hugeBody": "EPIPE"
+              },
+              "good": {
+                "sent": 3,
+                "ok": 3,
+                "failed": 0,
+                "p50": 25,
+                "p99": 51,
+                "max": 51
+              },
+              "after": 200,
+              "wallMs": 1349,
+              "memBeforeMiB": 73.6,
+              "memMaxMiB": 86.2,
+              "cpuSeconds": 0.21,
+              "running": true,
+              "oomKilled": false,
+              "taken": {
+                "commit": "d456063e50a7026025d0fb0353fa386840516b7b",
+                "dirty": true,
+                "date": "2026-11-07T17:38:27.331Z"
+              }
+            }
+          ]
         }
       },
       "cells": {

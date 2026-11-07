@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCpus, network, pageApps, runArgs, tier, tierApps as all } from "./apps.mjs";
 import { cpuUsec } from "./cpu-time.mjs";
-import { cellsOf, format, phases } from "./hardening.mjs";
+import { cellsOf, format, keptFrom, phases, replacing } from "./hardening.mjs";
 import { roundNameError } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -124,8 +124,9 @@ const commit = git("rev-parse", "HEAD");
 const status = commit === null ? null : git("status", "--porcelain", "--", ".", ":!results");
 const dirty = status === null ? null : status !== "";
 const file = out ? join(here, "results", out, "hardening.json") : null;
+const previous = file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
 /** @type {Record<string, any>} */
-const results = file && existsSync(file) ? JSON.parse(readFileSync(file, "utf8")).results ?? {} : {};
+const results = previous ? keptFrom(previous.results ?? {}, previous) : {};
 const save = () => {
   if (!file) return;
   mkdirSync(dirname(file), { recursive: true });
@@ -150,8 +151,9 @@ for (const name of names) {
     const wallMs = Date.now() - from;
     const memMax = stopWatch();
     const cpuAfter = cpuUsec(container);
-    // Each phase keeps the commit and time it was taken at: a rerun of some phases rewrites the file's own.
-    o[p.key] = { ...r, taken: { commit, dirty, date: new Date().toISOString() }, wallMs, memBeforeMiB: memBefore, memMaxMiB: memMax, cpuSeconds: cpuBefore !== null && cpuAfter !== null ? +((cpuAfter - cpuBefore) / 1e6).toFixed(2) : null, ...alive(container) };
+    // Each phase keeps the commit and time it was taken at (a rerun of some phases rewrites the
+    // file's own), and a phase run again keeps the result it replaces in `earlier`.
+    o[p.key] = replacing(o[p.key], { ...r, taken: { commit, dirty, date: new Date().toISOString() }, wallMs, memBeforeMiB: memBefore, memMaxMiB: memMax, cpuSeconds: cpuBefore !== null && cpuAfter !== null ? +((cpuAfter - cpuBefore) / 1e6).toFixed(2) : null, ...alive(container) });
     console.error(`${name} ${p.key}: ${JSON.stringify(cellsOf({ [p.key]: o[p.key] })[p.key])}`);
   }
   docker("rm", "-f", "fsw-" + name);

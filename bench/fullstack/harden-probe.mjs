@@ -111,11 +111,10 @@ const openMany = async (/** @type {number} */ count, batch = 250) => {
 
 /**
  * What the kernel holds unread for each of the probe's connections to the server, by local port
- * (/proc/net/tcp and tcp6's rx_queue: what the server sent that the probe has not read), or null
- * where /proc is not Linux's.
+ * (/proc/net/tcp and tcp6's rx_queue), or null where /proc is not Linux's.
  * @returns {Map<number, number> | null}
  */
-const unread = () => {
+const inKernel = () => {
   /** @type {Map<number, number>} */
   const by = new Map();
   try {
@@ -135,6 +134,25 @@ const unread = () => {
 };
 
 /**
+ * What each connection holds that the server sent and the probe has not taken, by local port, or
+ * null where /proc is not Linux's: the kernel's part and what the paused socket read into its own
+ * buffer anyway (up to 64 KiB), which the kernel no longer counts.
+ * @param {NonNullable<Awaited<ReturnType<typeof open>>>[]} conns
+ * @returns {Map<number, number> | null}
+ */
+const unread = (conns) => {
+  const kernel = inKernel();
+  if (!kernel) return null;
+  /** @type {Map<number, number>} */
+  const by = new Map();
+  for (const c of conns) {
+    const port = /** @type {number} */ (c.socket.localPort);
+    if (kernel.has(port)) by.set(port, /** @type {number} */ (kernel.get(port)) + c.socket.readableLength);
+  }
+  return by;
+};
+
+/**
  * Holds `conns` until holdMs has passed or the server closed all of them, then closes the rest.
  * With `watch`, it also reads what each open connection holds unread halfway through the hold and
  * at its end: one whose unread bytes did not grow over the second half had a server that was no
@@ -148,13 +166,13 @@ const holdAll = async (/** @type {NonNullable<Awaited<ReturnType<typeof open>>>[
   let mid;
   while (Date.now() < end && conns.some((c) => c.closed() === null)) {
     if (tick && Date.now() >= next) { tick(); next = Date.now() + everyMs; }
-    if (watch && mid === undefined && Date.now() >= from + (end - from) / 2) mid = unread();
+    if (watch && mid === undefined && Date.now() >= from + (end - from) / 2) mid = unread(conns);
     await sleep(Math.min(250, everyMs));
   }
   /** @type {{ open: number, stalled: number, silent: number, unreadMiB: number | null } | null} */
   let blocked = null;
   if (watch) {
-    const last = unread();
+    const last = unread(conns);
     const open = conns.filter((c) => c.closed() === null);
     if (mid && last) {
       const ends = open.map((c) => last.get(/** @type {number} */ (c.socket.localPort)) ?? 0).sort((a, b) => a - b);

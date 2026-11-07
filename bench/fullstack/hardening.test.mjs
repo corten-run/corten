@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
-import { cellsOf, closureOf, coresOf, phases, stateOf, survived } from "./hardening.mjs";
+import { cellsOf, closureOf, coresOf, keptFrom, phases, replacing, stateOf, survived } from "./hardening.mjs";
 
 test("every phase has a key, a label, a limit and the probe's numbers, each key once", () => {
   assert.equal(new Set(phases.map((p) => p.key)).size, phases.length);
@@ -31,6 +31,22 @@ test("an app survives a phase when it still runs, was not killed for memory and 
   assert.equal(stateOf({ ...ok, good: { sent: 2, failed: 1 } }), "up", "one request of a short phase");
   assert.equal(stateOf({ ...ok, running: false }), "DOWN");
   assert.equal(stateOf({ ...ok, oomKilled: true }), "DOWN (out of memory)");
+});
+
+test("a rerun keeps the phases it does not run with the commit they were taken at, and what it replaces", () => {
+  const header = { commit: "aaa", dirty: true, date: "2026-11-07T17:38:27Z" };
+  const fresh = { taken: { commit: "bbb", dirty: false, date: "2026-11-07T18:00:00Z" }, cpuSeconds: 2 };
+  const kept = keptFrom({ corten: { probes: { headFlood: { cpuSeconds: 1 }, slowReader: fresh, slowHead: { error: "probe failed" } }, cells: {} } }, header);
+  assert.deepEqual(kept.corten.probes.headFlood.taken, header, "an old phase is given the header it was written with");
+  assert.equal(kept.corten.probes.slowReader, fresh, "one with its own taken keeps it");
+  assert.equal(kept.corten.probes.slowHead.taken, undefined, "an error was not taken");
+  assert.deepEqual(kept.corten.cells, {});
+  assert.equal(replacing(undefined, fresh), fresh);
+  const once = replacing(kept.corten.probes.headFlood, fresh);
+  assert.deepEqual(once.earlier, [kept.corten.probes.headFlood]);
+  const twice = replacing(once, { ...fresh, cpuSeconds: 3 });
+  assert.deepEqual(twice.earlier.map((/** @type {any} */ p) => p.cpuSeconds), [1, 2], "oldest first, none nested");
+  assert.equal(twice.earlier[1].earlier, undefined);
 });
 
 test("a phase's cell says what the app did with the connections, what a good client saw and the memory it reached", () => {
@@ -143,7 +159,7 @@ test("the oversized requests' answers are each one's status, or closed", async (
   assert.equal(r.after, 200);
 });
 
-test("a slow body's answer is counted, and each close is timed from that connection's connect", async () => {
+test("a slow body's answer is counted, and each close is timed", async () => {
   // Refuses every other body at once with a 429, as a write limiter would, and closes the rest after 400 ms.
   let n = 0;
   const server = createServer((s) => {
@@ -160,6 +176,8 @@ test("a slow body's answer is counted, and each close is timed from that connect
       else setTimeout(() => s.destroy(), 400);
     });
   });
+  // Every connection connects within milliseconds of the probe starting, so this does not tell a
+  // close timed from its connection's connect from one timed from the probe's start.
   const r = await probeAgainst(server, { phase: "slowBody", count: 6, everyMs: 50, holdMs: 5000 });
   assert.equal(r.opened, 6);
   assert.equal(r.closedBy.length, 6);
@@ -184,4 +202,33 @@ test("a client that stops reading sees the server close it once its writes are b
   assert.equal(r.closedBy.length, 3, "each close was seen on the paused socket");
   assert.ok(r.closedBy.at(-1) < 3000, JSON.stringify(r.closedBy));
   assert.ok(r.heldMs < 10_000, "ended once all were closed");
+});
+
+test("of the clients that stop reading still open, it tells those a server stopped sending to from those sent nothing and those still sent to", { skip: process.platform !== "linux" && "reads /proc/net/tcp" }, async () => {
+  // The first connection is written to until its writes block, the second is sent nothing, and the
+  // third 1 KiB every 50 ms through the hold, less than a paused socket still reads into its own
+  // buffer (64 KiB), so only that buffer shows it; none is closed.
+  let n = 0;
+  /** @type {NodeJS.Timeout[]} */
+  const timers = [];
+  const server = createServer((s) => {
+    s.on("error", () => {});
+    let decided = false;
+    s.on("data", (c) => {
+      if (decided) return;
+      decided = true;
+      // The well-behaved client's requests, and the one after, ask to close: they are answered.
+      if (String(c).includes("connection: close")) { s.end("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"); return; }
+      const kind = n++;
+      if (kind === 0) { const page = Buffer.alloc(64 * 1024, "a"); while (s.write(page)); }
+      else if (kind === 2) timers.push(setInterval(() => s.write(Buffer.alloc(1024, "b")), 50));
+    });
+  });
+  const r = await probeAgainst(server, { phase: "slowReader", count: 3, pipelined: 1, everyMs: 100, holdMs: 3000 });
+  for (const t of timers) clearInterval(t);
+  assert.equal(r.opened, 3);
+  assert.deepEqual(r.closedBy, []);
+  assert.equal(r.blocked.open, 3, JSON.stringify(r.blocked));
+  assert.equal(r.blocked.stalled, 1, JSON.stringify(r.blocked));
+  assert.equal(r.blocked.silent, 1, JSON.stringify(r.blocked));
 });

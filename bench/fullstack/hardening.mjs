@@ -17,8 +17,9 @@ export const phases = [
   { key: "headFlood", label: "2,000 unfinished heads", input: { count: 2000, holdMs: 45_000 }, limitMs: 150_000 },
   { key: "slowHead", label: "200 heads a byte a second", input: { count: 200, everyMs: 1000, holdMs: 60_000 }, limitMs: 150_000 },
   { key: "slowBody", label: "100 bodies a byte a second", input: { count: 100, everyMs: 1000, holdMs: 90_000 }, limitMs: 180_000 },
-  // 1,000 pipelined pages a connection are more than the kernel's socket buffers hold between
-  // two containers (several MiB each way), so the server's writes do block.
+  // 1,000 pipelined pages a connection are more than the socket buffers between two containers
+  // hold, so the server's writes do block (in harden-local3, a connection whose server had stopped
+  // sending held 0.12 to 0.71 MiB unread in the kernel at each app's median).
   { key: "slowReader", label: "200 clients that stop reading", input: { count: 200, pipelined: 1000, holdMs: 90_000 }, limitMs: 180_000 },
   { key: "idleFlood", label: "5,000 idle connections", input: { count: 5000, holdMs: 60_000 }, limitMs: 240_000 },
   { key: "oversized", label: "200 headers / 1 MiB header / 16 MiB body", input: {}, limitMs: 120_000 },
@@ -89,3 +90,27 @@ export const cellsOf = (probes) => Object.fromEntries(Object.entries(probes).map
   const cpu = cores === null ? "" : `; ${cores} cores`;
   return [key, `${stateOf(p)}: ${what}${stalled}; ${goodOf(p.good)}${mem}${cpu}`];
 }));
+
+/**
+ * A round's results as a rerun of some phases keeps them: each phase without its own `taken` (one
+ * from before phases kept it) is given the file's header, which was written when it was taken.
+ * @param {Record<string, any>} results hardening.json's results, by app
+ * @param {{ commit: string | null, dirty: boolean | null, date: string }} header the file's own
+ * @returns {Record<string, any>}
+ */
+export const keptFrom = (results, header) => Object.fromEntries(Object.entries(results).map(([app, r]) => [app, {
+  ...r,
+  probes: Object.fromEntries(Object.entries(r.probes ?? {}).map(([key, p]) => [key, p.taken || p.error ? p : { ...p, taken: { commit: header.commit, dirty: header.dirty, date: header.date } }])),
+}]));
+
+/**
+ * A phase run again: the fresh result, with the one it replaces (and those that one replaced) kept
+ * in `earlier`, oldest first, so a rerun adds a pass and does not erase one.
+ * @param {Record<string, any> | undefined} previous
+ * @param {Record<string, any>} fresh
+ */
+export const replacing = (previous, fresh) => {
+  if (!previous) return fresh;
+  const { earlier = [], ...last } = previous;
+  return { ...fresh, earlier: [...earlier, last] };
+};

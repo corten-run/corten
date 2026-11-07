@@ -2437,13 +2437,14 @@ Corten is pre-1.0, so any minor version may change the API.
     requests) beside a well-behaved client, and writes whether the app stayed up (or degraded),
     what it did with the abusive connections and what it answered them, the client's latency and
     the app's memory and CPU to `results/<round>/hardening.json`; `droplet.mjs --suite harden`
-    runs it on its own cadence, and a run with a phase that could not run is not a finished one.
+    runs it on its own cadence, a run with a phase that could not run is not a finished one, and
+    a rerun of some phases records the commit each phase ran at and keeps the result it replaces.
     The README reports a local run of nine apps (measured, one run each): Corten closed every
     abusive connection in every phase and took the least CPU against clients that stop reading,
     and it falls short where a trickled body is closed by the deadline (10 s in card-market) and
     not a minimum rate, a client that stops reading by the 60 s send timeout, where Kestrel's
-    minimum rates close both sooner, and an oversized body can be refused with a reset the client
-    sees instead of the 413.
+    minimum rates close both sooner, and a 16 MiB body's 413 was lost to the connection closing in
+    2 of 4 local passes.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
