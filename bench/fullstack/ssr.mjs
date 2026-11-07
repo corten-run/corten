@@ -4,11 +4,15 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { edgeBound, edgeContainer } from "./edge.mjs";
+import { mergedMixed, mixedOf } from "./mixed.mjs";
 import { passFile, passesOf, spread, withinNoise } from "./passes.mjs";
 
 const read = (/** @type {string} */ file) => (existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null);
 
-/** The load phases, in the order run-ssr.mjs runs them. */
+/**
+ * The load phases, in the order run-ssr.mjs runs them. Item pages from the item API then have the
+ * mixed phase (mixed.mjs), read on its own: its numbers are by kind of request.
+ */
 export const phases = ["fixed", "sat64", "sat256"];
 
 /**
@@ -142,7 +146,8 @@ function failure(startups, fixed) {
 
 /**
  * The SSR part of a round's summary from its raw folder: for each source ("fixture" and "api" are
- * the item page, "fixture-json" and "api-json" the item as JSON) each app's startup and phases.
+ * the item page, "fixture-json" and "api-json" the item as JSON) each app's startup and phases,
+ * and for "api" its mixed phase (`mixed`).
  * Every pass asked for is read; a phase a pass has no files for counts in `asked`, not as a
  * failure, since a step skipped after the droplet hung leaves the same gap.
  * @param {string} raw @param {string[]} names the apps
@@ -167,6 +172,10 @@ export function ssrOf(raw, names) {
         const runs = /** @type {NonNullable<ReturnType<typeof phaseOf>>[]} */ (each.filter(Boolean));
         if (!runs.length) continue;
         entry[phase] = asked === 1 ? runs[0] : merged(runs, asked);
+      }
+      if (key === "api") {
+        const mixed = Array.from({ length: asked }, (_, i) => mixedOf(folder, name, passFile(`${file}-mixed`, i + 1))).filter((m) => m !== null);
+        if (mixed.length) entry.mixed = asked === 1 ? mixed[0] : mergedMixed(mixed, asked);
       }
       // Apps run with their usual settings, not tuned to fit one CPU and 1 GiB: one that did not
       // start, or could not serve the fixed rate, failed.
