@@ -236,7 +236,9 @@ export function watch(cells, feed, signal) {
 ```
 
 The server renders the rows first; the feed only keeps them current. Clients resume from their
-last patch after a disconnect. Across several instances, use `corten-cluster`.
+last patch after a disconnect. Across several instances, use `corten-cluster`. A feed that
+mirrors a log is `Feed::follow(generation, seq, rows)`, its generation ASCII letters, digits, `.`
+and `_` only (`deploy.3`, never `deploy:3` or base64): it panics on anything else.
 
 ## Many rows: views
 

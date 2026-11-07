@@ -766,6 +766,99 @@
 //! # fn main() {}
 //! ```
 //!
+//! A browser event's handler takes it as lib.dom's `HTMLElementEventMap` types it, except where an
+//! element fires a plainer one: an image's or media element's `error`, `abort`, `progress` and
+//! `resize` are `Event`s (lib.dom gives them the window's and XMLHttpRequest's types). A form's
+//! `formdata`, fired when its entries are read (a submit, `new FormData(form)`), is a
+//! `FormDataEvent`, so a handler can change what the form sends without rebuilding the body: here
+//! it leaves out blank fields, so a `GET` form's address has only the filters set. It bubbles, so
+//! `on:document:formdata` hears every form's:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:formdata={js::tidy(event)}><form on:formdata={js::tidy(event)}></form></li> }
+//! }
+//! # fn main() {
+//! let html = CartLine {}.to_html();
+//! assert!(html.contains(r#"data-on="document.formdata:cart_line.tidy($e)""#), "{html}");
+//! assert!(html.contains(r#"data-on="formdata:cart_line.tidy($e)""#), "{html}");
+//! # }
+//! ```
+//!
+//! A `FormDataEvent` handler takes no other event, and another event's handler does not take it:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:click={js::tidy(event)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:formdata={js::shortcut(event, target)}><form></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A page's `securitypolicyviolation`, a `SecurityPolicyViolationEvent` for each thing its CSP
+//! refused, bubbles to the document (probed for an image the CSP refused, fired at the document):
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:securitypolicyviolation={js::refused(event)}></li> }
+//! }
+//! # fn main() {
+//! assert!(CartLine {}.to_html().contains(r#"data-on="document.securitypolicyviolation:cart_line.refused($e)""#));
+//! # }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:click={js::refused(event)}></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A media element's `progress` is a plain `Event`, so a `ProgressEvent` handler does not take it,
+//! nor an `ErrorEvent` handler (the window's) an image's `error`:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! { <li><video on:progress={js::progressed(event, bar)}></video><progress ref={bar}></progress></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><img src="/a.png" alt="" on:error={js::crashed(event)}></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
 //! `on:` takes no other name with a colon, so the same markup with `corten:notice` (no element
 //! hears it) or any other does not compile; a component's own event is an `#[event]` type, and
 //! another library's is heard by a listener its script adds:
@@ -925,6 +1018,83 @@
 //! # fn main() {}
 //! ```
 //!
+//! Any other JSON shape (`{ count: number }`, `number[]`, `string | null`, a `@typedef` of plain
+//! values) has no Rust type the call is checked against, so a call to its handler does not
+//! compile either, whatever it passes; type the value with a generated declaration, as above:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::show(target, 42)}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! nor a value of the right shape, since nothing checks the shape:
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! struct Count { count: u32 }
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::show(target, Count { count: 3 })}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! nor through a `@typedef` of plain values (`counted` takes a `Count`, `{ count: number }`):
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! struct Count { count: u32 }
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::counted(target, Count { count: 3 })}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! nor a group with a field of such a type (`tally` takes a `Badge`, whose `ids` is `number[]`):
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     let out = refs();
+//!     let badge = js::Badge { out, ids: [1, 2] };
+//!     html! { <p on:click={js::tally(badge)}><output ref={out}></output></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A parameter typed `unknown` claims nothing the call does not check: it takes any `ToJson`
+//! value, and the script narrows it before using it:
+//!
+#![cfg_attr(feature = "json", doc = "```")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::raw(target, 42)}></p> }
+//! }
+//! # fn main() {
+//! assert!(CountBadge {}.to_html().contains("count_badge.raw($t,42)"), "{}", CountBadge {}.to_html());
+//! # }
+//! ```
+//!
 //! A typed event's handler on another event (`toggled` takes a `RowToggled`, a click is a
 //! `MouseEvent`):
 //!
@@ -947,6 +1117,41 @@
 //!             <caption><output ref={count}></output></caption>
 //!         </table>
 //!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! The same with the class imported for its type alone (`/** @import { RowToggled } from
+//! "corten/events" */`, `toggle_note.js`):
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[corten::script::event]
+//! pub struct RowToggled {
+//!     pub id: String,
+//!     pub selected: bool,
+//! }
+//!
+//! #[component(js)]
+//! fn ToggleNote() -> impl Render {
+//!     html! { <p on:click={js::toggled(event, target)}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[corten::script::event]
+//! pub struct RowToggled {
+//!     pub id: String,
+//!     pub selected: bool,
+//! }
+//!
+//! #[component(js)]
+//! fn ToggleNote() -> impl Render {
+//!     html! { <p on:RowToggled={js::toggled(event, target)}></p> }
 //! }
 //! # fn main() {}
 //! ```
@@ -1529,14 +1734,16 @@ pub trait Arg<P> {
 }
 
 /// What a handler parameter needs when its JSDoc type is one no call can be checked against (a set
-/// of names written as string literals, a generated declaration inside another type): nothing
-/// has it, so a call does not compile, and the handler's deprecation note says why. The handler
+/// of names written as string literals, a generated declaration inside another type, a JSON shape
+/// no Rust type stands for, `{ count: number }`, an element or event type outside the checked
+/// forms, `HTMLElementTagNameMap["dialog"]`): nothing has it, so a call does not compile, and the
+/// handler's deprecation note says why. The handler
 /// itself compiles, so an export only other scripts import is the script's to type. It is sealed:
 /// nothing outside Corten can implement it either.
 #[diagnostic::on_unimplemented(
     message = "the script types this handler parameter so that no call can be checked against it",
     label = "the warning on this handler says why",
-    note = "a set of names is a Rust enum with a generated declaration, import(\"../types/app\").Name; a list or an optional one is a Rust type of its own"
+    note = "a set of names, or any other JSON value, is a Rust type with a generated declaration, import(\"../types/app\").Name, and a list or an optional one a Rust type of its own; an element or an event takes an interface the scripts guide lists as checked (several events the one they share, UIEvent or Event); a parameter typed unknown takes any argument"
 )]
 pub trait Refused: refused::Sealed {}
 
@@ -1656,7 +1863,7 @@ pub mod ev {
     #[diagnostic::on_unimplemented(
         message = "the handler takes a {P}, and this on: attribute's event is a {Self}",
         label = "a {Self}",
-        note = "the event's type comes from the on: attribute's name (on:click is a MouseEvent); widen the JSDoc type to Event to take any"
+        note = "the event's type comes from the on: attribute's name (on:click is a PointerEvent); widen the JSDoc type to Event to take any"
     )]
     pub trait SubOf<P> {}
 
@@ -1683,6 +1890,8 @@ pub mod ev {
     events!(CompositionEvent: CompositionEvent, UIEvent, Event);
     events!(TouchEvent: TouchEvent, UIEvent, Event);
     events!(SubmitEvent: SubmitEvent, Event);
+    events!(FormDataEvent: FormDataEvent, Event);
+    events!(SecurityPolicyViolationEvent: SecurityPolicyViolationEvent, Event);
     events!(ToggleEvent: ToggleEvent, Event);
     events!(AnimationEvent: AnimationEvent, Event);
     events!(TransitionEvent: TransitionEvent, Event);
@@ -2448,7 +2657,7 @@ pub mod __private {
         }
     }
 
-    /// Any `ToJson` value, as JSON, for a parameter whose JSDoc type Corten does not check.
+    /// Any `ToJson` value, as JSON, for a parameter typed `unknown`, which the script narrows.
     #[cfg(feature = "json")]
     impl<T: crate::json::ToJson> Arg<ts::Any> for T {
         fn write_arg(&self, _: &Ctx, out: &mut String) {

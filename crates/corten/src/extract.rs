@@ -108,7 +108,10 @@ use crate::{
 /// with the app's limit and Corten's answer. A body over `max` is read past, not kept, up to
 /// 64 MiB past it, so a client still sending reads the handler's answer rather than a closed
 /// connection, as an upload's is ([`crate::form::File::bytes_up_to`]); past that, or when its
-/// length says it is, it is `None` at once and the connection closes after the answer. `Err` is
+/// length says it is, it is `None` at once and the connection closes after the answer. The
+/// route's deadline (the app's, its area's or its API's, [`crate::App::deadline`]) coming while
+/// this waits for the body, read past or not, is the client's 408 under [`crate::serve`], not a
+/// `None` the handler sees. `Err` is
 /// a body that could not be read (the connection broke), a 400 the handler passes on with `?`,
 /// or answers in its own shape with why (`error.to_string()`) and its status
 /// ([`Error::status_code`]).
@@ -165,7 +168,7 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
         if len > max {
             drop((pieces, small));
             // Read past, so the client reads the answer; a read that breaks here leaves the same.
-            read_past(&mut stream, len, max, &mut Idle::new(None)).await;
+            read_past(&mut stream, len, max, &mut Idle::new(None), None).await;
             return Ok(None);
         }
         if piece.len() >= SMALL_PIECE {
@@ -271,6 +274,88 @@ pub fn pieces_up_to(body: Body, max: usize) -> Pieces {
     }
 }
 
+std::thread_local! {
+    /// What a read of the request body waited for during the handler's poll that the deadline is
+    /// making ([`crate::page`]'s `within`): set by [`Arriving`] and [`reading_past`], cleared
+    /// before each poll.
+    static WAITED: std::cell::Cell<Waited> = const { std::cell::Cell::new(Waited::Nothing) };
+}
+
+/// What the handler's last poll waited for of the request body, for the deadline's answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Waited {
+    /// Nothing of the body.
+    Nothing,
+    /// The client, to send more of the body.
+    Body,
+    /// The client, to send more of a body over its limit, read past so the client reads the 413.
+    PastLimit(Over),
+}
+
+/// The limit a body read past went over, as the reader's own error says it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Over {
+    /// [`pieces_up_to`]'s `max`.
+    Body(usize),
+    /// [`crate::Upload::limit`].
+    Upload(usize),
+}
+
+/// A request body as it arrives from the connection ([`crate::serve`]), which marks a read that
+/// waits for the client, so a deadline that passes while the handler waits for the body answers
+/// as the client's (a 408), not as the server's (#1061). It allocates nothing: the mark is one
+/// thread-local value, set only when a read waits.
+pub(crate) struct Arriving<B>(pub(crate) B);
+
+impl<B: HttpBody + Unpin> HttpBody for Arriving<B> {
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<B::Data>, B::Error>>> {
+        let polled = Pin::new(&mut self.0).poll_frame(cx);
+        if polled.is_pending() && WAITED.get() == Waited::Nothing {
+            WAITED.set(Waited::Body);
+        }
+        polled
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.0.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.0.size_hint()
+    }
+}
+
+/// Forgets a wait for the request body, before the handler is polled again.
+#[inline]
+pub(crate) fn forget_wait() {
+    WAITED.set(Waited::Nothing);
+}
+
+/// What the handler's last poll waited for of the request body.
+pub(crate) fn waited() -> Waited {
+    WAITED.get()
+}
+
+/// `fut`, a read of a body over `over`'s limit that is read past: a poll of it that waits marks
+/// the wait as one past the limit, so a deadline that passes there answers the 413 the read gives.
+pub(crate) async fn reading_past<F: Future>(over: Over, fut: F) -> F::Output {
+    let mut fut = std::pin::pin!(fut);
+    std::future::poll_fn(|cx| {
+        let polled = fut.as_mut().poll(cx);
+        if polled.is_pending() {
+            WAITED.set(Waited::PastLimit(over));
+        }
+        polled
+    })
+    .await
+}
+
 /// How long [`Pieces`] waits for the next piece unless [`Pieces::idle`] says otherwise: nginx's
 /// `client_body_timeout`.
 pub(crate) const IDLE: Duration = Duration::from_secs(60);
@@ -354,7 +439,7 @@ impl Pieces {
                 // Refused first, so a read past given up on is not begun again.
                 self.end = End::Over;
                 if said <= self.max.saturating_add(READ_PAST) as u64 {
-                    read_past(&mut self.stream, 0, self.max, &mut self.idle).await;
+                    read_past(&mut self.stream, 0, self.max, &mut self.idle, Some(Over::Body(self.max))).await;
                 }
                 return Err(BodyError::TooLarge { limit: self.max });
             }
@@ -380,7 +465,7 @@ impl Pieces {
                 self.read = self.read.saturating_add(piece.len());
                 if self.read > self.max {
                     self.end = End::Over;
-                    read_past(&mut self.stream, self.read, self.max, &mut self.idle).await;
+                    read_past(&mut self.stream, self.read, self.max, &mut self.idle, Some(Over::Body(self.max))).await;
                     return Err(BodyError::TooLarge { limit: self.max });
                 }
                 Ok(Some(piece))
@@ -447,11 +532,18 @@ impl Idle {
 
 /// Reads the rest of a body over `max`, keeping nothing, until it ends, breaks, `read` (what
 /// arrived of it before) is 64 MiB past `max`, or no piece comes for `idle`, so a client still
-/// sending reads the answer.
-async fn read_past(stream: &mut BodyDataStream, mut read: usize, max: usize, idle: &mut Idle) {
+/// sending reads the answer. `over` marks a wait here for the deadline, which then answers the
+/// read's 413; `None` (for [`bytes_up_to`], whose handler answers in a shape of its own) leaves it
+/// a wait for the body, the 408.
+async fn read_past(stream: &mut BodyDataStream, mut read: usize, max: usize, idle: &mut Idle, over: Option<Over>) {
     let past = max.saturating_add(READ_PAST);
     while read <= past {
-        match idle.next(stream).await {
+        let next = idle.next(stream);
+        let piece = match over {
+            Some(over) => reading_past(over, next).await,
+            None => next.await,
+        };
+        match piece {
             Some(Some(Ok(piece))) => read = read.saturating_add(piece.len()),
             _ => break,
         }
