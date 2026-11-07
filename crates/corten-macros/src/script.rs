@@ -46,8 +46,9 @@ pub enum Param {
     Unreadable(String),
     /// A handler parameter whose type no call can be checked against (a set of names written as
     /// string literals, a generated declaration inside another type, any other JSON shape but
-    /// `unknown`): why. The handler compiles,
-    /// so an export only other scripts call is the script's to type, and a call to it does not.
+    /// `unknown`, an element, event or other browser value outside the checked forms): why. The
+    /// handler compiles, so an export only other scripts call is the script's to type, and a call
+    /// to it does not.
     Refused(String),
     /// Any other JSDoc type: a JSON value. A handler parameter is this only when it is `unknown`;
     /// any other becomes [`Param::Refused`].
@@ -515,7 +516,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
             }
             // `/** @import { Saved } from "corten/events" */`: a type-only import of typed events,
             // which types parameters as an import statement does (it serves nothing).
-            if block.contains("@import *") && (block.contains("\"corten/events\"") || block.contains("'corten/events'")) {
+            if jsdoc_namespace_import(&block, "corten/events") {
                 return Err((
                     start + 1,
                     "import typed events by name: /** @import { RowToggled } from \"corten/events\" */".into(),
@@ -700,6 +701,9 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
     };
     let mut groups = Vec::new();
     let mut unions: Vec<(String, (usize, String))> = Vec::new();
+    // A group's field no call is checked against: (group, line, field, type), its advice written
+    // once every group is known, so a field typed by a group declared after it reads as one.
+    let mut unchecked_fields: Vec<(String, usize, String, String)> = Vec::new();
     // Typedefs of plain values, each with its properties' types joined, so a handler that takes
     // one with a generated declaration in it is refused as one written inline is.
     let mut plain: Vec<(String, String)> = Vec::new();
@@ -734,10 +738,7 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         if let Some(((field, _), (_, t))) =
             fields.iter().zip(&props).find(|((_, p), (_, t))| *p == Param::Any && resolve(t) != UNKNOWN)
         {
-            unions.push((
-                name.clone(),
-                (line, format!("{name}: {field}: {}", unchecked(t, &expand(t), browser(&expand(t), &groups)))),
-            ));
+            unchecked_fields.push((name.clone(), line, field.clone(), t.clone()));
         }
         for (field, _) in &fields {
             if !field.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
@@ -747,6 +748,10 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
             }
         }
         groups.push(ArgGroup { name, fields, doc });
+    }
+    for (name, line, field, t) in unchecked_fields {
+        let why = format!("{name}: {field}: {}", unchecked(&t, &expand(&t), browser(&expand(&t), &groups)));
+        unions.push((name, (line, why)));
     }
     // The typedefs a handler cannot take in any shape (`P`, `P | null`, `P[]`, or inside another
     // typedef of plain values): one of plain values that holds a generated declaration or a set of
@@ -1630,6 +1635,8 @@ const BROWSER: &[&str] = &[
     "Node",
     "Element",
     "AbortSignal",
+    "ElementId",
+    "FeedUrl",
     "Holds",
     "Map",
     "Window",
@@ -1661,6 +1668,27 @@ fn jsdoc_import(block: &str, module: &str) -> Option<Vec<String>> {
         out.extend(names.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()));
     }
     (!out.is_empty()).then_some(out)
+}
+
+/// Whether a block has a JSDoc namespace import of `module`, `@import * as name from "module"`,
+/// read one `@import` at a time, each with its own `from` (a namespace import of another module
+/// beside a named import of this one is not one).
+fn jsdoc_namespace_import(block: &str, module: &str) -> bool {
+    let quoted = [format!("\"{module}\""), format!("'{module}'")];
+    let starts: Vec<usize> = block.match_indices("@import").map(|(at, _)| at).collect();
+    starts.iter().enumerate().any(|(n, &at)| {
+        let end = starts.get(n + 1).copied().unwrap_or(block.len());
+        let one = &block[at + "@import".len()..end];
+        let Some(rest) = one.trim_start().strip_prefix('*') else { return false };
+        let rest = rest.trim_start();
+        if !rest.strip_prefix("as").is_some_and(|r| r.starts_with(char::is_whitespace)) {
+            return false;
+        }
+        one.split_once("from").is_some_and(|(_, from)| {
+            let from = from.trim_start().trim_start_matches('*').trim_start();
+            quoted.iter().any(|q| from.starts_with(q.as_str()))
+        })
+    })
 }
 
 /// The Rust bound for a JSDoc type.
@@ -2032,6 +2060,19 @@ function helper() {}
         let err = parse("/** @import * as ev from \"corten/events\" */\n/** @param {ev.Saved} a */\nexport function f(a) {}")
             .unwrap_err();
         assert!(err.1.starts_with("import typed events by name"), "{err:?}");
+        // With any spacing, and `from` on the next line.
+        for source in [
+            "/** @import\t*\tas ev from \"corten/events\" */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
+            "/** @import  *  as  ev  from  'corten/events' */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
+            "/**\n * @import * as ev\n * from \"corten/events\"\n */\n/** @param {ev.Saved} a */\nexport function f(a) {}",
+        ] {
+            let err = parse(source).unwrap_err();
+            assert!(err.1.starts_with("import typed events by name"), "{source}: {err:?}");
+        }
+        // A namespace import of another module beside a named import of typed events is not one.
+        let (handlers, _) = parse("/**\n * @import * as app from \"../types/app\"\n * @import { Saved } from \"corten/events\"\n */\n/** @param {Saved} a */\nexport function f(a) {}")
+            .unwrap();
+        assert_eq!(handlers[0].params[0].1, Param::Event("Saved".into()));
     }
 
     /// A parameter whose type no call is checked against: a call to its handler does not compile.
@@ -2049,6 +2090,17 @@ function helper() {}
                 .flat_map(|h| &h.params)
                 .find_map(|(_, p)| if let Param::Refused(why) = p { Some(why.clone()) } else { None })
                 .unwrap_or_else(|| panic!("nothing refused: {handlers:?}")),
+        }
+    }
+
+    #[test]
+    fn a_group_field_typed_by_a_group_gets_the_same_advice_in_either_order() {
+        let outer = "/** @typedef {{ button: HTMLButtonElement; inner: Inner | null }} Outer */\n";
+        let inner = "/** @typedef {{ input: HTMLInputElement }} Inner */\n";
+        let handler = "/** @param {Outer} a */\nexport function f(a) {}";
+        for source in [format!("{outer}{inner}{handler}"), format!("{inner}{outer}{handler}")] {
+            let why = refusal(&source);
+            assert!(why.contains("a wrong element, event or signal would compile"), "{source}: {why}");
         }
     }
 

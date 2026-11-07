@@ -1642,8 +1642,9 @@ pub trait Arg<P> {
 
 /// What a handler parameter needs when its JSDoc type is one no call can be checked against (a set
 /// of names written as string literals, a generated declaration inside another type, a JSON shape
-/// no Rust type stands for, `{ count: number }`): nothing
-/// has it, so a call does not compile, and the handler's deprecation note says why. The handler
+/// no Rust type stands for, `{ count: number }`, an element or event type outside the checked
+/// forms, `HTMLElementTagNameMap["dialog"]`): nothing has it, so a call does not compile, and the
+/// handler's deprecation note says why. The handler
 /// itself compiles, so an export only other scripts import is the script's to type. It is sealed:
 /// nothing outside Corten can implement it either.
 #[diagnostic::on_unimplemented(

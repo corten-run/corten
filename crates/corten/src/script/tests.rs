@@ -711,6 +711,19 @@ struct Options {
     tags: [&'static str; 2],
 }
 
+/// The doctests' `types/app.d.ts` writes `Options` by hand: it is what `corten::types` generates.
+#[cfg(feature = "json")]
+#[test]
+fn the_hand_written_options_declaration_is_the_generated_one() {
+    let block = |ts: &str| {
+        let start = ts.find("export interface Options {").expect("an Options interface");
+        let end = start + ts[start..].find("\n}").expect("its end") + 2;
+        ts[start..end].to_string()
+    };
+    let generated = crate::types::Types::new().add::<Options>().typescript();
+    assert_eq!(block(include_str!("../types/app.d.ts")), block(&generated), "{generated}");
+}
+
 /// The strings handlers write, as the runtime's parser expects them (`wire.json`, which
 /// `scripts/wire.mjs` parses with the runtime's own parser).
 #[cfg(feature = "json")]
