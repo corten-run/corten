@@ -1,0 +1,16 @@
+<article aria-label="Catalog record">
+<h1>{@record.title}</h1>
+<p>{@record.subtitle}</p>
+<p>{@record.description}</p>
+<ul aria-label="Tags"><li :for={tag <- @record.tags}>{tag}</li></ul>
+<form method="get" action={~p"/catalog/#{@record.id}"}>
+<label>Field name <input name="field" value={@prefix} /></label>
+<button type="submit">Filter</button>
+</form>
+<table>
+<caption>Record fields</caption>
+<thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+<tbody><tr :for={field <- @fields}><th scope="row">{field.name}</th><td>{field.value}</td></tr></tbody>
+</table>
+<nav aria-label="Related records"><ul><li :for={related <- @record.related}><.link href={~p"/catalog/#{related.id}"}>{related.title}</.link></li></ul></nav>
+</article>

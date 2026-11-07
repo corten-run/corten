@@ -1,5 +1,10 @@
 # Full-stack comparison: one marketplace item page in eighteen apps
 
+This is the historical, localized marketplace workload. The separate
+[locale-neutral catalog benchmark](../catalog/README.md) gives every framework the same
+strings-only page work without currency or number localization. Its results start a new
+baseline; they do not replace or form a before/after comparison with the tables here.
+
 The same item detail page (title, images, sorted listings table, offers with "show all", a
 price-alert form that posts and patches a message), and the same item as JSON, built in:
 

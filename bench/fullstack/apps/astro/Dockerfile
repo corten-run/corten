@@ -12,4 +12,6 @@ COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 EXPOSE 8080
-CMD ["node", "dist/server/entry.mjs"]
+# Astro emits middleware separately and normally imports it lazily. Preload before listening
+# so the fixture is parsed at startup; a changed adapter entry fails startup rather than loading lazily.
+CMD ["node", "--import", "./dist/server/virtual_astro_middleware.mjs", "dist/server/entry.mjs"]

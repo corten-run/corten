@@ -2,7 +2,7 @@ package main
 
 import "strconv"
 
-templ layout(title string) {
+templ layout(title string, catalog ...bool) {
 <!doctype html>
 <html lang="en">
 <head>
@@ -11,6 +11,9 @@ templ layout(title string) {
 <title>{ title }</title>
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/components.css">
+if len(catalog) > 0 && catalog[0] {
+<link rel="stylesheet" href="/catalog.css">
+}
 <script src="/htmx.min.js" defer></script>
 <script src="/item.js" defer></script>
 </head>

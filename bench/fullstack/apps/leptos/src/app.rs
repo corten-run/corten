@@ -153,6 +153,7 @@ pub fn App() -> impl IntoView {
                 <Routes fallback=|| view! { <NotFound/> }>
                     <Route path=path!("/") view=Home ssr=SsrMode::Async/>
                     <Route path=path!("/items/:id") view=ItemPage ssr=SsrMode::Async/>
+                    <Route path=path!("/catalog/:id") view=crate::catalog_page::CatalogPage ssr=SsrMode::Async/>
                 </Routes>
             </main>
         </Router>

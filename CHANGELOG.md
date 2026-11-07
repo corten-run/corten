@@ -6,6 +6,11 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- A separate locale-neutral catalog benchmark in `bench/catalog`: the same strings-only
+  record-detail page, JSON, GET filter and related links in eighteen framework apps.
+  Correctness checks precede load tests; catalog rounds have their own baseline rather than
+  being compared with historical localized marketplace rounds.
+
 - `corten/views` adds `view(host, View, template)` for a single server-rendered branch,
   with typed templates, root-ID adoption, collision checks and CSP-safe custom properties. The
   deck builder exercises nested stateful branches with independent drafts and ID-based controls.
@@ -3928,6 +3933,12 @@ Corten is pre-1.0, so any minor version may change the API.
     called a handler with such a parameter; six event handlers in `examples/deck-builder` and
     `examples/seller-desk` are now checked
     ([#1037 Unsupported handler parameter types can silently fall back to unchecked Rust-to-JS arguments](https://github.com/corten-run/corten/issues/1037)).
+165. `Feed::follow` now panics on a generation that is empty or holds anything but ASCII letters,
+    digits, `.` and `_`. It took any without `-` before; one with a character a URL encoder
+    escapes (`deploy:3`, base64) never went live under `subscribe()`, though a client that sent
+    its cursor raw (`Last-Event-ID`, `Replica::cursor`) could follow it. An app that names its
+    generation from configuration checks it against the same set (Fixed 188)
+    ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
@@ -5425,6 +5436,36 @@ Corten is pre-1.0, so any minor version may change the API.
     "Check your connection" for a 408. Only `corten::serve` marks a read that waits for the body;
     served another way that deadline is the 503 as before (the 413 still holds)
     ([#1061 Upload's idle time (a minute) is longer than a page's default deadline (30 s), so a stalled page upload is answered as the server's timeout, never as Stalled](https://github.com/corten-run/corten/issues/1061)).
+187. A handler that takes a form's `formdata` event as lib.dom types it (`@param {FormDataEvent} event`)
+    did not compile since every handler parameter is checked
+    ([#1066 A handler parameter no call is checked against stops the call compiling; @import'ed events are checked (#1037)](https://github.com/corten-run/corten/pull/1066)):
+    Corten typed `on:formdata`'s event `Event`, and `FormDataEvent` was no interface a call is
+    checked against. `formdata` is now a `FormDataEvent` and `securitypolicyviolation` a
+    `SecurityPolicyViolationEvent`, and both bubble, so `on:document:` hears them. An element's
+    `error` is now an `Event`, not an `ErrorEvent`, as the element fires it (probed in Chromium,
+    Firefox and WebKit): an `on:error` handler typed `ErrorEvent` read an `event.message` that is
+    never there, and no longer compiles; type it `Event`. `abort`, `progress` and `resize` stay
+    `Event`, for the same reason, though lib.dom gives them the window's and XMLHttpRequest's
+    types. `npm run check` now holds the event map to lib.dom both ways (`scripts/events.mjs`), so
+    an event lib.dom types more narrowly cannot fall back to `Event` unnoticed, nor an arm be
+    narrower than lib.dom
+    ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
+188. A feed whose generation held a character `encodeURIComponent` escapes (`deploy:3`, `v 1`,
+    base64's `/` and `=`) never went live: `Since` reads `?since=` as written, so the cursor
+    `subscribe()` sent never matched, every stream answered `sync`, and each open page loaded
+    the snapshot again straight away, in a loop (544 snapshots in 3.5 s from one Chromium page,
+    measured). `Feed::follow` now panics where it is set on a generation that is not ASCII
+    letters, digits, `.` and `_`, the bytes a cursor carries as they are in a URL and an event's
+    `id:` line (a line break could also start a field of its own in every patch frame; Changed
+    165). Corten's own generations are hex, so they are unchanged. `subscribe()` now loads the
+    snapshot again after a backoff (1 s, doubling to 30 s) when a stream answers the cursor the
+    snapshot just gave with `sync` as it opens (on its first connection, within 900 ms), so a
+    feed that cannot go live for another reason (two feeds behind one URL) costs 3 snapshots in
+    the same 3.5 s in Chromium, Firefox and WebKit; a `sync` later on a stream or after a
+    reconnect (a reset) still loads it at once. The runtime is 79 B larger (gzip). The watchlist
+    smoke checks the backoff's 1 s and 2 s, that it stops on the signal, and that a `sync` later
+    or after a reconnect is not delayed
+    ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
 
 ### Documentation
 
