@@ -140,18 +140,26 @@ rules something out.
    a handler the script does not export fails to compile at the call. No generated declarations
    are needed between markup and script, and none can be stale.
 
-   Stands on: bet (the JSDoc types the compiler reads cover what handlers take; a union of strings
-   is already any JSON value to it, which the scripts guide works around with a handler per value);
+   Stands on: bet (the JSDoc types the compiler reads cover what handlers take: elements and their
+   lists, maps and views (`Holds`), events, `AbortSignal`, strings and lists of them, numbers,
+   booleans, element ids, routes and feed URLs, messages, formats, groups (a `@typedef` of these,
+   one object argument), and any value of a Rust type through its generated declaration; a type
+   it cannot check a call against, a set of names written as string literals, any other JSON
+   shape or an element or event in another shape, refuses the call rather than taking anything,
+   and only `unknown` takes any argument, since it claims nothing the call does not check);
    reasoned (with the check at the call, no declarations sit between markup and script to go stale);
    value (a wrong call fails to compile, Values 4).
 
-   Revisit when: an example or a kit component has to take a type the compiler reads loosely,
-   because the guide's workaround does not fit, so a wrong call compiles; or JavaScript gains type
-   syntax of its own (TC39's type annotations proposal), which a script could carry in place of
-   JSDoc.
+   Revisit when: an example or a kit component has to take `unknown` where a precise type would
+   serve it, because no checked type or generated declaration fits, so a wrong call compiles; or
+   JavaScript gains type syntax of its own (TC39's type annotations proposal), which a script
+   could carry in place of JSDoc.
 
-   Last checked: 2026-10-27, a union of strings typed as any JSON value, found at `2893a72d`, and
-   not checked since.
+   Last checked: 2026-11-07, at `cdbe4392`: every parameter a handler in the repository took as
+   any JSON value was listed (seven: six typed events imported in a JSDoc `@import`, now each its
+   `#[event]` type, and one test script's object type, now a generated declaration), and the
+   fallback now refuses the call
+   ([#1037 Unsupported handler parameter types can silently fall back to unchecked Rust-to-JS arguments](https://github.com/corten-run/corten/issues/1037)).
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in

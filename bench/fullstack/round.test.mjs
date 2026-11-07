@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { maxPasses } from "./passes.mjs";
-import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
+import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -222,4 +222,40 @@ test("the unit starts again at boot only when asked, and refuses what systemd wo
   assert.doesNotMatch(unit({ ...options, atBoot: false }), /WantedBy/);
   assert.throws(() => unit({ ...options, script: "/bench/%n.sh", atBoot: true }));
   assert.throws(() => unit({ ...options, log: "/bench/a\nExecStart=/bin/sh", atBoot: true }));
+});
+
+test("a matched-tier round is m<n>, and m<n> is the matched tier's alone, so the trend's r<n> never mix", () => {
+  for (const round of ["m1", "m12"]) assert.equal(roundNameError(round, "matched", { full: true }), null, round);
+  for (const round of ["r17", "ab1", "m", "m1x"]) assert.match(String(roundNameError(round, "matched", { full: true })), /is named m<n>/, round);
+  for (const round of ["r17", "aot2", "conform2", "p1"]) assert.equal(roundNameError(round, "defaults", { full: true }), null, round);
+  assert.match(String(roundNameError("m3", "defaults", { full: true })), /BENCH_TIER=matched/);
+  // A step run on its own may write a matched matrix under another name, never into r<n>.
+  assert.equal(roundNameError("conform-matched1", "matched"), null);
+  assert.match(String(roundNameError("r16", "matched")), /is named m<n>/);
+  assert.match(String(roundNameError("m3", "defaults")), /BENCH_TIER=matched/);
+});
+
+/** apps.mjs's exports under an environment, from a fresh process. @param {Record<string, string>} env */
+const appsUnder = (env) => {
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", 'const a = await import("./apps.mjs"); console.log(JSON.stringify({ apps: Object.keys(a.apps), tierApps: Object.keys(a.tierApps), tierEnv: a.tierEnv, run: a.runArgs("corten", a.allApps.corten, "api", "/f") }))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "BENCH_TIER" && k !== "BENCH_APPS")), ...env } });
+  return { status: r.status, stderr: r.stderr, ...(r.status === 0 ? JSON.parse(r.stdout) : {}) };
+};
+
+test("the matched tier starts its apps with the profile and only its apps; the defaults tier is as before", () => {
+  const defaults = appsUnder({});
+  assert.equal(defaults.status, 0, defaults.stderr);
+  assert.deepEqual(defaults.tierEnv, []);
+  assert.ok(!defaults.run.some((/** @type {string} */ a) => /^(PROFILE|MAX_CONNECTIONS)=/.test(a)), "no profile in the defaults tier");
+  assert.equal(defaults.apps.length, Object.keys(apps).length);
+  const matched = appsUnder({ BENCH_TIER: "matched" });
+  assert.equal(matched.status, 0, matched.stderr);
+  assert.deepEqual(matched.tierEnv, ["-e", "PROFILE=matched", "-e", "MAX_CONNECTIONS=1000"]);
+  const run = matched.run;
+  assert.ok(run.indexOf("PROFILE=matched") > 0 && run.indexOf("PROFILE=matched") < run.indexOf("cb-corten"), "set before the image");
+  for (const name of ["corten", "axum-maud"]) assert.ok(matched.tierApps.includes(name), name);
+  assert.deepEqual(matched.apps, matched.tierApps);
+  assert.ok(matched.tierApps.every((/** @type {string} */ n) => /** @type {{ matched?: boolean }} */ (apps[/** @type {keyof typeof apps} */ (n)]).matched), "only the tier's apps");
+  assert.deepEqual(appsUnder({ BENCH_TIER: "matched", BENCH_APPS: "axum-maud,corten" }).apps, ["corten", "axum-maud"]);
+  assert.match(appsUnder({ BENCH_TIER: "matched", BENCH_APPS: "corten,gin" }).stderr, /names gin, which is not in the matched tier/);
+  assert.match(appsUnder({ BENCH_TIER: "fast" }).stderr, /BENCH_TIER is defaults or matched/);
 });

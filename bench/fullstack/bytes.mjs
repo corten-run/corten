@@ -7,11 +7,14 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import { pageApps as apps } from "./apps.mjs";
+import { pageApps as apps, tier } from "./apps.mjs";
+import { roundNameError } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const round = process.argv[2] ?? "r1";
 const only = process.argv[3]?.split(",");
+// The matched tier's numbers never go into an r<n> round, nor the defaults' into an m<n> one.
+if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
 const browser = await chromium.launch({ headless: true });
 const out = {};
 try {
