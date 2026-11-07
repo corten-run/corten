@@ -1951,7 +1951,10 @@ function prefetch(target) {
   if (!(link instanceof HTMLAnchorElement) || link.target || link.hasAttribute("download")) return;
   if (link.closest("[data-reload], [data-no-prefetch]")) return;
   const url = new URL(link.href, location.href);
-  if (url.origin !== location.origin || pageKey(url) === pageKey(new URL(location.href))) return;
+  // The page a visit is fetching is not prefetched as well: the address stays this page's until
+  // it is in, and a hover then (the pointer back on its link, on a part of it, on another link to
+  // it) would fetch it a second time.
+  if (url.origin !== location.origin || pageKey(url) === pageKey(new URL(location.href)) || pageKey(url) === fetching?.key) return;
   const key = pageKey(url);
   // The user asked the browser to save data.
   if (/** @type {any} */ (navigator).connection?.saveData) return;
@@ -1978,6 +1981,9 @@ function prefetch(target) {
   response.catch(() => stop.abort());
   prefetched.set(key, { at: now, response, stop });
 }
+
+/** The page the newest visit is fetching, until that visit ends. @type {{ key: string } | null} */
+let fetching = null;
 
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let hoverTimer;
@@ -2008,6 +2014,9 @@ async function visit(url, signal, redirected, again, place, source, written, pre
   // when the read finds it. It stays whole while the page asks to be read again.
   const whole = !!written || (!!again && swappedWhole !== "");
   const key = pageKey(url);
+  // A read again fetches the page on screen, which no prefetch takes.
+  const going = again ? null : { key };
+  if (going) fetching = going;
   const hit = again || written ? undefined : prefetched.get(key);
   prefetched.delete(key);
   const fresh = hit && performance.now() - hit.at < PREFETCH_FRESH_MS;
@@ -2096,6 +2105,7 @@ async function visit(url, signal, redirected, again, place, source, written, pre
   } finally {
     signal.removeEventListener("abort", idle);
     idle();
+    if (fetching === going) fetching = null;
   }
 }
 
@@ -2279,9 +2289,6 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
     event.navigationType === "reload" ||
     event.sourceElement?.closest?.("[data-reload]");
   if (skip) return;
-  // A hover's prefetch not yet started is not started now: until the page is in, the address is
-  // still this page's, so it would fetch the page this navigation is fetching.
-  clearTimeout(hoverTimer);
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
   // The page is about to change: replies to its pending submits would patch the wrong page.

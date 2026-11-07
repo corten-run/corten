@@ -130,8 +130,9 @@ the toaster's handler is drawn on a full load and kept by a navigation. List it 
 
 The runtime fetches a same-origin link's page after the pointer rests on it for 65 ms (or a
 touch starts), so the click shows it at once; it keeps the 8 newest for 10 seconds and aborts
-the request of one it drops, so the server sees the client go. A link clicked before those 65 ms
-are up is fetched once, by the click: the rest of the dwell starts no prefetch. A page that is costly to draw (a
+the request of one it drops, so the server sees the client go. A page a click is fetching is
+fetched once, by the click: a hover until it is in (the dwell the click cut short, the pointer
+back on its link) prefetches nothing. A page that is costly to draw (a
 report that takes seconds) says so on its route, `#[route("/reports/suggested", get = suggested,
 prefetch = false)]`: every `href={..}` to it, a route held as `&dyn Href` included, is written
 with `data-no-prefetch`, and only a click starts its work. A route costly only for some of its
