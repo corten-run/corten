@@ -16,7 +16,18 @@
 // 5. For an app whose development loop compiles the whole program after each save (`dev` in
 //    builds.mjs: the Rust, Go and C++ apps; Corten's `corten dev` runs `cargo build`): its
 //    development build clean, then again after the same edit, `runs` times.
-// 6. For Corten's card-market: cargo's per-crate timings of the clean build, and rustc's passes
+// 6. For the Rust apps, the editor's loop and the tests': `cargo check` clean, then again after the
+//    edit, `runs` times (what rust-analyzer runs for its diagnostics on save), and the tests compiled
+//    without running them (`cargo test --no-run`) after the development build, then again after
+//    the edit. For an app whose recipe lists other kinds of edit (Corten's: a handler's body, a
+//    type the pages share, a `messages!` entry, a route added), the development rebuild after each.
+// 7. Disk: what the dependency step, the production build and the development build each add to
+//    the image, from Docker's image sizes (for Rust, mostly target/).
+// 8. With BENCH_BUILD_SCALE (core sets, as `0-1,0-7`), the clean production build again on each,
+//    for the apps in BENCH_BUILD_SCALE_APPS (default corten and axum-maud, the anchor); and for
+//    those that build with cargo, the development build clean and after the edit linked by mold
+//    instead of the toolchain's default linker.
+// 9. For Corten's card-market: cargo's per-crate timings of the clean build, and rustc's passes
 //    and macro expansion statistics for the app's crate alone (-Ztime-passes and -Zmacro-stats,
 //    nightly-only flags allowed on stable with RUSTC_BOOTSTRAP=1, for this diagnosis only).
 // Each step runs in a container of its own, so its CPU time and memory are its own: wall time,
@@ -47,6 +58,8 @@ const hostMemory = Number(spawnSync("docker", ["info", "--format", "{{.MemTotal}
 const memoryCap = Math.min(12 * 2 ** 30, (hostMemory || 16 * 2 ** 30) - 2 * 2 ** 30);
 const cpus = ["--cpuset-cpus", cores, "--memory", String(memoryCap)];
 const cpusLabel = `cores ${cores}`;
+const scaleCores = (process.env.BENCH_BUILD_SCALE ?? "").split(",").map((c) => c.trim()).filter(Boolean);
+const scaleApps = (process.env.BENCH_BUILD_SCALE_APPS ?? "corten,axum-maud").split(",");
 const hour = 3_600_000;
 const docker = (/** @type {string[]} */ args, /** @type {{ input?: string, timeout?: number }=} */ options = {}) =>
   spawnSync("docker", args, { encoding: "utf8", maxBuffer: 256 * 2 ** 20, timeout: options.timeout ?? hour, input: options.input });
@@ -86,16 +99,17 @@ const scratch = mkdtempSync(join(tmpdir(), "corten-build-"));
 /**
  * Runs one measured step in a new container from `image`: writes `files` (container path to
  * contents) into it first, then copies `take` (container path to host path) out after, and
- * commits it as `commit` when given.
+ * commits it as `commit` when given. `cores` pins it to other cores than the steps' own.
  * @param {string} name
  * @param {string} image
  * @param {string} command
- * @param {{ files?: Record<string, string>, take?: Record<string, string>, commit?: string }=} options
+ * @param {{ files?: Record<string, string>, take?: Record<string, string>, commit?: string, cores?: string }=} options
  */
-function step(name, image, command, { files = {}, take = {}, commit } = {}) {
+function step(name, image, command, { files = {}, take = {}, commit, cores: on } = {}) {
   const container = `bb-${name}`;
   docker(["rm", "-f", container]);
-  must(["create", "--name", container, ...cpus, image, "bash", "-c", stepScript(command)]);
+  const pinned = on ? ["--cpuset-cpus", on, "--memory", String(memoryCap)] : cpus;
+  must(["create", "--name", container, ...pinned, image, "bash", "-c", stepScript(command)]);
   try {
     for (const [path, text] of Object.entries(files)) {
       const local = join(scratch, "edit");
@@ -142,7 +156,8 @@ for (const name of appsArg.split(",")) {
     return result;
   };
   // An earlier call stopped partway leaves this app's images; its results are measured again.
-  for (const what of ["src", "deps", "built", "dev"]) docker(["rmi", "-f", tag(what)]);
+  const images = ["src", "deps", "built", "dev", "checked", "tested", "mold", "mold-dev"];
+  for (const what of images) docker(["rmi", "-f", tag(what)]);
   /** @type {Record<string, any>} */
   const entry = { cpus: cpusLabel, memoryCap, measuredAt: new Date().toISOString(), complete: false };
   out[name] = entry;
@@ -174,8 +189,62 @@ for (const name of appsArg.split(",")) {
         devRebuilds.push(rebuilt(step(`${name}-dev-rebuild-${i + 1}`, tag("dev"), again(r.dev), { files: edited }), "the dev rebuild"));
         keep("dev", { ...dev, rebuild: summary(devRebuilds) });
       }
+      // Other kinds of edit, each from the clean development build.
+      for (const e of r.edits ?? []) {
+        const text = readFileSync(join(context, e.edit), "utf8");
+        if (text.split(e.from).length !== 2) throw new Error(`${name}: ${e.edit} does not have exactly one ${e.from}`);
+        const path = `${r.workdir}/${e.edit}`;
+        const kind = e.kind.replace(/\W+/g, "-");
+        const list = [];
+        for (let i = 0; i < runs; i += 1) {
+          list.push(rebuilt(step(`${name}-dev-${kind}-${i + 1}`, tag("dev"), touchThen(path, r.dev), { files: { [path]: text.replace(e.from, e.to) } }), `the dev rebuild after the ${e.kind} edit`));
+          keep("edits", { ...entry.edits, [e.kind]: summary(list) });
+        }
+      }
+      if (r.test) {
+        const clean = step(`${name}-test`, tag("dev"), r.test, { commit: tag("tested") });
+        const list = [];
+        for (let i = 0; i < runs; i += 1) {
+          list.push(rebuilt(step(`${name}-test-rebuild-${i + 1}`, tag("tested"), again(r.test), { files: edited }), "the test build"));
+          keep("test", { clean, rebuild: summary(list) });
+        }
+      }
     }
+    if (r.check) {
+      const clean = keep("check", { clean: step(`${name}-check`, tag("deps"), r.check, { commit: tag("checked") }) });
+      const list = [];
+      for (let i = 0; i < runs; i += 1) {
+        list.push(rebuilt(step(`${name}-check-again-${i + 1}`, tag("checked"), again(r.check), { files: edited }), "the check"));
+        keep("check", { ...clean, again: summary(list) });
+      }
+    }
+    // What each step left on disk: the difference between the images before and after it.
+    const size = (/** @type {string} */ what) => Number(docker(["image", "inspect", "-f", "{{.Size}}", tag(what)]).stdout.trim()) || null;
+    const sizes = Object.fromEntries(["src", "deps", "built", "dev"].map((w) => [w, size(w)]));
+    const added = (/** @type {string} */ to, /** @type {string} */ from) => (sizes[to] && sizes[from] ? sizes[to] - sizes[from] : null);
+    keep("disk", { depsBytes: added("deps", "src"), buildBytes: added("built", "deps"), devBytes: added("dev", "deps") });
     keep("complete", true);
+    if (scaleCores.length && scaleApps.includes(name)) try {
+      // The clean build on other core sets, and for cargo the development loop linked by mold.
+      for (const on of scaleCores) keep("scale", { ...entry.scale, [on]: step(`${name}-build-on-${on}`, tag("deps"), r.build, { cores: on }) });
+      if (r.dev && cargoBuilds(r)) {
+        // Installing mold is not timed: it is a step in the image, before the measured ones. Since
+        // Rust 1.90 the default linker here is rust-lld, which `linker-features=-lld` turns off.
+        must(["build", "-q", "-t", tag("mold"), "-"], { input: `FROM ${tag("deps")}\nRUN apt-get update -qq && apt-get install -y -qq mold > /dev/null\nENV RUSTFLAGS="-C linker-features=-lld -C link-arg=-fuse-ld=mold"\n` });
+        const clean = step(`${name}-mold-dev`, tag("mold"), r.dev, { commit: tag("mold-dev") });
+        // mold names itself in the binaries it links; one without it was linked by something else.
+        const linked = docker(["run", "--rm", tag("mold-dev"), "bash", "-c", "for f in $(find target/debug -maxdepth 1 -type f -executable); do readelf -p .comment \"$f\"; done"]);
+        if (!/\bmold\b/.test(linked.stdout)) throw new Error(`${name}: the development build was not linked by mold:\n${(linked.stdout + linked.stderr).slice(-1000)}`);
+        const list = [];
+        for (let i = 0; i < runs; i += 1) {
+          list.push(rebuilt(step(`${name}-mold-dev-rebuild-${i + 1}`, tag("mold-dev"), again(r.dev), { files: edited }), "the mold dev rebuild"));
+          keep("mold", { clean, rebuild: summary(list) });
+        }
+      }
+    } catch (e) {
+      keep("scaleFailed", e instanceof Error ? e.message.slice(0, 2000) : String(e));
+      console.log(`${name} scaling: ${entry.scaleFailed}`);
+    }
     // Diagnostics, which a change to cargo's or rustc's output could break, after the rest is saved.
     if (r.timings) try {
       keep("crates", crateCost(timingUnits(readFileSync(timingsFile, "utf8")), r.timings.own));
@@ -196,7 +265,7 @@ for (const name of appsArg.split(",")) {
     keep("failed", e instanceof Error ? e.message.slice(0, 2000) : String(e));
     console.log(`${name}: ${entry.failed}`);
   } finally {
-    for (const what of ["src", "deps", "built", "dev"]) docker(["rmi", "-f", tag(what)]);
+    for (const what of images) docker(["rmi", "-f", tag(what)]);
   }
   save();
 }

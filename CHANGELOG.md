@@ -2324,6 +2324,20 @@ Corten is pre-1.0, so any minor version may change the API.
     `with_status` hid (a refusal answered as a 404 says `refused: 403 Forbidden`); an app that
     sends it, in its own body or in markup, chooses to
     ([#995 corten::Error has no Display or status accessor, so a handler answering in its own JSON shape cannot say why a body read failed](https://github.com/corten-run/corten/issues/995)).
+263. `bench/fullstack`'s build step measures more of where a Rust app is slow to work on: for the
+    Rust apps, `cargo check` clean and after the edit (what rust-analyzer runs on save) and the
+    tests compiled clean and after the edit; for Corten, the development build after four other
+    kinds of edit (a handler's body, a derive on a type three answers share, a `messages!` entry,
+    a route added); for every app, what its dependency step, production build and development
+    build add to disk; and in a round, Corten's and axum + Maud's clean build again on two and
+    eight cores and their development build linked by mold, checked to be mold's. `summarize.mjs`
+    prints each. A trial on a desktop (Docker Desktop, cores 0-3, one run each, not a round's
+    machine) took Corten's `cargo check` 1.0 s after the edit against 3.6 s for its development
+    build, and its development build 3.3 to 7.9 s after the other kinds of edit, the derive on a
+    shared type the slowest. Save to reload, rust-analyzer's own analysis and a Docker build with
+    BuildKit's cache warm are left to
+    [#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)
+    ([#774 bench/fullstack measures no editor, test-build, save-to-reload, disk or core-scaling cost, so where a Corten app is slow to work on is still partly unmeasured](https://github.com/corten-run/corten/issues/774)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

@@ -16,6 +16,9 @@ import { quote } from "./round.mjs";
  *   deps: string,
  *   build: string,
  *   dev?: string,
+ *   check?: string,
+ *   test?: string,
+ *   edits?: { kind: string, edit: string, from: string, to: string }[],
  *   timings?: { bin: string, own: string[], touch: string },
  *   edit: string,
  *   change?: { from: string, to: string },
@@ -63,6 +66,12 @@ const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */
  * repository root, when it is not in its context. `timings` asks for cargo's per-crate
  * timings and rustc's passes and macro expansion for one binary, whose own crates' names start
  * with one of `own`.
+ *
+ * For the Rust apps, the editor's and the tests' loops too: `check` is what an editor runs for its
+ * diagnostics after a save (rust-analyzer's check on save is `cargo check`, with the features its
+ * documentation has an editor set), and `test` compiles the tests without running them. `edits`
+ * are other kinds of change than the button's, each measured as a development rebuild: `kind`
+ * names it, `edit` is its file (relative to the context) and `from` must appear in it once.
  * @type {Record<string, Recipe>}
  */
 export const recipes = {
@@ -78,7 +87,25 @@ export const recipes = {
     deps: `cargo fetch ${hostTarget}`,
     build: "cargo build --release -p card-market",
     dev: "cargo build -p card-market",
+    check: "cargo check -p card-market",
+    test: "cargo test -p card-market --no-run",
     edit: "examples/card-market/src/views/alert.rs",
+    edits: [
+      { kind: "handler", edit: "examples/card-market/src/app.rs", from: "for v in found.iter().take(4) {", to: "for v in found.iter().take(5) {" },
+      {
+        kind: "shared type",
+        edit: "examples/card-market/src/model.rs",
+        from: "#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, ToJson)]\npub struct Summary {",
+        to: "#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, ToJson)]\npub struct Summary {",
+      },
+      { kind: "message", edit: "examples/card-market/locales/en.json", from: '"near_mint": "Near Mint",', to: '"near_mint": "Near mint",' },
+      {
+        kind: "route",
+        edit: "examples/card-market/src/main.rs",
+        from: "    pub struct Sitemap;\n",
+        to: '    pub struct Sitemap;\n\n    #[route("/humans.txt", get = app::robots)]\n    pub struct Humans;\n',
+      },
+    ],
     timings: { bin: "card-market", own: ["corten", "card-market"], touch: "examples/card-market/src/main.rs" },
   },
   leptos: {
@@ -89,6 +116,9 @@ export const recipes = {
     deps: `cargo fetch ${hostTarget} --target wasm32-unknown-unknown`,
     build: "cargo leptos build --release",
     dev: "cargo leptos build",
+    // The server's code, as Leptos's documentation has rust-analyzer check it.
+    check: "cargo check --features ssr",
+    test: "cargo test --features ssr --no-run",
     edit: "src/app.rs",
   },
   topcoat: {
@@ -99,6 +129,8 @@ export const recipes = {
     deps: `cargo fetch --locked ${hostTarget}`,
     build: "cargo build --release --locked && topcoat asset bundle --release",
     dev: "cargo build --locked",
+    check: "cargo check --locked",
+    test: "cargo test --locked --no-run",
     edit: "src/main.rs",
   },
   "axum-maud": {
@@ -108,6 +140,8 @@ export const recipes = {
     deps: `cargo fetch --locked ${hostTarget}`,
     build: "cargo build --release --locked",
     dev: "cargo build --locked",
+    check: "cargo check --locked",
+    test: "cargo test --locked --no-run",
     edit: "src/pages.rs",
     change: { from: 'button type="submit" {', to: 'button type="submit" title="Set the price alert" {' },
   },
@@ -287,8 +321,8 @@ export function readStep(output) {
   }
   // No memory sample means the sampler never ran, so the step's numbers are not to be trusted.
   if (!(got.ms >= 0 && got.cpuUsec >= 0 && got.anonPeakBytes > 0)) return null;
-  // What cargo compiled, so a rebuild that compiled more than the edited crate shows it.
-  const compiled = [...output.matchAll(/^\s+Compiling (\S+) v/gm)].map((m) => m[1]);
+  // What cargo compiled (or checked), so a rebuild that compiled more than the edited crate shows it.
+  const compiled = [...output.matchAll(/^\s+(?:Compiling|Checking) (\S+) v/gm)].map((m) => m[1]);
   return { ms: got.ms, cpuS: +(got.cpuUsec / 1e6).toFixed(1), peakMiB: Math.round(got.anonPeakBytes / 2 ** 20), ...(compiled.length ? { compiled } : {}) };
 }
 

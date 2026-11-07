@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { allApps } from "./apps.mjs";
-import { changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -29,6 +29,19 @@ test("each app's edit changes its one price-alert button", () => {
     const text = readFileSync(join(repo, contextOf(name), recipes[name].edit), "utf8");
     assert.equal(text.split(from).length, 2, `${name}: ${recipes[name].edit} needs exactly one ${from}`);
     assert.match(to, /title="Set the price alert"/, `${name}: the same title as the others'`);
+  }
+});
+
+test("each other kind of edit changes one place in its file, and kinds are not repeated", () => {
+  for (const [name, r] of Object.entries(recipes)) {
+    const kinds = (r.edits ?? []).map((e) => e.kind);
+    assert.equal(new Set(kinds).size, kinds.length, `${name}: a kind of edit twice`);
+    for (const e of r.edits ?? []) {
+      const text = readFileSync(join(repo, contextOf(name), e.edit), "utf8");
+      assert.equal(text.split(e.from).length, 2, `${name}: ${e.edit} needs exactly one ${e.from}`);
+      assert.notEqual(e.from, e.to, `${name}: the ${e.kind} edit changes nothing`);
+    }
+    if (r.edits?.length || r.check || r.test) assert.ok(cargoBuilds(r) && r.dev, `${name}: editor, test and other edits are measured for the apps that build with cargo`);
   }
 });
 
@@ -69,6 +82,7 @@ test("a step's measurements are read from its output, and a step without them fa
   const output = "compiling\nBENCH ms 61234\nBENCH cpuUsec 183400000\nBENCH anonPeakBytes 1610612736\n";
   assert.deepEqual(readStep(output), { ms: 61234, cpuS: 183.4, peakMiB: 1536 });
   assert.deepEqual(readStep(`   Compiling card-market v0.1.0 (/src/examples/card-market)\n${output}`)?.compiled, ["card-market"]);
+  assert.deepEqual(readStep(`    Checking card-market v0.1.0 (/src/examples/card-market)\n${output}`)?.compiled, ["card-market"], "cargo check's line");
   assert.equal(readStep("error[E0425]\nBENCH failed\n"), null);
   assert.equal(readStep("BENCH ms 5\nBENCH cpuUsec 9\n"), null);
   assert.equal(readStep("BENCH ms 5\nBENCH cpuUsec 9\nBENCH anonPeakBytes 0\n"), null, "no memory sample: the sampler did not run");

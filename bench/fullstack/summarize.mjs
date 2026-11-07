@@ -102,6 +102,28 @@ if (summary.build) {
     const dev = b.dev ? `dev ${s(b.dev.clean.ms)}, after the edit ${s(b.dev.rebuild.ms)} (${b.dev.rebuild.cpuS} CPU-s)` : "";
     console.log(line([name, `clean (deps + build) ${s(b.clean.ms)}, ${b.clean.cpuS} CPU-s`, `deps ${s(b.deps.ms)} (downloads)`, `build ${s(b.build.ms)}, ${b.build.cpuS} CPU-s, ${b.build.peakMiB} MiB`, `after the edit ${s(b.rebuild.ms)}, ${b.rebuild.cpuS} CPU-s, ${b.rebuild.peakMiB} MiB`, dev]));
   }
+  const mb = (/** @type {number | null} */ bytes) => (bytes == null ? "?" : `${Math.round(bytes / 1e6)} MB`);
+  const loops = Object.entries(summary.build).filter(([, b]) => !b.failed && b.complete !== false && (b.check || b.test || b.edits || b.disk));
+  if (loops.length) console.log("\nEditor, tests, other edits and disk (wall time; after an edit, the median)");
+  for (const [name, b] of loops) {
+    console.log(line([
+      name,
+      b.check ? `check ${s(b.check.clean.ms)}, after the edit ${s(b.check.again.ms)}` : "",
+      b.test ? `tests compiled ${s(b.test.clean.ms)}, after the edit ${s(b.test.rebuild.ms)}` : "",
+      ...Object.entries(b.edits ?? {}).map(([kind, e]) => `dev after a ${kind} edit ${s(e.ms)}`),
+      b.disk ? `disk: deps ${mb(b.disk.depsBytes)}, build ${mb(b.disk.buildBytes)}, dev ${mb(b.disk.devBytes)}` : "",
+    ].filter(Boolean)));
+  }
+  const scaled = Object.entries(summary.build).filter(([, b]) => b.scale || b.mold || b.scaleFailed);
+  if (scaled.length) console.log("\nThe clean build on other cores, and the development build linked by mold");
+  for (const [name, b] of scaled) {
+    if (b.scaleFailed) { console.log(line([name, `FAILED: ${b.scaleFailed.split("\n")[0]}`])); continue; }
+    console.log(line([
+      name,
+      ...Object.entries(b.scale ?? {}).map(([on, r]) => `cores ${on}: ${s(r.ms)}, ${r.cpuS} CPU-s`),
+      b.mold ? `mold: dev ${s(b.mold.clean.ms)}, after the edit ${s(b.mold.rebuild.ms)}` : "",
+    ].filter(Boolean)));
+  }
 }
 if (summary.coldStart) {
   console.log("\nCold start");
