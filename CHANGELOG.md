@@ -5461,6 +5461,17 @@ Corten is pre-1.0, so any minor version may change the API.
     smoke checks the backoff's 1 s and 2 s, that it stops on the signal, and that a `sync` later
     or after a reconnect is not delayed
     ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
+189. `corten-cluster` wrote what happens to a feed across instances (a gap in its patches and the
+    reload it starts, a patch dropped as invalid, a failed reload, consumer or resubscribe, a feed
+    loaded with no replay log, the relay going active or standing by) to stderr with `eprintln!`,
+    so the app's subscriber, its filters and JSON lines never saw them. Each is now a `tracing`
+    event with target `corten::feed`, as the feed's own are, with fields (`instance`, `feed`, and
+    `have` and `got` for a gap): a warning, or `info` for the relay going active. A test installs
+    a subscriber and sees a gap and a dropped patch with their feed; it saw nothing before. An event while
+    the app starts (an instance taking the lease, or failing to, before `serve`) no longer prints
+    with the default subscriber, which `serve` installs; `eprintln!` printed it. The failover
+    bench reads which instance ran the relay from its `/api/stats` at each kill instead
+    ([#1069 corten-cluster reports gaps, reloads and relay failover with eprintln!, so the app's tracing subscriber, filters and JSON logs never see them](https://github.com/corten-run/corten/issues/1069)).
 190. `subscribe()` told its `status` handler `syncing` twice in a row when a snapshot failed and
     was fetched again. Its recovery paths now each have a browser check in `scripts/smoke.mjs`,
     in Chromium, Firefox and WebKit: a patch that skips a `seq` loads one new snapshot and a
