@@ -1,0 +1,34 @@
+package main
+
+templ catalogPage(record *catalogRecord, prefix string) {
+@layout(record.Title, true) {
+<article aria-label="Catalog record">
+<h1>{ record.Title }</h1>
+<p>{ record.Subtitle }</p>
+<p>{ record.Description }</p>
+<ul aria-label="Tags">
+for _, tag := range record.Tags {
+<li>{ tag }</li>
+}
+</ul>
+<form method="get" action={ templ.URL(catalogURL(record.ID)) }>
+<label>Field name <input name="field" value={ prefix }/></label>
+<button type="submit">Filter</button>
+</form>
+<table>
+<caption>Record fields</caption>
+<thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+<tbody>
+for _, field := range record.matchingFields(prefix) {
+<tr><th scope="row">{ field.Name }</th><td>{ field.Value }</td></tr>
+}
+</tbody>
+</table>
+<nav aria-label="Related records"><ul>
+for _, related := range record.Related {
+<li><a href={ templ.URL(catalogURL(related.ID)) }>{ related.Title }</a></li>
+}
+</ul></nav>
+</article>
+}
+}

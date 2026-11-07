@@ -6,6 +6,7 @@
 <title th:text="${title}">Card Market</title>
 <link rel="stylesheet" th:href="@{/style.css}">
 <link rel="stylesheet" th:href="@{/components.css}">
+<link rel="stylesheet" th:if="${catalogPage == true}" th:href="@{/catalog.css}">
 <script th:src="@{/htmx.min.js}" defer></script>
 <script th:src="@{/item.js}" defer></script>
 </head>

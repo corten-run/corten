@@ -6,6 +6,7 @@
 <title>@(ViewData["Title"] ?? "Card Market")</title>
 <link rel="stylesheet" href="~/style.css" asp-append-version="true">
 <link rel="stylesheet" href="~/components.css" asp-append-version="true">
+@if (ViewData["Catalog"] is true) {<link rel="stylesheet" href="~/catalog.css" asp-append-version="true">}
 <script src="~/htmx.min.js" asp-append-version="true" defer></script>
 <script src="~/item.js" asp-append-version="true" defer></script>
 </head>

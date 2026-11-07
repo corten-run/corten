@@ -6,6 +6,11 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- A separate locale-neutral catalog benchmark in `bench/catalog`: the same strings-only
+  record-detail page, JSON, GET filter and related links in eighteen framework apps.
+  Correctness checks precede load tests; catalog rounds have their own baseline rather than
+  being compared with historical localized marketplace rounds.
+
 - `corten/views` adds `view(host, View, template)` for a single server-rendered branch,
   with typed templates, root-ID adoption, collision checks and CSP-safe custom properties. The
   deck builder exercises nested stateful branches with independent drafts and ID-based controls.
