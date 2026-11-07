@@ -1040,7 +1040,9 @@ rules something out.
     65,761 (65,748 to 65,764), ranges that overlap, so no difference is shown).
 
     Revisit when: a body read moves off the handler's task (a reader on a task of its own would
-    not mark the handler's thread), or Corten serves HTTP/2, where a body's reads would need the
+    not mark the handler's thread; nor does one driven inside something that is not polled again
+    when the deadline's timer fires, such as a `FuturesUnordered` of reads, which is the 503
+    today), or Corten serves HTTP/2, where a body's reads would need the
     same mark and a test that a stalled stream is the 408 while the connection's other streams
     go on.
 

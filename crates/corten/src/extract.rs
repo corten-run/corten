@@ -108,7 +108,9 @@ use crate::{
 /// with the app's limit and Corten's answer. A body over `max` is read past, not kept, up to
 /// 64 MiB past it, so a client still sending reads the handler's answer rather than a closed
 /// connection, as an upload's is ([`crate::form::File::bytes_up_to`]); past that, or when its
-/// length says it is, it is `None` at once and the connection closes after the answer. `Err` is
+/// length says it is, it is `None` at once and the connection closes after the answer. The app's
+/// deadline ([`crate::App::deadline`]) coming while this waits for the body, read past or not, is
+/// the client's 408 under [`crate::serve`], not a `None` the handler sees. `Err` is
 /// a body that could not be read (the connection broke), a 400 the handler passes on with `?`,
 /// or answers in its own shape with why (`error.to_string()`) and its status
 /// ([`Error::status_code`]).
