@@ -28,11 +28,11 @@ export const slowMs = 40_000;
 /** The phase's length: what its rate and CPU are over, not the wait for its last late answers after it. */
 export const mixedSeconds = 60;
 /**
- * How long the phase waits for the answers still to come when its time is up: k6's 60 s timeout
- * for each request, so every request sent ends counted, answered or not (one k6 stops waiting
- * for is in no count).
+ * How long the phase waits for the answers still to come when its time is up: past k6's 60 s
+ * timeout for each request, which starts a little after its iteration does, so every request sent
+ * ends counted, answered or not (one k6 stops waiting for is in no count).
  */
-export const tailSeconds = 60;
+export const tailSeconds = 65;
 
 /**
  * What mixed-load.js needs to post the item page's price-alert form as the page posts it: its

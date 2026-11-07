@@ -1176,8 +1176,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
      table marks the posts' column `CHECK POST <status>` when it was not taken, so a post the
      harness built wrong is not read as the app's refusal. An app whose form its script sends
      (Livewire, LiveView) has no post; that share asks for item pages, and the table says why.
-     When the 60 s are up, the requests still waiting are kept for their answers up to k6's 60 s
-     timeout, so every request sent is counted, answered or not; the rate and the app's CPU are
+     When the 60 s are up, the requests still waiting are kept for their answers for 65 s, past
+     k6's 60 s timeout, so every request sent is counted, answered or not; the rate and the app's CPU are
      over the 60 s, so an app is not shown slower for the wait (its CPU counted in the wait is
      charged to those 60 s, a little more for an app whose late answers come last). An app with no
      deadline holds each late item for its 40 s, about 84 at once (estimated, 150/s x 70% x 2%): one

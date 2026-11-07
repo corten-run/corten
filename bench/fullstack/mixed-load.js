@@ -8,7 +8,7 @@
 // for compression as a browser does (the other phases ask for none), so each answer is compressed
 // as the app compresses it for a browser.
 // Env: BASE, RATE, DURATION, ITEMS (500), SLOW_SHARE (0), TAIL (how long requests still waiting
-// when the time is up are kept: mixed.mjs's tailSeconds, 60 s, each request's timeout), and the
+// when the time is up are kept: mixed.mjs's tailSeconds, 65 s, past each request's timeout), and the
 // form as run-ssr.mjs read it from
 // the item page (mixed.mjs's formEnv): FORM_PATH, FORM_TYPE, FORM_BODY, FORM_COOKIE, FORM_HOST,
 // ORIGIN (no FORM_PATH: the app's form is sent by its script, or there is none, and the posts'
@@ -36,8 +36,8 @@ export const options = {
   summaryTrendStats: ["avg", "p(50)", "p(95)", "p(99)", "max"],
   scenarios: {
     // A request still waiting when the time is up is kept until its answer or its timeout (TAIL,
-    // as long as the timeout), so it is counted and not cut off.
-    load: { executor: "constant-arrival-rate", rate: Number(__ENV.RATE || 150), timeUnit: "1s", duration: __ENV.DURATION || "60s", gracefulStop: __ENV.TAIL || "60s", preAllocatedVUs: 200, maxVUs: 2000 },
+    // past the timeout), so it is counted and not cut off.
+    load: { executor: "constant-arrival-rate", rate: Number(__ENV.RATE || 150), timeUnit: "1s", duration: __ENV.DURATION || "60s", gracefulStop: __ENV.TAIL || "65s", preAllocatedVUs: 200, maxVUs: 2000 },
   },
 };
 
