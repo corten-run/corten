@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 
 use super::FieldName;
 use crate::{
-    extract::{next, IDLE},
+    extract::{Idle, IDLE},
     Error,
 };
 
@@ -233,7 +233,7 @@ impl<T> Upload<T> {
     /// body over its limit is read past, a client that stops for the idle time ends that read, and
     /// the answer is still the 413. `None` leaves only the route's deadline.
     pub fn idle(&mut self, idle: impl Into<Option<Duration>>) -> &mut Self {
-        self.parts.idle = idle.into();
+        self.parts.idle = Idle::new(idle.into());
         self
     }
 
@@ -297,7 +297,7 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
             read: 0,
             limit: DEFAULT_LIMIT,
             past: 0,
-            idle: Some(IDLE),
+            idle: Idle::new(Some(IDLE)),
             refused: false,
             stalled: false,
             ended: false,
@@ -435,7 +435,7 @@ struct Parts {
     /// `limit`. Each byte is counted once, as it leaves `buf` or as `bytes_up_to` gives it up.
     past: usize,
     /// How long a read waits for the next piece: [`Upload::idle`].
-    idle: Option<Duration>,
+    idle: Idle,
     /// Found over the limit: every read after is `TooLarge`.
     refused: bool,
     /// The client stopped sending: every read after is `Stalled`.
@@ -480,7 +480,7 @@ impl Parts {
         if self.ended {
             return Ok(false);
         }
-        match next(&mut self.body, self.idle).await {
+        match self.idle.next(&mut self.body).await {
             None => {
                 self.stalled = true;
                 self.ended = true;
@@ -547,7 +547,7 @@ impl Parts {
         let mut past = self.read.saturating_sub(self.limit);
         // A client that stops sending here ends the read past; the answer is still the 413.
         while past <= READ_PAST && !self.ended {
-            match next(&mut self.body, self.idle).await {
+            match self.idle.next(&mut self.body).await {
                 Some(Some(Ok(piece))) => past += piece.len(),
                 _ => break,
             }

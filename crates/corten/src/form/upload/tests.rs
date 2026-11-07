@@ -908,10 +908,47 @@ async fn an_upload_sent_steadily_is_never_cut_off_by_the_idle_time() {
     assert_eq!(started.elapsed(), std::time::Duration::from_secs(60));
 }
 
+/// Over a socket, a client that stops sending an upload is answered the 408 once the idle time
+/// passes, and the connection is closed after it, with no `connection: close` asked for, so the
+/// server holds nothing for that client (#1030).
+#[tokio::test]
+async fn a_stalled_upload_over_a_socket_is_a_408_and_its_connection_is_closed() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn title(mut upload: Upload<Listing>) -> crate::Result<String> {
+        upload.idle(std::time::Duration::from_millis(200));
+        Ok(upload.fields().await?.title)
+    }
+    let routes = axum::Router::new().route("/up", axum::routing::put(title));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = crate::App::new(crate::Routes::from(routes));
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let bytes = body(&[("title", None, None, &[b'a'; 4000])]);
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let head = format!(
+        "PUT /up HTTP/1.1\r\nhost: localhost\r\ncontent-type: multipart/form-data; boundary={BOUNDARY}\r\ncontent-length: {}\r\n\r\n",
+        bytes.len()
+    );
+    stream.write_all(head.as_bytes()).await.unwrap();
+    stream.write_all(&bytes[..1000]).await.unwrap();
+    let mut read = Vec::new();
+    let closed = tokio::time::timeout(std::time::Duration::from_secs(10), stream.read_to_end(&mut read)).await;
+    closed.expect("the connection closed after the answer").expect("the answer, not a reset connection");
+    let got = String::from_utf8_lossy(&read);
+    assert!(got.starts_with("HTTP/1.1 408"), "{got}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// What reading an upload costs per piece of its body: `UPLOAD_READS` (200) reads of a form with
 /// a 2 KiB file and a title, sent a byte at a time (each read is 2,259 pieces), the file
 /// read with `bytes_up_to`. Counted under callgrind at two numbers of reads, the difference is the
-/// cost of that many reads. `UPLOAD_IDLE=none` reads with no idle time. Run in release:
+/// cost of that many reads. `UPLOAD_IDLE=none` reads with no idle time. `UPLOAD_WAIT=1` makes the
+/// reader wait for every piece, as it does for a client slower than the server, so each read
+/// sets the idle timer; without it every piece has arrived already. Run in release:
 /// `UPLOAD_READS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_reading_an_upload_costs`
 /// (#1030).
 #[test]
@@ -919,12 +956,14 @@ async fn an_upload_sent_steadily_is_never_cut_off_by_the_idle_time() {
 fn what_reading_an_upload_costs() {
     let reads: usize = std::env::var("UPLOAD_READS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
     let idle = std::env::var("UPLOAD_IDLE").map_or(true, |idle| idle != "none");
+    let wait = std::env::var("UPLOAD_WAIT").is_ok_and(|wait| wait == "1");
     let photo = vec![1u8; 2048];
     let bytes = body(&[("photos", Some("p.png"), None, &photo), ("title", None, None, b"Mew")]);
     let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
     runtime.block_on(async {
         for _ in 0..reads {
-            let mut upload = Upload::<Listing>::from_request(request(&bytes, 1), &()).await.unwrap();
+            let req = if wait { waiting_for_each_byte(&bytes) } else { request(&bytes, 1) };
+            let mut upload = Upload::<Listing>::from_request(req, &()).await.unwrap();
             if !idle {
                 upload.idle(None);
             }
@@ -934,4 +973,25 @@ fn what_reading_an_upload_costs() {
             assert_eq!(upload.fields().await.unwrap().title, "Mew");
         }
     });
+}
+
+/// The request for `bytes` a byte at a time, each byte arriving after the reader has waited for it
+/// (the stream is `Pending` once before each, waking its task at once).
+fn waiting_for_each_byte(bytes: &[u8]) -> Request {
+    let mut pieces = bytes.iter().map(|b| Bytes::copy_from_slice(&[*b])).collect::<Vec<_>>().into_iter();
+    let mut wait = true;
+    let stream = futures_util::stream::poll_fn(move |cx| {
+        if wait {
+            wait = false;
+            cx.waker().wake_by_ref();
+            return std::task::Poll::Pending;
+        }
+        wait = true;
+        std::task::Poll::Ready(pieces.next().map(Ok::<_, std::io::Error>))
+    });
+    Request::builder()
+        .method("POST")
+        .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
+        .body(Body::from_stream(stream))
+        .unwrap()
 }

@@ -2368,13 +2368,16 @@ Corten is pre-1.0, so any minor version may change the API.
     deadline. The minute holds for each piece, so an upload sent steadily is never cut off; one
     that stops while a body over the limit is read past is still the 413; `None` leaves only the
     route's deadline. Breaking: `UploadError` has a new variant, so a `match` without a wildcard
-    arm needs one for `Stalled`. `Upload` and `Pieces` share one read, which makes its timer only
-    when no piece is waiting. Measured with the new `what_reading_an_upload_costs` (callgrind,
-    release, one run at 20 and at 120 reads of a 2,259-byte form sent a byte at a time): 1,942,268
-    instructions a read on main `cdbe4392` and 2,133,245 with the idle time, about 85 more per
-    piece (9.8% on this worst case, where every piece is one byte; a browser's pieces are KiB, so
-    the cost per byte is a thousandth of that), and the same with `idle(None)`, whose cost is the
-    shared read, not a timer. A timer made for every piece, as `Pieces` made it, measured 2,458,776
+    arm needs one for `Stalled`. `Upload` and `Pieces` share one read and one timer for the whole body,
+    made the first time a read waits and moved only when it goes off before the read it serves
+    is due. Measured with the new `what_reading_an_upload_costs` and `what_reading_a_body_costs`
+    (`READER=pieces`) under callgrind, release, instructions per read as the difference of 20 and
+    120 reads, median of three runs (each within 0.1%), on main `cdbe4392` and with the idle time,
+    for a 2,259-byte form sent a byte at a time (the worst case: a browser's pieces are KiB): every
+    piece already there 1,942,244 to 2,027,835 (+38 a piece, +4.4%); every piece waited for
+    4,150,032 to 5,341,425 (+527 a waited piece: a clock read and the timer's poll; `idle(None)`
+    4,292,483); and `Pieces` reading 8 KiB a byte at a time, each byte waited for, 41,659,778 to
+    33,331,597 (20% less, since it no longer makes a timer for each piece)
     ([#1030 Upload's files have no idle time, so a client that stops sending a form upload holds its request until the route's deadline](https://github.com/corten-run/corten/issues/1030)).
 
 ### Removed

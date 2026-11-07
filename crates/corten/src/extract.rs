@@ -85,13 +85,14 @@
 //! A body too large to hold (a file `PUT` as `application/octet-stream`, to an object store or a
 //! disk) is read as it arrives with [`pieces_up_to`], one piece at a time.
 
-use std::{future::Future, task::Poll, time::Duration};
+use std::{future::Future, pin::Pin, task::Poll, time::Duration};
 
 use axum::body::{BodyDataStream, HttpBody};
 pub use axum::extract::State;
 pub use axum_core::extract::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request};
 use bytes::Bytes;
 use futures_util::StreamExt;
+use tokio::time::Sleep;
 
 use crate::{
     answer::Body,
@@ -164,7 +165,7 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
         if len > max {
             drop((pieces, small));
             // Read past, so the client reads the answer; a read that breaks here leaves the same.
-            read_past(&mut stream, len, max, None).await;
+            read_past(&mut stream, len, max, &mut Idle::new(None)).await;
             return Ok(None);
         }
         if piece.len() >= SMALL_PIECE {
@@ -265,7 +266,7 @@ pub fn pieces_up_to(body: Body, max: usize) -> Pieces {
         stream: body.into_data_stream(),
         max,
         read: 0,
-        idle: Some(IDLE),
+        idle: Idle::new(Some(IDLE)),
         end: if said > max as u64 { End::Said(said) } else { End::Open },
     }
 }
@@ -281,7 +282,7 @@ pub struct Pieces {
     /// What has arrived and been counted against `max`, up to the piece that went over it (what is
     /// read past after is not).
     read: usize,
-    idle: Option<Duration>,
+    idle: Idle,
     end: End,
 }
 
@@ -340,7 +341,7 @@ impl Pieces {
     /// How long the client may go without sending a piece, here and while a body over the limit
     /// is read past: a minute unless set; `None` leaves only the route's deadline.
     pub fn idle(mut self, idle: impl Into<Option<Duration>>) -> Self {
-        self.idle = idle.into();
+        self.idle = Idle::new(idle.into());
         self
     }
 
@@ -353,7 +354,7 @@ impl Pieces {
                 // Refused first, so a read past given up on is not begun again.
                 self.end = End::Over;
                 if said <= self.max.saturating_add(READ_PAST) as u64 {
-                    read_past(&mut self.stream, 0, self.max, self.idle).await;
+                    read_past(&mut self.stream, 0, self.max, &mut self.idle).await;
                 }
                 return Err(BodyError::TooLarge { limit: self.max });
             }
@@ -362,7 +363,7 @@ impl Pieces {
             End::Broken => return Err(BodyError::Broken("an earlier piece failed".into())),
             End::Done => return Ok(None),
         }
-        match next(&mut self.stream, self.idle).await {
+        match self.idle.next(&mut self.stream).await {
             None => {
                 self.end = End::Stalled;
                 Err(BodyError::Stalled)
@@ -379,7 +380,7 @@ impl Pieces {
                 self.read = self.read.saturating_add(piece.len());
                 if self.read > self.max {
                     self.end = End::Over;
-                    read_past(&mut self.stream, self.read, self.max, self.idle).await;
+                    read_past(&mut self.stream, self.read, self.max, &mut self.idle).await;
                     return Err(BodyError::TooLarge { limit: self.max });
                 }
                 Ok(Some(piece))
@@ -393,38 +394,63 @@ impl Pieces {
     }
 }
 
-/// The stream's next item, or `None` when `idle` passed first. The timer is made only when the
-/// stream has nothing yet: a piece that has arrived is taken without one, since making it reads
-/// the clock and the runtime's handle, which a body sent a byte at a time would pay per byte
+/// How long a body's reader waits for its next piece ([`Pieces::idle`], [`crate::Upload::idle`]),
+/// with one timer for the whole body, made the first time a read waits. A read that waits after it
+/// notes when it is due and leaves the timer where it is; only a timer that goes off before the
+/// read it serves is due is moved to that time. So a piece that has arrived is taken without
+/// touching the timer, and a read that waits reads the clock once and allocates nothing
 /// (measured, callgrind, #1030).
-/// A plain function returning the future, not an `async fn`, so it inlines into the read that
-/// awaits it rather than adding a state machine for each piece (measured, callgrind, #1030).
-#[inline]
-pub(crate) fn next(
-    stream: &mut BodyDataStream,
-    idle: Option<Duration>,
-) -> impl Future<Output = Option<Option<Result<Bytes, axum::Error>>>> + '_ {
-    // Boxed when made, so a read that finds its piece waiting carries a pointer, not a timer.
-    let mut timer: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
-    std::future::poll_fn(move |cx| {
-        if let Poll::Ready(item) = stream.poll_next_unpin(cx) {
-            return Poll::Ready(Some(item));
-        }
-        let Some(idle) = idle else { return Poll::Pending };
-        match timer.get_or_insert_with(|| Box::pin(tokio::time::sleep(idle))).as_mut().poll(cx) {
-            Poll::Ready(()) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
-        }
-    })
+pub(crate) struct Idle {
+    time: Option<Duration>,
+    timer: Option<Pin<Box<Sleep>>>,
+    /// When the read that waits now gives up: its wait began at `due - time`.
+    due: tokio::time::Instant,
+}
+
+impl Idle {
+    pub(crate) fn new(time: Option<Duration>) -> Self {
+        Idle { time, timer: None, due: tokio::time::Instant::now() }
+    }
+
+    /// The stream's next item, or `None` when the idle time passed first.
+    #[inline]
+    pub(crate) fn next<'a>(
+        &'a mut self,
+        stream: &'a mut BodyDataStream,
+    ) -> impl Future<Output = Option<Option<Result<Bytes, axum::Error>>>> + 'a {
+        let mut began = false;
+        std::future::poll_fn(move |cx| {
+            if let Poll::Ready(item) = stream.poll_next_unpin(cx) {
+                return Poll::Ready(Some(item));
+            }
+            let Some(time) = self.time else { return Poll::Pending };
+            if !began {
+                began = true;
+                self.due = tokio::time::Instant::now() + time;
+            }
+            let due = self.due;
+            let timer = self.timer.get_or_insert_with(|| Box::pin(tokio::time::sleep_until(due)));
+            loop {
+                if timer.as_mut().poll(cx).is_pending() {
+                    return Poll::Pending;
+                }
+                if timer.deadline() >= due {
+                    return Poll::Ready(None);
+                }
+                // Set for an earlier read: moved to this one's time, and polled there.
+                timer.as_mut().reset(due);
+            }
+        })
+    }
 }
 
 /// Reads the rest of a body over `max`, keeping nothing, until it ends, breaks, `read` (what
 /// arrived of it before) is 64 MiB past `max`, or no piece comes for `idle`, so a client still
 /// sending reads the answer.
-async fn read_past(stream: &mut BodyDataStream, mut read: usize, max: usize, idle: Option<Duration>) {
+async fn read_past(stream: &mut BodyDataStream, mut read: usize, max: usize, idle: &mut Idle) {
     let past = max.saturating_add(READ_PAST);
     while read <= past {
-        match next(stream, idle).await {
+        match idle.next(stream).await {
             Some(Some(Ok(piece))) => read = read.saturating_add(piece.len()),
             _ => break,
         }
@@ -549,8 +575,10 @@ mod tests {
     fn what_reading_a_body_costs() {
         let reads: usize = std::env::var("BODY_READS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
         let ours = std::env::var("READER").map_or(true, |r| r != "axum");
+        // `READER=pieces`: `Pieces` read a byte at a time, each byte waited for (#1030).
+        let raw = std::env::var("READER").is_ok_and(|r| r == "pieces");
         let whole = Bytes::from(vec![b'x'; 8 * 1024]);
-        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
         runtime.block_on(async {
             for _ in 0..reads {
                 for body in [Body::from(whole.clone()), {
@@ -558,6 +586,28 @@ mod tests {
                         (0..8).map(|n| Ok(whole.slice(n * 1024..(n + 1) * 1024))).collect();
                     Body::from_stream(stream::iter(pieces))
                 }] {
+                    if raw {
+                        // `Pieces` (`pieces_up_to`), 8 KiB a byte at a time, each byte waited for.
+                        let mut bytes = whole.iter().map(|b| Bytes::copy_from_slice(&[*b])).collect::<Vec<_>>().into_iter();
+                        let mut wait = true;
+                        let waits = stream::poll_fn(move |cx| {
+                            if wait {
+                                wait = false;
+                                cx.waker().wake_by_ref();
+                                return std::task::Poll::Pending;
+                            }
+                            wait = true;
+                            std::task::Poll::Ready(bytes.next().map(Ok::<_, std::io::Error>))
+                        });
+                        let mut pieces = super::pieces_up_to(Body::from_stream(waits), 1 << 20);
+                        let mut got = 0;
+                        while let Some(piece) = pieces.chunk().await.unwrap() {
+                            got += std::hint::black_box(piece).len();
+                        }
+                        assert_eq!(got, 8 * 1024);
+                        drop(body);
+                        continue;
+                    }
                     let read = if ours {
                         bytes_up_to(body, 1 << 20).await.unwrap().unwrap()
                     } else {
