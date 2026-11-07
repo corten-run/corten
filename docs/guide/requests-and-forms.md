@@ -1184,6 +1184,13 @@ that the connection is closed. The limit for one file, the types a field accepts
 it takes are the handler's rules, so it checks them and adds a message to `Errors`. The form
 is then drawn again with its other fields kept and the message next to the input.
 
+A client that sends nothing for a minute while the handler reads a file, passes one over or reads
+the fields is `UploadError::Stalled`, a 408, as for [`pieces_up_to`](#http-types) (nginx's
+`client_body_timeout`). The minute holds for each piece, so a large upload sent steadily is never
+cut off, and the route's deadline ([app guide](app.md)) is what bounds it in all; one that stops
+while a body over the limit is read past is still the 413. `upload.idle(d)` changes the minute, and
+`upload.idle(None)` leaves only the route's deadline.
+
 A JSON route takes an upload the same way. One with no text fields still names its file input
 with a `Files` field and takes the file by that name (`file.is(..)`); the struct is not dead code,
 since `#[derive(Fields)]` marks a `Files` field read. In an [API](app.md#json-only-routes) its

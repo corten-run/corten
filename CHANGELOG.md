@@ -2387,6 +2387,24 @@ Corten is pre-1.0, so any minor version may change the API.
     own analysis and a Docker build with BuildKit's cache warm are left to
     [#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)
     ([#774 bench/fullstack measures no editor, test-build, save-to-reload, disk or core-scaling cost, so where a Corten app is slow to work on is still partly unmeasured](https://github.com/corten-run/corten/issues/774)).
+264. `Upload::idle(impl Into<Option<Duration>>)`: a client that sends nothing of a form upload for
+    a minute, while the handler reads a file, passes one over or reads the fields, is
+    `UploadError::Stalled`, a 408, as `Pieces` already was (nginx's `client_body_timeout`), so a
+    stalled client no longer holds its connection, handler and a shutdown drain until the route's
+    deadline. The minute holds for each piece, so an upload sent steadily is never cut off; one
+    that stops while a body over the limit is read past is still the 413; `None` leaves only the
+    route's deadline. Breaking: `UploadError` has a new variant, so a `match` without a wildcard
+    arm needs one for `Stalled`. `Upload` and `Pieces` share one read and one timer for the whole body,
+    made the first time a read waits and moved only when it goes off before the read it serves
+    is due. Measured with the new `what_reading_an_upload_costs` and `what_reading_a_body_costs`
+    (`READER=pieces`) under callgrind, release, instructions per read as the difference of 20 and
+    120 reads, median of three runs (each within 0.1%), on main `cdbe4392` (the upload path is
+    the same at `f3291094`) and with the idle time, for a 2,259-byte form sent a byte at a time (the worst case: a browser's pieces are KiB): every
+    piece already there 1,942,244 to 2,027,835 (+38 a piece, +4.4%); every piece waited for
+    4,150,032 to 5,341,425 (+527 a waited piece: a clock read and the timer's poll; `idle(None)`
+    4,292,483); and `Pieces` reading 8 KiB a byte at a time, each byte waited for, 41,659,778 to
+    33,331,597 (20% less, since it no longer makes a timer for each piece)
+    ([#1030 Upload's files have no idle time, so a client that stops sending a form upload holds its request until the route's deadline](https://github.com/corten-run/corten/issues/1030)).
 265. `bench/fullstack` says what each of Corten's production defaults costs a request: card-market
     is built as it is and with one default removed by each patch in `ablate/` (security headers
     and CSP, host and same-origin checks, deadline and panic catch, compression, `ETag`,

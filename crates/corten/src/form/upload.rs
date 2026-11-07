@@ -1,7 +1,7 @@
 //! Reading a form posted as `multipart/form-data`: its files one at a time as they arrive, and
 //! its text fields by [`Form`](super::Form)'s rules. See [`Upload`].
 
-use std::{borrow::Cow, marker::PhantomData};
+use std::{borrow::Cow, marker::PhantomData, time::Duration};
 
 use axum::{
     body::{BodyDataStream, Bytes},
@@ -10,11 +10,13 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::BytesMut;
-use futures_util::StreamExt;
 use serde::de::DeserializeOwned;
 
 use super::FieldName;
-use crate::Error;
+use crate::{
+    extract::{Idle, IDLE},
+    Error,
+};
 
 /// What a request keeps of the body unless the handler sets another ([`Upload::limit`]): axum's
 /// default for a body.
@@ -82,6 +84,9 @@ pub enum UploadError {
     Malformed(String),
     /// The text fields do not fit the form struct (422).
     Fields(String),
+    /// The client sent nothing for [`Upload::idle`] (408), while the request read a file, its
+    /// fields or what it passes over. The connection is closed after the answer.
+    Stalled,
 }
 
 impl std::fmt::Display for UploadError {
@@ -90,6 +95,7 @@ impl std::fmt::Display for UploadError {
             UploadError::TooLarge { limit } => write!(f, "the upload is larger than its limit of {limit} bytes"),
             UploadError::Malformed(what) => write!(f, "the multipart body is malformed: {what}"),
             UploadError::Fields(what) => write!(f, "Failed to deserialize form body: {what}"),
+            UploadError::Stalled => f.write_str("the client stopped sending the upload"),
         }
     }
 }
@@ -100,6 +106,7 @@ impl From<UploadError> for Error {
             UploadError::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
             UploadError::Malformed(_) => StatusCode::BAD_REQUEST,
             UploadError::Fields(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            UploadError::Stalled => StatusCode::REQUEST_TIMEOUT,
         };
         Error::new(error.to_string()).with_status(status)
     }
@@ -150,7 +157,8 @@ const HEAD_LIMIT: usize = 8 * 1024;
 /// none. The request may take 2 MiB of the body (fields, and files it reads or passes on) unless the
 /// handler sets [`Upload::limit`] before reading; past it the request is a 413. A file it passes
 /// over does not count, and one over its [`File::bytes_up_to`] needs room for that `max` as it
-/// goes over, then counts nothing (the rest is read past). A body that is
+/// goes over, then counts nothing (the rest is read past). A client that sends nothing for a
+/// minute ([`Upload::idle`]) is a 408. A body that is
 /// not multipart is a 415, one that breaks the format a 400, and fields that do not fit `T` a 422. Under an [`Api`](crate::Api) each is the API's
 /// failure, in its JSON shape.
 ///
@@ -217,6 +225,18 @@ impl<T> Upload<T> {
         self
     }
 
+    /// How long the client may go without sending a piece of the body, while the request reads a
+    /// file, its fields or what it passes over: a minute unless set (nginx's
+    /// `client_body_timeout`, as [`Pieces::idle`](crate::extract::Pieces::idle)), and past it a
+    /// read is [`UploadError::Stalled`]. A client still sending is never cut off for taking long
+    /// in all, so a large upload's route needs only a deadline that leaves time for it. While a
+    /// body over its limit is read past, a client that stops for the idle time ends that read, and
+    /// the answer is still the 413. `None` leaves only the route's deadline.
+    pub fn idle(&mut self, idle: impl Into<Option<Duration>>) -> &mut Self {
+        self.parts.idle = Idle::new(idle.into());
+        self
+    }
+
     /// The next file, reading the text fields before it (kept for [`Upload::fields`]); `None`
     /// once the body has no more. What is left of the file before is read past.
     pub async fn next_file(&mut self) -> Result<Option<File<'_>>> {
@@ -277,7 +297,9 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
             read: 0,
             limit: DEFAULT_LIMIT,
             past: 0,
+            idle: Idle::new(Some(IDLE)),
             refused: false,
+            stalled: false,
             ended: false,
             state: State::Body,
         };
@@ -412,8 +434,12 @@ struct Parts {
     /// ([`File::bytes_up_to`]) or one the handler passed over, which does not count toward
     /// `limit`. Each byte is counted once, as it leaves `buf` or as `bytes_up_to` gives it up.
     past: usize,
+    /// How long a read waits for the next piece: [`Upload::idle`].
+    idle: Idle,
     /// Found over the limit: every read after is `TooLarge`.
     refused: bool,
+    /// The client stopped sending: every read after is `Stalled`.
+    stalled: bool,
     ended: bool,
     state: State,
 }
@@ -442,6 +468,9 @@ fn malformed(what: &str) -> UploadError {
 impl Parts {
     /// Reads one more piece of the body onto `buf`; false at its end.
     async fn more(&mut self) -> Result<bool> {
+        if self.stalled {
+            return Err(UploadError::Stalled);
+        }
         if self.read > self.limit.saturating_add(READ_PAST) {
             return Err(UploadError::TooLarge { limit: self.limit });
         }
@@ -451,13 +480,19 @@ impl Parts {
         if self.ended {
             return Ok(false);
         }
-        match self.body.next().await {
+        match self.idle.next(&mut self.body).await {
             None => {
+                self.stalled = true;
+                self.ended = true;
+                self.buf = Bytes::new();
+                Err(UploadError::Stalled)
+            }
+            Some(None) => {
                 self.ended = true;
                 Ok(false)
             }
-            Some(Err(error)) => Err(UploadError::Malformed(format!("it could not be read: {error}"))),
-            Some(Ok(piece)) => {
+            Some(Some(Err(error))) => Err(UploadError::Malformed(format!("it could not be read: {error}"))),
+            Some(Some(Ok(piece))) => {
                 self.read += piece.len();
                 // However much of it is read past, a body is read no further than 64 MiB past its
                 // limit: the connection is closed there.
@@ -510,9 +545,10 @@ impl Parts {
         self.refused = true;
         self.buf = Bytes::new();
         let mut past = self.read.saturating_sub(self.limit);
+        // A client that stops sending here ends the read past; the answer is still the 413.
         while past <= READ_PAST && !self.ended {
-            match self.body.next().await {
-                Some(Ok(piece)) => past += piece.len(),
+            match self.idle.next(&mut self.body).await {
+                Some(Some(Ok(piece))) => past += piece.len(),
                 _ => break,
             }
         }
