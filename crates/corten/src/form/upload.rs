@@ -159,7 +159,8 @@ const HEAD_LIMIT: usize = 8 * 1024;
 /// handler sets [`Upload::limit`] before reading; past it the request is a 413. A file it passes
 /// over does not count, and one over its [`File::bytes_up_to`] needs room for that `max` as it
 /// goes over, then counts nothing (the rest is read past). A client that sends nothing for a
-/// minute ([`Upload::idle`]) is a 408. A body that is
+/// minute ([`Upload::idle`]), or trickles the body in until it is that minute behind 240 bytes a
+/// second, is a 408. A body that is
 /// not multipart is a 415, one that breaks the format a 400, and fields that do not fit `T` a 422. Under an [`Api`](crate::Api) each is the API's
 /// failure, in its JSON shape.
 ///
@@ -238,7 +239,7 @@ impl<T> Upload<T> {
     /// client that stops for the idle time ends that read, and the answer is still the 413.
     /// `None` leaves only the route's deadline, for the idle time and the rate both.
     pub fn idle(&mut self, idle: impl Into<Option<Duration>>) -> &mut Self {
-        self.parts.idle = Idle::new(idle.into());
+        self.parts.idle.set(idle.into());
         self
     }
 

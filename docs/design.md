@@ -1215,15 +1215,19 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `App::max_request_head` (32 KiB, [Choice 19](#choice-head-size)) with at most 100 headers; an answer must make
     progress, a write that finds the send buffer full waiting at most `App::send_timeout` (60
     seconds, nginx's `send_timeout` and its meaning, rather than Kestrel's minimum rate of 240
-    bytes a second, which needs a count of bytes and a window per connection); a request body read
-    as it arrives (`pieces_up_to`, `Upload`) gives up on a client that sends nothing for its idle
-    time (a minute, nginx's `client_body_timeout`) or falls that idle time behind 240 bytes a
-    second in all, counting only the time spent waiting for the client (Kestrel's minimum body
-    rate, with the idle time as its grace), since one byte resets an idle time alone and a long
-    upload's route has a long deadline or none. That reader already notes when a wait begins,
-    so the rate costs it two counts and a clock read per piece it waited for, nothing per
-    connection; a body read whole (`bytes_up_to`, `Form`, `Json`) is bounded by the route's
-    deadline alone, which a route that removes it keeps for those; how many may be open
+    bytes a second, which would need a count of bytes and a window in the connection's writer, for
+    every connection); a request body read as it arrives (`pieces_up_to`, `Upload`) gives up on a
+    client that sends nothing for its idle time (a minute, nginx's `client_body_timeout`) or whose
+    waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
+    minimum body rate, the idle time being how far behind it a client may fall), counting only the
+    time spent waiting for the client, since one byte resets an idle time alone and a long upload's
+    route has a long deadline or none. That reader is Corten's own and already notes when a wait
+    begins, so the rate costs it two counts and a clock read per piece it waited for, and nothing on
+    a request that reads no body (MEASURED); it assumes the handler asks for the next piece
+    promptly, as a handler that spends a fixed time on each piece lets a client that sends one in
+    that time go on unbounded, as Kestrel's does. A body read whole (`bytes_up_to`, `Form`,
+    `Json`) is bounded by the route's deadline alone, which a route that removes it keeps for those;
+    how many may be open
     is `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from a proxy
     or CDN in front of `corten::serve`. An app with live streams needs one: over HTTP/1.1 a
     browser opens about six connections to a host, each open stream holds one, and requests queue
@@ -1323,8 +1327,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     1 MiB of `\r` sent a byte at a time takes 846.6M instructions and 250 heads of 8,000 bytes
     1,972.7M, where the reader this one replaced took 1,221.6M and 42,531M (callgrind, release, the
     counts taking in the benchmark's making of each body). So a request that keeps sending is
-    bounded by its size (its limit plus 64 MiB), not by a time; one that stops for `Upload::idle`
-    (a minute unless set) is let go, and `App::max_connections`, when set, bounds how many are read
+    bounded by its size (its limit plus 64 MiB), not by a time, unless it falls its idle time behind
+    240 bytes a second ([Limit 14](#limit-http1)); one that stops for `Upload::idle` (a minute
+    unless set) is let go, and `App::max_connections`, when set, bounds how many are read
     at once. A file read with `bytes_up_to` keeps its pieces of 1 KiB or more as they came (slices
     of buffers already held) and copies runs of smaller ones into one buffer, so a file sent a few
     bytes at a time holds about its size: 8 MiB kept in 1-byte pieces peaked at 21.7 MiB,

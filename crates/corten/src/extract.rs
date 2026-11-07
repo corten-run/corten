@@ -430,7 +430,7 @@ impl Pieces {
     /// all (time the handler spends between reads is not counted), so a byte now and then does
     /// not hold the request. `None` leaves only the route's deadline, for both.
     pub fn idle(mut self, idle: impl Into<Option<Duration>>) -> Self {
-        self.idle = Idle::new(idle.into());
+        self.idle.set(idle.into());
         self
     }
 
@@ -500,6 +500,10 @@ pub(crate) struct Idle {
     /// When the read that waits now gives up; `None` when none has waited yet, or the idle time is
     /// too long to add to the clock (`Duration::MAX`), which never gives up.
     due: Option<tokio::time::Instant>,
+    /// When the wait for the next piece began; `None` when no read waits for one. Kept here, not
+    /// in the read, so a read dropped while it waits (inside a `timeout` or a `select!`) does not
+    /// start the wait again.
+    waiting: Option<tokio::time::Instant>,
     /// Nanoseconds the reads have waited for the client in all.
     waited: u64,
     /// Nanoseconds of waiting the pieces that came have earned: [`WAIT_PER_BYTE`] each byte.
@@ -515,7 +519,14 @@ const WAIT_PER_BYTE: u64 = 1_000_000_000 / MIN_BODY_RATE;
 
 impl Idle {
     pub(crate) const fn new(time: Option<Duration>) -> Self {
-        Idle { time, timer: None, due: None, waited: 0, earned: 0 }
+        Idle { time, timer: None, due: None, waiting: None, waited: 0, earned: 0 }
+    }
+
+    /// Sets the idle time, keeping what the body has waited and earned so far.
+    pub(crate) fn set(&mut self, time: Option<Duration>) {
+        self.time = time;
+        self.waiting = None;
+        self.due = None;
     }
 
     /// The stream's next item, or `None` when the idle time passed first.
@@ -524,11 +535,9 @@ impl Idle {
         &'a mut self,
         stream: &'a mut BodyDataStream,
     ) -> impl Future<Output = Option<Option<Result<Bytes, axum::Error>>>> + 'a {
-        // When this read began to wait; `None` while it has not, or with no idle time.
-        let mut began = None;
         std::future::poll_fn(move |cx| {
             if let Poll::Ready(item) = stream.poll_next_unpin(cx) {
-                if let Some(at) = began {
+                if let Some(at) = self.waiting.take() {
                     let waited = tokio::time::Instant::now().saturating_duration_since(at);
                     self.waited = self.waited.saturating_add(u64::try_from(waited.as_nanos()).unwrap_or(u64::MAX));
                 }
@@ -538,9 +547,9 @@ impl Idle {
                 return Poll::Ready(Some(item));
             }
             let Some(time) = self.time else { return Poll::Pending };
-            if began.is_none() {
+            if self.waiting.is_none() {
                 let now = tokio::time::Instant::now();
-                began = Some(now);
+                self.waiting = Some(now);
                 // The idle time, less what the body has waited past what its bytes earned.
                 let behind = Duration::from_nanos(self.waited.saturating_sub(self.earned));
                 self.due = now.checked_add(time.saturating_sub(behind));
@@ -947,6 +956,41 @@ mod tests {
         assert!(matches!(read_all(&mut steady).await, (864_000, None)));
         let mut far_apart = pieces_up_to(sent_every(60, 16 << 10, std::time::Duration::from_secs(59)), usize::MAX);
         assert!(matches!(read_all(&mut far_apart).await, (983_040, None)));
+    }
+
+    /// Bytes that came without a wait earn allowance too: 64 KiB sent at once, then two pauses of
+    /// 50 seconds before the last pieces, is read whole (a client that paused after a fast start).
+    #[tokio::test(start_paused = true)]
+    async fn bytes_that_came_without_a_wait_earn_allowance() {
+        let at_once = stream::iter([Ok::<_, std::io::Error>(Bytes::from(vec![b'x'; 64 << 10]))]);
+        let paused = stream::iter(0..2).then(|_| async {
+            tokio::time::sleep(std::time::Duration::from_secs(50)).await;
+            Ok::<_, std::io::Error>(Bytes::from_static(b"x"))
+        });
+        let body = Body::from_stream(at_once.chain(paused));
+        let mut pieces = pieces_up_to(body, usize::MAX);
+        assert!(matches!(read_all(&mut pieces).await, (65_538, None)));
+    }
+
+    /// A read dropped while it waits (a handler that reads inside a `timeout` and does something
+    /// else between) does not start the wait again: a byte-a-second trickle read that way is still
+    /// a 408 at 60.25 s.
+    #[tokio::test(start_paused = true)]
+    async fn a_read_dropped_while_it_waits_does_not_start_the_wait_again() {
+        let started = tokio::time::Instant::now();
+        let mut pieces = pieces_up_to(sent_every(10_000, 1, std::time::Duration::from_secs(1)), usize::MAX);
+        let mut read = 0;
+        let failed = loop {
+            match tokio::time::timeout(std::time::Duration::from_millis(900), pieces.chunk()).await {
+                Err(_) => continue,
+                Ok(Ok(Some(piece))) => read += piece.len(),
+                Ok(Ok(None)) => break None,
+                Ok(Err(error)) => break Some(error),
+            }
+        };
+        assert!(matches!(failed, Some(BodyError::Stalled)), "{failed:?} after {read} bytes");
+        let took = started.elapsed().as_millis();
+        assert!((60_249..=60_251).contains(&took), "{took} ms");
     }
 
     /// Time the handler spends between reads (passing each piece on to a slow store) is not the

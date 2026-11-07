@@ -98,9 +98,9 @@ error page). To answer it in the form, put the reads in one `async` block return
 statuses or check `Content-Length` by hand. A client that stops sending for a minute, or trickles
 the body in until it is a minute behind 240 bytes a second, is `UploadError::Stalled` (408);
 `upload.idle(d)` changes the minute, `upload.idle(None)` leaves only the route's deadline (never
-on a route with no deadline). A deadline that passes while the handler waits for the body (a page's 30 s
-comes before the minute) is a 408 as well, so no idle time needs setting under the deadline;
-never wrap the reads in a `tokio::time::timeout` of the handler's own.
+on a route with no deadline). A deadline that passes while the handler waits for the body (a
+page's 30 s comes before the minute) is a 408 as well, so no idle time needs setting under the
+deadline; never wrap the reads in a `tokio::time::timeout` of the handler's own.
 
 Types, counts and per-file sizes are the handler's checks, reported with `errors.add(f.photos, ..)`
 so the form is drawn again with the message beside the input.
