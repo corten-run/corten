@@ -1051,7 +1051,10 @@ rules something out.
     today), or Corten serves HTTP/2, where a body's reads would need the same mark and a test
     that a stalled stream is the 408 while the connection's other streams go on.
 
-32. <a id="choice-favicon-path"></a>**`/favicon.ico` is the static directory's icon itself, the
+    Last checked: 2026-11-07, the count on `e4d8281c` (`5dba8477` with this change), and the
+    socket tests at the default deadline.
+
+31. <a id="choice-favicon-path"></a>**`/favicon.ico` is the static directory's icon itself, the
     SVG when there is no `.ico`, not a redirect to its versioned URL.** Browsers ask for the
     path on their own for a document that names no icon, and so do feed readers and crawlers, so
     with no answer of Corten's each such request was the app's 404 page, its layout reads
@@ -1070,16 +1073,15 @@ rules something out.
     Stands on: reasoned (one request instead of two, and a client reads an icon by the type it
     is sent with, which the file's own name gives; a request for another URL meets one more
     exact route, which a router that matches by a tree of path segments finds no slower);
-    value (good defaults, easy overrides: the icon the template ships answers the browser's own
-    request, and a route of the app's still takes it). No measurement: no other URL's answer
-    changes.
+    value (the icon the template ships answers the browser's own request, and a route of the
+    app's still takes it, Values 7).
 
     Revisit when: a client that matters shows no icon for an SVG sent at `/favicon.ico` but
     would after a redirect, or an app needs more than one icon at the path (per area or per
     host).
 
-    Last checked: 2026-11-07, the count on `e4d8281c` (`5dba8477` with this change), and the
-    socket tests at the default deadline.
+    Last checked: 2026-11-07, the three cases on `ba625dee`, by the crate's tests and
+    card-market's smoke.
 
 ## Rules
 
