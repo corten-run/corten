@@ -441,8 +441,10 @@ impl Failure {
     }
 
     /// What went wrong, for the developer: set under `corten dev`, and logged instead in
-    /// production. A debug build's error about the app's own code (a component the page draws that
-    /// the app does not serve) keeps it outside `corten dev` too, so an app's router test names it.
+    /// production. A debug build's error about the app's own code that the page's answer raises (a
+    /// component the page draws that the app does not serve, a `Refresh` header, a write
+    /// redirected outside `form-action`) keeps it outside `corten dev` too, so an app's router
+    /// test names it; when the error page fails as well, its plain text keeps it.
     pub fn detail(&self) -> Option<&str> {
         match self {
             Failure::Rejected { detail, .. }
@@ -497,6 +499,17 @@ impl std::fmt::Display for Unserved {
 }
 
 impl std::error::Error for Unserved {}
+
+/// A debug build's error about the app's own code (`message` without the `corten: ` it is printed
+/// with): kept on the error page's [`Failure::detail`] outside `corten dev`, and printed to stderr
+/// there, since a router test has no logger.
+#[cold]
+pub(crate) fn unserved(dev: bool, message: String) -> Error {
+    if !dev {
+        eprintln!("corten: {message}");
+    }
+    Error::new(Unserved(message))
+}
 
 /// Marks a debug build's failed answer whose message describes the app's code, not the request, so
 /// the error page's [`Failure`] keeps it outside `corten dev` (where every other detail is only
@@ -650,6 +663,9 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
     let status = failure.status();
     let waits = failure.request_at_fault();
     let mut parts = asked.parts();
+    // In a debug build, what the failure says is kept for the plain text below: an unlisted
+    // component in the layout fails the page and its error page alike.
+    let detail = if cfg!(debug_assertions) { failure.detail().map(str::to_owned) } else { None };
     // Started before the page is called, so they run beside its own reads.
     if let Some(here) = parts.extensions.get::<crate::layout::StartHere>().cloned() {
         here.at_error_page(&mut parts, waits);
@@ -661,7 +677,10 @@ pub(crate) async fn error_page(shared: &Shared, asked: Asked, failure: Failure) 
         // The error page itself failed (in a debug build, a component the app does not list):
         // plain text, so a broken error page cannot fail again.
         tracing::error!(status = res.status().as_u16(), "corten: the error page failed");
-        res = (status, "The page could not be shown.").into_response();
+        res = match detail {
+            Some(detail) => (status, format!("The page could not be shown.\n\n{detail}")).into_response(),
+            None => (status, "The page could not be shown.").into_response(),
+        };
     }
     // Search engines skip it, whatever the layout says: the offline page is a 200.
     res.headers_mut().insert(HeaderName::from_static("x-robots-tag"), HeaderValue::from_static("noindex"));
@@ -1606,10 +1625,7 @@ impl Req {
     /// has no logger, so it goes to stderr as well.
     #[cold]
     fn unserved(&self, message: String) -> Error {
-        if !self.shared.dev {
-            eprintln!("corten: {message}");
-        }
-        Error::new(Unserved(message))
+        unserved(self.shared.dev, message)
     }
 
     /// In a debug build: the page's places for layout values are each a read the app starts, in
@@ -2364,12 +2380,13 @@ impl Req {
 /// A page with a `Refresh` header: browsers keep a full load's after the runtime navigates
 /// away, then load that URL again (Chromium, Firefox, WebKit). [`ReadAgain`] is the way.
 #[cfg(debug_assertions)]
-fn refresh_header_is_an_error(res: Response) -> Response {
+fn refresh_header_is_an_error(res: Response, dev: bool) -> Response {
     if !(res.headers().contains_key(SHELL_HEADER) && res.headers().contains_key("refresh")) {
         return res;
     }
-    Error::new(
-        "corten: this page sends a Refresh header, which the browser keeps after the runtime navigates away and then loads this URL again: put <ReadAgain after={..} /> in the page's head tags instead",
+    unserved(
+        dev,
+        "this page sends a Refresh header, which the browser keeps after the runtime navigates away and then loads this URL again: put <ReadAgain after={..} /> in the page's head tags instead".to_owned(),
     )
     .into_response()
 }
@@ -2379,7 +2396,7 @@ fn refresh_header_is_an_error(res: Response) -> Response {
 /// every test passes. A debug build answers it as an error that says so; a release build sends
 /// it as it is.
 #[cfg(debug_assertions)]
-fn redirect_outside_form_action(res: Response, check: Option<&crate::security::FormCheck>) -> Response {
+fn redirect_outside_form_action(res: Response, check: Option<&crate::security::FormCheck>, dev: bool) -> Response {
     let Some(check) = check else { return res };
     // A relayed answer is passed on as it came, under the policy it came with.
     if res.extensions().get::<crate::answer::Relayed>().is_some() {
@@ -2394,7 +2411,7 @@ fn redirect_outside_form_action(res: Response, check: Option<&crate::security::F
     // What the handler set besides the redirect (a session cookie, which the browser keeps even
     // when it stops the redirect) goes out with the error page.
     let (parts, _) = res.into_parts();
-    let mut error = Error::new(message).into_response();
+    let mut error = unserved(dev, message).into_response();
     let own: Vec<HeaderName> = error.headers().keys().cloned().collect();
     for (name, value) in &parts.headers {
         if name != header::LOCATION && name != LOCATION_HEADER && !own.contains(name) {
@@ -2427,7 +2444,7 @@ fn outside_form_action(check: &crate::security::FormCheck, to: &HeaderValue) -> 
         ""
     };
     Some(format!(
-        "corten: this write redirects to {origin}, which the form's page does not allow in its CSP's form-action, {stops} with only a console error: allow it with Policy::form_action(\"{origin}\") (Sources::form_action for an area), or redirect to a page of the app{own}"
+        "this write redirects to {origin}, which the form's page does not allow in its CSP's form-action, {stops} with only a console error: allow it with Policy::form_action(\"{origin}\") (Sources::form_action for an area), or redirect to a page of the app{own}"
     ))
 }
 
@@ -2542,9 +2559,9 @@ async fn page_or_error<S: crate::app::Steps>(
     let check = req.extensions_mut().remove::<crate::security::FormCheck>();
     let res = run(req, next, deadline, signal).await;
     #[cfg(debug_assertions)]
-    let res = refresh_header_is_an_error(res);
+    let res = refresh_header_is_an_error(res, shared.dev);
     #[cfg(debug_assertions)]
-    let mut res = redirect_outside_form_action(res, check.as_ref());
+    let mut res = redirect_outside_form_action(res, check.as_ref(), shared.dev);
     #[cfg(not(debug_assertions))]
     let mut res = res;
     let status = res.status();
@@ -2563,9 +2580,12 @@ async fn page_or_error<S: crate::app::Steps>(
         let Some(message) = sign_in_loops(asked.path(), &to) else {
             #[cfg(debug_assertions)]
             if let Some(message) = check.as_ref().and_then(|check| outside_form_action(check, &to)) {
-                tracing::error!("{message}");
+                // About the app's code, as `unserved`'s are: the detail stays outside dev too.
+                tracing::error!("corten: {message}");
+                if !shared.dev {
+                    eprintln!("corten: {message}");
+                }
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
-                let failure = if shared.dev { failure } else { failure.without_detail() };
                 return carried(kept, error_page(shared, asked, failure).await);
             }
             return carried(kept, redirect(mode, to));

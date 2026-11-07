@@ -5224,8 +5224,13 @@ Corten is pre-1.0, so any minor version may change the API.
     the error page outside `corten dev`, as every failure's is, so an app's own router test,
     which runs without `CORTEN_DEV`, saw the generic error page; the message went only to
     stderr, easy to miss in a long log. It is now the error page's `Failure::detail` in every
-    debug build, which the template's error page shows. A release build never raises these, and
-    a handler's own error still keeps its message off the page outside `corten dev` (tested)
+    debug build, which the template's error page shows, and so are the `Refresh` header check
+    and a write redirected outside `form-action` (which printed nothing outside dev). When the
+    error page fails too (the same unlisted component in its layout), its plain text keeps the
+    message. A release build never raises these, and a handler's own error, a panic and an
+    extractor's rejection still keep their messages off the page outside `corten dev` (tested).
+    The layout-read checks are not covered yet
+    ([#1035 A debug build's layout-read errors (later::<X>() on an answer that is not a page, a gives(..) the page does not give) answer a bare 500 that names nothing outside corten dev](https://github.com/corten-run/corten/issues/1035))
     ([#1029 A debug build's served-component check answers an app's own router test with a bare 500: the message that names the component goes only to tracing](https://github.com/corten-run/corten/issues/1029)).
 
 ### Documentation
