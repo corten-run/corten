@@ -34,10 +34,14 @@ test("repeats are paired by number, not by where they are in the file", () => {
   // A repeat with no as-is run is an error, not dropped.
   const extra = [tsv, "no-x\tpage\tidentity\t3\t300\t1000", "no-x\tpage\tidentity\t3\t1300\t91000"].join("\n");
   assert.throws(() => costs(extra), /repeat 3 has no as-is run/);
+  // Nor is an as-is repeat the build without the default lacks (a run that stopped partway).
+  const partial = [tsv, "as-is\tpage\tidentity\t3\t300\t1000", "as-is\tpage\tidentity\t3\t1300\t101000"].join("\n");
+  assert.throws(() => costs(partial), /no-x\tpage\tidentity: no run of repeat 3, which as-is has/);
 });
 
 test("a build with one run of a pair, three runs, or no build as it is, is an error", () => {
   assert.throws(() => perRequest([tsv, "as-is\tpage\tidentity\t1\t2300\t201000"].join("\n")), /more than two runs/);
   assert.throws(() => perRequest(tsv.split("\n").slice(0, 2).join("\n")), /one run, not two/);
+  assert.throws(() => perRequest([tsv, "as-is\tpage\tidentity\t1\t300\t1200"].join("\n")), /two runs of 300 requests/);
   assert.throws(() => costs(tsv.split("\n").filter((l) => !l.startsWith("as-is")).join("\n")), /no as-is build/);
 });

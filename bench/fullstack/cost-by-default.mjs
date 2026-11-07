@@ -20,6 +20,7 @@ export function perRequest(tsv) {
   for (const row of rows) {
     const key = [row[col.variant], row[col.target], row[col.encoding], row[col.repeat]].join("\t");
     const sizes = runs.get(key) ?? new Map();
+    if (sizes.has(Number(row[col.requests]))) throw new Error(`${key}: two runs of ${row[col.requests]} requests`);
     sizes.set(Number(row[col.requests]), Number(row[col.instructions]));
     runs.set(key, sizes);
   }
@@ -45,6 +46,9 @@ export function costs(tsv) {
     const [variant, target, encoding] = group.split("\t");
     const base = per.get(["as-is", target, encoding].join("\t"));
     if (!base) throw new Error(`no as-is build for ${target} ${encoding}`);
+    // The same repeats on both sides: a run that stopped partway leaves one with more.
+    const missing = [...base.keys()].filter((repeat) => !values.has(repeat));
+    if (missing.length) throw new Error(`${group}: no run of repeat ${missing.join(", ")}, which as-is has`);
     // Repeat k of each build ran in the same pass, one after the other.
     const deltas = [...values].map(([repeat, v]) => {
       if (!base.has(repeat)) throw new Error(`${group}: repeat ${repeat} has no as-is run`);

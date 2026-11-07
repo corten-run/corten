@@ -6,7 +6,7 @@ index 9bb5796e..3c3b1da0 100644
      api: Option<&crate::api::Mount>,
      mode: Mode,
  ) -> Response {
-+    // Ablation: the handler's answer as it is, never an error page or a JSON failure.
++    // Ablation: the handler's answer as it is, never an error page or a JSON failure (nor a layout read's, which card-market has none of).
 +    if true {
 +        let _ = (shared, api, mode);
 +        return run(req, next, deadline, signal).await;

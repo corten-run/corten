@@ -20,12 +20,13 @@ browser='gzip, deflate, br, zstd'
 variants=${VARIANTS:-"as-is $(cd /src/bench/fullstack/ablate && ls *.patch | sed 's/\.patch$//' | tr '\n' ' ')"}
 # One copy of the source to start each build from, without outputs or other rounds' results.
 bins=/out/bins
-rm -rf /tmp/pristine && mkdir -p /tmp/pristine $bins /out/headers
+rm -rf /tmp/pristine /out/headers && mkdir -p /tmp/pristine $bins /out/headers
 tar -C /src --exclude=./.git --exclude=./target --exclude=node_modules --exclude=./bench/fullstack/results -cf - . | tar -C /tmp/pristine -xf -
-# Builds already in /out/bins are reused only if they were built from this source: what the
-# patches and the two crates they touch read, hashed.
-source=$(cd /tmp/pristine && find Cargo.lock crates/corten crates/corten-macros examples/card-market bench/fullstack/ablate -type f \
-  ! -path '*/node_modules/*' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
+# Builds already in /out/bins are reused only if they were built from this source and compiler:
+# what the patches and the two crates they touch read, the release profile, and rustc's version.
+source=$( (cd /tmp/pristine && find Cargo.toml Cargo.lock crates/corten crates/corten-macros examples/card-market \
+  bench/fullstack/ablate -type f ! -path '*/node_modules/*' -print0 | sort -z | xargs -0 sha256sum; rustc -vV) |
+  sha256sum | cut -c1-16)
 if [ -n "$(ls $bins)" ] && [ "$(cat $bins/source.txt 2>/dev/null)" != "$source" ]; then
   echo "/out/bins holds builds of other source ($(cat $bins/source.txt 2>/dev/null || echo unstamped), this is $source): remove it to rebuild" >&2; exit 1
 fi
@@ -59,7 +60,8 @@ start() {
 for v in $variants; do
   start $bins/$v
   for target in ${TARGETS:-page json}; do for enc in ${ENCODINGS:-identity browser}; do
-    curl -sS -D /out/headers/$v-$target-$enc.txt -o /dev/null -H "accept-encoding: $(coding $enc)" "http://127.0.0.1:8080$(url $target 1)"
+    code=$(curl -sS -D /out/headers/$v-$target-$enc.txt -o /dev/null -w '%{http_code}' -H "accept-encoding: $(coding $enc)" "http://127.0.0.1:8080$(url $target 1)")
+    [ "$code" = 200 ] || { echo "$v $target $enc: answered $code" >&2; cat /tmp/server.log >&2; exit 1; }
   done; done
   kill -TERM $server; wait $server || true
 done
@@ -82,8 +84,8 @@ for rep in $(seq ${REPEATS:-5}); do for v in $variants; do
       if grep -qv '^200 ' /tmp/codes.txt || [ "$(grep -c '^200 1' /tmp/codes.txt)" != 1 ]; then
         echo "$v $target $enc: not every request answered 200 over one connection" >&2; exit 1
       fi
-      total=$(sed -n 's/^summary: *\([0-9]*\).*/\1/p' /tmp/cg.out.1 2>/dev/null)
-      [ -n "$total" ] || { cat /tmp/server.log >&2; exit 1; }
+      total=$(sed -n 's/^summary: *\([0-9]*\).*/\1/p' /tmp/cg.out.1 2>/dev/null || true)
+      [ -n "$total" ] || { echo "$v $target $enc: no callgrind count" >&2; cat /tmp/server.log >&2; exit 1; }
       printf '%s\t%s\t%s\t%s\t%s\t%s\n' $v $target $enc $rep $n $total | tee -a /out/results.tsv
     done
   done; done
