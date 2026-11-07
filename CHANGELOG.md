@@ -2345,6 +2345,32 @@ Corten is pre-1.0, so any minor version may change the API.
     Nothing else on the request path changes: `bytes_up_to` calls the same read-past, moved into
     a function, only for a body over its limit
     ([#1003 Evaluate a bounded raw-body chunk reader for large PUT and POST uploads without buffering or duplicating limit handling](https://github.com/corten-run/corten/issues/1003)).
+262. `on:corten:progress` on a `data-patch` form: its handler is called with the browser's
+    `ProgressEvent` while a multipart write's body is sent (`loaded` and `total` count the whole
+    request, `lengthComputable` says whether `total` is known), so an upload's progress is a native
+    `<progress>` the app fills, with Corten's submit (its keys, refusals, redirects, cancellation)
+    kept. Such a form's multipart writes go by `XMLHttpRequest`, which reports upload progress
+    where `fetch` does not, in a module of its own (`corten-upload`, 861 bytes, 540 gzipped) that
+    only a page with such a form loads; every other submit is a `fetch` as before. The form stays
+    `aria-busy` until the answer is drawn, a navigation abandons it (its events stop, its answer is
+    not drawn, and one left while the module loads is never sent), a newer submit of the form waits
+    for it as for any write, and without JavaScript it posts as before. A handler typed
+    `ProgressEvent` takes no other event, and `corten:progress` is heard only on a `data-patch`
+    `<form>` with a body method and `enctype="multipart/form-data"`, all at compile time
+    (design.md, Choice 29). The
+    runtime grows by 424 bytes minified (40,232 to 40,656), 166 gzipped (14,427 to 14,593 at
+    `build:js`'s level 6; 14,394 to 14,560 at level 9) and 151 with brotli (13,019 to 13,170, quality
+    11); a page's binding of an element's handlers compares each with the progress event once, as
+    it parses them, and an ordinary submit adds one check of whether the form has handlers. An
+    ordinary submit's cost did not change by more than its run-to-run spread: in Chromium 156,
+    watchlist's `/account` page with each build of the runtime routed in its place, `window.fetch`
+    replaced by one answering a 204 at once, its sign-out form sent 2,000 times by `requestSubmit`
+    (each awaiting its `corten:error`) per sample, 20 samples per build (4 processes, alternating
+    builds, 5 samples each): a median of 66.0 µs a submit (61.8 to 89.3) with this build and 69.4
+    µs (58.2 to 80.4) before, leaving out one process before whose 5 samples, at 163 to 199 µs,
+    ran while the machine was busy. The
+    watchlist's profile picture shows the bar
+    ([#1002 Enhanced multipart forms expose only aria-busy, so upload progress requires replacing Corten's submission logic](https://github.com/corten-run/corten/issues/1002)).
 263. `bench/fullstack`'s build step measures more of where a Rust app is slow to work on: for the
     Rust apps, `cargo check --all-targets` clean and after the edit (what rust-analyzer runs on
     save) and the tests compiled from the dependencies and after the edit; for Corten, the

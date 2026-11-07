@@ -435,6 +435,14 @@ impl Assets {
             }
             sources.push((url, crate::script::served(name, crate::script::FORMAT_JS).into_bytes().into()));
             registered.insert(name.to_string());
+            // The upload module, for the pages with a form whose handlers hear its progress.
+            let name = crate::script::UPLOAD_MODULE;
+            let url = format!("scripts/{name}.js");
+            if sources.iter().any(|(u, _)| *u == url) {
+                return Err(clash(format!("the static directory has a {url}, the name of Corten's upload module")));
+            }
+            sources.push((url, crate::script::served(name, crate::script::UPLOAD_JS).into_bytes().into()));
+            registered.insert(name.to_string());
         }
         // `corten/keys`, for the apps with a script that imports it: preloaded with that script (it
         // is one of its imports), so no page without one fetches it. Only a listed script brings

@@ -634,6 +634,49 @@ enum Attr {
     Page(Span),
 }
 
+/// Why a `<form>` with `on:corten:progress` would never hear it: the runtime reports progress only
+/// for a `data-patch` form it sends as `multipart/form-data` by a method other than GET. Attributes
+/// a spread may write are not known here, so a form with one is left to the runtime.
+fn progress_unsent(attrs: &[Attr]) -> Option<&'static str> {
+    if !attrs.iter().any(|a| matches!(a, Attr::On(event, ..) if event == "corten:progress")) {
+        return None;
+    }
+    if attrs.iter().any(|a| matches!(a, Attr::Spread(_))) {
+        return None;
+    }
+    // `None`: not written; `Some(None)`: written as an expression, so not known here.
+    let named = |want: &str| {
+        attrs.iter().find_map(|a| match a {
+            Attr::Bare(n) if n.eq_ignore_ascii_case(want) => Some(Some("")),
+            Attr::Static(n, v) if n.eq_ignore_ascii_case(want) => Some(Some(v.as_str())),
+            Attr::Expr(n, _) if n.eq_ignore_ascii_case(want) => Some(None),
+            _ => None,
+        })
+    };
+    if named("data-patch").is_none() {
+        return Some("on:corten:progress: the runtime reports an upload's progress only for a data-patch form (a form without it is sent by the browser, which reports none): add data-patch");
+    }
+    let multipart = match named("enctype") {
+        Some(Some(v)) => v.eq_ignore_ascii_case("multipart/form-data"),
+        Some(None) => true,
+        None => false,
+    };
+    if !multipart {
+        return Some("on:corten:progress: only a multipart body is sent with its progress: add enctype=\"multipart/form-data\"");
+    }
+    let sends_body = match named("method") {
+        Some(Some(v)) => !v.is_empty() && !v.eq_ignore_ascii_case("get") && !v.eq_ignore_ascii_case("dialog"),
+        Some(None) => true,
+        None => false,
+    };
+    if !sends_body {
+        return Some(
+            "on:corten:progress: a GET or dialog form sends no body, so it has no upload progress: give the form method=\"post\"",
+        );
+    }
+    None
+}
+
 /// The attribute an element is named by for assistive technology, `aria-label` or
 /// `aria-labelledby`, unless the element takes its role from elsewhere (a `role` of its own, or
 /// a spread, which may write one).
@@ -883,6 +926,7 @@ impl Cursor {
         }
         let (name, path, name_span) = self.name()?;
         let component = name.contains("::") || name.starts_with(|c: char| c.is_ascii_uppercase());
+        let is_form = name == "form";
         if component && name.contains('-') {
             return err(name_span, "a component name is a Rust path; element names with - are lowercase");
         }
@@ -995,7 +1039,10 @@ impl Cursor {
                                 // ends the type, so the runtime's `corten:error` keeps its own).
                                 let named = event.strip_prefix("document:").unwrap_or(event);
                                 if named.contains(':') && !crate::dom::is_runtime_event(named) {
-                                    return err(span, format!("{name}: an event name with a colon is one of the runtime's, corten:error (on a data-patch form, or on:document:) or corten:notice (on:document:corten:notice); a component's own event is a typed one (#[event], on:RowToggled)"));
+                                    return err(span, format!("{name}: an event name with a colon is one of the runtime's, corten:error (on a data-patch form, or on:document:), corten:progress (on a data-patch form) or corten:notice (on:document:corten:notice); a component's own event is a typed one (#[event], on:RowToggled)"));
+                                }
+                                if named == "corten:progress" && (event != named || !is_form) {
+                                    return err(span, format!("{name}: the runtime dispatches corten:progress on the data-patch form whose upload it is, and it does not bubble: write on:corten:progress on that <form>"));
                                 }
                                 if event == "corten:notice" {
                                     return err(span, format!("{name}: the runtime dispatches corten:notice on the document, so no element hears it: write on:document:corten:notice"));
@@ -1069,6 +1116,11 @@ impl Cursor {
         };
         if !component && !self.svg {
             if let Some(why) = unnamed_label(&name, &attrs) {
+                return err(name_span, why);
+            }
+        }
+        if is_form {
+            if let Some(why) = progress_unsent(&attrs) {
                 return err(name_span, why);
             }
         }
@@ -1618,8 +1670,13 @@ impl Gen {
                     let target: TokenStream =
                         format!("::corten::script::el::{}", crate::dom::element(name)).parse().expect("a path parses");
                     let mut binds = TokenStream::new();
+                    let mut binds_before = TokenStream::new();
                     for attr in attrs {
                         let Attr::On(event, span, expr) = attr else { continue };
+                        // A form that hears its upload's progress sends it by the upload module.
+                        if event == "corten:progress" {
+                            binds_before.extend(q("::corten::script::__private::uses_upload();", &[]));
+                        }
                         // A typed event's name is the one its `#[event]` gave it (a library's carries its
                         // prefix: `ui-copied`), so it is read from the type rather than derived here.
                         let (printed, ty) = if event.starts_with(|c: char| c.is_ascii_uppercase()) {
@@ -1634,6 +1691,9 @@ impl Gen {
                         };
                         let expr = keywords(expr.clone(), &ty, &target);
                         binds.extend(q("(__A0, &(__A1) as &dyn ::corten::script::Bind),", &[printed, expr]));
+                    }
+                    if !binds_before.is_empty() {
+                        self.code(binds_before);
                     }
                     self.code(q("::corten::script::__private::data_on(__OUT, &[__A0]);", &[binds]));
                 }
