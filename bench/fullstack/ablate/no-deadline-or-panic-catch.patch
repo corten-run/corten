@@ -1,0 +1,16 @@
+diff --git a/crates/corten/src/page.rs b/crates/corten/src/page.rs
+index 9bb5796e..6fb33128 100644
+--- a/crates/corten/src/page.rs
++++ b/crates/corten/src/page.rs
+@@ -2669,6 +2669,11 @@ async fn run<S: crate::app::Steps>(
+     deadline: Option<std::time::Duration>,
+     signal: &crate::Signal,
+ ) -> Response {
++    // Ablation: neither the deadline nor the panic catch.
++    let _ = (deadline, signal);
++    if true {
++        return next.run(req).await;
++    }
+     use std::{future::Future, panic::AssertUnwindSafe, pin::pin, task::Poll};
+     // For the log only: a method and a URI clone without allocating.
+     let (method, uri) = (req.method().clone(), req.uri().clone());
