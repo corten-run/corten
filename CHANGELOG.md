@@ -2345,6 +2345,22 @@ Corten is pre-1.0, so any minor version may change the API.
     Nothing else on the request path changes: `bytes_up_to` calls the same read-past, moved into
     a function, only for a body over its limit
     ([#1003 Evaluate a bounded raw-body chunk reader for large PUT and POST uploads without buffering or duplicating limit handling](https://github.com/corten-run/corten/issues/1003)).
+263. `bench/fullstack`'s build step measures more of where a Rust app is slow to work on: for the
+    Rust apps, `cargo check --all-targets` clean and after the edit (what rust-analyzer runs on
+    save) and the tests compiled from the dependencies and after the edit; for Corten, the
+    development build after four other kinds of edit (a handler's body, a derive on a type three
+    answers share, a `messages!` entry, a route added); for every app, what its dependency step,
+    production build and development build write to disk; and in a round, Corten's and axum +
+    Maud's clean build again on two vCPUs and on all of them, and their development build linked
+    by mold, with the linker of each build read from the binary. A failure in these steps is
+    recorded apart and hides none of the app's other results. `summarize.mjs` prints each. A
+    trial on a desktop (Docker Desktop, cores 0-3, one run each, not a round's machine) took
+    Corten's check 1.4 s after the edit against 3.3 s for its development build and 3.5 s for its
+    tests, and its development build 2.8 to 6.0 s after the other kinds of edit, the derive on a
+    shared type the slowest, each recompiling card-market alone. Save to reload, rust-analyzer's
+    own analysis and a Docker build with BuildKit's cache warm are left to
+    [#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)
+    ([#774 bench/fullstack measures no editor, test-build, save-to-reload, disk or core-scaling cost, so where a Corten app is slow to work on is still partly unmeasured](https://github.com/corten-run/corten/issues/774)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -5756,6 +5772,15 @@ Corten is pre-1.0, so any minor version may change the API.
     `cost-by-crate.mjs` lists a function with what it calls (`INCLUSIVE=`) and knows Maud's
     escaping and the bench apps' files
     ([#963 Design Choice 1 rests on an unrecorded askama comparison; it should state html!'s rendering cost against Maud on equal work](https://github.com/corten-run/corten/issues/963)).
+73. design.md: Limits 11 and 12 described decisions (who may use a route is in its handler's
+    type; a request's fixed stages, with the app's steps at one place), so they are Choices 27
+    and 28, with what they stand on, and Limits 11 and 12 keep only what Corten does not do (a
+    check on the record stays in the handler, and a route added outside a routes module that
+    holds its prefix is checked against the prefix by a build, not `cargo check`; no hooks at
+    several stages, and no step for one route). Their anchors stay, so no citation moves. The
+    intro and the Limits section no longer say every limit is "yet": some wait on the platform or
+    an app, others are so by design
+    ([#967 design.md's Limits 11 and 12 are decisions, not limits, and its intro calls every limit something Corten does not do yet](https://github.com/corten-run/corten/issues/967)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
