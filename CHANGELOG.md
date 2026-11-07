@@ -3744,7 +3744,8 @@ Corten is pre-1.0, so any minor version may change the API.
     crate in the build turns on `tracing-subscriber`'s `tracing-log`, which made `try_init` forward
     them. The guide said stderr; it was and is stdout. A line costs 9.8% fewer instructions
     (callgrind, release build, 1,200 lines less 200 over 1,000, two runs each: 6,676 and 6,682 a
-    line against 7,401 and 7,413, both with the `ansi` feature `log` turned on), and the template app's release binary is 145,392 bytes smaller (5,908,808 against
+    line against 7,401 and 7,413 for `tracing-subscriber` with the `ansi` feature `log` turned on
+    in it), and the template app's release binary is 145,392 bytes smaller (5,908,808 against
     6,054,200). Its clean build time did not move beyond the machine's noise (debug, six runs each
     on 4 CPUs, alternating: median 55.7 s against 58.0 s, ranges 50.9 to 61.3 s and 45.1 to 75.6 s)
     ([#764 The default log feature compiles tracing-subscriber and four crates only it needs, to print a few lines to stderr](https://github.com/corten-run/corten/issues/764)).
