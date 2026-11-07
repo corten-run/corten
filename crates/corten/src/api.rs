@@ -497,7 +497,10 @@ pub(crate) fn shown(status: StatusCode, detail: Option<&str>, dev: bool) -> &str
 /// or a failure with a body of the handler's own that is not plain text, is returned unchanged.
 pub(crate) async fn json_failure(res: Response, dev: bool, shape: Option<&ErrorShape>) -> Response {
     let status = res.status();
-    if !(status.is_client_error() || status.is_server_error()) || res.extensions().get::<crate::answer::Relayed>().is_some() {
+    if !(status.is_client_error() || status.is_server_error())
+        || res.extensions().get::<crate::answer::Relayed>().is_some()
+        || res.extensions().get::<crate::page::AsIs>().is_some()
+    {
         return res;
     }
     let failed = res.extensions().get::<crate::Failed>().map(|f| f.0.clone());

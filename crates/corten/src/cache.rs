@@ -425,7 +425,7 @@ fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
 
 /// Whether an `If-None-Match` line names `opaque` (a tag with its quotes, `W/` aside), compared
 /// weakly (RFC 9110 8.8.3.2), or is `*`. A line that does not parse names nothing.
-fn names(line: &[u8], opaque: &[u8]) -> bool {
+pub(crate) fn names(line: &[u8], opaque: &[u8]) -> bool {
     if line.trim_ascii() == b"*" {
         return true;
     }

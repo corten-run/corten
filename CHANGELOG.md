@@ -5460,9 +5460,12 @@ Corten is pre-1.0, so any minor version may change the API.
     path now answers the static directory's `favicon.ico`, else its `favicon.svg` (the icon
     `corten new` writes, sent itself rather than a redirect,
     [design](docs/design.md#choice-favicon-path)), each `public, max-age=86400` with its ETag,
-    and with neither it is a 404 with no body; no layout read starts and no page is drawn. A page
-    or API route of the app's at the path still takes it, so an app that answers it today keeps
-    its own answer
+    and with neither it is a 404 with no body, `public, max-age=3600`; no layout read starts and
+    no page is drawn, and an API at `/` does not answer it as JSON. A page or API route of the
+    app's that the router would pick for the path (written as it, or a parameter or catch-all
+    route) still takes it, so an app that answers it today keeps its own answer. A static file's
+    ETag is now compared as `If-None-Match` is, weakly and in a list or as `*`, so a proxy that
+    marks it weak gets a 304 where it got the whole file
     ([#1056 Nothing answers /favicon.ico, so each browser request for it is the app's 404 page with its layout reads](https://github.com/corten-run/corten/issues/1056)).
 
 ### Documentation
