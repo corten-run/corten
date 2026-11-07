@@ -24,9 +24,11 @@ rm -rf /tmp/pristine && mkdir -p /tmp/pristine $bins
 tar -C /src --exclude=./.git --exclude=./target --exclude=node_modules --exclude=./bench/fullstack/results -cf - . | tar -C /tmp/pristine -xf -
 # Builds already in /out/bins are reused only if they were built from this source and compiler:
 # what the patches and the two crates they touch read, the release profile, and rustc's version.
-source=$( (cd /tmp/pristine && find Cargo.toml Cargo.lock crates/corten crates/corten-macros examples/card-market \
-  bench/fullstack/ablate -type f ! -path '*/node_modules/*' -print0 | sort -z | xargs -0 sha256sum; rustc -vV) |
-  sha256sum | cut -c1-16)
+# Each step on its own, so a failed one stops the run (set -e does not reach inside a $( )).
+files=$(cd /tmp/pristine && find Cargo.toml Cargo.lock crates/corten crates/corten-macros examples/card-market \
+  bench/fullstack/ablate -type f ! -path '*/node_modules/*' -print0 | sort -z | xargs -0 sha256sum)
+compiler=$(rustc -vV)
+source=$(printf '%s\n%s\n' "$files" "$compiler" | sha256sum | cut -c1-16)
 if [ -n "$(ls $bins)" ] && [ "$(cat $bins/source.txt 2>/dev/null)" != "$source" ]; then
   echo "/out/bins holds builds of other source ($(cat $bins/source.txt 2>/dev/null || echo unstamped), this is $source): remove it to rebuild" >&2; exit 1
 fi
@@ -83,10 +85,10 @@ for rep in $(seq ${REPEATS:-5}); do for v in $variants; do
       start valgrind --tool=callgrind --callgrind-out-file=/tmp/cg.out $bins/$v
       # valgrind names its control pipe after `HOST`, the app's own setting, so the control asks under it.
       HOST=127.0.0.1 callgrind_control -d $server >/dev/null 2>&1 || true
-      [ -s /tmp/cg.out.1 ] || { echo "$v: callgrind_control did not dump the startup count" >&2; exit 1; }
+      [ -s /tmp/cg.out.1 ] || { echo "$v $target $enc: callgrind_control did not dump the startup count" >&2; exit 1; }
       curl -sS -H "accept-encoding: $(coding $enc)" -w '%{http_code} %{num_connects}\n' -K /tmp/run.txt > /tmp/codes.txt
       HOST=127.0.0.1 callgrind_control -d $server >/dev/null 2>&1 || true
-      [ -s /tmp/cg.out.2 ] || { echo "$v: callgrind_control did not dump the requests' count" >&2; exit 1; }
+      [ -s /tmp/cg.out.2 ] || { echo "$v $target $enc: callgrind_control did not dump the requests' count" >&2; exit 1; }
       kill -TERM $server; wait $server || true
       if grep -qv '^200 ' /tmp/codes.txt || [ "$(grep -c '^200 1' /tmp/codes.txt)" != 1 ]; then
         echo "$v $target $enc: not every request answered 200 over one connection" >&2; exit 1

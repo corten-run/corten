@@ -823,20 +823,23 @@ repeat: five repeats, median (range); at this resolution a default's cost is goo
 hundred instructions (code layout moves between builds, and now and then one run's fixed part
 jumps by about a million, which moves that repeat by about 1,000 and the median not at all), so a
 row near zero, or one whose range crosses it, says the default costs nothing that can be seen.
-User instructions only (callgrind does not see the kernel's), on glibc's allocator and the zstd the crate bundles, where the
-rounds' image preloads jemalloc and links Debian's libzstd ([design Choice 23](../../docs/design.md#choice-jemalloc-image)
-puts this page at about 83,000 under jemalloc against 87,000), so these are the rounds' request
-shape, not their configuration. Requests per CPU-second under load were not measured, which needs
-a droplet round ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)) ([cost-by-default.sh](cost-by-default.sh), split by [cost-by-default.mjs](cost-by-default.mjs);
+User instructions only (callgrind does not see the kernel's), on glibc's allocator and the zstd the
+crate bundles, where the rounds' image preloads jemalloc and links Debian's libzstd
+([design Choice 23](../../docs/design.md#choice-jemalloc-image) puts this page at about 83,000
+under jemalloc against 87,000), so these are the rounds' request shape, not their configuration.
+Requests per CPU-second under load were not measured, which needs a droplet round ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)) ([cost-by-default.sh](cost-by-default.sh), split by [cost-by-default.mjs](cost-by-default.mjs);
 results and each build's answer headers in [results/defaults1](results/defaults1/)). The headers
 show the security headers, compression, `ETag` and `Cache-Control` patches each removing only the
-headers it names, with the same `content-length`; the other four answer as the build as it is
-does, so what says they remove only their default is the patch's text alone (the script's check
-that every build is a different binary says only that each patch changed something). The
-results were counted by an earlier version of the script, which zeroed the count where this one
-dumps it, checked neither, and did not stamp its builds; each 300-request run there is 300
-requests' cost and a fixed part of about 1.1 million instructions (5.8 million with zstd), so no
-startup is in them.
+headers it names, with the same `content-length` on `identity` (compression's, for a browser, is
+the uncompressed body's); the other four answer as the build as it is does. The `ETag`'s value
+is keyed per process, so it differs between every two files and says nothing. What says those
+four remove only their default is the patch's text alone (the script's check that every build is
+a different binary says only that each patch changed something). The results were counted by an
+earlier version of the script, which zeroed the count where this one dumps it, did not check the
+zero, and did not stamp its builds; each 300-request run there is 300 requests' cost and a fixed
+part of about 1.1 million instructions (5.8 million with zstd), so no startup is in them, and on
+the same builds the two versions agree to the resolution below (the page for a browser, 344,746
+against 344,744 a request, its `ETag` 26,215 against 26,522).
 
 | Default removed | Page, `identity` | Page, browser | JSON, `identity` | JSON, browser |
 |---|---|---|---|---|
@@ -861,12 +864,12 @@ unexplained. For a browser, compressing is two thirds of the page request (233,6
 with zstd 1) and nearly three quarters of the JSON's (162,600 of 227,100) and the page's `ETag`
 26,500 (7.7%, close to the 27,700 measured in process above); the JSON is not tagged, and nothing
 is tagged on `identity` ([design Limit 21](../../docs/design.md#limit-etag)). The rest are each
-under 1.3%. The connection watch's 80 a request is at the edge of this resolution (its browser
-range crosses zero); it would be per-request work, marking the connection busy and idle and its
-read and write checks, by reading the code rather than by a count, since one connection's setup
-(its clock entry) cancels out between the two runs, though the clock's once-a-second tick, which
-grows with a run's length, is in it. Removing every default at once was not measured, so the sum
-assumes they do not overlap.
+under 1.3% of a request on `identity`, and under 1.6% for a browser. The connection watch's 80 a
+request is at the edge of this resolution (its browser range crosses zero); it would be per-request
+work, marking the connection busy and idle and its read and write checks, by reading the code rather
+than by a count, since one connection's setup (its clock entry) cancels out between the two runs,
+though the clock's once-a-second tick, which grows with a run's length, is in it. Removing every
+default at once was not measured, so the sum assumes they do not overlap.
 
 So about a tenth of a round's Corten user instructions are defaults that the other apps mostly do
 not have ([feature matrix](#feature-matrix-the-bench-apps-as-written-round-conform2-2026-11-04)).
