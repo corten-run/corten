@@ -200,14 +200,14 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
 /// it is over is refused before a piece is handed out. A client that sends nothing for a minute
 /// ([`Pieces::idle`], nginx's `client_body_timeout`) is [`BodyError::Stalled`], a 408, and one
 /// whose connection broke [`BodyError::Broken`], a 400; the minute holds while reading past too,
-/// so a client still sending is never cut off for taking long in all. The handler matches the
+/// so a client still sending is never cut off for taking long in all, and one that stops there
+/// is still the 413. The handler matches the
 /// error to answer in a shape of its own, or passes it on with `?` (under an [`crate::Api`],
 /// the API's JSON), after removing what it wrote.
 ///
 /// A large body takes time to arrive, and the route's deadline runs until the answer starts, so
 /// its route is in an API (or an area) whose `deadline` leaves time to read it; shutdown waits
-/// for that deadline too ([the app guide](https://github.com/corten-run/corten/blob/main/docs/guide/app.md),
-/// Shutdown). The handler's future is dropped at the deadline, when the client leaves and at
+/// for that deadline too (the app guide, Shutdown). The handler's future is dropped at the deadline, when the client leaves and at
 /// shutdown, so no code after the `await` it was in runs: what it wrote of a body it does not
 /// finish is removed by a guard's `Drop` or by work the request's [`crate::Signal`] starts.
 ///
@@ -217,7 +217,7 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
 /// use corten::{extract::{pieces_up_to, BodyError, Request}, http::StatusCode, prelude::*, Error};
 ///
 /// /// The largest file this route takes.
-/// const MAX_BYTES: usize = 4 << 30;
+/// const MAX_BYTES: usize = 1 << 30;
 ///
 /// async fn store(Params(_to): Params<files::Object>, request: Request) -> Result<StatusCode, Error> {
 ///     let mut pieces = pieces_up_to(request.into_body(), MAX_BYTES);
@@ -228,7 +228,7 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
 ///             Ok(None) => return Ok(StatusCode::CREATED),
 ///             // Remove what was written of it in each case below: the body did not finish.
 ///             Err(BodyError::TooLarge { .. }) => {
-///                 return Err(Error::new("A file is at most 4 GiB.").with_status(StatusCode::PAYLOAD_TOO_LARGE));
+///                 return Err(Error::new("A file is at most 1 GiB.").with_status(StatusCode::PAYLOAD_TOO_LARGE));
 ///             }
 ///             // A 408 or a 400, as `?` would answer it.
 ///             Err(other) => return Err(other.into()),
@@ -249,8 +249,9 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
 ///
 /// # #[tokio::main(flavor = "current_thread")]
 /// # async fn main() {
-/// // Ten minutes for an upload, while the rest of the app keeps its 30 seconds.
-/// let app = App::new(Routes::new()).api(|routes| files::api(routes).deadline(Duration::from_secs(600)));
+/// // Fifteen minutes, which sends 1 GiB at about 10 Mbit/s (and reads one over it past), while the
+/// // rest of the app keeps its 30 seconds.
+/// let app = App::new(Routes::new()).api(|routes| files::api(routes).deadline(Duration::from_secs(900)));
 /// let app = app.test();
 /// let to = files::Object { name: "photo.jpg".into() };
 /// let put = app.call(corten::http::Method::PUT, &to).body("application/octet-stream", vec![7; 1024]);
@@ -276,7 +277,8 @@ const IDLE: Duration = Duration::from_secs(60);
 pub struct Pieces {
     stream: BodyDataStream,
     max: usize,
-    /// What has arrived, read past or not.
+    /// What has arrived and been counted against `max`, up to the piece that went over it (what is
+    /// read past after is not).
     read: usize,
     idle: Option<Duration>,
     end: End,

@@ -27,7 +27,8 @@ before asking for the next, so the request holds one piece, not the body. It cou
 whatever the length says, and refuses a body over `max` as `bytes_up_to` does, reading past the
 rest until the body has sent 64 MiB more than `max`, so a browser, which sends the whole body
 before it reads, gets the 413 rather than a closed connection. A client that sends nothing for a
-minute (`.idle(d)` to change it) is a 408, and a body that breaks is a 400; each is a
+minute (`.idle(d)` to change it) is a 408 (still the 413 when it stops past the limit), and a
+body that breaks is a 400; each is a
 `corten::extract::BodyError` to match or pass on with `?`. The handler removes what it wrote of a
 body it does not finish, and puts the route in an API with a `deadline` that leaves time to read
 it, which shutdown also waits for. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
