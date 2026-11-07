@@ -1228,9 +1228,10 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
-from this tree at `f4e7a5b0` with the tier's changes, in `results/conform-matched1/conformance.json`:
-of the 24 counted columns Corten met all, its unfinished head closed in 29.3 s and the request past
-1,050 held connections left waiting until they closed (then a 200); axum-maud met 12 and missed 12:
+at `720c8a88` with no local changes (`commit` in `results/conform-matched1/conformance.json`):
+of the 24 counted columns Corten met all, its unfinished head closed in 29.3 s, a request was
+answered with 950 connections held, and one past 1,050 waited until they closed (then a 200);
+axum-maud met 12 and missed 12:
 the ETag, the cross-site post, the two failed reads (502 `text/plain`), the 404 and 405 formats
 (empty), the unknown Host and the 64 KiB header (200), liveness and readiness, the unfinished head
 (still held at 45 s) and the cap (answered with 1,050 held). No load phase has run in the tier yet.
