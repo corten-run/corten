@@ -16,7 +16,7 @@ import { parseAnswer } from "./conformance.mjs";
 
 const chunks = [];
 for await (const c of process.stdin) chunks.push(c);
-/** @type {{ host: string, port: number, mode: "head" | "cap", path: string, timeoutMs?: number, hold?: number, waitMs?: number, releaseMs?: number }} */
+/** @type {{ host: string, port: number, mode: "head" | "cap", path: string, timeoutMs?: number, below?: number, hold?: number, waitMs?: number, releaseMs?: number, connectMs?: number }} */
 const r = JSON.parse(Buffer.concat(chunks).toString("utf8"));
 const sleep = (/** @type {number} */ ms) => new Promise((done) => setTimeout(done, ms));
 const request = `GET ${r.path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n`;
@@ -24,10 +24,11 @@ const request = `GET ${r.path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\
 /** Opens a connection; resolves to it once connected, or null when it could not. */
 const open = () => /** @type {Promise<import("node:net").Socket | null>} */ (new Promise((done) => {
   const socket = connect({ host: r.host, port: r.port });
-  socket.once("connect", () => done(socket));
-  socket.once("error", () => done(null));
-  // A connection never accepted (a full queue) times out with no error event: it resolves null too.
-  socket.setTimeout(30_000, () => { socket.destroy(); done(null); });
+  // A connection never accepted (a full queue) gets no error event: it resolves null after
+  // connectMs. The limit is on connecting only, so a held connection stays open however idle.
+  const limit = setTimeout(() => { socket.destroy(); done(null); }, r.connectMs ?? 5000);
+  socket.once("connect", () => { clearTimeout(limit); done(socket); });
+  socket.once("error", () => { clearTimeout(limit); done(null); });
 }));
 
 if (r.mode === "head") {
@@ -36,7 +37,6 @@ if (r.mode === "head") {
   if (!socket) {
     process.stdout.write(JSON.stringify({ error: "could not connect" }));
   } else {
-    socket.setTimeout(0);
     socket.write(`GET ${r.path} HTTP/1.1\r\nhost: localhost\r\n`);
     socket.on("data", () => {});
     socket.on("error", () => {});
@@ -66,7 +66,6 @@ if (r.mode === "head") {
     const got = [];
     const state = { closed: socket === null };
     if (socket) {
-      socket.setTimeout(0);
       socket.on("data", (c) => got.push(c));
       socket.on("error", () => {});
       socket.on("close", () => { state.closed = true; });

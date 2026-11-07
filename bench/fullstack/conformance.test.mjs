@@ -363,6 +363,7 @@ test("the cap probe tells a server that answers past the held connections from o
       if (open.size <= 5) answer(); else waiting.push(answer);
     });
   });
-  const waited = await holdAgainst(waits, probe);
+  // The connect limit (200 ms here) is on connecting only: held connections idle past it stay open.
+  const waited = await holdAgainst(waits, { ...probe, connectMs: 200 });
   assert.deepEqual([waited.belowHeld, waited.held, waited.whileHeld, waited.afterRelease, waited.afterwards], [200, 6, null, 200, 200]);
 });
