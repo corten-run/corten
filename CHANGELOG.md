@@ -6,6 +6,11 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- A separate locale-neutral catalog benchmark in `bench/catalog`: the same strings-only
+  record-detail page, JSON, GET filter and related links in eighteen framework apps.
+  Correctness checks precede load tests; catalog rounds have their own baseline rather than
+  being compared with historical localized marketplace rounds.
+
 - `corten/views` adds `view(host, View, template)` for a single server-rendered branch,
   with typed templates, root-ID adoption, collision checks and CSP-safe custom properties. The
   deck builder exercises nested stateful branches with independent drafts and ID-based controls.
@@ -5955,6 +5960,11 @@ Corten is pre-1.0, so any minor version may change the API.
     intro and the Limits section no longer say every limit is "yet": some wait on the platform or
     an app, others are so by design
     ([#967 design.md's Limits 11 and 12 are decisions, not limits, and its intro calls every limit something Corten does not do yet](https://github.com/corten-run/corten/issues/967)).
+74. The README is about Corten again: what it is, highlights, the quick start, the compiled
+    example, how a request and a page work, a short table of Corten's own measured numbers, and
+    the guides, examples and crates. The benchmark tables against other frameworks and their notes
+    moved to `docs/performance.md`, unchanged apart from their links, with the README's former
+    headline comparisons as its summary; `docs/design.md` and `bench/browser` now cite them there.
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
