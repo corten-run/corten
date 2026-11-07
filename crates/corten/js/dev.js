@@ -97,32 +97,39 @@ const resolved = (selector, parent) => {
 };
 
 /**
- * Each style rule of the page's stylesheets that sets `display`: its selector, the `@media` or
+ * Each style rule of the page's stylesheets that sets `display`: its selector (resolved, and as
+ * written), the `@media` or
  * `@container` query it is inside (`@media (min-width: 64rem)`, or null) and whether it is
  * `!important`. Read again for each check, as a dev server's stylesheets change; a sheet the page
  * may not read is skipped.
- * @returns {{ selector: string, display: string, condition: string | null, important: boolean }[]}
+ * @returns {{ selector: string, written: string, display: string, condition: string | null, important: boolean }[]}
  */
 function displays() {
-  /** @type {{ selector: string, display: string, condition: string | null, important: boolean }[]} */
+  /** @type {{ selector: string, written: string, display: string, condition: string | null, important: boolean }[]} */
   const found = [];
-  /** @param {CSSRuleList} rules @param {string | null} condition @param {string | null} selector */
-  const walk = (rules, condition, selector) => {
+  /**
+   * @param {CSSRuleList} rules
+   * @param {string | null} condition
+   * @param {string | null} selector
+   * @param {string | null} written
+   */
+  const walk = (rules, condition, selector, written) => {
     for (const rule of rules) {
       const style = /** @type {CSSStyleRule} */ (rule).style;
       // A nested rule's own selector, or a nested block of declarations, which has its parent's.
       const own = rule instanceof CSSStyleRule ? resolved(rule.selectorText, selector) : selector;
-      if (style && own && style.display) found.push({ selector: own, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
+      const asWritten = rule instanceof CSSStyleRule ? rule.selectorText : written;
+      if (style && own && asWritten && style.display) found.push({ selector: own, written: asWritten, display: style.display, condition, important: style.getPropertyPriority("display") === "important" });
       const inner = /** @type {CSSGroupingRule} */ (rule).cssRules;
       if (!inner) continue;
       // A width (or a container's size) is a breakpoint; @supports is not, and passes its own on.
       const query = rule instanceof CSSMediaRule || (globalThis.CSSContainerRule && rule instanceof CSSContainerRule);
-      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), own);
+      walk(inner, condition ?? (query ? rule.cssText.slice(0, rule.cssText.indexOf("{")).trim() : null), own, asWritten);
     }
   };
   for (const sheet of document.styleSheets) {
     try {
-      walk(sheet.cssRules, null, null);
+      walk(sheet.cssRules, null, null, null);
     } catch {}
   }
   return found;
@@ -148,24 +155,28 @@ const matching = (el, selector) => {
  * @param {Element} root
  */
 function inPlace(root) {
-  const closed = within(root, CLOSED).filter((el) => !reported.has(el));
+  // One the app hides with `hidden` is meant to be hidden, whatever its rules say.
+  const closed = within(root, CLOSED).filter((el) => !reported.has(el) && !el.hasAttribute("hidden"));
   if (!closed.length) return;
   const rules = displays();
   for (const el of closed) {
     if (getComputedStyle(el).display !== "none") continue;
     const applies = rules.filter((r) => matching(el, r.selector));
-    // Hidden by components.css's rule, not only the browser's own, which an app's rule outranks.
-    if (!applies.some((r) => r.important && r.display === "none")) continue;
+    // Hidden by components.css's rule (`dialog:where(..)`, `[popover]:where(..)`), not only the
+    // browser's own, which an app's rule outranks.
+    if (!applies.some((r) => r.important && r.display === "none" && /^(dialog|\[popover\]):where\(/.test(r.written))) continue;
     const drawn = applies.find((r) => r.condition && r.display !== "none");
     if (!drawn || applies.some((r) => r.important && r.display !== "none")) continue;
     reported.add(el);
     const dialog = el.localName === "dialog" && !el.hasAttribute("popover");
     const state = dialog ? "[open]" : ":popover-open";
+    // Not [hidden] either, so a rail the app hides with the attribute stays hidden.
+    const closedState = dialog ? "[open],[hidden]" : ":popover-open,[hidden]";
     // The class as the component's file writes it (`.filters`, which Corten prefixes:
     // `.search-page__filters`), from the rule's own selector.
     const cls = [...drawn.selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1]).find((c) => el.classList.contains(c))?.split("__").pop();
     const named = cls ? "." + cls : el.localName + (el.id ? "#" + el.id : "");
-    console.warn(`corten: ${el.id || el.localName} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.selector}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed. To draw it in place there, give it a rule of its own in that query, \`${named}:not(${state}) { display: ${drawn.display} !important }\`; if it is the open ${dialog ? "dialog" : "popover"}'s look, write it as \`${named}${state}\``, el);
+    console.warn(`corten: ${el.id || el.localName} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed. To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${dialog ? "dialog" : "popover"}'s look, write it as \`${named}${state}\``, el);
   }
 }
 

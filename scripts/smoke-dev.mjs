@@ -59,7 +59,7 @@ try {
       '<dialog id="gone" class="gone"></dialog><dialog id="inplace" class="inplace"></dialog>',
       '<dialog id="enhanced" class="enhanced"></dialog><dialog id="modal" class="modal"></dialog>',
       '<div id="nav" class="nav" popover></div><div class="page"><dialog id="side" class="side"></dialog></div>',
-      '<dialog id="lastrail" class="rail"></dialog>',
+      '<dialog id="keptHidden" class="kept" hidden></dialog><dialog id="lastrail" class="rail"></dialog>',
     ].join("");
     const sheet = '<link rel="stylesheet" href="/dialog-in-place.css">';
     await route.fulfill({ response: res, body: (await res.text()).replace("</head>", `${sheet}</head>`).replace("</body>", `${controls}</body>`) });
@@ -70,7 +70,7 @@ try {
       body: [
         ".card { display: flex; }",
         "@media (min-width: 9999px) { .rail { display: block; } }",
-        "@media (min-width: 1px) { .kept { display: block; } .kept:not([open]) { display: block !important; } }",
+        "@media (min-width: 1px) { .kept { display: block; } .kept:not([open],[hidden]) { display: block !important; } }",
         "@media (min-width: 1px) { .gone { display: none; } }",
         "@media (min-width: 1px) { .inplace { display: block; } .modal[open] { display: grid; } }",
         "@supports (display: grid) { .enhanced { display: grid; } }",
@@ -93,14 +93,14 @@ try {
   check(
     "its warning names the rule, the query, the rule that draws it in place and the open one's look",
     !!railOnLoad[0]?.includes("`.rail` in `@media (min-width: 9999px)` gives display: block") &&
-      !!railOnLoad[0]?.includes("`.rail:not([open]) { display: block !important }`") &&
+      !!railOnLoad[0]?.includes("`.rail:not([open],[hidden]) { display: block !important }`") &&
       !!railOnLoad[0]?.includes("`.rail[open]`"),
     railOnLoad[0],
   );
   // components.css's rule is what hides `inplace`, whose query holds now; the rule the warning
   // gives draws `kept` over it.
-  const shown = await drawn.evaluate(() => ["inplace", "kept"].map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).display).join(","));
-  check("components.css hides a closed dialog a query draws, and the rule the warning gives draws it", shown === "none,block", shown);
+  const shown = await drawn.evaluate(() => ["inplace", "kept", "keptHidden"].map((id) => getComputedStyle(/** @type {Element} */ (document.getElementById(id))).display).join(","));
+  check("components.css hides a closed dialog a query draws, and the rule the warning gives draws it but not one with hidden", shown === "none,block,none", shown);
   const patchedRail = reportOf("patchedrail");
   await drawn.evaluate(() => document.body.append(Object.assign(document.createElement("dialog"), { id: "patchedrail", className: "rail" })));
   check("dev mode warns of such a dialog a patch draws", await patchedRail);

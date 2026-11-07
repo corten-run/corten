@@ -64,9 +64,10 @@ look that sets `display` (a card) can go on either and is drawn only while it is
 outranks `!important`, so animate a close that way: a `@keyframes` animation of `display` is
 held at `none`. A closed dialog meant to stay drawn (to fade out) takes the app's own
 `!important` rule with more weight than an attribute
-(`dialog.fading:not([open]) { display: block !important }`). So does a closed dialog drawn in
+(`dialog.fading:not([open],[hidden]) { display: block !important }`, which leaves one with
+`hidden` hidden). So does a closed dialog drawn in
 place from a breakpoint, a filters rail that is a modal on a phone: in its component's file, inside
-the media query, `.filters:not([open]) { display: block !important }`. A look for the open
+the media query, `.filters:not([open],[hidden]) { display: block !important }`. A look for the open
 dialog at a width goes under `[open]` (`.modal[open] { display: grid }`), as the kit's dialog and
 sheet do. Since nothing fails when a rail is missing (the page answers, the rail is simply not
 drawn), `corten dev` warns in the console of each closed dialog or popover that a rule inside

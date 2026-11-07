@@ -5480,7 +5480,8 @@ Corten is pre-1.0, so any minor version may change the API.
     the console of each closed dialog or popover that the rule keeps hidden while a rule inside
     `@media` or `@container` gives it a `display`, at the width the page is at or any other,
     nested rules included, with the selector, the query and a rule for each reading: drawn in
-    place there (`.filters:not([open]) { display: block !important }` in that query), or the open
+    place there (`.filters:not([open],[hidden]) { display: block !important }` in that query, which
+    leaves a rail the app hides with `hidden` hidden), or the open
     one's look, written under `[open]`, as the kit's dialog and sheet are. The page cannot tell the
     two apart, so it is a warning, not an error. A look outside a query (a card on a dialog) and
     one under `@supports` are still kept hidden while closed and are not reported; the styles
