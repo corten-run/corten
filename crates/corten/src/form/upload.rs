@@ -547,7 +547,8 @@ impl Parts {
         let mut past = self.read.saturating_sub(self.limit);
         // A client that stops sending here ends the read past; the answer is still the 413.
         while past <= READ_PAST && !self.ended {
-            match self.idle.next(&mut self.body).await {
+            let next = self.idle.next(&mut self.body);
+            match crate::extract::reading_past(crate::extract::Over::Upload(self.limit), next).await {
                 Some(Some(Ok(piece))) => past += piece.len(),
                 _ => break,
             }

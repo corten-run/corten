@@ -55,6 +55,10 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
         Failure::TimedOut | Failure::Offline => {
             ("Not available", "Check your connection and try again.")
         }
+        // The request did not arrive whole in time (a 408): an upload that stopped.
+        Failure::Failed { status, .. } if *status == StatusCode::REQUEST_TIMEOUT => {
+            ("Not received", "Check your connection and try again.")
+        }
         Failure::WrongMethod
         | Failure::Rejected { .. }
         | Failure::Failed { .. }

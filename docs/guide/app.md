@@ -100,7 +100,16 @@ Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: f
 so keep `max_request_head` a little above what the proxy lets through.
 `App::deadline` (30 seconds unless set) bounds how long a handler may take to start its answer;
 an area or an API with slower routes sets its own (`Area::deadline`, `Api::deadline`), so the
-rest keep the app's. See [Cancellation](cancellation.md).
+rest keep the app's. Past it the answer is a 503 (`Failure::TimedOut`), unless the handler was
+waiting for the client to send the rest of the body: then the request did not arrive in time,
+and the answer is the client's 408 (`Failure::Failed`, as a stalled upload's `?` gives), so a
+client that stops sending a form is not told the server was slow. With the defaults the deadline
+(30 seconds) comes before an upload's idle time (`Upload::idle`, a minute), so it is the deadline
+that answers a stalled upload, with that 408. A deadline that passes while a body over an
+`Upload`'s or a `pieces_up_to` limit is read past is the 413 that read gives. Only a request
+`corten::serve` reads from its connection is marked as waiting for its body; through
+`app.router()` served another way that deadline is the 503 (the 413 still holds). See
+[Cancellation](cancellation.md).
 
 ```rust,ignore
 let app = App::new(url::router())
@@ -2263,9 +2272,9 @@ Every way a request can fail is a `Failure`, given to the app's error page for a
 | `Refused { status }` | a `Caller` refused, with nowhere to sign in | 401, 403, 429 |
 | `Unidentified { detail }` | who is asking could not be looked up (`Refused::unavailable`), unlike a handler's own 503 | 503 |
 | `Rejected { status, detail }` | the path, the query or the body did not parse | 400, 415, 422 |
-| `Failed { status, detail }` | the handler returned an `Error` | 500, or its status |
+| `Failed { status, detail }` | the handler returned an `Error`, or the deadline passed while it waited for the client to send the body | 500, or its status; 408 for the body |
 | `Panicked { detail }` | the handler panicked | 500 |
-| `TimedOut` | the handler ran past its deadline (`App::deadline`, or its area's or API's) | 503 |
+| `TimedOut` | the handler ran past its deadline (`App::deadline`, or its area's or API's), not waiting for the body | 503 |
 | `Offline` | the PWA's offline page | 200, so the worker keeps it |
 
 Without `App::error_page`, a browser's failure is Corten's plain document: no stylesheet of the app's, no

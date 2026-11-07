@@ -646,7 +646,9 @@ impl<M: Middleware> App<M> {
     }
 
     /// How long a handler may take to answer (30 seconds unless set). Past it the client gets
-    /// the 503 error page, the handler's future is dropped, and the request's [`crate::Signal`]
+    /// the 503 error page (a 408 when the handler was waiting for the client to send the body, as
+    /// for an upload that stopped: the request did not arrive in time; the 413 while a body over its
+    /// limit is read past), the handler's future is dropped, and the request's [`crate::Signal`]
     /// aborts with [`crate::Abort::Deadline`] for work the handler spawned. It bounds the time to
     /// the response's start, so a stream (a feed, server-sent events) runs as long as it needs;
     /// reading the request body counts, so an app that takes large uploads raises it. `None`
@@ -1680,7 +1682,8 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
     }
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
-        let req = req.map(axum::body::Body::new);
+        // Marks a read of the body that waits for the client, for the deadline (#1061).
+        let req = req.map(|body| axum::body::Body::new(crate::extract::Arriving(body)));
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         if let Some(bound) = &self.bound {
             bound.arrived();

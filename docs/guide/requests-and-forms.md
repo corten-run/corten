@@ -1189,7 +1189,11 @@ the fields is `UploadError::Stalled`, a 408, as for [`pieces_up_to`](#http-types
 `client_body_timeout`). The minute holds for each piece, so a large upload sent steadily is never
 cut off, and the route's deadline ([app guide](app.md)) is what bounds it in all; one that stops
 while a body over the limit is read past is still the 413. `upload.idle(d)` changes the minute, and
-`upload.idle(None)` leaves only the route's deadline.
+`upload.idle(None)` leaves only the route's deadline. A page's deadline is 30 seconds unless set,
+so there a client that stops is caught by the deadline first: since the handler was waiting for
+the body, that answer is a 408 too (the error page's `Failure::Failed` with status 408, or the
+JSON 408), not the deadline's 503. The idle time matters on a route whose deadline is longer
+(an upload API's).
 
 A JSON route takes an upload the same way. One with no text fields still names its file input
 with a `Files` field and takes the file by that name (`file.is(..)`); the struct is not dead code,
