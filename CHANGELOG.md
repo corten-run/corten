@@ -3909,6 +3909,25 @@ Corten is pre-1.0, so any minor version may change the API.
     against `f6d39bbd`, did not move beyond the machine's noise (debug, six runs each on 4 CPUs,
     alternating: median 55.7 s against 58.0 s, ranges 50.9 to 61.3 s and 45.1 to 75.6 s)
     ([#764 The default log feature compiles tracing-subscriber and four crates only it needs, to print a few lines to stderr](https://github.com/corten-run/corten/issues/764)).
+164. A markup call to a handler whose parameter has a JSDoc type no Rust value is checked against
+    does not compile, where it took any `ToJson` value: an object type (`{ count: number }`),
+    `number[]`, `string | null`, `object`, `any`, a `@typedef` of plain values, an unknown name, or
+    a group with a field of such a type. So does one whose parameter names an element or an event in
+    a shape no call is checked against, which took any ref or event: a union of event interfaces
+    (`MouseEvent | KeyboardEvent`; take the one they share, `UIEvent` or `Event`),
+    `HTMLElement | null`, `EventTarget`, `Node`. The warning on the call says why and what to take
+    instead: a generated declaration (`import("../types/app").Name`) for a value, a checked
+    interface for an element or an event, or `unknown` for anything the script checks itself, the
+    one type that still takes any argument (a value, a ref, `event`, `target`, `signal` or `scope`).
+    The handler itself compiles, so an export only other scripts call is typed as the script needs.
+    A typed event imported for its type alone (`/** @import { Saved } from "corten/events" */`) is
+    now its `#[event]` type, as an `import` statement's is, where it took any event: `on:click` on
+    such a handler does not compile. A JSDoc namespace import of them
+    (`/** @import * as ev from "corten/events" */`), which compiled, now stops the script compiling,
+    as a namespace `import` statement of them does. No example, kit component or template script
+    called a handler with such a parameter; six event handlers in `examples/deck-builder` and
+    `examples/seller-desk` are now checked
+    ([#1037 Unsupported handler parameter types can silently fall back to unchecked Rust-to-JS arguments](https://github.com/corten-run/corten/issues/1037)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
@@ -5393,6 +5412,19 @@ Corten is pre-1.0, so any minor version may change the API.
     request with its purpose, and the timed requests and console errors of the module that is
     imported again
     ([#1053 Two Firefox watchlist smoke checks (prefetch's newest 8, a script module imported again) each fail now and then on a branch that does not touch them](https://github.com/corten-run/corten/issues/1053)).
+186. A page upload whose client stopped sending was answered at the deadline as the server's
+    timeout (503, `Failure::TimedOut`) and logged as a deadline, never as the stalled client it
+    was: a page's deadline (30 seconds) comes before an upload's idle time (a minute), so with the
+    defaults `UploadError::Stalled` was never reached. A deadline that passes while the handler
+    waits for more of the body (the client stopped, or sends slower than the deadline allows) is
+    now the client's 408 (`Failure::Failed` with status 408, or the JSON 408), as `?` on `Stalled`
+    answers, warned of as the 503 is, and its connection is closed after it; one that passes while
+    an `Upload` or `pieces_up_to` body over its limit is read past is that read's 413. The
+    request's signal still aborts with `Abort::Deadline`. A handler slow after the body arrived,
+    or one that never read it, is still the 503. The default error page and `corten new`'s say
+    "Check your connection" for a 408. Only `corten::serve` marks a read that waits for the body;
+    served another way that deadline is the 503 as before (the 413 still holds)
+    ([#1061 Upload's idle time (a minute) is longer than a page's default deadline (30 s), so a stalled page upload is answered as the server's timeout, never as Stalled](https://github.com/corten-run/corten/issues/1061)).
 
 ### Documentation
 
