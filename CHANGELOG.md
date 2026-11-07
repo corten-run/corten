@@ -2462,6 +2462,14 @@ Corten is pre-1.0, so any minor version may change the API.
     guidance), and how to propose it; the README's app table says whether each app has been
     reviewed by its maintainers (none has been reviewed in full yet)
     ([#814 No one who maintains the other frameworks has reviewed their bench/fullstack apps, so a fair-comparison claim rests on our own reading of each](https://github.com/corten-run/corten/issues/814)).
+270. `bench/fullstack` has a mixed load phase
+    ([#813 Every bench/fullstack load phase hits one endpoint, so no phase exercises deadlines, write limits and caching together as a real site would](https://github.com/corten-run/corten/issues/813)):
+    with items from the item API, each app's item-page phases end with 60 s at the fixed rate as
+    70% item pages (2% of them an item the item API answers in 15 s, past a deadline), 20% JSON,
+    5% the home page and 5% the item page's form posted from k6's one address, asking for
+    compression, so a deadline, a write limit and compression act under load together (`mixed-load.js`, `mixed.mjs`). The summary's Mixed table
+    gives each kind of request its latency and its answers by class (2xx and 3xx, 429, other 4xx,
+    5xx, none), with the app's CPU and peak memory.
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

@@ -1159,6 +1159,24 @@ passes, a separate diagnostic build of card-market's crate run after it:
      (`apiCpuPct`) is a percentage of one core, up to 200.
    - JSON: `GET /api/items/{id}` answers the view model the page renders (about 9 KB), written by
      the framework's usual JSON path. Same lookup as the page; only the output differs.
+   - Mixed: with items from the item API, the item page's phases end with 60 s at the fixed rate
+     (150/s) as a site gets it (`mixed-load.js`), so the features that matter only together are
+     under load at once: 70% item pages, 2% of them for an item the item API answers in 15 s
+     (`item_slow_<n>`, past card-market's 10 s deadline and inside k6's 60 s timeout), 20% the item
+     as JSON, 5% the home page, and 5% the item page's price-alert form posted where and as the
+     page posts it, hidden fields and cookies included (`formOf` and `formBody`, as
+     `conform.mjs`'s own post, from the page read once before the phase). Every request comes from
+     k6's one address, so a write limit per client (card-market's 20 a minute) is met and its 429s
+     counted, and asks for compression (`Accept-Encoding: br, gzip`, where the other phases ask
+     for none), so each kind of answer is compressed as the app compresses it for a browser. An app whose form its script sends (Livewire, LiveView) has no post; that share asks
+     for item pages, and the table says why. The summary's Mixed table gives each kind of request
+     its median and p99 latency and its answers by class (2xx and 3xx, 429, other 4xx, 5xx, none),
+     with the app's CPU and peak memory over the phase (`mixed.mjs`; `<app>-mixed.json`, and
+     `-cpu`, `-stats` and `-form` beside it). It adds about a minute an app a pass. It runs in
+     both tiers, but its deadline column compares like with like only in the matched tier, where
+     every app has a deadline; the matched profile has no write limit, so only an app with one of
+     its own answers 429. k6 keeps no cache, so the phase does not see a `Cache-Control` policy at
+     work; the feature matrix checks each app's.
 5. Instructions per request (`count.mjs`): `perf stat` counts the app container's user and
    kernel instructions while 4 users make 5,000 requests (items in memory) after a 30 s warmup;
    median of 3. On a bench host the counters are on the app's pinned cores only (`-C` with

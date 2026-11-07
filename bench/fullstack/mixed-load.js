@@ -4,7 +4,9 @@
 // than a deadline. The same mix for every app, from run-ssr.mjs:
 //   70% item pages (SLOW_SHARE of them, from the item API, ask for an item it answers late),
 //   20% the item as JSON, 5% the home page, 5% the item page's price-alert form posted.
-// Every request comes from k6's one address, so an app's per-client write limit is met.
+// Every request comes from k6's one address, so an app's per-client write limit is met, and asks
+// for compression as a browser does (the other phases ask for none), so each answer is compressed
+// as the app compresses it for a browser.
 // Env: BASE, RATE, DURATION, ITEMS (500), SLOW_SHARE (0), and the form as run-ssr.mjs read it from
 // the item page (mixed.mjs's formEnv): FORM_PATH, FORM_TYPE, FORM_BODY, FORM_COOKIE, FORM_HOST,
 // ORIGIN (no FORM_PATH: the app's form is sent by its script, or there is none, and the posts'
@@ -36,7 +38,8 @@ export const options = {
 };
 
 const item = () => 1 + Math.floor(ITEMS * Math.pow(Math.random(), 2));
-const plain = { headers: { "Accept-Encoding": "identity" }, redirects: 0, timeout: "60s" };
+const encoding = "br, gzip";
+const get = { headers: { "Accept-Encoding": encoding }, redirects: 0, timeout: "60s" };
 
 export default function () {
   const r = Math.random();
@@ -44,17 +47,17 @@ export default function () {
   let res;
   if (r < 0.7 || (r >= 0.95 && !FORM)) {
     kind = Math.random() < SLOW_SHARE ? "slow" : "page";
-    res = http.get(`${BASE}/items/item_${kind === "slow" ? "slow_" : ""}${item()}`, plain);
+    res = http.get(`${BASE}/items/item_${kind === "slow" ? "slow_" : ""}${item()}`, get);
   } else if (r < 0.9) {
     kind = "json";
-    res = http.get(`${BASE}/api/items/item_${item()}`, plain);
+    res = http.get(`${BASE}/api/items/item_${item()}`, get);
   } else if (r < 0.95) {
     kind = "home";
-    res = http.get(`${BASE}/`, plain);
+    res = http.get(`${BASE}/`, get);
   } else {
     kind = "post";
     const f = /** @type {NonNullable<typeof FORM>} */ (FORM);
-    const headers = { "Content-Type": f.type, Origin: f.origin, "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Accept-Encoding": "identity", ...(f.cookie ? { Cookie: f.cookie } : {}), ...(f.host ? { Host: f.host } : {}) };
+    const headers = { "Content-Type": f.type, Origin: f.origin, "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate", "Accept-Encoding": encoding, ...(f.cookie ? { Cookie: f.cookie } : {}), ...(f.host ? { Host: f.host } : {}) };
     res = http.post(`${BASE}${f.path}`, f.body, { headers, redirects: 0, timeout: "60s" });
   }
   ms[kind].add(res.timings.duration);
