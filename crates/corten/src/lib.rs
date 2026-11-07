@@ -122,6 +122,8 @@ pub mod i18n;
 #[cfg(feature = "json")]
 pub mod json;
 mod layout;
+#[cfg(feature = "log")]
+mod log;
 pub mod middleware;
 #[cfg(feature = "types")]
 pub mod openapi;

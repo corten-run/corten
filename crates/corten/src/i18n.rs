@@ -357,6 +357,7 @@ use crate::view::{escape_display, escape_into, AttrValue, Render};
 
 mod display_digits;
 mod format;
+pub(crate) use format::civil_from_days;
 mod visitor;
 
 pub(crate) use visitor::Scope;

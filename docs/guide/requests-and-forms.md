@@ -19,7 +19,19 @@ body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listene
 and types, named from Corten so the app imports one crate
 ([design Choice 21](../design.md#choice-own-extractors)). A handler that takes the whole `Request` and answers
 a body over a limit of its own itself (a route that keeps another server's error shape) reads it
-with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A route's
+with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A body too
+large to hold (a file `PUT` as `application/octet-stream`) is passed on as it arrives instead:
+`let mut pieces = corten::extract::pieces_up_to(request.into_body(), max)`, then
+`while let Some(piece) = pieces.chunk().await? { .. }`, writing each piece to the disk or store
+before asking for the next, so the request holds one piece, not the body. It counts what arrives,
+whatever the length says, and refuses a body over `max` as `bytes_up_to` does, reading past the
+rest until the body has sent 64 MiB more than `max`, so a browser, which sends the whole body
+before it reads, gets the 413 rather than a closed connection. A client that sends nothing for a
+minute (`.idle(d)` to change it) is a 408 (still the 413 when it stops past the limit), and a
+body that breaks is a 400; each is a
+`corten::extract::BodyError` to match or pass on with `?`. The handler removes what it wrote of a
+body it does not finish, and puts the route in an API with a `deadline` that leaves time to read
+it, which shutdown also waits for. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
 path and query are read as its `Params`, never another way. `corten::axum` stays for a stand-in
 server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-app)).
 
@@ -63,6 +75,15 @@ alone, in the component's stylesheet:
 
 Back and forward mark only `<main>`, since nothing on the page started them, and a page reading
 itself again marks nothing.
+
+The address changes when the page's answer is in, as a full load's does, not at the click: while a
+slow handler runs, the address still names the page on screen, so reloading, copying or sharing it
+gets that page, and a link the server redirects, or sends to a place on a page, shows only the
+address it ends at, in one history entry. This holds where the browser lets a navigation say when
+its address changes (the Navigation API's `precommitHandler`; the runtime checks for the feature,
+not for a browser). Elsewhere, and for back and forward, the address changes at the click while
+the old page is shown busy until the new one comes; `main[aria-busy]` is the hook for styling
+that wait.
 
 Back and forward draw the page again from the server, as a link does, and put back what the user
 typed or chose in it, as the browser does for a page it loaded: each field of `<main>` the user
