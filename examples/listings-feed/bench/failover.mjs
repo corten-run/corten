@@ -5,9 +5,10 @@
 // follow feed s1 through the load balancer with the requests EventSource + corten.js make:
 // snapshot, then /live?since=cursor; on a dropped stream, reconnect after the server's `retry`
 // with Last-Event-ID; on an HTTP error, back off and reconnect. They are a client of this file's
-// own, not the runtime (corten.js needs a DOM), so they count what the server sends; the
-// runtime's own recovery paths (sync, a seq gap, a stream's HTTP error, a failed snapshot) are
-// checked in browsers by scripts/smoke.mjs. The main thread commits WPS market
+// own, not the runtime: a failed snapshot is retried on its own schedule (250 ms doubling to
+// 5 s), and a gap in seq is counted as lost rather than loading a snapshot, so they count what
+// the server sends. run.mjs keeps a Chromium page on subscribe() through the same run, and
+// scripts/smoke.mjs checks subscribe()'s recovery paths in browsers. The main thread commits WPS market
 // writes per second (N listings each) through the load balancer and runs the schedule (default:
 // kill a, start a, kill b, start b; kills are SIGKILL). At the end every client must account for
 // every committed seq after its first snapshot, in order: as a patch, or inside a newer snapshot.

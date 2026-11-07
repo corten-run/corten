@@ -5455,9 +5455,12 @@ Corten is pre-1.0, so any minor version may change the API.
     in Chromium, Firefox and WebKit: a patch that skips a `seq` loads one new snapshot and a
     patch already applied is dropped; a stream answered with an HTTP error is listened to again
     from the last patch's cursor, with no snapshot, after 1 s and then 2 s; a failed snapshot is
-    fetched again after 1 s and the feed goes live (`sync` was checked with #1067). The
-    live-data guide and the failover benchmark now say its 200 clients are the benchmark's own
-    Node client of the feed's protocol, not the runtime, which needs a DOM
+    fetched again after 1 s and logged once, and the feed goes live (`sync` was checked with
+    [#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067),
+    except a `sync` on a stream already open, which WebKit skips). A stream that opens starts
+    the error backoff again. The live-data guide and the failover benchmark now say its 200
+    clients are the benchmark's own Node client of the feed's protocol on its own retry
+    schedule, beside a Chromium page running `subscribe()` that lost nothing
     ([#1068 subscribe()'s resync paths (sync, a seq gap, a stream answered with an error) have no browser smoke check, and the failover benchmark counts a Node copy of the client](https://github.com/corten-run/corten/issues/1068)).
 
 ### Documentation

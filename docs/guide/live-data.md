@@ -269,11 +269,14 @@ runs one feed across instances (Postgres outbox, a leased relay to NATS JetStrea
 failover benchmark (200 clients, 50 writes a second, each instance killed and restarted under
 load), every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000
 with clients back on the other instance after 1.1 s at the median (measured,
-`examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). Those clients are the
-benchmark's own Node client of the feed's protocol, making the requests `subscribe()` makes, not
-the runtime itself: they show what the server sends through a failover. `subscribe()`'s recovery
-(a `sync`, a gap in `seq`, a stream answered with an HTTP error, a failed snapshot) is checked
-in Chromium, Firefox and WebKit by `scripts/smoke.mjs`. An instance serves
+`examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). Those 200
+clients are the benchmark's own Node client of the feed's protocol, on its own retry schedule,
+and it counts a gap in `seq` as lost rather than loading a snapshot: they show what the server
+sends through a failover. Beside them a Chromium page runs `subscribe()` itself through the
+same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one snapshot each).
+`subscribe()`'s recovery from a gap in `seq`, a stream answered with an HTTP error and a failed
+snapshot is checked in Chromium, Firefox and WebKit by `scripts/smoke.mjs`, and from a `sync`
+in all three except a `sync` on a stream already open, which WebKit skips. An instance serves
 many feeds, and loading one (on first use, after an idle unload or a gap) or applying a patch to
 one does not hold up requests for the others: a feed is built from its rows on a blocking
 thread, outside the lock that finds a feed. Reading the rows (the app's `Source::rows`) runs on
