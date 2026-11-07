@@ -235,6 +235,10 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
             <Alert variant={AlertVariant::Warning} emphasis={AlertEmphasis::Soft}>
                 <strong>"One order is past its ship-by date"</strong>
                 <p>"Ada Lovelace's Ashen Drake was due to ship yesterday. Ship it today or message the buyer."</p>
+                <ul>
+                    <li>"Ship it today with its postage bought."</li>
+                    <li>"Or message the buyer and give a new date."</li>
+                </ul>
                 <div class={Cluster { gap: Gap::Sm }}>
                     <button class={Button { variant: ButtonVariant::Success, size: ButtonSize::Sm }} type="button">
                         "Mark shipped"

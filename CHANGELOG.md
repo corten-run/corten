@@ -5292,6 +5292,15 @@ Corten is pre-1.0, so any minor version may change the API.
     The layout-read checks are not covered yet
     ([#1035 A debug build's layout-read errors (later::<X>() on an answer that is not a page, a gives(..) the page does not give) answer a bare 500 that names nothing outside corten dev](https://github.com/corten-run/corten/issues/1035))
     ([#1029 A debug build's served-component check answers an app's own router test with a bare 500: the message that names the component goes only to tracing](https://github.com/corten-run/corten/issues/1029)).
+184. A list in the kit's `Alert` (the reasons a form was refused, the steps to fix a problem) kept
+    the browser's own box: a 1em margin above and below, wider than the alert's .25rem gap, and a
+    40px indent. It now has no margin of its own, so it sits the gap under its heading or paragraph,
+    an indent of 1.25rem that keeps its markers inside the alert's padding, and the paragraph's
+    color in every emphasis (the outline's tone mix, the neutral outline's muted text), which the
+    kit's contrast test covers with the paragraph's rules. The gallery's warning alert shows one,
+    and its smoke measures the margin, the gap, the indent and the color in each engine. An app
+    with a copy of the kit takes it with `corten ui add alert --merge`
+    ([#1048 Kit Alert styles its heading and paragraphs but not a list, so a list in an alert keeps the browser's 1em margin and 40px indent](https://github.com/corten-run/corten/issues/1048)).
 
 ### Documentation
 

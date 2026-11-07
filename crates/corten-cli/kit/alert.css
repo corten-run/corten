@@ -5,6 +5,9 @@
 }
 .alert > :is(h2, h3, h4, h5, h6, strong) { margin: 0; font-size: inherit; font-weight: 500; line-height: 1.25rem; }
 .alert > p { margin: 0; color: inherit; }
+/* A list (the reasons a form was refused, the steps to fix something) is spaced as a paragraph is,
+   by the grid's gap, its markers inside the alert's padding. */
+.alert > :is(ol, ul) { margin: 0; padding-inline-start: 1.25rem; color: inherit; }
 /* A variant is its tone (soft and outline text), and the fill and text of a solid alert. */
 .neutral { --kit-tone: var(--foreground); --kit-tone-fill: var(--secondary); --kit-tone-text: var(--secondary-foreground); }
 .info { --kit-tone: var(--info); --kit-tone-fill: var(--info); --kit-tone-text: var(--info-foreground); }
@@ -14,13 +17,13 @@
 /* Mixed in sRGB, which the kit's contrast test computes exactly. */
 .soft { background: color-mix(in srgb, var(--kit-tone) 12%, var(--card)); color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); border-color: transparent; }
 .outline { background: var(--card); color: var(--kit-tone); border-color: color-mix(in oklab, var(--kit-tone) 50%, var(--border)); }
-.outline > p { color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }
+.outline > :is(p, ol, ul) { color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }
 .solid { background: var(--kit-tone-fill); color: var(--kit-tone-text); border-color: transparent; }
 /* A neutral solid fill is near the card's, so it keeps the card's border to show as a box. */
 .neutral.solid { border-color: var(--border); }
 /* A neutral outline is the card's: its border and muted text. */
 .neutral.outline { color: var(--card-foreground); border-color: var(--border); }
-.neutral.outline > p { color: var(--muted-foreground); }
+.neutral.outline > :is(p, ol, ul) { color: var(--muted-foreground); }
 /* FailedAlert's live region: out of the flow while its alert is hidden, so an empty one takes no
    row or gap in its parent's grid or flex; it stays rendered, in the accessibility tree. */
 .region:not(:has(> :not([hidden]))) { position: absolute; }
