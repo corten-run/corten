@@ -2398,7 +2398,8 @@ Corten is pre-1.0, so any minor version may change the API.
     made the first time a read waits and moved only when it goes off before the read it serves
     is due. Measured with the new `what_reading_an_upload_costs` and `what_reading_a_body_costs`
     (`READER=pieces`) under callgrind, release, instructions per read as the difference of 20 and
-    120 reads, median of three runs (each within 0.1%), on main `cdbe4392` and with the idle time,
+    120 reads, median of three runs (each within 0.1%), on main `cdbe4392` (the upload path is the same at
+    `f3291094`) and with the idle time,
     for a 2,259-byte form sent a byte at a time (the worst case: a browser's pieces are KiB): every
     piece already there 1,942,244 to 2,027,835 (+38 a piece, +4.4%); every piece waited for
     4,150,032 to 5,341,425 (+527 a waited piece: a clock read and the timer's poll; `idle(None)`

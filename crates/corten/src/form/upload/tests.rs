@@ -908,6 +908,57 @@ async fn an_upload_sent_steadily_is_never_cut_off_by_the_idle_time() {
     assert_eq!(started.elapsed(), std::time::Duration::from_secs(60));
 }
 
+/// Pieces `apart` from each other, then nothing: how long `fields` takes to be `Stalled`.
+async fn stalled_after(apart: u64, pieces: usize, idle: Option<u64>) -> std::time::Duration {
+    let long = body(&[("title", None, None, &[b'a'; 4000])]);
+    let chunks: Vec<Bytes> = long.chunks(100).take(pieces).map(Bytes::copy_from_slice).collect();
+    let apart = std::time::Duration::from_secs(apart);
+    let sent = futures_util::stream::iter(chunks).then(move |piece| async move {
+        tokio::time::sleep(apart).await;
+        Ok::<_, std::io::Error>(piece)
+    });
+    let req = Request::builder()
+        .method("POST")
+        .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={BOUNDARY}"))
+        .body(Body::from_stream(sent.chain(futures_util::stream::pending())))
+        .unwrap();
+    let mut upload = Upload::<Listing>::from_request(req, &()).await.unwrap();
+    if let Some(idle) = idle {
+        upload.idle(std::time::Duration::from_secs(idle));
+    }
+    let started = tokio::time::Instant::now();
+    assert!(matches!(upload.fields().await, Err(UploadError::Stalled)));
+    started.elapsed()
+}
+
+/// A stall after reads that waited is caught the idle time after the last piece, to the second:
+/// the one timer an earlier read set is moved to the read that stalls, never early or late.
+#[tokio::test(start_paused = true)]
+async fn a_stall_after_reads_that_waited_comes_the_idle_time_after_the_last_piece() {
+    for (apart, pieces) in [(30u64, 10usize), (59, 7), (1, 40), (45, 3), (0, 5)] {
+        let took = stalled_after(apart, pieces, None).await;
+        assert_eq!(took, std::time::Duration::from_secs(apart * pieces as u64 + 60), "{pieces} pieces {apart} s apart");
+    }
+    assert_eq!(stalled_after(7, 9, Some(10)).await, std::time::Duration::from_secs(7 * 9 + 10));
+}
+
+/// An idle time too long to add to the clock (`Duration::MAX`) waits as `None` does, for
+/// `Upload` and `Pieces`, rather than panicking at the first read that waits.
+#[tokio::test(start_paused = true)]
+async fn an_idle_time_past_the_clock_never_gives_up() {
+    let photo = vec![1u8; 1000];
+    let bytes = body(&[("photos", Some("p.png"), None, &photo), ("title", None, None, b"Mew")]);
+    let mut upload = Upload::<Listing>::from_request(stops_after(&bytes, bytes.len() - 10), &()).await.unwrap();
+    upload.idle(std::time::Duration::MAX);
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(3600), upload.fields()).await;
+    assert!(waited.is_err(), "still waiting after an hour");
+
+    let stops = futures_util::stream::pending::<Result<Bytes, std::io::Error>>();
+    let mut pieces = crate::extract::pieces_up_to(Body::from_stream(stops), 10).idle(std::time::Duration::MAX);
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(3600), pieces.chunk()).await;
+    assert!(waited.is_err(), "still waiting after an hour");
+}
+
 /// Over a socket, a client that stops sending an upload is answered the 408 once the idle time
 /// passes, and the connection is closed after it, with no `connection: close` asked for, so the
 /// server holds nothing for that client (#1030).

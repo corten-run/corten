@@ -403,13 +403,14 @@ impl Pieces {
 pub(crate) struct Idle {
     time: Option<Duration>,
     timer: Option<Pin<Box<Sleep>>>,
-    /// When the read that waits now gives up: its wait began at `due - time`.
-    due: tokio::time::Instant,
+    /// When the read that waits now gives up; `None` when none has waited yet, or the idle time is
+    /// too long to add to the clock (`Duration::MAX`), which never gives up.
+    due: Option<tokio::time::Instant>,
 }
 
 impl Idle {
-    pub(crate) fn new(time: Option<Duration>) -> Self {
-        Idle { time, timer: None, due: tokio::time::Instant::now() }
+    pub(crate) const fn new(time: Option<Duration>) -> Self {
+        Idle { time, timer: None, due: None }
     }
 
     /// The stream's next item, or `None` when the idle time passed first.
@@ -426,9 +427,9 @@ impl Idle {
             let Some(time) = self.time else { return Poll::Pending };
             if !began {
                 began = true;
-                self.due = tokio::time::Instant::now() + time;
+                self.due = tokio::time::Instant::now().checked_add(time);
             }
-            let due = self.due;
+            let Some(due) = self.due else { return Poll::Pending };
             let timer = self.timer.get_or_insert_with(|| Box::pin(tokio::time::sleep_until(due)));
             loop {
                 if timer.as_mut().poll(cx).is_pending() {
