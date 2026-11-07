@@ -5414,6 +5414,20 @@ Corten is pre-1.0, so any minor version may change the API.
     "Check your connection" for a 408. Only `corten::serve` marks a read that waits for the body;
     served another way that deadline is the 503 as before (the 413 still holds)
     ([#1061 Upload's idle time (a minute) is longer than a page's default deadline (30 s), so a stalled page upload is answered as the server's timeout, never as Stalled](https://github.com/corten-run/corten/issues/1061)).
+187. A handler that takes a form's `formdata` event as lib.dom types it (`@param {FormDataEvent} event`)
+    did not compile since every handler parameter is checked
+    ([#1066 A handler parameter no call is checked against stops the call compiling; @import'ed events are checked (#1037)](https://github.com/corten-run/corten/pull/1066)):
+    Corten typed `on:formdata`'s event `Event`, and `FormDataEvent` was no interface a call is
+    checked against. `formdata` is now a `FormDataEvent` and `securitypolicyviolation` a
+    `SecurityPolicyViolationEvent`, and both bubble, so `on:document:` hears them. An element's
+    `error` is now an `Event`, not an `ErrorEvent`, as the element fires it (probed in Chromium,
+    Firefox and WebKit): an `on:error` handler typed `ErrorEvent` read an `event.message` that is
+    never there, and no longer compiles; type it `Event`. `abort`, `progress` and `resize` stay
+    `Event`, for the same reason, though lib.dom gives them the window's and XMLHttpRequest's
+    types. `npm run check` now holds the event map to lib.dom both ways (`scripts/events.mjs`), so
+    an event lib.dom types more narrowly cannot fall back to `Event` unnoticed, nor an arm be
+    narrower than lib.dom
+    ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
 
 ### Documentation
 
