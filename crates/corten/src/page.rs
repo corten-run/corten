@@ -23,6 +23,7 @@ use crate::{
     answer::{HtmlResponse, HtmlResult},
     app::Next,
     assets::Assets,
+    extract::{Over, Waited},
     security::NonceSlot,
     view::{html, Document, Part, Render},
     Error, Result,
@@ -415,11 +416,14 @@ pub enum Failure {
     /// extractor's text, written for a developer.
     Rejected { status: StatusCode, detail: Option<Arc<str>> },
     /// The handler returned an [`Error`]: 500, or the status [`Error::status`] gave (a 404 is
-    /// [`Failure::NotFound`]).
+    /// [`Failure::NotFound`]). Also the deadline that passed while the handler waited for the
+    /// client to send the rest of the body (408), as a stalled upload's `?` gives, since the
+    /// request did not arrive in time.
     Failed { status: StatusCode, detail: Option<Arc<str>> },
     /// The handler panicked (500).
     Panicked { detail: Option<Arc<str>> },
-    /// The handler ran past the deadline ([`crate::App::deadline`], 503).
+    /// The handler ran past the deadline ([`crate::App::deadline`], 503), not while it waited
+    /// for the client's body (that is [`Failure::Failed`] with 408).
     TimedOut,
     /// The PWA's offline page, which the service worker shows when the network is down (sent
     /// with 200 so the worker keeps it).
@@ -552,6 +556,10 @@ fn default_error_document(req: &Req, failure: Failure) -> impl crate::view::Docu
         Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
         Failure::Unidentified { .. } => ("Not available", "We could not check who you are. Try again in a moment."),
         Failure::TimedOut | Failure::Offline => ("Not available", "Check your connection and try again."),
+        // The request did not arrive whole in time: an upload that stopped.
+        Failure::Failed { status, .. } if status == StatusCode::REQUEST_TIMEOUT => {
+            ("Not received", "Check your connection and try again.")
+        }
         Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
             ("Something went wrong", "Please try again.")
         }
@@ -2751,7 +2759,8 @@ async fn run<S: crate::app::Steps>(
     }
 }
 
-/// The handler's response, or an empty 503 once it has waited past `deadline`.
+/// The handler's response, or once it has waited past `deadline` an empty 503, or a 408 when it
+/// was waiting for the client to send the body (the 413 while a body over its limit is read past).
 async fn within_deadline<S: crate::app::Steps>(
     req: Request,
     next: Next<'_, S>,
@@ -2763,8 +2772,26 @@ async fn within_deadline<S: crate::app::Steps>(
         return next.run(req).await;
     };
     match within(limit, next.run(req)).await {
-        Some(res) => res,
-        None => {
+        Ok(res) => res,
+        // The handler was waiting for the client to send the rest of the body: the request had
+        // not arrived whole in time, which is the client's 408 (a stalled upload with the
+        // defaults, whose idle time is longer than the deadline), not the server's 503. Still
+        // warned of, as the 503 is: a large upload still being sent says the deadline is short.
+        Err(Late(Waited::Body)) => {
+            signal.abort(crate::Abort::Deadline);
+            tracing::warn!("corten: {method} {} passed its {limit:?} deadline waiting for the request's body", uri.path());
+            Error::new("the request's body did not arrive in time").with_status(StatusCode::REQUEST_TIMEOUT).into_response()
+        }
+        // A body over its limit, read past so the client reads the 413: still the 413.
+        Err(Late(Waited::PastLimit(over))) => {
+            signal.abort(crate::Abort::Deadline);
+            match over {
+                Over::Body(limit) => Error::from(crate::extract::BodyError::TooLarge { limit }),
+                Over::Upload(limit) => Error::from(crate::form::UploadError::TooLarge { limit }),
+            }
+            .into_response()
+        }
+        Err(Late(Waited::Nothing)) => {
             signal.abort(crate::Abort::Deadline);
             tracing::warn!("corten: {method} {} passed its {limit:?} deadline", uri.path());
             let mut res = StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -2774,26 +2801,32 @@ async fn within_deadline<S: crate::app::Steps>(
     }
 }
 
+/// [`within`] waited its limit, and what the future's last poll waited for of the request body
+/// ([`crate::extract::Arriving`]).
+struct Late(Waited);
+
 fn accepts_html(headers: &HeaderMap) -> bool {
     headers.get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("text/html"))
 }
 
-/// `fut`'s output, or `None` once it has waited `limit`. The timer starts the first time `fut` is
-/// not ready, so a handler that answers at once (a page rendered from memory) never registers
-/// one: about 600 ns a request measured with `tokio::time::timeout`.
-async fn within<F: std::future::Future>(limit: std::time::Duration, fut: F) -> Option<F::Output> {
+/// `fut`'s output, or [`Late`] once it has waited `limit`. The timer starts the first time `fut`
+/// is not ready, so a handler that answers at once (a page rendered from memory) never registers
+/// one: about 600 ns a request measured with `tokio::time::timeout`. Each poll of `fut` starts
+/// with no wait for the body marked, so the mark read when the timer fires is that poll's.
+async fn within<F: std::future::Future>(limit: std::time::Duration, fut: F) -> Result<F::Output, Late> {
     use std::{future::Future, pin::pin, task::Poll};
     let mut fut = pin!(fut);
     let mut timer = pin!(None::<tokio::time::Sleep>);
     std::future::poll_fn(|cx| {
+        crate::extract::forget_wait();
         if let Poll::Ready(out) = fut.as_mut().poll(cx) {
-            return Poll::Ready(Some(out));
+            return Poll::Ready(Ok(out));
         }
         if timer.is_none() {
             timer.set(Some(tokio::time::sleep(limit)));
         }
         match timer.as_mut().as_pin_mut().map(|timer| timer.poll(cx)) {
-            Some(Poll::Ready(())) => Poll::Ready(None),
+            Some(Poll::Ready(())) => Poll::Ready(Err(Late(crate::extract::waited()))),
             _ => Poll::Pending,
         }
     })
