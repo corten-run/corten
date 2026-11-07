@@ -2445,6 +2445,17 @@ Corten is pre-1.0, so any minor version may change the API.
     not a minimum rate, a client that stops reading by the 60 s send timeout, where Kestrel's
     minimum rates close both sooner, and a 16 MiB body's 413 was lost to the connection closing in
     1 of the 3 committed local passes.
+268. `bench/fullstack`'s matched tier reaches its apps through an edge
+    ([#809 bench/fullstack serves every app over plain HTTP/1.1 with no proxy, though Corten's design expects one for TLS and HTTP/2](https://github.com/corten-run/corten/issues/809)):
+    one pinned nginx with one config (`edge.mjs`, the deploy guide's less its cache, with the
+    app's own name as Host) terminates TLS and speaks HTTP/2 to k6 and Chromium and HTTP/1.1 to
+    each app, on cores of its own (`BENCH_EDGE_CPUS`, six on a droplet), so the tier's load phases
+    and browser pass measure an app as it is deployed. Each phase counts the edge's CPU beside the
+    app's (`edgePerCpuSecond`, `edgeCpuUsedPct`), and k6's in every tier (`k6CpuUsedPct`); the
+    summary marks a phase the edge or k6 limited (EDGE-BOUND, LOAD-BOUND) and, through the edge,
+    a saturation phase whose app used less than 90% of its core (APP-IDLE), as every local one was. A matched round
+    runs on a c-16, and `droplet.mjs --edge off` runs it reached directly, to compare. The defaults
+    tier stays direct.
 269. `bench/fullstack/REVIEW.md` tells a framework's maintainers what the comparison measures,
     what they may change in their app (settings a production deployment uses, the app's own code)
     and what they may not (caching rendered output, skipping work, tuning past the framework's
@@ -5476,6 +5487,17 @@ Corten is pre-1.0, so any minor version may change the API.
     smoke checks the backoff's 1 s and 2 s, that it stops on the signal, and that a `sync` later
     or after a reconnect is not delayed
     ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
+189. `corten-cluster` wrote what happens to a feed across instances (a gap in its patches and the
+    reload it starts, a patch dropped as invalid, a failed reload, consumer or resubscribe, a feed
+    loaded with no replay log, the relay going active or standing by) to stderr with `eprintln!`,
+    so the app's subscriber, its filters and JSON lines never saw them. Each is now a `tracing`
+    event with target `corten::feed`, as the feed's own are, with fields (`instance`, `feed`, and
+    `have` and `got` for a gap): a warning, or `info` for the relay going active. A test installs
+    a subscriber and sees a gap and a dropped patch with their feed; it saw nothing before. An event while
+    the app starts (an instance taking the lease, or failing to, before `serve`) no longer prints
+    with the default subscriber, which `serve` installs; `eprintln!` printed it. The failover
+    bench reads which instance ran the relay from its `/api/stats` at each kill instead
+    ([#1069 corten-cluster reports gaps, reloads and relay failover with eprintln!, so the app's tracing subscriber, filters and JSON logs never see them](https://github.com/corten-run/corten/issues/1069)).
 190. `subscribe()` told its `status` handler `syncing` twice in a row when a snapshot failed and
     was fetched again. Its recovery paths now each have a browser check in `scripts/smoke.mjs`,
     in Chromium, Firefox and WebKit: a patch that skips a `seq` loads one new snapshot and a
@@ -5489,6 +5511,18 @@ Corten is pre-1.0, so any minor version may change the API.
     protocol on its own retry schedule, beside a Chromium page running `subscribe()` that lost
     nothing
     ([#1068 subscribe()'s resync paths (sync, a seq gap, a stream answered with an error) have no browser smoke check, and the failover benchmark counts a Node copy of the client](https://github.com/corten-run/corten/issues/1068)).
+192. Nothing answered `/favicon.ico`, which browsers ask for on their own for a PDF, an image or
+    JSON opened in a tab, so each such request was the app's 404 page with its layout reads. The
+    path now answers the static directory's `favicon.ico`, else its `favicon.svg` (the icon
+    `corten new` writes, sent itself rather than a redirect,
+    [design](docs/design.md#choice-favicon-path)), each `public, max-age=86400` with its ETag,
+    and with neither it is a 404 with no body, `public, max-age=3600`; no layout read starts and
+    no page is drawn, and it is never JSON, whatever the client accepts or an API at `/`. A page
+    or API route of the app's that the router would pick for the path (written as it, or a
+    parameter or catch-all route) still takes it, so an app that answers it today keeps its own answer. A static file's
+    ETag is now compared as `If-None-Match` is, weakly and in a list or as `*`, so a proxy that
+    marks it weak gets a 304 where it got the whole file
+    ([#1056 Nothing answers /favicon.ico, so each browser request for it is the app's 404 page with its layout reads](https://github.com/corten-run/corten/issues/1056)).
 
 ### Documentation
 

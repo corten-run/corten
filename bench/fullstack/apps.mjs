@@ -35,6 +35,13 @@ const catalog = {
  */
 export const tier = process.env.BENCH_TIER || "defaults";
 if (tier !== "defaults" && tier !== "matched") throw new Error(`BENCH_TIER is defaults or matched, not ${tier}`);
+/**
+ * Whether the tier's load phases and browser pass reach each app through the edge (edge.mjs): the
+ * matched tier's do, as a deployed app is reached; the defaults tier's reach it directly.
+ * BENCH_EDGE=off runs the matched tier without it, to measure what the edge adds to the same app.
+ */
+if (process.env.BENCH_EDGE && process.env.BENCH_EDGE !== "off") throw new Error(`BENCH_EDGE is off or unset, not ${process.env.BENCH_EDGE}`);
+export const viaEdge = tier === "matched" && process.env.BENCH_EDGE !== "off";
 /** What every app container of the tier is started with (runArgs, cold-start.mjs): the profile in the matched tier. */
 export const tierEnv = tier === "matched" ? ["-e", "PROFILE=matched", "-e", `MAX_CONNECTIONS=${maxConnections}`] : [];
 /**
@@ -82,6 +89,11 @@ export const countCpus = process.env.BENCH_APP_CPUS ? ["-C", process.env.BENCH_A
  */
 export const loadCpusFor = (source) =>
   source === "fixture" && process.env.BENCH_FIXTURE_LOAD_CPUS ? ["--cpuset-cpus", process.env.BENCH_FIXTURE_LOAD_CPUS] : loadCpus;
+/** How many CPUs k6 has for one source: the cores its cpuset lists ("8-15", "2-3,10-15"), or four. */
+export const loadCores = (/** @type {string} */ source) => {
+  const [flag, set] = loadCpusFor(source);
+  return flag === "--cpuset-cpus" ? set.split(",").reduce((n, part) => { const [a, b = a] = part.split("-").map(Number); return n + b - a + 1; }, 0) : Number(set);
+};
 /**
  * The load generator's network namespace: every local port, and TIME_WAIT ports reused for new
  * connections. A server that closes each connection (gunicorn's sync workers) would otherwise use

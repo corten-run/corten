@@ -273,6 +273,20 @@ try {
   const iconUrl = await page.evaluate(() => /** @type {HTMLLinkElement} */ (document.querySelector('link[rel="icon"]')).href);
   const icon = await fetch(iconUrl);
   check("the favicon is a versioned SVG asset", icon.ok && /\/assets\//.test(iconUrl) && icon.headers.get("content-type") === "image/svg+xml", `${icon.status} ${iconUrl}`);
+  // The path browsers ask for on their own is the same icon, cached a day, and a 304 when kept.
+  const iconBytes = await icon.arrayBuffer();
+  const fixed = await fetch(`${base}/favicon.ico`, { headers: { accept: "image/avif,image/webp,*/*" } });
+  const fixedBytes = await fixed.arrayBuffer();
+  const fixedAgain = await fetch(`${base}/favicon.ico`, { headers: { "if-none-match": fixed.headers.get("etag") ?? "" } });
+  check(
+    "/favicon.ico is the static directory's icon, cached a day, with a 304 for a kept copy",
+    fixed.status === 200 &&
+      fixed.headers.get("content-type") === "image/svg+xml" &&
+      fixed.headers.get("cache-control") === "public, max-age=86400" &&
+      Buffer.from(fixedBytes).equals(Buffer.from(iconBytes)) &&
+      fixedAgain.status === 304,
+    `${fixed.status} ${fixed.headers.get("content-type")} ${fixed.headers.get("cache-control")}, then ${fixedAgain.status}`,
+  );
   const zstd = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "zstd" } });
   check("pages are compressed with zstd when the client accepts it", zstd.headers.get("content-encoding") === "zstd" && /accept-encoding/.test(zstd.headers.get("vary") ?? ""));
   const br = await fetch(`${base}/items/item_5`, { headers: { "accept-encoding": "gzip, br" } });
