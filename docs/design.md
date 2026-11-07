@@ -54,7 +54,8 @@ commit or versions, and Choices out of order (`scripts/choices.mjs`).
 
 The Rules and Limits below have none of the three: a Rule applies the values to code and changes
 with them, and a Limit is what Corten does not do, saying, where it is known, what would lift it
-or why it is so by design. A decision about the framework's shape is a Choice, even where it rules something out.
+or why it is so by design. A decision about the framework's shape is a Choice, even where it
+rules something out.
 
 1. <a id="choice-markup-macro"></a>**Markup is a Rust macro, not TSX.** Rendering TSX needs a JavaScript runtime on the server
    or a second toolchain in the app; `html!` keeps one language and compiles to the same string
@@ -950,15 +951,15 @@ or why it is so by design. A decision about the framework's shape is a Choice, e
     one boxed future, 21,374 to 21,511 instructions against 20,497 to 20,646 with none; a request
     outside that area 19,909 to 19,913 against 19,706; an app whose areas and APIs have none runs
     Corten's own code within 18 instructions of before, while its whole request rose from 19,696
-    to 19,976 to 19,988 in the allocator with the same allocations, so the whole count does not
-    separate the prefix lookup from heap layout); reasoned (one place for the app's steps is one
+    to 19,976 to 19,988 in the allocator with the same allocations, so the same layout effect may
+    be in the request outside the area); reasoned (one place for the app's steps is one
     order to read, and a tuple resolved at compile time costs no box); value (one way to do each
     thing, Value 5, and good defaults with easy overrides, Value 7).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
-    layer around the app cannot serve it; or a request outside every area costs more than about
-    200 instructions over the same app with no area middleware (the lookup and layout together,
-    as measured here).
+    layer around the app cannot serve it; or a request outside every area costs more than twice
+    the about 200 instructions measured here over the build before area middleware (the lookup
+    and any layout effect together; layout alone moved a whole request by about 280).
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
@@ -1105,10 +1106,12 @@ by design; where it is known, a limit says what would lift it or why it is so.
     them. Two of an app's own scripts with one file name are a startup error that names both.
 11. <a id="limit-caller-types"></a>A route's type says who may use it ([Choice 27](#choice-caller-types)), not which record:
     a check that depends on the record (the author, the organization) stays in its handler, a
-    check the compiler does not see. That an area's or an API's routes are under its prefix is a
-    `const` assertion in a generic method, which the compiler evaluates only when it generates
-    code: when it builds the app (`cargo build`, `cargo test`, `corten check`), not under
-    `cargo check` alone.
+    check the compiler does not see. That an area's or an API's routes are under its prefix is
+    checked when a routes module that holds the prefix's struct expands, `cargo check` included;
+    a route given to `Area::route` or `Api::route` otherwise is checked by a `const`
+    assertion in a generic method, which the compiler evaluates only when it generates code: when
+    it builds the app (`cargo build`, `cargo test`, `corten check`), not under `cargo check`
+    alone.
 12. <a id="limit-fixed-stages"></a>The app's own steps run at one place in Corten's fixed order of stages
     ([Choice 28](#choice-fixed-stages)), not as hooks at several: a step that must see the raw
     request before every stage is a tower layer around the whole app (`.layer(l)`), and there is
