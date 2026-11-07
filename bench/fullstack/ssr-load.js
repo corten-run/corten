@@ -1,4 +1,4 @@
-// Load against one web app. Items 1..500 so the API's cache stays warm and the web server, not
+// Load against one web app, directly or through the matched tier's edge (BASE https://...). Items 1..500 so the API's cache stays warm and the web server, not
 // the API, is what saturates. Uncompressed responses.
 // TARGET=page (default) asks for the item page, TARGET=json for the same item as JSON from the
 // app's `GET /api/items/{id}` route, so the two measure the same lookup and differ only in what
@@ -18,6 +18,8 @@ const scenarios = {
 };
 export const options = {
   discardResponseBodies: true,
+  // The matched tier's edge (edge.mjs) has a certificate made for the run. Over TLS k6 speaks HTTP/2.
+  insecureSkipTLSVerify: BASE.startsWith("https:"),
   summaryTrendStats: ["avg", "p(50)", "p(95)", "p(99)", "max"],
   scenarios: { load: scenarios[MODE] },
 };

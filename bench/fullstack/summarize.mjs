@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { apps, tier } from "./apps.mjs";
 import { rawOf } from "./pack.mjs";
 import { roundNameError } from "./round.mjs";
-import { phases, ssrOf } from "./ssr.mjs";
+import { edgeOf, phases, ssrOf } from "./ssr.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const round = process.argv[2] ?? "r1";
@@ -21,7 +21,8 @@ const pct = (xs, p) => {
   return s.length ? +s[Math.min(s.length - 1, Math.floor(p * (s.length - 1) + 0.5))].toFixed(0) : null;
 };
 // The tier the round ran (BENCH_TIER), so a matched round's numbers are never read as the defaults'.
-const summary = { tier, ssr: {}, build: read(join(dir, "build.json")), coldStart: read(join(dir, "cold-start.json")), bytes: read(join(dir, "bytes.json")), instructions: {}, browser: {} };
+// Whether a matched round reached its apps through the edge, so one run with BENCH_EDGE=off is never read as the tier's.
+const summary = { tier, ...(tier === "matched" ? { edge: edgeOf(raw) ? "on" : "off" } : {}), ssr: {}, build: read(join(dir, "build.json")), coldStart: read(join(dir, "cold-start.json")), bytes: read(join(dir, "bytes.json")), instructions: {}, browser: {} };
 // Steps droplet.mjs skipped after the droplet hung ("<time> step <name> skipped: <why>"): their
 // results are partly or wholly missing. Only rounds with one get the key.
 const skippedFile = join(dir, "skipped.txt");
@@ -71,6 +72,13 @@ const passesNote = (/** @type {any} */ entries) => {
   const n = Math.max(0, ...Object.values(entries).flatMap((e) => phases.map((p) => /** @type {any} */ (e)[p]?.asked ?? /** @type {any} */ (e)[p]?.passes ?? 1)));
   return n > 1 ? `, median of ${n} passes (range), ~ within noise of corten` : "";
 };
+/**
+ * What may have set a saturation phase's rate other than the app (ssr.mjs): the edge or k6 using
+ * 90% of its cores, or, through the edge, the app using less than 90% of its own in a saturation
+ * phase (ssr.mjs says it of no other).
+ * @param {any} p
+ */
+const marks = (p) => (p?.edgeBound ? " EDGE-BOUND" : "") + (p?.loadBound ? " LOAD-BOUND" : "") + (p?.appIdle ? " APP-IDLE" : "");
 // The cost first: what a steady load costs the machine (CPU at the fixed rate, requests per
 // CPU-second), then what each app does at its peak.
 console.log("\nCost (requests per CPU-second at the fixed rate and at 64 users, CPU at the fixed rate, 64-user requests a second per MiB)");
@@ -80,7 +88,7 @@ for (const source of Object.keys(summary.ssr)) {
   for (const [name, e] of Object.entries(summary.ssr[source])) {
     const f = e.fixed, s = e.sat64;
     if (!s) continue;
-    console.log(line([named(`${source}/${name}`, e), `fixed ${show(f, "perCpuSecond")}/CPU-s at ${f?.rps}/s, ${show(f, "cpuUsedPct", "%")} CPU${f && !f.cpuCounted ? " (sampled)" : ""}`, `64 users ${show(s, "perCpuSecond")}/CPU-s${s.cpuCounted ? "" : " (sampled)"}`, `${show(s, "perMiB")}/s per MiB`, s.apiCpuPct === null ? "" : `item API ${s.apiCpuPct}%`, e.failed ? "FAILED" : ""]));
+    console.log(line([named(`${source}/${name}`, e), `fixed ${show(f, "perCpuSecond")}/CPU-s at ${f?.rps}/s, ${show(f, "cpuUsedPct", "%")} CPU${f && !f.cpuCounted ? " (sampled)" : ""}`, `64 users ${show(s, "perCpuSecond")}/CPU-s${s.cpuCounted ? "" : " (sampled)"}${marks(s)}`, `${show(s, "perMiB")}/s per MiB`, s.apiCpuPct === null ? "" : `item API ${s.apiCpuPct}%`, s.edgeCpuUsedPct == null ? "" : `edge ${s.edgeCpuUsedPct}% CPU, ${s.edgePerCpuSecond}/CPU-s`, s.k6CpuUsedPct == null ? "" : `k6 ${s.k6CpuUsedPct}% CPU`, e.failed ? "FAILED" : ""]));
   }
 }
 for (const source of Object.keys(summary.ssr)) {
@@ -88,9 +96,10 @@ for (const source of Object.keys(summary.ssr)) {
   console.log(line(["App", "fixed rate: achieved rps, p50/p99 ms, CPU", "64 VUs: rps, p50/p99", "256 VUs: rps, p99, failed", "memory under load"]));
   for (const [name, e] of Object.entries(summary.ssr[source])) {
     const f = e.fixed, s = e.sat64, b = e.sat256;
+    const bound = marks;
     if (e.failed) console.log(line([name, `FAILED: ${e.failed}`, "", "", ""]));
     if (!f) continue;
-    console.log(line([named(name, e), `${f.rps}, ${show(f, "p50")}/${show(f, "p99")}, ${show(f, "cpuPct", "%")}`, `${show(s, "rps")}, ${show(s, "p50")}/${show(s, "p99")}`, `${show(b, "rps")}, ${show(b, "p99")}, ${b?.failedPct}%`, `${s?.memMiB}-${b?.memMaxMiB} MiB`]));
+    console.log(line([named(name, e), `${f.rps}${bound(f)}, ${show(f, "p50")}/${show(f, "p99")}, ${show(f, "cpuPct", "%")}`, `${show(s, "rps")}${bound(s)}, ${show(s, "p50")}/${show(s, "p99")}`, `${show(b, "rps")}${bound(b)}, ${show(b, "p99")}, ${b?.failedPct}%`, `${s?.memMiB}-${b?.memMaxMiB} MiB`]));
   }
 }
 if (Object.keys(summary.instructions).length) {

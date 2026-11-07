@@ -2430,6 +2430,17 @@ Corten is pre-1.0, so any minor version may change the API.
     a header timeout and a cap of 1,000 connections, which `conform-hold.mjs` probes as two new
     columns of the tier's matrix. Corten and axum-maud are in it so far (axum-maud with
     tower-http's layers); card-market reads `MAX_CONNECTIONS` into `App::max_connections`.
+268. `bench/fullstack`'s matched tier reaches its apps through an edge
+    ([#809 bench/fullstack serves every app over plain HTTP/1.1 with no proxy, though Corten's design expects one for TLS and HTTP/2](https://github.com/corten-run/corten/issues/809)):
+    one pinned nginx with one config (`edge.mjs`, the deploy guide's less its cache, with the
+    app's own name as Host) terminates TLS and speaks HTTP/2 to k6 and Chromium and HTTP/1.1 to
+    each app, on cores of its own (`BENCH_EDGE_CPUS`, six on a droplet), so the tier's load phases
+    and browser pass measure an app as it is deployed. Each phase counts the edge's CPU beside the
+    app's (`edgePerCpuSecond`, `edgeCpuUsedPct`), and k6's in every tier (`k6CpuUsedPct`); the
+    summary marks a phase the edge or k6 limited (EDGE-BOUND, LOAD-BOUND) and, through the edge,
+    a saturation phase whose app used less than 90% of its core (APP-IDLE), as every local one was. A matched round
+    runs on a c-16, and `droplet.mjs --edge off` runs it reached directly, to compare. The defaults
+    tier stays direct.
 269. `bench/fullstack/REVIEW.md` tells a framework's maintainers what the comparison measures,
     what they may change in their app (settings a production deployment uses, the app's own code)
     and what they may not (caching rendered output, skipping work, tuning past the framework's
