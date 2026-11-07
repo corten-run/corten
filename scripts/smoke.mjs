@@ -1316,6 +1316,51 @@ async function run(browser) {
   await page.unroute("**/busy-read*");
   await page.evaluate(() => ["busy-form", "busy-said", "busy-a", "busy-b"].forEach((id) => document.getElementById(id)?.remove()));
 
+  // A write is not cut short by another button: the one pressed while it is on its way is marked
+  // beside it and sends once its answer is drawn. A write whose answer sends the browser to
+  // another page keeps its button marked until that page is in, and then clears it, a button in
+  // the header (outside what the page swaps) included (#1063).
+  await page.route("**/busy-write*", async (route) => {
+    const by = new URLSearchParams(route.request().postData() ?? "").get("by");
+    await new Promise((resolve) => setTimeout(resolve, by === "b" ? 0 : 600));
+    const headers = by === "go" ? { "corten-location": "/" } : { "content-type": "text/html; charset=utf-8", "corten-patch": "1" };
+    await route.fulfill({ headers, body: by === "go" ? "" : `<p id="busy-w-said">wrote ${by}</p>` }).catch(() => {});
+  });
+  await page.evaluate(() => {
+    document
+      .querySelector("main")
+      ?.insertAdjacentHTML(
+        "beforeend",
+        __html('<form id="busy-w" method="post" action="/busy-write" data-patch></form><p id="busy-w-said"></p><button id="busy-wa" form="busy-w" name="by" value="a">A</button><button id="busy-wb" form="busy-w" name="by" value="b">B</button>'),
+      );
+    document.querySelector("header")?.insertAdjacentHTML("beforeend", __html('<button id="busy-wgo" form="busy-w" name="by" value="go">Go</button>'));
+    /** @type {any} */ (window).__goHeld = document.getElementById("busy-wgo");
+  });
+  const writeMarks = () => page.evaluate(() => ["busy-w", "busy-wa", "busy-wb"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
+  await page.click("#busy-wa");
+  await page.click("#busy-wb");
+  const whileWrite = await writeMarks();
+  await page.waitForFunction(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+  const afterWrites = await writeMarks();
+  check(
+    "a button pressed while a write is on its way is marked beside it and sends after its answer",
+    whileWrite === "true,true,true" && afterWrites === "-,-,-",
+    `${whileWrite} | ${afterWrites}`,
+  );
+  const redirectName = "a write that sends the browser to another page keeps its button busy until that page is in";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(redirectName, "without the Navigation API the browser loads that page in full");
+  else {
+    await page.click("#busy-wgo");
+    const goBusy = await page.evaluate(() => /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"));
+    await page
+      .waitForFunction(() => !document.getElementById("busy-w") && /** @type {any} */ (window).__goHeld.getAttribute("aria-busy") !== "true" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
+      .catch(() => {});
+    const goAfter = await page.evaluate(() => ({ held: /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"), path: location.pathname, form: !!document.getElementById("busy-w") }));
+    check(redirectName, goBusy === "true" && goAfter.held === null && goAfter.path === "/" && !goAfter.form, JSON.stringify({ goBusy, goAfter }));
+  }
+  await page.unroute("**/busy-write*");
+  await page.evaluate(() => ["busy-w", "busy-w-said", "busy-wa", "busy-wb", "busy-wgo"].forEach((id) => document.getElementById(id)?.remove()));
+
   const current = () => page.$$eval("a[data-nav][aria-current=page]", (links) => links.map((l) => l.getAttribute("href")).join());
   check("the shell marks the current link", (await current()) === "/");
   // The sector links beside <main> are marked `page`: each navigation brings the page's.
@@ -1820,16 +1865,18 @@ async function run(browser) {
         linkBusy.with && linkBusy.then?.path === "/" && linkBusy.then.stories === 0 && !(await more.$("[aria-busy]")),
         JSON.stringify(linkBusy),
       );
-      // And a button outside its GET form (`form=`): it is busy with main too, as the form is
-      // (#1063).
-      await more.evaluate(() =>
-        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<form id="nav-busy" method="get" action="/news"></form><button id="nav-busy-go" form="nav-busy">News</button>')),
-      );
+      // And a button outside its GET form (`form=`), in the header the swap keeps: it is busy
+      // with main too, as the form is, and cleared when the page is in (#1063).
+      await more.evaluate(() => {
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<form id="nav-busy" method="get" action="/news"></form>'));
+        document.querySelector("header")?.insertAdjacentHTML("beforeend", __html('<button id="nav-busy-go" form="nav-busy">News</button>'));
+      });
       await watchBusy(more, "#nav-busy-go");
       await more.click("#nav-busy-go");
       await more.waitForFunction(() => location.pathname === "/news" && !document.querySelector("main[aria-busy]"));
       const buttonBusy = await busyEnded(more);
       check("a button outside its GET form is busy with main until the page it started is in", buttonBusy.with && buttonBusy.then?.path === "/news", JSON.stringify(buttonBusy));
+      await more.evaluate(() => document.getElementById("nav-busy-go")?.remove());
       await more.click('header a[href="/"]');
       await more.waitForFunction(() => location.pathname === "/" && !document.querySelector("main[aria-busy]"));
       // Where the browser lets a navigation say when its address changes (precommitHandler), a

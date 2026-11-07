@@ -2439,7 +2439,9 @@ Corten is pre-1.0, so any minor version may change the API.
 271. The button that sends a form is `aria-busy="true"` with the form until the answer is drawn:
     a `data-patch` form's submitter until its patch comes, and a GET form's until the page it
     started is swapped in, a button outside its form (`form=`, a row's action for one form the
-    rows share) included. Another button's newer submit of the same form takes the marks. The
+    rows share) included, and through a write's answer that sends the browser to another page,
+    until that page is drawn. Another button's newer GET submit of the same form takes the marks,
+    and one pressed while a write is on its way is marked beside it until it sends. The
     kit's `Button` draws the state: a ring after its label in the text's color, turning unless
     the user asks for less motion, kept under forced colors, with a `progress` cursor
     ([#1063 A data-patch form's busy state lands only on the form, so a submit button outside it (form=) and the kit's Button show nothing while a server-drawn sheet loads](https://github.com/corten-run/corten/issues/1063)).
