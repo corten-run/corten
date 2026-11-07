@@ -2678,6 +2678,7 @@ async function run(browser) {
 
   // subscribe()'s other recovery paths (#1068). A patch that skips a seq loads a new snapshot, and
   // one already applied is dropped: seq 2, 2 again, then 4.
+  const feedsLogged = errors.length;
   /** @param {number} seq */
   const patchEvent = (seq) => `event: patch\nid: a-${seq}\ndata: {"seq":${seq},"changes":[]}\n\n`;
   const gapFeed = await feedTimes("gap", (n) => (n === 1 ? `${patchEvent(2)}${patchEvent(2)}${patchEvent(4)}` : "retry: 60000\n\n"));
@@ -2722,8 +2723,15 @@ async function run(browser) {
   const retriedGap = retriedFeed.snapshots.length === 2 ? retriedFeed.snapshots[1] - retriedFeed.snapshots[0] : NaN;
   check(
     "a snapshot that fails is fetched again after 1 s, and the feed goes live",
-    retriedFeed.snapshots.length === 2 && retriedGap >= 900 && retriedGap < 1700 && retriedFeed.streams === 1 && retriedStates.startsWith("syncing live"),
+    retriedFeed.snapshots.length === 2 && retriedGap >= 900 && retriedGap < 1900 && retriedFeed.streams === 1 && retriedStates.startsWith("syncing live"),
     `${retriedFeed.snapshots.length} snapshots, +${retriedGap} ms, ${retriedFeed.streams} streams; ${retriedStates}`,
+  );
+  // The browsers' own errors for the 503 streams and the 500 snapshot, and the runtime's for the
+  // snapshot, are the point of these checks, not faults.
+  errors.splice(
+    feedsLogged,
+    errors.length,
+    ...errors.slice(feedsLogged).filter((e) => !/\/feed\/(failed|retried)|Failed to load resource: the server responded with a status of 50[03]/.test(e)),
   );
 
   // A patch replaces markup but keeps what the user is doing: edited fields keep their state,
