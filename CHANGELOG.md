@@ -3834,6 +3834,18 @@ Corten is pre-1.0, so any minor version may change the API.
     against `f6d39bbd`, did not move beyond the machine's noise (debug, six runs each on 4 CPUs,
     alternating: median 55.7 s against 58.0 s, ranges 50.9 to 61.3 s and 45.1 to 75.6 s)
     ([#764 The default log feature compiles tracing-subscriber and four crates only it needs, to print a few lines to stderr](https://github.com/corten-run/corten/issues/764)).
+164. A markup call to a handler whose parameter has a JSDoc type no Rust value is checked against
+    does not compile, where it took any `ToJson` value: an object type (`{ count: number }`),
+    `number[]`, `string | null`, `object`, `any`, a `@typedef` of plain values, an unknown
+    name, or a group with a field of such a type. The warning on the call says why; type the value
+    with a generated declaration (`import("../types/app").Name`), or `unknown` for a value the
+    script checks itself, the one type that still takes any value. The handler itself compiles, so
+    an export only other scripts call is typed as the script needs. A typed event imported for
+    its type alone (`/** @import { Saved } from "corten/events" */`) is now its `#[event]` type,
+    as an `import` statement's is, where it took any event: `on:click` on such a handler does not
+    compile. No example, kit component or template script called a handler with such a parameter;
+    six event handlers in `examples/deck-builder` and `examples/seller-desk` are now checked
+    ([#1037 Unsupported handler parameter types can silently fall back to unchecked Rust-to-JS arguments](https://github.com/corten-run/corten/issues/1037)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

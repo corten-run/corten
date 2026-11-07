@@ -705,14 +705,17 @@ fn rendering_collects_the_modules_a_page_uses() {
 
 /// The strings handlers write, as the runtime's parser expects them (`wire.json`, which
 /// `scripts/wire.mjs` parses with the runtime's own parser).
+/// `shared.watch`'s argument: the Rust type of its generated declaration (`types/app.d.ts`).
+#[cfg_attr(feature = "json", derive(crate::json::ToJson))]
+#[allow(dead_code)]
+struct Options {
+    id: &'static str,
+    tags: [&'static str; 2],
+}
+
 #[cfg(feature = "json")]
 #[test]
 fn handlers_write_the_shared_wire_vectors() {
-    #[derive(crate::json::ToJson)]
-    struct Options {
-        id: &'static str,
-        tags: [&'static str; 2],
-    }
     let nasty = "),{\"x\":1}\\ \u{2028} <&'> é 🦀 ,a:b";
     let pages = [
         LineItem { name: "a\"b", quantity: 2 }.to_html(),

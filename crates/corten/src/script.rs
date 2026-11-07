@@ -795,6 +795,36 @@
 //! # fn main() {}
 //! ```
 //!
+//! Any other JSON shape (`{ count: number }`, `number[]`, `string | null`, a `@typedef` of plain
+//! values) has no Rust type the call is checked against, so a call to its handler does not
+//! compile either, whatever it passes; type the value with a generated declaration, as above:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::show(target, 42)}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A parameter typed `unknown` claims nothing the call does not check: it takes any `ToJson`
+//! value, and the script narrows it before using it:
+//!
+#![cfg_attr(feature = "json", doc = "```")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::raw(target, 42)}></p> }
+//! }
+//! # fn main() {
+//! assert!(CountBadge {}.to_html().contains("count_badge.raw($t,42)"), "{}", CountBadge {}.to_html());
+//! # }
+//! ```
+//!
 //! A typed event's handler on another event (`toggled` takes a `RowToggled`, a click is a
 //! `MouseEvent`):
 //!
@@ -817,6 +847,41 @@
 //!             <caption><output ref={count}></output></caption>
 //!         </table>
 //!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! The same with the class imported for its type alone (`/** @import { RowToggled } from
+//! "corten/events" */`, `toggle_note.js`):
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[corten::script::event]
+//! pub struct RowToggled {
+//!     pub id: String,
+//!     pub selected: bool,
+//! }
+//!
+//! #[component(js)]
+//! fn ToggleNote() -> impl Render {
+//!     html! { <p on:click={js::toggled(event, target)}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[corten::script::event]
+//! pub struct RowToggled {
+//!     pub id: String,
+//!     pub selected: bool,
+//! }
+//!
+//! #[component(js)]
+//! fn ToggleNote() -> impl Render {
+//!     html! { <p on:RowToggled={js::toggled(event, target)}></p> }
 //! }
 //! # fn main() {}
 //! ```
@@ -1399,14 +1464,15 @@ pub trait Arg<P> {
 }
 
 /// What a handler parameter needs when its JSDoc type is one no call can be checked against (a set
-/// of names written as string literals, a generated declaration inside another type): nothing
+/// of names written as string literals, a generated declaration inside another type, a JSON shape
+/// no Rust type stands for, `{ count: number }`): nothing
 /// has it, so a call does not compile, and the handler's deprecation note says why. The handler
 /// itself compiles, so an export only other scripts import is the script's to type. It is sealed:
 /// nothing outside Corten can implement it either.
 #[diagnostic::on_unimplemented(
     message = "the script types this handler parameter so that no call can be checked against it",
     label = "the warning on this handler says why",
-    note = "a set of names is a Rust enum with a generated declaration, import(\"../types/app\").Name; a list or an optional one is a Rust type of its own"
+    note = "a set of names, or any other JSON value, is a Rust type with a generated declaration, import(\"../types/app\").Name; a list or an optional one is a Rust type of its own; a parameter typed unknown takes any value"
 )]
 pub trait Refused: refused::Sealed {}
 
@@ -2301,7 +2367,7 @@ pub mod __private {
         }
     }
 
-    /// Any `ToJson` value, as JSON, for a parameter whose JSDoc type Corten does not check.
+    /// Any `ToJson` value, as JSON, for a parameter typed `unknown`, which the script narrows.
     #[cfg(feature = "json")]
     impl<T: crate::json::ToJson> Arg<ts::Any> for T {
         fn write_arg(&self, _: &Ctx, out: &mut String) {

@@ -45,10 +45,12 @@ pub enum Param {
     /// A type Corten would check but cannot read (`FeedUrl<Level[]>`): why, for the error.
     Unreadable(String),
     /// A handler parameter whose type no call can be checked against (a set of names written as
-    /// string literals, a generated declaration inside another type): why. The handler compiles,
+    /// string literals, a generated declaration inside another type, any other JSON shape but
+    /// `unknown`): why. The handler compiles,
     /// so an export only other scripts call is the script's to type, and a call to it does not.
     Refused(String),
-    /// Any other JSDoc type: a JSON value.
+    /// Any other JSDoc type: a JSON value. A handler parameter is this only when it is `unknown`;
+    /// any other becomes [`Param::Refused`].
     Any,
 }
 
@@ -511,6 +513,14 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
                     return Err((start + 1, "unclosed /** comment".into()));
                 }
             }
+            // `/** @import { Saved } from "corten/events" */`: a type-only import of typed events,
+            // which types parameters as an import statement does (it serves nothing).
+            if let Some(names) = jsdoc_import(&block, "corten/events") {
+                for name in names {
+                    let (class, local) = name.split_once(" as ").map_or((name.as_str(), name.as_str()), |(c, l)| (c.trim(), l.trim()));
+                    events.push((local.to_string(), class.to_string()));
+                }
+            }
             if let Some((name, ty)) = tag_type(&block, "@typedef") {
                 match ty.strip_prefix("import(\"corten/events\").") {
                     Some(class) => events.push((name, class.trim().to_string())),
@@ -701,6 +711,11 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
         if let Some((_, Param::Unreadable(why))) = fields.iter().find(|(_, p)| matches!(p, Param::Unreadable(_))) {
             unions.push((name.clone(), (line, why.clone())));
         }
+        if let Some(((field, _), (_, t))) =
+            fields.iter().zip(&props).find(|((_, p), (_, t))| *p == Param::Any && resolve(t) != UNKNOWN)
+        {
+            unions.push((name.clone(), (line, format!("{name}: {field}: {}", unchecked(t, &expand(t))))));
+        }
         for (field, _) in &fields {
             if !field.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
                 || !field.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -767,7 +782,8 @@ fn parse_all(source: &str) -> Result<Parsed, (usize, String)> {
                     Param::Any => match type_words(&expanded).into_iter().find_map(|w| bad.iter().find(|(b, _)| *b == w)) {
                         Some((_, why)) => refused(why.clone()),
                         None if mentions_generated(&expanded) => refused(format!("{ty} holds a generated declaration in a shape the call is not checked against; take the generated type itself (import(\"../types/app\").Name), or declare a Rust type for the whole value (derive ToJson, add it with Types::add) and take its declaration")),
-                        None => Param::Any,
+                        None if named == UNKNOWN => Param::Any,
+                        None => refused(unchecked(&ty, &expanded)),
                     },
                     other => other,
                 }
@@ -1568,6 +1584,30 @@ fn generic_name(ty: &str) -> Option<&str> {
     None
 }
 
+/// The one JSDoc type a markup call passes any JSON value to: the script has to narrow it before
+/// using it, so nothing about the value is claimed that the call does not check.
+const UNKNOWN: &str = "unknown";
+
+/// Why a call to a handler whose parameter is typed `ty` (`expanded` with its aliases written
+/// out) does not compile: no Rust type is checked against it, and a precise-looking annotation
+/// that takes any value would be a guarantee only in appearance.
+fn unchecked(ty: &str, expanded: &str) -> String {
+    let shown = if expanded == ty { ty.to_string() } else { format!("{ty}, which is {expanded}") };
+    format!("{shown}: no call can be checked against this type, so a wrong argument would compile; declare a Rust type for the value (derive ToJson, add it with Types::add) and take its declaration, import(\"../types/app\").Name, use a type the scripts guide lists as checked, or take {UNKNOWN} and check the value in the script")
+}
+
+/// The names a JSDoc `@import { A, B as C } from "module"` of `module` brings in, as written.
+fn jsdoc_import(block: &str, module: &str) -> Option<Vec<String>> {
+    let rest = &block[block.find("@import")? + "@import".len()..];
+    let (names, after) = rest.trim_start().strip_prefix('{')?.split_once('}')?;
+    let from = after.trim_start().strip_prefix("from")?.trim_start();
+    let quoted = [format!("\"{module}\""), format!("'{module}'")];
+    if !quoted.iter().any(|q| from.starts_with(q.as_str())) {
+        return None;
+    }
+    Some(names.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect())
+}
+
 /// The Rust bound for a JSDoc type.
 fn param_type(ty: &str) -> Param {
     let ty = unwrap_parens(ty.trim());
@@ -1809,7 +1849,7 @@ import { keep } from "corten";
  */
 export function showAll(rows, rest, event) {}
 
-/** @param {HTMLTableCellElement[]} cells @param {Stock} stock @param {AbortSignal} signal @param {string} url */
+/** @param {HTMLTableCellElement[]} cells @param {unknown} stock @param {AbortSignal} signal @param {string} url */
 export async function watch(cells, stock, signal, url) {}
 
 function helper() {}
@@ -1839,6 +1879,72 @@ function helper() {}
                 "url:ts::String",
             ]
         );
+    }
+
+    #[test]
+    fn a_type_no_call_is_checked_against_refuses_the_call_and_unknown_takes_any_value() {
+        // #1037: each of these took any JSON value from Rust while the annotation looked precise.
+        for ty in [
+            "{ count: number }",
+            "Level",
+            "Level | null",
+            "number[]",
+            "boolean[]",
+            "string | null",
+            "number=",
+            "object",
+            "Record<string, number>",
+            "[string, number]",
+            "Json",
+            "any",
+            "*",
+            "MouseEvent | KeyboardEvent",
+        ] {
+            let source = format!(
+                "/** @typedef {{{{ id: string, qty: number }}}} Level */\n/** @typedef {{string | number | Json[]}} Json */\n/** @param {{{ty}}} a */\nexport function f(a) {{}}"
+            );
+            let why = refusal(&source);
+            assert!(why.starts_with("f: a: ") && why.contains("no call can be checked against this type"), "{ty}: {why}");
+        }
+        // A typedef is named as it was written, with what it stands for.
+        let why = refusal("/** @typedef {{ id: string }} Level */\n/** @param {Level} a */\nexport function f(a) {}");
+        assert!(why.starts_with("f: a: Level: no call"), "{why}");
+        let why = refusal("/** @typedef {number[]} Ids */\n/** @param {Ids} a */\nexport function f(a) {}");
+        assert!(why.starts_with("f: a: Ids, which is number[]: no call"), "{why}");
+        // `unknown` claims nothing the call does not check: the script narrows it.
+        let (handlers, _) =
+            parse("/** @typedef {unknown} Raw */\n/** @param {unknown} a @param {Raw} b */\nexport function f(a, b) {}").unwrap();
+        assert_eq!(handlers[0].params, [("a".to_string(), Param::Any), ("b".to_string(), Param::Any)]);
+        // A group with a field of such a type refuses a handler that takes it, and one that only
+        // the script keeps is the script's to type.
+        let group = "/** @typedef {{ box: HTMLInputElement, words: string[][] }} Parts */\n";
+        let why = refusal(&format!("{group}/** @param {{Parts}} p */\nexport function f(p) {{}}"));
+        assert!(why.starts_with("f: p: Parts: words: string[][]: no call can be checked"), "{why}");
+        let (handlers, groups) = parse(&format!("{group}/** @param {{HTMLInputElement}} b */\nexport function f(b) {{}}")).unwrap();
+        assert_eq!((groups.len(), &handlers[0].params[0].1), (1, &Param::Checked("el::HTMLInputElement".into())));
+        let (handlers, _) = parse(
+            "/** @typedef {{ box: HTMLInputElement, raw: unknown }} Parts */\n/** @param {Parts} p */\nexport function f(p) {}",
+        )
+        .unwrap();
+        assert_eq!(handlers[0].params[0].1, Param::Group("Parts".into()));
+    }
+
+    #[test]
+    fn an_event_imported_in_jsdoc_is_its_rust_type() {
+        let source = "/** @import { Saved, Cleared as Done } from \"corten/events\" */\n/** @import { Message } from \"corten\" */\n/** @param {Saved} a @param {Done} b */\nexport function f(a, b) {}";
+        let (handlers, _) = parse(source).unwrap();
+        assert_eq!(
+            handlers[0].params,
+            [("a".to_string(), Param::Event("Saved".into())), ("b".to_string(), Param::Event("Cleared".into()))]
+        );
+        // Not served with the script, which imports nothing when it runs.
+        let (_, _, imports, _) = parse_all(source).unwrap();
+        assert!(imports.is_empty(), "{imports:?}");
+    }
+
+    /// A parameter whose type no call is checked against: a call to its handler does not compile.
+    fn unchecked_call(param: &Param) -> bool {
+        matches!(param, Param::Refused(why) if why.contains("no call can be checked against this type"))
     }
 
     /// Why a call to the script's handler does not compile: its first refused parameter's reason,
@@ -1876,7 +1982,7 @@ function helper() {}
         .unwrap();
         assert_eq!(handlers[0].params[0].1, Param::Generated("SortBy".into()), "through a typedef");
         assert_eq!(handlers[0].params[1].1, Param::Generated("Step".into()), "written in place");
-        assert_eq!(handlers[0].params[2].1, Param::Any, "not the generated declarations");
+        assert!(unchecked_call(&handlers[0].params[2].1), "not the generated declarations");
         for (source, what) in [
             ("/** @param {\"name\" | \"price\"} by */\nexport function f(by) {}", "a union"),
             ("/** @param {'grid'} by */\nexport function f(by) {}", "one literal"),
@@ -1895,7 +2001,7 @@ function helper() {}
         )
         .unwrap();
         assert_eq!(deep[0].params[0].1, Param::Generated("Tab".into()), "through a typedef of a typedef");
-        assert_eq!(deep[0].params[1].1, Param::Any, "types/app as whole segments only");
+        assert!(unchecked_call(&deep[0].params[1].1), "types/app as whole segments only");
         for ty in [
             "import(\"../types/app\").Tab | null",
             "import(\"../types/app\").Tab[]",
@@ -2004,7 +2110,7 @@ function helper() {}
             }
             source += "/** @typedef {{ id: string, data: Json }} Saved */\n/** @param {Json} a @param {Saved} b @param {A0} c */\nexport function f(a, b, c) {}";
             let (handlers, _) = parse(&source).unwrap();
-            assert!(handlers[0].params.iter().all(|(_, p)| *p == Param::Any), "{:?}", handlers[0].params);
+            assert!(handlers[0].params.iter().all(|(_, p)| unchecked_call(p)), "{:?}", handlers[0].params);
         });
     }
 
@@ -2014,7 +2120,7 @@ function helper() {}
 /** @param {{ "aria-label": string }} a @param {HTMLElementTagNameMap["dialog"]} b @param {{ Tab: string }} c @param {`item-${string}`} d @param {(Tab: number) => void} e */
 export function f(a, b, c, d, e) {}"#;
         let (handlers, _) = parse(fine).unwrap();
-        assert!(handlers[0].params.iter().all(|(_, p)| *p == Param::Any), "{:?}", handlers[0].params);
+        assert!(handlers[0].params.iter().all(|(_, p)| unchecked_call(p)), "{:?}", handlers[0].params);
         let plain = "/** @typedef {import(\"../types/app\").Tab} Tab */\n/** @typedef {{ id: string, tab: Tab }} P */\n/** @typedef {{ inner: P }} Outer */\n";
         for ty in ["P", "P=", "P | null", "P[]", "Outer", "Outer | null"] {
             let source = format!("{plain}/** @param {{{ty}}} a */\nexport function f(a) {{}}");
@@ -2045,8 +2151,9 @@ export function f(a, b, c, d, e) {}"#;
             "(Mode, Tab) => void",
             "<Mode>(x: Mode) => Mode",
         ] {
-            let (handlers, _) = parse(&format!("{mode}/** @param {{{ty}}} a */\nexport function f(a) {{}}")).unwrap();
-            assert_eq!(handlers[0].params[0].1, Param::Any, "{ty}");
+            // Not a set of names, though no call is checked against it either.
+            let why = refusal(&format!("{mode}/** @param {{{ty}}} a */\nexport function f(a) {{}}"));
+            assert!(why.contains("no call can be checked against this type"), "{ty}: {why}");
         }
         for ty in [
             "Exclude<\"a\" | \"b\", \"a\">",
@@ -2075,7 +2182,7 @@ export function f(a, b, c, d, e) {}"#;
             "{:?}",
             handlers[0].params
         );
-        assert_eq!(handlers[0].params[2].1, Param::Any);
+        assert!(unchecked_call(&handlers[0].params[2].1), "a template literal type");
         let (handlers, _) = parse(
             "/** @param {import  (\t\"../types/app\"\n  )  .  Tab} a @param {Message\t <\"count\">} b */\nexport function f(a, b) {}",
         )
@@ -2091,7 +2198,7 @@ export function f(a, b, c, d, e) {}"#;
         // A template typedef with an apostrophe, written into another template's `${..}`.
         let (handlers, _) =
             parse("/** @typedef {`it's-${number}`} A */\n/** @param {`${A}`} a */\nexport function f(a) {}").unwrap();
-        assert_eq!(handlers[0].params[0].1, Param::Any);
+        assert!(unchecked_call(&handlers[0].params[0].1), "{:?}", handlers[0].params);
         // Aliases that refer to each other: what any of them holds is seen in each.
         for (leaf, what) in
             [("\"x\" | \"y\"", "one of several names"), ("import(\"../types/app\").Leaf", "generated declaration")]
@@ -2153,7 +2260,7 @@ export function f(a, b, c, d, e) {}"#;
         .unwrap();
         assert_eq!(handlers[0].params[0].1, Param::Checked(format!("ts::Message<{}u64>", message_id(&["count", "total"]))));
         assert_eq!(message_id(&["total", "count"]), message_id(&["count", "total"]), "the order does not matter");
-        assert_eq!(handlers[0].params[1].1, Param::Any, "not a union of names");
+        assert!(unchecked_call(&handlers[0].params[1].1), "not a union of names");
         let (camel, _) = parse("/** @param {Message<\"updatedAt\">} label */\nexport function f(label) {}").unwrap();
         assert_eq!(
             camel[0].params[0].1,
@@ -2179,7 +2286,7 @@ export function f(body, any, odd) {}";
                     Param::Checked(format!("ts::Holds<::corten::script::el::HTMLTableSectionElement, {row}u64>"))
                 ),
                 ("any".to_string(), Param::Checked(format!("ts::Holds<::corten::script::el::HTMLElement, {row}u64>"))),
-                ("odd".to_string(), Param::Any),
+                ("odd".to_string(), Param::Refused(format!("f: odd: {}", unchecked("Holds<Row, Thing>", "Holds<Row, Thing>")))),
             ]
         );
     }
@@ -2233,7 +2340,7 @@ export function toggled(event, sel, c, level, done, cleared, n) {}
                 &Param::Event("RowToggled".into()),
                 &Param::Group("Selection".into()),
                 &Param::Group("Counter".into()),
-                &Param::Any,
+                &Param::Refused(format!("toggled: level: {}", unchecked("Level", "Level"))),
                 &Param::Event("Saved".into()),
                 &Param::Event("Cleared".into()),
                 &Param::Group("Count".into()),

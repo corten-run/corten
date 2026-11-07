@@ -26,7 +26,9 @@ export function said(event) {
   document.title = event.detail.message;
 }
 
-/** @param {AbortSignal} signal @param {{ id: string, tags: string[] }} options */
+/** @typedef {import("../types/app").Options} Options */
+
+/** @param {AbortSignal} signal @param {Options} options */
 export function watch(signal, options) {
   signal.addEventListener("abort", () => console.log("stopped", options.id));
 }
