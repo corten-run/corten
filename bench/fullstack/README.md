@@ -843,8 +843,8 @@ On the rounds' requests, every default together costs about 10,500 instructions 
 compresses nothing there: it reads the body's type and size and adds `Vary: accept-encoding`.
 For a browser, compressing is two thirds of the request (233,600 of 344,400 a page with zstd 1,
 162,600 of 227,100 for the JSON) and the page's `ETag` 26,500 (7.7%, close to the 27,700 measured
-in process above); the JSON is not tagged, and nothing is tagged on `identity` ([design Limit
-21](../../docs/design.md#limit-etag)). The rest are each under 1.3%; the connection watch costs about
+in process above); the JSON is not tagged, and nothing is tagged on `identity`
+([design Limit 21](../../docs/design.md#limit-etag)). The rest are each under 1.3%; the connection watch costs about
 80 a request on one kept connection, since it runs per connection, not per request. Removing
 every default at once was not measured, so the sum assumes they do not overlap.
 
