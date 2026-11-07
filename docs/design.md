@@ -1258,8 +1258,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     minimum body rate, the idle time being how far behind it a client may fall), counting only the
     time spent waiting for the client, since one byte resets an idle time alone and a long upload's
     route has a long deadline or none. That reader is Corten's own and already notes when a wait
-    begins, so the rate costs it two counts and a clock read per piece it waited for, and nothing on
-    a request that reads no body (MEASURED); it assumes the handler asks for the next piece
+    begins, so the rate costs it a count for each piece, another and a clock read for each piece it
+    waited for, and nothing on a request that reads no body (callgrind, one byte a piece: 2,038 to
+    2,188 instructions a piece `Pieces` waited for; an upload 3% more when its pieces came at once,
+    6% more when it waited for each; a body read whole unchanged); it assumes the handler asks for the next piece
     promptly, as a handler that spends a fixed time on each piece lets a client that sends one in
     that time go on unbounded, as Kestrel's does. A body read whole (`bytes_up_to`, `Form`,
     `Json`) is bounded by the route's deadline alone, which a route that removes it keeps for those;
