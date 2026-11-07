@@ -3,12 +3,15 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apps } from "./apps.mjs";
+import { apps, tier } from "./apps.mjs";
 import { rawOf } from "./pack.mjs";
+import { roundNameError } from "./round.mjs";
 import { phases, ssrOf } from "./ssr.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const round = process.argv[2] ?? "r1";
+// A matched round (m<n>) is summarized with BENCH_TIER=matched, its apps, and only it.
+if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
 const dir = join(here, "results", round);
 // A packed round's raw files (each app's k6, CPU and startup files) are read from its archive.
 const raw = rawOf(dir);
@@ -17,7 +20,8 @@ const pct = (xs, p) => {
   const s = xs.filter(Number.isFinite).sort((a, b) => a - b);
   return s.length ? +s[Math.min(s.length - 1, Math.floor(p * (s.length - 1) + 0.5))].toFixed(0) : null;
 };
-const summary = { ssr: {}, build: read(join(dir, "build.json")), coldStart: read(join(dir, "cold-start.json")), bytes: read(join(dir, "bytes.json")), instructions: {}, browser: {} };
+// The tier the round ran (BENCH_TIER), so a matched round's numbers are never read as the defaults'.
+const summary = { tier, ssr: {}, build: read(join(dir, "build.json")), coldStart: read(join(dir, "cold-start.json")), bytes: read(join(dir, "bytes.json")), instructions: {}, browser: {} };
 // Steps droplet.mjs skipped after the droplet hung ("<time> step <name> skipped: <why>"): their
 // results are partly or wholly missing. Only rounds with one get the key.
 const skippedFile = join(dir, "skipped.txt");

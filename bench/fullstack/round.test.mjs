@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { maxPasses } from "./passes.mjs";
-import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
+import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -222,4 +222,16 @@ test("the unit starts again at boot only when asked, and refuses what systemd wo
   assert.doesNotMatch(unit({ ...options, atBoot: false }), /WantedBy/);
   assert.throws(() => unit({ ...options, script: "/bench/%n.sh", atBoot: true }));
   assert.throws(() => unit({ ...options, log: "/bench/a\nExecStart=/bin/sh", atBoot: true }));
+});
+
+test("a matched-tier round is m<n>, and m<n> is the matched tier's alone, so the trend's r<n> never mix", () => {
+  for (const round of ["m1", "m12"]) assert.equal(roundNameError(round, "matched"), null, round);
+  for (const round of ["r17", "ab1", "m", "m1x"]) assert.match(String(roundNameError(round, "matched")), /is named m<n>/, round);
+  for (const round of ["r17", "aot2", "conform2", "p1"]) assert.equal(roundNameError(round, "defaults"), null, round);
+  assert.match(String(roundNameError("m3", "defaults")), /BENCH_TIER=matched/);
+});
+
+test("the matched tier's apps include Corten, the reference, and the anchor every tier shares", () => {
+  const matched = Object.entries(apps).filter(([, app]) => /** @type {{ matched?: boolean }} */ (app).matched).map(([name]) => name);
+  for (const name of ["corten", "axum-maud"]) assert.ok(matched.includes(name), name);
 });

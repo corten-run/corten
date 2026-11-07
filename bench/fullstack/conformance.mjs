@@ -11,6 +11,11 @@
 /** The shape of a round's conformance.json: 2 added the failed read, the log lines and a counted header limit. */
 export const format = 2;
 
+/** The production profile's connection cap (apps.mjs passes it to each app as MAX_CONNECTIONS). */
+export const maxConnections = 1000;
+/** How many idle connections conform.mjs holds to see the cap: past it, by more than a few. */
+export const capHeld = maxConnections + 50;
+
 /** The item conform.mjs's item API (conform-items.mjs) answers 500 for: a read that fails. */
 export const brokenItem = "conform_broken";
 
@@ -105,7 +110,8 @@ export const readyPaths = ["/health/ready", "/readyz", "/actuator/health/readine
  * refused the page's own post.
  * The deadline is any 5xx within 35 seconds: Corten's default deadline is 30 (card-market sets 10),
  * gunicorn's worker timeout 30, and five seconds allow for the clock and the abort.
- * @type {{ key: string, label: string, pages?: boolean, cell: (o: Record<string, any>) => string, meets: (cell: string) => boolean }[]}
+ * A column with `tier: "matched"` is the matched tier's alone (conform.mjs probes it only there).
+ * @type {{ key: string, label: string, pages?: boolean, tier?: "matched", cell: (o: Record<string, any>) => string, meets: (cell: string) => boolean }[]}
  */
 export const features = [
   { key: "pageHeaders", label: "page security headers", pages: true, cell: (o) => securityOf(o.page), meets: (c) => c === "all" },
@@ -137,7 +143,31 @@ export const features = [
   { key: "live", label: "liveness endpoint", cell: (o) => (o.live ? o.live.path + " " + statusOf(o.live) : "none"), meets: (c) => / 200$/.test(c) },
   { key: "readyDown", label: "readiness, item API hung", cell: (o) => (!o.readyPath ? "no readiness endpoint" : o.readyPath + " " + timed(o.readyDown)), meets: (c) => within(c.replace(/^\S+ /, ""), /^[45]\d\d$/, 35) },
   { key: "deadline", label: "item API hung: page (JSON) answer", cell: (o) => timed(o.slow), meets: (c) => within(c, /^5\d\d$/, 35) },
+  // The profile's header timeout is 30 seconds; five allow for the clock, as the deadline's do.
+  { key: "unfinishedHead", label: "request head never finished: connection closed", tier: "matched", cell: (o) => unfinishedOf(o.unfinishedHead), meets: (c) => Number(/^closed in ([\d.]+) s$/.exec(c)?.[1] ?? Infinity) <= 35 },
+  { key: "connectionCap", label: `connections capped at ${maxConnections.toLocaleString("en-US")}`, tier: "matched", cell: (o) => capOf(o.cap), meets: (c) => c.startsWith("capped") },
 ];
+
+
+/** An unfinished head's cell: "closed in <s> s", "held <s> s", or how the probe failed. */
+const unfinishedOf = (/** @type {{ closedMs?: number, timedOutMs?: number, error?: string } | undefined} */ p) =>
+  !p ? "n/a: not probed" : p.error ? "error " + p.error : p.closedMs !== undefined ? "closed in " + (p.closedMs / 1000).toFixed(1) + " s" : "held " + Math.round((p.timedOutMs ?? 0) / 1000) + " s";
+
+/**
+ * The cap's cell: "capped, then <status | closed | held>" when a request on a connection past the
+ * held ones was not answered while they were held, "served with <n> held" when it was, or why it
+ * could not be seen (fewer connections held than the cap allows).
+ */
+const capOf = (/** @type {{ held?: number, whileHeld?: number | null, afterRelease?: number | string | null, error?: string } | undefined} */ p) => {
+  if (!p) return "n/a: not probed";
+  if (p.error) return "error " + p.error;
+  if ((p.held ?? 0) < capHeld) return `n/a: held only ${p.held} connections`;
+  if (p.whileHeld !== null && p.whileHeld !== undefined) return `served with ${p.held} held (${p.whileHeld})`;
+  return "capped, then " + (p.afterRelease === null || p.afterRelease === undefined ? "held" : String(p.afterRelease));
+};
+
+/** The columns of a tier's matrix: the matched tier's own columns only in that tier. */
+export const featuresOf = (/** @type {string | undefined} */ tier) => features.filter((f) => !f.tier || f.tier === tier);
 
 /**
  * One app's row: each column's cell, and `unmet`, the counted columns whose cell does not do the
@@ -148,7 +178,7 @@ export const rowOf = (o) => {
   /** @type {Record<string, any>} */
   const row = {};
   const unmet = [];
-  for (const f of features) {
+  for (const f of featuresOf(o.tier)) {
     const cell = f.pages && !o.pages ? "n/a" : f.cell(o);
     row[f.key] = cell;
     if (!cell.startsWith("n/a") && !f.meets(cell)) unmet.push(f.key);

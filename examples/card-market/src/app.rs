@@ -43,7 +43,15 @@ pub fn app(source: Source) -> App {
         Err(_) => WRITES_PER_MINUTE,
     };
     let keys = |name: &str| std::env::var(name).unwrap_or_default();
-    app_with(source, Keys { partners: Partners::parse(&keys("API_KEYS")), agents: &keys("AGENT_TOKENS") }, writes)
+    let app = app_with(source, Keys { partners: Partners::parse(&keys("API_KEYS")), agents: &keys("AGENT_TOKENS") }, writes);
+    // The most connections held open at once (`MAX_CONNECTIONS`), so many idle or slow clients
+    // cannot hold every socket the process may open; no limit unless set.
+    match std::env::var("MAX_CONNECTIONS") {
+        Ok(n) => app.max_connections(
+            n.trim().parse().ok().filter(|&n| n > 0).expect("MAX_CONNECTIONS is a whole number above zero"),
+        ),
+        Err(_) => app,
+    }
 }
 
 /// Who may call the JSON routes: partners by API key, agents by token (`AGENT_TOKENS`, comma

@@ -18,20 +18,24 @@
 //     ended (`journalctl -k -b -1`) goes to results/<round>/kernel-before-start-<n>.txt
 //     (keepKernelLog).
 // On a bench host set BENCH_APP_CPUS, BENCH_LOAD_CPUS and BENCH_API_CONTAINER (droplet.mjs does).
+// BENCH_TIER=matched (droplet.mjs --tier matched) runs the matched tier's apps with the production
+// profile (apps.mjs; README, "The matched tier"), in a round named m<n>.
 // BENCH_PASSES (1 unless set, droplet.mjs --passes) runs each load phase that many times, the apps
 // taking turns, and summarize.mjs reports their median and range (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apiContainer, apps, network, pageApps, runArgs } from "./apps.mjs";
+import { apiContainer, apps, network, pageApps, runArgs, tier } from "./apps.mjs";
 import { passesOf } from "./passes.mjs";
-import { buildStep, calls, idleMinutes, mayStart, resumeAt, startMinutes, steps } from "./round.mjs";
+import { buildStep, calls, idleMinutes, mayStart, resumeAt, roundNameError, startMinutes, steps } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const unattended = process.argv.includes("--unattended");
 const [round = "r1", browserRuns = "10", from = steps[0]] = process.argv.slice(2).filter((a) => a !== "--unattended");
 if (!steps.includes(from)) throw new Error(`from must be one of ${steps.join(", ")}`);
+// A matched-tier round (BENCH_TIER=matched) is m<n>, and only it: the trend reads r<n> alone.
+if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
 // It removes every container on the host, so only where droplet.mjs runs it.
 if (unattended && (process.platform !== "linux" || !process.env.BENCH_APP_CPUS)) throw new Error("--unattended is for a bench droplet (droplet.mjs runs it there)");
 const minute = 60_000;

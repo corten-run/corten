@@ -6,7 +6,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
-import { errorOf, features, format, formBody, formOf, logLinesOf, parseAnswer, rowOf, scriptPolicyOf, securityOf, statusOf } from "./conformance.mjs";
+import { capHeld, errorOf, features, featuresOf, format, formBody, formOf, logLinesOf, maxConnections, parseAnswer, rowOf, scriptPolicyOf, securityOf, statusOf } from "./conformance.mjs";
 
 const answer = (/** @type {number} */ status, /** @type {Record<string, string>} */ headers = {}, body = "x", ms = 5) => ({ status, headers, bodyLength: body.length, ms });
 const secure = { "content-security-policy": "default-src 'none'; frame-ancestors 'none'", "x-content-type-options": "nosniff", "referrer-policy": "no-referrer", "cross-origin-opener-policy": "same-origin" };
@@ -266,4 +266,71 @@ test("a failed read, the header limit and the log lines are scored from format 2
   for (const key of ["page500", "json500", "bigHead"]) assert.ok(bare.unmet.includes(key), key);
   assert.equal(rowOf({ pages: true, bigHead: { error: "ECONNRESET", ms: 2 } }).unmet.includes("bigHead"), false);
   assert.equal(logLinesOf(null, 4, 20), "unreadable");
+});
+
+test("the matched tier's columns are its own: a defaults row has neither", () => {
+  const matchedOnly = ["unfinishedHead", "connectionCap"];
+  assert.deepEqual(featuresOf("defaults").filter((f) => matchedOnly.includes(f.key)), []);
+  assert.deepEqual(featuresOf("matched").filter((f) => matchedOnly.includes(f.key)).map((f) => f.key), matchedOnly);
+  assert.equal(featuresOf("matched").length, features.length);
+  const row = rowOf({ pages: false });
+  for (const key of matchedOnly) assert.ok(!(key in row), key);
+  assert.ok(capHeld > maxConnections, "the cap probe holds more connections than the cap allows");
+});
+
+test("an unfinished head counts when closed within 35 seconds; the cap when the request past it waits", () => {
+  const row = (/** @type {Record<string, any>} */ o) => rowOf({ pages: false, tier: "matched", ...o });
+  const closed = row({ unfinishedHead: { closedMs: 30_120 }, cap: { held: capHeld, whileHeld: null, afterRelease: 200, releaseMs: 40 } });
+  assert.equal(closed.unfinishedHead, "closed in 30.1 s");
+  assert.equal(closed.connectionCap, "capped, then 200");
+  for (const key of ["unfinishedHead", "connectionCap"]) assert.ok(!closed.unmet.includes(key), key);
+  const open = row({ unfinishedHead: { timedOutMs: 45_010 }, cap: { held: capHeld, whileHeld: 200, afterRelease: null, releaseMs: 0 } });
+  assert.equal(open.unfinishedHead, "held 45 s");
+  assert.equal(open.connectionCap, `served with ${capHeld} held (200)`);
+  for (const key of ["unfinishedHead", "connectionCap"]) assert.ok(open.unmet.includes(key), key);
+  // Refused past the cap (closed) or still waiting when the probe gave up both count as capped.
+  assert.equal(row({ cap: { held: capHeld, whileHeld: null, afterRelease: "closed" } }).connectionCap, "capped, then closed");
+  assert.equal(row({ cap: { held: capHeld, whileHeld: null, afterRelease: null } }).connectionCap, "capped, then held");
+  // Too few held to see a cap, a failed probe, or no probe at all: not counted.
+  const unseen = row({ cap: { held: 900, whileHeld: null, afterRelease: null } });
+  assert.equal(unseen.connectionCap, "n/a: held only 900 connections");
+  assert.ok(!unseen.unmet.includes("connectionCap"));
+  assert.equal(row({ unfinishedHead: { error: "could not connect" } }).unfinishedHead, "error could not connect");
+  assert.ok(row({ unfinishedHead: { error: "could not connect" } }).unmet.includes("unfinishedHead"));
+  assert.equal(row({}).unfinishedHead, "n/a: not probed");
+});
+
+/**
+ * Runs conform-hold.mjs, as conform.mjs does inside fsw-probe, against a local server.
+ * @param {import("node:net").Server} server
+ * @param {Record<string, any>} request
+ */
+const holdAgainst = async (server, request) => {
+  await new Promise((r) => server.listen(0, "127.0.0.1", () => r(undefined)));
+  const port = /** @type {import("node:net").AddressInfo} */ (server.address()).port;
+  const child = spawn(process.execPath, [join(import.meta.dirname, "conform-hold.mjs")]);
+  child.stdin.end(JSON.stringify({ host: "127.0.0.1", port, path: "/api/items/item_5", ...request }));
+  let out = "";
+  child.stdout.on("data", (c) => (out += c));
+  await new Promise((r) => child.on("close", r));
+  server.close();
+  return JSON.parse(out);
+};
+const answers = (/** @type {import("node:net").Socket} */ s) => { s.on("error", () => {}); s.once("data", () => s.end("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")); };
+
+test("the head probe sees a server close an unfinished head, and one that holds it until the probe's limit", async () => {
+  const closes = await holdAgainst(createServer((s) => { s.on("error", () => {}); setTimeout(() => s.destroy(), 100); }), { mode: "head", timeoutMs: 5000 });
+  assert.ok(closes.closedMs !== undefined && closes.closedMs < 5000, JSON.stringify(closes));
+  const holds = await holdAgainst(createServer((s) => s.on("error", () => {})), { mode: "head", timeoutMs: 300 });
+  assert.ok(holds.timedOutMs >= 300, JSON.stringify(holds));
+});
+
+test("the cap probe tells a server that answers past the held connections from one that refuses them", async () => {
+  const uncapped = await holdAgainst(createServer(answers), { mode: "cap", hold: 5, waitMs: 1000, releaseMs: 1000 });
+  assert.deepEqual([uncapped.held, uncapped.whileHeld, uncapped.afterRelease], [5, 200, null]);
+  // node:net's own cap closes a connection past it at once.
+  const capped = createServer(answers);
+  capped.maxConnections = 5;
+  const refused = await holdAgainst(capped, { mode: "cap", hold: 5, waitMs: 1000, releaseMs: 1000 });
+  assert.deepEqual([refused.held, refused.whileHeld, refused.afterRelease], [5, null, "closed"]);
 });

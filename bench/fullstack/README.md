@@ -1167,6 +1167,62 @@ passes, a separate diagnostic build of card-market's crate run after it:
     app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
+### The matched tier
+
+Every round above runs each app as its framework starts it (the defaults tier), so a Corten table
+partly measures what Corten does that the others do not: the feature matrix shows most apps
+without its security headers, host list, same-origin write check or deadline. The matched tier
+runs apps that add a production profile, each with its framework's own documented middleware, so
+its tables compare the same work. It has rounds of its own, named `m<n>` and run on their own
+cadence: `droplet.mjs <m-round> --tier matched` (`BENCH_TIER=matched` on the droplet) runs its
+apps, each started with `PROFILE=matched`, and `run-all.mjs`, `summarize.mjs` and
+`droplet.mjs` refuse a matched round named otherwise, or an `m<n>` round of the defaults tier,
+so `trend.mjs`, which reads `r<n>` alone, never mixes the two (`summary.json` and
+`conformance.json` record the tier).
+
+The profile:
+
+1. Every counted column of the feature matrix: the security headers on the page and the JSON, a
+   strict CSP, a private cache policy, an ETag and a 304, compression, problem+json or JSON
+   errors, HEAD, an unknown Host refused, the form's cross-site post and 3 MiB field refused (a
+   request body limit; Corten's forms take 2 MiB), a failed read and a hung item API answered
+   with a 5xx within 35 s (a deadline; card-market's is 10 s), liveness and readiness.
+2. A header timeout: a request head never finished has its connection closed within 35 s
+   (Corten's `App::header_timeout` is 30 s). `conform-hold.mjs` sends a request line and one
+   header, then nothing.
+3. A connection cap of 1,000 (`MAX_CONNECTIONS`, which `apps.mjs` passes to each app):
+   `conform-hold.mjs` holds 1,050 idle connections and sends a request on one more; the column
+   counts when that request is not answered while they are held (it waits, or is closed), and
+   shows whether it is answered once they close. The app and the probe may hold 65,536 files
+   there, so a file limit is not read as a cap.
+
+An app uses what its framework provides for each part and nothing hand-written; a part its
+framework has nothing for is left out and shows as a column not met, and no app is tuned beyond
+the profile. The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
+rule (Corten; axum-maud, the anchor every tier shares; the three best on the tier's own measure
+and the four most used in the Stack Overflow survey, on r13 and the 2026 survey ASP.NET Core,
+Topcoat and Leptos, and Next.js, ASP.NET Core, Spring and Django), are eight. An app takes part
+(`matched: true` in `apps.mjs`) once it starts with its profile:
+
+1. `corten`: card-market's defaults are the profile's first two parts; `MAX_CONNECTIONS` sets
+   `App::max_connections`, which is unbounded unless set.
+2. `axum-maud`: tower-http's layers add the security headers, `Cache-Control: private, no-cache`,
+   compression, a 503 past 10 s (`TimeoutLayer`) and a 2 MiB body limit (`RequestBodyLimitLayer`).
+   axum and tower-http have no host list, same-origin check, problem+json errors, ETag,
+   readiness, header timeout (`axum::serve` sets none) or connection cap, so those columns stay
+   unmet.
+3. `nextjs`, `leptos`, `django`, `aspnet`, `spring` and `topcoat` are not in it yet: each
+   joins with its profile.
+
+`BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
+locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
+from this tree at `f4e7a5b0` with the tier's changes, in `results/conform-matched1/conformance.json`:
+of the 24 counted columns Corten met all, its unfinished head closed in 29.3 s and the request past
+1,050 held connections left waiting until they closed (then a 200); axum-maud met 12 and missed 12:
+the ETag, the cross-site post, the two failed reads (502 `text/plain`), the 404 and 405 formats
+(empty), the unknown Host and the 64 KiB header (200), liveness and readiness, the unfinished head
+(still held at 45 s) and the cap (answered with 1,050 held). No load phase has run in the tier yet.
+
 ### Drift across rounds
 
 A round's differences under about 10% are noise (caveat 1), so a number that gets a few percent
@@ -1356,6 +1412,8 @@ node bench/fullstack/droplet.mjs r17 --collect                        # then col
 node bench/fullstack/droplet.mjs aot2 --ssh-key <id> --apps corten,aspnet,aspnet-aot --detach
 # Each load phase three times, the apps taking turns, for medians and ranges:
 node bench/fullstack/droplet.mjs p1 --ssh-key <id> --apps corten,axum-maud --passes 3 --detach
+# A round of the matched tier (named m<n>; its apps with the production profile):
+node bench/fullstack/droplet.mjs m1 --ssh-key <id> --tier matched --detach
 # Or by hand, from the repository root: the images, the fixture, then everything.
 docker build -f examples/card-market/Dockerfile -t cb-corten .
 for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud gin drogon django rails laravel aspnet aspnet-aot spring phoenix astro nuxt; do

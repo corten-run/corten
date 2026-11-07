@@ -25,6 +25,19 @@ export const buildBudgetMinutes = 240;
  */
 export const compiledFirst = ["corten", "leptos", "topcoat", "axum-maud", "gin", "drogon"];
 
+/**
+ * Why a round's name does not fit its tier, or null. A full round of the defaults tier is r<n>,
+ * the rounds trend.mjs reads; a round of the matched tier is m<n>, so its numbers, measured with
+ * the production profile, never enter the defaults tier's trend. Other names (an A/B, a few apps)
+ * are the defaults tier's experiments, as before.
+ * @param {string} round
+ * @param {string} tier "defaults" or "matched"
+ */
+export const roundNameError = (round, tier) => {
+  if (tier === "matched") return /^m\d+$/.test(round) ? null : `a matched-tier round is named m<n> (m1), not ${round}, so the defaults tier's trend (r<n>) never reads it`;
+  return /^m\d+$/.test(round) ? `${round} is a matched-tier round's name (m<n>): run it with BENCH_TIER=matched (droplet.mjs --tier matched), or name it otherwise` : null;
+};
+
 /** The minutes run-all.mjs may wait for each app to start before the browser step. */
 export const startMinutes = 2;
 
