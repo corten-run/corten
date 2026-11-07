@@ -5544,7 +5544,9 @@ Corten is pre-1.0, so any minor version may change the API.
     runtime now asks for that page with `corten: page`, which the server answers as the whole
     document, as before, and to which a redirect to a place or to another site is named in
     `corten-location`, as to a navigation; one to another site no longer costs a refused fetch
-    and a reload
+    and a reload. Every redirect now varies on `corten`, and the answer to the runtime's fetch is
+    kept by the browser alone, so a cache that keys on the URL cannot hand a full load's 303 to the
+    runtime, or the runtime's `corten-location` to a full load
     ([#1034 A page fetched whole after a write that redirects to a place loses its #id: the fetch sends no corten header, so the redirect is a 303 that fetch follows without the fragment](https://github.com/corten-run/corten/issues/1034)).
 
 ### Documentation

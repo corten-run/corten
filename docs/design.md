@@ -297,7 +297,8 @@ rules something out.
    browser without JavaScript needs. The page the runtime fetches whole after a write asks with
    `corten: page`: it is the whole document too, but a redirect to a place or to another site is
    named to it in `corten-location`, as to a navigation, since `fetch` follows a 303 without its
-   `#id` and cannot read another origin's answer. The mode would move to a standard header that
+   `#id` and cannot read another origin's answer. So a redirect varies on `corten`, and an
+   answer to that fetch is the browser's alone, as a navigation's is. The mode would move to a standard header that
    says "part of a page" and that a script may set.
 
    Stands on: platform (no registered media type tells a navigation from an action; a script cannot

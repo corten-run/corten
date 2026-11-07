@@ -1444,7 +1444,9 @@ runtime fetches after a write (`corten: page`), so a page a write leads to that 
 on to a place lands there. So does one sent to another site
 (a `corten::http::Uri` such as `https://pay.example/..`), which `fetch` may not read (the CSP's
 `connect-src`, else CORS): the browser goes there itself, in one request to the app. The same
-holds for `req.moved`.
+holds for `req.moved`. Each of these answers varies on `corten`, and one to the runtime's fetch
+is kept by the browser alone, so a cache never hands a full load's 303 to the runtime or its
+`corten-location` to a full load.
 
 A place on a page outside the app (another site, another app of the same product) has an id
 that page's markup owns, so it is text: `Elsewhere::at(&uri, "fee-calculator")` is
