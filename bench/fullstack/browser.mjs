@@ -125,7 +125,10 @@ async function clientNav(browser, profile, base) {
   }
 }
 
-const browser = await chromium.launch({ headless: true });
+// The matched tier's apps are reached through the edge, whose certificate is made for the run. The
+// flag, not a context's ignoreHTTPSErrors, which leaves a service worker unregistered ("An SSL
+// certificate error occurred when fetching the script"), as a public certificate would not.
+const browser = await chromium.launch({ headless: true, args: ["--ignore-certificate-errors"] });
 const results = [];
 try {
   for (const [profileName, profile] of Object.entries(profiles)) {

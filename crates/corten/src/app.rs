@@ -1142,6 +1142,18 @@ impl<M: Middleware> App<M> {
             own.prefixes.push(assets.mount_prefix());
             routes = routes.merge(assets.routes());
         }
+        // The icon browsers ask for on their own, unless a route of the app's matches the path
+        // (a catch-all or a parameter one too, whatever its methods), as the router would pick it.
+        let favicon = crate::assets::FAVICON_PATH;
+        let api_paths: Vec<(&'static str, bool)> = self.api_paths.iter().map(|path| (*path, true)).collect();
+        let taken = std::iter::once(&self.pages[..])
+            .chain(self.areas.iter().map(|area| &area.pages[..]))
+            .chain(std::iter::once(&api_paths[..]))
+            .any(|routes| crate::route::chosen(routes, favicon).is_some());
+        if !taken {
+            own.exact.push(favicon);
+            routes = routes.merge(crate::assets::favicon(assets.as_ref()));
+        }
         routes = routes.merge(match self.ready {
             None => crate::health(|| async { true }),
             Some(ready) => {

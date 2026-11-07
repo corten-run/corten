@@ -84,13 +84,13 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps that render the pages (they serve the JSON too)
- * @param {number[]} ports their ports, in the same order
+ * @param {string[]} urls where the browser step reaches each, in the same order (the matched tier's through the edge)
  * @param {string[]} [jsonOnly] the apps that serve only the JSON (`pages: false`)
  * @param {number} [passes] each load phase's passes (run-ssr.mjs): its calls' limits are that many
  *   times one pass's
  * @returns {[string, number, string, ...string[]][]}
  */
-export const calls = (round, browserRuns, names, ports, jsonOnly = [], passes = 1) => [
+export const calls = (round, browserRuns, names, urls, jsonOnly = [], passes = 1) => [
   ["cold-start", 30, "cold-start.mjs", round, "10", [...names, ...jsonOnly].join(",")],
   ["fixture", ssrLimits[0] * passes, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page", String(passes)],
   ["fixture", ssrLimits[1] * passes, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json", String(passes)],
@@ -102,7 +102,7 @@ export const calls = (round, browserRuns, names, ports, jsonOnly = [], passes = 
   ["browser", 10, "parity.mjs"],
   ["browser", 15, "look.mjs"],
   ["browser", 10, "bytes.mjs", round],
-  ["browser", 30, "browser.mjs", ...names.map((n, i) => `${n}=http://localhost:${ports[i]}`), `runs=${browserRuns}`, `out=${round}/browser.json`],
+  ["browser", 30, "browser.mjs", ...names.map((n, i) => `${n}=${urls[i]}`), `runs=${browserRuns}`, `out=${round}/browser.json`],
   ...[...names].sort((a, b) => rank(a) - rank(b)).map((n) => /** @type {[string, number, string, ...string[]]} */ (["build", 90, "build.mjs", round, n])),
 ];
 
