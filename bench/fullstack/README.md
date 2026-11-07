@@ -1155,10 +1155,12 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    in a one-pass round differences under about 10% are noise. A round of passes gives each
    number's range, and a difference whose ranges overlap is within noise. r16, the first round of
    three passes, measured that noise: across the 72 app and test pairs with a range, the 64-user
-   phase's requests a second spread a median 5.3% of their median between passes (13 over 10%, the
-   widest 37.6%, Leptos's in-memory JSON), and requests per CPU-second at the fixed rate a median
-   3.0% (the widest 18.9%). So the fixed-rate cost is the steadier number, and a one-pass
-   difference under 10% is still noise. Across rounds,
+   requests a second varied between passes by a median 5.3% (range over median), 13 pairs by
+   more than 10% and the widest by 37.6% (Leptos's JSON from memory, with no failed or unsent
+   requests); in the fixed-rate phase requests per CPU-second varied by a median 3.0% (the widest
+   18.9%). So about 10% covers a typical app's one-pass number, some apps vary by more than that
+   between passes of the same build and need passes to judge, and the fixed-rate phase is the
+   steadier one. Across rounds,
    `trend.mjs` reports a sustained drift (Drift across rounds).
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
