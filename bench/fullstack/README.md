@@ -1016,6 +1016,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
 2. Cores: the app under test pinned to core 1 with 1 GiB of memory, the item API to cores 2-3,
    the load generator (k6) to cores 4-7, the system and Docker on core 0. One app runs at a time.
    From r7, with items in memory, k6 also gets cores 2-3, which the item API does not use then.
+   A matched-tier round runs on a `c-16`: the edge on cores 4-9 and k6 on 10-15 (with items in
+   memory, 2-3 as well), the rest as above (The matched tier).
 3. Cold start (`cold-start.mjs`): the container runs a shell that writes the time and execs the
    server; a probe in the same network namespace polls for the first 200 of an item page (items
    from the item API). Docker's own container setup is not in the number. 10 runs each.
@@ -1141,7 +1143,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
       overlayfs on containerd's).
     - Cores and linker, when the round sets `BENCH_BUILD_SCALE` (vCPU sets; a round sets
       `1-2,0-7` on a c-8, whose vCPUs are hyperthreads, so all eight may add sibling threads
-      rather than cores): the clean production build again on each, for the apps in
+      rather than cores; a matched round's c-16 gives all sixteen, so its build on all of them
+      is not compared with a defaults round's): the clean production build again on each, for the apps in
       `BENCH_BUILD_SCALE_APPS` (Corten and axum + Maud, the anchor, unless it names others), and
       for those the development build clean and after the edit linked by mold rather than the
       toolchain's default (rust-lld since Rust 1.90). The linker each build used is read from the
@@ -1203,6 +1206,52 @@ The profile:
    a full accept queue, so a cap too); then, once they are closed, a request on a new
    connection must be answered, so a crash or a hang is not read as a cap. The app and the probe
    may hold 65,536 files there, so a file limit is not read as a cap.
+
+The tier's load phases and browser pass reach each app through the edge (`edge.mjs`), as a
+deployed app is reached: Corten's design has HTTP/2 and HTTP/3 to browsers come from a proxy or
+CDN in front of `corten::serve` ([Limit 14](../../docs/design.md#limit-http1)), which usually ends
+TLS too, and the defaults tier measures every app without one. The edge is one nginx (1.29.8,
+pinned) with one config for every app, the one the deploy guide checks Corten with
+([nginx](../../docs/guide/deploy.md#nginx)) less its cache and with the app's own name as Host: a
+worker a core, each with its own listening socket (`reuseport`), TLS with a P-256
+certificate made for the run, HTTP/2 to k6 and Chromium (HTTP/1.1 to a client that asks; no
+HTTP/3, which is a CDN's), HTTP/1.1 to the app over up to 1,024 kept connections (re-used for 25
+s, under Corten's header timeout), each connection on either side kept for the whole phase (nginx
+closes one after 1,000 requests by default), and no compression, cache or access log of its own. The app
+sees the Host k6 sends it directly, its container name. Chromium is started with
+`--ignore-certificate-errors`, since with only a context's `ignoreHTTPSErrors` it refuses to
+register a service worker from the edge, as it would not with a public certificate. Caddy 2.11.9
+was tried first: at 1,000 requests a second to Corten locally it used 2.8 times nginx's CPU for
+the page (670 requests per CPU-second against 1,875) and 3.2 times for the JSON (700 against
+2,244; measured, Docker Desktop, one 20 s run each). What matters is the edge's CPU per CPU the
+app uses: in full local runs (one each) nginx used 3.0 to 3.5, Caddy about 9. At nginx's ratio,
+keeping the app's one core busy would take about 3.2 to 3.5 of the edge's cores (estimated, on
+the assumption that the app, nginx and k6 all run faster on a droplet alike), so it has six
+there; at Caddy's, neither four nor six would do.
+
+The edge runs on cores of its own (`BENCH_EDGE_CPUS`; 4-9 on a droplet, so a matched round needs
+16 vCPUs, a c-16, and its script stops on a smaller host before it starts; off a bench host, four
+CPUs' time, unpinned), and each phase counts its CPU beside the app's: the summary's
+`edgePerCpuSecond`, `edgeCpuUsedPct` (of one CPU) and `edgeBound`, true when the edge used 90% or
+more of the cores it had (`edge.json` in the round's load folders says how many), so the phase
+measured the edge, not the app; `summarize.mjs` marks such a phase EDGE-BOUND. k6 reads its own CPU time as it ends
+(`k6CpuUsedPct`), and `loadBound` (LOAD-BOUND) says it used 90% of its cores. Neither need be
+true for something other than the app to set a saturation phase's rate (an unevenly loaded
+worker, the network), so through the edge `appIdle` (APP-IDLE) says the app used less than 90%
+of its own core: such a phase did not measure what the app can serve. Locally (Docker Desktop on
+a shared 8-CPU machine, two runs) every saturation phase through the edge was APP-IDLE: Corten
+used 46% to 61% of its core, while the edge used at most 205% of its four CPUs and k6 at most
+248% of its four. What limited them was not determined, and directly Corten also stayed under
+90% in three of four phases (82% to 92%), so a local run cannot test the edge; on a droplet it
+used 96% to 100% directly (r16). A matched round's numbers stand only
+where its saturation phases are not marked. Before m1 is read, Corten runs on its droplet directly
+(`droplet.mjs --edge off`, whose summary says `edge: "off"`) and through the edge, to check its
+core is as busy both ways; this has not been run yet. k6 keeps its
+connections, so its handshakes are few; each cold browser load is a new context, so its handshake
+is in the load. Cold start, the instruction counts, the feature matrix and the bytes reach the app
+directly, since they measure the app. An app whose own server can terminate TLS (Kestrel, Bandit)
+is not measured doing so: every app is measured behind the same edge. `BENCH_EDGE=off` runs the
+tier's steps without the edge, to measure what it adds to the same app.
 
 An app uses what its framework provides for each part and nothing hand-written; a part its
 framework has nothing for is left out and shows as a column not met, and no app is tuned beyond
@@ -1429,7 +1478,7 @@ node bench/fullstack/droplet.mjs aot2 --ssh-key <id> --apps corten,aspnet,aspnet
 # Each load phase three times, the apps taking turns, for medians and ranges:
 node bench/fullstack/droplet.mjs p1 --ssh-key <id> --apps corten,axum-maud --passes 3 --detach
 # A round of the matched tier (named m<n>; its apps with the production profile), and its collect:
-node bench/fullstack/droplet.mjs m1 --ssh-key <id> --tier matched --detach
+node bench/fullstack/droplet.mjs m1 --ssh-key <id> --tier matched --detach   # a c-16: the edge has six cores
 node bench/fullstack/droplet.mjs m1 --collect
 # Or by hand, from the repository root: the images, the fixture, then everything.
 docker build -f examples/card-market/Dockerfile -t cb-corten .
