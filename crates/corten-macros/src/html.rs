@@ -670,7 +670,9 @@ fn progress_unsent(attrs: &[Attr]) -> Option<&'static str> {
         None => false,
     };
     if !sends_body {
-        return Some("on:corten:progress: a GET or dialog form sends no body, so it has no upload progress: give the form method=\"post\"");
+        return Some(
+            "on:corten:progress: a GET or dialog form sends no body, so it has no upload progress: give the form method=\"post\"",
+        );
     }
     None
 }
