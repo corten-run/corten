@@ -996,8 +996,8 @@ async fn a_stalled_upload_over_a_socket_is_a_408_and_its_connection_is_closed() 
 
 /// Serves `app` over a socket, sends a head with `extra` headers and, `wait` later, `sent` bytes
 /// of a body that says it is `len` bytes long (chunked when `None`, `sent` framed by the caller),
-/// then nothing more, and reads what comes back until
-/// the server closes the connection: the answer, and how long that took on the runtime's clock.
+/// then nothing more, and reads what comes back until the server closes the connection: the
+/// answer, and how long that took on the runtime's clock.
 async fn stalled_over_a_socket(
     app: crate::App,
     path: &str,
