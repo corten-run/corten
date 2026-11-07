@@ -3,7 +3,7 @@
 [Back to the README](../README.md)
 
 The [values](../README.md#values) decide what goes in. This file records how they turned into the
-framework's shape, and what it does not do yet.
+framework's shape, and what it does not do.
 
 Each Choice, Rule and Limit has an anchor after its number, and a citation links to it: in
 Markdown `[design Choice 20](../design.md#choice-layout-reads)`, in code the path alone,
@@ -53,7 +53,8 @@ here or a value before another kind, a Last checked entry without a date no late
 commit or versions, and Choices out of order (`scripts/choices.mjs`).
 
 The Rules and Limits below have none of the three: a Rule applies the values to code and changes
-with them, and a Limit is what Corten does not do yet, where it says what would lift it.
+with them, and a Limit is what Corten does not do, saying what would lift it or why it is so by
+design. A decision about the framework's shape is a Choice, even where it rules something out.
 
 1. <a id="choice-markup-macro"></a>**Markup is a Rust macro, not TSX.** Rendering TSX needs a JavaScript runtime on the server
    or a second toolchain in the app; `html!` keeps one language and compiles to the same string
@@ -894,6 +895,63 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
     Last checked: 2026-11-06, serde_derive 1.0.229 at `8cd5934e`; 2026-11-06, the form read at
     `8cd5934e`.
 
+27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
+    the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or
+    refuses (sign in, 401, 403, 503), and a routes module's `caller = T` holds every handler in it
+    to that at compile time, so a route added later is covered. The lookup runs only when a handler
+    or middleware reads it, once per request, and reading it makes the answer private. A route's
+    answer type says how it fails (`HtmlResult`: the error page; `JsonResult<T>`: JSON) and
+    whether a shared cache may keep it (`Public<..>`, whose handler may only take `Anonymous`
+    inputs and whose page cannot set a cookie). A route that says `no_store` is checked as
+    answering `NoStore<..>` of its handler's type (`no_store(post)`: only the handlers of the
+    methods it names), so that one word in the route, not the handler's signature, says nothing
+    may keep it; a handler there that returns `NoStore<..>` too says it twice, and a hand-added
+    route says it with `NoStore<..>`. Every route reaches the app through these checks: `App::new`
+    takes the `Routes` a `#[corten::routes]` module makes, and `Area::route` and `Api::route` take
+    `Methods`, made by Corten's `get`, `post` and the others, which check the same things. A plain
+    axum `Router` or method router does not fit any of them, so there is no unchecked way in. A
+    WebSocket (`Upgrade`) and another server's answer passed on (`Relay`) are such routes too.
+    Not chosen: guards or a context object checked per request, which a route added later can
+    miss and only a request finds. What the type cannot see stays the handler's
+    ([Limit 11](#limit-caller-types)).
+
+    Stands on: reasoned (a handler's arguments and return type are checked where the routes module
+    is compiled, so a module's `caller = T`, `Public` and `no_store` hold every handler in it,
+    and `Routes` and `Methods` are the only types `App::new`, `Area::route` and `Api::route`
+    take, so no route skips them); bet (most of an app's access rules are about who is asking,
+    which a type can name, and the rest depend on the record, which the handler reads anyway);
+    value (mistakes fail at compile time, Value 4).
+
+    Revisit when: an app needs an access rule a type cannot name and a handler cannot check
+    without repeating it in every handler of a module; or a way into the app is found that does
+    not pass `Routes` or `Methods`.
+
+    Last checked: 2026-11-06, the `compile_fail` doctests that hold `caller = T`
+    (`crates/corten/src/route.rs`) and the caller's own (`crates/corten/src/caller.rs`) at
+    `bcd31ffe`.
+
+28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
+    `Middleware` tuple at one place in it.** The stages are `corten::middleware`'s; the app's
+    steps are resolved at compile time. An area's or an API's own steps (`Area::middleware`,
+    `Api::middleware`) run right after the app's, for the requests at its prefix; they are boxed,
+    since which run depends on the path, and an app with none pays nothing for them. Not chosen:
+    hooks at several stages (before routing, after the caller, around the error page), each a
+    place an app's step could run and a reader of the app would have to check; what must see the
+    raw request first is a tower layer around the whole app ([Limit 12](#limit-fixed-stages)).
+
+    Stands on: measured (an area's pass-through middleware is one boxed future, 21,374 to 21,511
+    instructions a request against 20,497 to 20,646 with none, and a request outside the area
+    19,909 to 19,913; an app whose areas and APIs have none runs Corten's own code within 18
+    instructions of before; callgrind, release, five runs each, card-market); reasoned (one place
+    for the app's steps is one order to read, and a tuple resolved at compile time costs no box);
+    value (one way to do each thing, Value 5, and good defaults with easy overrides, Value 7).
+
+    Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
+    layer around the app cannot serve it; or the boxed area steps cost a request outside every
+    area more than the scan of prefixes measured here.
+
+    Last checked: 2026-10-29, the area middleware runs at `f1277ae5`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -976,6 +1034,9 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
 
 ## Limits
 
+What Corten does not do. Some wait on the platform or on an app that needs them, and say what
+would lift them; others are so by design, and say why.
+
 1. <a id="limit-navigation-api"></a>Client navigation uses the Navigation API (Chrome, Edge, Firefox 147+, Safari 26.2+); older
    browsers do full page loads, and forms, patches and handlers still work.
 2. <a id="limit-whole-element-patches"></a>Patches replace whole elements: the server's markup wins, except for what the user is doing.
@@ -1029,32 +1090,15 @@ with them, and a Limit is what Corten does not do yet, where it says what would 
     Its names in the page are prefixed (`ui.combo_box.js`, `data-scope="ui-combo-box"`) through
     `[package.metadata.corten] scripts = "ui"`, so an app's own components never collide with
     them. Two of an app's own scripts with one file name are a startup error that names both.
-11. <a id="limit-caller-types"></a>Who may use a route is in its handler's type: it takes `Caller<T>`, whose `Identify` finds
-    the caller or refuses (sign in, 401, 403, 503), and a routes module's `caller = T` holds
-    every handler in it to that, checked at compile time, so a route added later is covered.
-    The lookup runs only when a handler or middleware reads it, once per request, and reading
-    it makes the answer private. A route's answer type says how it fails (`HtmlResult`: the
-    error page; `JsonResult<T>`: JSON) and whether a shared cache may keep it (`Public<..>`,
-    whose handler may only take `Anonymous` inputs and whose page cannot set a cookie). A route
-    that says `no_store` is checked as answering `NoStore<..>` of its handler's type (`no_store(post)`:
-    only the handlers of the methods it names), so that one word in the route, not the handler's
-    signature, says nothing may keep it; a handler there
-    that returns `NoStore<..>` too says it twice, and a hand-added route says it with
-    `NoStore<..>`. A check
-    that depends on the record (the author, the organization) stays in its handler. That an
-    area's or an API's routes are under its prefix is a `const` assertion, which the compiler
-    evaluates when it builds the app (`cargo build`, `cargo test`, `corten check`), not under
-    `cargo check` alone. Every route reaches the app through these checks: `App::new` takes the
-    `Routes` a
-    `#[corten::routes]` module makes, and `Area::route` and `Api::route` take `Methods`, made
-    by Corten's `get`, `post` and the others, which check the same things. A plain axum
-    `Router` or method router does not fit any of them, so there is no unchecked way in. A
-    WebSocket (`Upgrade`) and another server's answer passed on (`Relay`) are such routes too.
-12. <a id="limit-fixed-stages"></a>A request goes through fixed stages in one order (`corten::middleware`); the app's own
-    steps are a `Middleware` tuple at one place in it, resolved at compile time, not hooks at
-    several. An area's or an API's own steps (`Area::middleware`, `Api::middleware`) run right
-    after the app's, for the requests at its prefix; they are boxed, since which run depends on
-    the path, and an app with none pays nothing for them.
+11. <a id="limit-caller-types"></a>A route's type says who may use it ([Choice 27](#choice-caller-types)), not which record:
+    a check that depends on the record (the author, the organization) stays in its handler, which
+    the compiler does not see. That an area's or an API's routes are under its prefix is a `const`
+    assertion, which the compiler evaluates when it builds the app (`cargo build`, `cargo test`,
+    `corten check`), not under `cargo check` alone.
+12. <a id="limit-fixed-stages"></a>The app's own steps run at one place in Corten's fixed order of stages
+    ([Choice 28](#choice-fixed-stages)), not as hooks at several: a step that must see the raw
+    request before every stage is a tower layer around the whole app (`.layer(l)`), and there is
+    no step for one route, whose needs are its handler's arguments and return type.
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the

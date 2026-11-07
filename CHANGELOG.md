@@ -5677,6 +5677,14 @@ Corten is pre-1.0, so any minor version may change the API.
     `cost-by-crate.mjs` lists a function with what it calls (`INCLUSIVE=`) and knows Maud's
     escaping and the bench apps' files
     ([#963 Design Choice 1 rests on an unrecorded askama comparison; it should state html!'s rendering cost against Maud on equal work](https://github.com/corten-run/corten/issues/963)).
+73. design.md: Limits 11 and 12 described decisions (who may use a route is in its handler's
+    type; a request's fixed stages, with the app's steps at one place), so they are Choices 27
+    and 28, with what they stand on, and Limits 11 and 12 keep only what Corten does not do (a
+    check on the record stays in the handler, and an area's prefix check needs a build, not
+    `cargo check`; no hooks at several stages). Their anchors stay, so no citation moves. The
+    intro and the Limits section no longer say every limit is "yet": some wait on the platform or
+    an app, others are so by design
+    ([#967 design.md's Limits 11 and 12 are decisions, not limits, and its intro calls every limit something Corten does not do yet](https://github.com/corten-run/corten/issues/967)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
