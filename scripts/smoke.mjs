@@ -2617,6 +2617,11 @@ async function run(browser) {
   await stopFeed("quiet");
   await unrouteFeed("quiet");
   const quietGap = quietFeed.snapshots.length === 2 ? quietFeed.snapshots[1] - quietFeed.snapshots[0] : NaN;
+  check(
+    "a sync on a stream the browser reconnected loads the snapshot at once, not after a backoff",
+    quietFeed.snapshots.length === 2 && quietFeed.streams >= 2 && quietGap < 900,
+    `${quietFeed.snapshots.length} snapshots, ${quietFeed.streams} streams, the second snapshot +${quietGap} ms after the first`,
+  );
   // A feed reset while its stream is open: the first connection stays open, and 1.5 s after it
   // opened the server sends `sync`. A server of the smoke's own holds the stream (a route cannot
   // answer in two parts); later streams are held open with nothing on them.
@@ -2639,20 +2644,20 @@ async function run(browser) {
     });
     await new Promise((resolve) => resetServer.listen(0, "127.0.0.1", () => resolve(undefined)));
     const resetPort = /** @type {import("node:net").AddressInfo} */ (resetServer.address()).port;
-    const resetFeed = await feedTimes("reset", () => "", `http://127.0.0.1:${resetPort}/live`);
-    for (const end = Date.now() + 5000; resetFeed.snapshots.length < 2 && Date.now() < end; ) await page.waitForTimeout(50);
-    await stopFeed("reset");
-    await unrouteFeed("reset");
-    for (const res of held) res.destroy();
-    resetServer.close();
+    /** @type {{ snapshots: number[], streams: number }} */
+    let resetFeed = { snapshots: [], streams: 0 };
+    try {
+      resetFeed = await feedTimes("reset", () => "", `http://127.0.0.1:${resetPort}/live`);
+      for (const end = Date.now() + 5000; resetFeed.snapshots.length < 2 && Date.now() < end; ) await page.waitForTimeout(50);
+      await stopFeed("reset");
+    } finally {
+      await unrouteFeed("reset");
+      for (const res of held) res.destroy();
+      resetServer.close();
+    }
     const resetGap = resetFeed.snapshots.length === 2 && syncsSent.length ? resetFeed.snapshots[1] - syncsSent[0] : NaN;
     check(resetName, resetFeed.snapshots.length === 2 && resetGap < 500, `${resetFeed.snapshots.length} snapshots, the second ${resetGap} ms after the sync was sent`);
   }
-  check(
-    "a sync on a stream the browser reconnected loads the snapshot at once, not after a backoff",
-    quietFeed.snapshots.length === 2 && quietFeed.streams >= 2 && quietGap < 900,
-    `${quietFeed.snapshots.length} snapshots, ${quietFeed.streams} streams, the second snapshot +${quietGap} ms after the first`,
-  );
 
   // A patch replaces markup but keeps what the user is doing: edited fields keep their state,
   // untouched ones take the server's, and focus and caret stay put (here a <corten-live> style
