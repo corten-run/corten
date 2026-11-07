@@ -85,7 +85,7 @@ rules something out.
 2. <a id="choice-no-wasm"></a>**No WASM.** Hydrating a WASM app costs hundreds of kilobytes before the page responds; the
    server already has the HTML, so the browser only needs behavior where there is behavior.
 
-   Stands on: measured (the browser table in performance.md, median of 10 cold loads each: Leptos's item page
+   Stands on: measured (the [browser table](performance.md#in-the-browser), median of 10 cold loads each: Leptos's item page
    loads 305 KB of WASM and is interactive on a phone in 1,926 ms, Corten's in 468 ms); reasoned
    (the server already sends the HTML, so the browser needs only the behavior).
 

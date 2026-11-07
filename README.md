@@ -37,13 +37,14 @@ AI agents.
   server-sent events, with replay and resume, and one feed can run across several instances.
 - **Typed end to end.** Routes, form fields, element ids, CSS classes, handler calls, events and
   messages are Rust types, and the TypeScript types for scripts are generated from Rust. A typo
-  at any of these seams is a compile error.
+  at these seams fails the build, `corten check` or startup, before any request.
 - **One server, every surface.** The same handler answers a browser with HTML, a native app
   with JSON, and an AI agent as a Model Context Protocol tool.
 - **Production defaults.** A strict CSP, a cross-site write check, error pages, versioned
   assets, cache headers that never share one user's page with another, compression, health
   checks, graceful shutdown and an installable PWA, from `corten::serve(App::new(routes))`.
-- **One binary.** No JavaScript toolchain in the app; `static/` is compiled into the program.
+- **One binary.** No JavaScript build step or bundler in the app; `static/` is compiled into the
+  program.
 
 ## Quick start
 
@@ -201,21 +202,24 @@ says an `HTMLOutputElement` and the ref is on an `<output>`. Either mismatch is 
 
 ## Performance
 
-Every claim about speed has a measured number behind it. The same marketplace item page, in
-eighteen apps on one CPU each (round r16; the row figures are from round browser-3):
+Every claim about speed has a measured number behind it. The first five rows are one marketplace
+item page served by eighteen apps on one CPU each (round r16), with requests sent uncompressed
+and untagged, as `curl` sends them; a browser's request costs Corten more. The last row is a
+client-heavy table in the browser (round browser-3, on an older, smaller runtime than today's).
 
 | What | Corten, measured |
 |---|---|
 | Item pages rendered from memory | 20,705 a second, 47 µs of CPU each |
 | The same item as JSON | 26,385 a second |
 | Memory after the first request | 1.3 MiB |
-| JavaScript the item page loads | 14.1 KB (gzip) |
+| JavaScript the item page loaded | 14.1 KB (gzip) |
 | Interactive on a throttled phone, on desktop | 468 ms, 59 ms |
 | Taking over 1,000 server-rendered rows | 6.0 ms, 101 bytes of memory per row |
 
-Of the eighteen, only axum + Maud renders the page from memory faster, and Corten serves the
-most JSON and item-API pages. The tables against ASP.NET Core, Next.js, Leptos, Rails and the
-rest, the method and the caveats are in [Performance](docs/performance.md).
+Of the eighteen apps, only axum + Maud renders the page from memory faster, and Corten serves
+the most JSON and item-API pages. The tables against ASP.NET Core, Next.js, Leptos, Rails and
+the rest, what a browser's request adds, the method and the caveats are in
+[Performance](docs/performance.md).
 
 ## When to use it
 
@@ -262,13 +266,16 @@ In the order to read them; each README says how to run it and where each piece i
    PWA, i18n, caching, JSON routes for partners and agents). Read it before you deploy.
 3. [seller-desk](examples/seller-desk): a client-heavy inventory screen, for a screen that does
    more in the browser than forms and links.
-4. [deck-builder](examples/deck-builder): a rich client screen with drag and drop, undo and redo,
-   a chart drawn in the browser, and autosave that rolls back a change the server refuses.
+4. [deck-builder](examples/deck-builder): drag and drop and keyboard moves, undo and redo, a
+   chart drawn in the browser, and autosave that rolls back a change the server refuses. Read it
+   when a screen keeps state in the browser and saves it as the user works.
 5. [auction-room](examples/auction-room): a live auction where signed-in people bid on the same
-   lots at once, with SQLite, per-bidder notices and rate limits.
+   lots at once, with SQLite, per-bidder notices and rate limits. Read it when several people
+   act on shared data in real time.
 6. [ui-gallery](examples/ui-gallery): every `corten-ui` component and every UI kit component.
 7. [listings-feed](examples/listings-feed): one live feed served by several instances through
-   Postgres and NATS, with a failover benchmark that kills instances while browsers follow.
+   Postgres and NATS, for when one instance is not enough, with a failover benchmark that kills
+   instances while browsers follow.
 
 ## Crates
 
