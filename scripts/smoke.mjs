@@ -2558,6 +2558,37 @@ async function run(browser) {
   );
   await page.evaluate(() => document.querySelector("#resume-live")?.remove());
 
+  // A feed whose stream refuses the cursor its own snapshot gives (here every stream is `sync`,
+  // as when one URL serves more than one feed) loads the snapshot again after a backoff that
+  // grows (1 s, 2 s, ...), not straight away in a loop, and stops when its signal aborts (#1067).
+  const refusedFeed = { snapshots: 0, streams: 0 };
+  await page.route("**/feed/refused", (route) => {
+    refusedFeed.snapshots += 1;
+    return route.fulfill({ status: 200, contentType: "application/json", body: '{"epoch":"a","seq":1,"rows":[]}' });
+  });
+  await page.route("**/feed/refused/live*", (route) => {
+    refusedFeed.streams += 1;
+    return route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: 'event: sync\ndata: {"reason":"cursor-expired"}\n\n' });
+  });
+  await page.evaluate(async () => {
+    const { subscribe } = /** @type {any} */ (await import(/** @type {string} */ ("corten")));
+    const w = /** @type {any} */ (window);
+    w.__refused = new AbortController();
+    w.__refusedStates = [];
+    subscribe("/feed/refused", { snapshot() {}, patch() {}, status: (/** @type {string} */ s) => w.__refusedStates.push(s) }, { signal: w.__refused.signal });
+  });
+  await page.waitForTimeout(3500);
+  const refusedIn = { ...refusedFeed };
+  await page.evaluate(() => (/** @type {any} */ (window)).__refused.abort());
+  await page.waitForTimeout(2500);
+  check(
+    "a feed whose stream refuses its own snapshot's cursor backs off, and stops when its signal aborts",
+    refusedIn.snapshots >= 2 && refusedIn.snapshots <= 4 && refusedFeed.snapshots === refusedIn.snapshots && refusedFeed.streams <= refusedFeed.snapshots,
+    `${refusedIn.snapshots} snapshots and ${refusedIn.streams} streams in 3.5 s, ${refusedFeed.snapshots - refusedIn.snapshots} after the abort; ${(await page.evaluate(() => (/** @type {any} */ (window)).__refusedStates.length))} status calls`,
+  );
+  await page.unroute("**/feed/refused");
+  await page.unroute("**/feed/refused/live*");
+
   // A patch replaces markup but keeps what the user is doing: edited fields keep their state,
   // untouched ones take the server's, and focus and caret stay put (here a <corten-live> style
   // patch, with no form sent).

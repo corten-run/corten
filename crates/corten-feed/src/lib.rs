@@ -147,11 +147,24 @@ impl<T: Row> Feed<T> {
     }
 
     /// A feed that mirrors a log kept elsewhere: `rows` as of `seq`, and `generation` naming the
-    /// log (it must not contain `-`). Every instance that follows the same log with the same
-    /// generation accepts the same cursors. Changes arrive through [`Feed::apply`].
+    /// log. Every instance that follows the same log with the same generation accepts the same
+    /// cursors. Changes arrive through [`Feed::apply`].
+    ///
+    /// A generation is ASCII letters, digits, `.` and `_` (`deploy.3`, a hex time, a version):
+    /// it is the cursor's epoch, which a client writes into a URL (`?since=`) and the server into
+    /// each event's `id:` line, so it holds nothing an encoder escapes, no `-` (the cursor's
+    /// separator) and no line break.
+    ///
+    /// # Panics
+    ///
+    /// When `generation` holds anything else, at the line that set it rather than as a feed that
+    /// never goes live.
     pub fn follow(generation: impl Into<String>, seq: u64, rows: impl IntoIterator<Item = T>) -> Self {
         let epoch = generation.into();
-        assert!(!epoch.contains('-'), "a feed generation cannot contain '-'");
+        assert!(
+            epoch.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_'),
+            "a feed generation is ASCII letters, digits, '.' and '_', not {epoch:?}"
+        );
         let rows = rows.into_iter().map(|r| (r.id().to_string(), r)).collect();
         let (tx, _) = broadcast::channel(BACKLOG);
         let state = State { seq, rows, log: VecDeque::new(), log_bytes: 0, snapshot: Cached::default() };
@@ -856,6 +869,34 @@ mod tests {
         assert_eq!(since.0, Some(Cursor::new("bb", 7)));
         let (mut parts, _) = axum::http::Request::builder().uri("/x?a=1&since=aa-3").body(()).unwrap().into_parts();
         assert_eq!(Since::from_request_parts(&mut parts, &()).await.unwrap().0, Some(Cursor::new("aa", 3)));
+    }
+
+    /// Every kind of generation `Feed::follow` takes goes live from the cursor its own snapshot
+    /// gives, sent as `subscribe()` writes it: `encodeURIComponent` leaves each of these bytes as
+    /// it is, so the stream is the feed's (`retry:`), not `sync` (#1067).
+    #[tokio::test]
+    async fn every_generation_follow_takes_goes_live_from_its_own_cursor() {
+        for generation in ["g7", "deploy.3", "v1_2", "A.b_9", "0"] {
+            let feed = Feed::follow(generation, 4, std::iter::empty::<Item>());
+            let uri = format!("/feed/live?since={generation}-4");
+            let (mut parts, _) = axum::http::Request::builder().uri(uri).body(()).unwrap().into_parts();
+            let since = Since::from_request_parts(&mut parts, &()).await.unwrap();
+            let text = read_events(&mut feed.live(since).into_response().into_body(), 1).await;
+            assert_eq!(text, "retry: 1000\n\n", "{generation}");
+        }
+    }
+
+    /// A generation a cursor cannot carry as it is (one `encodeURIComponent` escapes, the
+    /// cursor's `-`, a line break that would end an event's `id:` line) is refused where it is
+    /// set, not served as a feed that answers every stream with `sync` (#1067).
+    #[test]
+    fn a_generation_a_cursor_cannot_carry_is_refused_where_it_is_set() {
+        for generation in ["deploy:3", "v 1", "ab+c", "b64/x=", "a-b", "g\nevent: x", "caf\u{e9}", "a%20b"] {
+            let refused = std::panic::catch_unwind(|| Feed::follow(generation, 0, std::iter::empty::<Item>()));
+            let message =
+                refused.err().and_then(|e| e.downcast::<String>().ok()).unwrap_or_else(|| panic!("{generation:?} was taken"));
+            assert!(message.contains("a feed generation is ASCII letters, digits, '.' and '_'"), "{message}");
+        }
     }
 
     fn followers() -> (Feed<Item>, Feed<Item>) {

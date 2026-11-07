@@ -708,6 +708,8 @@ export function subscribe(url, handlers, { signal } = {}) {
   let timer;
   let seq = 0;
   let failures = 0;
+  // Snapshots in a row whose own cursor the stream refused before any patch came.
+  let refused = 0;
   const status = handlers.status ?? (() => {});
   signal?.addEventListener(
     "abort",
@@ -741,7 +743,7 @@ export function subscribe(url, handlers, { signal } = {}) {
       failures = 0;
       seq = snap.seq;
       handlers.snapshot(snap.rows, snap.seq, snap.epoch);
-      listen(`${url}/live?since=${encodeURIComponent(`${snap.epoch}-${snap.seq}`)}`);
+      listen(`${url}/live?since=${encodeURIComponent(`${snap.epoch}-${snap.seq}`)}`, true);
     } catch (error) {
       if (current.signal.aborted) return;
       console.error(error);
@@ -749,8 +751,8 @@ export function subscribe(url, handlers, { signal } = {}) {
     }
   }
 
-  /** @param {string} liveUrl */
-  function listen(liveUrl) {
+  /** @param {string} liveUrl @param {boolean} [fresh] its cursor is the snapshot's just loaded */
+  function listen(liveUrl, fresh = false) {
     const es = new EventSource(liveUrl);
     source = es;
     let cursor = new URL(liveUrl, location.href).searchParams.get("since") ?? "";
@@ -765,7 +767,17 @@ export function subscribe(url, handlers, { signal } = {}) {
       status("reconnecting");
       if (es.readyState === EventSource.CLOSED && source === es) retry(() => listen(`${url}/live?since=${encodeURIComponent(cursor)}`));
     });
-    es.addEventListener("sync", () => sync());
+    es.addEventListener("sync", () => {
+      if (!fresh) return void sync();
+      // The stream refused the cursor the snapshot just gave (the URL serves more than one feed,
+      // say): load it again after a backoff that grows, not straight away in a loop.
+      es.close();
+      source = null;
+      status("syncing");
+      refused += 1;
+      clearTimeout(timer);
+      timer = setTimeout(sync, Math.min(30_000, 500 * 2 ** refused));
+    });
     es.addEventListener("patch", (event) => {
       const receivedAt = performance.now();
       /** @type {{ seq: number, changes: FeedChange<Row>[] }} */
@@ -773,6 +785,8 @@ export function subscribe(url, handlers, { signal } = {}) {
       if (batch.seq <= seq) return;
       if (batch.seq !== seq + 1) return void sync();
       seq = batch.seq;
+      fresh = false;
+      refused = 0;
       cursor = /** @type {MessageEvent} */ (event).lastEventId;
       handlers.patch(batch.changes, batch.seq, receivedAt);
     });

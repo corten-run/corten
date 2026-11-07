@@ -5401,6 +5401,19 @@ Corten is pre-1.0, so any minor version may change the API.
     request with its purpose, and the timed requests and console errors of the module that is
     imported again
     ([#1053 Two Firefox watchlist smoke checks (prefetch's newest 8, a script module imported again) each fail now and then on a branch that does not touch them](https://github.com/corten-run/corten/issues/1053)).
+188. A feed whose generation held a character `encodeURIComponent` escapes (`deploy:3`, `v 1`,
+    base64's `/` and `=`) never went live: `Since` reads `?since=` as written, so the cursor
+    `subscribe()` sent never matched, every stream answered `sync`, and each open page loaded
+    the snapshot again straight away, in a loop (544 snapshots in 3.5 s from one Chromium page,
+    measured). `Feed::follow` now takes a generation of ASCII letters, digits, `.` and `_` only,
+    the bytes a cursor carries as they are in a URL and an event's `id:` line, and panics on
+    any other where it is set (a line break could also start a field of its own in every patch
+    frame). Corten's own generations are hex, so they are unchanged. `subscribe()` now loads the
+    snapshot again after a backoff (1 s, doubling to 30 s) when the stream refuses the cursor
+    the snapshot just gave before any patch, so a feed that cannot go live for another reason
+    (two feeds behind one URL) costs 3 snapshots in the same 3.5 s (in Chromium, Firefox and WebKit); the runtime is
+    31 B larger (gzip). The watchlist smoke checks the backoff and that it stops on the signal
+    ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
 
 ### Documentation
 

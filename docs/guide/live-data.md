@@ -248,14 +248,21 @@ generation, and after a restart (a `Feed::new` feed) the new `seq` may be lower,
 than one the page holds without being the same deck. Render the generation next to the version,
 and treat a snapshot from another generation as news whatever its `seq`. `reset` keeps the
 generation, so a feed that starts following another log is a new `Feed::follow` with that log's
-generation, not a `reset`.
+generation, not a `reset`. A generation is ASCII letters, digits, `.` and `_` (`deploy.3`, a
+hex time): it is the cursor's epoch, which goes into the stream's URL and each event's `id:` line
+as it is, so `Feed::follow` panics on any other character (`deploy:3`, base64's `/` and `=`, a
+`-`) where it is set, instead of serving a feed that never goes live.
 
 Feed guarantees: every `write` is one numbered patch carrying the final value of each row it
 touched, encoded once and sent as the same bytes to every subscriber. A snapshot is serialized
 once per change too: its body is kept (in memory, the size of the JSON) until the next write,
 `apply` or `reset`, so pages that subscribe between two writes cost no serialization. A
 subscriber gets the snapshot and then each later patch exactly once, in order; reconnects resume
-from `Last-Event-ID`, and an unknown cursor or a gap ends in a fresh snapshot. `corten-cluster`
+from `Last-Event-ID`, and an unknown cursor or a gap ends in a fresh snapshot. A stream that
+refuses the cursor the snapshot just gave, before any patch (two feeds behind one URL, say), loads
+the snapshot again after a backoff that doubles from 1 s to 30 s, not straight away: measured in
+Chromium against a feed that answers every stream with `sync`, 544 snapshots in 3.5 s before the
+backoff and 3 after it (Firefox 328 and 3, WebKit 221 and 3) (`scripts/smoke.mjs`). `corten-cluster`
 runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream): in the
 failover benchmark (200 clients, 50 writes a second, each instance killed and restarted under
 load), every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000
