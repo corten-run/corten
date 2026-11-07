@@ -3739,6 +3739,11 @@ Corten is pre-1.0, so any minor version may change the API.
     costs the same (callgrind, release build, 1,200 reads less 200 over 1,000, three runs each:
     9,241 instructions a read before and after)
     ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
+160. A value that is not a link where an `Href` is expected (a `&dyn Href`, `req.redirect`, a
+    `#[derive(Href)]` variant) fails with "`..` is not a link" and notes that say what a link is,
+    that text from outside the code is `Local::parse(text)` and that a boxed route is passed as the
+    route itself or as a `Box<dyn Href>`, where before the error ended in a long list of types
+    ([#974 Href has no on_unimplemented note, so a value that is not a link (a Box of a route) fails with E0277 listing 120 impls](https://github.com/corten-run/corten/issues/974)).
 161. The runtime's declarations for `corten/views` (`rows()`, `view()`, `Holds`, `ViewClass`,
     `Rows` and the rest) ship with the crate in `js/views.d.ts`, which `corten check` already
     gives `tsc`, instead of being written into each app's `types/app.d.ts`. The app's file holds
