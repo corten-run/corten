@@ -86,29 +86,30 @@ rules something out.
    server already has the HTML, so the browser only needs behavior where there is behavior.
 
    Stands on: measured (the README's browser table, median of 10 cold loads each: Leptos's item page
-   loads 304 KB of WASM and is interactive on a phone in 1,929 ms, Corten's in 474 ms); reasoned
+   loads 305 KB of WASM and is interactive on a phone in 1,926 ms, Corten's in 468 ms); reasoned
    (the server already sends the HTML, so the browser needs only the behavior).
 
    Revisit when: a page's behavior compiled to WASM loads in fewer bytes and is interactive sooner
    than the same behavior in JavaScript, measured as the browser table measures, without hydrating
    what the server drew.
 
-   Last checked: 2026-11-05, round r15 in Chromium 148, on `ec10c8f`.
+   Last checked: 2026-11-07, round r16's Chromium browser pass, on `eea6adb`.
 
 3. <a id="choice-no-server-vdom"></a>**No virtual DOM on the server.** Frameworks that build a view tree per request and then
    serialize it pay for it in throughput (Leptos in the
    [README benchmark](../README.md#performance)). `html!` writes straight to the
    response buffer.
 
-   Stands on: measured, of whole frameworks only (the README benchmark, one run: 300 pages a second
-   take 6.2% of a core in Corten and 26% in Leptos, which differs from Corten in more than its view
-   tree); reasoned (a tree built and then serialized is work a direct write does not do).
+   Stands on: measured, of whole frameworks only (the README benchmark, median of three load passes:
+   300 pages a second take 4.2% of a core in Corten and 25% in Leptos, which differs from Corten in
+   more than its view tree); reasoned (a tree built and then serialized is work a direct write does
+   not do).
 
    Revisit when: a view tree measured alone (callgrind on the item page) costs within noise of
    direct writes, or a feature needs the tree on the server, such as computing patches by diffing
    two renders.
 
-   Last checked: 2026-11-05, round r15, on `ec10c8f`.
+   Last checked: 2026-11-06, round r16, three load passes, on `eea6adb`.
 
 4. <a id="choice-plain-functions"></a>**Plain functions, not a client framework, by default.** A handler is an exported function the
    markup calls with the elements it uses, run by one delegated listener per event type; there
@@ -185,16 +186,17 @@ rules something out.
    ready and ends.
 
    Stands on: bet (a page's sources are fetched together and the slowest is rarely slow enough for a
-   part sent later to be worth its costs); measured (a whole item page request takes 66 µs of CPU in
-   the README benchmark, one run); reasoned (the status and headers go before a streamed part
-   exists, so its failure cannot become an error page or a redirect); value (a page works without a
-   script, Values 3, where a part placed out of order would land at the end of the page).
+   part sent later to be worth its costs); measured (an uncompressed, untagged whole item page request
+   takes 47 µs of CPU in the README benchmark, median of three load passes); reasoned (the status
+   and headers go before a streamed part exists, so its failure cannot become an error page or a
+   redirect); value (a page works without a script, Values 3, where a part placed out of order would
+   land at the end of the page).
 
    Revisit when: browsers place a part streamed out of order with HTML alone, no script; or an app
    measures a first paint that streaming would bring forward by more than a `<corten-live>` part
    does.
 
-   Last checked: 2026-11-05, round r15, on `ec10c8f`.
+   Last checked: 2026-11-06, round r16, three load passes, on `eea6adb`.
 
 8. <a id="choice-compiled-static-files"></a>**Static files are compiled into the program, a constant per file.** `embed!(pub struct
    Static = "static")` includes the directory when the crate compiles, so the binary is the

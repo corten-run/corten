@@ -5305,13 +5305,15 @@ Corten is pre-1.0, so any minor version may change the API.
 5. New agent skill in `skills/corten/`: rules, a decision table and recipes for common tasks. The
    `corten new` template's `AGENTS.md` points to it.
 6. The full-stack benchmark tables in the README and `bench/fullstack`, server, browser and build, are
-   from round r15 (2026-11-05 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `ec10c8f`),
-   with all eighteen apps. Corten serves 15,103 item pages and 22,553 JSON responses a second from memory at 64
-   users, and 3,339 item-API pages. A page from memory costs 66 µs of CPU
-   (15,258 per CPU-second), serves 894 pages a second per MiB, and the item page loads 12.9 KB
-   of JavaScript (gzip).
-   The Build table is r15's: Corten's clean production build took 87.6 s and its rebuild 35.8 s; axum + Maud took 33.8 s and 11.9 s,
-   the apps not written in Rust or C++ took 7.1-51.8 s clean and at most 7.1 s after the edit, and Corten's development rebuild took 2.4 s.
+   from round r16 (2026-11-06 to 2026-11-07 UTC, one c-8 droplet, Xeon Platinum 8168, the tree at `eea6adb`),
+   with all eighteen page apps and JSON-only aspnet-aot; load rows are medians of three passes.
+   Corten serves 20,705 item pages and 26,385 JSON responses a second from memory at 64
+   users, and 3,669 item-API pages. A page from memory costs 47 µs of CPU
+   (21,195 per CPU-second), serves 1,234 pages a second per MiB, and the item page loads 14.1 KB
+   of JavaScript (gzip), up 9.1% from r15. It is the first round with five offers in Corten's initial HTML,
+   not all offers in hidden templates, so its page gain is not a like-for-like speedup.
+   The Build table is r16's: Corten's clean production build took 77.3 s and its rebuild 34.7 s; axum + Maud took 31.7 s and 11.3 s,
+   the apps not written in Rust or C++ took 6.6-45.4 s clean and 0.9-6.3 s after the edit, and Corten's development rebuild took 2.6 s.
 
 7. `Form` in the prelude is `corten::Form` (Added 20), and a route's parameters its `Params`. Against
    axum's: a blank field is `None` for an `Option` (axum gave `Some("")`, or an error for a
