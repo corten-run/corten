@@ -703,8 +703,8 @@ before its writes blocked. Where it falls short:
    committed local passes, harden-local3's first (in `earlier`), Corten's connection closed while
    the probe was still sending (the write failed with `EPIPE`) and no 413 was read, and the 413
    arrived in the other 2 (harden-local1 and harden-local3's rerun); a fourth local run, not kept,
-   also read the body's connection closed. In that first pass the 1 MiB header's 431 was lost the
-   same way (`closed`). Kestrel (both apps) and Spring answered all three requests in both of
+   also read the body's connection closed. In that first pass the 1 MiB header's 431 was lost too
+   (`closed`; resets for headers were not recorded then). Kestrel (both apps) and Spring answered all three requests in both of
    harden-local3's passes, with no reset. It is the race described above, which hyper's close without reading the rest of the body
    decides.
 

@@ -19,7 +19,7 @@ export const phases = [
   { key: "slowBody", label: "100 bodies a byte a second", input: { count: 100, everyMs: 1000, holdMs: 90_000 }, limitMs: 180_000 },
   // 1,000 pipelined pages a connection are more than the socket buffers between two containers
   // hold, so the server's writes do block (in harden-local3, the median of each app's connections
-  // still open at the end held 0.12 to 0.71 MiB unread in the kernel).
+  // still open at the end held 0 to 0.71 MiB unread in the kernel, 0 being Django's).
   { key: "slowReader", label: "200 clients that stop reading", input: { count: 200, pipelined: 1000, holdMs: 90_000 }, limitMs: 180_000 },
   { key: "idleFlood", label: "5,000 idle connections", input: { count: 5000, holdMs: 60_000 }, limitMs: 240_000 },
   { key: "oversized", label: "200 headers / 1 MiB header / 16 MiB body", input: {}, limitMs: 120_000 },
