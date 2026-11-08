@@ -154,7 +154,7 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
         for (const id of representative) await visit(catalog[id]);
         for (const prefix of filterPrefixes(record)) await visit(record, prefix);
         // Reference is generated from the contract, not from Corten's output. The normal
-        // fullstack shell styles and catalog.css are shared by all eighteen apps.
+        // fullstack shell styles and catalog.css are shared by all twenty apps.
         for (const r of [record, catalog.record_500]) {
           await visit(r);
           await reference.setContent(referenceHtml(r), { waitUntil: "load" });

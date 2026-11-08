@@ -34,10 +34,10 @@ test("runner rejects marketplace/matched/unsafe rounds before any Docker command
     assert.match(result.stderr, /round must be cN/);
   }
 });
-test("catalog CI covers exactly the registry's eighteen page apps and both sources without nightly integration", () => {
+test("catalog CI covers exactly the registry's twenty page apps and both sources without nightly integration", () => {
   const workflow = readFileSync(join(repo, ".github/workflows/catalog.yml"), "utf8");
   const names = /app: \[([^\]]+)\]/.exec(workflow)[1].split(",").map((s) => s.trim());
-  assert.equal(names.length, 18);
+  assert.equal(names.length, 20);
   assert.deepEqual(names.sort(), Object.entries(allApps).filter(([, app]) => app.pages !== false).map(([name]) => name).sort());
   assert.match(workflow, /run\.mjs c1 --apps \$\{\{ matrix\.app \}\} --build --check-only/);
   assert.match(workflow, /CATALOG_DOCKER_TESTS:\s*"1"/, "Linux CI must execute the cleanup regression rather than skip it");
