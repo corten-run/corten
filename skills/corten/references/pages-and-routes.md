@@ -173,11 +173,11 @@ script gets the same formats from `t.js()` (`references/scripts.md`).
 
 ## A data screen
 
-A screen that native clients or agents also read derives `Serialize`, and its fields are the
+A screen that native clients or agents also read derives `ToJson`, and its fields are the
 whole view model, formatted text included:
 
 ```rust
-#[derive(Serialize)]
+#[derive(ToJson)]
 pub struct Home { stocks: Vec<Stock>, message: String }
 
 async fn home(req: Req, State(m): State<Market>) -> HtmlResult {

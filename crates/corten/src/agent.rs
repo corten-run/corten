@@ -53,16 +53,23 @@
 //! the writes. Results go back as `structuredContent` and as the same JSON in a text block, for
 //! clients that only read text. The output is written once, by its `ToJson` (the same JSON
 //! serde's `Serialize` writes, laid out when the crate compiles), into the response as is, so a
-//! tool returning a large shared value (`Arc<T>`) costs one write and no copy. An output needs
-//! `ToJson` and no `Serialize`; one that only derives `Serialize` has no schema and is not
-//! written by Corten, so it does not compile as one:
+//! tool returning a large shared value (`Arc<T>`) costs one write and no copy. As in any
+//! `ToJson` answer, a field whose own `Serialize` fails (another crate's map with a key JSON
+//! cannot hold) panics: the request ends as a handler's panic does, logged and answered with the
+//! app's 500 (in an [`Api`](crate::Api), its JSON failure), not as the tool's result.
+//!
+//! An output needs `ToJson` and no `Serialize`. One written by serde, with a schema written by
+//! hand, does not compile as one, since its schema and its bytes could drift apart:
 //!
 //! ```compile_fail,E0277
-//! use corten::agent::Tools;
+//! use corten::{agent::Tools, json::schema::{Generator, ToJsonSchema}};
 //! #[derive(corten::FromJson)]
 //! struct Adjust { id: String }
 //! #[derive(serde::Serialize)]
 //! struct Done { ok: bool }
+//! impl ToJsonSchema for Done {
+//!     fn json_schema(_: &mut Generator) -> serde_json::Value { serde_json::json!({ "type": "object" }) }
+//! }
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
 

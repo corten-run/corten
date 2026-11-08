@@ -124,10 +124,10 @@ use crate::{
 /// const MAX_BODY_BYTES: usize = 1024 * 1024;
 ///
 /// /// The shape of the server this route replaces.
-/// #[derive(serde::Serialize, ToJson)]
+/// #[derive(ToJson)]
 /// struct Said { error: String }
 ///
-/// #[derive(serde::Serialize, ToJson)]
+/// #[derive(ToJson)]
 /// struct Replaced { bytes: usize }
 ///
 /// async fn replace(request: Request) -> Result<JsonResponse, JsonError> {

@@ -3108,7 +3108,7 @@ impl<R: crate::route::Route> crate::view::Patch for ReadAgainFrom<R> {}
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(serde::Serialize, corten::ToJson)]
+/// #[derive(corten::ToJson)]
 /// struct Product<'a> {
 ///     #[serde(rename = "@type")]
 ///     kind: &'a str,

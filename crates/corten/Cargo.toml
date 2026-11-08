@@ -73,7 +73,7 @@ default = ["log"]
 # App::serve prints logs (errors, startup, shutdown) to stdout unless the app set a subscriber:
 # a subscriber of Corten's own (src/log.rs), so the feature adds no dependency.
 log = []
-# Handler arguments of any Serialize type (JSON in the markup) and JSON screens for data clients.
+# Handler arguments of any ToJson type (JSON in the markup) and JSON screens for data clients.
 json = ["serde/derive", "dep:serde_json", "axum/json"]
 # corten::types: TypeScript declarations for scripts and JSON Schema for agents, from the same
 # reading of the types that #[derive(ToJson)] and #[derive(FromJson)] write and read them by.

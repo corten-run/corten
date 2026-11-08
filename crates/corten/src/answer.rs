@@ -405,10 +405,10 @@ pub type JsonResult<T> = std::result::Result<crate::Json<T>, JsonError>;
 /// ```
 /// use corten::{http::StatusCode, json::Raw, prelude::*, security::cookie::SetCookie, JsonError, JsonResponse};
 ///
-/// #[derive(serde::Serialize, ToJson)]
+/// #[derive(ToJson)]
 /// struct Started { ok: bool }
 ///
-/// #[derive(serde::Serialize, ToJson)]
+/// #[derive(ToJson)]
 /// struct Problem { error: &'static str }
 ///
 /// async fn refresh() -> Result<JsonResponse, JsonError> {

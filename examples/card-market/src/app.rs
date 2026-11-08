@@ -25,7 +25,6 @@ use corten::{
     security::{Policy, Violations},
     seo::{self, SitemapUrl},
 };
-use serde::Serialize;
 
 use crate::{
     api, items, mcp,
@@ -349,7 +348,7 @@ pub(crate) async fn home(req: Req, State(source): State<Source>) -> Public<HtmlR
 }
 
 /// The trail a search engine shows for a page (schema.org `BreadcrumbList`), as structured data.
-#[derive(Serialize, ToJson)]
+#[derive(ToJson)]
 struct Breadcrumbs {
     #[serde(rename = "@context")]
     context: &'static str,
@@ -359,7 +358,7 @@ struct Breadcrumbs {
     items: Vec<Crumb>,
 }
 
-#[derive(Serialize, ToJson)]
+#[derive(ToJson)]
 struct Crumb {
     #[serde(rename = "@type")]
     kind: &'static str,
@@ -1166,6 +1165,7 @@ mod tests {
             res["result"]["structuredContent"]["message"],
             "Alert set: we will email a@b.c when Pika <Promo> & \"Friends\" drops below $1.00."
         );
+        assert_eq!(res["result"]["structuredContent"].get("partner"), None, "an agent's alert has no partner: {body}");
         // The tools' own refusal keeps its request's id: `Api::errors` leaves a JSON body as it is.
         // A bearer token that was sent and refused is named invalid (RFC 6750).
         let (status, headers, body) = send(call(Some("wrong"), alert)).await;
@@ -1325,6 +1325,12 @@ mod tests {
         let (_, _, body) = send(call(Some("dev-token"), read)).await;
         let res: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(res["result"]["structuredContent"]["listings"].as_array().unwrap().len(), 2);
+        // The output is written by its ToJson: serde's bytes, in the text block and as is in
+        // structuredContent.
+        let text = res["result"]["content"][0]["text"].as_str().unwrap();
+        let view: ItemView = serde_json::from_str(text).unwrap();
+        assert_eq!(text, serde_json::to_string(&view).unwrap());
+        assert!(body.contains(&format!(r#""structuredContent":{text}"#)), "{body}");
     }
 
     #[tokio::test]
