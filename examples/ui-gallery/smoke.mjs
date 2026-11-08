@@ -2900,6 +2900,32 @@ async function run(browser) {
   );
   await progressBlank.close();
   check("Progress: drawn in the primary color up to its value, on the border color", near(progressDrawn.fill, progressDrawn.want) && near(progressDrawn.past, progressDrawn.empty), JSON.stringify(progressDrawn));
+  // A finished run in the success tone: a full bar, so its middle is the fill, in the theme's
+  // success color and not the primary one (sampled on pages of their own, as above).
+  const doneProbe = await (await browser.newContext()).newPage();
+  await doneProbe.goto(`${base}/orders`);
+  const doneShot = (await doneProbe.getByLabel("Morning labels").screenshot()).toString("base64");
+  await doneProbe.context().close();
+  const doneBlank = await orders.context().newPage();
+  const doneDrawn = await doneBlank.evaluate(
+    async ([png, color]) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${png}`;
+      await img.decode();
+      const canvas = document.createElement("canvas");
+      [canvas.width, canvas.height] = [img.width, img.height];
+      const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+      g.drawImage(img, 0, 0);
+      const fill = [...g.getImageData(Math.round(img.width / 2), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
+      g.clearRect(0, 0, 1, 1);
+      g.fillStyle = color;
+      g.fillRect(0, 0, 1, 1);
+      return { fill, want: [...g.getImageData(0, 0, 1, 1).data].slice(0, 3) };
+    },
+    /** @type {[string, string]} */ ([doneShot, tokens["--success"]]),
+  );
+  await doneBlank.close();
+  check("Progress: a finished run's success tone fills it in the success color", near(doneDrawn.fill, doneDrawn.want) && !near(doneDrawn.fill, progressDrawn.want), JSON.stringify(doneDrawn));
   const band = async () =>
     orders.getByLabel("Sending the next label").evaluate((p) => ({
       // Whether the page sees the emulated preference, so a failure says if emulation applied.

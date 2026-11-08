@@ -2496,6 +2496,20 @@ Corten is pre-1.0, so any minor version may change the API.
     `pagination.css`, so a copied `pagination.rs` takes it from `corten ui diff`. The
     ui-gallery's payouts card pages by it
     ([#1073 Kit Pagination needs every page's link, so a list paged by previous and next links (a cursor, or the API's own) cannot use it](https://github.com/corten-run/corten/issues/1073)).
+273. The kit's `Progress` takes a tone beside its size,
+    `Progress { size, tone: ProgressTone::Success }` (`Primary`, `Info`, `Success`, `Warning`,
+    `Destructive`), each 3:1 against the track in both themes (the kit's test), so a task that
+    finished or failed is drawn in the theme's success or destructive color without an app's page
+    rule, which tied with the kit's `::-webkit-progress-value` rule and won only by stylesheet
+    order. `Primary` is the bar it was; `Info` is one under way on a screen whose primary color
+    marks its actions. The tone is the fill and the band of a bar with no value; under forced
+    colors every tone is the system's highlight, as the meter's states are, so the label or the
+    words beside the bar say how the task ended. Measured on the kit file as the Dialog's entry
+    was: `progress.css` 1,617 to 1,794 bytes (gzip 516 to 567, brotli 412 to 465). Breaking: a
+    `Progress { size }` does not compile until it names its tone, which the compiler names;
+    `corten ui add progress --merge` updates a copy. The ui-gallery's label run shows a finished
+    one
+    ([#1059 Kit Progress has no tone, so a finished or failed task's bar cannot be drawn in the theme's success or destructive color](https://github.com/corten-run/corten/issues/1059)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
