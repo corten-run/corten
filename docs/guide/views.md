@@ -231,8 +231,9 @@ value instead (`req.patch(Badge { count })`). A `later` whose `to_html()` string
 writes draws nothing and is no error, and the page does not wait for its read. In a debug build, a
 `later` for a read the app does not start, one inside `<main>` (which a navigation would not fill),
 one in a patch, one rendered as text or whose `to_html()` string is placed twice, or one on a page
-whose answer type does not say it is a page, is an error naming it; one in a live fragment is
-logged. A release build checks less, so test the page in a debug build: a read it does not start, a
+whose answer type does not say it is a page, is an error naming it, on the error page's
+`Failure::detail` (so a router test sees it) and on stderr outside `corten dev`; one in a live
+fragment is logged. A release build checks less, so test the page in a debug build: a read it does not start, a
 page whose answer type is not a page, and a place in a patch or a live fragment draw nothing and are
 logged once; a place inside `<main>` draws the value on a full load and nothing on a navigation, and
 one in `<head>` (its `<title>` included) draws nothing, both unlogged; one rendered as text stays as
@@ -257,7 +258,8 @@ waiting for the read. The read was started as the route was called, before the h
 it gives the value, so its query still runs and is dropped. A route whose page always gives it
 says so in its routes module, `#[route("/cart", get = cart, gives(CartCount))]`, and the read is
 not started for it; a type there that is not a layout read does not compile. A page from such a
-route that does not give the value draws nothing there, and a debug build refuses the page; the
+route that does not give the value draws nothing there, and a debug build refuses the page, naming
+the route's `gives(..)` as the error page's detail; the
 route's error page (a 404 its handler answers) is not that page, so it starts the read as any
 error page for a failure the request is at fault for does; one for a failure that is not (a 5xx)
 starts none, so it draws nothing there. On a `Public` or JSON route it changes nothing, as no read
