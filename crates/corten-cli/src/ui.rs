@@ -3505,6 +3505,18 @@ mod tests {
         let stack = include_str!("../kit/stack.css");
         assert!(stack.lines().any(|l| l.starts_with(".stack {") && l.contains("align-items: stretch;")));
         assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > * { margin-block: 0; }"));
+        // StackStart keeps a stack's children their own width: two classes, so it beats .stack and does
+        // nothing beside a Cluster or alone; its cap on a child's width, the word break and a picture's
+        // shape have no specificity, so an app's rule on a child wins.
+        assert!(stack.contains(".stack.start { align-items: flex-start; }"), "StackStart's rule");
+        assert!(
+            stack.contains(":where(.stack.start) > * { max-width: 100%; overflow-wrap: anywhere; }"),
+            "a child is at most the stack's width"
+        );
+        assert!(
+            stack.contains(":where(.stack.start) > :where(img, video, canvas) { height: auto; }"),
+            "a picture keeps its shape"
+        );
         let (stat, card) =
             (block(include_str!("../kit/stats.css"), ".stat {"), block(include_str!("../kit/card.css"), ".card, .panel {"));
         let declarations =

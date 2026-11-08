@@ -2524,6 +2524,18 @@ Corten is pre-1.0, so any minor version may change the API.
     693). Breaking: each form names its width, which the compiler names; `corten ui add segmented
     --merge` updates a copy. The ui-gallery's label size radios fill the form's column
     ([#1060 Kit Segmented draws only as wide as its choices, so a phone's full-width choice bar (equal parts across the row) keeps its own segmented rules](https://github.com/corten-run/corten/issues/1060)).
+276. The kit's `stack` has `StackStart`, a look written beside a `Stack`
+    (`class={(Stack { gap: Gap::Xs }, StackStart {})}`): the column's children keep their own
+    width at its start (its end on a right-to-left page), each at most the stack's, a word wider than
+    that breaking inside it and a picture narrowing in its shape, for a column of links as wide as
+    their words, badges, or a button under a line of text. Its rule names both classes, so it wins
+    over `.stack`'s wherever an app links its stylesheets and does nothing beside a `Cluster` or
+    alone; an app's own `align-items` on the stack tied with the kit's and won only by stylesheet
+    order. Not breaking: every `Stack { gap }` is as it was, and a copied `stack.rs` and
+    `stack.css` take it from `corten ui diff`. Measured as the Dialog's entry was: `stack.css` 237 to 395 bytes
+    (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
+    link and a badge
+    ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

@@ -2621,6 +2621,52 @@ async function run(browser) {
     links.current === "Newest" && links.fits && links.fills[0] !== clear && links.fills[0] !== links.track && links.fills.slice(1).every((c) => c === clear),
     JSON.stringify(links),
   );
+  // StackStart: a column whose children keep their own width, a link as wide as its words and a
+  // badge, each at most the column's; at 320px a word wider than the column breaks inside its link,
+  // and a picture wider than the column narrows in its shape (#1119).
+  const startColumn = async () =>
+    orders.getByRole("link", { name: "How selling limits work" }).evaluate((a) => {
+      const column = /** @type {HTMLElement} */ (a.parentElement);
+      const box = column.getBoundingClientRect();
+      const kids = [...column.children].map((c) => c.getBoundingClientRect());
+      return {
+        column: Math.round(box.width),
+        widths: kids.map((k) => Math.round(k.width)),
+        atStart: kids.every((k) => Math.abs(k.left - box.left) <= 0.5),
+        inside: kids.every((k) => k.right <= box.right + 0.5),
+      };
+    });
+  const startWide = await startColumn();
+  const startSize = orders.viewportSize();
+  await orders.setViewportSize({ width: 320, height: 640 });
+  const startLong = await orders.getByRole("link", { name: "How selling limits work" }).evaluate(async (a) => {
+    const column = /** @type {HTMLElement} */ (a.parentElement);
+    const [was, one] = [a.textContent, a.getBoundingClientRect().height];
+    // One word, far wider than the column: only the kit's break keeps it in.
+    a.textContent = "W".repeat(100);
+    const link = a.getBoundingClientRect();
+    const box = column.getBoundingClientRect();
+    const word = { inside: link.right <= box.right + 0.5, overflow: a.scrollWidth > a.clientWidth + 1 || column.scrollWidth > column.clientWidth + 1, wrapped: link.height > one * 1.5 };
+    a.textContent = was;
+    // A square picture twice the column's width, its size in its own width and height (the page's
+    // own icon, which the page's CSP lets it load): narrowed to the column, and still square.
+    const img = document.createElement("img");
+    img.width = 640;
+    img.height = 640;
+    img.alt = "";
+    img.src = /** @type {HTMLLinkElement} */ (document.querySelector("link[rel=icon]")).href;
+    column.append(img);
+    await img.decode().catch(() => {});
+    const pic = img.getBoundingClientRect();
+    img.remove();
+    return { ...word, picture: { width: Math.round(pic.width), height: Math.round(pic.height), column: Math.round(box.width) } };
+  });
+  if (startSize) await orders.setViewportSize(startSize);
+  check(
+    "StackStart: a column's link and badge keep their own width at its start; on a phone a word wider than it breaks inside its link and a picture narrows in its shape",
+    startWide.widths.every((w) => w < startWide.column - 8) && startWide.atStart && startWide.inside && startLong.inside && !startLong.overflow && startLong.wrapped && Math.abs(startLong.picture.width - startLong.picture.column) <= 1 && Math.abs(startLong.picture.height - startLong.picture.width) <= 1,
+    JSON.stringify({ startWide, startLong }),
+  );
   // Card: an action on the heading's row at its end, the description under them; a panel is one
   // element with the card's padding on every side; a compact card is denser (#573, #605).
   const cards = await orders.evaluate(() => {
