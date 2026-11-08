@@ -226,7 +226,13 @@ pub(crate) mod tests {
         use corten::{Corten, html};
         req.page(html! {
             <!DOCTYPE html>
-            <html lang="en"><head><title>"Kit"</title><Corten /></head><body><main></main></body></html>
+            <html lang="en">
+                <head>
+                    <title>"Kit"</title>
+                    <Corten />
+                </head>
+                <body><main></main></body>
+            </html>
         })
     }
 
@@ -245,9 +251,10 @@ pub(crate) mod tests {
     async fn the_kit_guide_states_what_every_component_costs() {
         use corten::{App, http::header, testing::Client};
         const SAYS: &str = "every component and the theme's tokens, nothing of its own, serves ";
-        let guide = include_str!("../../../docs/guide/kit.md");
+        // Its lines joined, so the sentence may wrap anywhere.
+        let guide = include_str!("../../../docs/guide/kit.md").split_whitespace().collect::<Vec<_>>().join(" ");
         let stated = guide.split_once(SAYS).expect("the guide's Size says what the kit costs").1;
-        // "59,299 bytes, 8,615 with brotli at level 11 and 9,774 with gzip at level 9"
+        // "59,156 bytes, 8,580 with brotli and 9,740 with gzip, what ..." to the sentence's end.
         let numbers: Vec<usize> = stated
             .split(['.', ':'])
             .next()

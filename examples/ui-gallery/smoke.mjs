@@ -1452,7 +1452,12 @@ async function run(browser) {
   // live region is FailedAlert's, which the checks below read.
   await page.locator("#rename-name").fill("");
   await page.getByRole("button", { name: "Rename", exact: true }).click();
-  await page.waitForFunction(() => document.querySelector("#rename form > .alert__alert") === null && document.querySelector("#rename [aria-invalid=true]") !== null, null, { timeout: 5000 }).catch(() => {});
+  check(
+    "refused for an empty name, the dialog is drawn without the form's alert",
+    await page
+      .waitForFunction(() => document.querySelector("#rename form > .alert__alert") === null && document.querySelector("#rename [aria-invalid=true]") !== null, null, { timeout: 5000 })
+      .then(() => true, () => false),
+  );
   await page.keyboard.press("Escape");
   check("Escape closes it", !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
   // dialog::failed: a rename that gets no answer is said in the modal dialog, not by the toaster
@@ -4426,6 +4431,19 @@ async function run(browser) {
   check("no script: the button opens the dialog", await plain.locator("#rename").isVisible());
   await Promise.all([plain.waitForURL("**/rename"), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
   check("no script: refused, the dialog is open with the error", (await plain.locator("#rename").isVisible()) && ((await plain.locator("#rename").textContent()) ?? "").includes("Give the draft a name."));
+  // The other draft's name: the whole page drawn again has the dialog open with the form's alert.
+  await plain.locator("#rename-name").fill("Holiday lot");
+  await Promise.all([plain.waitForEvent("load"), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
+  {
+    const alert = plain.locator("#rename form > .alert__alert[role=alert]");
+    check(
+      "no script: refused for a taken name, the dialog is open with the form's alert",
+      (await plain.locator("#rename").isVisible()) &&
+        (await alert.count()) === 1 &&
+        (await alert.textContent()) === "Your other draft is named Holiday lot. Rename that one first, or choose another name.",
+      String(await alert.first().textContent({ timeout: 1000 }).catch(() => null)),
+    );
+  }
   if (engine !== "webkit") {
     await plain.locator("#rename-name").fill("Winter draft");
     await Promise.all([plain.waitForURL(`${base}/`), plain.getByRole("button", { name: "Rename", exact: true }).click()]);

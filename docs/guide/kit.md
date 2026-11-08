@@ -279,8 +279,8 @@ legend) are the app's, in its language.
 
 Every component is in use in the [ui-gallery](../../examples/ui-gallery) example, built from the
 kit's own files, and its browser test (`examples/ui-gallery/smoke.mjs`) runs them in Chromium,
-Firefox and WebKit, with and without JavaScript. The [seller-desk](../../examples/seller-desk) example is
-an app styled with the kit: five components copied and unedited, and the theme's tokens
+Firefox and WebKit, with and without JavaScript. The [seller-desk](../../examples/seller-desk)
+example is an app styled with the kit: five components copied and unedited, and the theme's tokens
 set to the app's palette and radius in light and dark.
 
 ## The app's own stylesheet
@@ -320,13 +320,13 @@ would then win over it, those included.
 
 ## Size
 
-The kit's CSS goes into `components.css` with the app's own, one cached file, compressed once
-with brotli at level 11 and gzip at level 9. An app that lists
-every component and the theme's tokens, nothing of its own, serves 59,156 bytes, 8,580 with
-brotli at level 11 and 9,740 with gzip at level 9 (what `corten ui add --all` adds; the
-starter's counter adds a few hundred bytes more). A test in the ui-gallery example (`the_kit_guide_states_what_every_component_costs`) serves it and fails
-when a number here is more than 3 percent off, naming the new ones. An app pays for the
-components it adds, and `corten ui add` adds one at a time.
+The kit's CSS goes into `components.css` with the app's own, one cached file, compressed once with
+brotli at level 11 and gzip at level 9. An app that lists every component and the theme's tokens,
+nothing of its own, serves 59,156 bytes, 8,580 with brotli and 9,740 with gzip, what `corten ui add
+--all` adds. The starter's counter adds about 140 bytes more. A test in the ui-gallery example
+(`the_kit_guide_states_what_every_component_costs`) serves it and fails when a number here is more
+than 3 percent off, naming the new ones. An app pays for the components it adds, and `corten ui add`
+adds one at a time.
 
 A kit several apps share lives in a library crate of the workspace (`corten ui init` and `corten ui
 add` run in it, and say what a library leaves to do by hand). There, `ui::COMPONENTS` lists every
