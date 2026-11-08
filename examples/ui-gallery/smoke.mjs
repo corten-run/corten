@@ -3912,16 +3912,24 @@ async function run(browser) {
       const items = [...(document.querySelector("dl[class*='stats__stats']")?.children ?? [])];
       const value = items[0]?.querySelector("[class*='stats__value']");
       const boxes = items.map((i) => i.getBoundingClientRect());
+      const rem = (/** @type {Element | null | undefined} */ e) =>
+        e ? parseFloat(getComputedStyle(e).fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) : 0;
+      // A theme's phone size is its own token.
+      const list = /** @type {HTMLElement | null} */ (value?.closest("dl") ?? null);
+      list?.style.setProperty("--stat-value-font-size-narrow", "1.5rem");
+      const themed = rem(value);
+      list?.style.removeProperty("--stat-value-font-size-narrow");
       return {
         tops: boxes.map((r) => Math.round(r.top)),
-        size: value ? parseFloat(getComputedStyle(value).fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) : 0,
+        size: rem(value),
+        themed,
         // For a failure: what the page was laid out at, and where each card was.
         at: { width: innerWidth, scrollY: Math.round(scrollY) },
         boxes: boxes.map((r) => [r.left, r.top, r.width, r.height].map(Math.round)),
       };
     });
     const [a, b, c, d] = phone.tops;
-    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, phone.at.width === width && new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
+    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, phone.at.width === width && new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25 && phone.themed === 1.5, JSON.stringify(phone));
   }
   await orders.setViewportSize({ width: 390, height: 844 });
   await orders.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 }).catch(() => {});

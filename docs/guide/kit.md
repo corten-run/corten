@@ -85,18 +85,22 @@ sets the tokens lower. A size, weight or tracking is the same in both themes, so
 `ui-dark.tokens.json` has none.
 
 A `Stats` figure's type is the theme's too: `--stat-label-font-size` and `--stat-label-font-weight`
-(.875rem, 500), `--stat-value-font-size` and `--stat-value-font-weight` (1.5rem, 600; on a narrow
-screen the value is five sixths of its size, 1.25rem), and `--stat-label-tracking` and
-`--stat-value-tracking` (0 and -0.01), `number` tokens in ems, since a DTCG dimension is px or rem
-and tracking follows the text's size: `"stat-label-tracking": { "$type": "number", "$value": 0.05 }`.
-Two are not in the kit's theme, because no token's value says "the page's": the value's face,
-which is the page's until the app declares `--stat-value-font-family` (a `fontFamily` token,
+(.875rem, 500), `--stat-value-font-size` and `--stat-value-font-weight` (1.5rem, 600),
+`--stat-value-font-size-narrow` (the value on a narrow screen, 1.25rem), and `--stat-label-tracking`
+and `--stat-value-tracking` (0 and -0.01), `number` tokens in ems, since a DTCG dimension is px or
+rem and tracking follows the text's size: `"stat-label-tracking": { "$type": "number", "$value": 0.05 }`.
+A design system whose letter spacing is a DTCG dimension (a `typography` token's `letterSpacing`)
+writes the number again rather than referring to it, as the types differ. Two are not in the kit's
+theme, because no token's value says "the page's": the value's face, which is the page's until the
+app declares `--stat-value-font-family` (a `fontFamily` token,
 `"stat-value-font-family": { "$type": "fontFamily", "$value": "{font.display}" }`), and the label's
 case, which is as written until the app declares `--stat-label-text-transform`, which DTCG has no
-type for, so it goes in `static/style.css` (`:root { --stat-label-text-transform: uppercase; }`).
-The stylesheet reads each with a fallback, so the startup check does not ask for them, and a
-name spelled wrong changes nothing. A card's heading sets no face, so the app's own heading rule
-(`h2 { font-family: .. }`) draws it.
+type for, so it goes with the fonts in `static/style.css`
+(`:root { --stat-label-text-transform: uppercase; }`). The stylesheet reads each with a fallback, so the startup check does not ask for
+them, and a name spelled wrong changes nothing. As with every look, the figure's type is its own:
+a page rule for `dt` or `dd` (a case, a letter spacing, a face) does not reach the label or the
+value. A card's heading sets no face, so the app's own heading rule (`h2 { font-family: .. }`)
+draws it.
 
 An app set up by an older kit has a theme without the newer tokens: `corten ui add` names each
 one a component it copies reads and the app declares nowhere (not in its theme or a stylesheet

@@ -2530,7 +2530,7 @@ mod tests {
         {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 43, "{names:?}");
+        assert_eq!(names.len(), 44, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
@@ -2778,7 +2778,8 @@ mod tests {
                 "stat-label-tracking",
                 "stat-value-font-size",
                 "stat-value-font-weight",
-                "stat-value-tracking"
+                "stat-value-tracking",
+                "stat-value-font-size-narrow"
             ],
             "{stats:?}"
         );
@@ -3205,21 +3206,33 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The properties a kit stylesheet reads that the app may declare and the kit's theme does
+    /// not: a figure's face and its label's case.
+    const OPTIONAL: [&str; 2] = ["stat-value-font-family", "stat-label-text-transform"];
+
     #[test]
     fn every_property_a_component_reads_is_a_token_of_the_theme() {
         let tokens = |path: &str| INIT.iter().find(|(p, _)| *p == path).unwrap().1;
         let (light, dark) = (tokens("tokens/ui.tokens.json"), tokens("tokens/ui-dark.tokens.json"));
+        for name in OPTIONAL {
+            let read = KIT.iter().flat_map(|p| p.files.iter()).any(|(_, t)| t.contains(&format!("var(--{name},")));
+            assert!(read, "no kit stylesheet reads --{name}: rename it in OPTIONAL and the kit guide too");
+        }
         for piece in KIT {
             for (file, text) in piece.files.iter().filter(|(f, _)| f.ends_with(".css")) {
                 for read in text.split("var(--").skip(1) {
-                    let end = read.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap();
-                    let name = &read[..end];
-                    // One the stylesheet sets itself (a badge's `--kit-tone`) is not the theme's,
-                    // and one with a fallback (a figure's face) is the app's to declare or not.
-                    if text.contains(&format!("--{name}:")) || read[end..].trim_start().starts_with(',') {
+                    let name = &read[..read.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap()];
+                    // One the stylesheet sets itself (a badge's `--kit-tone`) is not the theme's.
+                    if text.contains(&format!("--{name}:")) {
                         continue;
                     }
                     let line = light.lines().find(|l| l.starts_with(&format!("  \"{name}\": ")));
+                    // The app's alone, read with a fallback, since no token's value says "the
+                    // page's" (the guide names each): never in the kit's theme, so never asked for.
+                    if OPTIONAL.contains(&name) {
+                        assert!(line.is_none() && read[name.len()..].trim_start().starts_with(','), "{file} reads --{name}");
+                        continue;
+                    }
                     assert!(line.is_some(), "{file} reads --{name}, which the theme lacks");
                     // Only a color differs in the dark theme: a size (`radius`, a control's
                     // height), a weight or a figure's tracking is the same in both.

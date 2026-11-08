@@ -46,7 +46,8 @@ pub fn OfferList<'a>(offers: &'a [Offer], selected: Option<&'a str>) -> impl Ren
    A kit copy's sizes and a Stats figure's type (with its face and label case) are theme tokens:
    change the token, not the copied stylesheet, so `corten ui diff` keeps it the kit's
    (`docs/guide/kit.md`).
-6. `static/style.css` holds only element defaults, fonts and the layout. It is linked
+6. `static/style.css` holds only element defaults, fonts (and type DTCG has no token for, such as
+   the kit's `--stat-label-text-transform`) and the layout. It is linked
    before `<Corten />` in the layout.
 7. Inline `style=` is blocked by the CSP. Use a class or a token utility instead: a fixed value is
    its own function (`mx_auto()`, `gap_3()`); the utility's function (`gap(space)`,

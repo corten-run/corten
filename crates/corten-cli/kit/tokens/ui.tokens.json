@@ -39,6 +39,7 @@
   "stat-label-font-weight": { "$type": "fontWeight", "$value": 500 },
   "stat-label-tracking": { "$type": "number", "$value": 0 },
   "stat-value-font-size": { "$type": "dimension", "$value": { "value": 1.5, "unit": "rem" } },
+  "stat-value-font-size-narrow": { "$type": "dimension", "$value": { "value": 1.25, "unit": "rem" } },
   "stat-value-font-weight": { "$type": "fontWeight", "$value": 600 },
   "stat-value-tracking": { "$type": "number", "$value": -0.01 },
   "toasts-inset-bottom": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } },
