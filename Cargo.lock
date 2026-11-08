@@ -326,7 +326,6 @@ name = "corten-feed"
 version = "0.1.0"
 dependencies = [
  "axum",
- "corten-macros",
  "corten-protocol",
  "futures-util",
  "http-body-util",

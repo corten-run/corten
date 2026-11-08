@@ -1109,15 +1109,19 @@ rules something out.
     field, implements the trait by hand
     ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
 
-    Stands on: reasoned (one declaration for the key, and no second way to derive `Clone` or
-    `Serialize`, Values 5 and 6); measured (nothing to measure: the impl is the one written by
-    hand and the feed's path is unchanged, which `crates/corten/tests/derived_row.rs` checks by
-    comparing a derived row's snapshot and replayed patch with a hand-written one's).
+    The derive is `corten::feed::Row`, beside the trait, and not in `corten-feed` itself: its impl
+    names `::corten::feed::Row`, and the lower crates (`corten-feed`, `corten-cluster`) keep
+    writing their test rows by hand.
+
+    Stands on: reasoned (the generated impl is the one written by hand and the feed's path is
+    unchanged, which `crates/corten/tests/derived_row.rs` checks by comparing a derived row's
+    snapshot and replayed patch with a hand-written one's); value (one declaration for the key,
+    and no second way to derive `Clone` or `Serialize`, Values 5 and 6).
 
     Revisit when: rows often need a key made from more than one field, which a mark on one field
     cannot say.
 
-    Last checked: 2026-11-08, the derive and the rows of the four example apps, from `c65c10ec`.
+    Last checked: 2026-11-08, the derive and the rows of the four example apps at `bf969573`.
 
 ## Rules
 

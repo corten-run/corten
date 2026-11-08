@@ -100,8 +100,16 @@ macro_rules! __openapi_document {
     };
 }
 
+/// Live feeds (feature `feed`): the server side of `corten-feed`, and `#[derive(Row)]`, a row's
+/// [`Row::id`](feed::Row::id) from the field marked `#[row(id)]` (a `String`, or another type
+/// that derefs to `str`), so `Row` is the derive and the trait at once, as serde's `Serialize`
+/// is. The row's `Clone` and `Serialize` stay in its derive list. See the live-data guide.
 #[cfg(feature = "feed")]
-pub use corten_feed as feed;
+pub mod feed {
+    #[doc(inline)]
+    pub use corten_feed::*;
+    pub use corten_macros::Row;
+}
 #[cfg(feature = "agent")]
 pub mod agent;
 mod ahead;
@@ -1012,6 +1020,8 @@ mod doc_examples {
     struct GettingStarted;
     #[doc = include_str!("../../../docs/guide/scripts.md")]
     struct Scripts;
+    // Its examples are feeds, and its compile errors name what a feed refuses.
+    #[cfg(feature = "feed")]
     #[doc = include_str!("../../../docs/guide/live-data.md")]
     struct LiveData;
     #[doc = include_str!("../../../docs/guide/requests-and-forms.md")]

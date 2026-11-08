@@ -237,7 +237,8 @@ impl Row for Entry {
 # }
 ```
 
-A row with no field marked, two marked, an id that is not text, or an enum does not compile:
+A row with no field marked, two marked, an id that is not text, an enum, a unit struct, or a
+`row` attribute that is not `#[row(id)]` on a field does not compile:
 
 ```compile_fail
 #[derive(Clone, serde::Serialize, corten::feed::Row)]
@@ -259,8 +260,28 @@ struct Stock { #[row(id)] number: u64 }
 enum Stock { Open { #[row(id)] ticker: String } }
 ```
 
-The trait's bounds hold too: a row that is not `Clone`, `Send` and `Sync` (a `Cell` in it) does
-not compile.
+```compile_fail
+#[derive(Clone, serde::Serialize, corten::feed::Row)]
+struct Stock;
+```
+
+```compile_fail
+#[derive(Clone, serde::Serialize, corten::feed::Row)]
+struct Stock(String, u32);
+```
+
+```compile_fail
+#[derive(Clone, serde::Serialize, corten::feed::Row)]
+struct Stock { #[row(key)] ticker: String }
+```
+
+```compile_fail
+#[derive(Clone, serde::Serialize, corten::feed::Row)]
+#[row(id)]
+struct Stock { ticker: String }
+```
+
+The trait's bounds hold too: a row that is not `Sync` (a `Cell` in it) does not compile.
 
 ```compile_fail,E0277
 #[derive(Clone, serde::Serialize, corten::feed::Row)]

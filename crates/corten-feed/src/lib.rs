@@ -49,11 +49,6 @@ use axum::{
     http::{header, request::Parts, HeaderName, HeaderValue},
     response::{IntoResponse, Response},
 };
-/// `#[derive(Row)]`: a row's [`Row::id`] is the field marked `#[row(id)]` (a `String`, or another
-/// type that derefs to `str`), so `Row` is the derive and the trait at once, as serde's
-/// `Serialize` is. The row's `Clone` and `Serialize` stay in its derive list. Used through
-/// `corten::feed`, which the impl names; see the live-data guide.
-pub use corten_macros::Row;
 use corten_protocol::{apply_ops, check_seq, Patch, SnapshotRef};
 pub use corten_protocol::{patch_json, Applied, ApplyError, Change, Cursor, Row, SyncReason};
 use futures_util::{stream, StreamExt};

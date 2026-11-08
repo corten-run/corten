@@ -58,8 +58,21 @@ where
     value: T,
 }
 
+/// A row a `macro_rules!` declares, its id field named by the caller.
+macro_rules! row {
+    ($name:ident, $id:ident) => {
+        #[derive(Clone, Serialize, Row)]
+        struct $name {
+            #[row(id)]
+            $id: String,
+        }
+    };
+}
+row!(Made, code);
+
 #[test]
 fn the_id_is_the_marked_field() {
+    assert_eq!(Made { code: "m".into() }.id(), "m");
     assert_eq!(Level { sku: "a".into(), qty: 1 }.id(), "a");
     assert_eq!(Listing { price_cents: 5, listing_id: "l1".into() }.id(), "l1");
     assert_eq!(Pair(3, "p".into()).id(), "p");
