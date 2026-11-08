@@ -19,7 +19,7 @@
 //!
 //! `on:link` is every link's `on:connect`, run as each joins the page: `None::<Handler>` for
 //! none, or, for a pager under a table sorted in place whose pages read its order,
-//! `corten_ui::ordered::link(target, [sorted(&SalesId)], signal)`, so each link opens its page in
+//! `corten_ui::ordered::link(target, [sorted(&SupplyId)], signal)`, so each link opens its page in
 //! the order on screen. A disabled end is not a link, so it does not run it.
 //!
 //! A list paged by a cursor, or by the links its API answers with, knows only the page before and

@@ -197,7 +197,8 @@ or `PreviousNext` as `on:link`, which puts it on each link it draws:
 
 ```rust,ignore
 <PreviousNext label="Pages" previous_label="Previous" next_label="Next"
-    previous={before} next={after} on:link={ordered::link(target, [sorted(&SupplyId)], signal)} />
+    previous={before.as_ref().map(|r| r as &dyn Href)} next={after.as_ref().map(|r| r as &dyn Href)}
+    on:link={ordered::link(target, [sorted(&SupplyId)], signal)} />
 ```
 
 A form or link that carries the order of several sorted tables (one route's query set holding each
@@ -241,8 +242,7 @@ first page, and the pages' links keep the sort. A page of rows can also be sorte
 an order across pages would cost more than it is worth (pages by a keyset, `after` the last id,
 would need a keyset and an index for each order): `rows::sort` as above, each sort link keeps
 the page (the same `after` or offset) so the server sorts those same rows without the script, and
-the caption says the order covers the rows shown ("These 50 sales, sorted by price"). Its pager
-passes `ordered::link` as `on:link` (above), so the next page opens in the order on screen.
+the caption says the order covers the rows shown ("These 50 sales, sorted by price").
 
 ```rust,ignore
 #[route("/sales")]
@@ -252,8 +252,11 @@ pub struct Sales { pub sold: Option<SoldBy>, pub page: Option<usize> }
     descending={&url::Sales { sold: Some(SoldBy::PriceDown), page: None }} first={Sort::Ascending} class={TableNumeric {}}
     on:sort={None::<Handler>} />
 ..
-<Pagination .. link={|page| url::Sales { sold, page: Some(page).filter(|p| *p > 1) }} />
+<Pagination .. link={|page| url::Sales { sold, page: Some(page).filter(|p| *p > 1) }} on:link={None::<Handler>} />
 ```
+
+A pager under a page sorted on its own passes `ordered::link` as `on:link` instead (above), so the
+next page opens in the order on screen.
 
 A table whose rows a script also writes or filters keeps their data in a view and sorts that
 (`rows()`, [Scripts](scripts.md)), by the view's fields rather than by column.

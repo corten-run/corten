@@ -313,10 +313,10 @@ pub fn Gallery<'a>(
     let shown_tab = Some(tab).filter(|t| *t != MarketTab::Listings);
     let shown_period = Some(period).filter(|p| *p != Period::Month);
     let sales = earlier.then_some(SalesPage::Earlier);
-    let at = move |tab| url::Home { tab, sale: None, period: shown_period, sold, sales: None };
+    let at = move |tab| url::Home { tab, sale: None, period: shown_period, sold, sales };
     let (week, month) = (
-        url::Home { tab: shown_tab, sale: None, period: Some(Period::Week), sold, sales: None },
-        url::Home { tab: shown_tab, sale: None, period: None, sold, sales: None },
+        url::Home { tab: shown_tab, sale: None, period: Some(Period::Week), sold, sales },
+        url::Home { tab: shown_tab, sale: None, period: None, sold, sales },
     );
     // Each sort header links to the page sorted by its column; the script sorts in place instead.
     let sorted = move |by| url::Home { tab: shown_tab, sale: None, period: shown_period, sold: Some(by), sales };
