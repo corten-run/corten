@@ -2606,15 +2606,18 @@ Corten is pre-1.0, so any minor version may change the API.
     system whose chosen tab is its brand color, or whose choices are semibold, sets them once and
     the copies stay the kit's. Nothing changes for an app that keeps its copies, and the kit's look
     is the same. One set up by an older kit that takes the new copies adds the two tokens
-    `corten ui add tabs --merge` (or `segmented`, or `--force` for a copy without edits) names,
-    the color in both theme files, before it starts. The kit's contrast test checks the chosen text
-    on `--background`, its raised surface, in both themes. The theme's declarations and the two
-    `var()`s in each stylesheet make the ui-gallery's served `components.css` 60,840 bytes where it
-    was 60,608 (gzip 10,069 against 10,039, brotli 8,869 against 8,841, Node's zlib at gzip level 9
-    and brotli's default). The ui-gallery's smoke test checks a tab, a segmented choice, a
-    `SegmentedLinks` link and a `SegmentedRadio` at the kit's values and at a theme's. Asked for by
-    the Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen choice in
-    `--primary` at 600
+    `corten ui add tabs --merge` (or `segmented`, or `--force` for a copy without edits) names, the
+    color in both theme files, before it starts. A checked `SegmentedRadio` under the pointer keeps the
+    chosen color: its hover rule weighed more than the checked one and drew it in `--foreground`,
+    which only showed once the two could differ. The kit's contrast test checks the chosen text on
+    `--background`, its raised surface, in both themes. The theme's declarations and the two
+    `var()`s in each stylesheet, with the hover rule's selector, make the ui-gallery's served
+    `components.css` 60,857 bytes where it was 60,608 (gzip 10,067 against 10,039, brotli 8,866
+    against 8,841, Node's zlib at gzip level 9 and brotli's default). The ui-gallery's smoke test
+    checks a tab, a segmented choice, a `SegmentedLinks` link and a `SegmentedRadio` at the kit's
+    values and at a theme's, and the checked `SegmentedRadio` under the pointer. Asked for by the
+    Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen choice in `--primary`
+    at 600
     ([#1123 Kit Segmented and Tabs draw the chosen choice in --foreground at weight 500 as literals, so a theme whose chosen tab is its primary color edits both copies](https://github.com/corten-run/corten/issues/1123)).
 
 ### Removed
