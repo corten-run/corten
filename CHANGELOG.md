@@ -5574,9 +5574,10 @@ Corten is pre-1.0, so any minor version may change the API.
     after load; and a `data-patch` form with one could not be drawn again by its own answer, so
     the write looked failed. The runtime now reads the attributes of an element it dispatches to,
     binds, finds refs in, patches or draws again through Element's own `getAttribute` and
-    `hasAttribute`, as its submit path already did. Its other members are not covered yet
+    `hasAttribute`, as its submit path already did, and a patched element's id from its attribute
+    (a form's `id` is its control named `id`). Its other members are not covered yet
     ([#1105 Form controls named after other Element members (closest, querySelectorAll, isConnected, remove, contains) still shadow what the runtime calls on a form](https://github.com/corten-run/corten/issues/1105)).
-    The runtime is 308 B smaller and 25 B larger gzipped (41,292 to 40,984 B, 14,839 to 14,864 B
+    The runtime is 312 B smaller and 27 B larger gzipped (41,292 to 40,980 B, 14,839 to 14,866 B
     gzip)
     ([#1049 A form with a control named hasAttribute never runs its data-on handlers: the runtime's dispatch calls the form's own methods](https://github.com/corten-run/corten/issues/1049)).
 

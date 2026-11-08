@@ -979,7 +979,9 @@ async function run(browser) {
     const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
     const markup = form.outerHTML.replace(/^<form[^>]*>/, (open) => open + inputs);
     for (const n of [1, 2]) {
-      const copy = markup.replace(/ id="([^"]+)"/g, (_, id) => ` id="smoke-${n}-${id}"`).replace('data-on="corten:error:', `data-on="smoke-shadowed-${n}:`);
+      const copy = markup
+        .replace(/ id="([^"]+)"/g, (_, id) => ` id="smoke-${n}-${id}"`)
+        .replace(/data-on="corten:error:([\w.]+)\(@(\w+)\)"/, (_, f, ref) => `data-on="smoke-shadowed-${n}:${f}(@${ref}) smoke-closest-${n}:${f}(^${ref})"`);
       document.querySelector("main")?.insertAdjacentHTML("beforeend", /** @type {any} */ (window).__html(copy));
     }
     form.insertAdjacentHTML("afterbegin", /** @type {any} */ (window).__html(inputs));
@@ -992,11 +994,20 @@ async function run(browser) {
       Element.prototype.dispatchEvent.call(at, new CustomEvent(type, { bubbles, cancelable: true, detail: { status: 0 } }));
       return !note.hidden;
     };
+    // A handler on the form given the element the event came from (`^ref`), which it finds by
+    // reading the form's own scope.
+    const closest = () => {
+      const note = /** @type {HTMLElement} */ (document.querySelector("#smoke-1-watch-form [role=alert]"));
+      note.hidden = true;
+      note.dispatchEvent(new CustomEvent("smoke-closest-1", { bubbles: true }));
+      return !note.hidden;
+    };
     try {
       return {
         loaded: heard("watch-form", "corten:error", true),
         added: heard("smoke-1-watch-form", "smoke-shadowed-1", true),
         notBubbling: heard("smoke-2-watch-form", "smoke-shadowed-2", false),
+        closest: closest(),
       };
     } finally {
       for (const n of [1, 2]) document.getElementById(`smoke-${n}-watch-form`)?.remove();
@@ -1005,7 +1016,7 @@ async function run(browser) {
   });
   check(
     "a form with controls named hasAttribute and getAttribute runs its handlers, loaded with the page or added after, for events that bubble or not",
-    shadowed.loaded && shadowed.added && shadowed.notBubbling,
+    shadowed.loaded && shadowed.added && shadowed.notBubbling && shadowed.closest,
     JSON.stringify(shadowed),
   );
   // A newer submit that waited for a write the network failed is not sent: it would fail the
@@ -1171,7 +1182,7 @@ async function run(browser) {
   await page.evaluate(() =>
     document.querySelector("main")?.insertAdjacentHTML(
       "beforeend",
-      __html('<form id="shadowed" method="post" action="/watch" data-patch><input type="hidden" name="id" value="GLBX"><input type="hidden" name="method" value="x"><input type="hidden" name="enctype" value="x"><input type="hidden" name="elements" value="x"><input type="hidden" name="setAttribute" value="x"><button name="action" value="go">Watch</button></form>'),
+      __html('<form id="shadowed" method="post" action="/watch" data-patch><input type="hidden" name="id" value="GLBX"><input type="hidden" name="method" value="x"><input type="hidden" name="enctype" value="x"><input type="hidden" name="elements" value="x"><input type="hidden" name="setAttribute" value="x"><input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x"><button name="action" value="go">Watch</button></form>'),
     ),
   );
   const shadowedPosts = /** @type {string[]} */ ([]);
@@ -1203,7 +1214,30 @@ async function run(browser) {
     replaced: !document.querySelector("#watch-form > input[name=hasAttribute]"),
     errors: /** @type {any} */ (window).__shadowedErrors,
   }));
-  check("a patch draws again a form with controls named hasAttribute and getAttribute, and says no write failed", redrawn.replaced && redrawn.errors === 0, JSON.stringify(redrawn));
+  // And an answer that carries such controls itself, as the server's would for a form that has
+  // them: drawn as any other, its reads of the new form go through Element's own methods too.
+  const carried = await page.evaluate(async () => {
+    const { patch } = await import("corten");
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
+    const inputs = '<input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x">';
+    const fresh = form.outerHTML.replace(/^<form[^>]*>/, (open) => open + inputs);
+    /** @type {unknown} */
+    let failed = null;
+    try {
+      await patch(__html(fresh));
+    } catch (error) {
+      failed = String(error);
+    }
+    const now = document.getElementById("watch-form");
+    const drawn = now !== form && !!now?.querySelector("input[name=hasAttribute]");
+    for (const input of Array.from(now?.querySelectorAll("input[name=hasAttribute], input[name=getAttribute]") ?? [])) input.remove();
+    return { drawn, failed };
+  });
+  check(
+    "a patch draws again a form with controls named hasAttribute and getAttribute, and says no write failed",
+    redrawn.replaced && redrawn.errors === 0 && carried.drawn && carried.failed === null,
+    JSON.stringify({ ...redrawn, ...carried }),
+  );
   await page.evaluate(() => document.getElementById("shadowed")?.remove());
 
   // The latest submit wins, but a pending write is not abandoned (the server may have applied

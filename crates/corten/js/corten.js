@@ -914,14 +914,15 @@ async function apply(html, signal, sent, took, own = true, asked) {
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
   for (const el of Array.from(content.children)) {
-    const id = idOf(el);
+    // Read from the attribute, as `target.id` is a control named id when the target is a form.
+    const id = idOf(el) ?? "";
     const target = id ? document.getElementById(id) : null;
     if (hasAttr(el, "data-corten-read-again")) again = el;
     else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-remove")) {
       // Focus in it goes to the nearest element around it that can take focus.
       const up = target?.contains(document.activeElement) && target.parentElement;
       navs ||= !!target && holdsNav(target);
-      if (target?.parentElement) changedIn(target.parentElement, ["x", target.id, []]);
+      if (target?.parentElement) changedIn(target.parentElement, ["x", id, []]);
       target?.remove();
       if (up) focusNear(up);
     }
@@ -929,10 +930,10 @@ async function apply(html, signal, sent, took, own = true, asked) {
     else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
       put.push(...Array.from(el.content.children));
       serve(el.content);
-      changedIn(target, ["a", target.id, Array.from(el.content.childNodes)]);
+      changedIn(target, ["a", id, Array.from(el.content.childNodes)]);
       target.append(el.content);
     } else {
-      if (target.parentElement) changedIn(target.parentElement, ["r", target.id, [el]]);
+      if (target.parentElement) changedIn(target.parentElement, ["r", id, [el]]);
       replaceKeeping(target, el, sent, took);
       put.push(el);
     }
@@ -958,7 +959,7 @@ async function apply(html, signal, sent, took, own = true, asked) {
  */
 function partTagBeside(put) {
   for (const el of put) {
-    if (!el.id || !el.parentElement) continue;
+    if (!idOf(el) || !el.parentElement) continue;
     const tag = Array.from(el.parentElement.children).find((sibling) => sibling.matches(PART_AGAIN));
     if (tag) return tag;
   }
@@ -1010,7 +1011,7 @@ const PART_AGAIN = "template[data-corten-read-again][data-from]";
  */
 function readPartsAgain(main) {
   for (const tag of Array.from(main.querySelectorAll(PART_AGAIN))) {
-    readPatchAgain(tag, [tag, ...Array.from(/** @type {Element} */ (tag.parentElement).children).filter((el) => el.id)]);
+    readPatchAgain(tag, [tag, ...Array.from(/** @type {Element} */ (tag.parentElement).children).filter((el) => idOf(el))]);
   }
 }
 
@@ -1338,7 +1339,8 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   if (html.includes(" data-corten-page")) {
     for (const part of Array.from(content.children)) {
       if (!hasAttr(part, "data-corten-page")) continue;
-      const old = part.id ? document.getElementById(part.id) : null;
+      const id = idOf(part);
+      const old = id ? document.getElementById(id) : null;
       if (!old || main.contains(old)) {
         reload(notice);
         return false;
@@ -1380,7 +1382,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   for (const [old, part] of parts) {
     // One inside an element the layout drew changes what a write's page is compared with, as a
     // patch there does; one that is such an element takes its place (`replaceKeeping`).
-    if (!drawn.has(old) && old.parentElement) changedIn(old.parentElement, ["r", part.id, [part]]);
+    if (!drawn.has(old) && old.parentElement) changedIn(old.parentElement, ["r", /** @type {string} */ (idOf(part)), [part]]);
     // A link followed moves the focus as one in the header does; a read again keeps it.
     replaceKeeping(old, part, null, false, !!stay);
   }
