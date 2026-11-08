@@ -2559,12 +2559,14 @@ Corten is pre-1.0, so any minor version may change the API.
     `Progress`'s sweep moves. The guides give the rules that make the words beside it follow the
     stream too ("Live" only while it is live, "Not live" otherwise and without JavaScript).
     Not breaking: `StatusDot` is unchanged (its doc test no longer names a class a live form
-    could have), and `corten ui add status_dot --merge` takes `LiveDot`. The ui-gallery's served
-    `components.css` is 60,666 bytes where it was 60,471 (gzip 10,056 against 10,012, brotli 8,856
-    against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier size is the
-    served file without the new rules), on every page that draws a `StatusDot`, as the two share
-    a stylesheet. The ui-gallery's orders page has a live badge with those words, which the smoke
-    test puts inside a `<corten-live>` and checks in each state
+    could have), and `corten ui add status_dot --merge` takes `LiveDot`. The kit's new rules
+    add 195 bytes to the stylesheet of every app that draws a `StatusDot`, as the two share one:
+    measured on the ui-gallery's served `components.css`, 60,666 bytes with them where it was
+    60,471 (gzip 10,056 against 10,012, brotli 8,856 against 8,814, Node's zlib at gzip level 9
+    and brotli's default; the earlier size is the served file without the new rules). The
+    ui-gallery's orders page has a live badge with those words, whose own three rules bring the
+    served file to 60,833 bytes (gzip 10,081, brotli 8,876), and the smoke test puts it inside a
+    `<corten-live>` and checks it in each state
     ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
 
 ### Removed

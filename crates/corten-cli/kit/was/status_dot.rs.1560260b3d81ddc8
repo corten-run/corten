@@ -18,7 +18,7 @@
 //! `<corten-live>` it is still. It pulses only for a user who has not asked for less motion, and
 //! the motion is never the only sign: the words beside it must follow the stream too, as the
 //! element's `status` attribute does. Inside nested streams the dot pulses while any of them is
-//! live, and so do words shown by the rules below.
+//! live, and the words the rules below show say "Live" then too.
 //!
 //! ```rust,ignore
 //! <corten-live src={url::LotFeed { id }}>
