@@ -3663,10 +3663,12 @@ async function run(browser) {
     );
     navRequests.length = 0;
     await page.hover("#no-prefetch");
+    // Nothing to wait for: the check is that no request comes, so it waits past the hover's dwell.
     await page.waitForTimeout(300);
     const afterOptOut = navRequests.length;
+    const control = page.waitForRequest((request) => request.headers()["purpose"] === "prefetch" && new URL(request.url()).search === "?from=hover", { timeout: 5_000 }).catch(() => null);
     await page.hover("#prefetch");
-    await page.waitForTimeout(300);
+    await control;
     check("data-no-prefetch: hovering the link fetches nothing", afterOptOut === 0 && navRequests.length === 1, `${afterOptOut} then ${navRequests.join()}`);
 
     // The prefetch cache keeps the 8 newest pages: after hovering 9 links, following the newest
@@ -3675,18 +3677,32 @@ async function run(browser) {
     await page.evaluate(() =>
       document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html(Array.from({ length: 9 }, (_, i) => `<a class="hovered" href="/news?p=${i}">${i}</a>`).join(" "))),
     );
+    // Each count is read once the request it counts has been seen, not after a pause (#1053).
+    /** @param {string} search @param {boolean} prefetch */
+    const navTo = (search, prefetch) =>
+      page
+        .waitForRequest(
+          (request) =>
+            request.headers()["corten"] === "nav" &&
+            new URL(request.url()).search === search &&
+            (request.headers()["purpose"] === "prefetch") === prefetch,
+          { timeout: 5_000 },
+        )
+        .catch(() => null);
     for (let i = 0; i < 9; i += 1) {
+      const prefetched = navTo(`?p=${i}`, true);
       await page.hover(`header a.hovered[href="/news?p=${i}"]`);
-      await page.waitForTimeout(150);
+      await prefetched;
     }
     const hoveredCount = navRequests.length;
     await page.click('header a.hovered[href="/news?p=8"]');
     await page.waitForFunction(() => location.search === "?p=8");
     const afterNewest = navRequests.length;
+    const fetchedAgain = navTo("?p=0", false);
     await page.click('header a.hovered[href="/news?p=0"]');
     await page.waitForFunction(() => location.search === "?p=0");
     // Playwright can report the request after the address changes.
-    for (let waited = 0; navRequests.length < 11 && waited < 2000; waited += 50) await page.waitForTimeout(50);
+    await fetchedAgain;
     check(
       "prefetch keeps the 8 newest pages: the newest is reused, the oldest is fetched again",
       hoveredCount === 10 && afterNewest === 10 && navRequests.length === 11,
