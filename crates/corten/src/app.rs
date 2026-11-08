@@ -1357,8 +1357,8 @@ pub async fn serve<M: Middleware>(app: App<M>) -> std::io::Result<()> {
 /// ([`serve_wrapped`]), or whose own default port is not 3000
 /// (`corten::serve_on(corten::listeners(8320).await?, app)`, with no `PORT` to set from the
 /// program). Each asks the system to hold 511 connections it has finished and the app not yet
-/// accepted, where `TcpListener::bind` asks for 128. The system may hold fewer: Linux caps it at `net.core.somaxconn`, macOS at
-/// `kern.ipc.somaxconn` (128 by default), and Windows 11 held 200.
+/// accepted, where `TcpListener::bind` asks for 128. The system may hold fewer: Linux caps it at
+/// `net.core.somaxconn`, macOS at `kern.ipc.somaxconn` (128 by default), and Windows 11 held 200.
 pub async fn listeners(port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
     let host = std::env::var("HOST").ok();
     let port: u16 = match std::env::var("PORT") {
