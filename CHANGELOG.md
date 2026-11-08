@@ -2462,6 +2462,25 @@ Corten is pre-1.0, so any minor version may change the API.
     guidance), and how to propose it; the README's app table says whether each app has been
     reviewed by its maintainers (none has been reviewed in full yet)
     ([#814 No one who maintains the other frameworks has reviewed their bench/fullstack apps, so a fair-comparison claim rests on our own reading of each](https://github.com/corten-run/corten/issues/814)).
+270. `bench/fullstack` has a mixed load phase
+    ([#813 Every bench/fullstack load phase hits one endpoint, so no phase exercises deadlines, write limits and caching together as a real site would](https://github.com/corten-run/corten/issues/813)):
+    with items from the item API, each app's item-page phases end with 60 s at the fixed rate as
+    70% item pages (2% of them an item the item API answers in 40 s, past the 35 s the matched
+    profile's deadline must answer within), 20% JSON, 5% the home page and 5% the item page's form
+    posted from k6's one address, all asking for compression, so a deadline, a write limit and
+    compression act under load together (`mixed-load.js`, `mixed.mjs`). One post is checked
+    before the phase. The summary's Mixed table gives each kind of request its latency and its
+    answers by class (2xx and 3xx, 429, other 4xx, 5xx, none), with the app's CPU and peak memory.
+    A round's api page call has 220 minutes and its unit 23 hours.
+271. The button that sends a form is `aria-busy="true"` with the form until the answer is drawn:
+    a `data-patch` form's submitter until its patch comes, and a GET form's until the page it
+    started is swapped in, a button outside its form (`form=`, a row's action for one form the
+    rows share) included, and through a write's answer that sends the browser to another page,
+    until that page is drawn. Another button's newer GET submit of the same form takes the marks,
+    and one pressed while a write is on its way is marked beside it until it sends. The
+    kit's `Button` draws the state: a ring after its label in the text's color, turning unless
+    the user asks for less motion, kept under forced colors, with a `progress` cursor
+    ([#1063 A data-patch form's busy state lands only on the form, so a submit button outside it (form=) and the kit's Button show nothing while a server-drawn sheet loads](https://github.com/corten-run/corten/issues/1063)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3960,6 +3979,16 @@ Corten is pre-1.0, so any minor version may change the API.
     its cursor raw (`Last-Event-ID`, `Replica::cursor`) could follow it. An app that names its
     generation from configuration checks it against the same set (Fixed 188)
     ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
+166. The kit's `Gap` has a sixth value, `Gap::App`, which prints only `.stack` or `.cluster`: the
+    app's own `gap` utility or class beside it (`class={(Stack { gap: Gap::App }, gap_3())}`) is
+    then the only gap, so an app on its own spacing scale keeps the kit's column or wrapping row
+    and its dropped child margins instead of a page rule of its own. A literal gap beside the
+    utility sets `gap` twice at one specificity, so the stylesheet linked last wins: use `App`
+    there. The five
+    literal gaps are unchanged. A `match` over `Gap` in an app's code needs the new arm; `corten
+    ui diff` shows the change to a copied `stack.rs`. The ui-gallery's payout row uses it with the
+    page's own .75rem
+    ([#1065 Kit Stack and Cluster always print a literal gap, so an app on its own token spacing scale cannot use them with its gap utility](https://github.com/corten-run/corten/issues/1065)).
 
 ### Fixed
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

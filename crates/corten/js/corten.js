@@ -2030,7 +2030,8 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
  *   answer, not marked busy, and not swapped when nothing changed
  * @param {ReturnType<typeof placeOf>} [place] where a `data-keep-place` navigation leaves the
  *   user, handed on when the server redirects
- * @param {Element | null} [source] the link or GET form that started it, marked busy with `main`
+ * @param {Element | null} [source] what started it, marked busy with `main`: a link, a form, or
+ *   the button that sent a form (and that button's form)
  * @param {boolean} [written] sent by a write: the page is fetched whole and its layout drawn again
  * @param {Precommit} [precommit] where the address waits for the answer ({@link interceptVisit})
  */
@@ -2050,9 +2051,11 @@ async function visit(url, signal, redirected, again, place, source, written, pre
   // A visit left before its prefetched answer is used stops that request too.
   else signal.addEventListener("abort", () => discard(hit), { once: true });
   // Marked busy as this visit's (past a form control named setAttribute): a newer visit's mark
-  // is not cleared when this one ends.
+  // is not cleared when this one ends. A form's navigation marks the form and the button that
+  // sent it, one outside it (`form=`) too.
   const mine = {};
-  const busy = again ? [] : [document.querySelector("main"), source];
+  const form = source instanceof HTMLButtonElement || source instanceof HTMLInputElement ? source.form : null;
+  const busy = again ? [] : [document.querySelector("main"), form ?? source, form && source];
   for (const el of busy) if (el) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
   // Cleared when the visit ends, or at once when it is abandoned: a prefetched answer it awaits
   // is not cancelled with it.
@@ -2238,7 +2241,7 @@ const KEEP_PLACE = Symbol("corten.keepPlace");
  * when only the `#id` differs from the address, since the write may have changed the page.
  */
 const LOAD = Symbol("corten.load");
-/** The link or GET form that started a navigation the server redirected, still marked busy. */
+/** What started a navigation the server redirected, or a write's answer sent on: still marked busy. */
 const SOURCE = Symbol("corten.source");
 /**
  * Key of the navigation a write sent the browser on: its page is fetched whole, as a full load
@@ -2280,12 +2283,12 @@ function sendsAs(form, submitter) {
 }
 
 /**
- * The link or GET form that started a navigation (a submit button's form), if any.
+ * What started a navigation, if anything: a link, a form, or the button that sent one.
  * @param {any} event
  */
 function startedBy(event) {
   const el = event.info?.[SOURCE] ?? event.sourceElement;
-  return el?.form instanceof HTMLFormElement ? el.form : el instanceof Element ? el : null;
+  return el instanceof Element ? el : null;
 }
 
 /**
@@ -2663,7 +2666,7 @@ addEventListener("pagehide", () => (left += 1));
  * of the form's state (409, 410), a 5xx, an answer the runtime does not draw, a redirect, a reload
  * or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 
@@ -2710,8 +2713,12 @@ async function send(form, submitter, sends) {
   const key = `${method} ${url.href} ${fields} ${Array.from(data.values(), (v) => (typeof v === "string" ? "" : `${v.size}/${v.lastModified}`))}`;
   const previous = submits.get(form);
   if (previous?.write) {
-    // Sent once the write's answer is in; the same values as the write's again send nothing.
+    // Sent once the write's answer is in; the same values as the write's again send nothing. A
+    // button that waits is busy with the write's marks, one it replaced no longer.
+    const waiting = previous.next;
     previous.next = previous.key === key ? undefined : (submitter ?? null);
+    if (waiting && waiting !== previous.next && waiting !== previous.by && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
+    if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
     return;
   }
   if (previous?.key === key) return;
@@ -2719,7 +2726,12 @@ async function send(form, submitter, sends) {
   const sent = sentState(form);
   const controller = new AbortController();
   const { signal } = controller;
-  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined) };
+  // The form and the control that sent it (a button outside it, by `form=`, too) are busy until
+  // the answer is drawn, as this submit's: a newer submit's marks are not cleared when this one
+  // ends.
+  const mine = {};
+  const busy = submitter ? [form, submitter] : [form];
+  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -2732,7 +2744,7 @@ async function send(form, submitter, sends) {
     init.body = plain ? entries.map(([name, value]) => `${name}=${value}\r\n`).join("") : fields.toString();
     init.headers = { corten: "action", "content-type": plain ? "text/plain" : "application/x-www-form-urlencoded" };
   }
-  formCall(form, "setAttribute", "aria-busy", "true");
+  for (const el of busy) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
   // A write can change any page, so nothing fetched before it is reused, nor anything prefetched
   // while it was on its way (which may predate it, or use up a notice it sets).
   const forget = () => {
@@ -2768,7 +2780,8 @@ async function send(form, submitter, sends) {
       submits.delete(form);
       if (navigation) {
         stale ||= method !== "GET";
-        go(location_, { info: { [LOAD]: true, [WRITTEN]: method !== "GET" } });
+        // The page it sends the browser to keeps the marks until it is drawn.
+        go(location_, { info: { [LOAD]: true, [WRITTEN]: method !== "GET", [SOURCE]: submitter ?? form } });
       } else {
         // Without the Navigation API, a URL that differs only in its `#id` would only scroll.
         const to = new URL(location_, location.href);
@@ -2814,9 +2827,12 @@ async function send(form, submitter, sends) {
     pending.next = undefined;
     formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: 0, error } }));
   } finally {
-    if (submits.get(form)?.controller === controller) {
+    // Cleared when this submit ends, but not those a newer submit of the form or the page a
+    // redirect sends the browser to marked again (theirs, cleared when they end).
+    const current = submits.get(form)?.controller === controller;
+    for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
+    if (current) {
       submits.delete(form);
-      formCall(form, "removeAttribute", "aria-busy");
       // In a task of its own, after the answer is drawn; not into a page being left.
       const next = pending.next;
       if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next));

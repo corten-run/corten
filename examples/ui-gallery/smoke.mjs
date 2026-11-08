@@ -489,6 +489,67 @@ async function run(browser) {
     return { gap: t.left - i.right, rem: parseFloat(getComputedStyle(document.documentElement).fontSize) / 2, off: i.top + i.height / 2 - (t.top + t.height / 2) };
   });
   check("Icon: beside a button's text, the button's gap apart and on the text's middle", spacedLikeButton(buttonIcon), JSON.stringify(buttonIcon));
+  // A busy Button (the runtime marks the one that sent a form, #1063): a ring after the label in
+  // the text's color, turning unless the user asks for less motion, and drawn under forced colors.
+  const busyButton = page.getByRole("button", { name: "List for sale" });
+  const ring = () =>
+    busyButton.evaluate((b) => {
+      const s = getComputedStyle(b, "::after");
+      return {
+        content: s.content,
+        border: s.borderTopStyle,
+        color: s.borderTopColor,
+        text: getComputedStyle(b).color,
+        end: s.borderRightColor,
+        animation: s.animationName,
+        running: document
+          .getAnimations()
+          .filter((a) => /** @type {CSSAnimation} */ (a).animationName === "button-busy" && /** @type {KeyframeEffect} */ (a.effect)?.target === b && /** @type {KeyframeEffect} */ (a.effect)?.pseudoElement === "::after").length,
+        cursor: getComputedStyle(b).cursor,
+      };
+    });
+  const idleRing = await ring();
+  await busyButton.evaluate((b) => b.setAttribute("aria-busy", "true"));
+  const busyRing = await ring();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const stillRing = await ring();
+  await page.emulateMedia({ reducedMotion: null });
+  /** @type {Awaited<ReturnType<typeof ring>> | null} */
+  let forcedBusy = null;
+  if (engine !== "webkit") {
+    await page.emulateMedia({ forcedColors: "active" });
+    forcedBusy = await ring();
+    await page.emulateMedia({ forcedColors: "none" });
+  }
+  await busyButton.evaluate((b) => b.removeAttribute("aria-busy"));
+  check(
+    "Button: busy, a ring after its label in the text's color that turns, still under reduced motion and drawn under forced colors",
+    idleRing.content === "none" &&
+      busyRing.content === '""' &&
+      busyRing.border === "solid" &&
+      busyRing.color === busyRing.text &&
+      busyRing.end === "rgba(0, 0, 0, 0)" &&
+      busyRing.animation.endsWith("button-busy") &&
+      busyRing.running > 0 &&
+      busyRing.cursor === "progress" &&
+      stillRing.animation === "none" &&
+      stillRing.running === 0 &&
+      (forcedBusy === null || (forcedBusy.border === "solid" && forcedBusy.color !== "rgba(0, 0, 0, 0)" && forcedBusy.end === "rgba(0, 0, 0, 0)")),
+    JSON.stringify({ idleRing, busyRing, stillRing, forcedBusy }),
+  );
+  // A busy Icon button: the ring takes the icon's place, and a text inside it (a visually hidden
+  // name) is not hidden with it.
+  const busyIcon = await page.evaluate(() => {
+    const icon = /** @type {HTMLElement} */ (document.querySelector("a[aria-labelledby][interestfor]")?.cloneNode(true));
+    icon.removeAttribute("interestfor");
+    icon.append(Object.assign(document.createElement("span"), { textContent: "Orders" }));
+    icon.setAttribute("aria-busy", "true");
+    document.querySelector("main")?.append(icon);
+    const seen = { svg: getComputedStyle(/** @type {Element} */ (icon.querySelector("svg"))).display, name: getComputedStyle(/** @type {Element} */ (icon.querySelector("span"))).display, ring: getComputedStyle(icon, "::after").content };
+    icon.remove();
+    return seen;
+  });
+  check("Button: a busy Icon button draws the ring in its icon's place and keeps a text inside it", busyIcon.svg === "none" && busyIcon.name !== "none" && busyIcon.ring === '""', JSON.stringify(busyIcon));
   // Under forced colors the box shadow is not drawn: the group's outline is the focus ring.
   const forcedRingName = "InputGroup: under forced colors its input's focus draws the group's outline";
   if (engine === "webkit") skip(forcedRingName, "Playwright's WebKit does not emulate forced colors");
@@ -3894,6 +3955,19 @@ async function run(browser) {
     };
   });
   check("StatusDot and Stack: the dot is not read, and a stack's gap is its only space", spacing.dot && spacing.gap === 1.5 && spacing.paragraph === 1 && spacing.margins === 0, JSON.stringify(spacing));
+  // Gap::App: the payout row is a cluster with no gap class of the kit's, so the page's .75rem is its gap.
+  const appGap = await orders.evaluate(() => {
+    const row = document.querySelector("[class*='orders__payout']");
+    if (!row) return null;
+    const style = getComputedStyle(row);
+    return {
+      cluster: /stack__cluster/.test(row.className),
+      kitGap: /stack__(xs|sm|md|lg|xl)\b/.test(row.className),
+      wraps: style.flexWrap,
+      gap: parseFloat(style.columnGap) / parseFloat(getComputedStyle(document.documentElement).fontSize),
+    };
+  });
+  check("Cluster with Gap::App: no kit gap class, so the page's own gap is the row's", appGap?.cluster === true && !appGap.kitGap && appGap.wraps === "wrap" && appGap.gap === 0.75, JSON.stringify(appGap));
   await orders.getByRole("button", { name: "Share the shop" }).click();
   check("Popover: its button opens it", await orders.locator("#share").evaluate((p) => p.matches(":popover-open")));
   await orders.keyboard.press("Escape");

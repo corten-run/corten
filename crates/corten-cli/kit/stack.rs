@@ -13,12 +13,16 @@
 //! names the element or a class (`static/style.css`'s `form { margin: .. }`) still sets its margin,
 //! and only one with none (`*`, `:where(..)`) ties and loses to the kit's, linked after it. The gaps
 //! are the values the kit's components space their own parts with. An app styled from its own token
-//! utilities spaces a screen with its `gap` utility instead (the styles guide), so its screens
-//! follow its scale.
+//! utilities keeps its own scale with `Gap::App`, which sets no gap, beside its `gap` utility (the
+//! styles guide), so the utility is the only gap and its screens follow its scale:
+//!
+//! ```rust,ignore
+//! <div class={(Stack { gap: Gap::App }, gap_3())}>..</div>
+//! ```
 use corten::prelude::*;
 
-/// The space between the children. Each is a class in `stack.css`, so one without a rule does
-/// not compile.
+/// The space between the children. Each but `App` is a class in `stack.css`, so one without a
+/// rule does not compile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Gap {
     /// .25rem
@@ -31,6 +35,9 @@ pub enum Gap {
     Lg,
     /// 2rem
     Xl,
+    /// None of the kit's: the app's own class sets it (its `gap` utility, `gap_3()`, or a rule of a
+    /// stylesheet of its own), so a stack follows the app's scale. Without one the children touch.
+    App,
 }
 
 /// A gap without a rule in `stack.css` does not compile:
@@ -46,11 +53,12 @@ pub enum Gap {
 #[component(css)]
 pub fn Stack(gap: Gap) -> impl ClassList {
     let gap = match gap {
-        Gap::Xs => Xs,
-        Gap::Sm => Sm,
-        Gap::Md => Md,
-        Gap::Lg => Lg,
-        Gap::Xl => Xl,
+        Gap::Xs => Some(Xs),
+        Gap::Sm => Some(Sm),
+        Gap::Md => Some(Md),
+        Gap::Lg => Some(Lg),
+        Gap::Xl => Some(Xl),
+        Gap::App => None,
     };
     (Stack, gap)
 }
@@ -59,11 +67,12 @@ pub fn Stack(gap: Gap) -> impl ClassList {
 #[component(css = Stack)]
 pub fn Cluster(gap: Gap) -> impl ClassList {
     let gap = match gap {
-        Gap::Xs => Xs,
-        Gap::Sm => Sm,
-        Gap::Md => Md,
-        Gap::Lg => Lg,
-        Gap::Xl => Xl,
+        Gap::Xs => Some(Xs),
+        Gap::Sm => Some(Sm),
+        Gap::Md => Some(Md),
+        Gap::Lg => Some(Lg),
+        Gap::Xl => Some(Xl),
+        Gap::App => None,
     };
     (Cluster, gap)
 }
