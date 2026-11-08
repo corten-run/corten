@@ -3282,7 +3282,7 @@ mod tests {
             // A color that is a reference to another (`"{foreground}"`) is that one's.
             let hex = |name: &str| {
                 let mut name = name.to_string();
-                loop {
+                for _ in 0..8 {
                     let line = text
                         .lines()
                         .find(|l| l.starts_with(&format!("  \"{name}\": ")))
@@ -3293,8 +3293,9 @@ mod tests {
                         continue;
                     }
                     let at = line.find("\"hex\": \"#").unwrap() + "\"hex\": \"#".len();
-                    break u32::from_str_radix(&line[at..at + 6], 16).unwrap();
+                    return u32::from_str_radix(&line[at..at + 6], 16).unwrap();
                 }
+                panic!("{file}: {name} is a reference eight deep, or one that goes round in a circle")
             };
             let luminance = |rgb: u32| {
                 let channel = |c: u32| {
