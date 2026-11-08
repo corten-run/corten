@@ -1,15 +1,6 @@
 # Changelog
 
-Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog
-169. The image `corten new` writes (and card-market's) runs jemalloc with
-    `MALLOC_CONF=background_thread:true,tcache_max:65536`, a third line beside the two that
-    preload it. The background thread returns a flood's memory while the app is idle (eight floods
-    of unfinished heads left 4 to 9 MiB, against 114 to 128 without it and about 440 on glibc's
-    allocator, three runs each), and the larger thread cache keeps brotli's buffers, which took 19.3
-    page faults on every brotli response before. glibc's own tunables were tried and did not give
-    the memory back. `bench/fullstack/flood-memory.mjs` drives the floods, and `ab.mjs` measures
-    brotli alone too
-    ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011))..com/en/1.1.0/).
+Notable changes to Corten. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
