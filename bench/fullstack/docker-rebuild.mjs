@@ -5,19 +5,23 @@
 // to BENCH_BUILD_CPUS (otherwise the host's first four, as build.mjs) with build.mjs's memory cap,
 // since BuildKit takes no core pinning itself. On it:
 // 1. Cold: the image built once with nothing cached, base images pulled included (so the network
-//    is in it), exporting its layer cache (`--cache-to type=local,mode=max`).
+//    is in it), exporting its layer cache (`--cache-to type=local,mode=max`, its export and
+//    compression in the time too).
 // 2. Kept: `runs` builds on that builder, each after the edit (the button's title, with the run's
 //    number, so each changes the file from what the one before it built): its layers and its
 //    cache mounts (cargo's target/, npm's cache) are there, as on a CI runner that keeps its
 //    builder or a developer's machine.
 // 3. Imported: `runs` builds after the same edits, each on a new builder given only the layer
 //    cache step 1 exported (`--cache-from`), as a hosted runner restoring a cache gets: BuildKit
-//    exports no cache mount, so a step after the source's COPY starts with an empty one.
-// Each build writes only to BuildKit's cache (`--output type=cacheonly`), so no image export or
-// load is in its time. Wall time, and the builder container's CPU time (its cgroup's usage_usec
-// before and after), and for cargo the crates it compiled. A build that ran no step after the edit fails, since its time would be a
-// cache hit's. The source is a copy of the app's build context from this checkout's working tree,
-// with the edit made in the copy. Results merge into results/<round>/docker-rebuild.json.
+//    exports no cache mount, so a step after the source's COPY starts with an empty one, and the
+//    new builder may pull the base images again.
+// Every build resolves the Dockerfile's syntax image and base tags over the network. Each writes
+// only to BuildKit's cache (`--output type=cacheonly`), so no image export or load is in its
+// time. Wall time, the builder container's CPU time (its cgroup's usage_usec before and after),
+// and for cargo the crates it compiled. A build after the edit that ran no step fails, since its
+// time would be a cache hit's. The source is a copy of the app's build context from this
+// checkout's working tree, with the edit made in the copy; each entry records the commit and
+// whether the tree had changes. Results merge into results/<round>/docker-rebuild.json.
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -32,10 +36,12 @@ const runs = Number(runsArg);
 if (!Number.isInteger(runs) || runs < 1) throw new Error("runs is a whole number, 1 or more");
 const apps = appsArg.split(",");
 for (const name of apps) if (!recipes[name]) throw new Error(`no build recipe for ${name}`);
-const hour = 3_600_000;
-const run = (/** @type {string} */ cmd, /** @type {string[]} */ args, timeout = hour) =>
+const minute = 60_000;
+// Every command ends well inside build.mjs's call limit (90 minutes), so a hang fails this
+// script's app, not the call: a build may take 20 minutes, anything else 10.
+const run = (/** @type {string} */ cmd, /** @type {string[]} */ args, timeout = 10 * minute) =>
   spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 256 * 2 ** 20, timeout });
-const must = (/** @type {string[]} */ args, timeout = hour) => {
+const must = (/** @type {string[]} */ args, timeout = 10 * minute) => {
   const r = run("docker", args, timeout);
   if (r.status !== 0) throw new Error(`docker ${args.slice(0, 3).join(" ")}: ${(r.stdout + r.stderr || r.error?.message || "").trim().slice(-3000)}`);
   return r.stdout + r.stderr;
@@ -47,6 +53,11 @@ const memoryCap = Math.min(12 * 2 ** 30, (hostMemory || 16 * 2 ** 30) - 2 * 2 **
 const outFile = join(here, "results", round, "docker-rebuild.json");
 /** @type {Record<string, any>} */
 const out = existsSync(outFile) ? JSON.parse(readFileSync(outFile, "utf8")) : {};
+/** The commit the working tree is at, and whether it has changes, since the copy is the tree's. */
+const source = {
+  commit: run("git", ["-C", repo, "rev-parse", "--short=8", "HEAD"]).stdout.trim(),
+  dirty: run("git", ["-C", repo, "status", "--porcelain"]).stdout.trim() !== "",
+};
 const save = () => { mkdirSync(dirname(outFile), { recursive: true }); writeFileSync(outFile, JSON.stringify(out, null, 1)); };
 const scratch = mkdtempSync(join(tmpdir(), "corten-docker-rebuild-"));
 // What the root's .dockerignore leaves out anyway, and what is large and never in a context.
@@ -68,7 +79,7 @@ const usec = (/** @type {string} */ name) => {
 const build = (/** @type {string} */ name, /** @type {string} */ context, /** @type {string} */ dockerfile, /** @type {string[]} */ extra, /** @type {boolean} */ mustRun) => {
   const c = usec(name);
   const s = Date.now();
-  const output = must(["buildx", "build", "--builder", name, "--progress", "plain", "--output", "type=cacheonly", "-f", dockerfile, ...extra, context], 2 * hour);
+  const output = must(["buildx", "build", "--builder", name, "--progress", "plain", "--output", "type=cacheonly", "-f", dockerfile, ...extra, context], 20 * minute);
   const ms = Date.now() - s;
   const cpuS = +((usec(name) - c) / 1e6).toFixed(1);
   const ran = ranSteps(output);
@@ -90,7 +101,7 @@ for (const name of apps) {
   const dockerfile = join(ctx, dockerfileOf(name));
   const editFile = join(context, r.edit);
   /** @type {Record<string, any>} */
-  const entry = { cores, memoryCap, buildx, measuredAt: new Date().toISOString(), complete: false };
+  const entry = { cores, memoryCap, hostCores, buildx, ...source, measuredAt: new Date().toISOString(), complete: false };
   out[name] = entry;
   const keep = (/** @type {string} */ key, /** @type {unknown} */ value) => { entry[key] = value; save(); return value; };
   try {

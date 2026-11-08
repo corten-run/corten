@@ -301,8 +301,9 @@ for (const name of appsArg.split(",")) {
   // a failure there costs none of them: its own `docker build` with BuildKit's cache warm, for the
   // apps in BENCH_DOCKER_REBUILD_APPS (default the anchors, corten and axum-maud), and
   // rust-analyzer's latency for the Rust apps.
-  if (dockerRebuildApps.includes(name)) spawnSync(process.execPath, [join(here, "docker-rebuild.mjs"), round, name, String(runs)], { stdio: "inherit" });
-  if (r.ra) spawnSync(process.execPath, [join(here, "rust-analyzer.mjs"), round, name], { stdio: "inherit" });
+  // An app whose own build failed would fail these too.
+  if (!entry.failed && dockerRebuildApps.includes(name)) spawnSync(process.execPath, [join(here, "docker-rebuild.mjs"), round, name, String(runs)], { stdio: "inherit" });
+  if (!entry.failed && r.ra) spawnSync(process.execPath, [join(here, "rust-analyzer.mjs"), round, name], { stdio: "inherit" });
 }
 rmSync(scratch, { recursive: true, force: true });
 const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;

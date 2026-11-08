@@ -170,7 +170,7 @@ if (summary.build) {
 if (summary.dockerRebuild) {
   const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
   const crates = (/** @type {{ runs: { compiled?: string[] }[] }} */ r) => (r.runs[0]?.compiled ? ` [${r.runs[0].compiled.length} crates]` : "");
-  console.log("\nThe app's own docker build after the edit, BuildKit's cache warm (wall, CPU-seconds; the median)");
+  console.log("\nThe app's own docker build after the edit, BuildKit's cache warm (wall, CPU-seconds; each the median of its own runs)");
   for (const [name, d] of Object.entries(summary.dockerRebuild)) {
     console.log(line([
       name,
@@ -182,14 +182,16 @@ if (summary.dockerRebuild) {
   }
 }
 if (summary.rustAnalyzer) {
+  const ms = (/** @type {number | null} */ x) => (x == null ? "no answer" : `${x} ms`);
   console.log("\nrust-analyzer (ready cold and warm; after the edit, the median of a completion and of the errors asked for)");
   for (const [name, a] of Object.entries(summary.rustAnalyzer)) {
     const p = a.probes;
     console.log(line([
       name,
-      a.readyCold ? `ready ${(a.readyCold.ms / 1000).toFixed(1)} s cold, ${(a.readyWarm?.ms / 1000).toFixed(1)} s warm` : "",
-      p ? `completion ${p.completionMs} ms (offered in ${p.offered} of ${p.runs.length})` : "",
-      p ? `errors ${p.errorMs} ms (shown in ${p.errorShown} of ${p.runs.length}), cleared ${p.clearedMs} ms` : "",
+      a.readyCold ? `ready ${(a.readyCold.ms / 1000).toFixed(1)} s cold${a.readyWarm ? `, ${(a.readyWarm.ms / 1000).toFixed(1)} s warm` : ""}` : "",
+      p ? `completion ${ms(p.completionMs)} (offered in ${p.offered} of ${p.runs.length})` : "",
+      p ? `errors ${ms(p.errorMs)} (shown in ${p.errorShown} of ${p.runs.length}), cleared ${ms(p.clearedMs)}` : "",
+      a.experimental === false ? "experimental diagnostics off" : "",
       a.peakMiB ? `${a.peakMiB} MiB peak` : "",
       a.error ? `FAILED: ${String(a.error).split("\n")[0]}` : a.complete === false ? "stopped before it finished" : "",
     ].filter(Boolean)));

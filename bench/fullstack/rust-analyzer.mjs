@@ -8,20 +8,24 @@
 // script is the client, over the container's stdio.
 // 1. Ready, cold: from `initialize` until the server is first quiescent
 //    (`experimental/serverStatus`): the workspace loaded, build scripts and proc macros built
-//    (`cargo check` of them, so the dependencies compile), and its caches primed. Then ready
-//    again from a new server in the same container, with those builds kept (warm).
-// 2. On the warm server, with the file the page's edit is in open, `runs` times: the item page's edit made
-//    (the button's title, numbered by run), then a completion asked for at once at the recipe's
-//    point inside the markup (`ra` in builds.mjs), timed to its answer, and whether the answer
-//    offers the expected field; then the field's name made unknown there (`nope_` typed before
-//    it) and the time the server takes to answer the editor's request for the file's errors
-//    (`textDocument/diagnostic`: this server pushes only syntax errors, and gives type errors
-//    when asked), with whether it has the error, and the same once the text is back. An unknown
-//    field is one of rust-analyzer's experimental diagnostics, off unless an editor turns them on
-//    (`rust-analyzer.diagnostics.experimental.enable`); this turns them on.
-// 3. The server's peak memory (VmHWM) at the end.
-// A step with no answer in two minutes records null and its reason. Results merge into
-// results/<round>/rust-analyzer.json.
+//    (`cargo check` of them, so the dependencies compile), and its caches primed (the priming's
+//    progress ends just before it). Then ready again from a new server in the same container,
+//    with those builds kept (warm). A server not ready in 30 minutes fails the app.
+// 2. On the warm server, with the file the page's edit is in open, `runs` times: the item
+//    page's edit made (the button's title, numbered by run), then a completion asked for at once
+//    at the recipe's point inside the markup (`ra` in builds.mjs), timed to its answer, and
+//    whether the answer offers the expected field; then the field's name made unknown there
+//    (`nope_` typed before it) and the time the server takes to answer the editor's request for
+//    the file's errors (`textDocument/diagnostic`: this server pushes only syntax errors, and
+//    gives type errors when asked), with the new errors and whether one names the field, and the
+//    same once the text is back. A request with no answer in two minutes records null and its
+//    reason. An unknown field is one of rust-analyzer's experimental diagnostics, off unless an
+//    editor turns them on (`rust-analyzer.diagnostics.experimental.enable`); this turns them on,
+//    and RA_EXPERIMENTAL=off leaves them off, as an editor has them by default.
+// 3. The peak memory of each of the server's processes (VmHWM; the server and its proc-macro
+//    server, which expands the markup), summed, at the end.
+// Each entry records the commit and whether the tree had changes, since the source is the
+// working tree's. Results merge into results/<round>/rust-analyzer.json.
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -36,11 +40,14 @@ const runs = Number(runsArg);
 if (!Number.isInteger(runs) || runs < 1) throw new Error("runs is a whole number, 1 or more");
 const apps = appsArg.split(",");
 for (const name of apps) if (!recipes[name]?.ra) throw new Error(`${name} has no completion point (ra) in builds.mjs`);
-const hour = 3_600_000;
-const limit = 120_000;
-const docker = (/** @type {string[]} */ args, /** @type {string=} */ input) => spawnSync("docker", args, { encoding: "utf8", maxBuffer: 256 * 2 ** 20, timeout: hour, input });
-const must = (/** @type {string[]} */ args, /** @type {string=} */ input) => {
-  const r = docker(args, input);
+const minute = 60_000;
+const limit = 2 * minute;
+const experimental = process.env.RA_EXPERIMENTAL !== "off";
+// Every docker command ends well inside build.mjs's call limit (90 minutes), so a hang fails this
+// script's app, not the call.
+const docker = (/** @type {string[]} */ args, /** @type {string=} */ input, timeout = 10 * minute) => spawnSync("docker", args, { encoding: "utf8", maxBuffer: 256 * 2 ** 20, timeout, input });
+const must = (/** @type {string[]} */ args, /** @type {string=} */ input, timeout = 10 * minute) => {
+  const r = docker(args, input, timeout);
   if (r.status !== 0) throw new Error(`docker ${args.slice(0, 3).join(" ")}: ${(r.stdout + r.stderr || r.error?.message || "").trim().slice(-3000)}`);
   return r.stdout;
 };
@@ -51,6 +58,11 @@ const memoryCap = Math.min(12 * 2 ** 30, (hostMemory || 16 * 2 ** 30) - 2 * 2 **
 const outFile = join(here, "results", round, "rust-analyzer.json");
 /** @type {Record<string, any>} */
 const out = existsSync(outFile) ? JSON.parse(readFileSync(outFile, "utf8")) : {};
+/** The commit the working tree is at, and whether it has changes. */
+const source = {
+  commit: spawnSync("git", ["rev-parse", "--short=8", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim(),
+  dirty: spawnSync("git", ["status", "--porcelain"], { cwd: repo, encoding: "utf8" }).stdout.trim() !== "",
+};
 const save = () => { mkdirSync(dirname(outFile), { recursive: true }); writeFileSync(outFile, JSON.stringify(out, null, 1)); };
 
 /** A UTF-16 position of `offset` in `text`, as LSP counts by default. */
@@ -111,18 +123,18 @@ class Server {
   }
   /** @param {string} method @param {any} params */
   notify(method, params) { this.write({ jsonrpc: "2.0", method, params }); }
-  /** The first notification `pick` accepts, from now on. @param {(msg: any) => boolean} pick @param {string} what */
-  until(pick, what) {
-    return this.within(new Promise((resolve) => {
+  /** The first notification `pick` accepts, from now on, with no time limit. @param {(msg: any) => boolean} pick @returns {Promise<any>} */
+  next(pick) {
+    return new Promise((resolve) => {
       const listen = (/** @type {any} */ msg) => { if (pick(msg)) { this.listeners = this.listeners.filter((l) => l !== listen); resolve(msg); } };
       this.listeners.push(listen);
-    }), what);
+    });
   }
   /** @template T @param {Promise<T>} p @param {string} what @returns {Promise<T>} */
-  within(p, what) {
+  within(p, what, ms = limit) {
     /** @type {NodeJS.Timeout | undefined} */
     let timer;
-    return Promise.race([p, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer to ${what} in ${limit / 1000} s`)), limit * (what === "ready" ? 15 : 1)); })]).finally(() => clearTimeout(timer));
+    return Promise.race([p, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`no answer to ${what} in ${ms / 1000} s`)), ms); })]).finally(() => clearTimeout(timer));
   }
 }
 
@@ -132,28 +144,35 @@ async function start(/** @type {string} */ container, /** @type {string} */ root
   child.stderr.resume();
   const server = new Server(child);
   let busy = false;
-  const ready = server.until((m) => {
+  // Listened for before `initialized`, and timed only once `initialize` has answered.
+  const ready = server.next((m) => {
     if (m.method !== "experimental/serverStatus") return false;
     if (!m.params.quiescent) busy = true;
     return busy && m.params.quiescent;
-  }, "ready");
-  const began = performance.now();
-  await server.request("initialize", {
-    processId: null,
-    rootUri: `file://${root}`,
-    workspaceFolders: [{ uri: `file://${root}`, name: "app" }],
-    capabilities: {
-      window: { workDoneProgress: true },
-      textDocument: { diagnostic: { dynamicRegistration: false }, completion: { completionItem: { snippetSupport: false } }, synchronization: { didSave: true } },
-      experimental: { serverStatusNotification: true },
-    },
-    // Type errors (an unknown field among them) are among rust-analyzer's experimental diagnostics,
-    // which an editor turns on; without them the server reports none of the probe's error.
-    initializationOptions: { checkOnSave: false, cargo: { features }, procMacro: { enable: true }, cachePriming: { enable: true }, diagnostics: { experimental: { enable: true } } },
   });
-  server.notify("initialized", {});
-  const status = await ready;
-  return { server, child, readyMs: Math.round(performance.now() - began), health: status.params.health };
+  const began = performance.now();
+  try {
+    await server.request("initialize", {
+      processId: null,
+      rootUri: `file://${root}`,
+      workspaceFolders: [{ uri: `file://${root}`, name: "app" }],
+      capabilities: {
+        window: { workDoneProgress: true },
+        textDocument: { diagnostic: { dynamicRegistration: false }, completion: { completionItem: { snippetSupport: false } }, synchronization: { didSave: true } },
+        experimental: { serverStatusNotification: true },
+      },
+      // Type errors (an unknown field among them) are among rust-analyzer's experimental
+      // diagnostics, which an editor turns on; without them the server reported none of the
+      // probe's errors.
+      initializationOptions: { checkOnSave: false, cargo: { features }, procMacro: { enable: true }, cachePriming: { enable: true }, diagnostics: { experimental: { enable: experimental } } },
+    });
+    server.notify("initialized", {});
+    const status = await server.within(ready, "ready", 30 * minute);
+    return { server, child, readyMs: Math.round(performance.now() - began), health: status.params.health };
+  } catch (e) {
+    child.kill();
+    throw e;
+  }
 }
 
 async function stop(/** @type {Server} */ server, /** @type {import("node:child_process").ChildProcess} */ child) {
@@ -167,16 +186,16 @@ for (const name of apps) {
   const image = `bb-ra-${name}`;
   const container = `bb-ra-${name}`;
   /** @type {Record<string, any>} */
-  const entry = { cores, memoryCap, measuredAt: new Date().toISOString(), complete: false };
+  const entry = { cores, memoryCap, hostCores, experimental, ...source, measuredAt: new Date().toISOString(), complete: false };
   out[name] = entry;
   const keep = (/** @type {string} */ key, /** @type {unknown} */ value) => { entry[key] = value; save(); return value; };
   docker(["rm", "-f", container]);
   try {
-    if (r.stage) must(["build", "-q", "--target", "tools", "-t", r.tools, join(repo, r.stage)]);
-    must(["build", "-q", "-t", image, "-f", "-", join(repo, contextOf(name))], sourceDockerfile(name));
+    if (r.stage) must(["build", "-q", "--target", "tools", "-t", r.tools, join(repo, r.stage)], undefined, 20 * minute);
+    must(["build", "-q", "-t", image, "-f", "-", join(repo, contextOf(name))], sourceDockerfile(name), 20 * minute);
     must(["run", "-d", "--name", container, "--cpuset-cpus", cores, "--memory", String(memoryCap), image, "sleep", "infinity"]);
     // Untimed: the dependencies' sources, and the server with the standard library's.
-    must(["exec", container, "sh", "-c", `${r.deps} && rustup component add rust-analyzer rust-src`]);
+    must(["exec", container, "sh", "-c", `${r.deps} && rustup component add rust-analyzer rust-src`], undefined, 20 * minute);
     keep("version", must(["exec", container, "rust-analyzer", "--version"]).trim());
     const cold = await start(container, r.workdir, ra.features ?? []);
     keep("readyCold", { ms: cold.readyMs, health: cold.health });
@@ -197,7 +216,7 @@ for (const name of apps) {
       const began = performance.now();
       const report = await server.request("textDocument/diagnostic", { textDocument: { uri } });
       const found = (report?.items ?? []).filter((/** @type {any} */ d) => d.severity === 1);
-      return { ms: Math.round(performance.now() - began), n: found.length, kind: report?.kind, messages: found.map((/** @type {any} */ d) => `${d.code}: ${d.message}`) };
+      return { ms: Math.round(performance.now() - began), n: found.length, messages: found.map((/** @type {any} */ d) => `${d.code}: ${d.message}`) };
     };
     /** @type {any[]} */
     const probes = [];
@@ -224,8 +243,8 @@ for (const name of apps) {
         change(edited.slice(0, at) + "nope_" + edited.slice(at));
         const shown = await errors();
         probe.errorMs = shown.ms;
-        probe.errorShown = shown.n > baseline;
-        if (!probe.errorShown) probe.errorsSeen = { baseline, kind: shown.kind, messages: shown.messages };
+        probe.errors = shown.messages;
+        probe.errorShown = shown.n > baseline && shown.messages.some((m) => m.includes(`nope_${ra.expect}`));
         change(edited);
         const cleared = await errors();
         probe.clearedMs = cleared.ms;
@@ -236,8 +255,8 @@ for (const name of apps) {
       const med = (/** @type {string} */ k) => { const xs = probes.map((p) => p[k]).filter((x) => typeof x === "number"); return xs.length ? median(xs) : null; };
       keep("probes", { completionMs: med("completionMs"), errorMs: med("errorMs"), clearedMs: med("clearedMs"), offered: probes.filter((p) => p.offered).length, errorShown: probes.filter((p) => p.errorShown).length, runs: probes });
     }
-    const hwm = docker(["exec", container, "sh", "-c", "for p in /proc/[0-9]*; do if [ \"$(cat $p/comm 2>/dev/null)\" = rust-analyzer ]; then grep VmHWM $p/status; fi; done"]).stdout;
-    const kb = Math.max(0, ...[...hwm.matchAll(/VmHWM:\s+(\d+)/g)].map((m) => Number(m[1])));
+    const hwm = docker(["exec", container, "sh", "-c", "for p in /proc/[0-9]*; do case \"$(cat $p/comm 2>/dev/null)\" in rust-analyzer*) grep VmHWM $p/status;; esac; done"]).stdout;
+    const kb = [...hwm.matchAll(/VmHWM:\s+(\d+)/g)].reduce((sum, m) => sum + Number(m[1]), 0);
     keep("peakMiB", Math.round(kb / 1024));
     await stop(server, warm.child);
     keep("complete", true);

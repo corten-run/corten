@@ -92,7 +92,7 @@ const call = (/** @type {number} */ limit, /** @type {string[]} */ args) => /** 
 // Unattended only: a clean slate after a stopped call, a build that exited with an error, or a
 // restart. The benchmark's containers go
 // (a stopped k6 client leaves its container running; a restart leaves them all stopped): the apps,
-// build.mjs's steps (and the images they commit, several GB for a Rust app), cold start's, the item API, and k6's and cpu-time.mjs's by image. Then the item API starts again
+// build.mjs's steps (and the images they commit, several GB for a Rust app) and docker-rebuild.mjs's builders, cold start's, the item API, and k6's and cpu-time.mjs's by image. Then the item API starts again
 // on its cores.
 const reset = () => {
   const ids = [["name=fsw-", "name=bb-", "name=cs-", "name=item-api"], ["ancestor=grafana/k6:latest", "ancestor=alpine"]]
@@ -100,6 +100,8 @@ const reset = () => {
   if (ids.length) docker("rm", "-f", ...new Set(ids));
   const images = docker("images", "-q", "--filter", "reference=bb-*").stdout?.split("\n").filter(Boolean) ?? [];
   if (images.length) docker("rmi", "-f", ...new Set(images));
+  // docker-rebuild.mjs's builders, with their state volumes.
+  for (const builder of docker("buildx", "ls", "--format", "{{.Name}}").stdout?.split("\n").filter((n) => n.startsWith("bb-dr-")) ?? []) docker("buildx", "rm", "-f", builder);
   if (apiContainer !== "item-api") return;
   const r = docker("run", "-d", "--name", "item-api", "--network", network, "--cpuset-cpus", "2-3", "-v", `${here}:/b:ro`,
     "node:24-bookworm-slim", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");
