@@ -2562,7 +2562,9 @@ Corten is pre-1.0, so any minor version may change the API.
     that built it and on a new builder given only the exported layer cache. That second case is
     what a hosted CI runner restoring a cache gets. Since BuildKit exports no cache mount, it
     rebuilds an app whose Dockerfile copies its source before building, as both of these do, about
-    as if from clean. The results are in `results/dev-loop`, and `summarize.mjs` prints both
+    as if from clean. The results are in `results/dev-loop`, and `summarize.mjs` prints both.
+    The time from a save to the page showing it under each stack's development server is not
+    measured, and the bench README says why
     ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
 
 ### Removed

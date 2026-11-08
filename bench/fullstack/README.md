@@ -1342,8 +1342,10 @@ three runs:
       Drogon itself installed (a Release build, from the dependency step), so its clean debug
       build compiles only the app, while the Rust and Go ones compile every dependency. The time
       from a save to the open page showing it, under `corten dev` and each stack's own development
-      server, is not measured yet
-      ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
+      server, is not measured: it needs each app's development server running (Vite, `next dev`,
+      Phoenix's live reload, `dotnet watch`, Django's and Rails' reloaders, `corten dev`) with
+      a browser on its page, and the round's images are each app's production build, which has
+      none of them, so it would take a second image of every app, which the round does not build.
     - Editor and tests, for the Rust apps: `cargo check --all-targets` clean and again after the
       same edit, which is what rust-analyzer runs for its diagnostics when a file is saved (with
       the features Leptos's documentation has an editor set, `ssr`; Corten's checks card-market
