@@ -23,7 +23,7 @@ use crate::ui::{
     pagination::{Pagination, PreviousNext},
     popover::Popover,
     progress::{Progress, ProgressSize},
-    segmented::{Legend, SegmentedLinks, SegmentedRadio, SegmentedRadios},
+    segmented::{Legend, SegmentedLinks, SegmentedRadio, SegmentedRadios, SegmentedWidth},
     select::Select,
     separator::{Orientation, Separator},
     skeleton::{Skeleton, SkeletonShape},
@@ -360,7 +360,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                             </ul>
                         </Alert>
                         // Each order is a view the server renders: links, the current one marked.
-                        <nav class={SegmentedLinks {}} aria-label="Order the orders by">
+                        <nav class={SegmentedLinks { width: SegmentedWidth::Fit }} aria-label="Order the orders by">
                             <a href={url::Orders { page: None, sort: None, payout: None }} aria-current={current(None)}>
                                 "Newest"
                             </a>
@@ -568,7 +568,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                                         }
                                     </select>
                                 </Field>
-                                <SegmentedRadios legend={Legend::Shown("Label size")}>
+                                // A choice in the form's column: the field's width, each size an equal part.
+                                <SegmentedRadios legend={Legend::Shown("Label size")} width={SegmentedWidth::Fill}>
                                     <SegmentedRadio label={LabelSize::Thermal.label()}>
                                         <input type="radio" name={f.labels} value={LabelSize::Thermal} checked>
                                     </SegmentedRadio>

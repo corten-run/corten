@@ -3411,6 +3411,46 @@ mod tests {
         }
     }
 
+    /// A filled segmented control is a grid of equal parts across its box, and its rules are one class
+    /// more than the track's and the choices', so they win wherever the stylesheets are linked; its
+    /// choices may wrap, at least a control's height (#1060).
+    #[test]
+    fn a_filled_segmented_control_outranks_its_track() {
+        let css = include_str!("../kit/segmented.css");
+        let block = |start: &str| {
+            let at = css.find(start).unwrap_or_else(|| panic!("segmented.css has no {start}"));
+            &css[at..at + css[at..].find('}').unwrap()]
+        };
+        let track = block(".segmented.fill [role=\"radiogroup\"], .links.fill, .radios.fill > .track {");
+        for part in [
+            "display: grid;",
+            "grid-auto-flow: column;",
+            "grid-auto-columns: minmax(0, 1fr);",
+            "box-sizing: border-box; width: 100%;",
+        ] {
+            assert!(track.contains(part), "the filled track: {part}");
+        }
+        let choice = block(".segmented.fill [role=\"radio\"], .links.fill > a, .radios.fill .choice {");
+        for part in [
+            "min-width: 0; height: auto; min-height: var(--control-height-sm);",
+            "white-space: normal;",
+            "overflow-wrap: anywhere;",
+        ] {
+            assert!(choice.contains(part), "a filled choice: {part}");
+        }
+        assert!(
+            css.contains(
+                ".segmented.fill [role=\"radio\"] > *, .links.fill > a > *, .radios.fill .choice > span { min-width: 0; }"
+            ),
+            "a choice's text shrinks"
+        );
+        assert!(css.contains(".segmented [role=\"radiogroup\"], .links, .track {"), "the track the fill outranks");
+        let fieldset = css
+            .find(".radios.fill { box-sizing: border-box; width: 100%; justify-items: stretch; }")
+            .expect("the fieldset fills");
+        assert!(fieldset > css.find(".radios {").unwrap(), "after .radios");
+    }
+
     /// A stack's children take its width whatever the app's element rules say (a new app's
     /// `form { align-items: end }`): `.stack` is one class, which beats an element. Its margin rule
     /// has no specificity, so the app's own margin rules win. And a figure is the same surface as a

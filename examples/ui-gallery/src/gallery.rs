@@ -25,7 +25,7 @@ use crate::ui::{
     input::Input,
     input_group::{Adornment, InputGroup},
     radio_group::{Radio, RadioGroup},
-    segmented::Segmented,
+    segmented::{Segmented, SegmentedWidth},
     sheet::{Sheet, SheetHeader, SheetWidth, Side},
     stepper::{Stepper, StepperUnit},
     steps::{Step, StepState, Steps, StepsLayout},
@@ -399,7 +399,7 @@ pub fn Gallery<'a>(
                 <section class={Card {}}>
                     <header class={CardHeader {}}><h2>"Sales"</h2></header>
                     <div class={CardContent {}}>
-                        <Segmented>
+                        <Segmented width={SegmentedWidth::Fit}>
                             <ChoiceGroup
                                 choice={&period}
                                 label="Sales period"

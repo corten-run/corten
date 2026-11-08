@@ -2496,6 +2496,20 @@ Corten is pre-1.0, so any minor version may change the API.
     `pagination.css`, so a copied `pagination.rs` takes it from `corten ui diff`. The
     ui-gallery's payouts card pages by it
     ([#1073 Kit Pagination needs every page's link, so a list paged by previous and next links (a cursor, or the API's own) cannot use it](https://github.com/corten-run/corten/issues/1073)).
+274. The kit's segmented control takes a width on each of its three forms,
+    `<Segmented width={SegmentedWidth::Fill}>`, `SegmentedLinks { width }` and
+    `<SegmentedRadios width={..}>`: `Fit`, as wide as its choices (the look it had), or `Fill`, the
+    width of its box with the choices in equal parts, as a phone's bar of a few choices (a side, a
+    period) is drawn so each is a wide target, the fieldset of `SegmentedRadios` filling its box as
+    a flex or grid item too. A filled choice is at least a control's height and its label wraps in
+    its part, a word wider than the part breaking inside it, so a narrow screen does not scroll
+    sideways. The fill rules are one
+    class more specific than the track's, so they win wherever the stylesheets are linked; an app's
+    page rule for a full-width bar tied with the kit's and won only by stylesheet order. Measured as
+    the Dialog's entry was: `segmented.css` 1,858 to 2,371 bytes (gzip 726 to 856, brotli 577 to
+    693). Breaking: each form names its width, which the compiler names; `corten ui add segmented
+    --merge` updates a copy. The ui-gallery's label size radios fill the form's column
+    ([#1060 Kit Segmented draws only as wide as its choices, so a phone's full-width choice bar (equal parts across the row) keeps its own segmented rules](https://github.com/corten-run/corten/issues/1060)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
