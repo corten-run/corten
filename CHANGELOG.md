@@ -2573,8 +2573,9 @@ Corten is pre-1.0, so any minor version may change the API.
     writes a computed tone once, on the badge, and a dot that takes it cannot disagree with it. It
     shows on a `Solid` badge's fill too, where a dot in the badge's own tone was the fill's color
     and could not be seen; the kit doc and guide say a dot in a badge takes it. `LiveDot` takes it
-    as well. Under forced colors it is `CanvasText`, as every tone is. A dot in another tone in a badge still compiles: kit
-    files are copied into an app one by one, so the dot has no badge type to check against. Not
+    as well. Under forced colors it is `CanvasText`, as every tone is.
+    A dot in another tone in a badge still compiles: kit files are copied into an app one by one,
+    so the dot has no badge type to check against. Not
     breaking: the other tones are unchanged, and `corten ui add status_dot --merge` takes `Text`.
     The kit's rule adds 42 bytes to the stylesheet (measured on the ui-gallery's served
     `components.css`: 60,920 bytes against 60,878, gzip 10,099 against 10,089, brotli 8,900
