@@ -715,12 +715,13 @@ impl StartHere {
                 if !cfg!(debug_assertions) {
                     not_a_page(name);
                 } else {
+                    let dev = here.shared.dev;
                     drop(here);
+                    // About the app's code: the error page keeps it outside dev too.
                     let message = format!(
-                    "corten: the page draws later::<{name}>(), but its route's answer type says it is not a page (Answer::PAGE), so no read is started for it: return HtmlResult, or set const PAGE: bool = true on the answer type (or forward its page's)"
-                );
-                    tracing::error!("{message}");
-                    return crate::Error::new(message).into_response();
+                        "the page draws later::<{name}>(), but its route's answer type says it is not a page (Answer::PAGE), so no read is started for it: return HtmlResult, or set const PAGE: bool = true on the answer type (or forward its page's)"
+                    );
+                    return crate::page::unserved(dev, message).into_response();
                 }
             }
             // A route that says its page gives a read (`gives(..)`) did not start it, so a page that
@@ -736,13 +737,13 @@ impl StartHere {
                     if !cfg!(debug_assertions) {
                         not_given(slot.name);
                     } else {
+                        let dev = here.shared.dev;
                         drop(here);
                         let message = format!(
-                            "corten: the page draws later::<{0}>() and its route says gives({0}), so the read is not started, but the page did not give it: give it (page.give::<{0}>(..)), or take gives({0}) off the route",
+                            "the page draws later::<{0}>() and its route says gives({0}), so the read is not started, but the page did not give it: give it (page.give::<{0}>(..)), or take gives({0}) off the route",
                             slot.name
                         );
-                        tracing::error!("{message}");
-                        return crate::Error::new(message).into_response();
+                        return crate::page::unserved(dev, message).into_response();
                     }
                 }
             }

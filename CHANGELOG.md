@@ -5632,6 +5632,15 @@ Corten is pre-1.0, so any minor version may change the API.
     The runtime is 312 B smaller and 27 B larger gzipped (41,292 to 40,980 B, 14,839 to 14,866 B
     gzip)
     ([#1049 A form with a control named hasAttribute never runs its data-on handlers: the runtime's dispatch calls the form's own methods](https://github.com/corten-run/corten/issues/1049)).
+195. A debug build's two layout-read checks, a page that draws `later::<X>()` from a route whose
+    answer type says it is not a page (`Answer::PAGE`) and a route that says `gives(X)` whose
+    page did not give it, kept their message off the error page outside `corten dev` and wrote
+    it nowhere a router test sees, as the served-component check did before Fixed 183. Each is
+    now the error page's `Failure::detail` in every debug build, and printed to stderr outside
+    `corten dev`, as the other checks about the app's code are (a middleware that answers a page
+    of its own in place of such a route's still gets a plain 500, logged and named on stderr
+    outside `corten dev`). A release build still draws nothing in the place and logs it once
+    ([#1035 A debug build's layout-read errors (later::<X>() on an answer that is not a page, a gives(..) the page does not give) answer a bare 500 that names nothing outside corten dev](https://github.com/corten-run/corten/issues/1035)).
 
 ### Documentation
 
