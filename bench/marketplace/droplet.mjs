@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { nightly, ownedDroplet, parseDropletArgs, remoteFiles, safeArchive, terminalUnit, validateState } from "./droplet-contract.mjs";
@@ -68,11 +68,21 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
       const lock = join(local, "collect.lock");
       writeFileSync(lock, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" });
       try {
+        const verifyArchive = () => assert.equal(createHash("sha256").update(readFileSync(state.resultArchive)).digest("hex"), state.archiveSha256);
+        const deleted = () => {
+          verifyArchive();
+          state.destroyedAt ??= new Date().toISOString(); save();
+          console.log(`${state.complete ? "all done" : `partial results (the round did not finish): ${state.validationError}`}\nresults in ${state.resultFolder}\ndroplet ${state.id} deletion confirmed`);
+          return state.complete ? 0 : 1;
+        };
         if (state.destroyedAt) {
           assert.ok(!list().some((d) => String(d.id) === state.id), "previously deleted droplet still present");
-          assert.equal(createHash("sha256").update(readFileSync(state.resultArchive)).digest("hex"), state.archiveSha256);
-          console.log(`already collected ${state.round}: ${state.status}; ${state.resultFolder}`);
-          return state.complete ? 0 : 1;
+          return deleted();
+        }
+        if (state.deletionIntentAt && state.collectedAt && !list().some((d) => String(d.id) === state.id)) {
+          // A delete may succeed even when its acknowledgement or the next list is lost.
+          // The intent was saved only after owned-terminal checks and verified collection.
+          return deleted();
         }
         const d = own();
         state.id = String(d.id); state.ip = d.networks.v4.find((n) => n.type === "public")?.ip_address; save(); validateState(state, options.round);
@@ -81,39 +91,42 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
           return 3;
         }
         if (!state.collectedAt) {
-          ssh("/bin/bash /bench/pack.sh", 10 * 60000);
-          const hash = ssh("sha256sum /bench/results.tgz").stdout.trim().split(/\s+/)[0]; assert.match(hash, /^[a-f0-9]{64}$/);
-          const archive = join(local, "results.tgz");
-          scp(`root@${state.ip}:/bench/results.tgz`, `${archive}.download`);
-          assert.equal(createHash("sha256").update(readFileSync(`${archive}.download`)).digest("hex"), hash, "download hash mismatch; droplet preserved");
-          renameSync(`${archive}.download`, archive);
+          if (!state.resultArchive) {
+            ssh("/bin/bash /bench/pack.sh", 10 * 60000);
+            const hash = ssh("sha256sum /bench/results.tgz").stdout.trim().split(/\s+/)[0]; assert.match(hash, /^[a-f0-9]{64}$/);
+            const archive = join(local, "results.tgz");
+            scp(`root@${state.ip}:/bench/results.tgz`, `${archive}.download`);
+            assert.equal(createHash("sha256").update(readFileSync(`${archive}.download`)).digest("hex"), hash, "download hash mismatch; droplet preserved");
+            renameSync(`${archive}.download`, archive);
+            Object.assign(state, { resultArchive: archive, archiveSha256: hash }); save();
+          }
+          verifyArchive();
+          const archive = state.resultArchive;
           safeArchive(run("tar", ["-tzf", archive]).stdout, run("tar", ["-tvzf", archive]).stdout, state.round);
-          const extracted = join(local, "evidence");
-          mkdirSync(extracted); run("tar", ["-xzf", archive, "-C", extracted], 5 * 60000);
+          const extracted = mkdtempSync(join(local, "evidence-"));
+          (state.extractionAttempts ??= []).push(extracted); save();
+          run("tar", ["-xzf", archive, "-C", extracted], 5 * 60000);
           const source = join(extracted, "repo", "bench", "marketplace", "results", state.round);
-          const destination = join(repo, "bench", "marketplace", "results", state.round);
-          assert.ok(!existsSync(destination), "result directory already exists; preserve both copies for inspection");
-          if (existsSync(source)) cpSync(source, destination, { recursive: true, errorOnExist: true, force: false });
           state.exitCode = Number(readFileSync(join(extracted, "exit-code"), "utf8").trim());
           state.complete = false;
           try {
             assert.equal(state.exitCode, 0, "remote job failed");
-            const s = validateSummary(JSON.parse(readFileSync(join(destination, "summary.json"), "utf8")));
+            const s = validateSummary(JSON.parse(readFileSync(join(source, "summary.json"), "utf8")));
             assert.equal(s.round, state.round); assert.equal(s.commit, state.commit);
             for (const [key, value] of Object.entries(nightly)) assert.equal(s.options[key], value, `unexpected ${key}`);
             state.complete = true;
           } catch (e) { state.validationError = e.message; }
-          Object.assign(state, { resultArchive: archive, archiveSha256: hash, resultFolder: destination, evidenceFolder: extracted,
+          // Keep collection independent of Git imports: no partial copy can poison a retry.
+          Object.assign(state, { resultFolder: existsSync(source) ? source : extracted, evidenceFolder: extracted,
             collectedAt: new Date().toISOString(), status: state.complete ? "done" : "failed" }); save();
         }
         // Repeat identity + terminal checks after the download, including cleanup retries.
-        assert.equal(createHash("sha256").update(readFileSync(state.resultArchive)).digest("hex"), state.archiveSha256);
+        verifyArchive();
         own(); assert.ok(terminalUnit(unit()), "unit became active; refusing deletion");
+        state.deletionIntentAt ??= new Date().toISOString(); save();
         run("doctl", ["compute", "droplet", "delete", state.id, "--force"], 120000);
         assert.ok(!list().some((item) => String(item.id) === state.id), "droplet deletion not confirmed");
-        state.destroyedAt = new Date().toISOString(); save();
-        console.log(`${state.complete ? "all done" : `partial results (the round did not finish): ${state.validationError}`}\nresults in ${state.resultFolder}\ndroplet ${state.id} deletion confirmed`);
-        return state.complete ? 0 : 1;
+        return deleted();
       } finally { unlinkSync(lock); }
     },
   };

@@ -105,8 +105,12 @@ host and report the provisioning error rather than guessing deletion is safe.
    counted CPU and aggregates matching saved passes. Incomplete data is never a full baseline.
 2. Hash summary before/after the read-only reporter. Save its generated report as
    results/rN/report.md and exact SHA as commit.txt. Preserve raw logs/checks/image provenance.
-   Keep the original hash-verified archive outside Git, in maintenance storage, with a checksum
-   receipt in the committed results folder. Do not publish credentials or local control state.
+   Collection keeps the result folder outside Git in the round-control evidence directory.
+   Import that folder into a new bench/marketplace/results/rN only after validation, without
+   overwriting an existing folder. Stage and verify any interrupted import separately before
+   promotion; never change the archived source. Keep the original hash-verified archive outside
+   Git, with a checksum receipt in the committed results folder. Do not publish credentials or
+   local control state. Pre-measurement failures may have only run.log/exit-code in evidence.
 3. Fetch origin, create bench/rN from origin/main carrying only the untracked result folder.
    Commit results first and docs second. Push only bench/rN. Never overwrite another change.
 4. r17 is the first v2 baseline, no r16/c1 delta. Later compare only validated v2 results with

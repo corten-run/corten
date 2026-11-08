@@ -59,12 +59,12 @@ test("generated remote shell and systemd unit pass native syntax validation", { 
   }
 });
 
-function harness(t, { active = false, corrupt = false, missing = false, dirty = false, failCreate = false, failDelete = false } = {}) {
+function harness(t, { active = false, corrupt = false, missing = false, dirty = false, failCreate = false, failDelete = false, lostDelete = false, failExtract = false } = {}) {
   const temp = mkdtempSync(join(tmpdir(), "marketplace-droplet-test-"));
   t.after(() => rmSync(temp, { recursive: true, force: true }));
   const repo = join(temp, "repo"), local = join(temp, "control"), remote = join(temp, "remote");
   mkdirSync(repo); mkdirSync(local); mkdirSync(remote);
-  let s = state(), droplets = [droplet(s)], deleted = 0, creates = 0;
+  let s = state(), droplets = [droplet(s)], deleted = 0, creates = 0, extractions = 0;
   const calls = [];
   const run = (binary, args) => {
     calls.push([binary, ...args]);
@@ -77,7 +77,12 @@ function harness(t, { active = false, corrupt = false, missing = false, dirty = 
         const saved = JSON.parse(readFileSync(join(local, "state.json"), "utf8")); s = { ...saved, id: "123", ip: "192.0.2.1" };
         droplets = [droplet(s)]; return failCreate ? { status: 1, stdout: "", stderr: "connection lost after create" } : good();
       }
-      if (args[2] === "delete") { deleted++; if (failDelete && deleted === 1) throw new Error("delete temporarily unavailable"); droplets = []; return good(); }
+      if (args[2] === "delete") {
+        deleted++; if (failDelete && deleted === 1) throw new Error("delete temporarily unavailable");
+        droplets = [];
+        if (lostDelete && deleted === 1) throw new Error("delete acknowledgement lost");
+        return good();
+      }
     }
     if (binary === "ssh") {
       const script = args.at(-1);
@@ -91,6 +96,10 @@ function harness(t, { active = false, corrupt = false, missing = false, dirty = 
       return good();
     }
     if (binary === "tar") {
+      if (args[0] === "-xzf" && failExtract && ++extractions === 1) {
+        writeFileSync(join(args.at(-1), "partial.txt"), "preserved partial extraction");
+        throw new Error("transient extraction failure");
+      }
       const r = spawnSync(binary, args, { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r;
     }
     throw new Error(`unexpected command ${binary} ${args.join(" ")}`);
@@ -98,11 +107,13 @@ function harness(t, { active = false, corrupt = false, missing = false, dirty = 
   return { repo, local, remote, run, calls, get deleted() { return deleted; }, get creates() { return creates; },
     reserve() { writeFileSync(join(local, "state.json"), JSON.stringify(s)); },
     empty() { droplets = []; },
-    archive() {
-      const result = join(remote, "repo/bench/marketplace/results/r17"); mkdirSync(result, { recursive: true });
-      writeFileSync(join(result, "summary.json"), JSON.stringify({ workload: "marketplace-v2", round: "r17", commit, complete: false, failures: ["failed checks"] }));
+    archive({ beforeRun = false } = {}) {
+      if (!beforeRun) {
+        const result = join(remote, "repo/bench/marketplace/results/r17"); mkdirSync(result, { recursive: true });
+        writeFileSync(join(result, "summary.json"), JSON.stringify({ workload: "marketplace-v2", round: "r17", commit, complete: false, failures: ["failed checks"] }));
+      }
       writeFileSync(join(remote, "exit-code"), "1\n"); writeFileSync(join(remote, "run.log"), "checks failed\n");
-      const r = spawnSync("tar", ["-czf", join(remote, "results.tgz"), "-C", remote, "run.log", "exit-code", "repo/bench/marketplace/results/r17"], { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr);
+      const r = spawnSync("tar", ["-czf", join(remote, "results.tgz"), "-C", remote, "run.log", "exit-code", ...(beforeRun ? [] : ["repo/bench/marketplace/results/r17"])], { encoding: "utf8" }); assert.equal(r.status, 0, r.stderr);
     },
     task(extra = {}) { return controller({ round: "r17", stateDir: local, sshKey: "42", ...extra }, { run, repo, sleep: async () => {} }); },
   };
@@ -130,11 +141,44 @@ test("partial artifacts survive terminal deletion and repeated collect", async (
   assert.ok(existsSync(saved.resultArchive));
   assert.equal(await h.task().collect(), 1); assert.equal(h.deleted, 1);
 });
+
+test("pre-measurement failure reports its actual preserved evidence directory", async (t) => {
+  const h = harness(t); h.reserve(); h.archive({ beforeRun: true });
+  assert.equal(await h.task().collect(), 1); assert.equal(h.deleted, 1);
+  const saved = JSON.parse(readFileSync(join(h.local, "state.json"), "utf8"));
+  assert.equal(saved.resultFolder, saved.evidenceFolder);
+  assert.ok(existsSync(join(saved.resultFolder, "run.log")));
+  assert.equal(existsSync(join(saved.resultFolder, "summary.json")), false);
+});
 test("cleanup failure is retried without overwriting or downloading artifacts again", async (t) => {
   const h = harness(t, { failDelete: true }); h.reserve(); h.archive();
   await assert.rejects(h.task().collect(), /temporarily unavailable/);
   const downloads = h.calls.filter((c) => c[0] === "scp").length;
   assert.equal(await h.task().collect(), 1); assert.equal(h.calls.filter((c) => c[0] === "scp").length, downloads);
+});
+
+test("interrupted extraction retries independently and preserves the failed attempt", async (t) => {
+  const h = harness(t, { failExtract: true }); h.reserve(); h.archive();
+  await assert.rejects(h.task().collect(), /transient extraction/); assert.equal(h.deleted, 0);
+  const before = JSON.parse(readFileSync(join(h.local, "state.json"), "utf8"));
+  assert.ok(existsSync(join(before.extractionAttempts[0], "partial.txt")));
+  const downloads = h.calls.filter((c) => c[0] === "scp").length;
+  assert.equal(await h.task().collect(), 1); assert.equal(h.deleted, 1);
+  const after = JSON.parse(readFileSync(join(h.local, "state.json"), "utf8"));
+  assert.equal(after.extractionAttempts.length, 2);
+  assert.ok(existsSync(join(before.extractionAttempts[0], "partial.txt")));
+  assert.ok(existsSync(join(after.resultFolder, "summary.json")));
+  assert.equal(h.calls.filter((c) => c[0] === "scp").length, downloads);
+  assert.equal(existsSync(join(h.repo, "bench/marketplace/results/r17")), false);
+});
+
+test("lost deletion acknowledgement reconciles confirmed absence without a second delete", async (t) => {
+  const h = harness(t, { lostDelete: true }); h.reserve(); h.archive();
+  await assert.rejects(h.task().collect(), /acknowledgement lost/);
+  const before = JSON.parse(readFileSync(join(h.local, "state.json"), "utf8"));
+  assert.ok(before.collectedAt && before.deletionIntentAt); assert.equal(before.destroyedAt, undefined);
+  assert.equal(await h.task().collect(), 1); assert.equal(h.deleted, 1);
+  assert.ok(JSON.parse(readFileSync(join(h.local, "state.json"), "utf8")).destroyedAt);
 });
 test("launch reserves once even when create response is ambiguous", async (t) => {
   const h = harness(t, { active: true, failCreate: true }); h.empty();
