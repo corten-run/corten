@@ -796,8 +796,8 @@ rules something out.
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
    Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
-   faults a request, repeatable to 0.1 in every round; idle CPU, three rounds); measured, noisy (CPU
-   time and throughput in three rounds on a shared desktop, whose rounds moved by up to 2.4 times);
+   faults a request, repeatable to 0.1 in every round; idle CPU, three rounds); measured, noisy
+   (CPU time and throughput in three rounds on a shared desktop, whose rounds moved by up to 2.4 times);
    bet (an app's image is Debian with the `libjemalloc2` package, 5.3, whose option names these
    are); reasoned (an image package binds only the image, where a `#[global_allocator]` crate
    compiles C into every build).

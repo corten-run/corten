@@ -1,17 +1,19 @@
-// CPU time and minor page faults a request, by image and Accept-Encoding (docs/design.md#choice-jemalloc-image):
+// CPU time and minor page faults a request, by image and Accept-Encoding
+// (docs/design.md#choice-jemalloc-image):
 //   node alloc-faults.mjs <out-dir> <image> [image ...]
-// Each image runs alone (--cpus 1 --memory 1g, items in memory from fixtures/items.json) on the bench
-// network. A probe container sends 500 item pages to warm it, then REQUESTS (3,000 unless set) more
-// from 8 connections, for each of identity, a browser's encodings and brotli alone (ENCODINGS,
-// comma-separated names, for some); the server's /proc/1/stat is read before and after, so a
-// request's minor faults (minflt) and CPU time (utime + stime, in the kernel's 10 ms ticks) are
-// the difference over the requests (ticks assumed 100 a second, Linux's USER_HZ). A figure is an
-// average over everything the server did in that window, so it repeats to about 0.1 a request;
-// CPU time is coarse and moves with whatever else the machine runs. ROUNDS (3 unless set) repeats
-// every image and encoding in turn. With IDLE_SECONDS set it sends nothing and instead reads, per
-// image and round, the CPU an untouched app takes over that many seconds (cgroup cpu.stat's
-// usage_usec) and its thread count, for an allocator's own threads. Writes <out-dir>/summary.json (each image's id and allocator
-// environment, and every row) after each row; a request that is not answered 200 stops it.
+// Each image runs alone (--cpus 1 --memory 1g, items in memory from fixtures/items.json) on the
+// bench network. A probe container sends 500 item pages to warm it, then REQUESTS (3,000 unless
+// set) more from 8 connections, for each of identity, a browser's encodings and brotli alone
+// (ENCODINGS, comma-separated names, for some); the server's /proc/1/stat is read before and
+// after, so a request's minor faults (minflt) and CPU time (utime + stime, in the kernel's 10 ms
+// ticks) are the difference over the requests (ticks assumed 100 a second, Linux's USER_HZ). A
+// figure is an average over everything the server did in that window, so it repeats to about 0.1 a
+// request; CPU time is coarse and moves with whatever else the machine runs. ROUNDS (3 unless set)
+// repeats every image and encoding in turn. With IDLE_SECONDS set it sends nothing and instead
+// reads, per image and round, the CPU an untouched app takes over that many seconds (cgroup
+// cpu.stat's usage_usec) and its thread count, for an allocator's own threads. Writes
+// <out-dir>/summary.json (each image's id and allocator environment, and every row) after each
+// row; a request that is not answered 200 stops it.
 // Inside the probe it is run as: node alloc-faults.mjs --load <base> <encoding> <requests>
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";

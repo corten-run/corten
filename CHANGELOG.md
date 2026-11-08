@@ -4079,8 +4079,8 @@ Corten is pre-1.0, so any minor version may change the API.
 169. The image `corten new` writes (and card-market's) runs jemalloc with
     `MALLOC_CONF=background_thread:true,tcache_max:65536`, a third line beside the two that
     preload it. The background thread returns a flood's memory while the app is idle (eight floods
-    of unfinished heads left 13 to 16 MiB of `memory.current`, against 118 to 139 without it and 406
-    to 455 on glibc's allocator, three runs each). The larger thread cache keeps brotli's buffers:
+    of unfinished heads left 13 to 16 MiB of `memory.current`, against 118 to 139 without it and
+    406 to 455 on glibc's allocator, three runs each). The larger thread cache keeps brotli's buffers:
     brotli responses took 19.3 to 19.4 page faults each on average before, and none now. glibc's
     own tunables were tried: fewer arenas changed nothing, and a lower mmap threshold left about
     180 MiB, still growing. `bench/fullstack/flood-memory.mjs` drives the floods,
