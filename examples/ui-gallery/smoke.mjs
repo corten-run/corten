@@ -4053,6 +4053,41 @@ async function run(browser) {
     // An Icon after a choice's input, beside its label, as beside a button's text (#793).
     const radioIcon = await sizes.locator("label", { hasText: "Letter" }).evaluate(besideText);
     check("SegmentedRadios: an icon beside a choice's label is the kit's gap apart and on its middle", spacedLikeButton(radioIcon), JSON.stringify(radioIcon));
+    // SegmentedWidth::Fill: the track is the fieldset's width and its choices equal parts of it,
+    // also on a phone, where nothing reaches past the track (#1060).
+    const filled = async () =>
+      sizes.evaluate((fieldset) => {
+        const track = /** @type {HTMLElement} */ (fieldset.querySelector("[class*='segmented__track']"));
+        const parts = [...track.querySelectorAll("label")].map((l) => l.getBoundingClientRect());
+        const box = track.getBoundingClientRect();
+        return {
+          track: Math.round(box.width),
+          fieldset: Math.round(fieldset.getBoundingClientRect().width),
+          parts: parts.map((p) => Math.round(p.width)),
+          inside: parts.every((p) => p.left >= box.left - 0.5 && p.right <= box.right + 0.5),
+        };
+      });
+    const wide = await filled();
+    const phoneSize = orders.viewportSize();
+    await orders.setViewportSize({ width: 320, height: 640 });
+    const narrow = await filled();
+    // A word wider than its part breaks inside it: the label's text stays in its choice and nothing
+    // reaches past the track (the word is put in for the measure and taken out after).
+    const long = await sizes.evaluate((fieldset) => {
+      const text = /** @type {HTMLElement} */ (fieldset.querySelector("label:last-of-type > span"));
+      const was = text.textContent;
+      text.textContent = "InternationalizationPreferences";
+      const [choice, words] = [/** @type {HTMLElement} */ (text.parentElement).getBoundingClientRect(), text.getBoundingClientRect()];
+      const track = /** @type {HTMLElement} */ (fieldset.querySelector("[class*='segmented__track']"));
+      const at = { inside: words.left >= choice.left - 0.5 && words.right <= choice.right + 0.5, sideways: track.scrollWidth > track.clientWidth + 1 };
+      text.textContent = was;
+      return at;
+    });
+    if (phoneSize) await orders.setViewportSize(phoneSize);
+    const even = (/** @type {{ track: number, fieldset: number, parts: number[], inside: boolean }} */ f) =>
+      Math.abs(f.track - f.fieldset) <= 1 && f.parts.every((w) => Math.abs(w - f.parts[0]) <= 1) && f.inside;
+    check("SegmentedRadios: a filled control is its fieldset's width, its choices equal parts, on a phone too", even(wide) && even(narrow) && narrow.track < wide.track, JSON.stringify({ wide, narrow }));
+    check("SegmentedRadios: a filled choice's long word breaks inside it, and nothing reaches past the track", long.inside && !long.sideways, JSON.stringify(long));
     await sizes.getByRole("radio", { name: "4 x 6 in" }).focus();
     await orders.keyboard.press("ArrowRight");
     const after = await raised();
