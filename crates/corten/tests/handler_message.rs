@@ -86,26 +86,7 @@ fn a_value_that_is_not_a_link_says_what_a_link_is() {
 #[test]
 fn an_option_in_an_attribute_says_what_it_takes() {
     let app = |value: &str| {
-        format!("use corten::prelude::*;
-
-struct Shown;
-
-impl std::fmt::Display for Shown {{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
-        f.write_str(\"shown\")
-    }}
-}}
-
-#[derive(Clone, Copy, UrlValue)]
-enum Finish {{
-    Weathered,
-}}
-
-fn main() {{
-    let _ = (Shown, Finish::Weathered);
-    let _ = html! {{ <div data-a={{{value}}}></div> }}.to_html();
-}}
-")
+        format!("use corten::prelude::*;\n\nstruct Shown;\n\nimpl std::fmt::Display for Shown {{\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{\n        f.write_str(\"shown\")\n    }}\n}}\n\n#[derive(Clone, Copy, UrlValue)]\nenum Finish {{\n    Weathered,\n}}\n\nfn main() {{\n    let _ = (Shown, Finish::Weathered);\n    let _ = html! {{ <div data-a={{{value}}}></div> }}.to_html();\n}}\n")
     };
     let (ok, stderr) = build_main("attr-message", &app("Some(Shown)"));
     assert!(!ok, "an Option of a Display type compiled as an attribute");
