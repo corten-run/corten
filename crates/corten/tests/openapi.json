@@ -325,6 +325,20 @@
               ],
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "also",
+            "schema": {
+              "items": {
+                "enum": [
+                  "lowest",
+                  "newest"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            }
           }
         ],
         "responses": {

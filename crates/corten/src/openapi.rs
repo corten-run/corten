@@ -1110,6 +1110,7 @@ mod tests {
         #[route("/api/quotes", get = quotes, post = quote)]
         pub struct Quotes {
             pub order: Option<super::Order>,
+            pub also: Vec<super::Order>,
         }
 
         #[route("/api/socket", get = socket)]
@@ -1229,7 +1230,14 @@ mod tests {
         assert_eq!(quotes["post"]["security"], json!([{ "x-api-key": [] }]));
         assert_eq!(
             quotes["get"]["parameters"],
-            json!([{ "name": "order", "in": "query", "schema": { "type": "string", "enum": ["lowest", "newest"] } }])
+            json!([
+                { "name": "order", "in": "query", "schema": { "type": "string", "enum": ["lowest", "newest"] } },
+                {
+                    "name": "also",
+                    "in": "query",
+                    "schema": { "type": "array", "items": { "type": "string", "enum": ["lowest", "newest"] } }
+                }
+            ])
         );
         assert_eq!(quotes["get"]["responses"]["default"], json!({ "$ref": "#/components/responses/FailureOrJson" }));
         assert_eq!(quotes["post"]["responses"]["default"], json!({ "$ref": "#/components/responses/FailureOrJson" }));

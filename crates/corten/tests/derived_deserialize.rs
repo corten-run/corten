@@ -926,8 +926,17 @@ twin! { order, corten::Fields,
     }
 }
 
+twin! { note, corten::Fields,
+    pub struct Note {
+        pub text: Cow<'static, str>,
+    }
+}
+
 #[test]
 fn fields_and_url_value_are_read_from_json_as_they_are() {
+    // A `Cow<'static, str>` read without `borrow` is owned, so the struct is a `FromJson`.
+    same_read::<note::ours::Note, note::theirs::Note>(r#"{"text":"hi"}"#);
+    read_alone::<note::ours::Note, note::theirs::Note>(r#"{"text":"hi"}"#);
     // The twins' `shipping` is the same type on both sides, so serde's reads it by ours.
     for text in [
         r#"{"email":"a@b.c","shipping":"next_day"}"#,

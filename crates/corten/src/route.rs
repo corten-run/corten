@@ -235,7 +235,8 @@ pub use corten_macros::Route;
 /// `#[serde(rename_all)]` and `#[serde(rename)]`. A form field of that type works the same way:
 /// an `<option value={Condition::NearMint}>` (or corten-ui's `Choice`) posts the word its
 /// handler's `condition: Condition` reads, and a form with any other word is refused (422), as one
-/// with a value of the wrong kind is.
+/// with a value of the wrong kind is. It implements the enum's `Deserialize`, and with the `json`
+/// feature its `FromJson` and schema, so `FromJson` beside it is a second impl (E0119).
 ///
 /// ```
 /// use corten::prelude::*;
@@ -3764,6 +3765,15 @@ pub mod __private {
         #[inline]
         fn __schema(&self) -> Schema {
             Schema(words::<T>)
+        }
+    }
+
+    // A list of a `UrlValue` is a list of its words, as for an optional one.
+    #[cfg(feature = "types")]
+    impl<T: UrlWords> SchemaWords for &&&Probe<Vec<T>> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema(|g| serde_json::json!({ "type": "array", "items": words::<T>(g) }))
         }
     }
 

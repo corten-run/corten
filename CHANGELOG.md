@@ -4087,8 +4087,10 @@ Corten is pre-1.0, so any minor version may change the API.
     pass; inside a derived type or a `Vec`, from its own text, which the reader finds first.
     `#[derive(Fields)]` and `#[derive(UrlValue)]`, which write the type's `Deserialize` already,
     now write its `FromJson` and schema too (feature `json`), so a form's input is read from JSON,
-    and is an agent tool's input, as it is; a generic type, or one `FromJson` cannot read (a field
-    that borrows, an attribute it does not follow), gets none and takes an empty impl. **Migration:** take `Deserialize` out
+    and is an agent tool's input, as it is, and a query's list of a `UrlValue` is described by its
+    words; a generic type, or one `FromJson` cannot read (a field that borrows, an attribute it
+    does not follow), gets none and takes an empty impl, with a `FromJsonSchema` written by hand
+    where it needs a schema. **Migration:** take `Deserialize` out
     of a derive list that has `FromJson`, and `FromJson` out of one that has `Fields` or
     `UrlValue`: each is now a second impl (E0119). Reading the benchmark's 500 item API
     responses costs the same: 265,550,044 instructions through `FromJson` and 438,766,522

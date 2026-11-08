@@ -36,10 +36,17 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
 /// serde infers in ways `FromJson`'s do not follow, or one `FromJson` cannot read (an attribute
 /// it does not follow, or a field that borrows).
 pub fn beside_deserialize(item: &Item) -> TokenStream {
-    let borrows = |tokens: &TokenStream| {
-        tokens.clone().into_iter().any(|t| matches!(&t, TokenTree::Punct(p) if p.as_char() == '\'' || p.as_char() == '&'))
-    };
-    let fields = item.body.iter().chain(&item.tuple).any(|g| borrows(&g.stream()));
+    // A reference, or a `#[serde(borrow)]`: the `Deserialize` then borrows from its input, and a
+    // `FromJson` reads owned values. A `Cow<'static, str>` read without `borrow` is owned.
+    fn borrows(tokens: TokenStream) -> bool {
+        tokens.into_iter().any(|t| match t {
+            TokenTree::Punct(p) => p.as_char() == '&',
+            TokenTree::Ident(id) => id.to_string() == "borrow",
+            TokenTree::Group(g) => borrows(g.stream()),
+            TokenTree::Literal(_) => false,
+        })
+    }
+    let fields = item.body.iter().chain(&item.tuple).any(|g| borrows(g.stream()));
     if !item.impl_generics.is_empty() || fields {
         return TokenStream::new();
     }
