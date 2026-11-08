@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { apps, tier } from "./apps.mjs";
 import { rawOf } from "./pack.mjs";
 import { roundNameError } from "./round.mjs";
+import { classes, kinds, slowMs, slowShare } from "./mixed.mjs";
 import { edgeOf, phases, ssrOf } from "./ssr.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -100,6 +101,28 @@ for (const source of Object.keys(summary.ssr)) {
     if (e.failed) console.log(line([name, `FAILED: ${e.failed}`, "", "", ""]));
     if (!f) continue;
     console.log(line([named(name, e), `${f.rps}${bound(f)}, ${show(f, "p50")}/${show(f, "p99")}, ${show(f, "cpuPct", "%")}`, `${show(s, "rps")}${bound(s)}, ${show(s, "p50")}/${show(s, "p99")}`, `${show(b, "rps")}${bound(b)}, ${show(b, "p99")}, ${b?.failedPct}%`, `${s?.memMiB}-${b?.memMaxMiB} MiB`]));
+  }
+}
+// The mixed phase (#813): each kind of request's latency and answers in one load, beside the
+// tables of one kind at a time above.
+const mixedRows = Object.entries(summary.ssr.api ?? {}).filter(([, e]) => e.mixed);
+if (mixedRows.length) {
+  console.log(`\nMixed (item API, the fixed rate as 70% item pages, ${100 * slowShare}% of them an item it answers in ${slowMs / 1000} s, 20% JSON, 5% home, 5% the form posted; p50/p99 ms, answers ok/429/other 4xx/5xx/none)`);
+  console.log(line(["App", "rate, unsent", ...kinds, "CPU, peak memory"]));
+  for (const [name, e] of mixedRows) {
+    const m = e.mixed;
+    const cell = (/** @type {string} */ kind) => {
+      const k = m.byKind[kind];
+      if (kind === "post" && m.form?.none) return `none: ${m.form.none}`;
+      if (!k) return "-";
+      // The one post sent before the phase, when it was not taken: the posts' answers may be the
+      // harness's fault, not the app's.
+      const checked = kind === "post" && !(m.form?.check >= 200 && m.form?.check < 400) ? ` (CHECK POST ${m.form?.check ?? "not sent"})` : "";
+      return `${k.p50}/${k.p99}, ${classes.map((c) => k[c]).join("/")}${checked}`;
+    };
+    const short = m.asked ? ` [${m.passes} of ${m.asked} passes]` : "";
+    const cost = [m.cpuUsedPct === null ? "-" : `${m.cpuUsedPct}%`, m.memMaxMiB === null ? "-" : `${m.memMaxMiB} MiB`].join(", ");
+    console.log(line([name + short, `${m.rps}/s, ${m.unsentPct}%`, ...kinds.map(cell), cost, e.failed ? "FAILED" : ""]));
   }
 }
 if (Object.keys(summary.instructions).length) {
