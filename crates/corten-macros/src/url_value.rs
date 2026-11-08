@@ -5,7 +5,7 @@
 use proc_macro::{Delimiter, Group, Literal, TokenStream, TokenTree};
 
 use crate::{
-    component::split,
+    component::variants,
     derive::parse_item,
     to_json::{serde_args_for, variant_rule, Value, RULES},
     tokens::{err, is_punct, q, Error},
@@ -52,7 +52,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let mut listed = TokenStream::new();
     // Each variant as serde reads it, for the `Deserialize` impl.
     let mut read = Vec::new();
-    for tokens in split(body.stream(), ',') {
+    for tokens in variants(body.stream()) {
         let mut j = 0;
         let mut attrs = Vec::new();
         while is_punct(tokens.get(j), '#') {

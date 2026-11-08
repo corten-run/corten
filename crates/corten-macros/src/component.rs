@@ -796,6 +796,34 @@ pub(crate) fn split(tokens: TokenStream, sep: char) -> Vec<Vec<TokenTree>> {
     parts
 }
 
+/// An enum body's variants, split at its top-level commas. Unlike [`split`], a `<` nests only in
+/// a path's generic arguments (`size_of::<Pair<u8, u16>>()`): one in a discriminant is an operator
+/// (`B = 1 << 1`), which would otherwise hide every comma after it.
+pub(crate) fn variants(tokens: TokenStream) -> Vec<Vec<TokenTree>> {
+    let mut parts = vec![Vec::new()];
+    let (mut depth, mut colons) = (0i32, 0);
+    for token in tokens {
+        if let TokenTree::Punct(p) = &token {
+            match p.as_char() {
+                '<' if depth > 0 || colons == 2 => depth += 1,
+                '>' if depth > 0 => depth -= 1,
+                ',' if depth == 0 => {
+                    parts.push(Vec::new());
+                    colons = 0;
+                    continue;
+                }
+                _ => {}
+            }
+            colons = if p.as_char() == ':' { colons + 1 } else { 0 };
+        } else {
+            colons = 0;
+        }
+        parts.last_mut().expect("never empty").push(token);
+    }
+    parts.retain(|p| !p.is_empty());
+    parts
+}
+
 /// `<'a, T: Render = Foo, const N: usize>` gives the impl list without defaults
 /// (`<'a, T: Render, const N: usize>`) and the type's arguments (`<'a, T, N>`).
 pub(crate) fn split_generics(generics: &[TokenTree]) -> (TokenStream, TokenStream) {

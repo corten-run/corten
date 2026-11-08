@@ -208,9 +208,10 @@ pub use client::{ClientIp, ClientZone};
 /// struct derives nothing else for [`Form`]. With the `json` feature it is a
 /// [`FromJson`](json::FromJson) too, and with `types` it has its schema, so the same struct is
 /// a JSON body or an agent tool's input, and `FromJson` beside it is a second impl (E0119). A
-/// generic struct is not: it takes an empty `impl<T: DeserializeOwned> FromJson for Offer<T> {}`,
-/// and a `FromJsonSchema` by hand where a schema is needed. One whose fields borrow from the
-/// input (a `&'a str`, a `#[serde(borrow)]`) cannot be one, since `FromJson` reads owned values.
+/// generic struct is one wherever its `Deserialize` applies (`Offer<u32>`), read by serde_json
+/// rather than Corten's reader. One whose
+/// fields borrow from the input (a `&'a str`, a `#[serde(borrow)]`) cannot be one, since
+/// `FromJson` reads owned values.
 ///
 /// ```
 /// use corten::prelude::*;

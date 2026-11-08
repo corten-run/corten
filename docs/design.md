@@ -909,9 +909,12 @@ rules something out.
     `Fields` and `UrlValue` write the `Deserialize` `FromJson` would, they write its `FromJson`
     and schema too (features `json` and `types`), so a form's input is read from JSON and is an
     agent tool's input with no derive beside theirs, and `FromJson` beside them is a second impl
-    as well. A generic type (whose bounds serde infers in ways `FromJson`'s do not follow), or an
-    enum with `#[serde(other)]` (which the reader does not follow), gets none and takes an empty
-    impl, with a `FromJsonSchema` written by hand where it needs a schema; one whose
+    as well. A generic type's `FromJson` is the trait's own body, which hands the text to
+    serde_json, under `Self: DeserializeOwned`: the bounds serde infers for its `Deserialize`
+    (`T: Default` for a defaulted `T`, a bound on `T::Assoc`) are not one per parameter, and a
+    reader written against them would have to repeat each; an
+    enum with `#[serde(other)]` is read by the reader up to a word it does not know, which the
+    `Deserialize` reads as that variant, and is described as any string. One whose
     `Deserialize` borrows from its input cannot be a `FromJson`, which reads owned values. Not
     chosen: depending on serde_derive from `corten-macros`, which builds on `proc_macro` alone, or
     keeping the second derive, which a derive cannot add to the item it reads

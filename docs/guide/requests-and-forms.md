@@ -154,7 +154,8 @@ posts a `data-patch` form to its own `action` and `method` whatever its controls
 script that reads `form.action` gets the control instead, as in any page; read `getAttribute("action")`.
 The same struct reads JSON too (feature `json`): `Fields` makes it a `FromJson` with its schema,
 so a data client's `Json<Input>` body or an agent tool's input is the form's struct, with its
-rules (derive nothing beside it for that; a generic struct takes an empty `impl FromJson`).
+rules (derive nothing beside it for that; a generic struct is one wherever its `Deserialize`
+applies, read by serde_json).
 `FieldName`, `Errors` and `Form` are all in the prelude, and so is `Result`, whose error type
 defaults to `corten::Error`: a handler returns `Result`, and a helper that checks one field
 returns `Result<u32, Errors>`, both under `use corten::prelude::*`.

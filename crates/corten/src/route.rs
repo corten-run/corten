@@ -237,8 +237,8 @@ pub use corten_macros::Route;
 /// handler's `condition: Condition` reads, and a form with any other word is refused (422), as one
 /// with a value of the wrong kind is. It implements the enum's `Deserialize`, and with the `json`
 /// feature its `FromJson` (and with `types` its schema), so `FromJson` beside it is a second impl
-/// (E0119). An enum with a `#[serde(other)]` variant, which Corten's JSON reader does not follow,
-/// gets no `FromJson`, and takes an empty `impl corten::FromJson for Shown {}`.
+/// (E0119). An enum with a `#[serde(other)]` variant reads any other word as that variant, from
+/// JSON too, and is described as any string.
 ///
 /// ```
 /// use corten::prelude::*;
