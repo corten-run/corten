@@ -1110,8 +1110,9 @@ rules something out.
     ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
 
     The derive is `corten::feed::Row`, beside the trait, and not in `corten-feed` itself: its impl
-    names `::corten::feed::Row`, and the lower crates (`corten-feed`, `corten-cluster`) keep
-    writing their test rows by hand.
+    names `::corten::feed::Row`, so `corten-feed` and `corten-protocol`, which do not depend on
+    `corten`, keep writing their test rows by hand, as does a row whose `id` does more than
+    return a field (`corten-cluster`'s `Gated`).
 
     Stands on: reasoned (the generated impl is the one written by hand and the feed's path is
     unchanged, which `crates/corten/tests/derived_row.rs` checks by comparing a derived row's
@@ -1121,7 +1122,7 @@ rules something out.
     Revisit when: rows often need a key made from more than one field, which a mark on one field
     cannot say.
 
-    Last checked: 2026-11-08, the derive and the rows of the four example apps at `bf969573`.
+    Last checked: 2026-11-08, the derive and the rows of the four example apps and `corten-cluster`'s tests at the commit that adds it.
 
 ## Rules
 

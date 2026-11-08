@@ -82,17 +82,21 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     out.extend(q("::corten::feed::Row for __A0", &[this]));
     out.extend(item.where_clause.clone());
     let mut body = q("#[inline] fn id(&self) -> &str", &[]);
-    // `&self.<field>`, at the field, so an id that is not text is reported there; `self` is the
-    // method's own, so a row a `macro_rules!` declares reads its field too.
+    // `&self.<field>`, at the field, so an id that is not text is reported there; `self` has the
+    // method's hygiene (located at the field), so a row a `macro_rules!` declares reads it too.
     let at = member.span();
     let mut and = Punct::new('&', Spacing::Alone);
     and.set_span(at);
     let mut dot = Punct::new('.', Spacing::Alone);
     dot.set_span(at);
-    let get: TokenStream =
-        [TokenTree::Punct(and), TokenTree::Ident(Ident::new("self", Span::call_site())), TokenTree::Punct(dot), member]
-            .into_iter()
-            .collect();
+    let get: TokenStream = [
+        TokenTree::Punct(and),
+        TokenTree::Ident(Ident::new("self", Span::call_site().located_at(at))),
+        TokenTree::Punct(dot),
+        member,
+    ]
+    .into_iter()
+    .collect();
     body.extend([TokenTree::Group(Group::new(Delimiter::Brace, get))]);
     out.extend([TokenTree::Group(Group::new(Delimiter::Brace, body))]);
     Ok(out)

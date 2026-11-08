@@ -100,14 +100,28 @@ macro_rules! __openapi_document {
     };
 }
 
-/// Live feeds (feature `feed`): the server side of `corten-feed`, and `#[derive(Row)]`, a row's
-/// [`Row::id`](feed::Row::id) from the field marked `#[row(id)]` (a `String`, or another type
-/// that derefs to `str`), so `Row` is the derive and the trait at once, as serde's `Serialize`
-/// is. The row's `Clone` and `Serialize` stay in its derive list. See the live-data guide.
+/// Live feeds (feature `feed`): everything [`corten_feed`] has (its crate page has the overview:
+/// routes, sync and authorization), and `#[derive(Row)]`. See the live-data guide.
 #[cfg(feature = "feed")]
 pub mod feed {
     #[doc(inline)]
     pub use corten_feed::*;
+    /// `#[derive(Row)]`: a row's [`Row::id`](trait@Row) is the field marked `#[row(id)]` (a
+    /// `String`, `Box<str>`, `Arc<str>`, `&'static str`, `Cow<'static, str>` or another type that
+    /// derefs to `str`), so `Row` is the derive and the trait at once, as serde's `Serialize` is.
+    /// The row's `Clone` and `Serialize` stay in its derive list, where Rust checks them and the
+    /// trait's bounds. An enum, or a row whose key is not one field, implements the trait by hand.
+    ///
+    /// ```
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     ticker: String,
+    ///     price_cents: u32,
+    /// }
+    /// # use corten::feed::Row as _;
+    /// assert_eq!(Stock { ticker: "ACME".into(), price_cents: 1 }.id(), "ACME");
+    /// ```
     pub use corten_macros::Row;
 }
 #[cfg(feature = "agent")]

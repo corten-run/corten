@@ -272,13 +272,13 @@ struct Stock(String, u32);
 
 ```compile_fail
 #[derive(Clone, serde::Serialize, corten::feed::Row)]
-struct Stock { #[row(key)] ticker: String }
+struct Stock { #[row(id)] ticker: String, #[row(key)] isin: String }
 ```
 
 ```compile_fail
 #[derive(Clone, serde::Serialize, corten::feed::Row)]
 #[row(id)]
-struct Stock { ticker: String }
+struct Stock { #[row(id)] ticker: String }
 ```
 
 The trait's bounds hold too: a row that is not `Sync` (a `Cell` in it) does not compile.
