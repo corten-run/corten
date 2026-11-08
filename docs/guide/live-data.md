@@ -237,8 +237,9 @@ impl Row for Entry {
 # }
 ```
 
-A row with no field marked, two marked, an id that is not text, an enum, a unit struct, or a
-`row` attribute that is not `#[row(id)]` on a field does not compile:
+A row with no field marked, two marked, an id that is not text, an enum, a unit struct, a `row`
+attribute on the struct, or a `row` attribute that is not `#[row(id)]` on a field does not
+compile:
 
 ```compile_fail
 #[derive(Clone, serde::Serialize, corten::feed::Row)]

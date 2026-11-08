@@ -106,7 +106,7 @@ macro_rules! __openapi_document {
 pub mod feed {
     #[doc(inline)]
     pub use corten_feed::*;
-    /// `#[derive(Row)]`: a row's [`Row::id`](trait@Row) is the field marked `#[row(id)]` (a
+    /// `#[derive(Row)]`: a row's [`Row::id`] is the field marked `#[row(id)]` (a
     /// `String`, `Box<str>`, `Arc<str>`, `&'static str`, `Cow<'static, str>` or another type that
     /// derefs to `str`), so `Row` is the derive and the trait at once, as serde's `Serialize` is.
     /// The row's `Clone` and `Serialize` stay in its derive list, where Rust checks them and the
