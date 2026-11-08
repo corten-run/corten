@@ -1404,12 +1404,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     endpoint, and a trial of one directive beside the enforced policy is not built in: the
     enforced policy's reports show what a change must allow, and `report_only` tries the whole
     policy.
-24. <a id="limit-sort-readers"></a>A form or link whose route reads a table's order that `rows::sort` drew, and that
-    neither sends to the page's own address nor is a form in the part read again around the table
-    that posts, takes the order only by naming the table (`ordered::send`, `ordered::link`,
-    [Rule 3](#rule-handler-arguments)). One that does not sends the order the page was drawn with,
-    and nothing notices: the compiler cannot see which routes read the order, and the runtime
-    cannot tell a form that should carry it from one that should not. A navigating sort header
-    would close this at the cost of a round trip on every sort ([UI guide](guide/ui.md)). It lifts
-    when a route's type says it reads a table's order, so markup that sends to it beside that
-    table without the call does not build.
+24. <a id="limit-sort-readers"></a>A form or link whose route reads a table's order that `rows::sort` drew takes that order only
+    by naming the table (`ordered::send`, `ordered::link`, [Rule 3](#rule-handler-arguments)).
+    Two kinds need no call: a form in the part read again around the table that posts, which
+    `rows::sort` rewrites, and a form that posts without an `action`, which sends to the address it
+    keeps. Any other that does not name the table sends the order the page was drawn with, and
+    nothing notices: the compiler cannot see which routes read the order, and the runtime cannot
+    tell a form that should carry it from one that should not. A navigating sort header would close
+    this at the cost of a round trip on every sort ([UI guide](guide/ui.md)). It lifts when a
+    route's type says it reads a table's order, so markup that sends to it on a page that draws
+    that table without the call does not build.

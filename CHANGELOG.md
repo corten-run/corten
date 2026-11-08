@@ -6200,9 +6200,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `rows::sort` against a swap of the server-sorted table, fetched at the click or before it, and
     writes each case's median and range with the engine's version. With no network the three are
     within one another's range in Chromium, Firefox and WebKit from 50 to 2,000 rows, a swap
-    fetched ahead the fastest from 1,000 rows; with 40 ms of latency in place is faster by 59 to
-    63 ms up to 500 rows (15 ms against 77 at 50 rows in Chromium). A swap fetched ahead matches it
-    only when the answer is in before the click (a hover's dwell or a tap; not a key press). The
+    fetched ahead the fastest from 1,000 rows in Chromium (and at 2,000 in Firefox); with 40 ms of
+    latency in place is faster by 59 to 63 ms up to 500 rows (15 ms against 77 at 50 rows in
+    Chromium). A swap fetched ahead matches it only when the answer is in before the click (a hover
+    that rests through the fetch, or a tap, not measured; not a key press or a quick click). The
     UI guide has the tables. Design Rule 3's `rows::sort` exception says its search of the page is
     closed and that any other reader, a `GET` form in the part or anything outside it, names the
     table with `sorted(&Id)`; new design Limit 24 says one that does not sends the order the page
