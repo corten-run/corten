@@ -13,9 +13,16 @@ class ItemSource
     {
         if (config('items.source') === 'fixture') {
             $this->fixture = [];
-            self::eachItem(file_get_contents(config('items.fixture_path')), function (string $id, string $json) {
-                $this->fixture[$id] = ItemView::fromApi(json_decode($json, true, 512, JSON_THROW_ON_ERROR));
-            });
+            try {
+                self::eachItem(file_get_contents(config('items.fixture_path')), function (string $id, string $json) {
+                    $this->fixture[$id] = ItemView::fromApi(json_decode($json, true, 512, JSON_THROW_ON_ERROR));
+                });
+            } catch (\JsonException $error) {
+                // Octane drops an exception thrown while a worker boots, so say why it stopped.
+                file_put_contents('php://stderr', 'items fixture '.config('items.fixture_path').': '.$error->getMessage()."\n");
+
+                throw $error;
+            }
         }
     }
 
