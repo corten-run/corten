@@ -67,8 +67,8 @@ large button), `--control-padding` (the inline padding of a field, a small butto
 button and a default or large button, not a small one's, which stays .8125rem; .875rem),
 `--control-width-sm`, `--control-width-md` and `--control-width-lg` (`ControlWidth`'s widths; 8, 16
 and 24rem), `--card-padding` (a card's
-padding and the gap between its parts; 1.5rem), `--card-heading-font-size` (a card's heading; 1rem)
-and `--toasts-inset-bottom` (how far `Toasts` sits above the bottom of the window; 1rem, plus the
+padding and the gap between its parts; 1.5rem), `--card-heading-font-size` (a card's heading; 1rem),
+a `Stats` figure's type (below) and `--toasts-inset-bottom` (how far `Toasts` sits above the bottom of the window; 1rem, plus the
 home indicator's inset on a page whose viewport meta has `viewport-fit=cover`). A layout with a
 fixed bar along the bottom (a phone's tab bar) sets it on `body` where the bar shows, so a toast
 does not cover the bar: `@media (width < 48rem) { body { --toasts-inset-bottom: calc(1rem + 5.25rem); } }`
@@ -78,10 +78,29 @@ it is a token as every size the kit reads is, so the theme says what the kit exp
 A 44 px touch target for buttons, fields, selects, menu buttons, page links and tabs is
 `control-height`, `control-height-sm` and `control-height-lg` at 2.75rem (`"control-height": { "$type": "dimension",
 "$value": { "value": 2.75, "unit": "rem" } }`). The tokens do not reach a menu item, a combobox
-option, a checkbox, radio or switch label, a slider, a meter's bar or a Stats figure (whose padding
-is its own, not `--card-padding`), which keep their own sizes, nor the labels and items whose text
+option, a checkbox, radio or switch label, a slider, a meter's bar or a Stats figure's padding (its
+own, not `--card-padding`), which keep their own sizes, nor the labels and items whose text
 stays .875rem; a compact density is a modifier context of the app's that
-sets the tokens lower. A size is the same in both themes, so `ui-dark.tokens.json` has none.
+sets the tokens lower. A size, weight or tracking is the same in both themes, so
+`ui-dark.tokens.json` has none.
+
+A `Stats` figure's type is the theme's too: `--stat-label-font-size` and `--stat-label-font-weight`
+(.875rem, 500), `--stat-value-font-size` and `--stat-value-font-weight` (1.5rem, 600),
+`--stat-value-font-size-narrow` (the value on a narrow screen, 1.25rem), and `--stat-label-tracking`
+and `--stat-value-tracking` (0 and -0.01), `number` tokens in ems, since a DTCG dimension is px or
+rem and tracking follows the text's size: `"stat-label-tracking": { "$type": "number", "$value": 0.05 }`.
+A design system whose letter spacing is a DTCG dimension (a `typography` token's `letterSpacing`)
+writes the number again rather than referring to it, as the types differ. Two are not in the kit's
+theme, because no token's value says "the page's": the value's face, which is the page's until the
+app declares `--stat-value-font-family` (a `fontFamily` token,
+`"stat-value-font-family": { "$type": "fontFamily", "$value": "{font.display}" }`), and the label's
+case, which is as written until the app declares `--stat-label-text-transform`, which DTCG has no
+type for, so it goes with the fonts in `static/style.css`
+(`:root { --stat-label-text-transform: uppercase; }`). The stylesheet reads each with a fallback,
+so the startup check does not ask for them, and a name spelled wrong changes nothing. A page's
+rule for `dt` or `dd` no longer gives the label its case or letter spacing, or the value its
+face, since the kit sets those; one for the label's face still reaches it. A card's heading sets no face, so the app's own heading rule (`h2 { font-family: .. }`)
+draws it.
 
 An app set up by an older kit has a theme without the newer tokens: `corten ui add` names each
 one a component it copies reads and the app declares nowhere (not in its theme or a stylesheet
