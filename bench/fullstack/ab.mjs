@@ -78,6 +78,7 @@ try {
     }
   }
   finished = true;
+  rmSync(join(dir, "summary.partial.json"), { force: true });
 } finally {
   docker("rm", "-f", "ab-app");
   writeFileSync(join(dir, finished ? "summary.json" : "summary.partial.json"), JSON.stringify(rows, null, 1));

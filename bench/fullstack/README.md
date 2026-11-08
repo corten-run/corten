@@ -1013,27 +1013,28 @@ a default changes
 
 The same nine builds, as a round's image makes them (card-market's Dockerfile at `e6d5b61c`:
 release, jemalloc preloaded, Debian's libzstd), each served the item page and its JSON from memory
-on the app's one pinned CPU of a fresh c-8 droplet (Xeon Platinum 8168), with `ab.mjs` running
-them one after another, three rounds, each phase after a warmup: a fixed 300 requests a second
-and 64 users, with `Accept-Encoding: identity` and with a browser's. CPU is the app's cgroup's;
-no request failed. A default's cost is the CPU a request takes in the build as it is less in the
-build without it, round by round, median (range) of the three
-([cost-under-load.sh](cost-under-load.sh), split by [cost-under-load.mjs](cost-under-load.mjs);
-[results/cost-under-load](results/cost-under-load/)). Round to round a build moves by about 3
-microseconds (median) and up to 9 in either phase, so a row whose range crosses zero says no cost
-that can be seen. Each round ran the build as it is first and the others after it in one order, so
-a drift within a round reads as a cost on every row: for a browser's page at 64 users the build as
-it is was the slowest of the nine in two rounds of three, and every default there shows a cost.
-`ab.mjs` now starts each round one image later, which removes a cost on the first slot alone (what
-this data shows) but not a drift across the round, which needs the build as it is beside each
-variant. k6 had the
+on the app's one pinned CPU of a fresh c-8 droplet (Xeon Platinum 8168), with `ab.mjs` running them
+one after another, three rounds, each phase after a warmup: a fixed 300 requests a second and 64
+users, with `Accept-Encoding: identity` and with a browser's. CPU is the app's cgroup's; no request
+failed. A default's cost is the CPU a request takes in the build as it is less in the build without
+it, round by round, median (range) of the three ([cost-under-load.sh](cost-under-load.sh), split by
+[cost-under-load.mjs](cost-under-load.mjs); [results/cost-under-load](results/cost-under-load/)).
+Round to round a build moves by about 3 microseconds (median) and up to 9 in either phase, so a row
+whose range crosses zero says no cost that can be seen. Each round ran the build as it is first and
+the others after it in one order, so a drift within a round reads as a cost on every row: for a
+browser's page at 64 users the build as it is was the slowest of the nine in two rounds of three,
+and every default there shows a cost. `ab.mjs` now starts each round one image later, which would
+remove a cost on the first slot alone (with three rounds or more) but not a drift across the round,
+which needs the build as it is beside each variant; this data shows neither clearly. k6 had the
 round's four load CPUs (`BENCH_LOAD_CPUS`), not the six a round gives an app serving from memory
-(`BENCH_FIXTURE_LOAD_CPUS`, which `ab.mjs` uses now). The images and results carry no record of
-the source they were built from; `cost-under-load.sh` now labels the images and writes
-`source.txt` beside the results. The page's 37.5 microseconds on `identity` are about a fifth below
-the r16 round's 47 (21,195 a CPU-second), from the same cgroup counter, CPU model and Dockerfile;
-the droplet, the commit, the round's settings and k6's phase and cores differ, and which of them
-accounts for the gap was not measured.
+(`BENCH_FIXTURE_LOAD_CPUS`, which `ab.mjs` uses now). The images and results carry no record of the
+source they were built from; `cost-under-load.sh` now labels the images and writes `source.txt`
+beside the results. The page's 37.5 microseconds on `identity` are about a fifth below the r16
+round's 47 (21,195 a CPU-second), from the same cgroup counter and CPU model. r16's image preloaded
+no jemalloc (it came to card-market's Dockerfile after r16's commit), and [Choice 23](../../docs/design.md#choice-jemalloc-image) counts
+about 83,000 instructions a page with it against 87,000 without; the droplet, the commit, the
+round's settings and k6's phase and cores differ too, and which of them accounts for the gap was not
+measured.
 
 At 64 users, CPU microseconds a request (the app's CPU was 86-101% busy: k6, on its four CPUs,
 did not keep it saturated, so these are CPU a request, not the most it can serve):
@@ -1071,18 +1072,18 @@ Compression is the one default whose cost under load is larger than the run's no
 for a browser it is 45 of the page's 85 microseconds at 64 users (53%, so the page serves 11,700
 requests a CPU-second compressed against 24,900 without) and 25 of the JSON's 57 (44%), less than
 the share callgrind counts above (68% and 72% of user instructions), since these include the
-kernel's part of a request, which callgrind does not count. The page's `ETag` for a browser
-measures 6.1 (4.3-6.5) microseconds at 64 users, but every other default in that column measures
-0.4 to 9.5, so this run does not separate it from the order; callgrind's 7.7% of the page's instructions
-is the evidence for it. Every other cell is under 10 microseconds. Of those 58 (the 64 less compression and the
-page's `ETag` for a browser), 14 have a range clear of zero, 6 of them below it, a saving that removing work cannot make, so a range clear of zero by a
-few microseconds is within these runs' drift. The instruction counts fit: callgrind gives the
-security headers 5.5% of an `identity` page and compression 3.2%, about 2 and 1.2 of its 37.5
-microseconds, at the edge of what these runs resolve. On the rounds' `identity` requests no default
-is seen to cost more than a few microseconds of CPU. What
-the bytes compression saves are worth to a client is outside this measure; an app short of CPU
-behind a proxy that compresses can build without the `compress` feature
-([the defaults](../../docs/guide/app.md)).
+kernel's part of a request, which callgrind does not count. The page's `ETag` for a browser measures
+6.1 (4.3-6.5) microseconds at 64 users, but every other default in that column measures 0.4 to 9.5,
+so this run does not separate it from the order; callgrind's 7.7% of the page's instructions is the
+evidence for it. Every other cell is under 10 microseconds. Of those 58 (the 64 less compression and
+the page's `ETag`, each for a browser), 14 have a range clear of zero, 6 of them below it, a saving
+that removing work cannot make, so a range clear of zero by a few microseconds is within these runs'
+drift. The instruction counts fit: callgrind gives the security headers 5.5% of an `identity` page
+and compression 3.2%, about 2 and 1.2 of its 37.5 microseconds, at the edge of what these runs
+resolve. On the rounds' `identity` requests no default is seen to cost more than a few microseconds
+of CPU. What the bytes compression saves are worth to a client is outside this measure; an app short
+of CPU behind a proxy that compresses can build without the `compress` feature ([the
+defaults](../../docs/guide/app.md)).
 
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
 
