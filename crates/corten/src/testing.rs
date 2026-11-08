@@ -282,7 +282,8 @@ impl<'c, K> Call<'c, K> {
     /// Asks as the runtime or a data client does: [`Mode::Action`] for a `data-patch` form's
     /// submit, [`Mode::Navigation`] for a link the runtime follows, [`Mode::Data`] for a client
     /// that asks for JSON. Without it (or with [`Mode::Document`]) the request asks for HTML as a
-    /// browser's page load does. An `Accept` the test sets with [`Call::header`] is kept; with
+    /// browser's page load does, which the page the runtime fetches whole after a write renders as
+    /// too. An `Accept` the test sets with [`Call::header`] is kept; with
     /// [`Mode::Data`] it must ask for JSON first, or the request is not a data client's (a panic
     /// says so).
     pub fn mode(mut self, mode: Mode) -> Self {

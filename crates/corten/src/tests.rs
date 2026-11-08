@@ -116,8 +116,8 @@ impl crate::Middleware for AsViewer {
     }
 }
 
-/// Stamps every answer with a request id and two `Server-Timing` values, and answers 429 with
-/// `Retry-After` itself when asked to by `x-flood`.
+/// Stamps every answer with a request id, two `Server-Timing` values and `Vary: origin`, and
+/// answers 429 with `Retry-After` itself when asked to by `x-flood`.
 struct Stamp;
 
 impl crate::Middleware for Stamp {
@@ -134,21 +134,30 @@ impl crate::Middleware for Stamp {
         headers.insert("x-request-id", HeaderValue::from_static("r-1"));
         headers.append("server-timing", HeaderValue::from_static("app;dur=1"));
         headers.append("server-timing", HeaderValue::from_static("db;dur=2"));
+        headers.append(header::VARY, HeaderValue::from_static("origin"));
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=600"));
         res
     }
 }
 
 /// A failure that becomes the error page keeps what the handler and the middleware said besides
-/// the body (a request id, `Retry-After`, every `Server-Timing` value), in every mode; the error
-/// page's own type and `Cache-Control` win.
+/// the body (a request id, `Retry-After`, every `Server-Timing` value, what it varies on beside
+/// what the error page does), in every mode; the error page's own type and `Cache-Control` win.
 #[tokio::test]
 async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
     use axum::http::header;
-    let routes = Router::new().route(
-        "/busy",
-        get(|| async { (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "30"), (header::CONTENT_TYPE, "text/x-old")]) }),
-    );
+    async fn must_sign_in() -> crate::Result<&'static str> {
+        Err(crate::Refused::sign_in(&caller_url::SignIn))?;
+        Ok("never")
+    }
+    let routes = Router::new()
+        .route(
+            "/busy",
+            get(|| async {
+                (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "30"), (header::CONTENT_TYPE, "text/x-old")])
+            }),
+        )
+        .route("/mine", get(must_sign_in));
     let router = App::new(Routes::from(routes)).error_page(test_error_page, ()).middleware(Stamp).router();
     for mode in [None, Some("nav")] {
         for (uri, flood, status, retry) in
@@ -168,12 +177,29 @@ async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
             assert_eq!(headers["x-request-id"], "r-1", "{at}");
             let timing: Vec<_> = headers.get_all("server-timing").iter().collect();
             assert_eq!(timing, ["app;dur=1", "db;dur=2"], "{at}");
+            let vary: Vec<_> = headers.get_all(header::VARY).iter().flat_map(|v| v.to_str().unwrap().split(", ")).collect();
+            assert!(vary.contains(&"origin") && vary.contains(&"corten"), "{at}: {vary:?}");
             assert_eq!(headers.get(header::RETRY_AFTER).map(|v| v.to_str().unwrap()), retry, "{at}");
             assert!(headers[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"), "{at}: {headers:?}");
             assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{at}: an error page is never shared");
             let body = res.into_body().collect().await.unwrap().to_bytes();
             assert!(String::from_utf8_lossy(&body).contains("<h1>"), "{at}: the error page");
         }
+        // A refusal that sends the caller to sign in keeps them too, and varies on both, once each.
+        let mut req = Request::get("/mine").header("accept", "text/html");
+        if let Some(mode) = mode {
+            req = req.header("corten", mode);
+        }
+        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(
+            (res.status(), &res.headers()[header::LOCATION]),
+            (StatusCode::SEE_OTHER, &"/sign-in".parse().unwrap()),
+            "{mode:?}"
+        );
+        assert_eq!(res.headers()["x-request-id"], "r-1", "{mode:?}");
+        let vary: Vec<_> = res.headers().get_all(header::VARY).iter().flat_map(|v| v.to_str().unwrap().split(", ")).collect();
+        assert_eq!(vary.iter().filter(|v| **v == "origin").count(), 1, "{mode:?}: {vary:?}");
+        assert_eq!(vary.iter().filter(|v| **v == "corten").count(), 1, "{mode:?}: {vary:?}");
     }
 }
 
@@ -1178,6 +1204,9 @@ async fn an_extractor_rejection_gets_the_error_page_in_a_browser_and_its_text_in
     assert!(body.contains("<title>Something went wrong</title>") && !body.contains("parse"), "{body}");
     let (_, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", Some("nav"), None).await;
     assert_eq!(headers["corten-page"], "1", "a navigation swaps the error page in: {body}");
+    // The whole page after a write, which `fetch` asks for with `Accept: */*` (#1034).
+    let (_, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", Some("page"), Some("*/*")).await;
+    assert!(body.contains("<title>Something went wrong</title>") && headers.contains_key("corten-shell"), "{body}");
     let (_, _, body) = call_with(App::new(Routes::from(routes())).dev(true).router(), "GET", "/n/abc", None, html).await;
     assert!(body.contains("<pre>Invalid URL"), "the default error page shows it: {body}");
     let (status, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", None, Some("application/json")).await;
@@ -2820,15 +2849,77 @@ async fn a_redirect_to_a_place_keeps_its_fragment_in_every_mode() {
     let place = "/items/pika%20chu#place-7%20%26%208";
     let (status, headers, _) = call(app(routes.clone(), None), "GET", None).await;
     assert_eq!((status, &headers["location"]), (StatusCode::SEE_OTHER, &place.parse().unwrap()), "a full load follows it");
-    // fetch would follow a 303 and drop the fragment, so the runtime is told where to go.
-    for mode in ["nav", "action"] {
+    // fetch would follow a 303 and drop the fragment, so the runtime is told where to go: for a
+    // navigation, a patch's read, and the whole page it fetches after a write (`corten: page`,
+    // #1034).
+    for mode in ["nav", "action", "page"] {
         let (status, headers, _) = call(app(routes.clone(), None), "GET", Some(mode)).await;
         assert_eq!((status, &headers["corten-location"]), (StatusCode::NO_CONTENT, &place.parse().unwrap()), "{mode}");
     }
-    let (status, headers, _) = call_with(app(routes.clone(), None), "GET", "/old", Some("nav"), None).await;
-    assert_eq!((status, &headers["corten-location"]), (StatusCode::NO_CONTENT, &"/items/pika#place-7".parse().unwrap()));
+    for mode in ["nav", "page"] {
+        let (status, headers, _) = call_with(app(routes.clone(), None), "GET", "/old", Some(mode), None).await;
+        assert_eq!(
+            (status, &headers["corten-location"]),
+            (StatusCode::NO_CONTENT, &"/items/pika#place-7".parse().unwrap()),
+            "{mode}"
+        );
+    }
     let (status, headers, _) = call_with(app(routes, None), "GET", "/old", None, Some("text/html")).await;
     assert_eq!((status, &headers["location"]), (StatusCode::MOVED_PERMANENTLY, &"/items/pika#place-7".parse().unwrap()));
+}
+
+/// A redirect's answer depends on the `corten` header, so it varies on it, and the runtime's is the
+/// browser's alone: a cache that keys on the URL alone never hands its `corten-location` to a full
+/// load, nor a full load's 303 or 301 to the runtime's `fetch`, which would drop the `#id` (#1034).
+#[tokio::test]
+async fn a_redirect_varies_on_the_mode_and_the_runtimes_is_not_shared() {
+    #[derive(crate::Route)]
+    #[route("/items/{slug}")]
+    struct Item<'a> {
+        slug: &'a str,
+    }
+    #[derive(crate::view::Id)]
+    struct SpotId<'a>(&'a str);
+    let minute = std::time::Duration::from_secs(60);
+    let routes = Router::new()
+        .route("/", get(move |req: Req| async move { Public::new(minute, req.redirect(&Item { slug: "pika" }.at(SpotId("7")))) }))
+        .route("/old", get(|req: Req| async move { req.moved::<ForOne>(&Item { slug: "pika" }.at(SpotId("7"))) }))
+        .route("/done", get(move |req: Req| async move { Public::new(minute, req.redirect(&Done)) }));
+    for (uri, mode, status, shared) in [
+        ("/", None, StatusCode::SEE_OTHER, true),
+        ("/", Some("page"), StatusCode::NO_CONTENT, false),
+        ("/", Some("nav"), StatusCode::NO_CONTENT, false),
+        ("/old", None, StatusCode::MOVED_PERMANENTLY, false),
+        ("/old", Some("page"), StatusCode::NO_CONTENT, false),
+        ("/done", None, StatusCode::SEE_OTHER, true),
+        ("/done", Some("page"), StatusCode::SEE_OTHER, false),
+    ] {
+        let (got, headers, _) = call_with(app(routes.clone(), None), "GET", uri, mode, Some("text/html")).await;
+        let case = format!("{uri} {mode:?}: {headers:?}");
+        assert_eq!(got, status, "{case}");
+        let vary =
+            headers.get_all(header::VARY).iter().flat_map(|v| v.to_str().unwrap().split(',')).any(|v| v.trim() == "corten");
+        assert!(vary, "{case}");
+        assert_eq!(headers[header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), shared, "{case}");
+    }
+    // A `corten` value the runtime does not send is no fetch of its: a data client's redirect.
+    let (status, headers, _) = call_with(app(routes, None), "GET", "/", Some("x"), Some("application/json")).await;
+    assert_eq!((status, &headers["location"]), (StatusCode::SEE_OTHER, &"/items/pika#spot-7".parse().unwrap()));
+}
+
+/// The error page's request is asked as the failed one was: the whole page after a write keeps
+/// `corten: page`, so an error page that sends the browser to a place names it in `corten-location`.
+#[tokio::test]
+async fn the_error_page_of_the_whole_page_after_a_write_redirects_as_its_request_would() {
+    async fn moves(_: Failure, req: Req) -> HtmlResult {
+        req.redirect(&Done.at(MsgId))
+    }
+    let router = || App::new(Routes::from(Router::new())).error_page(moves, ()).router();
+    // The error page keeps the failure's status (404); what it says of the place is the mode's.
+    let (_, headers, _) = call_with(router(), "GET", "/missing", Some("page"), None).await;
+    assert!(headers["corten-location"] == "/done#msg" && !headers.contains_key("location"), "{headers:?}");
+    let (_, headers, _) = call_with(router(), "GET", "/missing", None, Some("text/html")).await;
+    assert!(headers["location"] == "/done#msg" && !headers.contains_key("corten-location"), "{headers:?}");
 }
 
 /// A client navigation's `fetch` cannot follow a redirect to another origin (the CSP's
@@ -2848,7 +2939,7 @@ async fn a_redirect_to_another_origin_is_named_to_a_client_navigation() {
         ("/away", "https://shop.example/sales?x=1", StatusCode::SEE_OTHER),
         ("/moved", "//shop.example/sales", StatusCode::MOVED_PERMANENTLY),
     ] {
-        for mode in ["nav", "action"] {
+        for mode in ["nav", "action", "page"] {
             let (status, headers, _) = call_with(app(routes.clone(), None), "GET", uri, Some(mode), None).await;
             assert_eq!((status, &headers["corten-location"]), (StatusCode::NO_CONTENT, &to.parse().unwrap()), "{uri} {mode}");
             assert!(!headers.contains_key("location"), "{uri} {mode}: nothing for fetch to follow");
@@ -2857,9 +2948,29 @@ async fn a_redirect_to_another_origin_is_named_to_a_client_navigation() {
         assert_eq!((status, &headers["location"]), (full, &to.parse().unwrap()), "{uri}: a full load follows it");
     }
     // A path on this origin is still a redirect fetch follows, in one round trip.
-    let (status, headers, _) = call_with(app(routes, None), "GET", "/here", Some("nav"), None).await;
-    assert_eq!(status, StatusCode::SEE_OTHER);
-    assert!(!headers.contains_key("corten-location"));
+    for mode in ["nav", "page"] {
+        let (status, headers, _) = call_with(app(routes.clone(), None), "GET", "/here", Some(mode), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{mode}");
+        assert!(!headers.contains_key("corten-location"), "{mode}");
+    }
+}
+
+/// The whole page the runtime fetches after a write (`corten: page`) is drawn as a full load's,
+/// its layout and `corten-shell` included, not as a navigation's `<main>` (#1034).
+#[tokio::test]
+async fn the_whole_page_after_a_write_is_drawn_as_a_full_load() {
+    let routes = Router::new()
+        .route("/", get(|req: Req| async move { req.page::<ForOne>(Shell { req: &req, title: "A", head: "", children: "a" }) }));
+    let (status, headers, body) = call(app(routes.clone(), None), "GET", Some("page")).await;
+    let (_, _, full) = call(app(routes.clone(), None), "GET", None).await;
+    let (_, _, nav) = call(app(routes, None), "GET", Some("nav")).await;
+    assert_eq!(status, StatusCode::OK);
+    let key = headers["corten-shell"].to_str().unwrap();
+    assert_eq!(meta_content(&body, "corten-shell"), key, "the document, as a full load gets it");
+    assert!(
+        body.starts_with("<!DOCTYPE html>") && full.starts_with("<!DOCTYPE html>") && !nav.starts_with("<!DOCTYPE html>"),
+        "{body}"
+    );
 }
 
 /// A place on a page outside the app keeps its `#fragment` through `moved` and `redirect`, which
