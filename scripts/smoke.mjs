@@ -3677,7 +3677,7 @@ async function run(browser) {
     navRequests.length = 0;
     await page.hover("#no-prefetch");
     // Nothing to wait for: the check is that no request comes. The pause is the page's own timer,
-    // set after the hover's dwell, so it ends after the dwell would have fetched.
+    // set after the hover's dwell timer, so it ends after the dwell would have fetched.
     await page.evaluate(() => new Promise((done) => setTimeout(done, 300)));
     const afterOptOut = navRequests.length;
     const control = navTo("?from=hover", true);
@@ -3706,7 +3706,7 @@ async function run(browser) {
     // Playwright can report the request after the address changes.
     await fetchedAgain;
     // The newest was reused: no visit fetched it, however late its request was reported.
-    const newestFetched = navRequests.includes(`${base}/news?p=8`);
+    const newestFetched = navRequests.includes(new URL("/news?p=8", base).href);
     check(
       "prefetch keeps the 8 newest pages: the newest is reused, the oldest is fetched again",
       hoveredCount === 10 && !newestFetched && navRequests.length === 11,
