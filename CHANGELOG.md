@@ -4092,9 +4092,11 @@ Corten is pre-1.0, so any minor version may change the API.
     where it reached `snapshot` with no rows; a patch that is not one (not JSON, say) closes the
     stream and loads the snapshot again after a backoff that doubles from 1 s, where it threw in
     the listener and its write was missed until the next patch. Rows are trusted as the server's
-    `Row`. The runtime, the kit, the template and the examples have no `any` (the Navigation API
-    and a service worker's global are declared where they are used), and `npm run check` fails on
-    an `any` or a `@ts-ignore` in them. The runtime's gzip size grows by 206 bytes, 188 of them the
+    `Row`. The runtime, the kit, the template and the examples have no explicit `any` (the
+    Navigation API and a service worker's global are declared where they are used), and
+    `npm run check` fails on an explicit `any` or a `@ts-ignore` in them. card-market's push
+    worker shows a message with no title as an empty title, where it showed "undefined", and opens
+    `/` for a `url` that is not text. The runtime's gzip size grows by 215 bytes, 188 of them the
     feed's checks (design Choice 33)
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 

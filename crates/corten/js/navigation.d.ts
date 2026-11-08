@@ -1,9 +1,9 @@
 // The parts of the Navigation API (https://html.spec.whatwg.org/multipage/nav-history-apis.html)
-// the runtime uses, which TypeScript's DOM library (5.9) does not declare yet. Types only: it
-// ships with the crate so the runtime's JSDoc can name them, and nothing imports it at run time.
-// Remove it once the DOM library declares the API.
-
-export type NavigationType = "push" | "replace" | "reload" | "traverse";
+// the runtime uses that TypeScript 5.9's DOM library, the repository's, does not declare: it has
+// `NavigationHistoryEntry` and `NavigationType`, not `window.navigation` or its events. Types
+// only: it ships with the crate so the runtime's JSDoc can name them, and nothing imports it at
+// run time. TypeScript 6.0's library declares the API, with `NavigateEvent.info` as `any`; once
+// the repository is on it, this goes and the runtime casts `info` to its own type alone.
 
 export interface NavigationResult {
   committed: Promise<NavigationHistoryEntry>;

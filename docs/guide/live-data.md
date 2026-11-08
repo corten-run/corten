@@ -276,7 +276,8 @@ sends through a failover. Beside them a Chromium page runs `subscribe()` itself 
 same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one snapshot each).
 The runtime checks the envelope of what it is sent: a snapshot's `epoch`, `seq` and `rows`, and a
 patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An answer that is not a
-snapshot (a proxy's page, a server of another version) is a failed snapshot: logged and fetched
+snapshot (from a server of another version than the page's runtime, or a route that answers other
+JSON) is a failed snapshot: logged and fetched
 again after a backoff. A patch that is not one has lost its write, so the stream is closed and the
 snapshot loaded again, after a backoff that doubles from 1 s while the patches after it are bad
 too; neither reaches the script. The rows themselves are not checked: each is the feed's `Row`,

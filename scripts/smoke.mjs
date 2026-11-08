@@ -3016,6 +3016,8 @@ async function run(browser) {
         : `retry: 60000\n\n${patchEvent(2)}`,
   );
   await feedLive("rejected", 3, 10000);
+  // The third stream's patch comes in a task after it opens.
+  await page.waitForFunction((name) => (/** @type {any} */ (window)).__feeds[name].patches.length > 0, "rejected", { timeout: 5000 }).catch(() => {});
   const rejectedPatches = await feedPatches("rejected");
   const rejectedStates = await stopFeed("rejected");
   await unrouteFeed("rejected");

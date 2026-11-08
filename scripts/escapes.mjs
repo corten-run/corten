@@ -1,31 +1,47 @@
 // Checks that the scripts Corten ships (the runtime, the kit, the template, the examples) have no
-// `any` and no comment that turns the checker off: a value of unknown shape is `unknown` and is
-// narrowed, or cast once where it enters with a comment saying what vouches for it
-// (docs/design.md#choice-script-boundaries). `@ts-expect-error` belongs to the typing fixtures,
-// which are not among these files. A JSDoc type is read from one line: one that spans lines is not
-// checked. Run by npm run check.
+// explicit `any` and no comment that turns the checker off: a value of unknown shape is
+// `unknown` and is narrowed, or cast once where it enters with a comment saying what vouches for
+// it (docs/design.md#choice-script-boundaries). `@ts-expect-error` belongs to the typing
+// fixtures, which are not among these files. Types are read with TypeScript's parser: those in
+// JSDoc, over any number of lines, and a declaration file's. Run by npm run check.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-
-/** The types a line names: in JSDoc tags of a script, or the code of a declaration file. @param {string} file @param {string} line */
-const typesIn = (file, line) =>
-  file.endsWith(".d.ts")
-    ? [line.replace(/\/\*.*?(\*\/|$)|\/\/.*|^\s*\*.*/g, "")]
-    : [...line.matchAll(/@(?:type|param|returns?|typedef|property|prop|template|satisfies)\s*\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/g)].map((m) => m[1] ?? "");
+import ts from "typescript";
 
 /** What `text`, the file `file`, has that this check forbids, by line. @param {string} file @param {string} text @returns {string[]} */
 export function problems(file, text) {
   /** @type {string[]} */
   const found = [];
-  text.split(/\r?\n/).forEach((line, i) => {
-    const at = `${file}:${i + 1}`;
-    const off = /@ts-(ignore|nocheck|expect-error)\b/.exec(line);
-    if (off) found.push(`${at}: @ts-${off[1]} turns the type check off here; fix the type, or narrow the value`);
-    if (typesIn(file, line).some((type) => /(^|[^\w$])any\b(?![\w$])/.test(type))) found.push(`${at}: \`any\` is unchecked; use \`unknown\` and narrow it, or the type it is`);
-  });
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true, file.endsWith(".d.ts") ? ts.ScriptKind.TS : ts.ScriptKind.JS);
+  const at = (/** @type {number} */ pos) => `${file}:${source.getLineAndCharacterOfPosition(pos).line + 1}`;
+  /** @param {ts.Node} node */
+  const visit = (node) => {
+    if (node.kind === ts.SyntaxKind.AnyKeyword) found.push(`${at(node.getStart(source))}: \`any\` is unchecked; use \`unknown\` and narrow it, or the type it is`);
+    // A node's JSDoc is not among its children.
+    for (const doc of /** @type {{ jsDoc?: ts.JSDoc[] }} */ (node).jsDoc ?? []) visit(doc);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  for (const range of commentsOf(source)) {
+    const off = /@ts-(ignore|nocheck|expect-error)\b/.exec(text.slice(range.pos, range.end));
+    if (off) found.push(`${at(range.pos)}: @ts-${off[1]} turns the type check off here; fix the type, or narrow the value`);
+  }
   return found;
+}
+
+/** Every comment in `source`: each is in the trivia before a token. @param {ts.SourceFile} source */
+function commentsOf(source) {
+  /** @type {Map<number, ts.CommentRange>} */
+  const all = new Map();
+  /** @param {ts.Node} node */
+  const visit = (node) => {
+    for (const range of ts.getLeadingCommentRanges(source.text, node.pos) ?? []) all.set(range.pos, range);
+    for (const child of node.getChildren(source)) visit(child);
+  };
+  visit(source);
+  return all.values();
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

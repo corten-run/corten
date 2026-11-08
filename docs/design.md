@@ -1154,63 +1154,78 @@ rules something out.
     checks values whose making it saw, and JSDoc types are erased at run time, so a value parsed
     or read from outside (`JSON.parse`, `res.json()`, storage, another window) is whatever it
     is, whatever its annotation says. Each place the runtime reads one was sorted by who made the
-    value. A feed's snapshot and patches are the server's, sent by `corten-protocol` on a URL the
-    page was given, but a proxy's error page or a server of another version can stand in their
-    place: their envelope (`epoch`, `seq`, `rows`; `seq` and each change's `op`, `id` and
-    an upsert's `value`) is checked, a bad snapshot is a failed one (logged, fetched again after
-    the backoff a failure gets), and a bad patch, whose write is lost, closes the stream and
-    loads the snapshot again after a backoff that doubles while the next stream's patches are
-    bad too, so a server that only sends bad patches is asked again every 30 s once the
-    backoff tops out. Before, a bad
-    snapshot reached the script's `snapshot` as `undefined` rows, and a patch that was not JSON
-    threw in the listener and dropped its write until the next patch's gap showed it. The rows
-    are not checked: `Row` is the server's own type, the checker holds the script to it, and
-    checking it in the browser would need a runtime schema the browser does not have (the Rust
-    client, `corten_protocol::Replica`, deserializes rows with the type, since there it has
-    one). A notice the runtime kept in `sessionStorage` for a full reload is checked field by
-    field, since storage outlives a version of the runtime. `data-on` arguments are trusted: the
-    server writes them into the document the runtime runs in, in the format `wire.json` tests
-    both sides against, and markup that could write others could run its own script. Explicit
-    `any` was removed from the runtime, the kit, the template and the examples (26 lines):
-    where the DOM library has no type for an API (the Navigation API, a service worker's global,
-    `navigator.connection`) they declare the part they use (`crates/corten/js/navigation.d.ts`)
-    and cast once where the value enters; a form's property read past a shadowing control is
-    typed by its name (`HTMLFormElement[K]`); a format's function is
-    `(value: never) => string`, its branches typed. Typing the Navigation API's `info` found a
-    read the checker had not seen: the place a `data-keep-place` navigation returns to was read
-    when it could be `null`, kept safe only by the element lookup before it, now checked.
-    `scripts/escapes.mjs` (in `npm run check`) fails on an `any` in a one-line JSDoc type or
-    a declaration file, and on `@ts-ignore`, `@ts-nocheck` or `@ts-expect-error`, outside the
-    typing fixtures. Casts stay: the DOM gives an `Element` where the markup guarantees an
-    `HTMLInputElement`, and a cast says so in one place. An app's own scripts are not held to
-    this; `corten check` checks them with the same compiler options.
-    The runtime's minified build (gzip, level 9): `corten.js` 14,842 to 15,048 bytes, of which
-    the feed's checks are 188 and the rest 18; `format.js` 1,498 to 1,496.
+    value. A feed's snapshot and patches are the server's, written by `corten-protocol`, but the
+    runtime reading them may not be the one that server ships: a tab left open across a deploy
+    keeps the runtime it loaded (its URL is versioned), and a `FeedUrl` can name a route that
+    answers other JSON. Their envelope is checked (`crates/corten/js/feed.js`: a snapshot's
+    `epoch`, `seq` and `rows`; a patch's `seq` and each change's `op`, `id` and an
+    upsert's `value`). A bad snapshot is a failed one (logged, fetched again after the backoff a
+    failure gets); a bad patch, whose write is lost, closes the stream and loads the snapshot
+    again after a backoff that doubles while the next stream's patches are bad too, so a server
+    that only sends bad patches is asked again every 30 s once the backoff tops out. Before, a
+    snapshot of another shape reached the script's `snapshot` with no rows (and, unless that
+    threw, the stream was asked to resume from `undefined-undefined`); a patch whose changes were
+    of another shape moved `seq` on before the script's `patch` threw on them, so its write was
+    lost for good; and a patch that was not
+    JSON threw in the listener, its write missed until the next patch showed the gap. That is
+    correctness, first in the order, against 188 bytes every page pays (the patch's changes 52 of
+    them, the snapshot's 34). An HTTP error or a body that is not JSON was already a failed
+    snapshot, and `EventSource` closes a stream that is not `text/event-stream`, so a proxy's
+    error page never reaches either check. The rows are not checked: `Row` is the server's own
+    type, the checker holds the script to it, and checking it in the browser would need a
+    runtime schema the browser does not have (the Rust client, `corten_protocol::Replica`,
+    deserializes rows with the type, since there it has one). A notice the runtime kept in
+    `sessionStorage` for a full reload is checked field by field, since storage outlives a
+    version of the runtime. Trusted, as the server's or the runtime's own: `data-on` arguments
+    (the server writes them into the document the runtime runs in, in the format `wire.json`
+    tests both sides against, and markup that could write others could run its own script),
+    which `JSON.parse` gives as an unchecked `any` into the argument's type, and the
+    `corten:module` event each served module dispatches, which the runtime takes only from the
+    module its page's own script tag loaded. Explicit `any` was removed from the runtime, the
+    kit, the template and the examples (26 uses): where the DOM library has no type for an API
+    (the Navigation API, a service worker's global, `navigator.connection`) they declare the part
+    they use (`crates/corten/js/navigation.d.ts`) and cast once where the value enters; a form's
+    property read past a shadowing control is typed by its name (`HTMLFormElement[K]`); a
+    format's function is `(value: never) => string`, its branches typed. Typing the Navigation
+    API's `info` found a read the checker had not seen: the place a `data-keep-place`
+    navigation returns to was read when it could be `null`, kept safe only by the element
+    lookup before it, now checked. `scripts/escapes.mjs` (in `npm run check`) reads those
+    files with TypeScript's parser and fails on an `any` in a JSDoc type or a declaration file,
+    and on a `@ts-ignore`, `@ts-nocheck` or `@ts-expect-error` comment, which belong to the
+    typing fixtures. An implicit `any` (what `JSON.parse` returns, used as it is) is not found
+    by it, which is why each parse is listed here. Casts stay: the DOM gives an `Element` where
+    the markup guarantees an `HTMLInputElement`, and a cast says so in one place. An app's own
+    scripts are not held to this; `corten check` checks them with the same compiler options.
+    The runtime's minified build (gzip, level 9): `corten.js` 14,842 to 15,057 bytes, of which
+    the feed's checks are 188, their own module 9 and the rest 18; `format.js` 1,498 to 1,496.
     Not chosen: validating rows from a schema the server derives (bytes for every app with a
     feed to catch a server bug the Rust types already prevent); a schema library (a dependency
     for the few values that come from outside); checking only that a patch is JSON (a change
-    without an `id` would reach the script's `patch` and throw in the app's code, far from the
-    cause).
+    without an `id` would reach the script's `patch` and throw in the app's code, after `seq`
+    moved on).
 
     Stands on: measured (each `JSON.parse` and `res.json()` in the runtime and each `any` in
-    the scripts, inventoried with `rg` on `c65c10ec`; the sizes above; the check's time next to
-    `JSON.parse` alone, patches of 1, 10 and 100 changes of a nine-field row, medians of 15
-    alternating 100 ms rounds: in Chromium 156 through Playwright 1.64.1, 1,131 to 1,221 ns, 7,275
-    to 7,844 and 81,000 to 77,538, and in Node 24, -3.3% to 1.5%, all within the spread of the
-    same loop run again on this busy workstation); platform (JSDoc and TypeScript types are erased
-    at run time, `JSON.parse` returns `any`, and TypeScript 5.9's DOM library declares no
-    `window.navigation`); reasoned (a value the checker did not see made is only as typed as
-    its producer: the server's rows are, a proxy's page and old storage are not); value
-    (Correctness and reliability first, a bad patch noticed at once rather than at the next gap;
-    Mistakes fail at compile time, Values 4; Fast, and proven fast, Values 1, which is why the
-    rows are not checked).
+    the scripts, inventoried on `c65c10ec` and `648617e3`, 26 uses on each; the sizes above;
+    the check's time next to `JSON.parse` alone, patches of 1, 10 and 100 changes of a
+    nine-field row, medians of 15 alternating 100 ms rounds, three runs in Chromium 156 through
+    Playwright 1.64.1 on a busy workstation: the full check -1.6% to 8.0% over the parse, and
+    `JSON.parse` against itself -8.1% to 6.6%, so the check's cost is within what this timing
+    can resolve); platform (JSDoc and TypeScript types are erased at run time, `JSON.parse`
+    returns `any`, `EventSource` fails a stream whose type is not `text/event-stream`, and
+    TypeScript 5.9's DOM library declares no `window.navigation`); reasoned (a value the checker
+    did not see made is only as typed as its producer: the server's rows are, an older runtime's
+    reading of a newer protocol and old storage are not); value (Correctness and reliability
+    first, a patch's write never lost without a snapshot; Mistakes fail at compile time, Values
+    4; Fast, and proven fast, Values 1, which is why the rows are not checked).
 
-    Revisit when: TypeScript's DOM library declares the Navigation API (`navigation.d.ts` goes),
-    the browser gets a way to check JSON against a schema without a library, or a feed carries
-    rows the server did not type (a feed relayed from another service).
+    Revisit when: the repository's TypeScript (5.9.3, `package.json`) moves to one whose DOM
+    library declares the Navigation API (6.0's does, with `NavigateEvent.info` as `any`), when
+    `navigation.d.ts` goes and `info` alone is cast to the runtime's type; the browser gets a
+    way to check JSON against a schema without a library; or a feed carries rows the server did
+    not type (a feed relayed from another service).
 
-    Last checked: 2026-11-08, TypeScript 5.9.3 on `c65c10ec` and the change, the timings in
-    Chromium 156 (Playwright 1.64.1) and Node 24.
+    Last checked: 2026-11-08, TypeScript 5.9.3 on `c65c10ec` and the change (and 6.0.3 on the
+    change, which checks clean), the timings in Chromium 156 (Playwright 1.64.1).
 
 ## Rules
 
