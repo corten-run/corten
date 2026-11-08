@@ -24,8 +24,9 @@ examples/listings-feed/ A seller's listings kept live by a feed on corten-cluste
 examples/ui-gallery/ corten-ui and every UI kit component; smoke.mjs tests them in a browser
 docs/              Guides (docs/guide), design decisions and limits, surfaces (architecture.md)
 skills/corten/     The agent skill for building apps on Corten
-bench/fullstack/     The same page in eighteen apps, and the scripts that compare them
-bench/catalog/       Locale-neutral record detail and JSON, with a separate results baseline
+bench/fullstack/     Historical marketplace implementations and diagnostic scripts; localization work differs
+bench/marketplace/   Equivalent-localization marketplace v2, the nightly workload from official r17
+bench/catalog/       Optional locale-neutral record detail and JSON diagnostic, with a separate baseline
 bench/live/          One price feed pushed to many clients in the same frameworks
 ```
 
@@ -162,6 +163,19 @@ docker network rm corten-test
 The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its header.
 
 ## Pull requests
+
+For nightly performance evidence, use the [marketplace v2 procedure](bench/marketplace/nightly.md).
+Official `rN` rounds start at r17; `wN` stays for development. Require all eighteen apps, both
+sources and every conformance profile before load. The nightly suite measures CPU, memory,
+load and cold start only, with three short-window passes (`--duration 15 --warmup 10 --rate 150`)
+on a dedicated c-8, app CPU 1, upstream CPUs 2-3 and load CPUs 4-7. Time pages in all three
+locales (`en-US`, `fr-FR`, `de-DE`) and locale-neutral JSON once per source per pass.
+Report medians, ranges and headroom limits, not a guaranteed finish by 7 am. Compare only
+compatible v2 rounds, with no r16 or catalog c1 delta; catalog is not a duplicate nightly run.
+Historical build, browser, byte and instruction evidence remains under its original workload
+labels. The tools below still serve focused measurements not yet covered by the v2 nightly.
+Keep framework feature claims separate from speed; unequal historical localization does not
+establish a general ranking.
 
 1. One change per pull request, with a test for each behavior: a Rust test, a `compile_fail`
    doctest for a compile-time guarantee, an `@ts-expect-error` line in

@@ -12,7 +12,9 @@ richer application, with the work differences stated below. The separate catalog
 strings-only page and JSON. [Marketplace v2](../bench/marketplace/README.md) adds a separate
 rich-page workload with request-time localization in all eighteen adapters, a whole-page
 conformance gate and a repeated-pass runner. It starts its own baseline; no v2 performance
-results replace the historical tables here.
+results replace the historical tables here. Old marketplace localization was non-equivalent:
+Corten formatted values per request while some others used stored strings or non-localized formatting. Those
+tables describe historical implementations, not valid general framework speed rankings.
 
 | Question | Evidence to read |
 |---|---|
@@ -33,21 +35,25 @@ support through a named library, and behavior not implemented or not evaluated i
 a benchmark omission is not evidence a framework lacks a feature. Do not combine these into
 a single performance score.
 
-## Summary
+## Nightly scope
 
-- **Fast on the server.** 20,705 rendered pages a second on one CPU (uncompressed, untagged),
-  5.0x ASP.NET Core; of eighteen apps, behind axum + Maud (27,327) and ahead of Drogon (17,870).
-  The most JSON responses and item-API pages of any (26,385 and 3,669 a second), and
-  1.3 MiB of memory after the first request (measured, [below](#on-the-server)).
-- **Light on the machine.** A page costs 47 µs of CPU (uncompressed, untagged), 5.1x less than
-  ASP.NET Core's; 300 pages a second take 4.2% of one core (ASP.NET Core 25%, Leptos 25%), and
-  each MiB of memory serves 1,234 pages a second, 14.8x Leptos. axum + Maud costs less CPU
-  (35 µs, 3.6%), and Drogon serves more per MiB (1,407) (measured,
-  [below](#cpu-and-memory-per-request)).
-- **Fast in the browser.** The benchmark item page loaded 14.1 KB of JavaScript (gzip,
-  measured). No WASM, no virtual DOM, no hydration: a script takes over 1,000 server-rendered
-  rows in 6.0 ms, against 20-84 ms for Solid, Svelte, Vue, React and Remix (measured,
-  [below](#client-heavy-screens)).
+Starting at official r17, the [nightly procedure](../bench/marketplace/nightly.md) uses only
+marketplace v2, not a duplicate catalog run. Later official rounds use fresh `rN` identifiers
+with N >= 17; `wN` is for development. V2 has a new baseline: compare only compatible v2
+rounds, never calculate an r16 or catalog c1 before/after delta.
+
+The nightly suite measures CPU, memory, load and cold start. Three passes use
+`--duration 15 --warmup 10 --rate 150` on a dedicated c-8 with app CPU 1, upstream CPUs 2-3
+and load-generator CPUs 4-7. Pages are timed in `en-US`, `fr-FR` and `de-DE`; locale-neutral
+JSON is timed once per source per pass, not repeated as a locale control. The pre-load gate
+still requires all eighteen apps, both sources and every conformance profile.
+
+Report these as short-window medians and ranges, with errors, utilization and headroom limits;
+they do not guarantee a finish by 7 am or establish small differences without repeatability.
+Build times, instructions, bytes and interactive timing are not measured by this suite yet.
+The older measurements below remain historical evidence for their own workloads, not v2
+results. The nonlocalized [catalog](../bench/catalog/README.md) remains an optional, separate
+diagnostic. Full-feature claims remain separate from measured speed.
 
 ## Where the numbers come from
 
@@ -56,14 +62,15 @@ Measured on one DigitalOcean c-8 droplet (Xeon Platinum 8168) on 2026-11-06 to 2
 method, every table and the caveats are in [bench/fullstack](../bench/fullstack/README.md) and
 [bench/browser](../bench/browser/README.md).
 
-These are historical marketplace measurements, including localized prices in Corten's
-example. The new [catalog benchmark](../bench/catalog/README.md) measures a strings-only
+These are historical marketplace measurements with non-equivalent localization, including
+localized prices in Corten's example. The separate [catalog benchmark](../bench/catalog/README.md) measures a strings-only
 record-detail page in the same eighteen frameworks, with no locale formatting in any app.
 It has a separate baseline; its throughput has not been measured yet.
 
 ## On the server
 
-The same item page (listings table, offers, a form that patches) and the same item as JSON in
+Historical implementations of an item page (listings table, offers, a form that patches)
+with unequal localization work, and the same item as JSON in
 eighteen apps, each with its usual production settings on one CPU and 1 GiB. Requests a
 second are at 64 users; "failed" means the app could not serve the fixed rate (or start) without
 tuning. Corten's maintainers wrote every app; none has yet been reviewed in full by its
@@ -99,15 +106,13 @@ compressing it with zstd a further 230,000, and brotli 1, for a client without z
 ([details](../bench/fullstack/README.md#what-a-browsers-request-costs-corten-callgrind-2026-11-06)).
 
 With the item API every request fetches and parses about 55 KB of JSON, which bounds every app.
-Corten reads only the fields the page uses from that response, not a `serde_json::Value`, and
-serves 2.8x ASP.NET Core's pages there (3,669 a second against 1,292) at 6.0% of one core
-against 32% ([details](../bench/fullstack/README.md#cortens-item-api-path)). axum + Maud renders the page
-from memory faster (27,327 against 20,705); Corten serves the most JSON (26,385) and item-API
-pages. Its JSON route costs 69,631 user instructions a request against the page's 94,677.
+Corten's historical implementation reads only the fields the page uses from that response,
+not a `serde_json::Value` ([details](../bench/fullstack/README.md#cortens-item-api-path)).
+Its JSON route costs 69,631 user instructions a request against the page's 94,677.
 Against r15 the in-memory page rose 37.1% and JSON 17.0%, while the other passing apps' medians
 rose 7.0% and 8.6%. This is not an unchanged-app control: every page app's Show all
 markup changed, and Corten now sends five offers initially instead of every offer in hidden
-templates. It still formats prices per request where the others write stored strings. The
+templates. It still formats prices per request where some others use stored strings or non-localized formatting. The
 page improvement is therefore not a like-for-like rendering speedup. JavaScript got worse,
 13,187 to 14,392 gzip bytes (+9.1%); no other Corten regression crosses the thresholds.
 Requests a second compare only within a round, since droplets of one size differ; instruction

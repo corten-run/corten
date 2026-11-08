@@ -11,9 +11,8 @@ Corten is pre-1.0, so any minor version may change the API.
   pre-load gate checks full pages, native forms, layout, escaping, JSON and uncached upstream
   reads in both data sources. Its repeated-pass runner and read-only report preserve provenance,
   variability, CPU and memory evidence and measurement limits. Catalog also gains a read-only
-  report. Historical result files and the pinned catalog run are untouched; nightly execution
-  is not switched to v2. Leptos's existing build-cost recipe also uses cargo-leptos's supported
-  lockfile flag, matching its image build.
+  report. Historical result files and the pinned catalog run are untouched. Leptos's existing
+  build-cost recipe also uses cargo-leptos's supported lockfile flag, matching its image build.
 
 - A separate locale-neutral catalog benchmark in `bench/catalog`: the same strings-only
   record-detail page, JSON, GET filter and related links in eighteen framework apps.
@@ -2548,6 +2547,13 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 
 ### Changed
+
+- Nightly benchmarking moves to equivalent-localization marketplace v2 from official r17,
+  with a new baseline, detached launch/collection and three short-window CPU, memory, load
+  and cold-start passes. Pages cover all three locales; locale-neutral JSON runs once per
+  source per pass. Catalog remains an optional separate diagnostic. Historical results and
+  labels are preserved, but unequal legacy localization no longer supports general speed
+  rankings; v2 comparisons require compatible rounds, not r16 or catalog c1 deltas.
 
 1. A handler never runs after its event: markup a navigation or patch inserts waits for the
    modules its handlers name, and an event that comes before its module on the first page gets
@@ -5599,6 +5605,19 @@ Corten is pre-1.0, so any minor version may change the API.
     every round and `check-app.mjs laravel` could not pass. It now reads the fixture one item at a
     time and keeps the default, and refuses a damaged fixture at boot
     ([#981 bench: Laravel cannot start with items in memory, so check-app.mjs laravel fails: decoding the 27.7 MB fixture passes PHP's 128 MB memory_limit](https://github.com/corten-run/corten/issues/981)).
+196. A form with a control named `hasAttribute` or `getAttribute` never ran its `data-on`
+    handlers (`on:submit`, `on:corten:error`, `on:corten:progress`): the control shadows the
+    form's method of that name, so the runtime's dispatch threw `node.hasAttribute is not a
+    function` and skipped them, for an event that bubbles, one that does not, and a form put in
+    after load; and a `data-patch` form with one could not be drawn again by its own answer, so
+    the write looked failed. The runtime now reads the attributes of an element it dispatches to,
+    binds, finds refs in, patches or draws again through Element's own `getAttribute` and
+    `hasAttribute`, as its submit path already did, and a patched element's id from its attribute
+    (a form's `id` is its control named `id`). Its other members are not covered yet
+    ([#1105 Form controls named after other Element members (closest, querySelectorAll, isConnected, remove, contains) still shadow what the runtime calls on a form](https://github.com/corten-run/corten/issues/1105)).
+    The runtime is 312 B smaller and 27 B larger gzipped (41,292 to 40,980 B, 14,839 to 14,866 B
+    gzip)
+    ([#1049 A form with a control named hasAttribute never runs its data-on handlers: the runtime's dispatch calls the form's own methods](https://github.com/corten-run/corten/issues/1049)).
 195. A debug build's two layout-read checks, a page that draws `later::<X>()` from a route whose
     answer type says it is not a page (`Answer::PAGE`) and a route that says `gives(X)` whose
     page did not give it, kept their message off the error page outside `corten dev` and wrote
@@ -5606,8 +5625,7 @@ Corten is pre-1.0, so any minor version may change the API.
     now the error page's `Failure::detail` in every debug build, and printed to stderr outside
     `corten dev`, as the other checks about the app's code are (a middleware that answers a page
     of its own in place of such a route's still gets a plain 500, logged and named on stderr
-    outside `corten dev`). A release
-    build still draws nothing in the place and logs it once
+    outside `corten dev`). A release build still draws nothing in the place and logs it once
     ([#1035 A debug build's layout-read errors (later::<X>() on an answer that is not a page, a gives(..) the page does not give) answer a bare 500 that names nothing outside corten dev](https://github.com/corten-run/corten/issues/1035)).
 
 ### Documentation

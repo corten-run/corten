@@ -1,5 +1,5 @@
-// Independent marketplace-v2 baseline. Never invokes fullstack runners, trend, nightly, or cleanup.
-// node bench/marketplace/run.mjs w1 [--apps corten,nextjs] [--build] [--check-only] [--passes 3]
+// Marketplace-v2: official r17 onward; wN permits explicit development subsets/checks.
+// node bench/marketplace/run.mjs r17 --build --passes 3
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -7,8 +7,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { aggregate, cpuSettings, imageProvenance, inventory, parseArgs, phases, readLoad, sources, targets } from "./run-contract.mjs";
-import { workload, locales } from "./contract.mjs";
+import { aggregate, cpuSettings, imageProvenance, inventory, parseArgs, phases, readLoad, resultSchema, sources, timedProfiles } from "./run-contract.mjs";
+import { workload } from "./contract.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
 
@@ -25,9 +25,9 @@ const folder = join(here, "results", options.round);
 mkdirSync(join(here, "results"), { recursive: true });
 // Atomic reservation: another invocation or an old failed run cannot be overwritten.
 mkdirSync(folder);
-const summary = { workload, round: options.round, runId, options, startedAt: new Date().toISOString(), complete: false, checksPassed: false, failures: [], cleanupFailures: [], apps: {}, host: { hostname: hostname(), platform: platform(), release: release() },
+const summary = { schema: resultSchema, workload, round: options.round, runId, options, startedAt: new Date().toISOString(), complete: false, checksPassed: false, failures: [], cleanupFailures: [], apps: {}, host: { hostname: hostname(), platform: platform(), release: release() },
   scope: "marketplace-v2 rich localized rendering/JSON load only; fullstack bytes, build-cost, instructions and browser-timing measurements are not ported",
-  measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", fixedRate: options.rate,
+  measurement: { profiles: timedProfiles, cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", fixedRate: options.rate,
     upstream: "single Node process, even with a two-CPU quota; high upstream CPU can limit API-mode throughput; closed-loop VUs alone do not prove app saturation",
     cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec" } };
 const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
@@ -164,7 +164,7 @@ async function cpu(containers) {
 async function load(name, target, phase, seconds, raw) {
   const container = `${runId}-k6`;
   const output = join(raw, `${phase}.json`);
-  const env = ["-e", `LOCALE=${summary.currentLocale}`, "-e", `BASE=http://${name}:8080`, "-e", `TARGET=${target}`, "-e", `DURATION=${seconds}s`, "-e", `MODE=${phase === "fixed" ? "fixed" : "closed"}`,
+  const env = [...(target === "page" ? ["-e", `LOCALE=${summary.currentLocale}`] : []), "-e", `BASE=http://${name}:8080`, "-e", `TARGET=${target}`, "-e", `DURATION=${seconds}s`, "-e", `MODE=${phase === "fixed" ? "fixed" : "closed"}`,
     "-e", `RATE=${options.rate}`, "-e", `VUS=${phase === "sat256" ? 256 : phase === "warmup" ? 32 : 64}`];
   const samples = phase === "warmup" ? [] : [name, ...(summary.currentSource === "api" ? [upstreamName] : [])];
   let before = {};
@@ -216,6 +216,7 @@ try {
   } finally { await remove(hostProbe); }
   writeFileSync(join(folder, "host.txt"), hostText + "\n");
   summary.host.cpu = hostText.split("\n").find((line) => line.startsWith("model name"))?.split(":").slice(1).join(":").trim() ?? null;
+  summary.host.onlineCpus = hostText.trim().split("\n").at(-1).trim();
   const fixture = readFileSync(join(fixtureDir, "marketplace.json"));
   const marketplace = validateMarketplace(JSON.parse(fixture));
   const generated = (await import("./fixtures.mjs")).records();
@@ -310,11 +311,10 @@ try {
     summary.tools.k6 = { image: k6Image, imageId: k6.Id, repoDigests: k6.RepoDigests };
     await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
-    for (let pass = 1; pass <= options.passes; pass++) for (const source of sources) for (const locale of locales) for (const app of rotate(options.apps, Math.floor((pass - 1) * options.apps.length / options.passes))) for (const target of targets) {
+    for (let pass = 1; pass <= options.passes; pass++) for (const { key, source, locale, target } of timedProfiles) for (const app of rotate(options.apps, Math.floor((pass - 1) * options.apps.length / options.passes))) {
       const entry = summary.apps[app];
       const name = `${runId}-${app}`;
-      const key = `${source}-${locale}-${target}`;
-      const raw = join(folder, source, app, `p${pass}-${locale}-${target}`);
+      const raw = join(folder, source, app, `p${pass}-${locale ?? "neutral"}-${target}`);
       mkdirSync(raw);
       const run = { pass, locale, startedAt: new Date().toISOString(), complete: false, phases: {} };
       (entry.runs[key] ??= []).push(run);
