@@ -6197,8 +6197,9 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
 77. Design Choice 32 records why shared state keeps `#[derive(Clone, FromRef)]` rather than a
     `#[corten::state]` attribute that writes both: `Clone` is the router's requirement and
-    `FromRef` each handler's, and the attribute would take one word off each of the examples'
-    four state types as a second spelling of the same derives
+    `FromRef` each handler's, and the attribute would take one word off the four example state
+    types that derive both while giving the three that derive `Clone` alone a third way to write
+    theirs
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)

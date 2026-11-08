@@ -1094,44 +1094,39 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
-32. <a id="choice-state-derives"></a>**An app's shared state derives `Clone` and `FromRef`, two derives that each say one
-    thing, not a state attribute that writes both.** `Clone` is axum's: its router requires its
-    state to be `Clone` (a handler's `State<Shared>` is a clone of it), so
-    `#[corten::routes(state = Shared)]` needs it whatever else the type derives. `FromRef` gives each field its own extractor
-    (`State<Market>`), which clones that field and needs nothing of the containing type. A
-    `#[corten::state]` attribute writing both would take one word off a type (the
-    `Clone` in `#[derive(Clone, FromRef)]`) that every example writes once: watchlist's
-    `Shared` and a test's, card-market's `ApiState`, listings-feed's `Shared`. It would be a
-    second spelling of the same two derives and a public concept to learn, which Values 5 and 6
-    rule out, and the generated code would be the same. `FromRef` deriving `Clone` itself is not
-    chosen either: a type whose parts a handler extracts need not be a router's state (a
-    sub-state another type's `FromRef` hands on), and the derive would then add an impl the type
-    may already write by hand, or one its fields cannot satisfy:
-
-    ```rust,ignore
-    // Kept: each derive says one thing; Clone is the router's, FromRef the handlers'.
-    #[derive(Clone, FromRef)]
-    struct Shared { catalog: Catalog, sessions: Sessions }
-
-    // Not chosen: one attribute for both.
-    #[corten::state]
-    struct Shared { catalog: Catalog, sessions: Sessions }
-    ```
-
-    Not chosen: the attribute; an option on `FromRef` (`#[from_ref(clone)]`), the same second
-    spelling in another place
+32. <a id="choice-state-derives"></a>**An app's shared state derives `Clone` and `FromRef`, two
+    derives that each say one thing, not a state attribute that writes both.** `Clone` is what
+    a router needs of its state: axum's `Router<S>` requires `S: Clone`, and
+    `#[corten::routes(state = Shared)]` clones the state for each route it adds, so the type
+    needs it whatever else it derives. `FromRef` gives each field its own extractor
+    (`State<Market>`), which clones that field and needs nothing of the containing type. Of the
+    seven examples with shared state, four types derive both (watchlist's `Shared`,
+    card-market's `ApiState`, listings-feed's `Shared`, and a test's state in watchlist's
+    `account.rs`) and three derive `Clone` alone, their handlers taking the whole state
+    (auction-room's `Auction`, deck-builder's `Builder`, seller-desk's `Desk`). A
+    `#[corten::state]` attribute would take one word off each of the four (the `Clone` in
+    `#[derive(Clone, FromRef)]`) and give the other three a choice between it and the derive
+    they write now: a third way to write state, and a concept to learn that one word a type does
+    not earn (Values 5 and 6). The generated code would be the same. `FromRef` deriving `Clone`
+    itself is not chosen either: `#[from_ref(skip)]` leaves out a field whose type need not be
+    `Clone` (the derive bounds only the fields it extracts), which a derived `Clone` would then
+    require, and a type that already writes `#[derive(Clone)]` or its own `impl Clone` would get
+    a second, conflicting impl. Not chosen: the attribute; an option on `FromRef`
+    (`#[from_ref(clone)]`), the same second spelling in another place, with the same cost on
+    skipped fields
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 
-    Stands on: platform (axum's router requires `S: Clone` of its state; a field's `FromRef`
-    requires only the field's `Clone`); reasoned (one word saved on each of four types, in
-    exchange for a second way to write them); value (one way to do each thing and a small
-    surface, Values 5 and 6).
+    Stands on: platform (axum 0.8.9's `Router<S>` requires `S: Clone`, `Cargo.lock`);
+    reasoned (Corten's `FromRef` derive bounds only the fields it extracts, `from_ref.rs`, and
+    the attribute saves one word on four types while adding a way to write all seven); value (one
+    way to do each thing and a small surface, Values 5 and 6).
 
-    Revisit when: an app's state needs more than the two derives that the attribute could write
-    for it (a bound, a check the compiler cannot make today), so the attribute would carry its own
-    meaning rather than spell two derives.
+    Revisit when: a third mechanical impl routinely goes with the pair on an app's state, or the
+    router stops requiring `Clone` of it, so an attribute would carry more than two derives'
+    worth.
 
-    Last checked: 2026-11-08, the state types of the examples and `from_ref.rs` at `c65c10ec`.
+    Last checked: 2026-11-08, the examples' state types, `from_ref.rs` and axum 0.8.9 at
+    `c65c10ec`.
 
 ## Rules
 
