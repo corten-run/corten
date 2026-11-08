@@ -19,8 +19,8 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         // Load the fixture when a server worker boots, not on its first request (and not in the
-        // artisan process that starts the workers). PHP's default memory_limit (128M) is too
-        // small for the 508 items as PHP arrays, so the in-memory runs fail; that is reported.
+        // artisan process that starts the workers). It is read one item at a time (ItemSource), so
+        // it fits PHP's default memory_limit (128M), which the app keeps.
         if (! $this->app->runningInConsole()) {
             $this->app->make(ItemSource::class);
             $this->app->make(CatalogSource::class);
