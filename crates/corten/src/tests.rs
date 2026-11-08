@@ -116,8 +116,8 @@ impl crate::Middleware for AsViewer {
     }
 }
 
-/// Stamps every answer with a request id, two `Server-Timing` values and `Vary: origin`, and answers 429 with
-/// `Retry-After` itself when asked to by `x-flood`.
+/// Stamps every answer with a request id, two `Server-Timing` values and `Vary: origin`, and
+/// answers 429 with `Retry-After` itself when asked to by `x-flood`.
 struct Stamp;
 
 impl crate::Middleware for Stamp {
@@ -146,10 +146,16 @@ impl crate::Middleware for Stamp {
 #[tokio::test]
 async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
     use axum::http::header;
-    let routes = Router::new().route(
-        "/busy",
-        get(|| async { (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "30"), (header::CONTENT_TYPE, "text/x-old")]) }),
-    );
+    async fn must_sign_in() -> crate::Result<&'static str> {
+        Err(crate::Refused::sign_in(&caller_url::SignIn))?;
+        Ok("never")
+    }
+    let routes = Router::new()
+        .route(
+            "/busy",
+            get(|| async { (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "30"), (header::CONTENT_TYPE, "text/x-old")]) }),
+        )
+        .route("/mine", get(must_sign_in));
     let router = App::new(Routes::from(routes)).error_page(test_error_page, ()).middleware(Stamp).router();
     for mode in [None, Some("nav")] {
         for (uri, flood, status, retry) in
@@ -177,6 +183,18 @@ async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
             let body = res.into_body().collect().await.unwrap().to_bytes();
             assert!(String::from_utf8_lossy(&body).contains("<h1>"), "{at}: the error page");
         }
+        // A refusal that sends the caller to sign in keeps them too, and varies on both, once each.
+        let mut req = Request::get("/mine").header("accept", "text/html");
+        if let Some(mode) = mode {
+            req = req.header("corten", mode);
+        }
+        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!((res.status(), &res.headers()[header::LOCATION]), (StatusCode::SEE_OTHER, &"/sign-in"), "{mode:?}");
+        assert_eq!(res.headers()["x-request-id"], "r-1", "{mode:?}");
+        let vary: Vec<_> =
+            res.headers().get_all(header::VARY).iter().flat_map(|v| v.to_str().unwrap().split(", ")).collect();
+        assert_eq!(vary.iter().filter(|v| **v == "origin").count(), 1, "{mode:?}: {vary:?}");
+        assert_eq!(vary.iter().filter(|v| **v == "corten").count(), 1, "{mode:?}: {vary:?}");
     }
 }
 
