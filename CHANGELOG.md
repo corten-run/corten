@@ -2430,6 +2430,21 @@ Corten is pre-1.0, so any minor version may change the API.
     a header timeout and a cap of 1,000 connections, which `conform-hold.mjs` probes as two new
     columns of the tier's matrix. Corten and axum-maud are in it so far (axum-maud with
     tower-http's layers); card-market reads `MAX_CONNECTIONS` into `App::max_connections`.
+267. `bench/fullstack` has a hardening step
+    ([#808 bench/fullstack measures only throughput and latency, not how each server holds up against slow clients, oversized requests and connection floods](https://github.com/corten-run/corten/issues/808)):
+    `harden.mjs` runs six phases against each freshly started app (unfinished heads, heads and
+    bodies sent a byte a second, clients that stop reading, idle connections, oversized
+    requests) beside a well-behaved client, and writes whether the app stayed up (or degraded),
+    what it did with the abusive connections and what it answered them, the client's latency and
+    the app's memory and CPU to `results/<round>/hardening.json`; `droplet.mjs --suite harden`
+    runs it on its own cadence, a run with a phase that could not run is not a finished one, and
+    a rerun of some phases records the commit each phase ran at and keeps the result it replaces.
+    The README reports a local run of nine apps (measured, one run each): Corten closed every
+    abusive connection in every phase and took the least CPU against clients that stop reading,
+    and it falls short where a trickled body is closed by the deadline (10 s in card-market) and
+    not a minimum rate, a client that stops reading by the 60 s send timeout, where Kestrel's
+    minimum rates close both sooner, and a 16 MiB body's 413 was lost to the connection closing in
+    1 of the 3 committed local passes.
 268. `bench/fullstack`'s matched tier reaches its apps through an edge
     ([#809 bench/fullstack serves every app over plain HTTP/1.1 with no proxy, though Corten's design expects one for TLS and HTTP/2](https://github.com/corten-run/corten/issues/809)):
     one pinned nginx with one config (`edge.mjs`, the deploy guide's less its cache, with the
@@ -2438,8 +2453,8 @@ Corten is pre-1.0, so any minor version may change the API.
     and browser pass measure an app as it is deployed. Each phase counts the edge's CPU beside the
     app's (`edgePerCpuSecond`, `edgeCpuUsedPct`), and k6's in every tier (`k6CpuUsedPct`); the
     summary marks a phase the edge or k6 limited (EDGE-BOUND, LOAD-BOUND) and, through the edge,
-    a saturation phase whose app used less than 90% of its core (APP-IDLE), as every local one was. A matched round
-    runs on a c-16, and `droplet.mjs --edge off` runs it reached directly, to compare. The defaults
+    a saturation phase whose app used less than 90% of its core (APP-IDLE), as every local one was. A matched full-stack
+    round runs on a c-16, and `droplet.mjs --edge off` runs it reached directly, to compare. The defaults
     tier stays direct.
 269. `bench/fullstack/REVIEW.md` tells a framework's maintainers what the comparison measures,
     what they may change in their app (settings a production deployment uses, the app's own code)
@@ -2447,6 +2462,25 @@ Corten is pre-1.0, so any minor version may change the API.
     guidance), and how to propose it; the README's app table says whether each app has been
     reviewed by its maintainers (none has been reviewed in full yet)
     ([#814 No one who maintains the other frameworks has reviewed their bench/fullstack apps, so a fair-comparison claim rests on our own reading of each](https://github.com/corten-run/corten/issues/814)).
+270. `bench/fullstack` has a mixed load phase
+    ([#813 Every bench/fullstack load phase hits one endpoint, so no phase exercises deadlines, write limits and caching together as a real site would](https://github.com/corten-run/corten/issues/813)):
+    with items from the item API, each app's item-page phases end with 60 s at the fixed rate as
+    70% item pages (2% of them an item the item API answers in 40 s, past the 35 s the matched
+    profile's deadline must answer within), 20% JSON, 5% the home page and 5% the item page's form
+    posted from k6's one address, all asking for compression, so a deadline, a write limit and
+    compression act under load together (`mixed-load.js`, `mixed.mjs`). One post is checked
+    before the phase. The summary's Mixed table gives each kind of request its latency and its
+    answers by class (2xx and 3xx, 429, other 4xx, 5xx, none), with the app's CPU and peak memory.
+    A round's api page call has 220 minutes and its unit 23 hours.
+271. The button that sends a form is `aria-busy="true"` with the form until the answer is drawn:
+    a `data-patch` form's submitter until its patch comes, and a GET form's until the page it
+    started is swapped in, a button outside its form (`form=`, a row's action for one form the
+    rows share) included, and through a write's answer that sends the browser to another page,
+    until that page is drawn. Another button's newer GET submit of the same form takes the marks,
+    and one pressed while a write is on its way is marked beside it until it sends. The
+    kit's `Button` draws the state: a ring after its label in the text's color, turning unless
+    the user asks for less motion, kept under forced colors, with a `progress` cursor
+    ([#1063 A data-patch form's busy state lands only on the form, so a submit button outside it (form=) and the kit's Button show nothing while a server-drawn sheet loads](https://github.com/corten-run/corten/issues/1063)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3945,6 +3979,16 @@ Corten is pre-1.0, so any minor version may change the API.
     its cursor raw (`Last-Event-ID`, `Replica::cursor`) could follow it. An app that names its
     generation from configuration checks it against the same set (Fixed 188)
     ([#1067 A feed generation with a character encodeURIComponent escapes never goes live: Since does not decode ?since=, so subscribe() loops snapshot and sync about 190 times a second](https://github.com/corten-run/corten/issues/1067)).
+166. The kit's `Gap` has a sixth value, `Gap::App`, which prints only `.stack` or `.cluster`: the
+    app's own `gap` utility or class beside it (`class={(Stack { gap: Gap::App }, gap_3())}`) is
+    then the only gap, so an app on its own spacing scale keeps the kit's column or wrapping row
+    and its dropped child margins instead of a page rule of its own. A literal gap beside the
+    utility sets `gap` twice at one specificity, so the stylesheet linked last wins: use `App`
+    there. The five
+    literal gaps are unchanged. A `match` over `Gap` in an app's code needs the new arm; `corten
+    ui diff` shows the change to a copied `stack.rs`. The ui-gallery's payout row uses it with the
+    page's own .75rem
+    ([#1065 Kit Stack and Cluster always print a literal gap, so an app on its own token spacing scale cannot use them with its gap utility](https://github.com/corten-run/corten/issues/1065)).
 167. A body read as it arrives (`pieces_up_to`, `Upload`) is also `Stalled` (408) once the client
     falls its idle time behind 240 bytes a second in all (Kestrel's minimum body rate), counting
     only the time spent waiting for the client. A byte now and then reset the idle time before,
@@ -5505,6 +5549,21 @@ Corten is pre-1.0, so any minor version may change the API.
     protocol on its own retry schedule, beside a Chromium page running `subscribe()` that lost
     nothing
     ([#1068 subscribe()'s resync paths (sync, a seq gap, a stream answered with an error) have no browser smoke check, and the failover benchmark counts a Node copy of the client](https://github.com/corten-run/corten/issues/1068)).
+191. A closed `<dialog>` an app draws in place from a breakpoint (a filters rail that is a modal
+    on a phone) was hidden by the components' stylesheet's `dialog:not([open])` rule with no error
+    and no failed check, so the rail was simply missing on wide screens. `corten dev` now warns in
+    the console of each closed dialog or popover that the rule keeps hidden while a rule inside
+    `@media` or `@container` gives it a `display`, at the width the page is at or any other,
+    nested rules included, with the selector, the query and a rule for each reading: drawn in
+    place there (`.filters:not([open],[hidden]) { display: block !important }` in that query, which
+    leaves a rail the app hides with `hidden` hidden), or the open
+    one's look, written under `[open]`, as the kit's dialog and sheet are. The page cannot tell the
+    two apart, so it is a warning, not an error. A look outside a query (a card on a dialog) and
+    one under `@supports` are still kept hidden while closed and are not reported; the styles
+    guide gives both rules. It is a check of `/corten/dev.js`, which only a dev server serves, so
+    a production page is unchanged; `scripts/smoke-dev.mjs` checks what it warns of and what it
+    does not
+    ([#1081 A closed dialog an app draws in place from a breakpoint (a filters rail) is hidden by components.css's !important dialog rule, with no error and no failed check](https://github.com/corten-run/corten/issues/1081)).
 192. Nothing answered `/favicon.ico`, which browsers ask for on their own for a PDF, an image or
     JSON opened in a tab, so each such request was the app's 404 page with its layout reads. The
     path now answers the static directory's `favicon.ico`, else its `favicon.svg` (the icon

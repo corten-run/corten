@@ -12,6 +12,7 @@ import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
+import { slowMs as lateMs } from "../mixed.mjs";
 
 const [file = "/fixtures/items.json", port = "8080", processes = String(availableParallelism())] = process.argv.slice(2);
 const count = Math.max(1, Math.floor(Number(processes)) || 1);
@@ -33,13 +34,20 @@ if (count > 1 && !process.env.ITEM_API_SERVER) {
 } else {
   const items = new Map(Object.entries(JSON.parse(readFileSync(file, "utf8"))).map(([id, item]) => [id, Buffer.from(JSON.stringify(item))]));
   const prefix = "/api/discovery/items/";
+  // An upstream that answers late (the mixed phase, mixed.mjs): `item_slow_<n>` is item_<n>,
+  // answered after SLOW_MS (mixed.mjs's `slowMs` unless set, for a test).
+  const slowMs = Number(process.env.SLOW_MS ?? lateMs);
   createServer((req, res) => {
-    const body = req.url?.startsWith(prefix) ? items.get(decodeURIComponent(req.url.slice(prefix.length))) : undefined;
+    const id = req.url?.startsWith(prefix) ? decodeURIComponent(req.url.slice(prefix.length)) : "";
+    const slow = /^item_slow_(\d+)$/.exec(id);
+    const body = items.get(slow ? `item_${slow[1]}` : id);
     if (!body) {
       res.writeHead(404).end();
       return;
     }
-    res.writeHead(200, { "content-type": "application/json", "content-length": body.length }).end(body);
+    const send = () => res.writeHead(200, { "content-type": "application/json", "content-length": body.length }).end(body);
+    if (slow) setTimeout(send, slowMs);
+    else send();
   }).listen({ port: Number(port), host: "0.0.0.0", reusePort: count > 1 }, () => {
     if (process.send) process.send(items.size);
     else console.log(`item API: ${items.size} items on ${port}`);

@@ -28,6 +28,7 @@ export const KEPT = new Set([
   "instructions.json",
   "browser.json",
   "conformance.json",
+  "hardening.json",
   "trend.json",
 ]);
 export const ARCHIVE = "raw.tar.xz";

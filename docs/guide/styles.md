@@ -64,7 +64,16 @@ look that sets `display` (a card) can go on either and is drawn only while it is
 outranks `!important`, so animate a close that way: a `@keyframes` animation of `display` is
 held at `none`. A closed dialog meant to stay drawn (to fade out) takes the app's own
 `!important` rule with more weight than an attribute
-(`dialog.fading:not([open]) { display: block !important }`). When only areas have stylesheets,
+(`dialog.fading:not([open],[hidden]) { display: block !important }`, which leaves one with
+`hidden` hidden). So does a closed dialog drawn in
+place from a breakpoint, a filters rail that is a modal on a phone: in its component's file, inside
+the media query, `.filters:not([open],[hidden]) { display: block !important }`. A look for the open
+dialog at a width goes under `[open]` (`.modal[open] { display: grid }`), as the kit's dialog and
+sheet do. Since nothing fails when a rail is missing (the page answers, the rail is simply not
+drawn), `corten dev` warns in the console of each closed dialog or popover that a rule inside
+`@media` or `@container` gives a `display`, at the width the page is at or any other, with both
+rules: the page cannot tell a rail from an open look written without `[open]`. When only areas
+have stylesheets,
 each area's file starts with these rules. An app with no component stylesheet has neither file,
 so if its `static/style.css` gives a hidden element, a popover or a dialog a `display` (styling
 corten-ui's parts there, say), it adds them itself:
@@ -407,7 +416,9 @@ utilities for layout that varies from page to page, and a component's stylesheet
 A value's own function (`gap_3()`) is its class as static text, with no match: moving the
 watchlist's fixed values to them took its home page from 62,827 instructions a request to 62,162.
 A helper that takes a value (`stack(space)`) keeps the utility's function, which costs a match
-and keeps the scale's type. States a utility cannot
+and keeps the scale's type. An app with the kit's `Stack` and `Cluster` builds such a helper on
+them, `(Cluster { gap: Gap::App }, gap(space))`, so the row keeps the kit's layout and dropped
+child margins and its gap is the utility's ([kit guide](kit.md)). States a utility cannot
 say (hover, focus, the current link) and element defaults stay in `static/style.css`, and a
 component with rules of its own (`LivePrices`) keeps its stylesheet. A utility function's
 classes are static text chosen by a match, so writing them costs what writing a class does.

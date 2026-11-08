@@ -485,7 +485,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                     <section class={(CardPanel {}, Stack { gap: Gap::Md })} aria-labelledby={PayoutTitle}>
                         <h2 class={Title} id={PayoutTitle}>"Next payout"</h2>
                         // The shape the payout's live region shows before its first value.
-                        <div class={Payout} aria-busy="true">
+                        // A gap off the kit's scale: `Gap::App` sets none, so the page's `.payout` is the one.
+                        <div class={(Cluster { gap: Gap::App }, Payout)} aria-busy="true">
                             <span class={VisuallyHidden {}}>"Working out your next payout."</span>
                             <Skeleton shape={SkeletonShape::Circle} />
                             <div class={Lines}>
