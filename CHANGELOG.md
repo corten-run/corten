@@ -2604,6 +2604,15 @@ Corten is pre-1.0, so any minor version may change the API.
     one of eighteen. Neither has a build step, so build-cost rows say so.
     They take Spring Boot's and Django's places among the matched tier's four most used frameworks
     ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
+284. The kit's `StatusTone` has `Text`, the color of the text around the dot: in a badge, the
+    badge's, so `<span class={Badge { tone, .. }}><StatusDot tone={StatusTone::Text} />"Open"</span>`
+    writes a computed tone once, on the badge, and the dot cannot disagree with it. It shows on a
+    `Solid` badge's fill too, where a dot in the badge's own tone was the fill's color and could not
+    be seen; the kit doc and guide say a dot in a badge takes it. `LiveDot` takes it as well. Not
+    breaking: the other tones are unchanged, and `corten ui add status_dot --merge` takes `Text`.
+    The ui-gallery's badges use it, and its smoke test checks the dot is the badge's text color in a
+    soft badge and a solid one
+    ([#1092 Kit StatusDot and Badge take separate tone enums, so a badge with a computed tone writes it twice and a mismatched pair compiles](https://github.com/corten-run/corten/issues/1092)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

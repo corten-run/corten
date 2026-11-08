@@ -2,8 +2,16 @@
 //! A dot in a status's color, before the words that name it:
 //!
 //! ```rust,ignore
-//! <span class={Badge { tone: BadgeTone::Success, emphasis: BadgeEmphasis::Soft }}>
-//!     <StatusDot tone={StatusTone::Success} />
+//! <p><StatusDot tone={StatusTone::Success} />" Open"</p>
+//! ```
+//!
+//! In a badge the dot takes the badge's text color, `StatusTone::Text`, so the status's tone is
+//! written once, on the badge, and the dot shows in a `Solid` badge too (one in the badge's own
+//! tone would be the color of its fill):
+//!
+//! ```rust,ignore
+//! <span class={Badge { tone, emphasis: BadgeEmphasis::Solid }}>
+//!     <StatusDot tone={StatusTone::Text} />
 //!     "Open"
 //! </span>
 //! ```
@@ -23,7 +31,7 @@
 //! ```rust,ignore
 //! <corten-live src={url::LotFeed { id }}>
 //!     <span class={Badge { tone: BadgeTone::Info, emphasis: BadgeEmphasis::Soft }}>
-//!         <LiveDot tone={StatusTone::Info} />
+//!         <LiveDot tone={StatusTone::Text} />
 //!         <span class={WhenLive}>"Live"</span>
 //!         <span class={WhenNot}>"Not live"</span>
 //!     </span>
@@ -50,6 +58,8 @@ use corten::prelude::*;
 /// The dot's color. Each is a class in `status_dot.css`, so one without a rule does not compile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatusTone {
+    /// The color of the text around it: a badge's, in a badge.
+    Text,
     Neutral,
     Info,
     Success,
@@ -70,6 +80,7 @@ pub enum StatusTone {
 #[component(css)]
 pub fn StatusDot(tone: StatusTone) -> impl Render {
     let tone = match tone {
+        StatusTone::Text => Text,
         StatusTone::Neutral => Neutral,
         StatusTone::Info => Info,
         StatusTone::Success => Success,
@@ -83,6 +94,7 @@ pub fn StatusDot(tone: StatusTone) -> impl Render {
 #[component(css = StatusDot)]
 pub fn LiveDot(tone: StatusTone) -> impl Render {
     let tone = match tone {
+        StatusTone::Text => Text,
         StatusTone::Neutral => Neutral,
         StatusTone::Info => Info,
         StatusTone::Success => Success,
