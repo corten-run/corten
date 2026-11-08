@@ -1854,7 +1854,7 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
 | `identify` says | Page, or a form post without JavaScript | Form patch | Data client, JSON route |
 |---|---|---|---|
 | `Ok(caller)` | the handler runs | the handler runs | the handler runs |
-| `Refused::sign_in(&route)` | 303 to the route | `corten-location`, and the runtime goes there | JSON 401 |
+| `Refused::sign_in(&route)` | 303 to the route (`corten-location` to the runtime's fetch when the route is on another site or names a place) | `corten-location`, and the runtime goes there | JSON 401 |
 | `Refused::unauthorized()`, `Refused::forbidden()` | the error page, `Failure::Refused` (401, 403) | the error page, swapped in | JSON 401, 403 |
 | `Refused::too_many(wait)` | the error page, `Failure::Refused` (429), with `Retry-After` | the error page, swapped in | JSON 429, with `Retry-After` |
 | `Refused::unavailable(error)` | the error page, `Failure::Unidentified` (503) | the error page, swapped in | JSON 503 |
