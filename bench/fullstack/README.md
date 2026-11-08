@@ -1034,19 +1034,20 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 ### The image's allocator (Docker Desktop, 2026-11-08)
 
 The evidence behind [design Choice 23](../../docs/design.md#choice-jemalloc-image), card-market built
-at `81f1f8ef` with only its allocator's environment changed (each folder's JSON records every
-image's id and settings):
+at `81f1f8ef` with only its allocator's environment changed (the flood and fault folders' JSON records every image's id and settings; the table gives the
+`ab.mjs` folders'):
 
 | Folder | What | Images |
 |---|---|---|
 | `results/flood-memory`, `-mmap`, `-tuned` | `flood-memory.mjs`: eight floods of 4,000 unfinished heads, three runs each | jemalloc unset, `background_thread:true`, and that with `tcache_max:65536`; glibc, with two arenas or one, and with a 16 KiB mmap threshold |
 | `results/alloc-faults` | `alloc-faults.mjs`: page faults and CPU a request, three encodings, three rounds | jemalloc unset (`cm-p1011-je`), the tuned image as committed (`corten-card-market-p1011b`), glibc (`cm-p1011-glibc`) |
+| `results/alloc-idle` | `alloc-faults.mjs` with `IDLE_SECONDS=60`: CPU and threads of an untouched app, three rounds | jemalloc unset, the tuned image, and that with `max_background_threads:1` (`jecap1`) |
 | `results/alloc-faults-br` | the same, brotli only | jemalloc unset, `background_thread:true` (`jebg`), no decay (`jenodecay`), `thp:never`, `retain:false`, `tcache_max` 64 KiB and 8 MiB, the tuned image, glibc |
 | `results/ab-jemalloc` | `ab.mjs`, three encodings, three rounds | jemalloc unset (`je`), `background_thread:true` (`jebg`), glibc |
 | `results/ab-jemalloc-br` | `ab.mjs`, brotli only | jemalloc unset, `oversize_threshold` 0 (`jeos0`) and 64 MiB (`jeos64`), glibc |
 | `results/ab-jemalloc-tuned` | `ab.mjs`, three encodings, three rounds | jemalloc unset, `background_thread:true,tcache_max:65536` (`jecand`), glibc |
 
-All ran on a desktop with other containers running, so the `ab.mjs` rounds moved by up to 2.7
+All ran on a desktop with other containers running, so the `ab.mjs` rounds moved by up to 2.4
 times between rounds of one image; the fault counts repeat to 0.1 a request. A quiet host has not
 run them.
 

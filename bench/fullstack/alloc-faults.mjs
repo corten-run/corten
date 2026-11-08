@@ -8,7 +8,9 @@
 // the difference over the requests (ticks assumed 100 a second, Linux's USER_HZ). A figure is an
 // average over everything the server did in that window, so it repeats to about 0.1 a request;
 // CPU time is coarse and moves with whatever else the machine runs. ROUNDS (3 unless set) repeats
-// every image and encoding in turn. Writes <out-dir>/summary.json (each image's id and allocator
+// every image and encoding in turn. With IDLE_SECONDS set it sends nothing and instead reads, per
+// image and round, the CPU an untouched app takes over that many seconds (cgroup cpu.stat's
+// usage_usec) and its thread count, for an allocator's own threads. Writes <out-dir>/summary.json (each image's id and allocator
 // environment, and every row) after each row; a request that is not answered 200 stops it.
 // Inside the probe it is run as: node alloc-faults.mjs --load <base> <encoding> <requests>
 import { spawnSync } from "node:child_process";
@@ -64,8 +66,18 @@ const stat = () => {
 const load = (/** @type {string} */ encoding, /** @type {number} */ n) => {
   const r = docker("run", "--rm", "--network", network, "-v", here + ":/b:ro", "node:24-alpine", "node", "/b/alloc-faults.mjs", "--load", `http://${app}:8080`, encoding, String(n));
   if (r.status !== 0) throw new Error("load: " + r.stderr);
-  return Number(r.stdout);
+  const failed = Number(r.stdout);
+  if (!Number.isInteger(failed)) throw new Error("load: " + r.stdout);
+  return failed;
 };
+/** The app's cgroup CPU time so far, in microseconds, and its thread count. */
+const idleStat = () => {
+  const cpu = docker("exec", app, "sh", "-c", "grep '^usage_usec ' /sys/fs/cgroup/cpu.stat; ls /proc/1/task | wc -l");
+  if (cpu.status !== 0) throw new Error("idle: " + cpu.stderr);
+  const [usage, threads] = cpu.stdout.trim().split("\n");
+  return { usec: Number(usage.split(" ")[1]), threads: Number(threads) };
+};
+const idleSeconds = process.env.IDLE_SECONDS === undefined ? 0 : whole("IDLE_SECONDS", 60);
 
 /** Each image's id and the allocator settings in its environment. */
 const described = Object.fromEntries(images.map((image) => {
@@ -75,12 +87,26 @@ const described = Object.fromEntries(images.map((image) => {
   const env = /** @type {string[]} */ (info.Config.Env ?? []).filter((e) => /^(LD_PRELOAD|MALLOC_CONF|GLIBC_TUNABLES)=/.test(e));
   return [image, { id: info.Id, env }];
 }));
-/** @type {{ round: number, image: string, enc: string, faults: number, cpuMicros: number, failed: number }[]} */
+/** @type {object[]} */
 const rows = [];
-const save = () => writeFileSync(join(dir, "summary.json"), JSON.stringify({ requests, rounds, images: described, rows }, null, 1));
+const save = () => writeFileSync(join(dir, "summary.json"), JSON.stringify({ requests, rounds, idleSeconds, images: described, rows }, null, 1));
 try {
   for (let round = 1; round <= rounds; round++) {
     for (const image of images) {
+      if (idleSeconds > 0) {
+        docker("rm", "-f", app);
+        const run = docker("run", "-d", "--name", app, "--network", network, "--cpus", "1", "--memory", "1g", "-v", `${join(here, "fixtures")}:/fixtures:ro`, "-e", "ITEM_SOURCE=fixture", "-e", "FIXTURE_PATH=/fixtures/items.json", "-e", "PORT=8080", "-e", `HOSTS=${app}`, image);
+        if (run.status !== 0) throw new Error(run.stderr);
+        await sleep(6000);
+        const before = idleStat();
+        await sleep(idleSeconds * 1000);
+        const after = idleStat();
+        const row = { round, image, idleCpuMs: Math.round((after.usec - before.usec) / 1000), seconds: idleSeconds, threads: after.threads };
+        rows.push(row);
+        save();
+        console.log(JSON.stringify(row));
+        continue;
+      }
       for (const [enc, encoding] of Object.entries(encodings)) {
         docker("rm", "-f", app);
         const run = docker("run", "-d", "--name", app, "--network", network, "--cpus", "1", "--memory", "1g", "-v", `${join(here, "fixtures")}:/fixtures:ro`, "-e", "ITEM_SOURCE=fixture", "-e", "FIXTURE_PATH=/fixtures/items.json", "-e", "PORT=8080", "-e", `HOSTS=${app}`, image);

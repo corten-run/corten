@@ -52,6 +52,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const [out = "results/flood-memory", image, runsArg = "3", floodsArg = "8"] = process.argv.slice(2);
 if (!image) throw new Error("usage: node flood-memory.mjs <out-dir> <image> [runs] [floods]");
 const runs = Number(runsArg), floods = Number(floodsArg);
+if (!Number.isInteger(runs) || runs < 1 || !Number.isInteger(floods) || floods < 1) throw new Error("runs and floods are whole numbers above zero");
 const dir = join(here, out);
 mkdirSync(dir, { recursive: true });
 const docker = (/** @type {string[]} */ ...args) => spawnSync("docker", args, { encoding: "utf8", maxBuffer: 1 << 24 });
