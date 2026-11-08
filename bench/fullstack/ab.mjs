@@ -6,8 +6,8 @@
 // JSON too; the summary gives each image's median and range of CPU use and throughput, and of
 // requests per CPU-second in each phase, the app's CPU counted from its cgroup (cpu-time.mjs).
 // On a bench host BENCH_APP_CPUS and BENCH_FIXTURE_LOAD_CPUS (else BENCH_LOAD_CPUS) pin the app and
-// k6 as a round does for an app serving from memory (apps.mjs). A failed k6 run stops the run with
-// the rows so far in the summary.
+// k6 as a round does for an app serving from memory (apps.mjs). A failed run stops with the rows so
+// far in summary.partial.json, leaving an earlier summary.json as it was.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -34,6 +34,7 @@ if (!targets.length || targets.some((t) => t !== "page" && t !== "json") || new 
 const rounds = Number(process.env.AB_ROUNDS ?? 3);
 if (!Number.isInteger(rounds) || rounds < 1) throw new Error("AB_ROUNDS is a whole number above zero");
 const rows = [];
+let finished = false;
 
 try {
   for (let round = 1; round <= rounds; round++) {
@@ -76,9 +77,10 @@ try {
       docker("rm", "-f", "ab-app");
     }
   }
+  finished = true;
 } finally {
   docker("rm", "-f", "ab-app");
-  writeFileSync(join(dir, "summary.json"), JSON.stringify(rows, null, 1));
+  writeFileSync(join(dir, finished ? "summary.json" : "summary.partial.json"), JSON.stringify(rows, null, 1));
 }
 const median = (/** @type {number[]} */ xs) => { const s = [...xs].sort((a, b) => a - b); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
 const spread = (/** @type {number[]} */ xs) => `${median(xs)} (${Math.min(...xs)} to ${Math.max(...xs)})`;

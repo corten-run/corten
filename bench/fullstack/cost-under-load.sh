@@ -11,7 +11,9 @@
 # built from; an image already built is used only when that hash is this source's.
 # VARIANTS (as-is and every patch), OUT (results/cost-under-load), AB_ROUNDS (3), BENCH_APP_CPUS
 # and BENCH_FIXTURE_LOAD_CPUS (else BENCH_LOAD_CPUS) as a round sets them. OUT/source.txt records
-# the commit, the source hash, each image's id and the CPU settings the run had.
+# the commit (marked -dirty when the tree differs from it), the source hash, each image's id and
+# the CPU settings the run had. The hash covers this source, not the Dockerfile's base image or
+# packages, so after a base image update remove the cbd-* images before a run.
 set -eo pipefail
 here=bench/fullstack
 [ -s $here/fixtures/items.json ] || { echo "no $here/fixtures/items.json: run fixtures/fetch.mjs, or copy one" >&2; exit 1; }
@@ -36,7 +38,7 @@ fi
 out=bench/fullstack/${OUT:-results/cost-under-load}
 mkdir -p "$out"
 {
-  echo "commit $(git rev-parse HEAD 2>/dev/null || echo unknown)"
+  echo "commit $(git describe --always --dirty --abbrev=40 2>/dev/null || echo unknown)"
   echo "source $src_hash"
   for i in "${images[@]}"; do echo "image $i $(docker image inspect -f '{{.Id}}' "$i")"; done
   echo "BENCH_APP_CPUS=${BENCH_APP_CPUS-} BENCH_FIXTURE_LOAD_CPUS=${BENCH_FIXTURE_LOAD_CPUS-} BENCH_LOAD_CPUS=${BENCH_LOAD_CPUS-} AB_ROUNDS=${AB_ROUNDS-}"

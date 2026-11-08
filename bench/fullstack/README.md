@@ -1024,13 +1024,16 @@ microseconds (median) and up to 9 in either phase, so a row whose range crosses 
 that can be seen. Each round ran the build as it is first and the others after it in one order, so
 a drift within a round reads as a cost on every row: for a browser's page at 64 users the build as
 it is was the slowest of the nine in two rounds of three, and every default there shows a cost.
-`ab.mjs` now starts each round one image later, which moves the first slot but does not put the
-build as it is beside each variant, so it lessens this rather than removing it. k6 had the
+`ab.mjs` now starts each round one image later, which removes a cost on the first slot alone (what
+this data shows) but not a drift across the round, which needs the build as it is beside each
+variant. k6 had the
 round's four load CPUs (`BENCH_LOAD_CPUS`), not the six a round gives an app serving from memory
 (`BENCH_FIXTURE_LOAD_CPUS`, which `ab.mjs` uses now). The images and results carry no record of
 the source they were built from; `cost-under-load.sh` now labels the images and writes
-`source.txt` beside the results. These numbers are on a different host and counter (the app's
-cgroup) than the r16 rounds' 47 microseconds a page (`docker stats`), so the two are not compared.
+`source.txt` beside the results. The page's 37.5 microseconds on `identity` are about a fifth below
+the r16 round's 47 (21,195 a CPU-second), from the same cgroup counter, CPU model and Dockerfile;
+the droplet, the commit, the round's settings and k6's phase and cores differ, and which of them
+accounts for the gap was not measured.
 
 At 64 users, CPU microseconds a request (the app's CPU was 86-101% busy: k6, on its four CPUs,
 did not keep it saturated, so these are CPU a request, not the most it can serve):
@@ -1069,10 +1072,10 @@ for a browser it is 45 of the page's 85 microseconds at 64 users (53%, so the pa
 requests a CPU-second compressed against 24,900 without) and 25 of the JSON's 57 (44%), less than
 the share callgrind counts above (68% and 72% of user instructions), since these include the
 kernel's part of a request, which callgrind does not count. The page's `ETag` for a browser
-measures 6.1 (4.3-6.5) microseconds at 64 users, but every default in that column measures 0.4 to
-9.5, so this run does not separate it from the order; callgrind's 7.7% of the page's instructions
-is the evidence for it. Every other cell is under 10 microseconds. Of the 58, 14 have a range clear
-of zero, 6 of them below it, a saving that removing work cannot make, so a range clear of zero by a
+measures 6.1 (4.3-6.5) microseconds at 64 users, but every other default in that column measures
+0.4 to 9.5, so this run does not separate it from the order; callgrind's 7.7% of the page's instructions
+is the evidence for it. Every other cell is under 10 microseconds. Of those 58 (the 64 less compression and the
+page's `ETag` for a browser), 14 have a range clear of zero, 6 of them below it, a saving that removing work cannot make, so a range clear of zero by a
 few microseconds is within these runs' drift. The instruction counts fit: callgrind gives the
 security headers 5.5% of an `identity` page and compression 3.2%, about 2 and 1.2 of its 37.5
 microseconds, at the edge of what these runs resolve. On the rounds' `identity` requests no default
