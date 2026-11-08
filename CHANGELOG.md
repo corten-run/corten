@@ -6,6 +6,14 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
+  money, ratings and counts during each request in English, French and German. An independent
+  pre-load gate checks full pages, native forms, layout, escaping, JSON and uncached upstream
+  reads in both data sources. Its repeated-pass runner and read-only report preserve provenance,
+  variability, CPU and memory evidence and measurement limits. Catalog also gains a read-only
+  report. Historical result files and the pinned catalog run are untouched. Leptos's existing
+  build-cost recipe also uses cargo-leptos's supported lockfile flag, matching its image build.
+
 - A separate locale-neutral catalog benchmark in `bench/catalog`: the same strings-only
   record-detail page, JSON, GET filter and related links in eighteen framework apps.
   Correctness checks precede load tests; catalog rounds have their own baseline rather than
@@ -2481,6 +2489,13 @@ Corten is pre-1.0, so any minor version may change the API.
     kit's `Button` draws the state: a ring after its label in the text's color, turning unless
     the user asks for less motion, kept under forced colors, with a `progress` cursor
     ([#1063 A data-patch form's busy state lands only on the form, so a submit button outside it (form=) and the kit's Button show nothing while a server-drawn sheet loads](https://github.com/corten-run/corten/issues/1063)).
+272. The kit's `pagination` has `PreviousNext`, Previous and Next alone in `Pagination`'s look,
+    for a list that knows only the page before and the page after (a cursor, or the previous and
+    next links an API answers with): `previous` and `next` are each an `Option<&dyn Href>`, a
+    link with `rel="prev"` or `rel="next"`, and a `None` one a disabled step. It shares
+    `pagination.css`, so a copied `pagination.rs` takes it from `corten ui diff`. The
+    ui-gallery's payouts card pages by it
+    ([#1073 Kit Pagination needs every page's link, so a list paged by previous and next links (a cursor, or the API's own) cannot use it](https://github.com/corten-run/corten/issues/1073)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2532,6 +2547,13 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 
 ### Changed
+
+- Nightly benchmarking moves to equivalent-localization marketplace v2 from official r17,
+  with a new baseline, detached launch/collection and three short-window CPU, memory, load
+  and cold-start passes. Pages cover all three locales; locale-neutral JSON runs once per
+  source per pass. Catalog remains an optional separate diagnostic. Historical results and
+  labels are preserved, but unequal legacy localization no longer supports general speed
+  rankings; v2 comparisons require compatible rounds, not r16 or catalog c1 deltas.
 
 1. A handler never runs after its event: markup a navigation or patch inserts waits for the
    modules its handlers name, and an event that comes before its module on the first page gets
@@ -3989,8 +4011,19 @@ Corten is pre-1.0, so any minor version may change the API.
     ui diff` shows the change to a copied `stack.rs`. The ui-gallery's payout row uses it with the
     page's own .75rem
     ([#1065 Kit Stack and Cluster always print a literal gap, so an app on its own token spacing scale cannot use them with its gap utility](https://github.com/corten-run/corten/issues/1065)).
+167. A body read as it arrives (`pieces_up_to`, `Upload`) is also `Stalled` (408) once the client
+    falls its idle time behind 240 bytes a second in all (Kestrel's minimum body rate), counting
+    only the time spent waiting for the client. A byte now and then reset the idle time before,
+    so on a route with a long deadline or none (a large upload's) a client trickling the body
+    held the connection and the request as long as it liked. A client sending at any real speed
+    is not affected; `idle(None)` turns the rate off with the idle time. A read dropped and begun
+    again (a `chunk()` inside a `timeout` or `select!`) no longer starts the idle time again, so a
+    client that went quiet is given up on after the idle time however the handler reads
+    ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
 
 ### Fixed
+- The fixed favicon keeps its weak content tag when background compression finishes, so a
+  conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
 
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -5567,6 +5600,24 @@ Corten is pre-1.0, so any minor version may change the API.
     ETag is now compared as `If-None-Match` is, weakly and in a list or as `*`, so a proxy that
     marks it weak gets a 304 where it got the whole file
     ([#1056 Nothing answers /favicon.ico, so each browser request for it is the app's 404 page with its layout reads](https://github.com/corten-run/corten/issues/1056)).
+194. `bench/fullstack`'s Laravel app starts with items in memory: it decoded the whole 27.7 MB
+    fixture at boot, past PHP's default 128 MB `memory_limit`, so its in-memory tests failed in
+    every round and `check-app.mjs laravel` could not pass. It now reads the fixture one item at a
+    time and keeps the default, and refuses a damaged fixture at boot
+    ([#981 bench: Laravel cannot start with items in memory, so check-app.mjs laravel fails: decoding the 27.7 MB fixture passes PHP's 128 MB memory_limit](https://github.com/corten-run/corten/issues/981)).
+196. A form with a control named `hasAttribute` or `getAttribute` never ran its `data-on`
+    handlers (`on:submit`, `on:corten:error`, `on:corten:progress`): the control shadows the
+    form's method of that name, so the runtime's dispatch threw `node.hasAttribute is not a
+    function` and skipped them, for an event that bubbles, one that does not, and a form put in
+    after load; and a `data-patch` form with one could not be drawn again by its own answer, so
+    the write looked failed. The runtime now reads the attributes of an element it dispatches to,
+    binds, finds refs in, patches or draws again through Element's own `getAttribute` and
+    `hasAttribute`, as its submit path already did, and a patched element's id from its attribute
+    (a form's `id` is its control named `id`). Its other members are not covered yet
+    ([#1105 Form controls named after other Element members (closest, querySelectorAll, isConnected, remove, contains) still shadow what the runtime calls on a form](https://github.com/corten-run/corten/issues/1105)).
+    The runtime is 312 B smaller and 27 B larger gzipped (41,292 to 40,980 B, 14,839 to 14,866 B
+    gzip)
+    ([#1049 A form with a control named hasAttribute never runs its data-on handlers: the runtime's dispatch calls the form's own methods](https://github.com/corten-run/corten/issues/1049)).
 193. A page the runtime fetched whole after a write, whose handler sent the browser on to a place
     (`req.redirect(&route.at(id))`), landed at the path without its `#id`: the fetch said
     nothing, so the server answered a 303, and `fetch` follows one without its fragment. The

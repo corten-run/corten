@@ -5,4 +5,6 @@ export default [index("routes/home.tsx"), route("items/:id", "routes/item.tsx"),
   route("live/publish", "routes/live-publish.ts"),
   route("catalog/:id", "routes/catalog.tsx"),
   route("api/catalog/:id", "routes/api-catalog.ts"),
+  route("marketplace/:locale/:id", "routes/marketplace.tsx"),
+  route("api/marketplace/:id", "routes/api-marketplace.ts"),
 ] satisfies RouteConfig;

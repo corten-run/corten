@@ -5,7 +5,7 @@ import test from "node:test";
 import { chromium } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { records } from "./fixtures.mjs";
-import { expectedArticle } from "./contract.mjs";
+import { expectedArticle, expectedPageChecks } from "./contract.mjs";
 import { catalogServer } from "./upstream.mjs";
 import { checkApp, compareStyle, intentionalDisabledPreload, isScriptPreload, referenceHtml, snapshotArticle } from "./check.mjs";
 
@@ -85,7 +85,8 @@ test("complete check exercises both sources, no-JS/JS forms, independent styles,
       const result = await checkApp({ base, catalog, source, upstream: upstreamBase, browser });
       assert.equal(result.jsonRecords, 500);
       assert.equal(result.profiles.length, 8);
-      assert.ok(result.pages > 50);
+      assert.equal(result.pages, expectedPageChecks(catalog));
+      assert.equal(result.pages, 120);
       if (source === "api") assert.equal(result.upstream.readsPerRequest, 1);
     }
     broken = true;

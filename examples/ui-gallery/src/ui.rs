@@ -304,6 +304,45 @@ pub(crate) mod tests {
         }
     }
 
+    /// A list that knows only its neighbours: a link with `rel` for each one there is, and a
+    /// disabled end in the same look for one that is not (#1073).
+    #[test]
+    fn previous_next_links_the_neighbours_it_is_given_and_disables_the_others() {
+        use super::pagination::PreviousNext;
+        use corten::{Href, route::Local, view::Render};
+        let older = Local::parse("/payouts?before=p2").unwrap();
+        let html = PreviousNext {
+            label: "Payouts",
+            previous_label: "Newer",
+            next_label: "Older",
+            previous: None,
+            next: Some(&older as &dyn Href),
+        }
+        .to_html();
+        assert!(html.starts_with(r#"<nav class="pagination__pagination" aria-label="Payouts"><ul>"#), "{html}");
+        assert!(
+            html.contains(r#"<span class="pagination__step pagination__previous" aria-disabled="true">Newer</span>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<a class="pagination__step pagination__next" href="/payouts?before=p2" rel="next">Older</a>"#),
+            "{html}"
+        );
+        // Only the two steps: no page numbers, which such a list does not know.
+        assert!(!html.contains("pagination__page"), "{html}");
+        let newer = Local::parse("/payouts").unwrap();
+        let html = PreviousNext {
+            label: "Payouts",
+            previous_label: "Newer",
+            next_label: "Older",
+            previous: Some(&newer as &dyn Href),
+            next: None,
+        }
+        .to_html();
+        assert!(html.contains(r#"href="/payouts" rel="prev">Newer</a>"#), "{html}");
+        assert!(html.contains(r#"pagination__next" aria-disabled="true">Older</span>"#), "{html}");
+    }
+
     #[test]
     fn a_named_link_closure_may_borrow_the_page() {
         use corten::view::Render;
@@ -385,8 +424,8 @@ pub(crate) mod tests {
                 <SortHeader
                     label="Total"
                     sort={Some(Sort::Ascending)}
-                    ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp) }}
-                    descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                    ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp), payout: None }}
+                    descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown), payout: None }}
                     first={Sort::Ascending}
                     class={TableNumeric {}}
                     on:sort={js::sortBy(event, TotalsBy::Total)}
@@ -394,8 +433,8 @@ pub(crate) mod tests {
                 <SortHeader
                     label="Placed"
                     sort={None}
-                    ascending={&url::Orders { page: Some(1), sort: None }}
-                    descending={&url::Orders { page: Some(2), sort: None }}
+                    ascending={&url::Orders { page: Some(1), sort: None, payout: None }}
+                    descending={&url::Orders { page: Some(2), sort: None, payout: None }}
                     first={Sort::Descending}
                     class={()}
                     on:sort={js::sortBy(event, TotalsBy::Placed)}
@@ -419,8 +458,8 @@ pub(crate) mod tests {
         let served = super::table::SortHeader {
             label: "Total",
             sort: None,
-            ascending: &crate::app::url::Orders { page: None, sort: None },
-            descending: &crate::app::url::Orders { page: None, sort: None },
+            ascending: &crate::app::url::Orders { page: None, sort: None, payout: None },
+            descending: &crate::app::url::Orders { page: None, sort: None, payout: None },
             first: super::table::Sort::Ascending,
             class: (),
             on_sort: &None::<corten::prelude::Handler>,

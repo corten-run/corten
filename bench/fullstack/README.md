@@ -1,9 +1,19 @@
 # Full-stack comparison: one marketplace item page in eighteen apps
 
-This is the historical, localized marketplace workload. The separate
+This is the historical marketplace workload with **non-equivalent localization work**:
+Corten formats values per request while the other implementations use stored strings
+(caveat 16). Its tables and relative observations describe these historical implementations,
+not valid general framework speed rankings. The separate
 [locale-neutral catalog benchmark](../catalog/README.md) gives every framework the same
 strings-only page work without currency or number localization. Its results start a new
 baseline; they do not replace or form a before/after comparison with the tables here.
+[Marketplace v2](../marketplace/README.md) implements equivalent request-time locale formatting
+in eighteen adapters, with a whole-page conformance gate and its own repeated-pass runner.
+It starts a separate baseline and becomes the nightly workload at official r17. See the
+[nightly procedure](../marketplace/nightly.md). Compare only compatible v2 rounds, never an
+r16 or catalog c1 delta. Catalog remains an optional separate diagnostic, not a nightly duplicate.
+All legacy results, including build, browser and instruction measurements, remain below under
+their original labels; those measurements are not yet part of the v2 nightly suite.
 
 The same item detail page (title, images, sorted listings table, offers with "show all", a
 price-alert form that posts and patches a message), and the same item as JSON, built in:
@@ -413,6 +423,9 @@ and macro expansion, type checking and borrow checking 1.070 s together. Leptos 
 highest at 2,020 MiB, next to Corten's 680 MiB.
 
 ### What the numbers say
+
+These are observations about r16's historical implementations with unequal localization,
+not current or general rankings. They are not v2 results.
 
 1. Rendering from memory: axum + Maud serves 27,327 item pages a second at 64 users, then Corten (20,705) and Drogon (17,870). Corten serves 5.0x ASP.NET Core and 15.3x Leptos.
 2. JSON from memory: Corten leads with 26,385 a second, ahead of Topcoat (17,790), axum + Maud (16,977) and Leptos (15,854).
@@ -1529,7 +1542,7 @@ under r10's, and throughput 39.5% and requests per CPU-second 29.1% below r10's 
 23,898 a second, 5,274 against 7,434), which ran on a faster CPU model (Platinum 8280 against
 r14's 8168), the reason they get no verdict.
 
-The detector runs with each full round the nightly automation collects (outside this repository),
+In the legacy workflow, the detector runs with each full round the automation collects (outside this repository),
 and the round's report reads `trend.json`: a `DRIFT:` line becomes an issue, or a comment on an
 open one for the same number, and a `WARN:` line, or a trend that could not be made, goes to the
 maintainer instead. r16's report, the first to read it, found no drift and no warning
@@ -1575,7 +1588,17 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r16. (r2's main run had raised it
    to 512 MB and measured Laravel again with the default afterwards; `laravel-rerun.log` in r2's raw
-   output ([results/r2/raw.txt](results/r2/raw.txt)).)
+   output ([results/r2/raw.txt](results/r2/raw.txt)).) Through r16 its in-memory tests failed under
+   that limit: every worker decoded the whole 27.7 MB fixture at boot and ran out of memory before it
+   answered. From
+   [#981 bench: Laravel cannot start with items in memory, so check-app.mjs laravel fails: decoding the 27.7 MB fixture passes PHP's 128 MB memory_limit](https://github.com/corten-run/corten/issues/981)
+   it reads the fixture one item at a time, as the Rust apps do, keeping only each item's view, and
+   starts with the same default. It checks the whole file with `json_validate` first, so with a
+   damaged fixture the server logs why and exits at startup instead of serving part of the items
+   (`tests/items.php`, run in the image with `php tests/items.php`). Measured locally with one CPU on a loaded machine: the old
+   image never answered in 60 s; the new one answered its first item page 5.5 to 7.1 s after
+   `docker run` in four runs, at 132 to 144 MiB for the container, and `check-app.mjs laravel`
+   passes. So a round from then on has Laravel's in-memory numbers, which no earlier round has.
 8. r4's droplet had a slower CPU than r3's (Platinum 8168 against 8280). Django and Nuxt, which
    passed r3's in-memory page test near their limit, failed it on r4's; their settings did not
    change. r3's numbers stay in `results/r3/`. In r5, on the same CPU model as r4, Django passed
@@ -1656,11 +1679,15 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
 
 ## Running it
 
+The commands below are for the legacy workload and diagnostics, not the current nightly.
+Official r17 and later nightly rounds use [marketplace v2](../marketplace/nightly.md);
+use a distinct diagnostic identity here to avoid mixing the baselines.
+
 ```sh
 # On a fresh droplet, created and destroyed for the run (needs doctl and an SSH key there):
-node bench/fullstack/droplet.mjs r17 --ssh-key <id> [--region sfo2]   # waits for the round
-node bench/fullstack/droplet.mjs r17 --ssh-key <id> --detach          # or start it and leave,
-node bench/fullstack/droplet.mjs r17 --collect                        # then collect it later
+node bench/fullstack/droplet.mjs legacy1 --ssh-key <id> [--region sfo2]   # waits for the round
+node bench/fullstack/droplet.mjs legacy1 --ssh-key <id> --detach          # or start it and leave,
+node bench/fullstack/droplet.mjs legacy1 --collect                        # then collect it later
 # A few apps against each other, without the other apps' hours (r14's eighteen took 6.3):
 node bench/fullstack/droplet.mjs aot2 --ssh-key <id> --apps corten,aspnet,aspnet-aot --detach
 # Each load phase three times, the apps taking turns, for medians and ranges:
@@ -1678,13 +1705,13 @@ for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud
   docker build -t cb-$app bench/fullstack/apps/$app
 done
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file
-cd bench/fullstack && node run-all.mjs r17 10   # BENCH_APPS=corten,aspnet-aot for only those
+cd bench/fullstack && node run-all.mjs legacy1 10   # BENCH_APPS=corten,aspnet-aot for only those
 node conform.mjs [apps] [round]   # the feature matrix above (on the bench network; removes its containers when done)
 node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s against corten
                             # (replaces fsw-corten and fsw-<app>, removed after unless keep; needs cb-corten from this tree)
 node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app
 node look.mjs [apps]        # every app's pages in Chromium against Corten's, box by box
-node build.mjs r17 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
+node build.mjs legacy1 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
 # One request's instructions by stage and crate (callgrind), from the repository root, items in memory:
 docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh

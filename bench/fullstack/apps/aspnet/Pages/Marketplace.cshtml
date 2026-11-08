@@ -1,0 +1,52 @@
+@page "/marketplace/{locale}/{id}"
+@model MarketplaceModel
+@{ ViewData["Title"] = Model.Record.Title; ViewData["Locale"] = Model.Locale; ViewData["Marketplace"] = true;
+   var r = Model.Record; var f = Model.Format; var t = f.Text; }
+<article class="marketplace">
+<nav class="marketplace__categories">@foreach (var c in r.Categories) {<a asp-page="/Marketplace" asp-route-locale="@Model.Locale" asp-route-id="item_1">@c.Name</a>}</nav>
+<h1>@r.Title</h1>
+@if (r.Subtitle is not null) {<p class="marketplace__subtitle">@r.Subtitle</p>}
+<ul class="marketplace__badges">@foreach (var badge in r.Badges) {<li>@badge</li>}</ul>
+<div class="marketplace__images">@for (var i = 0; i < r.Images.Length; i++) {<div class="marketplace__image" role="img" aria-label="@(r.Title + " " + (i + 1))" data-src="@r.Images[i]"></div>}</div>
+<section class="marketplace__summary">
+@if (r.Summary is { } s) {
+<span><strong>@f.Money(s.LowestMinor)</strong> @t["lowest"]</span><span>@f.Listings(s.Count)</span><span>@f.Count(s.Quantity) @t["available"]</span>
+} else {<span>@t["no_listings"]</span>}
+</section>
+<section class="marketplace__listings">
+<h2>@t["listings"]</h2>
+<form method="get" asp-page="/Marketplace" asp-route-locale="@Model.Locale" asp-route-id="@r.Id">
+<label>@t["filter"] <input name="seller" value="@Model.Prefix"></label>
+<label>@t["sort"] <select name="sort"><option value="asc" selected="@(Model.Sort == "asc")">@t["asc"]</option><option value="desc" selected="@(Model.Sort == "desc")">@t["desc"]</option></select></label>
+@if (Model.AllOffers) {<input type="hidden" name="offers" value="all">}
+<button type="submit">@t["apply"]</button>
+</form>
+<table><thead><tr>@foreach (var key in new[] { "seller", "condition", "ships_from", "qty", "price", "reviews" }) {<th>@t[key]</th>}</tr></thead>
+<tbody>@foreach (var row in MarketplaceFormat.Listings(r, Model.Prefix, Model.Sort)) {
+<tr data-listing-id="@row.Id"><td>@row.Seller@if (row.RatingHundredths is { } rating) {<text> · @f.Rating(rating) ★</text>}</td><td>@row.Condition</td><td>@row.ShipsFrom</td><td>@f.Count(row.Quantity)</td><td>@f.Money(row.PriceMinor)</td><td>@f.Count(row.Reviews)</td></tr>
+}</tbody></table>
+</section>
+<section class="marketplace__offers"><h2>@t["offers"]</h2>
+<table><thead><tr>@foreach (var key in new[] { "buyer", "condition", "qty", "price" }) {<th>@t[key]</th>}</tr></thead>
+<tbody>@foreach (var row in r.Offers.Take(Model.AllOffers ? r.Offers.Length : 5)) {
+<tr data-offer-id="@row.Id"><td>@row.Buyer</td><td>@row.Condition</td><td>@f.Count(row.Quantity)</td><td>@f.Money(row.PriceMinor)</td></tr>
+}</tbody></table>
+@if (!Model.AllOffers && r.Offers.Length > 5) {<a class="marketplace__more" asp-page="/Marketplace" asp-route-locale="@Model.Locale" asp-route-id="@r.Id" asp-route-seller="@Model.Prefix" asp-route-sort="@Model.Sort" asp-route-offers="all">@t["show_all"]</a>}
+</section>
+<section class="marketplace__alert"><h2>@t["alert"]</h2>
+<form method="post" asp-page="/Marketplace" asp-route-locale="@Model.Locale" asp-route-id="@r.Id" asp-route-seller="@Model.Prefix" asp-route-sort="@Model.Sort" asp-route-offers="@(Model.AllOffers ? "all" : null)">
+<label>@t["email"] <input name="email" type="email"></label>
+<label>@t["target"] <input name="target_price" type="text" inputmode="decimal"></label>
+<button type="submit">@t["submit"]</button>
+</form><p class="marketplace__message">@Model.Message</p>
+</section>
+<section class="marketplace__details"><h2>@t["details"]</h2><p>@r.Description</p>
+<dl>@foreach (var field in r.Fields) {<dt>@field.Name</dt><dd>@field.Value</dd>}</dl>
+<ul>@foreach (var tag in r.Tags) {<li>@tag</li>}</ul></section>
+<section class="marketplace__contents"><h2>@t["contents"]</h2><ul>@foreach (var line in r.Contents) {
+<li><a asp-page="/Marketplace" asp-route-locale="@Model.Locale" asp-route-id="@line.ItemId">@line.Title</a> × @f.Count(line.Quantity)</li>
+}</ul></section>
+<section class="marketplace__included"><h2>@t["included"]</h2><ul>@foreach (var line in r.IncludedIn) {
+<li><a asp-page="/Marketplace" asp-route-locale="@Model.Locale" asp-route-id="@line.ItemId">@line.Title</a> × @f.Count(line.Quantity)</li>
+}</ul></section>
+</article>

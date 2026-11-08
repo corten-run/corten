@@ -1,0 +1,134 @@
+<article class="marketplace">
+  <nav class="marketplace__categories">
+    <a :for={category <- @record["categories"]} href={~p"/marketplace/#{@locale}/item_1"}>{category[
+      "name"
+    ]}</a>
+  </nav>
+  <h1>{@record["title"]}</h1>
+  <p :if={@record["subtitle"] != nil} class="marketplace__subtitle">{@record["subtitle"]}</p>
+  <ul class="marketplace__badges">
+    <li :for={badge <- @record["badges"]}>{badge}</li>
+  </ul>
+  <div class="marketplace__images">
+    <div
+      :for={{image, index} <- Enum.with_index(@record["images"], 1)}
+      class="marketplace__image"
+      role="img"
+      aria-label={@record["title"] <> " " <> Integer.to_string(index)}
+      data-src={image}
+    >
+    </div>
+  </div>
+  <section class="marketplace__summary">
+    <%= if @record["summary"] do %>
+      <span><strong>{F.money(@record["summary"]["lowest_minor"], @locale)}</strong> {@t["lowest"]}</span><span>{F.listings(
+        @record["summary"]["count"],
+        @locale
+      )}</span><span>{F.count(@record["summary"]["quantity"], @locale)} {@t["available"]}</span>
+    <% else %>
+      <span>{@t["no_listings"]}</span>
+    <% end %>
+  </section>
+  <section class="marketplace__listings">
+    <h2>{@t["listings"]}</h2>
+    <form method="get" action={~p"/marketplace/#{@locale}/#{@record["id"]}"}>
+      <label>{@t["filter"]} <input name="seller" value={@prefix} /></label><label>{@t["sort"]}
+      <select name="sort"><option value="asc" selected={@sort == "asc"}>{@t["asc"]}</option><option
+        value="desc"
+        selected={@sort == "desc"}
+      >
+        {@t["desc"]}
+      </option></select></label>
+      <input :if={@all_offers} type="hidden" name="offers" value="all" /><button type="submit">{@t[
+        "apply"
+      ]}</button>
+    </form>
+    <table>
+      <thead>
+        <tr>
+          <th :for={key <- ~w(seller condition ships_from qty price reviews)}>{@t[key]}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr :for={row <- @listings} data-listing-id={row["id"]}>
+          <td>
+            {row["seller"]}
+            <%= if row["rating_hundredths"] != nil do %>
+              · {F.rating(row["rating_hundredths"], @locale)} ★
+            <% end %>
+          </td><td>{row["condition"]}</td><td>{row["ships_from"]}</td><td>
+            {F.count(row["quantity"], @locale)}
+          </td><td>{F.money(row["price_minor"], @locale)}</td><td>
+            {F.count(row["reviews"], @locale)}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+  <section class="marketplace__offers">
+    <h2>{@t["offers"]}</h2>
+    <table>
+      <thead>
+        <tr>
+          <th :for={key <- ~w(buyer condition qty price)}>{@t[key]}</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr :for={row <- @offers} data-offer-id={row["id"]}>
+          <td>{row["buyer"]}</td><td>{row["condition"]}</td><td>
+            {F.count(row["quantity"], @locale)}
+          </td><td>{F.money(row["price_minor"], @locale)}</td>
+        </tr>
+      </tbody>
+    </table>
+    <a
+      :if={!@all_offers && length(@record["offers"]) > 5}
+      class="marketplace__more"
+      href={
+        ~p"/marketplace/#{@locale}/#{@record["id"]}?#{[seller: @prefix, sort: @sort, offers: "all"]}"
+      }
+    >{@t["show_all"]}</a>
+  </section>
+  <section class="marketplace__alert">
+    <h2>{@t["alert"]}</h2>
+    <form
+      method="post"
+      action={
+        ~p"/marketplace/#{@locale}/#{@record["id"]}?#{[seller: @prefix, sort: @sort, offers: if(@all_offers, do: "all", else: "")]}"
+      }
+    >
+      <input type="hidden" name="_csrf_token" value={get_csrf_token()} />
+      <label>{@t["email"]} <input name="email" type="email" /></label><label>{@t["target"]}
+      <input name="target_price" type="text" inputmode="decimal" /></label><button type="submit">{@t[
+        "submit"
+      ]}</button>
+    </form>
+    <p class="marketplace__message">{@message}</p>
+  </section>
+  <section class="marketplace__details">
+    <h2>{@t["details"]}</h2><p>{@record["description"]}</p>
+    <dl>
+      <%= for field <- @record["fields"] do %>
+        <dt>{field["name"]}</dt><dd>{field["value"]}</dd>
+      <% end %>
+    </dl><ul>
+      <li :for={tag <- @record["tags"]}>{tag}</li>
+    </ul>
+  </section>
+  <section class="marketplace__contents">
+    <h2>{@t["contents"]}</h2><ul>
+      <li :for={line <- @record["contents"]}>
+        <a href={~p"/marketplace/#{@locale}/#{line["item_id"]}"}>{line["title"]}</a>
+        × {F.count(line["quantity"], @locale)}
+      </li>
+    </ul>
+  </section>
+  <section class="marketplace__included">
+    <h2>{@t["included"]}</h2><ul>
+      <li :for={line <- @record["included_in"]}>
+        <a href={~p"/marketplace/#{@locale}/#{line["item_id"]}"}>{line["title"]}</a>
+        × {F.count(line["quantity"], @locale)}
+      </li>
+    </ul>
+  </section>
+</article>
