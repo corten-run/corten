@@ -11,8 +11,8 @@
   border: 1px solid var(--border); border-radius: calc(var(--radius) + 4px);
   box-shadow: 0 1px 2px rgb(0 0 0 / .05);
 }
-/* Its own margins, colors and type, so a page's defaults for dt and dd do not reach in. The type is
-   the theme's: sizes, weights and tracking (in ems) are tokens. The value is in the page's face
+/* Its own margins and colors, so a page's defaults for dt and dd do not reach in. Its type is the
+   theme's: sizes, weights and tracking (in ems) are tokens. The value is in the page's face
    and the label as written unless the app declares --stat-value-font-family or
    --stat-label-text-transform, since no token's value says "the page's". */
 .stat > dt {

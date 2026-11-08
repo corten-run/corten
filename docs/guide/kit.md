@@ -96,10 +96,10 @@ app declares `--stat-value-font-family` (a `fontFamily` token,
 `"stat-value-font-family": { "$type": "fontFamily", "$value": "{font.display}" }`), and the label's
 case, which is as written until the app declares `--stat-label-text-transform`, which DTCG has no
 type for, so it goes with the fonts in `static/style.css`
-(`:root { --stat-label-text-transform: uppercase; }`). The stylesheet reads each with a fallback, so the startup check does not ask for
-them, and a name spelled wrong changes nothing. As with every look, the figure's type is its own:
-a page rule for `dt` or `dd` (a case, a letter spacing, a face) does not reach the label or the
-value. A card's heading sets no face, so the app's own heading rule (`h2 { font-family: .. }`)
+(`:root { --stat-label-text-transform: uppercase; }`). The stylesheet reads each with a fallback,
+so the startup check does not ask for them, and a name spelled wrong changes nothing. A page's
+rule for `dt` or `dd` no longer gives the label its case or letter spacing, or the value its
+face, since the kit sets those; one for the label's face still reaches it. A card's heading sets no face, so the app's own heading rule (`h2 { font-family: .. }`)
 draws it.
 
 An app set up by an older kit has a theme without the newer tokens: `corten ui add` names each
