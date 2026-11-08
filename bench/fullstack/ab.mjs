@@ -7,7 +7,7 @@
 // requests per CPU-second at the fixed rate, the app's CPU counted from its cgroup (cpu-time.mjs).
 // On a bench host BENCH_APP_CPUS and BENCH_LOAD_CPUS pin the app and k6 as a round does (apps.mjs).
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appCpus, k6User, loadCpus, network } from "./apps.mjs";
@@ -34,7 +34,8 @@ if (!Number.isInteger(rounds) || rounds < 1) throw new Error("AB_ROUNDS is a who
 const rows = [];
 
 for (let round = 1; round <= rounds; round++) {
-  for (const image of images) {
+  // Each round starts one image later, so no image always runs first (or last) in a round.
+  for (const image of images.map((_, i) => images[(i + round - 1) % images.length])) {
     docker("rm", "-f", "ab-app");
     const run = docker("run", "-d", "--name", "ab-app", "--network", network, ...appCpus, "--memory", "1g", "-v", `${join(here, "fixtures")}:/fixtures:ro`, "-e", "ITEM_SOURCE=fixture", "-e", "FIXTURE_PATH=/fixtures/items.json", "-e", "PORT=8080", "-e", "HOSTS=ab-app", image);
     if (run.status !== 0) throw new Error(run.stderr);
@@ -43,14 +44,18 @@ for (let round = 1; round <= rounds; round++) {
       for (const [phase, env] of [["warmup", { MODE: "closed", VUS: "32", DURATION: "10s" }], ["fixed300", { MODE: "open", RATE: "300", DURATION: "40s" }], ["vus64", { MODE: "closed", VUS: "64", DURATION: "40s" }]]) {
         const name = `${image}-${target}-${encName}-${phase}-r${round}`;
         const stats = join(dir, `${name}-stats.json`);
+        // A file left by an earlier run is never read as this one's.
+        rmSync(stats, { force: true });
+        rmSync(join(dir, `${name}.json`), { force: true });
         const sampler = phase === "warmup" ? null : spawn("node", [join(here, "sample-stats.mjs"), stats, "42", "ab-app"], { stdio: "ignore", windowsHide: true });
         const args = ["run", "--rm", "--network", network, ...loadCpus, ...k6User, "-v", `${here}:/bench`, "-e", "BASE=http://ab-app:8080", "-e", `ENC=${enc}`, "-e", `TARGET=${target}`];
         for (const [k, v] of Object.entries(env)) args.push("-e", `${k}=${v}`);
         args.push("grafana/k6:latest", "run", "--quiet", "--summary-export", `/bench/${out}/${name}.json`, "/bench/ab-load.js");
         const before = cpuUsec("ab-app");
-        docker(...args);
+        const load = docker(...args);
         const after = cpuUsec("ab-app");
         if (sampler) await new Promise((r) => (sampler.exitCode !== null ? r() : sampler.on("exit", r)));
+        if (load.status !== 0) throw new Error(`k6 failed (${load.status}) on ${name}: ${load.stderr}`);
         if (phase === "warmup") continue;
         const k6 = JSON.parse(readFileSync(join(dir, `${name}.json`), "utf8"));
         const d = k6.metrics.http_req_duration;

@@ -1020,9 +1020,14 @@ build without it, round by round, median (range) of the three
 ([cost-under-load.sh](cost-under-load.sh), split by [cost-under-load.mjs](cost-under-load.mjs);
 [results/cost-under-load](results/cost-under-load/)). Round to round a build moves by a few
 microseconds at 64 users and up to about 8 at the fixed rate, so a row whose range crosses zero
-says no cost that can be seen.
+says no cost that can be seen. Each round ran the build as it is first and the others after it in
+one order (`ab.mjs` has rotated the order each round since), so a drift within a round reads as a
+cost; a row of a few microseconds, the page's `ETag` among them, may be partly that. The images
+carried no stamp of the source they were built from (`cost-under-load.sh` labels them now); they
+were built for this run on a fresh droplet.
 
-At 64 users, CPU microseconds a request (the server is never idle, so this is its throughput):
+At 64 users, CPU microseconds a request (the app's CPU was 86-101% busy: k6, on its four CPUs,
+did not keep it saturated, so these are CPU a request, not the most it can serve):
 
 | Default removed | Page, `identity` | Page, browser | JSON, `identity` | JSON, browser |
 |---|---|---|---|---|
@@ -1058,10 +1063,14 @@ is 45 of the page's 85 microseconds at 64 users (53%, so the page serves 11,700 
 CPU-second compressed against 24,900 without) and 25 of the JSON's 57 (44%), less than the share
 callgrind counts above (two thirds and three quarters of user instructions), since these include
 the kernel's part of a request, which compression does not change. The page's `ETag` for a
-browser is the other: 6.1 (4.3-6.5) microseconds at 64 users, 7% of the request, as callgrind's
-7.7%. Every other default, and every default on `identity`, is within a few microseconds of zero
-in both phases, as the instruction counts (each under 1.5% of a request) say it should be: on the
-rounds' `identity` requests the defaults cost nothing measurable in requests per CPU-second. What
+browser is the other: 6.1 (4.3-6.5) microseconds at 64 users, 7% of the request's CPU, close to
+the 7.7% of user instructions callgrind gives it. Every other default, and every default on
+`identity`, is within a few microseconds of zero in both phases. Of those 58 cells, 13 have a range
+clear of zero, and 6 of the 13 are below it, a saving that removing work cannot make, so a range
+clear of zero by a microsecond or two is within these runs' drift. The instruction counts fit:
+callgrind gives the security headers 5.5% of an `identity` page and compression 3.2%, about 2 and
+1.2 of its 37.5 microseconds, at the edge of what these runs resolve. On the rounds' `identity`
+requests no single default costs more than a few microseconds of CPU. What
 the bytes compression saves are worth to a client is outside this measure; an app short of CPU
 behind a proxy that compresses can build without the `compress` feature
 ([the defaults](../../docs/guide/app.md)).

@@ -7,7 +7,8 @@
 # cgroup, with the median and range across rounds; cost-under-load.mjs turns them into each
 # default's cost. cost-by-default.sh counts the same builds' instructions on one connection.
 # Run from the repository root on a Linux host with Docker and Node, with fixtures/items.json and
-# the rustbench network. Images are cbd-<variant>; an image already built is used as it is.
+# the rustbench network. Images are cbd-<variant>, labelled with a hash of the source they were
+# built from; an image already built is used only when that hash is this source's.
 # VARIANTS (as-is and every patch), OUT (results/cost-under-load), AB_ROUNDS (3), BENCH_APP_CPUS
 # and BENCH_LOAD_CPUS as a round sets them.
 set -eo pipefail
@@ -17,13 +18,14 @@ variants=${VARIANTS:-"as-is $(cd $here/ablate && ls *.patch | sed 's/\.patch$//'
 # One copy of the source to build each variant from, without outputs or other rounds' results.
 rm -rf /tmp/cost-pristine && mkdir -p /tmp/cost-pristine
 tar --exclude=./.git --exclude=./target --exclude=node_modules --exclude=./bench/fullstack/results -cf - . | tar -C /tmp/cost-pristine -xf -
+source=$(cd /tmp/cost-pristine && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
 images=()
 for v in $variants; do
   images+=("cbd-$v")
-  docker image inspect "cbd-$v" >/dev/null 2>&1 && continue
+  [ "$(docker image inspect -f '{{ index .Config.Labels "corten.cost-source" }}' "cbd-$v" 2>/dev/null)" = "$source" ] && continue
   rm -rf /tmp/cost-work && cp -a /tmp/cost-pristine /tmp/cost-work
   [ "$v" = as-is ] || (cd /tmp/cost-work && git apply "bench/fullstack/ablate/$v.patch")
-  docker build -q -f /tmp/cost-work/examples/card-market/Dockerfile -t "cbd-$v" /tmp/cost-work >/dev/null
+  docker build -q --label "corten.cost-source=$source" -f /tmp/cost-work/examples/card-market/Dockerfile -t "cbd-$v" /tmp/cost-work >/dev/null
 done
 rm -rf /tmp/cost-work /tmp/cost-pristine
 # Each patch must change the image, or its row would measure the build as it is.

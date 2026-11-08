@@ -2558,7 +2558,9 @@ Corten is pre-1.0, so any minor version may change the API.
     Three rounds on a c-8 (the README's "What each production default costs under load"): for a
     browser, compression is 45 of the page's 85 microseconds at 64 users (53%) and 25 of the JSON's
     57 (44%), and the page's `ETag` 6 (7%); every other default, and every default on `identity`,
-    is within a few microseconds of zero
+    is within a few microseconds of zero. `ab.mjs` now starts each round one image later, stops on
+    a failed k6 run and never reads an earlier run's file; `cost-under-load.sh` reuses a `cbd-*`
+    image only when its label says it was built from the same source
     ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
 
 ### Removed
