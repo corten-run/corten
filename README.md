@@ -202,10 +202,12 @@ says an `HTMLOutputElement` and the ref is on an `<output>`. Either mismatch is 
 
 ## Performance
 
-Every claim about speed has a measured number behind it. The first five rows are one marketplace
-item page served by eighteen apps on one CPU each (round r16), with requests sent uncompressed
-and untagged, as `curl` sends them; a browser's request costs Corten more. The last row is a
-client-heavy table in the browser (round browser-3, on an older, smaller runtime than today's).
+The table preserves historical measurements, not a current framework ranking. The first five
+rows are Corten's old marketplace implementation (round r16), with requests sent uncompressed
+and untagged, as `curl` sends them; a browser's request costs Corten more. Localization work
+was not equivalent across the eighteen apps, so r16 cannot establish general speed rankings.
+The last row is a client-heavy table in the browser (round browser-3, on an older, smaller
+runtime than today's).
 
 | What | Corten, measured |
 |---|---|
@@ -216,10 +218,11 @@ client-heavy table in the browser (round browser-3, on an older, smaller runtime
 | Interactive on a throttled phone, on desktop | 468 ms, 59 ms |
 | Taking over 1,000 server-rendered rows | 6.0 ms, 101 bytes of memory per row |
 
-Of the eighteen apps, only axum + Maud renders the page from memory faster, and Corten serves
-the most JSON and item-API pages. The tables against ASP.NET Core, Next.js, Leptos, Rails and
-the rest, what a browser's request adds, the method and the caveats are in
-[Performance](docs/performance.md).
+Nightly measurements move to [marketplace v2](bench/marketplace/README.md) starting with
+official round r17: equivalent request-time localization in all eighteen apps, with a new
+baseline and no r16 or catalog c1 delta. No v2 performance numbers are published here yet.
+See the [nightly procedure](bench/marketplace/nightly.md) and
+[Performance](docs/performance.md) for scope, historical tables and measurement limits.
 
 ## When to use it
 

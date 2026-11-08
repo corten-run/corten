@@ -11,9 +11,8 @@ Corten is pre-1.0, so any minor version may change the API.
   pre-load gate checks full pages, native forms, layout, escaping, JSON and uncached upstream
   reads in both data sources. Its repeated-pass runner and read-only report preserve provenance,
   variability, CPU and memory evidence and measurement limits. Catalog also gains a read-only
-  report. Historical result files and the pinned catalog run are untouched; nightly execution
-  is not switched to v2. Leptos's existing build-cost recipe also uses cargo-leptos's supported
-  lockfile flag, matching its image build.
+  report. Historical result files and the pinned catalog run are untouched. Leptos's existing
+  build-cost recipe also uses cargo-leptos's supported lockfile flag, matching its image build.
 
 - A separate locale-neutral catalog benchmark in `bench/catalog`: the same strings-only
   record-detail page, JSON, GET filter and related links in eighteen framework apps.
@@ -2548,6 +2547,13 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 
 ### Changed
+
+- Nightly benchmarking moves to equivalent-localization marketplace v2 from official r17,
+  with a new baseline, detached launch/collection and three short-window CPU, memory, load
+  and cold-start passes. Pages cover all three locales; locale-neutral JSON runs once per
+  source per pass. Catalog remains an optional separate diagnostic. Historical results and
+  labels are preserved, but unequal legacy localization no longer supports general speed
+  rankings; v2 comparisons require compatible rounds, not r16 or catalog c1 deltas.
 
 1. A handler never runs after its event: markup a navigation or patch inserts waits for the
    modules its handlers name, and an event that comes before its module on the first page gets
