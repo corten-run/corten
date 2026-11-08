@@ -1110,7 +1110,7 @@ rules something out.
     and cast what they read, with a comment saying what keeps it in range, since `rows()` with
     those loops rewritten timed slower (below) and a cast costs nothing once minified. The
     runtime's minified build (gzip, level 9): `corten.js` 14,836 to 14,842 bytes, `format.js`
-    1,494 to 1,498, and `view.js` 2,149 to 2,151, `at()`'s check of the ends.
+    1,494 to 1,498, and `view.js` 2,149 to 2,153, `at()`'s check of the ends.
     `noFallthroughCasesInSwitch` found nothing and costs nothing; a case that runs into the next
     one is a mistake the compiler can see. An app, the repository and the browser benchmark's
     view apps are checked the same way: `corten check` writes the app's config with the options
@@ -1134,10 +1134,10 @@ rules something out.
     (`bench/browser/view-unindexed.js` in `f6885eca`), keeping some rows and making the rest
     was 4.3% to 13.7% slower in seven of seven runs, where `c65c10ec` against itself was -3.0%
     to 4.7%; the noise is too large to time the cast loops, which minify to the code they were,
-    `at()` aside); platform (Web IDL converts a dictionary member that is `undefined` as one that is not
-    present, and `JSON.stringify` leaves out a property whose value is `undefined`); reasoned (a
-    read past the end the checker cannot see is a `TypeError` far from the read, as the
-    `ComboBox`'s was); value (Mistakes fail at compile time, Values 4, after the user's speed,
+    `at()` aside); platform (Web IDL converts a dictionary member that is `undefined` as one
+    that is not present, and `JSON.stringify` leaves out a property whose value is
+    `undefined`); reasoned (a read past the end the checker cannot see is a `TypeError` far
+    from the read, as the `ComboBox`'s was); value (Mistakes fail at compile time, Values 4, after the user's speed,
     Values 1, which is why the hot loops cast instead).
 
     Revisit when: lib.dom's option dictionaries accept `undefined` under

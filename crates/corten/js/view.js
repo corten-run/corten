@@ -395,6 +395,6 @@ function lis(a) {
     tails[lo] = i;
   }
   const run = new Array(tails.length);
-  for (let i = tails.length - 1, k = /** @type {number} */ (tails[i]); i >= 0; i -= 1, k = /** @type {number} */ (prev[k])) run[i] = k;
+  for (let i = tails.length - 1, k = /** @type {number} */ (tails[tails.length - 1]); i >= 0; i -= 1, k = /** @type {number} */ (prev[k])) run[i] = k;
   return run;
 }
