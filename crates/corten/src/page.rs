@@ -2761,14 +2761,27 @@ fn carried(kept: HeaderMap, mut res: Response) -> Response {
             entry.append(value);
         }
     }
-    // Each name once: a name the answer varies on already, on any of its lines, is not added again.
-    let names = |value: &HeaderValue| -> Vec<String> {
-        value.to_str().unwrap_or_default().split(',').map(str::trim).filter(|name| !name.is_empty()).map(String::from).collect()
-    };
+    // Each name once: a name the answer varies on already, on any of its lines, or earlier on the
+    // same line, is not added again. A value that is not text is kept as it came: a cache is safer
+    // varying on too much than too little.
     for value in vary {
-        let own: Vec<String> = res.headers().get_all(header::VARY).iter().flat_map(names).collect();
-        let new: Vec<String> =
-            names(&value).into_iter().filter(|name| !own.iter().any(|own| own.eq_ignore_ascii_case(name))).collect();
+        let Ok(text) = value.to_str() else {
+            res.headers_mut().append(header::VARY, value);
+            continue;
+        };
+        let mut new: Vec<&str> = Vec::new();
+        for name in text.split(',').map(str::trim).filter(|name| !name.is_empty()) {
+            let had = res
+                .headers()
+                .get_all(header::VARY)
+                .iter()
+                .filter_map(|own| own.to_str().ok())
+                .flat_map(|own| own.split(','))
+                .any(|own| own.trim().eq_ignore_ascii_case(name));
+            if !had && !new.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
+                new.push(name);
+            }
+        }
         if !new.is_empty() {
             if let Ok(value) = HeaderValue::from_str(&new.join(", ")) {
                 res.headers_mut().append(header::VARY, value);
@@ -3192,16 +3205,17 @@ mod carried_tests {
     use super::*;
 
     /// The failed answer's `Vary` names are added to the error page's, each name once whatever its
-    /// case or the line it is on.
+    /// case or the line it is on, and a value that is not text as it came.
     #[test]
     fn a_kept_vary_name_is_added_once() {
         let mut kept = HeaderMap::new();
-        kept.append(header::VARY, HeaderValue::from_static("Corten, Origin"));
+        kept.append(header::VARY, HeaderValue::from_static("Corten, Origin, origin"));
         kept.append(header::VARY, HeaderValue::from_static("cookie"));
+        kept.append(header::VARY, HeaderValue::from_bytes(b"caf\xe9").unwrap());
         let mut res = Response::new(Body::empty());
         res.headers_mut().append(header::VARY, HeaderValue::from_static("corten, accept"));
         let res = carried(kept, res);
-        let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(|v| v.to_str().unwrap()).collect();
-        assert_eq!(vary, ["corten, accept", "Origin", "cookie"]);
+        let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(HeaderValue::as_bytes).collect();
+        assert_eq!(vary, [&b"corten, accept"[..], b"Origin", b"cookie", b"caf\xe9"]);
     }
 }
