@@ -72,7 +72,25 @@ fn string_arg(derive: &str, arg: &Arg) -> Result<String, Error> {
 /// writing has one.
 fn bound_arg(derive: &str, arg: &Arg) -> Result<Option<TokenStream>, Error> {
     let usage = format!("{derive}: use #[serde(bound = \"T: Trait\")] or #[serde(bound(deserialize = \"T: Trait\"))]");
-    let text = match &arg.value {
+    let text = reading_half(arg, &usage)?;
+    match text.map(|text| text.parse::<TokenStream>()) {
+        None => Ok(None),
+        Some(Ok(predicates)) => Ok(Some(predicates)),
+        Some(Err(_)) => err(arg.span, format!("{derive}: a bound is where predicates, as in \"T: Default\"")),
+    }
+}
+
+/// The container's `rename = ".."`, or the `deserialize` half of
+/// `rename(serialize = "..", deserialize = "..")`: the name serde reads the type by. `None` when
+/// only writing has one.
+fn rename_arg(derive: &str, arg: &Arg) -> Result<Option<String>, Error> {
+    reading_half(arg, &format!("{derive}: use #[serde(rename = \"...\")] or #[serde(rename(deserialize = \"...\"))]"))
+}
+
+/// An argument's text, `key = ".."`, or the `deserialize` half of
+/// `key(serialize = "..", deserialize = "..")`; `None` when only writing has one.
+fn reading_half(arg: &Arg, usage: &str) -> Result<Option<String>, Error> {
+    Ok(match &arg.value {
         Value::Str(text) => Some(text.clone()),
         Value::Bare => return err(arg.span, usage),
         Value::Group(inner) => {
@@ -92,12 +110,7 @@ fn bound_arg(derive: &str, arg: &Arg) -> Result<Option<TokenStream>, Error> {
             }
             found
         }
-    };
-    match text.map(|text| text.parse::<TokenStream>()) {
-        None => Ok(None),
-        Some(Ok(predicates)) => Ok(Some(predicates)),
-        Some(Err(_)) => err(arg.span, format!("{derive}: a bound is where predicates, as in \"T: Default\"")),
-    }
+    })
 }
 
 fn rule_arg(derive: &str, arg: &Arg) -> Result<String, Error> {
@@ -137,11 +150,11 @@ impl Container {
         for arg in serde_args_for(attrs, derive)? {
             match arg.key.as_str() {
                 "transparent" if json && !is_enum => c.transparent = true,
-                "rename_all_fields" if json => {}
+                "rename_all_fields" if json && is_enum => {}
                 "rename_all" => c.rename_all = Some(rule_arg(derive, &arg)?),
                 "default" if !is_enum => c.default = Some(default_arg(derive, &arg)?),
                 "deny_unknown_fields" => c.deny_unknown_fields = true,
-                "rename" => c.rename = Some(string_arg(derive, &arg)?),
+                "rename" => c.rename = rename_arg(derive, &arg)?,
                 "expecting" => c.expecting = Some(string_arg(derive, &arg)?),
                 "bound" => c.bound = bound_arg(derive, &arg)?,
                 // serde's own path (Corten's impl names serde itself), and what only writing uses.
@@ -348,7 +361,7 @@ fn where_clause(item: &Item, container: &Container, fields: &[Field], this: &Tok
 
 /// `#[allow(deprecated)]` on the generated code when the item is `#[deprecated]` or allows it, as
 /// serde_derive does, so naming the item there warns no more than the item itself does.
-fn allows_deprecated(attrs: &[Group]) -> bool {
+pub fn allows_deprecated(attrs: &[Group]) -> bool {
     attrs.iter().any(|attr| {
         let mut tokens = attr.stream().into_iter();
         match (tokens.next(), tokens.next()) {
@@ -819,14 +832,23 @@ fn unit_enum(item: &Item, container: &Container, variants: &[Variant]) -> TokenS
     let mut code = Code::default();
     code.push(&identifier(&entries, None, other.as_deref(), true));
     visitor_head(&mut code, item, &g, &expecting);
-    code.push("fn visit_enum<__A: _serde::de::EnumAccess<'de>>(self, __data: __A) -> ::core::result::Result<Self::Value, __A::Error> { match _serde::de::EnumAccess::variant(__data)? {");
-    for (i, v) in variants.iter().enumerate() {
-        code.push(&format!(
-            "(__Field::__field{i}, __variant) => {{ _serde::de::VariantAccess::unit_variant(__variant)?; ::core::result::Result::Ok({path}::{}) }}",
-            v.ident
-        ));
+    code.push(
+        "fn visit_enum<__A: _serde::de::EnumAccess<'de>>(self, __data: __A) -> ::core::result::Result<Self::Value, __A::Error> {",
+    );
+    if variants.is_empty() {
+        // No variant is read (none, or all skipped): reading one is an error, as serde_derive's.
+        code.push("::core::result::Result::map(_serde::de::EnumAccess::variant::<__Field>(__data), |(__impossible, _)| match __impossible {}) }");
+    } else {
+        code.push("match _serde::de::EnumAccess::variant::<__Field>(__data)? {");
+        for (i, v) in variants.iter().enumerate() {
+            code.push(&format!(
+                "(__Field::__field{i}, __variant) => {{ _serde::de::VariantAccess::unit_variant(__variant)?; ::core::result::Result::Ok({path}::{}) }}",
+                v.ident
+            ));
+        }
+        code.push("} }");
     }
-    code.push("} } }");
+    code.push("}");
     code.push(&names_const("VARIANTS", &entries));
     let deserialize_name = container.rename.clone().unwrap_or(type_name);
     code.push(&format!(
@@ -846,7 +868,7 @@ pub fn for_from_json(item: &Item) -> Result<TokenStream, Error> {
         (
             arg.span,
             format!(
-                "FromJson: #[serde({})] changes how serde reads in a way FromJson does not follow; derive Deserialize alone for this type (as a field it is then read by serde_json)",
+                "FromJson: #[serde({})] changes how serde reads in a way FromJson does not follow; derive Deserialize alone for this type (as a field it is then read by serde_json, and an empty `impl corten::FromJson for T {{}}` makes it a FromJson read by serde_json)",
                 arg.key
             ),
         )

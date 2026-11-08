@@ -28,8 +28,8 @@
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
 //!
-//! A form's input struct can be the tool's input as is, so the browser and the agent share one
-//! definition and one set of rules.
+//! A form's input struct (`#[derive(Fields)]`, which is a `FromJson` too) can be the tool's input
+//! as is, so the browser and the agent share one definition and one set of rules.
 //!
 //! Agents authenticate the way any other client does: a bearer token, never ambient cookies.
 //! [`Tools::auth`] runs once per call, and its result is handed to the tool:

@@ -80,6 +80,24 @@ macro_rules! __if_types {
     ($($item:tt)*) => {};
 }
 
+/// What `#[derive(Fields)]` and `#[derive(UrlValue)]` wrap their `FromJson` impl in: kept with
+/// the `json` feature, dropped without it. Not a public API.
+#[cfg(feature = "json")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __if_json {
+    ($($item:tt)*) => { $($item)* };
+}
+
+/// What `#[derive(Fields)]` and `#[derive(UrlValue)]` wrap their `FromJson` impl in: kept with
+/// the `json` feature, dropped without it. Not a public API.
+#[cfg(not(feature = "json"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __if_json {
+    ($($item:tt)*) => {};
+}
+
 /// What `#[corten::routes(api = .., openapi = ..)]` builds its document in: the document with the
 /// `types` feature, an error that names the feature without it. Not a public API.
 #[cfg(feature = "types")]

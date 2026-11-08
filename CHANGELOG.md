@@ -4083,9 +4083,14 @@ Corten is pre-1.0, so any minor version may change the API.
     with it and with serde's derive and compares values, errors and the names passed to the
     deserializer, and through Corten's reader too. A type whose `Deserialize` is written by hand,
     or derived by serde for an attribute `FromJson` refuses (`flatten`), becomes a `FromJson`
-    with an empty `impl corten::FromJson for T {}`, read by serde_json: alone in one pass, inside
-    a derived type from its own text. **Migration:** take `Deserialize` out of a derive list that
-    has `FromJson`, which is now a second impl (E0119). Reading the benchmark's 500 item API
+    with an empty `impl corten::FromJson for T {}`, read by serde_json: alone, in serde_json's one
+    pass; inside a derived type or a `Vec`, from its own text, which the reader finds first.
+    `#[derive(Fields)]` and `#[derive(UrlValue)]`, which write the type's `Deserialize` already,
+    now write its `FromJson` and schema too (feature `json`), so a form's input is read from JSON,
+    and is an agent tool's input, as it is; a generic type, or one `FromJson` cannot read (a field
+    that borrows, an attribute it does not follow), gets none and takes an empty impl. **Migration:** take `Deserialize` out
+    of a derive list that has `FromJson`, and `FromJson` out of one that has `Fields` or
+    `UrlValue`: each is now a second impl (E0119). Reading the benchmark's 500 item API
     responses costs the same: 265,550,044 instructions through `FromJson` and 438,766,522
     through serde_json alone, before and after (callgrind, release build, `read_cost` in
     `examples/card-market`, two runs each)

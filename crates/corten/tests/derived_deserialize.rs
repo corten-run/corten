@@ -852,6 +852,100 @@ fn from_json_reads_what_serde_s_derive_reads() {
     }
 }
 
+/// Corten's reader reads `text` itself, to serde's value: it does not give up and hand the text
+/// to serde_json.
+fn read_alone<A: corten::FromJson + std::fmt::Debug, B: DeserializeOwned + std::fmt::Debug>(text: &str) {
+    let ours = corten::json::__read::alone::<A>(text).unwrap_or_else(|| panic!("the reader gave up on {text}"));
+    assert_eq!(format!("{ours:?}"), format!("{:?}", serde_json::from_str::<B>(text).unwrap()), "{text}");
+}
+
+#[test]
+fn corten_s_reader_reads_each_type_itself() {
+    type Ours = listing::ours::Listing<seller::ours::Seller>;
+    type Theirs = listing::theirs::Listing<seller::theirs::Seller>;
+    read_alone::<Ours, Theirs>(r#"{"listingId":"l1","qty":2,"price":2.5,"seller":{"id":7},"address":"127.0.0.1","type":"card"}"#);
+    read_alone::<pair::ours::Pair, pair::theirs::Pair>("[3,\"x\"]");
+    read_alone::<span::ours::Span, span::theirs::Span>("[1,2]");
+    read_alone::<id::ours::Id, id::theirs::Id>("7");
+    read_alone::<marker::ours::Marker, marker::theirs::Marker>("null");
+    read_alone::<name::ours::Name, name::theirs::Name>("\"Ada\"");
+    read_alone::<cents::ours::Cents, cents::theirs::Cents>("250");
+    read_alone::<filters::ours::Filters, filters::theirs::Filters>(r#"{"page":2,"search":"red"}"#);
+    read_alone::<status::ours::Status, status::theirs::Status>("\"sent\"");
+}
+
+twin! { never, corten::FromJson,
+    pub enum Never {}
+}
+
+twin! { skipped, corten::FromJson,
+    pub enum Skipped {
+        #[allow(dead_code)]
+        #[serde(skip)]
+        Hidden,
+    }
+}
+
+twin! { renamed, corten::FromJson,
+    #[serde(rename(serialize = "Out", deserialize = "In"))]
+    pub struct Renamed {
+        pub id: u32,
+    }
+}
+
+#[test]
+fn from_json_reads_enums_with_no_variant_read_and_a_split_rename() {
+    for text in ["\"Hidden\"", "\"x\"", "null", "1", r#"{"Hidden":null}"#] {
+        same_read::<never::ours::Never, never::theirs::Never>(text);
+        same_read::<skipped::ours::Skipped, skipped::theirs::Skipped>(text);
+    }
+    for text in [r#"{"id":1}"#, "[1]", "{}", "null"] {
+        same_read::<renamed::ours::Renamed, renamed::theirs::Renamed>(text);
+    }
+    assert_eq!(names::<renamed::ours::Renamed>(), names::<renamed::theirs::Renamed>());
+    assert_eq!(names::<renamed::ours::Renamed>().0, "In");
+    assert_eq!(names::<skipped::ours::Skipped>(), names::<skipped::theirs::Skipped>());
+}
+
+twin! { shipping, corten::UrlValue,
+    #[serde(rename_all = "snake_case")]
+    pub enum Shipping {
+        Standard,
+        #[serde(alias = "express")]
+        NextDay,
+    }
+}
+
+twin! { order, corten::Fields,
+    #[serde(rename_all = "camelCase")]
+    pub struct Order {
+        pub email: String,
+        #[serde(default)]
+        pub gift_note: Option<String>,
+        pub shipping: crate::shipping::ours::Shipping,
+    }
+}
+
+#[test]
+fn fields_and_url_value_are_read_from_json_as_they_are() {
+    // The twins' `shipping` is the same type on both sides, so serde's reads it by ours.
+    for text in [
+        r#"{"email":"a@b.c","shipping":"next_day"}"#,
+        r#"{"email":"a@b.c","giftNote":"hi","shipping":"express"}"#,
+        r#"{"email":"a@b.c","shipping":"overnight"}"#,
+        r#"{"email":"a@b.c"}"#,
+        "null",
+    ] {
+        same_read::<order::ours::Order, order::theirs::Order>(text);
+    }
+    read_alone::<order::ours::Order, order::theirs::Order>(r#"{"email":"a@b.c","giftNote":"hi","shipping":"express"}"#);
+    for text in ["\"standard\"", "\"next_day\"", "\"express\"", "\"NextDay\"", "1"] {
+        same_read::<shipping::ours::Shipping, shipping::theirs::Shipping>(text);
+    }
+    read_alone::<shipping::ours::Shipping, shipping::theirs::Shipping>("\"next_day\"");
+    read_alone::<fallback::ours::Fallback, fallback::theirs::Fallback>(r#"{"page":2}"#);
+}
+
 #[test]
 fn from_json_passes_the_deserializer_serde_s_names() {
     type Ours = listing::ours::Listing<seller::ours::Seller>;
