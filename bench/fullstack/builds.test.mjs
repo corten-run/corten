@@ -168,7 +168,7 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
     // Packaging after the build (copying the output aside) and the shared cache's touch, which this
     // benchmark has no use for; every other command of the deps and build stages is the recipe's.
     const packaging = [/^mkdir -p \/out$/, /^cp (-r )?\S+ \/out\/\S+$/, /^chmod 644 /, /^find \. -name target -prune -o -type f -exec touch \{\} \+$/, /^npm prune --omit=dev$/];
-    const mine = [...parts(r.deps), ...parts(r.build)];
+    const mine = [...parts(r.deps), ...(r.build ? parts(r.build) : [])];
     for (const stage of stages.filter((s) => s.run.some((c) => mine.some((m) => c.includes(m))))) {
       for (const command of stage.run.flatMap((c) => c.split(" && ").map((x) => x.trim()))) {
         assert.ok(mine.includes(command) || packaging.some((p) => p.test(command)), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
@@ -176,8 +176,12 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
       if (r.stage) assert.equal(stage.from, "tools", `${name}: its build stage starts from its tools stage`);
     }
     const run = stages.flatMap((s) => s.run).join(" && ");
-    for (const part of [...parts(r.deps), ...parts(r.build)]) assert.ok(run.includes(part), `${name}: its Dockerfile does not run ${part}`);
-    const build = stages.find((s) => s.run.some((c) => c.includes(parts(r.build)[0])));
+    for (const part of mine) assert.ok(run.includes(part), `${name}: its Dockerfile does not run ${part}`);
+    // An app with no build step: its Dockerfile runs nothing after the dependency step, and what
+    // that stage sets and fetches is checked as a build stage's is.
+    const last = parts(r.build ?? r.deps)[0];
+    const build = stages.find((s) => s.run.some((c) => c.includes(last)));
+    if (!r.build) assert.ok(build && build.run.at(-1)?.includes(parts(r.deps).at(-1) ?? ""), `${name}: it has no build, but its Dockerfile runs something after its dependencies`);
     assert.ok(build, `${name}: no stage runs its build`);
     if (!r.stage) assert.equal(stages[0].from, r.tools, `${name}: its toolchain is its Dockerfile's first image`);
     assert.ok(stages.some((s) => s.workdir.includes(r.workdir)), `${name}: its Dockerfile has no WORKDIR ${r.workdir}`);

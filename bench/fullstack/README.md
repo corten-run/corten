@@ -1,4 +1,4 @@
-# Full-stack comparison: one marketplace item page in eighteen apps
+# Full-stack comparison: one marketplace item page in twenty apps
 
 This is the historical marketplace workload with **non-equivalent localization work**:
 Corten formats values per request while the other implementations use stored strings
@@ -8,7 +8,7 @@ not valid general framework speed rankings. The separate
 strings-only page work without currency or number localization. Its results start a new
 baseline; they do not replace or form a before/after comparison with the tables here.
 [Marketplace v2](../marketplace/README.md) implements equivalent request-time locale formatting
-in eighteen adapters, with a whole-page conformance gate and its own repeated-pass runner.
+in twenty adapters, with a whole-page conformance gate and its own repeated-pass runner.
 It starts a separate baseline and becomes the nightly workload at official r17. See the
 [nightly procedure](../marketplace/nightly.md). Compare only compatible v2 rounds, never an
 r16 or catalog c1 delta. Catalog remains an optional separate diagnostic, not a nightly duplicate.
@@ -36,6 +36,8 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 | gin | Gin 1.12.0, Go 1.27, templ 0.3, htmx | [apps/gin](apps/gin) | not yet |
 | drogon | Drogon 1.9.14 (C++), CSP views, JsonCpp, htmx | [apps/drogon](apps/drogon) | not yet |
 | django | Django 6.1.2, Python 3.14, gunicorn 26 (3 sync workers), htmx | [apps/django](apps/django) | not yet |
+| fastapi | FastAPI 0.162.2, Python 3.14, Jinja2, `fastapi run` (uvicorn, one process), htmx | [apps/fastapi](apps/fastapi) | not yet |
+| express | Express 5.3.0, Node 24, EJS 7, htmx | [apps/express](apps/express) | not yet |
 | rails | Rails 8.1.4, Ruby 3.4 with YJIT, Puma (3 threads), Turbo and Stimulus | [apps/rails](apps/rails) | not yet |
 | laravel | Laravel 13.38, PHP 8.4, Octane on FrankenPHP (2 workers), Livewire 4.4 | [apps/laravel](apps/laravel) | not yet |
 | phoenix | Phoenix 1.8.16, LiveView 1.2, Elixir 1.19 on OTP 28, Bandit | [apps/phoenix](apps/phoenix) | not yet |
@@ -65,12 +67,12 @@ answers `GET /api/items/{id}` with the same JSON. A round runs parity and `look.
 server tests, with every app fetching items from the item API, so the home page they compare is
 the list of item links; `check-app.mjs`, which every app passes before it joins a round, runs
 both with items in memory, where the home page is Corten's cards, and compares the JSON. The
-tables below are from r16, with all eighteen page apps plus JSON-only aspnet-aot, each page app rendering Corten's markup
+tables below are from r16, with all eighteen page apps then plus JSON-only aspnet-aot (FastAPI and Express joined after it and have no rows yet), each page app rendering Corten's markup
 and stylesheets (caveat 12). Each app
 has the same interactions: a sort (in the browser, except where the framework renders again on
 the server: Phoenix's LiveView and Topcoat's shard, each a round trip), a form action that
 updates part of the page, and client-side navigation from the home page, each done the
-framework's usual way (htmx for Razor Pages, Spring, Django, Gin, Drogon and axum + Maud; Turbo
+framework's usual way (htmx for Razor Pages, Spring, Django, FastAPI, Express, Gin, Drogon and axum + Maud; Turbo
 for Rails; Livewire for Laravel; LiveView for Phoenix; shards, signals and a procedure for
 Topcoat).
 The item page's first response carries its first five offers in every app, and "Show all N
@@ -1414,8 +1416,10 @@ companion its documentation points to for it (tower-http for axum); a part that 
 write its own handler, error mapper or server loop is left out, as the defaults tier leaves it. The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
 rule (Corten; axum-maud, the anchor every tier shares; the three best on the tier's own measure
 and the four most used in the Stack Overflow survey, on r13 and the 2026 survey ASP.NET Core,
-Topcoat and Leptos, and Next.js, ASP.NET Core, Spring and Django; ASP.NET Core as its Razor Pages
-app in the page phases and its native AOT app in the JSON ones), are eight. An app takes part
+Topcoat and Leptos, and Next.js, ASP.NET Core, FastAPI and Express; ASP.NET Core as its Razor Pages
+app in the page phases and its native AOT app in the JSON ones), are eight. Spring Boot and Django,
+fifth and seventh in that survey, left the four when FastAPI and Express joined the bench
+([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)); they stay in the defaults tier. An app takes part
 (`matched: true` in `apps.mjs`) once it starts with its profile:
 
 1. `corten`: card-market's defaults are the profile's first two parts; `MAX_CONNECTIONS` sets
@@ -1428,7 +1432,7 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    are the app's own code, which the profile does not change, as no framework's error pages are
    rewritten by hand; and `axum::serve` has no header timeout or head size setting (hyper's are
    reached by writing the accept loop on hyper-util). Those columns stay unmet.
-3. `nextjs`, `leptos`, `django`, `aspnet` (and `aspnet-aot`), `spring` and `topcoat` are not
+3. `nextjs`, `leptos`, `aspnet` (and `aspnet-aot`), `topcoat`, `fastapi` and `express` are not
    in it yet: each joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured

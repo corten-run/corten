@@ -10,7 +10,7 @@ This page gathers the comparisons; how each number is taken is in the benchmark 
 No single table establishes overall framework speed. The historical marketplace measures a
 richer application, with the work differences stated below. The separate catalog measures a
 strings-only page and JSON. [Marketplace v2](../bench/marketplace/README.md) adds a separate
-rich-page workload with request-time localization in all eighteen adapters, a whole-page
+rich-page workload with request-time localization in all twenty adapters, a whole-page
 conformance gate and a repeated-pass runner. It starts its own baseline; no v2 performance
 results replace the historical tables here. Old marketplace localization was non-equivalent:
 Corten formatted values per request while some others used stored strings or non-localized formatting. Those
@@ -46,7 +46,7 @@ The nightly suite measures CPU, memory, load and cold start. Three passes use
 `--duration 15 --warmup 10 --rate 150` on a dedicated c-8 with app CPU 1, upstream CPUs 2-3
 and load-generator CPUs 4-7. Pages are timed in `en-US`, `fr-FR` and `de-DE`; locale-neutral
 JSON is timed once per source per pass, not repeated as a locale control. The pre-load gate
-still requires all eighteen apps, both sources and every conformance profile.
+still requires all twenty apps (eighteen in r17), both sources and every conformance profile.
 
 Report these as short-window medians and ranges, with errors, utilization and headroom limits;
 they do not guarantee a finish by 7 am or establish small differences without repeatability.
