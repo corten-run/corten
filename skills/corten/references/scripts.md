@@ -293,8 +293,8 @@ where a form in that part posts, whose route reads the sort the same way as the 
 form whose route reads it, a GET form in the part included, calls
 `on:submit={ordered::send(event, target, [sorted(&TableId)])}`, and a link
 `on:connect={ordered::link(target, [sorted(&TableId)], signal)}` (the kit's `Pagination` and
-`PreviousNext` take that call as `on:link`, put on each link they draw), and sends the order on screen,
-a GET form in place of its `keep_query` hidden inputs); a paged table sorts
-on the server across its pages (`on:sort={None::<Handler>}`, its pager `on:link={None::<Handler>}`),
-or sorts only the page shown, in place (its sort links keep the page, its caption says the order
-covers the rows shown, and its pager passes `ordered::link` as `on:link`). Do not write these handlers in the app.
+`PreviousNext` take that call as `on:link`, put on each link they draw), and sends the order on
+screen, a GET form in place of its `keep_query` hidden inputs); a paged table sorts on the server
+across its pages (`on:sort={None::<Handler>}`, its pager `on:link={None::<Handler>}`), or sorts only
+the page shown, in place (its sort links keep the page, its caption says the order covers the rows
+shown, and its pager passes `ordered::link` as `on:link`). Do not write these handlers in the app.

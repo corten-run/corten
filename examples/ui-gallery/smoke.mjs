@@ -792,6 +792,9 @@ async function run(browser) {
   // a control the user sees sends is left to it.
   {
     const outside = await page.context().newPage();
+    /** @type {string[]} */
+    const outsideErrors = [];
+    outside.on("console", (m) => m.type() === "error" && outsideErrors.push(m.text()));
     await outside.route(
       (url) => url.href === unsorted,
       async (route) => {
@@ -822,7 +825,9 @@ async function run(browser) {
           `<a id="back" href="/sales-back?shop=a&amp;sold=day&amp;src=2#rows" ${linked(["other-table", "sales-box"])}>Previous</a> ` +
           `<a id="mid" href="/sales-back?src=3" ${linked(["sales-box"])}>Middle</a> ` +
           `<form id="far" method="get" action="https://example.com/far" ${on("submit", ["sales-box"])}><input type="hidden" name="sold" value="day"><button>Far</button></form>` +
-          `<a id="away" href="/sales-back?sold=day" ${linked(["find"])}>Away</a> <a id="bare" ${linked(["sales-box"])}>Bare</a>`;
+          `<a id="away" href="/sales-back?sold=day" ${linked(["find"])}>Away</a> <a id="bare" ${linked(["sales-box"])}>Bare</a>` +
+          // An element that is not a link, which the compiler cannot refuse to a pager's handler.
+          `<span id="unlinked" ${linked(["sales-box"])}>Not a link</span>`;
         // The wrapper holds a table without sort links first: the sorted one is still found.
         body = `${body.slice(0, at)}${forms}<div id="sales-box"><table><thead><tr><th>Plain</th></tr></thead></table>${body.slice(at, end)}</div>${body.slice(end)}`;
         await route.fulfill({ status: res.status(), headers, body });
@@ -981,6 +986,12 @@ async function run(browser) {
       JSON.stringify(posted) === JSON.stringify(["/sales-supply?shop=a&sold=price"]) && sentTo[0] === "/sales-back?shop=a&src=2&sold=price",
       `${posted.join(" ")} ${sentTo.join(" ")}`,
     );
+    check(
+      // Once each time the element joins the page, and this page is loaded several times.
+      "ordered::link on an element that is not a link says so in the console",
+      outsideErrors.some((text) => text.includes("ordered: link keeps the order in a link's href; this element is not a link")),
+      JSON.stringify(outsideErrors),
+    );
     await outside.close();
   }
   await sales.getByRole("link", { name: "Price" }).click();
@@ -1006,7 +1017,7 @@ async function run(browser) {
     await earlier.hover();
     const href = await earlier.getAttribute("href");
     await earlier.click();
-    await page.getByText("This month's earlier sales", { exact: true }).waitFor();
+    await page.getByText("This month's earlier sales, sorted among themselves", { exact: true }).waitFor();
     const there = new URL(page.url()).searchParams;
     const buyers = await salesTable("This month's earlier sales").locator("tbody tr td:nth-child(2)").allTextContents();
     check(
@@ -1020,7 +1031,7 @@ async function run(browser) {
     );
     await salesTable("This month's earlier sales").getByRole("link", { name: "Price" }).click();
     await page.getByRole("navigation", { name: "Sales pages" }).getByRole("link", { name: "Later sales" }).click();
-    await page.getByText("This month's last sales", { exact: true }).waitFor();
+    await page.getByText("This month's last sales, sorted among themselves", { exact: true }).waitFor();
     const back = new URL(page.url()).searchParams;
     check("the earlier page's Later sales link (PreviousNext's previous) takes a sort in place there too", back.get("sold") === "price" && !back.has("sales"), page.url());
   }
