@@ -8025,6 +8025,22 @@ fn has_ipv6_loopback() -> bool {
     std::net::TcpListener::bind("[::1]:0").is_ok()
 }
 
+/// A burst of clients larger than the standard library's backlog of 128 all finish connecting
+/// before the server accepts one: none waits for its SYN to be sent again. Linux drops a SYN
+/// when the queue is full, so the 129th connection would time out here.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit() {
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let mut held = Vec::new();
+    for n in 0..300 {
+        let connected = tokio::time::timeout(Duration::from_millis(500), tokio::net::TcpStream::connect(addr)).await;
+        held.push(connected.unwrap_or_else(|_| panic!("connection {n} waited")).unwrap());
+    }
+    drop(listeners);
+}
+
 /// Without `HOST`, `localhost` is both loopback addresses on one port, so a browser that tries
 /// `::1` first is answered at once, not after a fallback; stopping ends both.
 #[tokio::test]

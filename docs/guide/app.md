@@ -663,6 +663,11 @@ binds `HOST`:`PORT` (both loopback addresses without `HOST`, port 3000 without `
 that implements `corten::Listener`, with `serve`'s shutdown across all of them
 (tasks told, live streams ended, every listener closed and drained, tasks waited for). A Unix
 socket, or a socket a supervisor hands over, is a listener of the app's own.
+`listeners` asks the system to hold up to 4096 connections that finished their handshake but
+are not yet accepted (Linux caps it at `net.core.somaxconn`), not the standard library's 128: a
+burst of clients faster than the server accepts them waits in that queue, not a second or more
+for a resent SYN.
+A listener of the app's own sets its own.
 
 HTTPS is a step on each connection before HTTP, which `corten::serve_wrapped` takes: the TLS
 handshake. TLS stays the app's choice of library, and so does its configuration. With

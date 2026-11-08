@@ -1465,14 +1465,24 @@ where
 /// port another process holds is an error: `localhost` would reach that process instead (port 0,
 /// any free port, tries another pair).
 pub(crate) async fn bind(host: Option<&str>, port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
     if let Some(host) = host {
-        return Ok(vec![tokio::net::TcpListener::bind((host, port)).await?]);
+        // Each address the host resolves to in turn, as `TcpListener::bind` tries them.
+        let mut last = None;
+        for addr in tokio::net::lookup_host((host, port)).await? {
+            match listen(addr) {
+                Ok(listener) => return Ok(vec![listener]),
+                Err(error) => last = Some(error),
+            }
+        }
+        return Err(last.unwrap_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("HOST {host} resolves to no address"))
+        }));
     }
     let mut tries = 0;
     loop {
-        let v4 = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
-        match tokio::net::TcpListener::bind((Ipv6Addr::LOCALHOST, v4.local_addr()?.port())).await {
+        let v4 = listen(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))?;
+        match listen(SocketAddr::from((Ipv6Addr::LOCALHOST, v4.local_addr()?.port()))) {
             Ok(v6) => return Ok(vec![v4, v6]),
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
                 tries += 1;
@@ -1483,6 +1493,25 @@ pub(crate) async fn bind(host: Option<&str>, port: u16) -> std::io::Result<Vec<t
             Err(_) => return Ok(vec![v4]),
         }
     }
+}
+
+/// How many connections the kernel holds finished (handshake done) for the server to accept. The
+/// standard library's 128, which `TcpListener::bind` uses, overflows when clients connect faster
+/// than the server accepts them: with 1,024 k6 clients starting at once against a page on one
+/// CPU, 75 and 454 connections (two runs) waited a second or more for their SYN to be sent again,
+/// and none with this. The system caps it (Linux at `net.core.somaxconn`, 4096 by default); a
+/// queued connection costs kernel memory only while it waits.
+const BACKLOG: u32 = 4096;
+
+/// A listener on `addr` with [`BACKLOG`], otherwise as `TcpListener::bind` makes it
+/// (`SO_REUSEADDR` on Unix, so a restarted server binds a port its last connections still hold
+/// in `TIME_WAIT`).
+fn listen(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+    let socket = if addr.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
+    #[cfg(unix)]
+    socket.set_reuseaddr(true)?;
+    socket.bind(addr)?;
+    socket.listen(BACKLOG)
 }
 
 /// Serves `router` on every listener, each connection after its step `wrap`, until `stop`
