@@ -1,0 +1,7 @@
+/node_modules/
+/.next/
+/.output/
+/build/
+/src/routeTree.gen.ts
+/next-env.d.ts
+*.tsbuildinfo

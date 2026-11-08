@@ -80,6 +80,8 @@ GEM
     bootsnap (1.26.0)
       msgpack (~> 1.5)
     builder (3.3.0)
+    camertron-eprun (2.0.0)
+    cldr-plurals-runtime-rb (1.2.0)
     concurrent-ruby (1.3.8)
     connection_pool (3.0.2)
     crass (1.0.8)
@@ -217,6 +219,11 @@ GEM
     turbo-rails (2.0.23)
       actionpack (>= 7.1.0)
       railties (>= 7.1.0)
+    twitter_cldr (6.14.0)
+      base64
+      camertron-eprun
+      cldr-plurals-runtime-rb (~> 1.1)
+      tzinfo
     tzinfo (2.0.6)
       concurrent-ruby (~> 1.0)
     uri (1.1.2)
@@ -247,6 +254,7 @@ DEPENDENCIES
   rails (~> 8.1.4)
   stimulus-rails
   turbo-rails
+  twitter_cldr (= 6.14.0)
   tzinfo-data
 
 BUNDLED WITH

@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Support\CatalogSource;
 use App\Support\ItemSource;
+use App\Support\MarketplaceSource;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -12,6 +13,7 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->app->singleton(ItemSource::class);
         $this->app->singleton(CatalogSource::class);
+        $this->app->singleton(MarketplaceSource::class);
     }
 
     public function boot(): void
@@ -22,6 +24,7 @@ class AppServiceProvider extends ServiceProvider
         if (! $this->app->runningInConsole()) {
             $this->app->make(ItemSource::class);
             $this->app->make(CatalogSource::class);
+            $this->app->make(MarketplaceSource::class);
         }
     }
 }

@@ -51,7 +51,8 @@ defmodule ItemPage.MixProject do
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
-      {:req, "~> 0.5"}
+      {:req, "~> 0.5"},
+      {:ex_cldr_numbers, "~> 2.38"}
     ]
   end
 

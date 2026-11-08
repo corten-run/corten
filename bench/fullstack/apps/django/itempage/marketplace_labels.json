@@ -1,0 +1,29 @@
+{
+  "en-US": {
+    "lowest": "lowest", "listing_one": "listing", "listing_other": "listings", "listing_many": "listings",
+    "available": "available", "no_listings": "No listings yet", "listings": "Listings", "offers": "Offers",
+    "seller": "Seller", "buyer": "Buyer", "condition": "Condition", "ships_from": "Ships from", "qty": "Qty", "price": "Price", "reviews": "Reviews",
+    "filter": "Seller prefix", "sort": "Price order", "asc": "Low to high", "desc": "High to low", "apply": "Apply", "show_all": "Show all offers",
+    "alert": "Price alert", "email": "Email", "target": "Alert me below", "submit": "Set alert", "invalid_email": "Enter a valid email address.",
+    "invalid_price": "Enter a target price above zero.", "alert_set": "Alert set: we will email {email} when {title} drops below {price}.",
+    "details": "Details", "contents": "Contents", "included": "Included in"
+  },
+  "fr-FR": {
+    "lowest": "le plus bas", "listing_one": "annonce", "listing_other": "annonces", "listing_many": "d’annonces",
+    "available": "disponibles", "no_listings": "Aucune annonce pour l'instant", "listings": "Annonces", "offers": "Offres",
+    "seller": "Vendeur", "buyer": "Acheteur", "condition": "État", "ships_from": "Expédié de", "qty": "Qté", "price": "Prix", "reviews": "Avis",
+    "filter": "Préfixe du vendeur", "sort": "Ordre des prix", "asc": "Prix croissant", "desc": "Prix décroissant", "apply": "Appliquer", "show_all": "Voir toutes les offres",
+    "alert": "Alerte de prix", "email": "E-mail", "target": "M'alerter sous", "submit": "Créer l'alerte", "invalid_email": "Saisissez une adresse e-mail valide.",
+    "invalid_price": "Saisissez un prix cible supérieur à zéro.", "alert_set": "Alerte créée : nous écrirons à {email} quand {title} passera sous {price}.",
+    "details": "Détails", "contents": "Contenu", "included": "Inclus dans"
+  },
+  "de-DE": {
+    "lowest": "niedrigster Preis", "listing_one": "Angebot", "listing_other": "Angebote", "listing_many": "Angebote",
+    "available": "verfügbar", "no_listings": "Noch keine Angebote", "listings": "Verkaufsangebote", "offers": "Kaufangebote",
+    "seller": "Verkäufer", "buyer": "Käufer", "condition": "Zustand", "ships_from": "Versand aus", "qty": "Menge", "price": "Preis", "reviews": "Bewertungen",
+    "filter": "Verkäuferpräfix", "sort": "Preisreihenfolge", "asc": "Aufsteigend", "desc": "Absteigend", "apply": "Anwenden", "show_all": "Alle Kaufangebote anzeigen",
+    "alert": "Preisalarm", "email": "E-Mail", "target": "Benachrichtigen unter", "submit": "Preisalarm setzen", "invalid_email": "Geben Sie eine gültige E-Mail-Adresse ein.",
+    "invalid_price": "Geben Sie einen Zielpreis über null ein.", "alert_set": "Preisalarm gesetzt: Wir schreiben an {email}, wenn {title} unter {price} fällt.",
+    "details": "Details", "contents": "Inhalt", "included": "Enthalten in"
+  }
+}

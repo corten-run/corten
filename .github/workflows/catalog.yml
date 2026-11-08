@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/catalog.yml
       - bench/catalog/**
+      - bench/marketplace/**
       - bench/fullstack/apps/**
       - bench/fullstack/apps.mjs
       - bench/fullstack/passes.mjs
@@ -19,6 +20,7 @@ on:
     paths:
       - .github/workflows/catalog.yml
       - bench/catalog/**
+      - bench/marketplace/**
       - bench/fullstack/apps/**
       - bench/fullstack/apps.mjs
       - bench/fullstack/passes.mjs
@@ -45,6 +47,8 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npx playwright install --with-deps chromium
       - run: node bench/catalog/fixtures.mjs
+      - run: node bench/marketplace/fixtures.mjs
+      - run: npm run check:marketplace
       - run: node --test bench/catalog/*.test.mjs
         env:
           CATALOG_DOCKER_TESTS: "1"
@@ -65,18 +69,26 @@ jobs:
           node-version: 24
       - run: npm ci --no-audit --no-fund
       - run: node bench/catalog/fixtures.mjs
+      - run: node bench/marketplace/fixtures.mjs
       - name: Test the standalone Corten app
         if: matrix.app == 'corten'
         run: cargo test --manifest-path bench/catalog/corten/Cargo.toml --locked
+      - name: Test the localized Corten app
+        if: matrix.app == 'corten'
+        run: cargo test --manifest-path bench/marketplace/corten/Cargo.toml --locked
       # check-only still launches BOTH fixture and API sources and fails on any
       # structural, styling, escaping, navigation, schema, or upstream-read error.
       # This workflow does not measure/publish performance or touch nightly state.
       - name: Build and verify both catalog sources
         run: node bench/catalog/run.mjs c1 --apps ${{ matrix.app }} --build --check-only
+      - name: Build and verify localized marketplace sources
+        run: node bench/marketplace/run.mjs w1 --apps ${{ matrix.app }} --build --check-only
       - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: catalog-contract-${{ matrix.app }}
-          path: bench/catalog/results/c1/
+          path: |
+            bench/catalog/results/c1/
+            bench/marketplace/results/w1/
           if-no-files-found: warn
           retention-days: 14

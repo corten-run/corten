@@ -65,6 +65,26 @@ baseline. Marketplace rounds `r1` through `r16` must not be described as before 
 this page, or mixed into a catalog trend. Framework production settings can still differ;
 equal application work is not a claim that their middleware, hydration or transports are equal.
 
+Generate a read-only report from a saved `summary.json`, including preliminary or failed runs:
+
+```sh
+node bench/catalog/report.mjs bench/catalog/results/c1/summary.json
+node bench/catalog/report.mjs bench/catalog/results/c1/summary.json --commit FULL_MEASURED_SHA --require-complete
+```
+
+The second command exits unsuccessfully unless all eighteen apps, all requested 64-user passes,
+the per-app correctness evidence, canonical fixture identity, measurement configuration,
+clean-tree provenance and cleanup succeeded. Supply the full measured
+commit, not a branch name. Reports include phase duration, warmup, fixed rate and CPU placement,
+label partial pass counts and every app's throughput range, show Corten's CPU efficiency,
+memory and latency, and flag underutilized app CPUs or busy single-process
+upstreams. A successful correctness baseline is not proof the app saturated its CPU. Inspect
+the raw artifacts and `host.txt` as well; the report does not collect results or delete a host.
+
+The proposed [marketplace v2 contract](../marketplace/README.md) retains a richer app workload
+while requiring equivalent request-time localization. It is groundwork, not a measured or
+ready-to-run replacement for catalog or the historical marketplace suite.
+
 ## Running it
 
 From the repository root, with Node 24, Docker and Playwright Chromium installed:

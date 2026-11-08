@@ -20,7 +20,7 @@ use corten_ui::{Toast, Toaster};
 use crate::gallery::{
     CARD, Condition, Gallery, MarketTab, MenuResult, OrderResult, Period, Pricing, Region, RenameDialog, Sale, Times,
 };
-use crate::orders::{Orders, PAGES, SettingsForm};
+use crate::orders::{Orders, PAGES, PAYOUTS, SettingsForm};
 use crate::ui::{
     button::{Button, ButtonSize, ButtonVariant},
     nav_bar::{NavActions, NavBar, NavBrand, NavSections},
@@ -80,6 +80,8 @@ pub mod url {
     pub struct Orders {
         pub page: Option<usize>,
         pub sort: Option<crate::orders::OrderSort>,
+        /// Which payout the payouts card shows, newest first: none is the newest.
+        pub payout: Option<usize>,
     }
 
     #[route("/orders/settings", post = settings)]
@@ -126,7 +128,7 @@ fn Layout<'a>(req: &'a Req, title: &'a str, toast: Toast<&'a str>, children: imp
                     <a class={NavBrand {}} href={DRAFT}>"corten-ui"</a>
                     <nav class={NavSections {}} aria-label="Sections">
                         <a {..req.nav(&DRAFT)}>"Draft"</a>
-                        <a {..req.nav(&url::Orders { page: None, sort: None })}>"Orders"</a>
+                        <a {..req.nav(&url::Orders { page: None, sort: None, payout: None })}>"Orders"</a>
                     </nav>
                     <div class={NavActions {}}>
                         <a class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }} href={url::Help}>"Help"</a>
@@ -342,11 +344,12 @@ async fn menu_action(req: Req, text: &'static str) -> HtmlResult {
 /// A page of the orders: one past the last is the last.
 async fn orders(req: Req, Params(q): Params<url::Orders>) -> HtmlResult {
     let page = q.page.unwrap_or(1).clamp(1, PAGES);
+    let payout = q.payout.unwrap_or(0).min(PAYOUTS.len() - 1);
     // The avatar takes the address as text.
     let (t, photo) = (req.t(), req.asset(Static::FAVICON_SVG).to_string());
     req.page(html! {
         <Layout req={&req} title="Orders | corten-ui" toast={QUIET}>
-            <Orders t={t} page={page} sort={q.sort} photo={&photo} />
+            <Orders t={t} page={page} sort={q.sort} payout={payout} photo={&photo} />
         </Layout>
     })
 }
@@ -357,7 +360,7 @@ async fn settings(req: Req, Form(form): Form<SettingsForm>) -> HtmlResult {
     let emails = if form.notify { "on" } else { "off" };
     let note = if form.note.trim().is_empty() { "no note" } else { "your note" };
     req.redirect_with_notice(
-        &url::Orders { page: None, sort: None },
+        &url::Orders { page: None, sort: None, payout: None },
         format_args!("Saved: ships from {from} in {days} days on {labels} labels with {note}; shipping emails {emails}."),
     )
 }
@@ -422,7 +425,7 @@ mod tests {
 
     /// The orders at `page`, sorted by `sort`.
     async fn orders(page: Option<usize>, sort: Option<OrderSort>) -> String {
-        client().get(&url::Orders { page, sort }).await.text().to_string()
+        client().get(&url::Orders { page, sort, payout: None }).await.text().to_string()
     }
 
     /// The sale form, filled in with one copy at an ounce in Lightly Played: the rest as given.

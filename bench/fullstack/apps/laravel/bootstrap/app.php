@@ -13,8 +13,8 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        // Catalog prefixes are literal text, including leading/trailing whitespace and "".
-        $catalog = fn (Request $request) => $request->is('catalog/*');
+        // Catalog and marketplace prefixes are literal text, including whitespace and "".
+        $catalog = fn (Request $request) => $request->is('catalog/*', 'marketplace/*');
         $middleware->trimStrings(except: [$catalog]);
         $middleware->convertEmptyStringsToNull(except: [$catalog]);
         // The live benchmark's publisher is another service, not a browser form.
