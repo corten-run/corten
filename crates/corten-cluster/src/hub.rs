@@ -165,7 +165,13 @@ impl<S: Source> Hub<S> {
                 other => (Feed::follow(loaded.generation, loaded.seq, loaded.rows), other),
             };
             if let Err(e) = feed.backfill(loaded.recent) {
-                eprintln!("hub {instance}: {log_key}: no replay log from the outbox: {e}");
+                tracing::warn!(
+                    target: "corten::feed",
+                    instance = %instance,
+                    feed = %log_key,
+                    error = %e,
+                    "no replay log from the outbox: clients moving to this instance resync"
+                );
             }
             (feed, replaced)
         })
@@ -234,12 +240,19 @@ impl<S: Source> Hub<S> {
         }
         match feed.apply(&message.json) {
             Ok(_) => true,
-            Err(e @ ApplyError::Gap { .. }) => {
-                eprintln!("hub {}: {key}: {e}", self.options.instance);
+            Err(ApplyError::Gap { have, got }) => {
+                tracing::warn!(
+                    target: "corten::feed",
+                    instance = %self.options.instance,
+                    feed = %key,
+                    have,
+                    got,
+                    "gap in the feed's patches: reloading it"
+                );
                 false
             }
             Err(e) => {
-                eprintln!("hub {}: {key}: dropping {e}", self.options.instance);
+                tracing::warn!(target: "corten::feed", instance = %self.options.instance, feed = %key, error = %e, "patch dropped");
                 true
             }
         }
@@ -254,7 +267,13 @@ impl<S: Source> Hub<S> {
         let key = key.to_string();
         tokio::spawn(async move {
             if let Err(e) = hub.load(key.clone()).await {
-                eprintln!("hub {}: reloading {key} failed: {e}", hub.options.instance);
+                tracing::warn!(
+                    target: "corten::feed",
+                    instance = %hub.options.instance,
+                    feed = %key,
+                    error = %e,
+                    "reloading the feed failed"
+                );
             }
         });
     }
@@ -346,8 +365,7 @@ impl<S: Source> Hub<S> {
 }
 
 /// Whether two handles are one feed. A feed's generation is a string it owns, so while both
-/// handles live, the same address means the same feed. (Two feeds with an empty generation look
-/// the same; the cost is one reload too many.)
+/// handles live, the same address means the same feed (a generation is never empty).
 fn same<T: corten::feed::Row>(a: &Feed<T>, b: &Feed<T>) -> bool {
     std::ptr::eq(a.generation(), b.generation())
 }
@@ -414,7 +432,12 @@ pub(crate) async fn start<S: Source>(hub: Arc<Hub<S>>, js: jetstream::Context) -
                         hub.on_message(key, Message { generation, json });
                     }
                     Err(e) => {
-                        eprintln!("hub {}: consumer error: {e}", hub.options.instance);
+                        tracing::warn!(
+                            target: "corten::feed",
+                            instance = %hub.options.instance,
+                            error = %e,
+                            "JetStream consumer failed: every loaded feed reloads"
+                        );
                         break;
                     }
                 }
@@ -428,7 +451,9 @@ pub(crate) async fn start<S: Source>(hub: Arc<Hub<S>>, js: jetstream::Context) -
                         hub.reload_all();
                         break;
                     }
-                    Err(e) => eprintln!("hub {}: resubscribing: {e}", hub.options.instance),
+                    Err(e) => {
+                        tracing::warn!(target: "corten::feed", instance = %hub.options.instance, error = %e, "resubscribing to JetStream failed")
+                    }
                 }
             }
         }
@@ -460,5 +485,93 @@ pub(crate) async fn unload_idle<S: Source>(hub: Arc<Hub<S>>, after: Duration) {
     loop {
         tick.tick().await;
         hub.unload_idle(after);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use corten::feed::{patch_json, Change, Feed, Row};
+    use serde::{Deserialize, Serialize};
+    use sqlx::{postgres::PgPoolOptions, PgConnection};
+
+    use super::{Hub, Message};
+    use crate::{Error, Options, Source};
+
+    #[derive(Clone, Debug, Serialize, Deserialize)]
+    struct Item {
+        id: String,
+        n: i64,
+    }
+
+    impl Row for Item {
+        fn id(&self) -> &str {
+            &self.id
+        }
+    }
+
+    /// No rows are read: the test applies patches to a feed it built.
+    struct NoRows;
+
+    impl Source for NoRows {
+        type Row = Item;
+
+        async fn rows(&self, _: &mut PgConnection, _: &str) -> Result<Vec<Item>, Error> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Each event as "LEVEL target field=value ..", in the order they came.
+    struct Capture(Arc<Mutex<Vec<String>>>);
+
+    impl tracing::Subscriber for Capture {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Fields(String);
+            impl tracing::field::Visit for Fields {
+                fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                    use std::fmt::Write;
+                    let _ = write!(self.0, " {}={value:?}", field.name());
+                }
+            }
+            let mut fields = Fields(format!("{} {}", event.metadata().level(), event.metadata().target()));
+            event.record(&mut fields);
+            self.0.lock().unwrap().push(fields.0);
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    #[tokio::test]
+    async fn a_gap_and_a_dropped_patch_are_warnings_the_apps_subscriber_sees_with_the_feed() {
+        // Never connected: applying a patch reads nothing from Postgres.
+        let pool = PgPoolOptions::new().connect_lazy("postgres://localhost/unused").unwrap();
+        let hub = Hub::new(pool, NoRows, Arc::new(Options { instance: "a1".into(), ..Options::default() }));
+        let feed = Feed::follow("g1", 10, vec![Item { id: "i".into(), n: 0 }]);
+        let item = Item { id: "i".into(), n: 1 };
+        let skips = Message { generation: "g1".into(), json: patch_json(12, &[Change::Upsert { id: "i", value: &item }]) };
+        let broken = Message { generation: "g1".into(), json: "{\"seq\":11}".into() };
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (gap, dropped) = tracing::subscriber::with_default(Capture(seen.clone()), || {
+            (hub.apply(&feed, "k1", &skips), hub.apply(&feed, "k1", &broken))
+        });
+        assert!(!gap, "a gap reloads the feed");
+        assert!(dropped, "an invalid patch is dropped and the feed goes on");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert!(seen[0].starts_with("WARN corten::feed"), "{}", seen[0]);
+        for field in ["instance=a1", "feed=k1", "have=10", "got=12"] {
+            assert!(seen[0].contains(field), "{field} in {}", seen[0]);
+        }
+        assert!(seen[1].starts_with("WARN corten::feed"), "{}", seen[1]);
+        assert!(seen[1].contains("feed=k1") && seen[1].contains("patch dropped"), "{}", seen[1]);
     }
 }

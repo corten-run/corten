@@ -1,6 +1,8 @@
 <?php
 
 use App\Events\PriceTick;
+use App\Http\Controllers\CatalogController;
+use App\Http\Controllers\MarketplaceController;
 use App\Support\ItemSource;
 use App\Support\ItemView;
 use Illuminate\Http\Request;
@@ -15,6 +17,9 @@ Route::get('/items/{id}', function (string $id, ItemSource $items) {
 
     return view('item', ['item' => $item, 'listings' => ItemView::sortedListings($item)]);
 });
+
+Route::get('/catalog/{id}', [CatalogController::class, 'show'])->name('catalog.show');
+Route::match(['get', 'post'], '/marketplace/{locale}/{id}', [MarketplaceController::class, 'show'])->name('marketplace.show');
 
 // The live benchmark (bench/live): one price update, broadcast now (no queue) to Reverb.
 Route::post('/live/publish', function (Request $request) {

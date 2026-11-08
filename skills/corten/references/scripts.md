@@ -186,12 +186,12 @@ Another source (a change stream, a queue) is `corten::live(stream)`: give each i
 `Last-Event-ID` after a reconnect) to send nothing until the next change when it is current. A
 slow part sent once is a stream of one item. See the live-data guide.
 
-A script that draws a stream's data itself (a progress bar from a job's state) reads named JSON
-events with `EventSource`: the route returns `corten::event_stream(stream)` of
-`StreamEvent::new("progress", &state).cursor(v)` (feature `json`), not a `Relay` or a hand-built
-`Sse`. A stream that is over answers the `EventSource`'s reconnect with
-`EventStreamResponse::ended()` (204), which stops it. Its names and data are untyped in the
-script, so prefer `<corten-live>` or a feed when either fits.
+A job's progress is a `<progress value max>` a `corten::live` stream draws again as the job
+moves; a growing log or a generated answer is a `view::Append(id, lines)` per piece. A script that
+keeps the data follows a feed (one job is a feed of one row), never an `EventSource` of its own
+reading untyped names. A stream in a format another party defines is a `Relay` of the app's own
+body, which sends `X-Accel-Buffering: no`, writes its own keep-alive comments and has a short
+`deadline` on its area or API so shutdown closes it (the live-data guide, Which one).
 
 A job another process runs has only a read to repeat. Many pages following one job: an
 `App::task` reads it on an interval into a `watch` channel, and each stream is `live_watch`. One
@@ -236,7 +236,9 @@ export function watch(cells, feed, signal) {
 ```
 
 The server renders the rows first; the feed only keeps them current. Clients resume from their
-last patch after a disconnect. Across several instances, use `corten-cluster`.
+last patch after a disconnect. Across several instances, use `corten-cluster`. A feed that
+mirrors a log is `Feed::follow(generation, seq, rows)`, its generation ASCII letters, digits, `.`
+and `_` only (`deploy.3`, never `deploy:3` or base64): it panics on anything else.
 
 ## Many rows: views
 

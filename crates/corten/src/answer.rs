@@ -83,7 +83,7 @@ pub enum Format {
 /// What a handler named in `#[corten::routes]` returns: the type says how the route's failures are
 /// answered ([`Answer::FORMAT`]) and what the handler may read ([`Answer::Inputs`]). Implemented
 /// for [`HtmlResult`], [`JsonResult<T>`], `Result<JsonResponse, JsonError>`, [`Public`], [`NoStore`], text, a bare `StatusCode`,
-/// [`LiveResponse`], [`EventStreamResponse`], feeds, [`Media`], a [`Relay`], [`PageOr`] and [`crate::seo::File`]; a crate may add
+/// [`LiveResponse`], feeds, [`Media`], a [`Relay`], [`PageOr`] and [`crate::seo::File`]; a crate may add
 /// its own.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not an answer a route can name",
@@ -810,10 +810,11 @@ impl Answer for Relay {
 }
 
 /// Bytes the app holds, sent as their media type: a picture a user uploaded, a document the app
-/// made. The type is one the app names (`"image/png"`), never the one a client sent with the
-/// bytes: read an upload's type from its first bytes. What keeps a file that holds HTML from
-/// running as a page is the app's headers, which every `Media` gets: browsers do not guess
-/// another type (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script.
+/// made, or bytes it makes as they are sent ([`Media::stream`]). The type is one the app names
+/// (`"image/png"`), never the one a client sent with the bytes: read an upload's type from its
+/// first bytes. What keeps a file that holds HTML from running as a page is the app's headers,
+/// which every `Media` gets: browsers do not guess another type
+/// (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script.
 ///
 /// It is cached as anything the app answers is (`private, no-cache`). At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
@@ -849,6 +850,105 @@ impl Media {
         use axum::http::{header, HeaderValue};
         let mut res = Response::new(axum::body::Body::from(bytes.into()));
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
+        Media(res)
+    }
+
+    /// Bytes the app makes as they are sent, as `media_type`: an export too large to hold (every
+    /// order as CSV, an archive) goes out a chunk at a time, and the client has the first chunk
+    /// before the last is made. The stream is pulled only as fast as the client reads, so memory
+    /// stays at a few chunks however large the file, and when the client leaves it is dropped,
+    /// which stops whatever makes it (a database cursor, a channel whose sender then fails).
+    ///
+    /// ```
+    /// use corten::{prelude::*, Bytes, Media};
+    /// use futures_util::StreamExt;
+    ///
+    /// async fn export() -> Media {
+    ///     // A page of rows at a time, from the app's store.
+    ///     let pages = futures_util::stream::iter(0..3).map(|page| {
+    ///         let rows: String = (0..500).map(|i| format!("{},card {i}\n", page * 500 + i)).collect();
+    ///         Ok::<_, std::io::Error>(Bytes::from(rows))
+    ///     });
+    ///     Media::stream("text/csv", pages).attachment("orders.csv")
+    /// }
+    /// # let _: Methods = get(export);
+    /// ```
+    ///
+    /// Everything else is `Media`'s: its file name ([`Media::attachment`]), its headers, private
+    /// unless [`Public`]. A text type is compressed a chunk at a time as it comes (zstd or brotli,
+    /// as an event stream is, each ended when the stream ends), so a chunk of some kilobytes (a
+    /// few hundred rows) compresses far better than a row each. It goes out uncompressed in two
+    /// cases: to a client that takes only gzip (a script whose HTTP library has neither brotli
+    /// nor zstd), and while the server's compressed streams already hold their memory budget. No
+    /// `ETag` is made for it, since that would need the whole body.
+    ///
+    /// What can fail before anything is sent (a query that does not run, a file that is not
+    /// there) is the handler's to try first, returning its error as any handler does: once the
+    /// stream begins, the status and headers are sent. A chunk that is an `Err` after that ends
+    /// the connection without the body's end, so the client knows the file is incomplete (a
+    /// browser reports the download failed), and the error is logged; it cannot become an error
+    /// page or a redirect. The request's deadline bounds the handler, not the stream, and
+    /// [`App::send_timeout`](crate::App::send_timeout) closes a connection whose client stops
+    /// reading; nothing bounds a source that stops making chunks while the client waits, so give
+    /// each chunk's read a time limit of its own (a query timeout). The error a failed chunk
+    /// logs names the media type, so say which export it was in the error itself. Without a
+    /// known length the body is chunked (HTTP/1.1) and the client shows no progress;
+    /// [`Media::stream_sized`] gives one.
+    pub fn stream<S, E>(media_type: &'static str, chunks: S) -> Self
+    where
+        S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
+    {
+        Media::streamed(media_type, None, chunks)
+    }
+
+    /// [`Media::stream`] of `length` bytes, sent as its `Content-Length`, so the client shows
+    /// how much is left. The stream must make exactly that many: one that makes more, or ends
+    /// with fewer, ends the connection there and is logged, as a failed chunk is. A compressed
+    /// one is sent without the length, which is the uncompressed size (one under a kilobyte is
+    /// not compressed, and keeps it); a `HEAD` gets the headers without the body, and the
+    /// stream is never pulled.
+    pub fn stream_sized<S, E>(media_type: &'static str, length: u64, chunks: S) -> Self
+    where
+        S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
+    {
+        let mut media = Media::streamed(media_type, Some(length), chunks);
+        media.0.headers_mut().insert(axum::http::header::CONTENT_LENGTH, axum::http::HeaderValue::from(length));
+        media
+    }
+
+    fn streamed<S, E>(media_type: &'static str, length: Option<u64>, chunks: S) -> Self
+    where
+        S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
+        E: std::fmt::Display + Send + 'static,
+    {
+        use axum::http::{header, HeaderValue};
+        use futures_util::StreamExt;
+        // Each chunk passed on as it comes; a failure, or a length the stream does not keep,
+        // logged and ended as an error, which ends the connection without the body's end.
+        let checked = futures_util::stream::unfold(Some((Box::pin(chunks), length)), move |state| async move {
+            let (mut chunks, left) = state?;
+            let failed = |why: String| {
+                tracing::error!("corten: a streamed {media_type} answer stopped after its headers were sent: {why}");
+                Some((Err(StreamFailed), None))
+            };
+            match chunks.next().await {
+                Some(Ok(bytes)) => match left.map(|left| left.checked_sub(bytes.len() as u64)) {
+                    Some(None) => failed(format!("it made more than the {} bytes it said", length.unwrap_or(0))),
+                    Some(Some(left)) => Some((Ok(bytes), Some((chunks, Some(left))))),
+                    None => Some((Ok(bytes), Some((chunks, None)))),
+                },
+                Some(Err(error)) => failed(error.to_string()),
+                None => match left {
+                    Some(left) if left > 0 => failed(format!("it ended {left} bytes short of the length it said")),
+                    _ => None,
+                },
+            }
+        });
+        let mut res = Response::new(axum::body::Body::from_stream(checked));
+        res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
+        res.extensions_mut().insert(Streamed);
         Media(res)
     }
 
@@ -941,6 +1041,22 @@ fn disposition(kind: &str, name: &str) -> String {
     }
     out
 }
+
+/// A [`Media::stream`]'s answer, which compression takes a chunk at a time.
+#[derive(Clone)]
+pub(crate) struct Streamed;
+
+/// What ends a streamed answer that failed after it began (logged where it happened).
+#[derive(Debug)]
+struct StreamFailed;
+
+impl std::fmt::Display for StreamFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the streamed answer failed")
+    }
+}
+
+impl std::error::Error for StreamFailed {}
 
 impl IntoResponse for Media {
     fn into_response(self) -> Response {
@@ -1114,44 +1230,6 @@ impl IntoResponse for LiveResponse {
 
 impl Answer for LiveResponse {
     const FORMAT: Format = Format::Html;
-    type Inputs = AnyInputs;
-    type Rows = NotAFeed;
-}
-
-/// Named events of JSON: what [`crate::event_stream`] gives. It answers the client that asked,
-/// from where that client is in the stream, so it is never [`Public`]:
-///
-/// ```compile_fail,E0277
-/// use std::time::Duration;
-/// use corten::{prelude::*, EventStreamResponse};
-///
-/// async fn progress() -> Public<EventStreamResponse> {
-///     Public::new(Duration::from_secs(60), corten::event_stream(futures_util::stream::empty()))
-/// }
-/// ```
-#[cfg(feature = "json")]
-pub struct EventStreamResponse(pub(crate) Response);
-
-#[cfg(feature = "json")]
-impl EventStreamResponse {
-    /// The stream is over (the job is done, or there is no such job): `204 No Content`, which an
-    /// `EventSource` takes as the end and does not reconnect after. Answer it to a reconnect from
-    /// the last event's cursor ([`crate::LiveSince`]).
-    pub fn ended() -> Self {
-        EventStreamResponse(StatusCode::NO_CONTENT.into_response())
-    }
-}
-
-#[cfg(feature = "json")]
-impl IntoResponse for EventStreamResponse {
-    fn into_response(self) -> Response {
-        self.0
-    }
-}
-
-#[cfg(feature = "json")]
-impl Answer for EventStreamResponse {
-    const FORMAT: Format = Format::Json;
     type Inputs = AnyInputs;
     type Rows = NotAFeed;
 }
@@ -1599,7 +1677,6 @@ impl Unshared for AnyInputs {}
 pub trait Anonymous {}
 
 impl<T> Anonymous for axum::extract::Path<T> {}
-impl<T> Anonymous for axum::extract::Query<T> {}
 impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {}
 impl<T> Anonymous for crate::Form<T> {}
 impl<T> Anonymous for crate::form::Upload<T> {}
@@ -1648,6 +1725,18 @@ where
 
 impl AllAnonymous for () {}
 
+/// For one arity, `Holds<T, At<N>>` with `T` at each position `N` in turn: the arguments before it
+/// keep their names, the one at it is `T`, the rest keep theirs.
+/// The positions are literals, not `$at + 1`, so an error names `At<2>` rather than an anonymous
+/// constant.
+macro_rules! holds {
+    ([$($before:ident)*] [] [$($at:tt)*]) => {};
+    ([$($before:ident)*] [$here:ident $($after:ident)*] [$at:tt $($rest:tt)*]) => {
+        impl<T, $($before,)* $($after,)*> Holds<T, At<$at>> for ($($before,)* T, $($after,)*) {}
+        holds!([$($before)* $here] [$($after)*] [$($rest)*]);
+    };
+}
+
 macro_rules! arities {
     ($($ty:ident),*) => {
         impl<F, Fut, M, $($ty,)*> Signature<(M, $($ty,)*)> for F
@@ -1660,8 +1749,11 @@ macro_rules! arities {
         }
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {}
+
+        holds!([] [$($ty)*] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]);
     };
 }
+
 arities!(A1);
 arities!(A1, A2);
 arities!(A1, A2, A3);
@@ -1698,316 +1790,6 @@ pub trait Holds<T, I> {}
 #[doc(hidden)]
 pub struct Free;
 impl<A> Holds<(), Free> for A {}
-impl<T> Holds<T, At<0>> for (T,) {}
-impl<T, A2> Holds<T, At<0>> for (T, A2) {}
-impl<T, A1> Holds<T, At<1>> for (A1, T) {}
-impl<T, A2, A3> Holds<T, At<0>> for (T, A2, A3) {}
-impl<T, A1, A3> Holds<T, At<1>> for (A1, T, A3) {}
-impl<T, A1, A2> Holds<T, At<2>> for (A1, A2, T) {}
-impl<T, A2, A3, A4> Holds<T, At<0>> for (T, A2, A3, A4) {}
-impl<T, A1, A3, A4> Holds<T, At<1>> for (A1, T, A3, A4) {}
-impl<T, A1, A2, A4> Holds<T, At<2>> for (A1, A2, T, A4) {}
-impl<T, A1, A2, A3> Holds<T, At<3>> for (A1, A2, A3, T) {}
-impl<T, A2, A3, A4, A5> Holds<T, At<0>> for (T, A2, A3, A4, A5) {}
-impl<T, A1, A3, A4, A5> Holds<T, At<1>> for (A1, T, A3, A4, A5) {}
-impl<T, A1, A2, A4, A5> Holds<T, At<2>> for (A1, A2, T, A4, A5) {}
-impl<T, A1, A2, A3, A5> Holds<T, At<3>> for (A1, A2, A3, T, A5) {}
-impl<T, A1, A2, A3, A4> Holds<T, At<4>> for (A1, A2, A3, A4, T) {}
-impl<T, A2, A3, A4, A5, A6> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6) {}
-impl<T, A1, A3, A4, A5, A6> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6) {}
-impl<T, A1, A2, A4, A5, A6> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6) {}
-impl<T, A1, A2, A3, A5, A6> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6) {}
-impl<T, A1, A2, A3, A4, A6> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6) {}
-impl<T, A1, A2, A3, A4, A5> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T) {}
-impl<T, A2, A3, A4, A5, A6, A7> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7) {}
-impl<T, A1, A3, A4, A5, A6, A7> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7) {}
-impl<T, A1, A2, A4, A5, A6, A7> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7) {}
-impl<T, A1, A2, A3, A5, A6, A7> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7) {}
-impl<T, A1, A2, A3, A4, A6, A7> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7) {}
-impl<T, A1, A2, A3, A4, A5, A7> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7) {}
-impl<T, A1, A2, A3, A4, A5, A6> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7, A8) {}
-impl<T, A1, A3, A4, A5, A6, A7, A8> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7, A8) {}
-impl<T, A1, A2, A4, A5, A6, A7, A8> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7, A8) {}
-impl<T, A1, A2, A3, A5, A6, A7, A8> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7, A8) {}
-impl<T, A1, A2, A3, A4, A6, A7, A8> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7, A8) {}
-impl<T, A1, A2, A3, A4, A5, A7, A8> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7, A8) {}
-impl<T, A1, A2, A3, A4, A5, A6, A8> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T, A8) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7> Holds<T, At<7>> for (A1, A2, A3, A4, A5, A6, A7, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7, A8, A9) {}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7, A8, A9) {}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7, A8, A9) {}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7, A8, A9) {}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7, A8, A9) {}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7, A8, A9) {}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T, A8, A9) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9> Holds<T, At<7>> for (A1, A2, A3, A4, A5, A6, A7, T, A9) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8> Holds<T, At<8>> for (A1, A2, A3, A4, A5, A6, A7, A8, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10) {}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10) {}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10) {}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10) {}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10) {}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10) {}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10> Holds<T, At<7>> for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10> Holds<T, At<8>> for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9> Holds<T, At<9>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11) {}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11) {}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11) {}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11) {}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11) {}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11) {}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11> Holds<T, At<7>> for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11> Holds<T, At<8>> for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11> Holds<T, At<9>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10> Holds<T, At<10>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<0>> for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<1>> for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<2>> for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<3>> for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<4>> for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12> Holds<T, At<5>> for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11, A12> Holds<T, At<6>> for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11, A12> Holds<T, At<7>> for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11, A12> Holds<T, At<8>> for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11, A12> Holds<T, At<9>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A12> Holds<T, At<10>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T, A12) {}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11> Holds<T, At<11>> for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, T) {}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<0>>
-    for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<1>>
-    for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<2>>
-    for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<3>>
-    for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<4>>
-    for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<5>>
-    for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11, A12, A13> Holds<T, At<6>>
-    for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11, A12, A13> Holds<T, At<7>>
-    for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11, A12, A13> Holds<T, At<8>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11, A12, A13> Holds<T, At<9>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A12, A13> Holds<T, At<10>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T, A12, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A13> Holds<T, At<11>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, T, A13)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12> Holds<T, At<12>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, T)
-{
-}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<0>>
-    for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<1>>
-    for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<2>>
-    for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<3>>
-    for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<4>>
-    for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<5>>
-    for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<6>>
-    for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11, A12, A13, A14> Holds<T, At<7>>
-    for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11, A12, A13, A14> Holds<T, At<8>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11, A12, A13, A14> Holds<T, At<9>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A12, A13, A14> Holds<T, At<10>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T, A12, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A13, A14> Holds<T, At<11>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, T, A13, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A14> Holds<T, At<12>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, T, A14)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13> Holds<T, At<13>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, T)
-{
-}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<0>>
-    for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<1>>
-    for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<2>>
-    for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<3>>
-    for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<4>>
-    for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<5>>
-    for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<6>>
-    for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<7>>
-    for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11, A12, A13, A14, A15> Holds<T, At<8>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11, A12, A13, A14, A15> Holds<T, At<9>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A12, A13, A14, A15> Holds<T, At<10>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T, A12, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A13, A14, A15> Holds<T, At<11>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, T, A13, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A14, A15> Holds<T, At<12>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, T, A14, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A15> Holds<T, At<13>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, T, A15)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14> Holds<T, At<14>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, T)
-{
-}
-impl<T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<0>>
-    for (T, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<1>>
-    for (A1, T, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<2>>
-    for (A1, A2, T, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<3>>
-    for (A1, A2, A3, T, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<4>>
-    for (A1, A2, A3, A4, T, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<5>>
-    for (A1, A2, A3, A4, A5, T, A7, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A8, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<6>>
-    for (A1, A2, A3, A4, A5, A6, T, A8, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A9, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<7>>
-    for (A1, A2, A3, A4, A5, A6, A7, T, A9, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A10, A11, A12, A13, A14, A15, A16> Holds<T, At<8>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, T, A10, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A11, A12, A13, A14, A15, A16> Holds<T, At<9>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, T, A11, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A12, A13, A14, A15, A16> Holds<T, At<10>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, T, A12, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A13, A14, A15, A16> Holds<T, At<11>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, T, A13, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A14, A15, A16> Holds<T, At<12>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, T, A14, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A15, A16> Holds<T, At<13>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, T, A15, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A16> Holds<T, At<14>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, T, A16)
-{
-}
-impl<T, A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15> Holds<T, At<15>>
-    for (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12, A13, A14, A15, T)
-{
-}
 
 /// On a failed response from a JSON route, before or after its handler ran (a path that does not
 /// parse too): the route answers JSON.
@@ -2082,6 +1864,152 @@ where
 
 #[cfg(test)]
 mod tests {
+    /// The handler argument lists a route can hold to a type, written out rather than taken from
+    /// `holds!`: every position of every arity, 136 in all (#933). `Free` holds for any list.
+    #[test]
+    fn every_position_of_each_arity_holds_its_type() {
+        fn holds<T, const N: usize, A: super::Holds<T, super::At<N>>>() {}
+        fn free<A: super::Holds<(), super::Free>>() {}
+        holds::<char, 0, (char,)>();
+        holds::<char, 0, (char, u8)>();
+        holds::<char, 1, (u8, char)>();
+        holds::<char, 0, (char, u8, u8)>();
+        holds::<char, 1, (u8, char, u8)>();
+        holds::<char, 2, (u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8)>();
+        holds::<char, 3, (u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 12, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 12, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 13, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 12, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 13, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 14, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        holds::<char, 0, (char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 1, (u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 2, (u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 3, (u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 4, (u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 5, (u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 6, (u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 7, (u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 8, (u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 9, (u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8, u8)>();
+        holds::<char, 10, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8, u8)>();
+        holds::<char, 11, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8, u8)>();
+        holds::<char, 12, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8, u8)>();
+        holds::<char, 13, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8, u8)>();
+        holds::<char, 14, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char, u8)>();
+        holds::<char, 15, (u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, char)>();
+        free::<()>();
+        free::<(u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8, u8)>();
+    }
+
     #[test]
     fn a_download_s_name_is_quoted_when_plain_and_encoded_when_not() {
         use super::disposition;

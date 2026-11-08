@@ -5,16 +5,18 @@ import "../components.css";
 
 interface Props {
   title: string;
+  lang?: string;
 }
-const { title } = Astro.props;
+const { title, lang = "en" } = Astro.props;
 ---
 <!doctype html>
-<html lang="en">
+<html lang={lang}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <ClientRouter />
+    <slot name="head" />
   </head>
   <body>
     <header class="site-header__bar"><a href="/">Card Market</a></header>

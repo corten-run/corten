@@ -11,6 +11,16 @@ use std::{io::Write, path::Path};
 /// The commit this command was built from, when known (`build.rs`).
 pub const REV: &str = env!("CORTEN_CLI_REV");
 
+/// The framework's package names, its own first: `corten-run`, since `corten` on crates.io is
+/// someone else's, and `corten`, which earlier revisions (an app's git pin, an older checkout)
+/// were named. The library is `corten` under either, so an app's code names it the same way.
+pub const PACKAGES: [&str; 2] = ["corten-run", "corten"];
+
+/// Whether `name` is one of the framework's package names.
+pub fn is_framework(name: &str) -> bool {
+    PACKAGES.contains(&name)
+}
+
 /// The corten an app's `Cargo.lock` names.
 #[derive(Debug, PartialEq)]
 pub enum Locked {
@@ -22,9 +32,10 @@ pub enum Locked {
     Release(String),
 }
 
-/// The `corten` packages in a `Cargo.lock`; a path dependency (a checkout of corten itself)
-/// names no source, so it is left out.
-pub fn locked(lock: &str) -> Vec<Locked> {
+/// The corten packages in a `Cargo.lock` (under either name, [`PACKAGES`]), each with the name the
+/// lock gives it; a path dependency (a checkout of corten itself) names no source, so it is left
+/// out.
+fn named(lock: &str) -> Vec<(String, Locked)> {
     let mut found = Vec::new();
     for block in lock.split("[[package]]").skip(1) {
         let field = |key: &str| {
@@ -33,16 +44,14 @@ pub fn locked(lock: &str) -> Vec<Locked> {
                 Some(value.trim_matches('"').to_string())
             })
         };
-        if field("name").as_deref() != Some("corten") {
-            continue;
-        }
+        let Some(name) = field("name").filter(|name| is_framework(name)) else { continue };
         let Some(source) = field("source") else { continue };
         if let Some(git) = source.strip_prefix("git+") {
             let Some((url, sha)) = git.split_once('#') else { continue };
             let (url, asked) = url.split_once('?').unwrap_or((url, ""));
-            found.push(Locked::Git { url: url.to_string(), sha: sha.to_string(), asked: asked.to_string() });
+            found.push((name, Locked::Git { url: url.to_string(), sha: sha.to_string(), asked: asked.to_string() }));
         } else if let Some(version) = field("version") {
-            found.push(Locked::Release(version));
+            found.push((name, Locked::Release(version)));
         }
     }
     found
@@ -52,8 +61,8 @@ pub fn locked(lock: &str) -> Vec<Locked> {
 /// or `branch=..` as the lock records it (empty for the default branch). Empty when it has none
 /// (a release, `workspace = true`, no corten). Reads the shapes cargo takes: an inline table, on
 /// one line or several; a `[dependencies.corten]` table under any dependency kind, the workspace
-/// or a target; dotted keys (`corten.rev = ".."`); a dependency renamed from corten
-/// (`package = "corten"`); either kind of quote; and comments.
+/// or a target; dotted keys (`corten.rev = ".."`); a key that is either package name or names one
+/// (`package = "corten-run"`, [`PACKAGES`]); either kind of quote; and comments.
 pub fn asked(manifest: &str) -> Vec<(String, String)> {
     let mut found = Vec::new();
     // The current table's dependency, when the header names one (`[dependencies.corten]`).
@@ -89,7 +98,7 @@ pub fn asked(manifest: &str) -> Vec<(String, String)> {
     deps.extend(table);
     for (name, keys) in deps {
         let get = |k: &str| keys.iter().find(|(key, _)| key == k).map(|(_, v)| unquote(v));
-        if get("package").as_deref().unwrap_or(&name) != "corten" {
+        if !is_framework(get("package").as_deref().unwrap_or(&name)) {
             continue;
         }
         let Some(url) = get("git") else { continue };
@@ -318,8 +327,11 @@ pub struct Note {
     /// [`mismatch`]'s text.
     pub text: String,
     /// What the app's `Cargo.toml` asks for to build against this command's corten:
-    /// `rev = "<whole commit>"` or `version = "0.1.0"`.
+    /// `package = "corten-run", rev = "<whole commit>"` or `package = "corten-run", version = "0.2.0"`.
     pub this: String,
+    /// The package name the lock gives the pin (`corten` before the rename), which
+    /// `cargo update -p` takes.
+    pub package: String,
 }
 
 /// What to tell the user when the app in `root` (or the workspace above it) pins another corten
@@ -338,26 +350,34 @@ pub fn note(root: &Path, version: &str, rev: &str, target: Option<&Path>) -> Opt
         .map(|manifest| asked(&manifest))
         .find(|asked| !asked.is_empty())
         .unwrap_or_default();
-    let locked: Vec<Locked> = locked(&text).into_iter().filter_map(|l| as_asked(l, &asked)).collect();
-    if locked.iter().any(|l| mismatch(l, version, rev, target).is_none()) {
+    let locked: Vec<(String, Locked)> =
+        named(&text).into_iter().filter_map(|(name, l)| Some((name, as_asked(l, &asked)?))).collect();
+    if locked.iter().any(|(_, l)| mismatch(l, version, rev, target).is_none()) {
         return None;
     }
-    let first = locked.first()?;
+    let (package, first) = locked.first()?;
     let text = mismatch(first, version, rev, target)?;
+    // This command's corten is named as this revision names it.
+    let own = PACKAGES[0];
     let this = match first {
-        Locked::Git { .. } => format!("rev = \"{rev}\""),
+        Locked::Git { .. } => format!("package = \"{own}\", rev = \"{rev}\""),
         // Which this command is, a release or a git checkout, is not known here.
-        Locked::Release(_) if rev.is_empty() => format!("version = \"{version}\""),
-        Locked::Release(_) => {
-            format!("version = \"{version}\" if this command is that release, or git = corten's repository and rev = \"{rev}\"")
-        }
+        Locked::Release(_) if rev.is_empty() => format!("package = \"{own}\", version = \"{version}\""),
+        Locked::Release(_) => format!(
+            "package = \"{own}\" with version = \"{version}\" if this command is that release, or with git = corten's repository and rev = \"{rev}\""
+        ),
     };
-    Some(Note { text, this })
+    Some(Note { text, this, package: package.clone() })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pins [`named`] finds, without their names.
+    fn locked(lock: &str) -> Vec<Locked> {
+        named(lock).into_iter().map(|(_, locked)| locked).collect()
+    }
 
     const LOCK: &str = r#"
 [[package]]
@@ -386,10 +406,32 @@ source = "git+https://github.com/corten-run/corten?rev=8680dd62#8680dd620abceb65
             locked(LOCK),
             [Locked::Git { url: "https://github.com/corten-run/corten".into(), sha: sha.into(), asked: "rev=8680dd62".into() }]
         );
-        let release = "[[package]]\nname = \"corten\"\nversion = \"0.2.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        let release = "[[package]]\nname = \"corten-run\"\nversion = \"0.2.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
         assert_eq!(locked(release), [Locked::Release("0.2.0".into())]);
+        // A pin from before the rename names the package corten; another crate of the name is not it.
+        assert_eq!(locked(&release.replace("corten-run", "corten")), [Locked::Release("0.2.0".into())]);
+        assert_eq!(locked(&release.replace("corten-run", "corten-ui")), Vec::<Locked>::new());
         // A checkout of corten itself (a path dependency) names no source.
-        assert_eq!(locked("[[package]]\nname = \"corten\"\nversion = \"0.1.0\"\n"), Vec::<Locked>::new());
+        assert_eq!(locked("[[package]]\nname = \"corten-run\"\nversion = \"0.1.0\"\n"), Vec::<Locked>::new());
+    }
+
+    /// The note names the package as the lock does, for `cargo update -p`, and this command's
+    /// corten under its own name.
+    #[test]
+    fn the_note_names_the_pin_as_the_lock_does_and_this_command_as_it_is_named() {
+        let dir = std::env::temp_dir().join(format!("corten-pin-names-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rev = "dd028b94ad0f63d687ef65b157117fa53caab41c";
+        for (name, expected) in [("corten", "corten"), ("corten-run", "corten-run")] {
+            std::fs::write(dir.join("Cargo.lock"), LOCK.replacen("name = \"corten\"", &format!("name = \"{name}\""), 1)).unwrap();
+            let note = note(&dir, "0.2.0", rev, None).expect("another commit");
+            assert_eq!(note.package, expected);
+            assert_eq!(note.this, format!("package = \"corten-run\", rev = \"{rev}\""));
+        }
+        let release = "[[package]]\nname = \"corten\"\nversion = \"0.1.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        std::fs::write(dir.join("Cargo.lock"), release).unwrap();
+        assert_eq!(note(&dir, "0.2.0", "", None).expect("another release").this, "package = \"corten-run\", version = \"0.2.0\"");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -434,6 +476,8 @@ source = "git+https://github.com/corten-run/corten?rev=8680dd62#8680dd620abceb65
             "[dependencies]\ncorten.git = \"https://github.com/corten-run/corten\"\ncorten.rev = \"ab31954a\" # pinned\n",
             "[target.'cfg(windows)'.dependencies.corten]\ngit = \"https://github.com/corten-run/corten\"\nrev = \"ab31954a\"\n",
             "[dependencies]\nweb = { package = \"corten\", git = \"https://github.com/corten-run/corten\", rev = \"ab31954a\" }\n",
+            "[dependencies]\ncorten = { package = \"corten-run\", git = \"https://github.com/corten-run/corten\", rev = \"ab31954a\" }\n",
+            "[dependencies]\ncorten-run = { git = \"https://github.com/corten-run/corten\", rev = \"ab31954a\" }\n",
             "[workspace.dependencies.corten]\ngit = \"https://github.com/corten-run/corten\"\nrev = \"ab31954a\"\n\n[dependencies]\nserde = \"1\"\n",
             "[dependencies]\r\ncorten = { git = \"https://github.com/corten-run/corten\", rev = \"ab31954a\" }\r\n",
         ] {
@@ -447,6 +491,7 @@ source = "git+https://github.com/corten-run/corten?rev=8680dd62#8680dd620abceb65
             "[dependencies]\ncorten = \"0.2\"\n",
             "[dependencies]\ncorten = { workspace = true }\n",
             "[dependencies]\nserde = { version = \"1\", git = \"x\", rev = \"x\" }\n",
+            "[dependencies]\ncorten = { package = \"corten-ui\", git = \"x\", rev = \"x\" }\n",
             "[package]\nname = \"app\" # corten = { git = \"x\" }\n",
         ] {
             assert_eq!(asked(none), Vec::<(String, String)>::new(), "{none}");

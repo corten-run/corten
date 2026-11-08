@@ -32,6 +32,7 @@ pub fn expand(input: TokenStream) -> TokenStream {
             mark_scope(&mut nodes, scope)?;
         }
         check_raw_text(&nodes, None)?;
+        check_pages(&nodes)?;
         Ok(nodes)
     }) {
         Ok(nodes) if is_document(&nodes) => {
@@ -566,7 +567,7 @@ fn count_uses(nodes: &[Node], names: &[&str], uses: &mut [usize]) {
                         Attr::Expr(_, expr) | Attr::Spread(expr) | Attr::Ref(expr, _) | Attr::On(_, _, expr) => {
                             count(expr, names, uses)
                         }
-                        Attr::Bare(_) | Attr::Static(..) => {}
+                        Attr::Bare(_) | Attr::Static(..) | Attr::Page(_) => {}
                     }
                 }
                 count_uses(children, names, uses);
@@ -627,6 +628,53 @@ enum Attr {
     /// `on:click={js::show(rows)}`: the event (with its span) and the handler. All of an
     /// element's print as one `data-on="click:module.show(@rows)"`.
     On(String, Span, TokenStream),
+    /// `page`: an element of a document's layout around `<main>` that is the page's (a section's
+    /// nav). Printed `data-corten-page`; a navigation's answer has it, and the runtime puts it in
+    /// place of the one on screen, found by its id.
+    Page(Span),
+}
+
+/// Why a `<form>` with `on:corten:progress` would never hear it: the runtime reports progress only
+/// for a `data-patch` form it sends as `multipart/form-data` by a method other than GET. Attributes
+/// a spread may write are not known here, so a form with one is left to the runtime.
+fn progress_unsent(attrs: &[Attr]) -> Option<&'static str> {
+    if !attrs.iter().any(|a| matches!(a, Attr::On(event, ..) if event == "corten:progress")) {
+        return None;
+    }
+    if attrs.iter().any(|a| matches!(a, Attr::Spread(_))) {
+        return None;
+    }
+    // `None`: not written; `Some(None)`: written as an expression, so not known here.
+    let named = |want: &str| {
+        attrs.iter().find_map(|a| match a {
+            Attr::Bare(n) if n.eq_ignore_ascii_case(want) => Some(Some("")),
+            Attr::Static(n, v) if n.eq_ignore_ascii_case(want) => Some(Some(v.as_str())),
+            Attr::Expr(n, _) if n.eq_ignore_ascii_case(want) => Some(None),
+            _ => None,
+        })
+    };
+    if named("data-patch").is_none() {
+        return Some("on:corten:progress: the runtime reports an upload's progress only for a data-patch form (a form without it is sent by the browser, which reports none): add data-patch");
+    }
+    let multipart = match named("enctype") {
+        Some(Some(v)) => v.eq_ignore_ascii_case("multipart/form-data"),
+        Some(None) => true,
+        None => false,
+    };
+    if !multipart {
+        return Some("on:corten:progress: only a multipart body is sent with its progress: add enctype=\"multipart/form-data\"");
+    }
+    let sends_body = match named("method") {
+        Some(Some(v)) => !v.is_empty() && !v.eq_ignore_ascii_case("get") && !v.eq_ignore_ascii_case("dialog"),
+        Some(None) => true,
+        None => false,
+    };
+    if !sends_body {
+        return Some(
+            "on:corten:progress: a GET or dialog form sends no body, so it has no upload progress: give the form method=\"post\"",
+        );
+    }
+    None
 }
 
 /// The attribute an element is named by for assistive technology, `aria-label` or
@@ -638,7 +686,7 @@ fn label_of(attrs: &[Attr]) -> Option<&str> {
         let name = match attr {
             Attr::Bare(name) | Attr::Static(name, _) | Attr::Expr(name, _) => name.as_str(),
             Attr::Spread(_) => return None,
-            Attr::Ref(..) | Attr::On(..) => continue,
+            Attr::Ref(..) | Attr::On(..) | Attr::Page(_) => continue,
         };
         match name.to_ascii_lowercase().as_str() {
             "role" => return None,
@@ -878,6 +926,7 @@ impl Cursor {
         }
         let (name, path, name_span) = self.name()?;
         let component = name.contains("::") || name.starts_with(|c: char| c.is_ascii_uppercase());
+        let is_form = name == "form";
         if component && name.contains('-') {
             return err(name_span, "a component name is a Rust path; element names with - are lowercase");
         }
@@ -963,6 +1012,15 @@ impl Cursor {
                     if lower == "data-vars" {
                         return err(span, "data-vars is printed by Corten: write style={FILL.pct(42.0)}, with --fill registered by an @property in the component's stylesheet");
                     }
+                    if lower == "data-corten-page" {
+                        return err(span, "data-corten-page is printed by Corten: write page on an element of the layout, <nav page id={SectionNavId}>");
+                    }
+                    // `page`: an element of a document's layout that is the page's (a section's
+                    // nav), which a navigation sends with `<main>`'s children.
+                    if name == "page" && !is_punct(self.peek(), '=') {
+                        attrs.push(Attr::Page(span));
+                        continue;
+                    }
                     if name == "ref" || name.starts_with("on:") {
                         let braced = is_punct(self.peek(), '=')
                             && matches!(self.peek2(), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace);
@@ -981,7 +1039,10 @@ impl Cursor {
                                 // ends the type, so the runtime's `corten:error` keeps its own).
                                 let named = event.strip_prefix("document:").unwrap_or(event);
                                 if named.contains(':') && !crate::dom::is_runtime_event(named) {
-                                    return err(span, format!("{name}: an event name with a colon is one of the runtime's, corten:error (on a data-patch form, or on:document:) or corten:notice (on:document:corten:notice); a component's own event is a typed one (#[event], on:RowToggled)"));
+                                    return err(span, format!("{name}: an event name with a colon is one of the runtime's, corten:error (on a data-patch form, or on:document:), corten:progress (on a data-patch form) or corten:notice (on:document:corten:notice); a component's own event is a typed one (#[event], on:RowToggled)"));
+                                }
+                                if named == "corten:progress" && (event != named || !is_form) {
+                                    return err(span, format!("{name}: the runtime dispatches corten:progress on the data-patch form whose upload it is, and it does not bubble: write on:corten:progress on that <form>"));
                                 }
                                 if event == "corten:notice" {
                                     return err(span, format!("{name}: the runtime dispatches corten:notice on the document, so no element hears it: write on:document:corten:notice"));
@@ -1055,6 +1116,11 @@ impl Cursor {
         };
         if !component && !self.svg {
             if let Some(why) = unnamed_label(&name, &attrs) {
+                return err(name_span, why);
+            }
+        }
+        if is_form {
+            if let Some(why) = progress_unsent(&attrs) {
                 return err(name_span, why);
             }
         }
@@ -1562,6 +1628,7 @@ impl Gen {
                     self.text.push(' ');
                     self.text.push_str(attr);
                 }
+                Attr::Page(_) => self.text.push_str(" data-corten-page"),
                 Attr::Static(attr, value) => {
                     self.text.push_str(&format!(" {attr}=\"{}\"", escape(value)));
                 }
@@ -1603,8 +1670,13 @@ impl Gen {
                     let target: TokenStream =
                         format!("::corten::script::el::{}", crate::dom::element(name)).parse().expect("a path parses");
                     let mut binds = TokenStream::new();
+                    let mut binds_before = TokenStream::new();
                     for attr in attrs {
                         let Attr::On(event, span, expr) = attr else { continue };
+                        // A form that hears its upload's progress sends it by the upload module.
+                        if event == "corten:progress" {
+                            binds_before.extend(q("::corten::script::__private::uses_upload();", &[]));
+                        }
                         // A typed event's name is the one its `#[event]` gave it (a library's carries its
                         // prefix: `ui-copied`), so it is read from the type rather than derived here.
                         let (printed, ty) = if event.starts_with(|c: char| c.is_ascii_uppercase()) {
@@ -1619,6 +1691,9 @@ impl Gen {
                         };
                         let expr = keywords(expr.clone(), &ty, &target);
                         binds.extend(q("(__A0, &(__A1) as &dyn ::corten::script::Bind),", &[printed, expr]));
+                    }
+                    if !binds_before.is_empty() {
+                        self.code(binds_before);
                     }
                     self.code(q("::corten::script::__private::data_on(__OUT, &[__A0]);", &[binds]));
                 }
@@ -1659,6 +1734,10 @@ impl Gen {
                         &[expr.clone(), literal(&format!(" {attr}")), check],
                     ))
                 }
+                // A page part is found on screen by its id, so it is a typed one.
+                Attr::Expr(attr, expr) if attr == "id" && attrs.iter().any(|a| matches!(a, Attr::Page(_))) => {
+                    self.code(q("::corten::view::__private::page_id(&(__A0), __OUT);", std::slice::from_ref(expr)))
+                }
                 Attr::Expr(attr, expr) => self.code(q(
                     "(&::corten::view::__private::Attr(&(__A0))).__attr(__A1, __OUT);",
                     &[expr.clone(), literal(&format!(" {attr}"))],
@@ -1674,6 +1753,7 @@ impl Gen {
                             }
                             Attr::Ref(..) => Some("\"data-ref\"".into()),
                             Attr::On(..) => Some("\"data-on\"".into()),
+                            Attr::Page(_) => Some("\"data-corten-page\"".into()),
                             Attr::Spread(_) => None,
                         })
                         .collect();
@@ -1741,6 +1821,11 @@ impl Gen {
             }
             Node::Let(tokens) => self.code(tokens.clone()),
             Node::Element { name, attrs, children } => {
+                // An element of the layout that is the page's (`page`): written for a navigation too.
+                let part = self.level == Level::Layout && attrs.iter().any(|a| matches!(a, Attr::Page(_)));
+                if part {
+                    self.level(Level::Page);
+                }
                 self.open_tag(name, attrs, children);
                 if !VOID.contains(&name.as_str()) {
                     let outer = self.svg;
@@ -1748,6 +1833,9 @@ impl Gen {
                     self.nodes(children, RAW_TEXT.contains(&name.as_str()));
                     self.svg = outer;
                     self.text.push_str(&format!("</{name}>"));
+                }
+                if part {
+                    self.level(Level::Layout);
                 }
             }
             Node::Component { path, props, children } => {
@@ -1901,6 +1989,68 @@ fn check_document(nodes: &[Node]) -> Result<(), Error> {
         return fail("a document holds one <main>, which a client navigation swaps: <main>{children}</main>");
     }
     Ok(())
+}
+
+/// Where `page` goes: on an element of a document's layout around `<main>`, outside `<head>`, not
+/// inside `for`, `if` or `match` (so every page of the layout has it, and a navigation's answer
+/// always holds one for the runtime to put in place), nor inside another such element. It has a
+/// typed `id={..}`, by which the runtime finds the one on screen.
+fn check_pages(nodes: &[Node]) -> Result<(), Error> {
+    fn walk(nodes: &[Node], document: bool, inside: Option<&'static str>) -> Result<(), Error> {
+        for node in nodes {
+            match node {
+                Node::Element { name, attrs, children } => {
+                    let page = attrs.iter().find_map(|a| match a {
+                        Attr::Page(span) => Some(*span),
+                        _ => None,
+                    });
+                    let within = match page {
+                        Some(span) => {
+                            if !document {
+                                return err(span, "page marks an element of a document's layout (the html! that starts with <html>) as the page's: write it there, around this markup (<nav page id={SectionNavId}><SectionLinks req={req} /></nav>); an attribute named page is written page=\"\"");
+                            }
+                            if matches!(name.as_str(), "main" | "head" | "title") {
+                                return err(span, format!("page marks an element of the layout beside <main> as the page's, and <{name}> is the page's already: a navigation sends it"));
+                            }
+                            if let Some(place) = inside {
+                                return err(span, format!("page marks an element of the layout around <main> as the page's, and this one is {place}"));
+                            }
+                            if holds_main(children) {
+                                return err(span, "an element marked page is beside <main>, not around it: a navigation sends <main>'s children already");
+                            }
+                            if !attrs.iter().any(|a| matches!(a, Attr::Expr(n, _) if n == "id")) {
+                                return err(span, "an element marked page has an id of a #[derive(Id)] type, by which the runtime finds the one on screen: <nav page id={SectionNavId}>");
+                            }
+                            Some("inside another element marked page")
+                        }
+                        None if name == "main" => inside.or(Some("inside <main>, which is the page's already")),
+                        None if name == "head" => {
+                            inside.or(Some("in <head>, where the page's tags are an expression or component ({head})"))
+                        }
+                        None => inside,
+                    };
+                    walk(children, document, within)?;
+                }
+                Node::Block { bodies, .. } => {
+                    for body in bodies {
+                        walk(body, document, inside.or(Some("inside for, if or match: draw it on every page, with what is in it chosen by the page (it may be empty)")))?;
+                    }
+                }
+                Node::Component { children: Some(children), .. } => {
+                    walk(
+                        children,
+                        document,
+                        inside.or(Some(
+                            "in a component's children, which the component places: mark an element of the layout's own markup",
+                        )),
+                    )?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    walk(nodes, is_document(nodes), None)
 }
 
 /// The view every child of an element is, when the markup puts only components of one name in it

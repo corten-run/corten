@@ -31,7 +31,13 @@ jobs:
       - run: cargo run -q -p corten-cli -- fmt --check crates examples bench
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       - run: cargo test --workspace --all-features
-      - run: cargo test -p corten --no-default-features
+      - run: cargo test -p corten-run --no-default-features
+      # corten check type-checks the app's scripts and fails without tsc: the version package.json
+      # pins, on the Node the browser job uses rather than whatever the runner image has.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - run: npm install --global typescript@$(node -p "require('./package.json').devDependencies.typescript")
       - name: corten new writes an app that passes corten check, and so does every kit component in it
         run: |
           cargo build -q -p corten-cli
@@ -41,7 +47,7 @@ jobs:
           CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" "$GITHUB_WORKSPACE/target/debug/corten" check
       # Every published crate still packages and builds on its own from the .crate files, in a
       # target of its own: cargo treats a registry crate as unchanged while its version is, so the
-      # cached target could hand it an earlier build of corten 0.1.0.
+      # cached target could hand it an earlier build of corten-run 0.1.0.
       - run: CARGO_TARGET_DIR="$RUNNER_TEMP/publish" cargo publish --workspace --dry-run --locked
       # The tests again in release, with debug assertions off: what a deployed app runs, and the
       # tests of what only a release build does. Last, so the quicker checks above report first;
@@ -123,6 +129,7 @@ jobs:
           docker run -d --name corten-deck-builder -p 18487:8080 corten-deck-builder
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18487/; do sleep 1; done'
           $PLAYWRIGHT node examples/deck-builder/smoke.mjs http://localhost:18487
+          $PLAYWRIGHT node examples/deck-builder/preview-smoke.mjs http://localhost:18487
           docker rm -f corten-deck-builder
       - name: auction-room
         run: |

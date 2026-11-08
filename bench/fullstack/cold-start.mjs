@@ -10,10 +10,13 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apiBase, appCpus, apps as catalog, loadCpus, network, readyPath } from "./apps.mjs";
+import { apiBase, appCpus, apps as catalog, loadCpus, network, readyPath, tier, tierEnv } from "./apps.mjs";
+import { roundNameError } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const [round = "r1", iterations = "10", appsArg = Object.keys(catalog).join(",")] = process.argv.slice(2);
+// The matched tier's numbers never go into an r<n> round, nor the defaults' into an m<n> one.
+if (roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
 const docker = (...args) => spawnSync("docker", args, { encoding: "utf8" });
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 const holder = "cs-holder";
@@ -48,7 +51,7 @@ for (const name of appsArg.split(",")) {
     docker("run", "-d", "--name", holder, "--network", network, ...loadCpus, probeImage, "sleep", "600");
     const create = docker(
       "create", "--name", "cs-app", "--network", `container:${holder}`, ...appCpus, "--memory", "1g",
-      "-v", `${clock}:/clock`, "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "--entrypoint", "sh",
+      "-v", `${clock}:/clock`, "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", ...tierEnv, "--entrypoint", "sh",
       app.image, "-c", 'date +%s%N > /clock/start; exec "$@"', "sh", ...command(app.image),
     );
     if (create.status !== 0) throw new Error(`${name}: ${create.stderr}`);

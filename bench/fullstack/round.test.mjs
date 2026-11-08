@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { maxPasses } from "./passes.mjs";
-import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, startMinutes, steps, unit } from "./round.mjs";
+import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -33,7 +33,7 @@ test("a restart in the build step goes on there, skipping the app that was build
 });
 
 test("the builds left are the build calls' apps not yet started, in their order", () => {
-  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], [1, 2, 3, 4]);
+  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], ["u1", "u2", "u3", "u4"]);
   assert.deepEqual(buildsLeft(all, []), ["corten", "gin", "nextjs", "django"]);
   assert.deepEqual(buildsLeft(all, ["corten", "nextjs"]), ["gin", "django"]);
   assert.deepEqual(buildsLeft(all, ["corten", "gin", "nextjs", "django"]), []);
@@ -47,7 +47,7 @@ test("the builds left are the build calls' apps not yet started, in their order"
  * @param {number[]} [clock]
  */
 async function runBuilds(built, outcomes = {}, clock = []) {
-  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], [1, 2, 3, 4]);
+  const all = calls("r13", "10", ["nextjs", "corten", "django", "gin"], ["u1", "u2", "u3", "u4"]);
   /** @type {string[]} */
   const log = [];
   let turn = 0;
@@ -131,22 +131,22 @@ test("the summary is not a step: a restart in it runs the summary again", () => 
 });
 
 test("every step has calls, each with a time limit, in the steps' order", () => {
-  const all = calls("r10", "10", ["corten", "nextjs"], [18410, 18411]);
+  const all = calls("r10", "10", ["corten", "nextjs"], ["http://localhost:18410", "http://localhost:18411"]);
   assert.deepEqual([...new Set(all.map(([step]) => step))], steps);
-  for (const [, limit] of all) assert.ok(limit > 0 && limit <= 150);
+  for (const [, limit] of all) assert.ok(limit > 0 && limit <= 220);
   const browser = all.filter(([step]) => step === "browser").at(-1);
   assert.deepEqual(browser?.slice(2), ["browser.mjs", "corten=http://localhost:18410", "nextjs=http://localhost:18411", "runs=10", "out=r10/browser.json"]);
 });
 
 test("the builds come last, one call an app", () => {
-  const all = calls("r13", "10", ["corten", "nextjs"], [18410, 18411]);
+  const all = calls("r13", "10", ["corten", "nextjs"], ["http://localhost:18410", "http://localhost:18411"]);
   assert.equal(steps.at(-1), "build");
   assert.deepEqual(all.filter(([step]) => step === "build").map((c) => c.slice(2)), [["build.mjs", "r13", "corten"], ["build.mjs", "r13", "nextjs"]]);
 });
 
 test("the compiled apps build first, the others in the order given", () => {
   for (const name of compiledFirst) assert.ok(name in apps, `${name} is not an app`);
-  const order = calls("r13", "10", ["nextjs", "django", "gin", "corten", "leptos"], [1, 2, 3, 4, 5]).filter(([step]) => step === "build").map((c) => c.at(-1));
+  const order = calls("r13", "10", ["nextjs", "django", "gin", "corten", "leptos"], ["u1", "u2", "u3", "u4", "u5"]).filter(([step]) => step === "build").map((c) => c.at(-1));
   assert.deepEqual(order, ["corten", "leptos", "gin", "nextjs", "django"]);
 });
 
@@ -154,7 +154,7 @@ test("a full-stack round's calls and its build budget fit in its unit's hours, f
   const names = Object.keys(apps);
   assert.equal(hoursFor(1), fullstackHours);
   for (let passes = 1; passes <= maxPasses; passes += 1) {
-    const all = calls("r13", "10", names, names.map((_, i) => i), [], passes);
+    const all = calls("r13", "10", names, names.map((_, i) => `u${i}`), [], passes);
     // Every app may take its full wait to start before the browser step.
     const measuring = all.filter(([step]) => step !== "build").reduce((n, [, limit]) => n + limit, 0) + names.length * startMinutes;
     // The budget stops new builds; the last one started may still run to its own limit.
@@ -165,8 +165,8 @@ test("a full-stack round's calls and its build budget fit in its unit's hours, f
 });
 
 test("each load call runs the round's passes, with that many times one pass's limit", () => {
-  const one = calls("r15", "10", ["corten"], [1]).filter(([, , script]) => script === "run-ssr.mjs");
-  const three = calls("r15", "10", ["corten"], [1], [], 3).filter(([, , script]) => script === "run-ssr.mjs");
+  const one = calls("r15", "10", ["corten"], ["u1"]).filter(([, , script]) => script === "run-ssr.mjs");
+  const three = calls("r15", "10", ["corten"], ["u1"], [], 3).filter(([, , script]) => script === "run-ssr.mjs");
   assert.equal(one.length, 4);
   for (const [i, call] of three.entries()) {
     assert.equal(call[1], one[i][1] * 3);
@@ -197,7 +197,7 @@ test("count.mjs has perf watch the app's pinned cores on a bench host, and every
 });
 
 test("an app that serves only the JSON is in the JSON phases, cold start and count, not the pages", () => {
-  const all = calls("r13", "10", ["corten"], [18410], ["aspnet-aot"]);
+  const all = calls("r13", "10", ["corten"], ["http://localhost:18410"], ["aspnet-aot"]);
   const named = (/** @type {string} */ script, /** @type {string=} */ target) => all.filter(([, , s, ...rest]) => s === script && (!target || rest.at(-1) === target)).map((c) => c.join(" "));
   for (const c of [...named("run-ssr.mjs", "json"), ...named("cold-start.mjs"), ...named("count.mjs")]) assert.match(c, /corten,aspnet-aot/);
   for (const c of [...named("run-ssr.mjs", "page"), ...named("browser.mjs")]) assert.doesNotMatch(c, /aspnet-aot/);
@@ -222,4 +222,40 @@ test("the unit starts again at boot only when asked, and refuses what systemd wo
   assert.doesNotMatch(unit({ ...options, atBoot: false }), /WantedBy/);
   assert.throws(() => unit({ ...options, script: "/bench/%n.sh", atBoot: true }));
   assert.throws(() => unit({ ...options, log: "/bench/a\nExecStart=/bin/sh", atBoot: true }));
+});
+
+test("a matched-tier round is m<n>, and m<n> is the matched tier's alone, so the trend's r<n> never mix", () => {
+  for (const round of ["m1", "m12"]) assert.equal(roundNameError(round, "matched", { full: true }), null, round);
+  for (const round of ["r17", "ab1", "m", "m1x"]) assert.match(String(roundNameError(round, "matched", { full: true })), /is named m<n>/, round);
+  for (const round of ["r17", "aot2", "conform2", "p1"]) assert.equal(roundNameError(round, "defaults", { full: true }), null, round);
+  assert.match(String(roundNameError("m3", "defaults", { full: true })), /BENCH_TIER=matched/);
+  // A step run on its own may write a matched matrix under another name, never into r<n>.
+  assert.equal(roundNameError("conform-matched1", "matched"), null);
+  assert.match(String(roundNameError("r16", "matched")), /is named m<n>/);
+  assert.match(String(roundNameError("m3", "defaults")), /BENCH_TIER=matched/);
+});
+
+/** apps.mjs's exports under an environment, from a fresh process. @param {Record<string, string>} env */
+const appsUnder = (env) => {
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", 'const a = await import("./apps.mjs"); console.log(JSON.stringify({ apps: Object.keys(a.apps), tierApps: Object.keys(a.tierApps), tierEnv: a.tierEnv, run: a.runArgs("corten", a.allApps.corten, "api", "/f") }))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "BENCH_TIER" && k !== "BENCH_APPS")), ...env } });
+  return { status: r.status, stderr: r.stderr, ...(r.status === 0 ? JSON.parse(r.stdout) : {}) };
+};
+
+test("the matched tier starts its apps with the profile and only its apps; the defaults tier is as before", () => {
+  const defaults = appsUnder({});
+  assert.equal(defaults.status, 0, defaults.stderr);
+  assert.deepEqual(defaults.tierEnv, []);
+  assert.ok(!defaults.run.some((/** @type {string} */ a) => /^(PROFILE|MAX_CONNECTIONS)=/.test(a)), "no profile in the defaults tier");
+  assert.equal(defaults.apps.length, Object.keys(apps).length);
+  const matched = appsUnder({ BENCH_TIER: "matched" });
+  assert.equal(matched.status, 0, matched.stderr);
+  assert.deepEqual(matched.tierEnv, ["-e", "PROFILE=matched", "-e", "MAX_CONNECTIONS=1000"]);
+  const run = matched.run;
+  assert.ok(run.indexOf("PROFILE=matched") > 0 && run.indexOf("PROFILE=matched") < run.indexOf("cb-corten"), "set before the image");
+  for (const name of ["corten", "axum-maud"]) assert.ok(matched.tierApps.includes(name), name);
+  assert.deepEqual(matched.apps, matched.tierApps);
+  assert.ok(matched.tierApps.every((/** @type {string} */ n) => /** @type {{ matched?: boolean }} */ (apps[/** @type {keyof typeof apps} */ (n)]).matched), "only the tier's apps");
+  assert.deepEqual(appsUnder({ BENCH_TIER: "matched", BENCH_APPS: "axum-maud,corten" }).apps, ["corten", "axum-maud"]);
+  assert.match(appsUnder({ BENCH_TIER: "matched", BENCH_APPS: "corten,gin" }).stderr, /names gin, which is not in the matched tier/);
+  assert.match(appsUnder({ BENCH_TIER: "fast" }).stderr, /BENCH_TIER is defaults or matched/);
 });

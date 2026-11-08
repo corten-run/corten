@@ -15,7 +15,7 @@
 //!     pub struct Greet;
 //! }
 //!
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct GreetForm {
 //!     name: String,
 //! }
@@ -56,7 +56,7 @@
 //!
 //! ```compile_fail,E0277
 //! # use corten::prelude::*;
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Order {
 //!     quantity: u32,
 //! }
@@ -74,7 +74,7 @@
 //!
 //! ```compile_fail,E0599
 //! # use corten::prelude::*;
-//! # #[derive(serde::Deserialize, Fields)]
+//! # #[derive(Fields)]
 //! # struct Search { q: String }
 //! # #[derive(Route)]
 //! # #[route("/search")]
@@ -282,7 +282,8 @@ impl<'c, K> Call<'c, K> {
     /// Asks as the runtime or a data client does: [`Mode::Action`] for a `data-patch` form's
     /// submit, [`Mode::Navigation`] for a link the runtime follows, [`Mode::Data`] for a client
     /// that asks for JSON. Without it (or with [`Mode::Document`]) the request asks for HTML as a
-    /// browser's page load does. An `Accept` the test sets with [`Call::header`] is kept; with
+    /// browser's page load does, which the page the runtime fetches whole after a write renders as
+    /// too. An `Accept` the test sets with [`Call::header`] is kept; with
     /// [`Mode::Data`] it must ask for JSON first, or the request is not a data client's (a panic
     /// says so).
     pub fn mode(mut self, mode: Mode) -> Self {
@@ -343,7 +344,7 @@ impl<'c, K> Call<'c, K> {
             }
             Mode::Data => {
                 let accept = headers.entry(header::ACCEPT).or_insert(HeaderValue::from_static("application/json"));
-                let json = accept.to_str().unwrap_or("").split(',').next().unwrap_or("").split(';').next().unwrap_or("").trim();
+                let json = crate::api::media_type(accept.to_str().unwrap_or("").split(',').next().unwrap_or(""));
                 assert!(
                     json.eq_ignore_ascii_case("application/json"),
                     "Mode::Data asks for JSON first: an Accept of {accept:?} makes it another mode; leave out .mode(..)"
@@ -376,7 +377,7 @@ impl<'c, K> Call<'c, K> {
             .headers()
             .get(header::CONTENT_TYPE)
             .and_then(|kind| kind.to_str().ok())
-            .is_some_and(|kind| kind.split(';').next().unwrap_or("").trim().eq_ignore_ascii_case("text/event-stream"));
+            .is_some_and(|kind| crate::api::media_type(kind).eq_ignore_ascii_case("text/event-stream"));
         assert!(
             !streams,
             "the answer is a live stream, which has no end to read to: send it with app.router() and read it as it comes"
@@ -404,7 +405,7 @@ impl<'c> Call<'c, NoForm> {
     /// body a test means to be malformed. A form's body is its fields: a urlencoded one panics,
     /// naming [`Client::post`].
     pub fn body(mut self, content_type: &str, body: impl Into<Bytes>) -> Self {
-        let essence = content_type.split(';').next().unwrap_or("").trim();
+        let essence = crate::api::media_type(content_type);
         if essence.eq_ignore_ascii_case("application/x-www-form-urlencoded") {
             panic!("a test posts a form with .post(&route).field(name, value), which names its fields");
         }
@@ -493,7 +494,7 @@ mod tests {
     use crate::{prelude::*, ClientIp};
 
     // Only its field names are used: the form a test fills.
-    #[derive(serde::Deserialize, crate::Fields)]
+    #[derive(crate::Fields)]
     #[allow(dead_code)]
     struct Order {
         item: String,
@@ -567,7 +568,7 @@ mod tests {
     }
 
     // A form whose every field may be left out.
-    #[derive(serde::Deserialize, crate::Fields)]
+    #[derive(crate::Fields)]
     struct Filters {
         #[serde(default)]
         tags: Vec<String>,

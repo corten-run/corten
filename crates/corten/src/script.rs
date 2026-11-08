@@ -295,6 +295,18 @@
 //! }
 //! ```
 //!
+//! A typed event is named apart from the browser's and the runtime's (`KeyboardEvent`,
+//! `CortenError`, `CortenNotice`), since a handler's `@param` naming one of those is checked as
+//! that event:
+//!
+//! ```compile_fail
+//! #[corten::script::event]
+//! pub struct CortenError {
+//!     pub status: u16,
+//! }
+//! fn main() {}
+//! ```
+//!
 //! A feed's URL carries the feed's rows to the script. The route names them (`rows = Level`),
 //! its handler answers with them (`FeedResponse<Level>`), and the handler parameter that takes the
 //! route is a `FeedUrl<Level>` (from `corten`; `Level` is the Rust type of that name in the
@@ -528,8 +540,10 @@
 //! The runtime's own events are named with a colon: `corten:error` on a `data-patch` form whose
 //! submit got no answer it can draw (it bubbles, so `on:document:corten:error` hears every form's),
 //! and `corten:notice` on the document for a redirect's notice the page did not draw, which only
-//! `on:document:corten:notice` hears. Each is a `CustomEvent` (its `detail`, `{ status }` and
-//! `{ message }`, is not checked):
+//! `on:document:corten:notice` hears. A handler takes them as `@param {CortenError} event` and
+//! `@param {CortenNotice} event`, which `corten` declares (`/** @import { CortenError } from
+//! "corten" */`): `CustomEvent`s whose `detail` is `{ status: number, error?: unknown }` and
+//! `{ message: string }`, so the script reads it as the runtime writes it and `tsc` checks that:
 //!
 //! ```
 //! use corten::prelude::*;
@@ -551,6 +565,296 @@
 //! #[component(js)]
 //! fn CartLine() -> impl Render {
 //!     html! { <li on:corten:error={js::shortcut(event, target)}><form></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Nor does a `CortenError` handler take another event, or the `signal`:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:click={js::failed(event, target)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:submit={js::failed(signal, target)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A handler that types an event's `detail` itself (`CustomEvent<{ status: number }>`) is checked
+//! as a `CustomEvent`: it takes `corten:error`, and not a click:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:corten:error={js::sent(event)}></form></li> }
+//! }
+//! # fn main() { let _ = CartLine {}.to_html(); }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><button on:click={js::sent(event)}>"Send"</button></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A `CortenNotice` handler takes `corten:notice`, not `corten:error`:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:corten:notice={js::said(event)}></li> }
+//! }
+//! # fn main() { let _ = CartLine {}.to_html(); }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:corten:error={js::said(event)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! `corten:progress` is a `data-patch` form's upload progress: while a multipart write is sent, the
+//! form gets the browser's `ProgressEvent` (`loaded`, `total`, `lengthComputable`, counting the
+//! whole request's body), and a page with such a form loads the upload module that sends it. It
+//! does not bubble, so it is heard on the `<form>` alone:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="post" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {
+//! assert!(CartLine {}.to_html().contains(r#"corten:progress:cart_line.progressed($e,"#));
+//! # }
+//! ```
+//!
+//! A `ProgressEvent` handler takes nothing else, and another event's handler does not take it:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! { <li><form on:submit={js::progressed(event, bar)}><progress ref={bar}></progress></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form data-patch method="post" enctype="multipart/form-data" on:corten:progress={js::failed(event, target)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Nor is it heard on a form the runtime sends without it (one without `data-patch`, a GET form, or
+//! one whose body is not `multipart/form-data`), on another element, or on the document:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form method="post" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="get" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="dialog" enctype="multipart/form-data" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! {
+//!         <li><form data-patch method="post" on:corten:progress={js::progressed(event, bar)}>
+//!             <progress ref={bar}></progress>
+//!         </form></li>
+//!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! { <li on:corten:progress={js::progressed(event, bar)}><progress ref={bar}></progress></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! { <li on:document:corten:progress={js::progressed(event, bar)}><progress ref={bar}></progress></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A browser event's handler takes it as lib.dom's `HTMLElementEventMap` types it, except where an
+//! element fires a plainer one: an image's or media element's `error`, `abort`, `progress` and
+//! `resize` are `Event`s (lib.dom gives them the window's and XMLHttpRequest's types). A form's
+//! `formdata`, fired when its entries are read (a submit, `new FormData(form)`), is a
+//! `FormDataEvent`, so a handler can change what the form sends without rebuilding the body: here
+//! it leaves out blank fields, so a `GET` form's address has only the filters set. It bubbles, so
+//! `on:document:formdata` hears every form's:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:formdata={js::tidy(event)}><form on:formdata={js::tidy(event)}></form></li> }
+//! }
+//! # fn main() {
+//! let html = CartLine {}.to_html();
+//! assert!(html.contains(r#"data-on="document.formdata:cart_line.tidy($e)""#), "{html}");
+//! assert!(html.contains(r#"data-on="formdata:cart_line.tidy($e)""#), "{html}");
+//! # }
+//! ```
+//!
+//! A `FormDataEvent` handler takes no other event, and another event's handler does not take it:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><form on:click={js::tidy(event)}></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:formdata={js::shortcut(event, target)}><form></form></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A page's `securitypolicyviolation`, a `SecurityPolicyViolationEvent` for each thing its CSP
+//! refused, bubbles to the document (probed for an image the CSP refused, fired at the document):
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:securitypolicyviolation={js::refused(event)}></li> }
+//! }
+//! # fn main() {
+//! assert!(CartLine {}.to_html().contains(r#"data-on="document.securitypolicyviolation:cart_line.refused($e)""#));
+//! # }
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li on:document:click={js::refused(event)}></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A media element's `progress` is a plain `Event`, so a `ProgressEvent` handler does not take it,
+//! nor an `ErrorEvent` handler (the window's) an image's `error`:
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     let bar = refs();
+//!     html! { <li><video on:progress={js::progressed(event, bar)}></video><progress ref={bar}></progress></li> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CartLine() -> impl Render {
+//!     html! { <li><img src="/a.png" alt="" on:error={js::crashed(event)}></li> }
 //! }
 //! # fn main() {}
 //! ```
@@ -714,6 +1018,83 @@
 //! # fn main() {}
 //! ```
 //!
+//! Any other JSON shape (`{ count: number }`, `number[]`, `string | null`, a `@typedef` of plain
+//! values) has no Rust type the call is checked against, so a call to its handler does not
+//! compile either, whatever it passes; type the value with a generated declaration, as above:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::show(target, 42)}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! nor a value of the right shape, since nothing checks the shape:
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! struct Count { count: u32 }
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::show(target, Count { count: 3 })}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! nor through a `@typedef` of plain values (`counted` takes a `Count`, `{ count: number }`):
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[derive(ToJson)]
+//! struct Count { count: u32 }
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::counted(target, Count { count: 3 })}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! nor a group with a field of such a type (`tally` takes a `Badge`, whose `ids` is `number[]`):
+//!
+#![cfg_attr(feature = "json", doc = "```compile_fail,E0277")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     let out = refs();
+//!     let badge = js::Badge { out, ids: [1, 2] };
+//!     html! { <p on:click={js::tally(badge)}><output ref={out}></output></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A parameter typed `unknown` claims nothing the call does not check: it takes any `ToJson`
+//! value, and the script narrows it before using it:
+//!
+#![cfg_attr(feature = "json", doc = "```")]
+#![cfg_attr(not(feature = "json"), doc = "```ignore")]
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn CountBadge() -> impl Render {
+//!     html! { <p on:click={js::raw(target, 42)}></p> }
+//! }
+//! # fn main() {
+//! assert!(CountBadge {}.to_html().contains("count_badge.raw($t,42)"), "{}", CountBadge {}.to_html());
+//! # }
+//! ```
+//!
 //! A typed event's handler on another event (`toggled` takes a `RowToggled`, a click is a
 //! `MouseEvent`):
 //!
@@ -736,6 +1117,41 @@
 //!             <caption><output ref={count}></output></caption>
 //!         </table>
 //!     }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! The same with the class imported for its type alone (`/** @import { RowToggled } from
+//! "corten/events" */`, `toggle_note.js`):
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[corten::script::event]
+//! pub struct RowToggled {
+//!     pub id: String,
+//!     pub selected: bool,
+//! }
+//!
+//! #[component(js)]
+//! fn ToggleNote() -> impl Render {
+//!     html! { <p on:click={js::toggled(event, target)}></p> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[corten::script::event]
+//! pub struct RowToggled {
+//!     pub id: String,
+//!     pub selected: bool,
+//! }
+//!
+//! #[component(js)]
+//! fn ToggleNote() -> impl Render {
+//!     html! { <p on:RowToggled={js::toggled(event, target)}></p> }
 //! }
 //! # fn main() {}
 //! ```
@@ -1002,68 +1418,9 @@ pub struct ViewDef {
 }
 
 /// The start of `views.js`: `rows()` and the helpers the generated classes call by name
-/// (`text`, `value`, `checked`), built from `js/view.js`.
-const VIEW_HELPERS: &str = concat!(include_str!("../js/dist/view.js"), "export { rows };\n");
-
-/// The declarations of what `VIEW_HELPERS` exports, for `declare module "corten/views"`.
-#[cfg_attr(not(feature = "types"), allow(dead_code))]
-pub(crate) const VIEW_TYPES: &str = "  /** What #[component(view)] generates for a component. */
-  export interface KeylessViewClass<D, V> {
-    new (el: Element): V;
-    fill(el: Element, data: D): void;
-  }
-  /** What #[component(view)] generates for a component whose root has key={..}. */
-  export interface ViewClass<D, V> extends KeylessViewClass<D, V> {
-    key(el: Element): string;
-    /** There when the key is one of the view's holes: then scripts can make its rows. */
-    keyOf?(data: D): string;
-  }
-  const holds: unique symbol;
-  /**
-   * An element `E` whose children are rows of the view `V` (or a <template> that holds one): the
-   * JSDoc type of a handler parameter `rows()` reads, `@param {Holds<Row, HTMLTableSectionElement>} body`
-   * (with `@import { Holds } from 'corten/views'`). Corten checks the ref passed for it is on an
-   * element the markup fills with `<Row .. />` only.
-   */
-  export type Holds<V, E extends Element = HTMLElement> = E & { readonly [holds]: V };
-  /** The views of every child of a parent element, all made from one component without a key. */
-  export interface RowList<V extends { el: Element }> {
-    readonly length: number;
-    /** The view of the i-th row. */
-    at(i: number): V;
-    /** The view of the row that holds `target` (an event's target), if any. */
-    of(target: EventTarget | null): V | undefined;
-    /** Where the view's row is, or -1. */
-    indexOf(view: V): number;
-    /** Takes out a row. */
-    remove(view: V): void;
-    /** Swaps two rows. */
-    swap(i: number, j: number): void;
-    clear(): void;
-    [Symbol.iterator](): IterableIterator<V>;
-  }
-  /** The rows of a view with a key: found by it too. */
-  export interface ServerRows<V extends { el: Element }> extends RowList<V> {
-    /** The view of the row with this key, if any. */
-    get(key: string): V | undefined;
-  }
-  /** The rows of a view whose key is one of its holes: scripts make rows too. */
-  export interface Rows<D, V extends { el: Element }> extends ServerRows<V> {
-    /** Adds rows at the end. */
-    push(items: readonly D[]): void;
-    /** Shows exactly `items`: rows with a key it had keep their element and are filled again, the rest are made, in `items`' order. */
-    replace(items: readonly D[]): void;
-  }
-  /**
-   * The rows under `parent`, each a `View`: the same list every time for one parent, following
-   * changes made elsewhere. New rows are clones of the one row in `template`. A view whose key is
-   * also shown outside its holes gets `ServerRows`, and one without a key `RowList`: the server
-   * makes their rows, and only a key finds one.
-   */
-  export function rows<D, V extends { el: Element }>(parent: Holds<V, Element>, View: ViewClass<D, V> & { keyOf(data: D): string }, template?: Holds<V, HTMLTemplateElement>): Rows<D, V>;
-  export function rows<D, V extends { el: Element }>(parent: Holds<V, Element>, View: ViewClass<D, V>): ServerRows<V>;
-  export function rows<D, V extends { el: Element }>(parent: Holds<V, Element>, View: KeylessViewClass<D, V> & { key?: never }): RowList<V>;
-";
+/// (`text`, `value`, `checked`), built from `js/view.js`. Its declarations are `js/views.d.ts`,
+/// which ships with the crate: an app's `types/app.d.ts` holds only its own view classes.
+const VIEW_HELPERS: &str = concat!(include_str!("../js/dist/view.js"), "export { rows, view };\n");
 
 /// The `corten/views` module: the view class of every listed `#[component(view)]`, or `None`
 /// when no component has one. A component listed twice counts once; two different views with one
@@ -1377,14 +1734,16 @@ pub trait Arg<P> {
 }
 
 /// What a handler parameter needs when its JSDoc type is one no call can be checked against (a set
-/// of names written as string literals, a generated declaration inside another type): nothing
-/// has it, so a call does not compile, and the handler's deprecation note says why. The handler
+/// of names written as string literals, a generated declaration inside another type, a JSON shape
+/// no Rust type stands for, `{ count: number }`, an element or event type outside the checked
+/// forms, `HTMLElementTagNameMap["dialog"]`): nothing has it, so a call does not compile, and the
+/// handler's deprecation note says why. The handler
 /// itself compiles, so an export only other scripts import is the script's to type. It is sealed:
 /// nothing outside Corten can implement it either.
 #[diagnostic::on_unimplemented(
     message = "the script types this handler parameter so that no call can be checked against it",
     label = "the warning on this handler says why",
-    note = "a set of names is a Rust enum with a generated declaration, import(\"../types/app\").Name; a list or an optional one is a Rust type of its own"
+    note = "a set of names, or any other JSON value, is a Rust type with a generated declaration, import(\"../types/app\").Name, and a list or an optional one a Rust type of its own; an element or an event takes an interface the scripts guide lists as checked (several events the one they share, UIEvent or Event); a parameter typed unknown takes any argument"
 )]
 pub trait Refused: refused::Sealed {}
 
@@ -1504,7 +1863,7 @@ pub mod ev {
     #[diagnostic::on_unimplemented(
         message = "the handler takes a {P}, and this on: attribute's event is a {Self}",
         label = "a {Self}",
-        note = "the event's type comes from the on: attribute's name (on:click is a MouseEvent); widen the JSDoc type to Event to take any"
+        note = "the event's type comes from the on: attribute's name (on:click is a PointerEvent); widen the JSDoc type to Event to take any"
     )]
     pub trait SubOf<P> {}
 
@@ -1531,12 +1890,20 @@ pub mod ev {
     events!(CompositionEvent: CompositionEvent, UIEvent, Event);
     events!(TouchEvent: TouchEvent, UIEvent, Event);
     events!(SubmitEvent: SubmitEvent, Event);
+    events!(FormDataEvent: FormDataEvent, Event);
+    events!(SecurityPolicyViolationEvent: SecurityPolicyViolationEvent, Event);
     events!(ToggleEvent: ToggleEvent, Event);
     events!(AnimationEvent: AnimationEvent, Event);
     events!(TransitionEvent: TransitionEvent, Event);
     events!(ClipboardEvent: ClipboardEvent, Event);
     events!(ErrorEvent: ErrorEvent, Event);
     events!(CustomEvent: CustomEvent, Event);
+    // The runtime's two events (corten.js declares their `detail`): `corten:error` on a
+    // `data-patch` form whose submit got no answer it can draw, `corten:notice` on the document.
+    events!(CortenError: CortenError, CustomEvent, Event);
+    events!(CortenNotice: CortenNotice, CustomEvent, Event);
+    // A `data-patch` form's upload progress (`corten:progress`): the browser's own interface.
+    events!(ProgressEvent: ProgressEvent, Event);
 
     /// A typed event from `#[event]` is an `Event`.
     impl<E: super::DomEvent> SubOf<Event> for E {}
@@ -1725,6 +2092,15 @@ pub(crate) const KEYS_MODULE: &str = "corten-keys";
 /// [`KEYS_MODULE`]'s source.
 pub(crate) const KEYS_JS: &str = include_str!("../js/dist/keys.js");
 
+/// The module that sends a `data-patch` form's multipart body by `XMLHttpRequest` to report its
+/// progress (`js/upload.js`, minified into `js/dist/upload.js`): served with the app's scripts,
+/// and loaded by the pages with a form that has an `on:corten:progress` handler, not by every
+/// page with the runtime.
+pub(crate) const UPLOAD_MODULE: &str = "corten-upload";
+
+/// [`UPLOAD_MODULE`]'s source.
+pub(crate) const UPLOAD_JS: &str = include_str!("../js/dist/upload.js");
+
 /// Notes that the page rendering uses script module `name`, so its head loads it.
 pub(crate) fn uses(name: &'static str) {
     MODULES.with(|m| {
@@ -1746,6 +2122,12 @@ pub(crate) fn collect<T>(render: impl FnOnce() -> T) -> (T, Vec<&'static str>) {
 #[doc(hidden)]
 pub mod __private {
     use super::*;
+
+    /// A form on the page has an `on:corten:progress` handler, so the page loads the upload module.
+    #[inline]
+    pub fn uses_upload() {
+        uses(UPLOAD_MODULE);
+    }
 
     /// Where an argument is written: the component rendering and the one that made the handler.
     pub struct Ctx {
@@ -2275,7 +2657,7 @@ pub mod __private {
         }
     }
 
-    /// Any `ToJson` value, as JSON, for a parameter whose JSDoc type Corten does not check.
+    /// Any `ToJson` value, as JSON, for a parameter typed `unknown`, which the script narrows.
     #[cfg(feature = "json")]
     impl<T: crate::json::ToJson> Arg<ts::Any> for T {
         fn write_arg(&self, _: &Ctx, out: &mut String) {

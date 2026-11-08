@@ -197,6 +197,45 @@ const event = (type) =>
 /// Cache header for a URL that can never change.
 pub(crate) const IMMUTABLE: HeaderValue = HeaderValue::from_static("public, max-age=31536000, immutable");
 
+/// The path browsers ask for an icon on their own, for a document that names none (a PDF, an
+/// image or JSON opened in a tab), and feed readers and crawlers too.
+pub(crate) const FAVICON_PATH: &str = "/favicon.ico";
+
+/// How long a cache keeps the icon at [`FAVICON_PATH`]: a day, since the path never changes as
+/// a versioned URL does; with its ETag, a cache then asks again for a 304.
+const FAVICON_CACHE: HeaderValue = HeaderValue::from_static("public, max-age=86400");
+
+/// How long a cache keeps the 404 at [`FAVICON_PATH`] when the app has no icon: an hour, so a
+/// deploy that adds one is seen soon, by a CDN too.
+const NO_FAVICON_CACHE: HeaderValue = HeaderValue::from_static("public, max-age=3600");
+
+/// The route Corten adds at [`FAVICON_PATH`] when no route of the app's is there: the static
+/// directory's `favicon.ico` (`image/x-icon`), else its `favicon.svg` (`image/svg+xml`), each
+/// with its ETag and a day's cache; with neither, a 404 with no body and an hour's cache. Chosen
+/// once, at startup, and no layout read or page runs for it (#1056).
+pub(crate) fn favicon<S: Clone + Send + Sync + 'static>(assets: Option<&Arc<Assets>>) -> Router<S> {
+    let icon = assets.and_then(|assets| {
+        let path = ["favicon.ico", "favicon.svg"].into_iter().find(|path| assets.files.contains_key(*path))?;
+        Some((assets.clone(), path))
+    });
+    Router::new().route(
+        FAVICON_PATH,
+        get(move |headers: HeaderMap| {
+            let icon = icon.clone();
+            async move {
+                match icon {
+                    Some((assets, path)) => assets.serve(path, &headers, FAVICON_CACHE, true),
+                    None => {
+                        let mut res = (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, NO_FAVICON_CACHE)]).into_response();
+                        res.extensions_mut().insert(crate::page::AsIs);
+                        res
+                    }
+                }
+            }
+        }),
+    )
+}
+
 struct File {
     #[cfg(not(feature = "compress"))]
     body: Bytes,
@@ -435,6 +474,14 @@ impl Assets {
             }
             sources.push((url, crate::script::served(name, crate::script::FORMAT_JS).into_bytes().into()));
             registered.insert(name.to_string());
+            // The upload module, for the pages with a form whose handlers hear its progress.
+            let name = crate::script::UPLOAD_MODULE;
+            let url = format!("scripts/{name}.js");
+            if sources.iter().any(|(u, _)| *u == url) {
+                return Err(clash(format!("the static directory has a {url}, the name of Corten's upload module")));
+            }
+            sources.push((url, crate::script::served(name, crate::script::UPLOAD_JS).into_bytes().into()));
+            registered.insert(name.to_string());
         }
         // `corten/keys`, for the apps with a script that imports it: preloaded with that script (it
         // is one of its imports), so no page without one fetches it. Only a listed script brings
@@ -457,7 +504,8 @@ impl Assets {
         }
         // A static script a listed one imports (`scripts/helper.js`) is not read when the crate
         // compiles, so whether it imports the views is found here. It is read as written,
-        // comments included: a commented-out import costs one needless preload, never a failure.
+        // comments included: in an app with views, a commented-out import costs one needless
+        // preload; in one without, it is refused below, as an import of `corten/keys` is.
         for (url, body) in &sources {
             let Some(name) = url.strip_prefix("scripts/").and_then(|n| n.strip_suffix(".js")) else { continue };
             if !registered.contains(name) && names(body, "corten/views") {
@@ -476,6 +524,14 @@ impl Assets {
                 return Err(clash(format!("the static directory has a {VIEWS}, the name of the views' module")));
             }
             sources.push((VIEWS.to_string(), views.into_bytes().into()));
+        } else if let Some(name) = imports_views.iter().min() {
+            // `tsc` sees `rows()` and `view()` declared for every app (they ship with the crate),
+            // but the import map names `corten/views` only for an app with a view, so the import
+            // would fail in the browser.
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("scripts/{name}.js imports corten/views, which Corten serves only to an app that lists a #[component(view)]: list the view's component, or import nothing from corten/views"),
+            ));
         }
         let styles: Vec<(&str, crate::Style)> = seen.iter().filter_map(|(c, _)| Some((c.name, c.style?))).collect();
         undeclared_properties(&sheets, &sources, &styles, sections)?;
@@ -732,25 +788,40 @@ impl Assets {
             &format!("{}/{{version}}/{{*path}}", self.mount),
             get(move |UrlPath((version, path)): UrlPath<(String, String)>, headers: HeaderMap| {
                 let assets = assets.clone();
-                async move { assets.serve(&version, &path, &headers) }
+                async move {
+                    let cache = if version == assets.version { IMMUTABLE } else { HeaderValue::from_static("no-cache") };
+                    assets.serve(&path, &headers, cache, false)
+                }
             }),
         )
     }
 
-    fn serve(&self, version: &str, path: &str, headers: &HeaderMap) -> Response {
+    fn serve(&self, path: &str, headers: &HeaderMap, cache: HeaderValue, fixed: bool) -> Response {
         let Some(file) = self.files.get(path) else {
             return StatusCode::NOT_FOUND.into_response();
         };
-        let cache = if version == self.version { IMMUTABLE } else { HeaderValue::from_static("no-cache") };
-        // Each coding of the file is a different representation, so it has its own tag.
         #[cfg(feature = "compress")]
         let (body, coding) = file.body.pick(headers);
-        #[cfg(feature = "compress")]
-        let etag = coding.map_or_else(|| format!("\"{:016x}\"", file.hash), |c| format!("\"{:016x}-{}\"", file.hash, c.tag()));
         #[cfg(not(feature = "compress"))]
-        let (body, etag) = (file.body.clone(), format!("\"{:016x}\"", file.hash));
-        let etag = HeaderValue::try_from(etag).expect("hex is a valid header");
-        if headers.get(header::IF_NONE_MATCH).is_some_and(|tag| tag == etag) {
+        let body = file.body.clone();
+        let etag = if fixed {
+            // Its URL is revalidated: keep the same weak content tag while background
+            // compression changes the encoded bytes. Versioned files keep per-coding tags.
+            HeaderValue::try_from(format!("W/\"{:016x}\"", file.hash)).expect("hex tag")
+        } else {
+            #[cfg(feature = "compress")]
+            {
+                etag(file.hash, coding.map(|c| c.tag()))
+            }
+            #[cfg(not(feature = "compress"))]
+            {
+                etag(file.hash, None)
+            }
+        };
+        // Compared weakly, as RFC 9110 has `If-None-Match` compared: a proxy that marks the tag
+        // weak (`W/`), a list of tags or `*` still gets the 304.
+        let opaque = etag.as_bytes().strip_prefix(b"W/").unwrap_or(etag.as_bytes());
+        if headers.get_all(header::IF_NONE_MATCH).iter().any(|line| crate::cache::names(line.as_bytes(), opaque)) {
             #[allow(unused_mut)]
             let mut res = (StatusCode::NOT_MODIFIED, [(header::ETAG, etag), (header::CACHE_CONTROL, cache)]).into_response();
             #[cfg(feature = "compress")]
@@ -768,6 +839,19 @@ impl Assets {
         crate::compress::encoded_headers(res.headers_mut(), file.content_type, coding);
         res
     }
+}
+
+/// A file's ETag: its hash in hex, quoted, and its coding's tag after a `-` (`"0123..ef-br"`).
+fn etag(hash: u64, coding: Option<&str>) -> HeaderValue {
+    let mut tag = String::with_capacity(24);
+    tag.push('"');
+    tag.push_str(crate::ascii::hex(hash, &mut [0; 16]));
+    if let Some(coding) = coding {
+        tag.push('-');
+        tag.push_str(coding);
+    }
+    tag.push('"');
+    HeaderValue::try_from(tag).expect("hex is a valid header")
 }
 
 /// A stylesheet of components only some sections list (`Area::components`).
@@ -1016,6 +1100,17 @@ mod tests {
     use axum::http::Request;
     use tower::ServiceExt;
 
+    /// A file's tag is its hash in 16 hex digits, quoted, with each coding's tag after a `-`.
+    #[test]
+    fn an_etag_is_the_hash_in_hex_and_the_coding() {
+        for hash in [0, 0xab, 0x0123_4567_89ab_cdef, u64::MAX] {
+            assert_eq!(etag(hash, None), format!("\"{hash:016x}\"").as_str());
+            for coding in ["zst", "br", "gz"] {
+                assert_eq!(etag(hash, Some(coding)), format!("\"{hash:016x}-{coding}\"").as_str());
+            }
+        }
+    }
+
     fn dir(name: &str, files: &[(&str, &str)]) -> Scratch {
         let root = Scratch::new(&format!("assets-{name}"));
         for (path, body) in files {
@@ -1047,6 +1142,40 @@ mod tests {
         assert_eq!(get(traversal).await.unwrap().status(), StatusCode::NOT_FOUND, "only loaded files are served");
         let dotfile = format!("/assets/{}/.env", assets.version());
         assert_eq!(get(dotfile).await.unwrap().status(), StatusCode::NOT_FOUND, "dotfiles are skipped");
+    }
+
+    /// The fixed icon's content is unchanged when its background-compressed form becomes ready.
+    #[cfg(feature = "compress")]
+    #[tokio::test]
+    async fn the_favicon_tag_survives_background_compression() {
+        let svg = format!("<svg>{}</svg>", "<path d=\"M0 0h1v1\"/>".repeat(200));
+        let root = dir("favicon-compression", &[("favicon.svg", &svg)]);
+        let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let app: Router = crate::compress::apply(favicon(Some(&assets)));
+        let request = |tag: Option<HeaderValue>| {
+            let mut req = Request::get(FAVICON_PATH).header(header::ACCEPT_ENCODING, "gzip, deflate");
+            if let Some(tag) = tag {
+                req = req.header(header::IF_NONE_MATCH, tag);
+            }
+            app.clone().oneshot(req.body(Body::empty()).unwrap())
+        };
+        let cold = request(None).await.unwrap();
+        assert_eq!(cold.status(), StatusCode::OK);
+        assert_eq!(cold.headers()[header::CONTENT_ENCODING], "gzip");
+        let tag = cold.headers()[header::ETAG].clone();
+        assert!(tag.to_str().unwrap().starts_with("W/\""));
+        assets.files["favicon.svg"].body.wait();
+        let again = request(Some(tag.clone())).await.unwrap();
+        assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(again.headers()[header::ETAG], tag);
+        assert_eq!(again.headers()[header::VARY], "accept-encoding");
+        assert!(axum::body::to_bytes(again.into_body(), usize::MAX).await.unwrap().is_empty());
+        let warm = request(None).await.unwrap();
+        assert_eq!(warm.status(), StatusCode::OK);
+        assert_eq!(warm.headers()[header::CONTENT_ENCODING], "gzip");
+        assert_eq!(warm.headers()[header::ETAG], tag);
+        let changed = request(Some(HeaderValue::from_static("W/\"another-icon\""))).await.unwrap();
+        assert_eq!(changed.status(), StatusCode::OK);
     }
 
     const SCRIPT: Component = Component {
@@ -1150,6 +1279,42 @@ mod tests {
         let error = Assets::build_with(taken, &[PLAIN], &[], "/assets").err().expect("the name is Corten's");
         assert!(error.to_string().contains("Corten's keys module"), "{error}");
     }
+
+    /// `corten/views` is mapped only for an app with a view, though `tsc` sees `rows()` and
+    /// `view()` declared for every app: a script of an app without one that imports it is an
+    /// error when the app starts, not in the browser.
+    #[test]
+    fn corten_views_imported_by_an_app_without_a_view_is_refused() {
+        const PLAIN: Component = Component {
+            name: "plain",
+            script: Some(crate::Script { name: "plain", file: "plain", source: "", handlers: &[], events: &[], imports: &[] }),
+            style: None,
+            event: None,
+            view: None,
+            anchor: &0,
+        };
+        const VIEWING: Component = Component {
+            name: "viewing",
+            script: Some(crate::Script {
+                name: "viewing",
+                file: "viewing",
+                source: "import { view } from \"corten/views\";",
+                handlers: &[],
+                events: &[],
+                imports: &[],
+            }),
+            style: None,
+            event: None,
+            view: None,
+            anchor: &0,
+        };
+        let error = Assets::build(None, &[VIEWING], "/assets").err().expect("nothing serves corten/views");
+        assert!(error.to_string().contains("scripts/viewing.js imports corten/views"), "{error}");
+        let importer = vec![("scripts/helper.js".to_string(), Bytes::from_static(b"import { rows } from \"corten/views\";"))];
+        let error = Assets::build_with(importer, &[PLAIN], &[], "/assets").err().expect("nothing serves corten/views");
+        assert!(error.to_string().contains("scripts/helper.js imports corten/views"), "{error}");
+        assert!(Assets::build(None, &[PLAIN], "/assets").is_ok());
+    }
     /// A script that imports another of its directory has it preloaded with it, and its imports
     /// in turn; a page that loads the importer fetches them at once, not once it has arrived.
     #[test]
@@ -1184,10 +1349,18 @@ mod tests {
         let assets = Assets::build_with(files, &[ENTRY], &[], "/assets").unwrap();
         assert!(assets.module("entry").unwrap().0.ends_with("stripe.js\">"));
         assert!(!assets.module("entry").unwrap().2, "nothing imports the views");
-        // One that imports the views makes the listed module's pages preload them, though the
-        // crate never read it.
+        // One that imports the views (of an app with one) makes the listed module's pages preload
+        // them, though the crate never read it.
+        const ROW: Component = Component {
+            name: "Row",
+            script: None,
+            style: None,
+            event: None,
+            view: Some(crate::script::ViewDef { class: "Row", js: "export class Row {}\n", ts: "" }),
+            anchor: &0,
+        };
         let files = vec![("scripts/stripe.js".to_string(), Bytes::from_static(b"import { list } from 'corten/views';"))];
-        let assets = Assets::build_with(files, &[ENTRY], &[], "/assets").unwrap();
+        let assets = Assets::build_with(files, &[ENTRY, ROW], &[], "/assets").unwrap();
         assert!(assets.module("entry").unwrap().2 && assets.swap_imports("entry").unwrap().2);
         // A module that imports one that uses the typed events has them preloaded too.
         const SAVED: Component = Component {
@@ -1288,7 +1461,10 @@ mod tests {
         let module = crate::script::views_module(&[ROW, ROW]).unwrap().unwrap();
         assert_eq!(module.matches("export class Row").count(), 1, "listed twice, served once");
         assert!(module.starts_with("// The app's views"), "with the helpers the classes use");
-        assert!(module.contains("const{checked,rows,text,value}=") && module.contains("export { rows };"), "and rows()");
+        assert!(
+            module.contains("const{checked,rows,text,value,view}=") && module.contains("export { rows, view };"),
+            "and rows() and view()"
+        );
         let error = Assets::build(None, &[ROW, view("export class Row { other() {} }\n")], "/assets").err().expect("two Rows");
         assert!(error.to_string().contains("two views named Row"), "{error}");
         assert!(Assets::build(None, &[SCRIPT], "/assets").unwrap().views().is_none());

@@ -1,0 +1,12 @@
+diff --git a/examples/card-market/src/main.rs b/examples/card-market/src/main.rs
+index 44acf51c..aae23a5c 100644
+--- a/examples/card-market/src/main.rs
++++ b/examples/card-market/src/main.rs
+@@ -87,5 +87,6 @@ mod mcp {
+ #[tokio::main]
+ async fn main() -> std::io::Result<()> {
+     let source = source::Source::from_env().map_err(|e| std::io::Error::other(e.to_string()))?;
+-    corten::serve(app::app(source)).await
++    // Ablation: no header or send timeout, so no connection is watched.
++    corten::serve(app::app(source).header_timeout(None).send_timeout(None)).await
+ }

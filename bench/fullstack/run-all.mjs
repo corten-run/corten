@@ -18,20 +18,25 @@
 //     ended (`journalctl -k -b -1`) goes to results/<round>/kernel-before-start-<n>.txt
 //     (keepKernelLog).
 // On a bench host set BENCH_APP_CPUS, BENCH_LOAD_CPUS and BENCH_API_CONTAINER (droplet.mjs does).
+// BENCH_TIER=matched (droplet.mjs --tier matched) runs the matched tier's apps with the production
+// profile (apps.mjs; README, "The matched tier"), in a round named m<n>.
 // BENCH_PASSES (1 unless set, droplet.mjs --passes) runs each load phase that many times, the apps
 // taking turns, and summarize.mjs reports their median and range (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apiContainer, apps, network, pageApps, runArgs } from "./apps.mjs";
+import { apiContainer, apps, network, pageApps, runArgs, tier, viaEdge } from "./apps.mjs";
+import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
-import { buildStep, calls, idleMinutes, mayStart, resumeAt, startMinutes, steps } from "./round.mjs";
+import { buildStep, calls, idleMinutes, mayStart, resumeAt, roundNameError, startMinutes, steps } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const unattended = process.argv.includes("--unattended");
 const [round = "r1", browserRuns = "10", from = steps[0]] = process.argv.slice(2).filter((a) => a !== "--unattended");
 if (!steps.includes(from)) throw new Error(`from must be one of ${steps.join(", ")}`);
+// A matched-tier round (BENCH_TIER=matched) is m<n>, and only it: the trend reads r<n> alone.
+if (roundNameError(round, tier, { full: true })) throw new Error(/** @type {string} */ (roundNameError(round, tier, { full: true })));
 // It removes every container on the host, so only where droplet.mjs runs it.
 if (unattended && (process.platform !== "linux" || !process.env.BENCH_APP_CPUS)) throw new Error("--unattended is for a bench droplet (droplet.mjs runs it there)");
 const minute = 60_000;
@@ -110,6 +115,8 @@ const startEveryApp = async () => {
   }
   // Every app shares the app core here, so slow starters (the JVM) take a while: wait up to two
   // minutes for each, however its port behaves.
+  /** The apps that answered, which the edge must reach. @type {[string, { port: number }][]} */
+  const answered = [];
   for (const [name, app] of Object.entries(pageApps)) {
     const deadline = Date.now() + startMinutes * minute;
     let up = false;
@@ -119,9 +126,19 @@ const startEveryApp = async () => {
       if (!up) await sleep(500);
     }
     if (!up) console.log(`${name} did not answer within two minutes`);
+    else answered.push([name, app]);
   }
+  if (!viaEdge) return null;
+  const failed = await startEdge(Object.entries(pageApps), network);
+  if (failed) return failed;
+  // As in run-ssr.mjs: each app that is up must answer through the edge before it is timed there.
+  for (const [name, app] of answered) {
+    const unreachable = await reachApp(app, "/items/item_1");
+    if (unreachable) { stopEdge(); return `${name}: ${unreachable}`; }
+  }
+  return null;
 };
-const stopEveryApp = () => { for (const name of Object.keys(pageApps)) docker("rm", "-f", `fsw-${name}`); };
+const stopEveryApp = () => { for (const name of Object.keys(pageApps)) docker("rm", "-f", `fsw-${name}`); if (viaEdge) stopEdge(); };
 
 /**
  * Saves the kernel's log of the boot that ended (`journalctl -k -b -1`, streamed to the file, since
@@ -178,15 +195,20 @@ try {
     built = state.built;
   }
   const jsonOnly = Object.keys(apps).filter((name) => !(name in pageApps));
-  const all = calls(round, browserRuns, Object.keys(pageApps), Object.values(pageApps).map((a) => a.port), jsonOnly, passesOf(process.env.BENCH_PASSES));
+  // The browser step reaches each app as the round's load phases do: the matched tier's through the edge.
+  const urls = Object.values(pageApps).map((a) => (viaEdge ? edgeBase(a, "outside") : `http://localhost:${a.port}`));
+  const all = calls(round, browserRuns, Object.keys(pageApps), urls, jsonOnly, passesOf(process.env.BENCH_PASSES));
   for (const step of first ? steps.slice(steps.indexOf(first)) : []) {
     if (step === "count" && process.platform !== "linux") continue;
     progress(`start ${step}`);
-    if (step === "browser") await startEveryApp();
+    // The matched tier's browser timing reaches the apps through the edge: without it, only
+    // browser.mjs is skipped (parity, look and bytes reach the apps directly).
+    const edgeFailed = step === "browser" ? await startEveryApp() : null;
+    if (edgeFailed) skip(step, `browser.mjs: ${edgeFailed}`);
     const stepStarted = Date.now();
     // Each build is one app's: one stopped skips that app alone, and none starts past the budget.
     if (step === "build") await buildStep(all, built, { minutes: () => (Date.now() - stepStarted) / minute, call, progress, skip, reset: () => { if (unattended) reset(); } });
-    else for (const [, limit, ...args] of all.filter(([s]) => s === step)) {
+    else for (const [, limit, ...args] of all.filter(([s, , script]) => s === step && !(edgeFailed && script === "browser.mjs"))) {
       const { stopped } = await call(limit, args);
       if (stopped) {
         skip(step, stopped);

@@ -50,20 +50,23 @@ export function showAll(rows, rest, button) {
 | `on:click={js::showAll(..)}` | runs `showAll` on a click on that element |
 | `row.closest()` | the element with ref `row` around the event's target (the handler runs only inside one) |
 | `js::Selection { rows: row, count }` | a `@typedef` of elements: one object argument |
-| `event`, `target`, `signal`, `scope` | the event (`MouseEvent` for a click), the element with the `on:`, an `AbortSignal` that aborts when it leaves the page, the component's root element |
-| a Rust value: `&str`, a number, `bool`, a typed route, a slice, array or `Vec` of strings for `string[]`, a `corten::script::ElementId` (or a slice, array or `Vec` of them) for `ElementId` (`ElementId[]`) from `corten`, made only from a `#[derive(Id)]` type (`ElementId::of(&SalesId)`, never a string; corten-ui's `sorted(&SupplyId)` is one for a sorted table, and its `CopyButton` passes one), any `ToJson` (feature `json`) | the JSON value (an integer past 2^53 stops debug builds, since a JavaScript number cannot hold it exactly: pass a 64-bit id as a string; a float for a `number` is written as `Display` writes it, [Numbers in JSON](app.md#numbers-in-json)) |
-| a value of a Rust type `corten::types` writes a declaration for (`SortBy::Price`, an enum that derives `ToJson`, added with `Types::add`) | a parameter typed by that declaration, `@param {import("../types/app").SortBy} by` (or a `@typedef` of it, or of that): the call takes that Rust type and nothing else, so one handler serves every name and a renamed variant fails to build. The Rust type is the one of that name in the component's module, so bring it in with `use` under its declared name (the declaration is named after the Rust type, whatever `#[serde(rename)]` the type has). A declaration types a value alone: a list, an optional value or a generic around one does not compile, so declare a Rust type for the whole value. A call to a handler with a string literal anywhere in a parameter's type (`"name" \| "price"`, in a list, with `null`, optional, in a tuple or an object, through typedefs, in a typedef of plain values, or as a group's field) does not compile, since a set of names written that way would take any value; a warning on the call says why. A key is not a name: an object's (`{ "aria-label": string }`), an indexed type's (`HTMLElementTagNameMap["dialog" \| "details"]`), and the keys and members `Pick`, `Omit` and `Exclude` take after the type (`Extract<string, "a" \| "b">` is the set itself); neither is a callback's parameter name (`(Mode) => void`); a template literal type is left to `tsc`, though a set in its `${..}` counts. A call does not compile either when a parameter holds a generated declaration in a shape the call is not checked against, through typedefs and in a typedef of plain values in any shape (`P`, `P \| null`, `P[]`, or inside another typedef). The script itself compiles: an export only other scripts import types its parameters as it needs. Typedefs that refer to each other are seen through as one, and each is written out once, so a recursive one (a `Json` type) costs no more than another. A generic typedef of the script's own (`@template`) is a definition, not a name for another type |
+| `event`, `target`, `signal`, `scope` | the event (`PointerEvent` for a click), the element with the `on:`, an `AbortSignal` that aborts when it leaves the page, the component's root element |
+| a Rust value: `&str`, a number, `bool`, a typed route, a slice, array or `Vec` of strings for `string[]`, a `corten::script::ElementId` (or a slice, array or `Vec` of them) for `ElementId` (`ElementId[]`) from `corten`, made only from a `#[derive(Id)]` type (`ElementId::of(&SalesId)`, never a string; corten-ui's `sorted(&SupplyId)` is one for a sorted table, and its `CopyButton` passes one), any `ToJson` (feature `json`) for a parameter typed `unknown` (which also takes a ref, `event`, `target`, `signal` or `scope`) | the JSON value (an integer past 2^53 stops debug builds, since a JavaScript number cannot hold it exactly: pass a 64-bit id as a string; a float for a `number` is written as `Display` writes it, [Numbers in JSON](app.md#numbers-in-json)). `unknown` claims nothing the call does not check, so the script narrows it before using it. Any other JSON shape (`{ count: number }`, `number[]`, `string \| null`, `object`, `any`, a `@typedef` of plain values) has no Rust type the call is checked against, so a call to that handler does not compile, and a warning on the call says why: type the value with a generated declaration (next row). The same holds for an element or an event in a shape no call is checked against (`MouseEvent \| KeyboardEvent`, `HTMLElement \| null`, `EventTarget`, `Node`): take an interface the rows above check (several events take the one they share, `UIEvent` or `Event`, and the script narrows it) |
+| a value of a Rust type `corten::types` writes a declaration for (`SortBy::Price`, an enum that derives `ToJson`, added with `Types::add`) | a parameter typed by that declaration, `@param {import("../types/app").SortBy} by` (or a `@typedef` of it, or of that): the call takes that Rust type and nothing else, so one handler serves every name and a renamed variant fails to build. The Rust type is the one of that name in the component's module, so bring it in with `use` under its declared name (the declaration is named after the Rust type, whatever `#[serde(rename)]` the type has). A declaration types a value alone: a list, an optional value or a generic around one does not compile, so declare a Rust type for the whole value. A call to a handler with a string literal anywhere in a parameter's type (`"name" \| "price"`, in a list, with `null`, optional, in a tuple or an object, through typedefs, in a typedef of plain values, or as a group's field) does not compile, since a set of names written that way would take any value; a warning on the call says why. A key is not a name: an object's (`{ "aria-label": string }`), an indexed type's (`HTMLElementTagNameMap["dialog" \| "details"]`), and the keys and members `Pick`, `Omit` and `Exclude` take after the type (`Extract<string, "a" \| "b">` is the set itself); neither is a callback's parameter name (`(Mode) => void`), nor a template literal type (a set in its `${..}` counts); such a type is still one no call is checked against, so it refuses the call as the row above says. A call does not compile either when a parameter holds a generated declaration in a shape the call is not checked against, through typedefs and in a typedef of plain values in any shape (`P`, `P \| null`, `P[]`, or inside another typedef). The script itself compiles: an export only other scripts import types its parameters as it needs. Typedefs that refer to each other are seen through as one, and each is written out once, so a recursive one (a `Json` type) costs no more than another. A generic typedef of the script's own (`@template`) is a definition, not a name for another type |
 | `on:connect={..}` | runs when the element joins the page (first load, navigation, patch, a script's insert); on the first load it runs before the page's `load`, and a navigation it starts then (a link it clicks, a form it submits) is a full page load, not a swap |
 | `on:document:keydown={..}` | runs for that event anywhere on the page while the element is on it ([below](#events-anywhere-on-the-page)) |
-| `on:corten:error={..}`, `on:document:corten:notice={..}` | the runtime's own events: a `data-patch` submit that got no answer it can draw, and a redirect's notice the page did not draw ([Typed events](#typed-events)) |
+| `on:corten:error={..}`, `on:document:corten:notice={..}`, `on:corten:progress={..}` | the runtime's own events: a `data-patch` submit that got no answer it can draw, a redirect's notice the page did not draw ([Typed events](#typed-events)), and a `data-patch` form's upload progress, a `ProgressEvent` heard on the `<form>` ([Requests and forms](requests-and-forms.md)) |
 
 **What the compiler checks.** `#[component(js)]` reads the script when the crate compiles and
 gives the component a module `js` with one Rust function per export, its parameters typed by
 the JSDoc. A ref's element type is inferred from the tag it is put on, `event`'s from the
-`on:` name and `target`'s from the tag, so passing a `<tbody>` ref where the handler takes a
-`<button>`, a `MouseEvent` where it takes a `KeyboardEvent`, a number where it takes a
-`string`, or calling a handler the script does not export is a compile error that points at
-the call. Inside the script, `tsc --checkJs` checks the function bodies against the same JSDoc.
+`on:` name as lib.dom's `HTMLElementEventMap` types it (`on:click` is a `PointerEvent`,
+`on:formdata` a `FormDataEvent`, a name it does not list an `Event`; an element's `error`,
+`abort`, `progress` and `resize` are `Event`s, as the element fires them) and `target`'s from
+the tag, so passing a `<tbody>` ref where the handler takes a `<button>`, a `MouseEvent` where
+it takes a `KeyboardEvent`, a number where it takes a `string`, or calling a handler the script
+does not export is a compile error that points at the call. Inside the script, `tsc --checkJs`
+checks the function bodies against the same JSDoc.
 A ref on several kinds of element is typed as one they all are: `ref={tab as HTMLElement}`.
 
 **What the browser gets.** Plain HTML: `data-ref="rows"` and
@@ -228,9 +231,13 @@ The class bubbles and carries the fields; `Types::components` declares it with t
 that component is enough; only an event no such script imports (one a module in `static/`
 imports, or `import()` loads) is listed in `App::components` itself. Two different events with
 one name are a startup error, and a library's are named under its prefix (`ui-copied`). A
-handler parameter typed with a class imported from `"corten/events"` takes only the `event` of
-an `on:` for that type, a compile error otherwise; the `#[event]` type is in scope in the
-component's module (for `script!`, the module that invokes it), or the script does not compile. In `examples/seller-desk`, each price cell sends `PriceEdited` as its price
+handler parameter typed with a class imported from `"corten/events"` (by an `import` statement, or
+for its type alone by `/** @import { RowToggled } from "corten/events" */`, which serves nothing)
+takes only the `event` of an `on:` for that type, a compile error otherwise; the `#[event]` type is in scope in the
+component's module (for `script!`, the module that invokes it), or the script does not compile.
+Events are imported by name: a namespace import of `"corten/events"` (`import * as ev`, or
+`/** @import * as ev from "corten/events" */`) stops the script compiling, whether or not a
+handler uses its types. In `examples/seller-desk`, each price cell sends `PriceEdited` as its price
 is typed or put back, and the grid around the cells counts the prices not saved.
 
 A script that submits a `data-patch` form (`form.requestSubmit()`) and needs what the server
@@ -244,10 +251,18 @@ dispatches `DeckAnswered`, and the deck builder takes the saved version, a refus
 save from it. A submit with no answer to draw is `corten:error` on the form (it bubbles, and a
 handler that says so itself calls `preventDefault()`, which keeps corten-ui's `Toaster` quiet),
 and a redirect's notice the page did not draw is `corten:notice` on the document
-([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's, each
-a `CustomEvent` whose `detail` is not checked: `on:corten:error={js::failed(event, target)}` on
-the form (or `on:document:corten:error` for every form's) and `on:document:corten:notice`, which
-is the only place one is heard. Any other event name
+([Requests and forms](requests-and-forms.md)). Markup takes them as it takes the browser's:
+`on:corten:error={js::failed(event, target)}` on the form (or `on:document:corten:error` for every
+form's) and `on:document:corten:notice`, which is the only place one is heard. The handler types
+the event as `corten` declares it, `/** @import { CortenError, CortenNotice } from "corten" */`:
+`@param {CortenError} event` reads `event.detail.status` (0 when no answer could be used, with
+`detail.error`) and `@param {CortenNotice} event` reads `event.detail.message`, so `tsc` checks
+what the script reads against what the runtime sends, and the markup that passes it another event
+or the `signal` does not compile. A handler that types `detail` itself
+(`CustomEvent<{ status: number }>`) is checked only as a `CustomEvent`, so its markup may pass it
+any custom event; `CortenError` is the type that ties it to `corten:error`. An `#[event]` is not
+named `CortenError` or `CortenNotice`, nor after a browser event Corten checks a handler against
+(`KeyboardEvent`, `PointerEvent`). Any other event name
 with a colon does not compile: a component's own event is an `#[event]` type, and another
 library's (`htmx:*`, a custom element's) is heard by a listener its script adds.
 
@@ -295,7 +310,10 @@ The page gets `{rows:*row,boxes:*select,count:@count}`; the script gets an objec
 message (`Message<"count">`, see [Text a script computes](#text-a-script-computes)) makes a typedef a
 group too, so text and the values it goes with travel together:
 `js::Counted { entity: "Levels", label: t.js().rows_selected() }`. A typedef of plain values
-only (strings, numbers) is not a group; it is one JSON value, any `ToJson` of that shape.
+only (strings, numbers) is not a group: it is one JSON value, and since no Rust type is checked
+against it, a call to a handler that takes it does not compile. Declare a Rust type for it and take
+its generated declaration instead. A group's field of such a type does the same to the handlers
+that take the group (a field typed `unknown` does not).
 
 **Keys.** `key={item.id}` on the elements of a ref (`data-key` in the page) lets a parameter
 typed `Map<string, HTMLTableCellElement>` get them by key, so rows from a [feed](live-data.md)
@@ -586,6 +604,47 @@ feed's callbacks.
 
 ## Views
 
+### Switching Branches
+
+`view(host, View, template)` from `corten/views` places one server-rendered branch in `host`
+and returns its generated view. Write its holes normally:
+
+```javascript
+import { DeckEditor, DeckSummary, view } from "corten/views";
+
+// The template refs are Holds<DeckEditor, HTMLTemplateElement> and
+// Holds<DeckSummary, HTMLTemplateElement>. The host is an ordinary element ref.
+view(host, DeckEditor, editor).total = 7;
+view(host, DeckSummary, summary).saved_total = 7;
+```
+
+Each template holds exactly one `#[component(view)]` root with a `#[derive(Id)]` id. Use a
+different root id for each branch and a different key for each instance. The id is the branch's
+identity, not a mutable view hole. Render it identically in the initial HTML and its template.
+When that id and tag are already the host's only element child, `view` wraps the existing root:
+SSR, repeated updates and reconnects do not replace it. Otherwise it clones the template, applies
+the server's custom properties through the CSSOM, and replaces the host's children. It rejects
+scripts, malformed roots and IDs colliding within the clone or outside the outgoing subtree
+before replacing anything. It never rewrites IDs; labels, ARIA references and ID-based controls
+still name the elements the server rendered. These checks are not an HTML sanitizer: templates
+are trusted server markup, not user-provided HTML. Use it in the document's light DOM, where
+ID-based controls resolve their targets.
+
+`view` is not a renderer, cache, state container or lifecycle API. It does not fill child props,
+preserve removed DOM, diff trees, restore focus after a switch or restore child state. The usual
+delegated handlers connect new children and abort removed children's `signal`. Same-branch
+updates preserve DOM-owned state such as focus, selection and an open native disclosure. A
+branch switch discards it. Keep state that must survive in a component above the host, pass data
+through typed events, and let children request their initial data on connect. Work begun by a
+child must still respect its signal after an `await`.
+
+`examples/deck-builder/src/views/deck_preview.rs` is a nested screen: two independent preview
+owners, editor and summary views, a draft-notes child, a disclosure grandchild, and an export
+child containing the kit's CopyButton. Draft notes survive branch changes in the owner; transient
+editing feedback, disclosure state and copy feedback belong to the removed children.
+
+### Reading And Writing
+
 A component a script changes often (a row of a grid with thousands) can be a
 `#[component(view)]`. Its handlers then write the component's holes by name instead of finding
 elements:
@@ -680,8 +739,9 @@ Holes are found when the crate compiles, on elements whose place is fixed (no lo
 expression or component before them), so the view walks straight to them. Numbers, text and
 `bool` parameters can be properties. A number property is a JavaScript number in the page, so
 debug builds stop a value past 2^53 (a 64-bit id), as they do for a handler's number argument:
-make such a value a string. `corten::types` declares the classes and `rows()` in
-`corten/views`, so `row.lable = "x"` or `row.label = 3` fails `tsc`. A view needs one root
+make such a value a string. `corten::types` declares the classes in `corten/views` (the app's
+`types/app.d.ts`), and `rows()`, `view()` and `Holds` come with the crate (its `js/views.d.ts`, which
+`corten check` gives `tsc`), so `row.lable = "x"` or `row.label = 3` fails `tsc`. A view needs one root
 element and at least one hole, or the component does not compile. List the component in
 `App::components`; `rows()` and the classes are served as one module, mapped as
 `corten/views`, and only to apps with views. A page fetches it with a handler module that
@@ -694,7 +754,9 @@ it to both `App::components` and the types test. A view has a constant of its ow
 shares its owner's stylesheet (`#[component(view, css = Owner)]`), and a debug build (a router test,
 `corten dev`) names a rendered component that is not listed. `corten check` runs the tests before `tsc`, so a new view
 is declared before a script's import of it is checked; the types test fails once, saying it
-rewrote `types/app.d.ts`, and the next check passes.
+rewrote `types/app.d.ts`, and the next check passes. A Corten release that changes only the
+runtime's declarations (`rows()`, `view()`, `Holds`) does not, since they ship with the crate; one
+that changes how the app's own types, events or views are declared does, once, as the message says.
 
 ## Live rows
 

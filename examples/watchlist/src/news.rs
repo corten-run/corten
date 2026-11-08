@@ -7,7 +7,6 @@ use std::{
 };
 
 use corten::{http::Uri, i18n::DateStyle, prelude::*, route::Elsewhere, view::Append};
-use serde::Deserialize;
 
 use crate::{
     account::Viewer,
@@ -41,7 +40,7 @@ pub mod url {
 }
 
 /// A part of the market. In an address it is the word serde reads (`UrlValue`).
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "kebab-case")]
 pub enum Sector {
     Technology,
@@ -52,9 +51,9 @@ pub enum Sector {
 }
 
 impl Sector {
-    const ALL: [Sector; 5] = [Sector::Technology, Sector::Energy, Sector::Health, Sector::Industrials, Sector::Consumer];
+    pub const ALL: [Sector; 5] = [Sector::Technology, Sector::Energy, Sector::Health, Sector::Industrials, Sector::Consumer];
 
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Sector::Technology => "Technology",
             Sector::Energy => "Energy",
@@ -200,7 +199,7 @@ const READERS: usize = 10_000;
 /// The news page's parameters, one struct for the links that write them and the page that reads
 /// them: the sectors, the watchlist filter and how many stories the page has (Load more). A field
 /// renamed here is renamed in every link.
-#[derive(Clone, Default, Deserialize, Route, Fields)]
+#[derive(Clone, Default, Route, Fields)]
 #[route(query)]
 pub struct NewsQuery {
     #[serde(default)]
@@ -211,7 +210,7 @@ pub struct NewsQuery {
 
 impl NewsQuery {
     /// The stories of one sector.
-    fn sector(sector: Sector) -> Self {
+    pub fn sector(sector: Sector) -> Self {
         NewsQuery { sector: vec![sector], ..NewsQuery::default() }
     }
 }
@@ -385,7 +384,7 @@ fn Disclaimer() -> impl Render {
 #[derive(Id)]
 struct BriefingId;
 
-#[derive(Deserialize, Fields, Default)]
+#[derive(Fields, Default)]
 struct BriefingForm {
     email: String,
 }

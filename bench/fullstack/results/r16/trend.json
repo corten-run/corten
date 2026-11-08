@@ -1,0 +1,542 @@
+{
+ "format": 1,
+ "latest": {
+  "round": "r16",
+  "commit": "eea6adba2ef30bfd875cd46c45485e6c86da2c14",
+  "dirty": false
+ },
+ "dirtyRounds": [],
+ "rounds": [
+  "r5",
+  "r6",
+  "r7",
+  "r8",
+  "r10",
+  "r11",
+  "r12",
+  "r13",
+  "r14",
+  "r15",
+  "r16"
+ ],
+ "artifacts": {
+  "summary": "bench/fullstack/results/r16/summary.json",
+  "raw": "bench/fullstack/results/r16/raw.tar.xz"
+ },
+ "metrics": [
+  {
+   "name": "instructions, item page",
+   "unit": "per request",
+   "better": "lower",
+   "noisePct": 1,
+   "baselineRound": "r14",
+   "baselineSummary": "bench/fullstack/results/r14/summary.json",
+   "baselineWhy": "r14 is the round the README's tables come from; the growth before it was weighed in the pull requests that caused it and in the regression issues the nightly rounds opened",
+   "commits": "557920cba3d6..eea6adba2ef3",
+   "baseline": 105452,
+   "latest": 94677,
+   "worseThanBaselinePct": -10.22,
+   "rollingMedian": null,
+   "worseThanRollingPct": null,
+   "cusumPct": 0,
+   "limitPct": 3,
+   "verdict": "ok",
+   "series": [
+    {
+     "round": "r5",
+     "value": 103877
+    },
+    {
+     "round": "r6",
+     "value": 95038
+    },
+    {
+     "round": "r7",
+     "value": 95949
+    },
+    {
+     "round": "r8",
+     "value": null
+    },
+    {
+     "round": "r10",
+     "value": 110172
+    },
+    {
+     "round": "r11",
+     "value": 107287
+    },
+    {
+     "round": "r12",
+     "value": null
+    },
+    {
+     "round": "r13",
+     "value": 105870
+    },
+    {
+     "round": "r14",
+     "value": 105452
+    },
+    {
+     "round": "r15",
+     "value": 103544
+    },
+    {
+     "round": "r16",
+     "value": 94677
+    }
+   ]
+  },
+  {
+   "name": "instructions, item JSON",
+   "unit": "per request",
+   "better": "lower",
+   "noisePct": 1,
+   "baselineRound": "r14",
+   "baselineSummary": "bench/fullstack/results/r14/summary.json",
+   "baselineWhy": "r14 is the round the README's tables come from; the growth before it was weighed in the pull requests that caused it and in the regression issues the nightly rounds opened",
+   "commits": "557920cba3d6..eea6adba2ef3",
+   "baseline": 69772,
+   "latest": 69631,
+   "worseThanBaselinePct": -0.2,
+   "rollingMedian": null,
+   "worseThanRollingPct": null,
+   "cusumPct": 0,
+   "limitPct": 3,
+   "verdict": "ok",
+   "series": [
+    {
+     "round": "r5",
+     "value": 69291
+    },
+    {
+     "round": "r6",
+     "value": 69444
+    },
+    {
+     "round": "r7",
+     "value": 69572
+    },
+    {
+     "round": "r8",
+     "value": null
+    },
+    {
+     "round": "r10",
+     "value": 69968
+    },
+    {
+     "round": "r11",
+     "value": 69655
+    },
+    {
+     "round": "r12",
+     "value": null
+    },
+    {
+     "round": "r13",
+     "value": 69896
+    },
+    {
+     "round": "r14",
+     "value": 69772
+    },
+    {
+     "round": "r15",
+     "value": 70588
+    },
+    {
+     "round": "r16",
+     "value": 69631
+    }
+   ]
+  },
+  {
+   "name": "page HTML, gzip",
+   "unit": "bytes",
+   "better": "lower",
+   "noisePct": 0.5,
+   "baselineRound": "r14",
+   "baselineSummary": "bench/fullstack/results/r14/summary.json",
+   "baselineWhy": "r14 is the round the README's tables come from; the growth before it was weighed in the pull requests that caused it and in the regression issues the nightly rounds opened",
+   "commits": "557920cba3d6..eea6adba2ef3",
+   "baseline": 2384,
+   "latest": 2144,
+   "worseThanBaselinePct": -10.07,
+   "rollingMedian": null,
+   "worseThanRollingPct": null,
+   "cusumPct": 0,
+   "limitPct": 1.5,
+   "verdict": "ok",
+   "series": [
+    {
+     "round": "r5",
+     "value": 2337
+    },
+    {
+     "round": "r6",
+     "value": 2363
+    },
+    {
+     "round": "r7",
+     "value": 2358
+    },
+    {
+     "round": "r8",
+     "value": 2385
+    },
+    {
+     "round": "r10",
+     "value": 2387
+    },
+    {
+     "round": "r11",
+     "value": 2387
+    },
+    {
+     "round": "r12",
+     "value": 2385
+    },
+    {
+     "round": "r13",
+     "value": 2385
+    },
+    {
+     "round": "r14",
+     "value": 2384
+    },
+    {
+     "round": "r15",
+     "value": 2384
+    },
+    {
+     "round": "r16",
+     "value": 2144
+    }
+   ]
+  },
+  {
+   "name": "page JS, gzip",
+   "unit": "bytes",
+   "better": "lower",
+   "noisePct": 0.5,
+   "baselineRound": "r14",
+   "baselineSummary": "bench/fullstack/results/r14/summary.json",
+   "baselineWhy": "r14 is the round the README's tables come from; the growth before it was weighed in the pull requests that caused it and in the regression issues the nightly rounds opened",
+   "commits": "557920cba3d6..eea6adba2ef3",
+   "baseline": 13155,
+   "latest": 14392,
+   "worseThanBaselinePct": 9.4,
+   "rollingMedian": null,
+   "worseThanRollingPct": null,
+   "cusumPct": 0,
+   "limitPct": 1.5,
+   "verdict": "ok",
+   "series": [
+    {
+     "round": "r5",
+     "value": 7485
+    },
+    {
+     "round": "r6",
+     "value": 9869
+    },
+    {
+     "round": "r7",
+     "value": 9541
+    },
+    {
+     "round": "r8",
+     "value": 10394
+    },
+    {
+     "round": "r10",
+     "value": 10844
+    },
+    {
+     "round": "r11",
+     "value": 10844
+    },
+    {
+     "round": "r12",
+     "value": 12670
+    },
+    {
+     "round": "r13",
+     "value": 12789
+    },
+    {
+     "round": "r14",
+     "value": 13155
+    },
+    {
+     "round": "r15",
+     "value": 13187
+    },
+    {
+     "round": "r16",
+     "value": 14392
+    }
+   ]
+  },
+  {
+   "name": "page CSS, gzip",
+   "unit": "bytes",
+   "better": "lower",
+   "noisePct": 0.5,
+   "baselineRound": "r14",
+   "baselineSummary": "bench/fullstack/results/r14/summary.json",
+   "baselineWhy": "r14 is the round the README's tables come from; the growth before it was weighed in the pull requests that caused it and in the regression issues the nightly rounds opened",
+   "commits": "557920cba3d6..eea6adba2ef3",
+   "baseline": 2777,
+   "latest": 2777,
+   "worseThanBaselinePct": 0,
+   "rollingMedian": null,
+   "worseThanRollingPct": null,
+   "cusumPct": 0,
+   "limitPct": 1.5,
+   "verdict": "ok",
+   "series": [
+    {
+     "round": "r5",
+     "value": 1636
+    },
+    {
+     "round": "r6",
+     "value": 1636
+    },
+    {
+     "round": "r7",
+     "value": 2430
+    },
+    {
+     "round": "r8",
+     "value": 2609
+    },
+    {
+     "round": "r10",
+     "value": 2742
+    },
+    {
+     "round": "r11",
+     "value": 2742
+    },
+    {
+     "round": "r12",
+     "value": 2777
+    },
+    {
+     "round": "r13",
+     "value": 2777
+    },
+    {
+     "round": "r14",
+     "value": 2777
+    },
+    {
+     "round": "r15",
+     "value": 2777
+    },
+    {
+     "round": "r16",
+     "value": 2777
+    }
+   ]
+  },
+  {
+   "name": "peak memory, 64 users",
+   "unit": "MiB",
+   "better": "lower",
+   "noisePct": 5,
+   "baselineRound": "r14",
+   "baselineSummary": "bench/fullstack/results/r14/summary.json",
+   "baselineWhy": "r14 is the round the README's tables come from; the growth before it was weighed in the pull requests that caused it and in the regression issues the nightly rounds opened",
+   "commits": "557920cba3d6..eea6adba2ef3",
+   "baseline": 16.4,
+   "latest": 16.8,
+   "worseThanBaselinePct": 2.44,
+   "rollingMedian": null,
+   "worseThanRollingPct": null,
+   "cusumPct": 0,
+   "limitPct": 15,
+   "verdict": "ok",
+   "series": [
+    {
+     "round": "r5",
+     "value": 21.1
+    },
+    {
+     "round": "r6",
+     "value": 21.1
+    },
+    {
+     "round": "r7",
+     "value": 18.3
+    },
+    {
+     "round": "r8",
+     "value": 16.4
+    },
+    {
+     "round": "r10",
+     "value": 16.4
+    },
+    {
+     "round": "r11",
+     "value": 16.6
+    },
+    {
+     "round": "r12",
+     "value": 16.3
+    },
+    {
+     "round": "r13",
+     "value": 16.7
+    },
+    {
+     "round": "r14",
+     "value": 16.4
+    },
+    {
+     "round": "r15",
+     "value": 16.9
+    },
+    {
+     "round": "r16",
+     "value": 16.8
+    }
+   ]
+  },
+  {
+   "name": "requests per CPU-second, fixed rate",
+   "unit": "/CPU-s",
+   "better": "higher",
+   "noisePct": 20,
+   "baselineRound": "r14",
+   "baselineSummary": "bench/fullstack/results/r14/summary.json",
+   "baselineWhy": "r14 is the round the README's tables come from; the growth before it was weighed in the pull requests that caused it and in the regression issues the nightly rounds opened",
+   "commits": "557920cba3d6..eea6adba2ef3",
+   "baseline": 5274,
+   "latest": 7060,
+   "worseThanBaselinePct": -33.86,
+   "rollingMedian": null,
+   "worseThanRollingPct": null,
+   "cusumPct": 0,
+   "limitPct": 60,
+   "verdict": "none",
+   "series": [
+    {
+     "round": "r5",
+     "value": null
+    },
+    {
+     "round": "r6",
+     "value": 7317
+    },
+    {
+     "round": "r7",
+     "value": 7340
+    },
+    {
+     "round": "r8",
+     "value": 6450
+    },
+    {
+     "round": "r10",
+     "value": 7434
+    },
+    {
+     "round": "r11",
+     "value": 7325
+    },
+    {
+     "round": "r12",
+     "value": 5867
+    },
+    {
+     "round": "r13",
+     "value": 6504
+    },
+    {
+     "round": "r14",
+     "value": 5274
+    },
+    {
+     "round": "r15",
+     "value": 4820
+    },
+    {
+     "round": "r16",
+     "value": 7060
+    }
+   ]
+  },
+  {
+   "name": "requests a second, 64 users",
+   "unit": "/s",
+   "better": "higher",
+   "noisePct": 20,
+   "baselineRound": "r14",
+   "baselineSummary": "bench/fullstack/results/r14/summary.json",
+   "baselineWhy": "r14 is the round the README's tables come from; the growth before it was weighed in the pull requests that caused it and in the regression issues the nightly rounds opened",
+   "commits": "557920cba3d6..eea6adba2ef3",
+   "baseline": 14460,
+   "latest": 20705,
+   "worseThanBaselinePct": -43.19,
+   "rollingMedian": null,
+   "worseThanRollingPct": null,
+   "cusumPct": 0,
+   "limitPct": 60,
+   "verdict": "none",
+   "series": [
+    {
+     "round": "r5",
+     "value": 21735
+    },
+    {
+     "round": "r6",
+     "value": 23416
+    },
+    {
+     "round": "r7",
+     "value": 18758
+    },
+    {
+     "round": "r8",
+     "value": 15747
+    },
+    {
+     "round": "r10",
+     "value": 23898
+    },
+    {
+     "round": "r11",
+     "value": 22713
+    },
+    {
+     "round": "r12",
+     "value": 14854
+    },
+    {
+     "round": "r13",
+     "value": 18157
+    },
+    {
+     "round": "r14",
+     "value": 14460
+    },
+    {
+     "round": "r15",
+     "value": 15103
+    },
+    {
+     "round": "r16",
+     "value": 20705
+    }
+   ]
+  }
+ ],
+ "drift": [],
+ "warn": []
+}

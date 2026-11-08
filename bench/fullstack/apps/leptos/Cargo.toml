@@ -20,8 +20,14 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync"]
 futures = { version = "0.3", optional = true }
 tower-http = { version = "0.6", features = ["compression-gzip", "compression-br"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
+icu_decimal = "=2.4.0"
+icu_experimental = "=0.7.0"
+icu_locale = "=2.4.0"
+icu_plurals = "=2.4.0"
+icu_provider = { version = "=2.4.0", features = ["sync"] }
+url = "2.5"
 wasm-bindgen = { version = "0.2", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 web-sys = { version = "0.3", features = ["Window", "Performance"], optional = true }
@@ -58,6 +64,7 @@ output-name = "item_page"
 site-root = "target/site"
 site-pkg-dir = "pkg"
 style-file = "style/main.css"
+assets-dir = "public"
 # Vite 7's default browser targets (Vite 8, which react-router, sveltekit and tanstack-start pin,
 # targets slightly newer ones): new enough that lightningcss keeps the shared stylesheet as it is
 # instead of adding fallbacks for older browsers (by default it expanded `system-ui` into a font list).

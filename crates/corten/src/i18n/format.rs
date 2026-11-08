@@ -685,7 +685,7 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
 }
 
 /// The date of a day since 1970-01-01: (year, month, day).
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
+pub(crate) fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -1110,11 +1110,88 @@ fn write_grouped<W: Write + ?Sized>(
     write_piece(s.group, out)?;
     write_digits(data, last, out)
 }
-impl Render for Formatted {
-    fn render(&self, out: &mut String) {
-        // The locale data has none of `<>&"` (the generator checks); a group separator `'`
-        // (de-CH) is safe in text and in the double-quoted attributes `html!` writes.
+
+impl Formatted {
+    /// A short amount as its pieces: the template's text before and after the digits, the decimal
+    /// separator, the integer part (under 1,000, so never grouped) and the fraction's digits (none,
+    /// one or two). `None` for anything else: a currency written by its code, a signed amount, a
+    /// percentage or a change, a locale with other digits, a bigger number or more fraction digits.
+    #[inline(always)]
+    fn short(&self) -> Option<Short> {
+        let data = self.data;
+        let negative = usize::from(self.value.negative);
+        let (template, separators) = match self.kind {
+            Kind::Number => (data.number[negative], &data.plain),
+            Kind::Money(currency) => {
+                let &(_, positive, loss) = symbol(data, currency)?;
+                (if negative == 1 { loss } else { positive }, &data.money_separators)
+            }
+            _ => return None,
+        };
+        // `write_grouped` leaves fewer than primary + minimum digits ungrouped, so every
+        // integer under 1,000 when that is 4 or more (it is in every locale's data). A mantissa
+        // under 100,000 fits in a u32 and holds every such integer with two fraction digits.
+        let [primary, _, min] = separators.grouping;
+        if data.zero != '0' || self.value.mantissa >= 100_000 || primary + min < 4 {
+            return None;
+        }
+        let n = self.value.mantissa as u32;
+        let (int, frac, digits) = match self.value.scale {
+            0 => (n, 0, 0),
+            1 => (n / 10, n % 10, 1),
+            2 => (n / 100, n % 100, 2),
+            _ => return None,
+        };
+        if int >= 1000 {
+            return None;
+        }
+        let at = template.as_bytes().iter().position(|&b| b == 1)?;
+        Some(Short { before: &template[..at], after: &template[at + 1..], decimal: separators.decimal, int, frac, digits })
+    }
+
+    /// What `write` writes, for what `short` does not take: out of line, so the short path stays
+    /// small enough for its pushes to inline.
+    #[inline(never)]
+    fn render_long(&self, out: &mut String) {
         let _ = self.write(out);
+    }
+}
+
+/// See [`Formatted::short`].
+struct Short {
+    before: &'static str,
+    after: &'static str,
+    decimal: &'static str,
+    int: u32,
+    frac: u32,
+    digits: u8,
+}
+
+impl Render for Formatted {
+    /// The locale data has none of `<>&"` (the generator checks); a group separator `'`
+    /// (de-CH) is safe in text and in the double-quoted attributes `html!` writes. A short
+    /// amount (`$12.34`, `4.5`) is written piece by piece, without `write`'s digit buffer and
+    /// template loop; it is the same text (a test checks every locale).
+    #[inline]
+    fn render(&self, out: &mut String) {
+        let Some(short) = self.short() else { return self.render_long(out) };
+        let _ = write_piece(short.before, out);
+        let int = short.int;
+        if int >= 100 {
+            out.push(char::from(b'0' + (int / 100) as u8));
+        }
+        if int >= 10 {
+            out.push(char::from(b'0' + (int / 10 % 10) as u8));
+        }
+        out.push(char::from(b'0' + (int % 10) as u8));
+        if short.digits > 0 {
+            let _ = write_piece(short.decimal, out);
+            if short.digits == 2 {
+                out.push(char::from(b'0' + (short.frac / 10) as u8));
+            }
+            out.push(char::from(b'0' + (short.frac % 10) as u8));
+        }
+        let _ = write_piece(short.after, out);
     }
 }
 

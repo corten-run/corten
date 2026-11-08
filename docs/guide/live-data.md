@@ -2,8 +2,7 @@
 
 [Back to the guides](../../README.md#documentation)
 
-Corten has two ways to keep a page current, both over server-sent events, and a third for a
-script of the app's own: named events of JSON.
+Corten has two ways to keep a page current, both over server-sent events.
 
 ## Fragments: `<corten-live>`
 
@@ -147,7 +146,7 @@ channel.
 Each open stream holds one of the browser's connections to the host. Over HTTP/1.1 a browser opens
 about six, so a page with a few live parts open in a few tabs uses them up and its other requests
 wait; serve browsers HTTP/2 or HTTP/3 from the proxy or CDN in front of the app, which carries every
-stream on one connection (Corten itself speaks HTTP/1.1; design.md, Limits 14). Streams say `X-Accel-Buffering: no`, so
+stream on one connection (Corten itself speaks HTTP/1.1; [design Limit 14](../design.md#limit-http1)). Streams say `X-Accel-Buffering: no`, so
 nginx passes their events on as they are written ([Deploying](deploy.md#live-streams)).
 
 A browser without JavaScript gets no stream: a page whose part is relayed while a job runs asks
@@ -249,19 +248,44 @@ generation, and after a restart (a `Feed::new` feed) the new `seq` may be lower,
 than one the page holds without being the same deck. Render the generation next to the version,
 and treat a snapshot from another generation as news whatever its `seq`. `reset` keeps the
 generation, so a feed that starts following another log is a new `Feed::follow` with that log's
-generation, not a `reset`.
+generation, not a `reset`. A generation is ASCII letters, digits, `.` and `_` (`deploy.3`, a
+hex time): it is the cursor's epoch, which goes into the stream's URL and each event's `id:` line
+as it is, so `Feed::follow` panics on any other character (`deploy:3`, base64's `/` and `=`, a
+`-`) where it is set, instead of serving a feed that never goes live.
 
 Feed guarantees: every `write` is one numbered patch carrying the final value of each row it
 touched, encoded once and sent as the same bytes to every subscriber. A snapshot is serialized
 once per change too: its body is kept (in memory, the size of the JSON) until the next write,
 `apply` or `reset`, so pages that subscribe between two writes cost no serialization. A
 subscriber gets the snapshot and then each later patch exactly once, in order; reconnects resume
-from `Last-Event-ID`, and an unknown cursor or a gap ends in a fresh snapshot. `corten-cluster`
+from `Last-Event-ID`, and an unknown cursor or a gap ends in a fresh snapshot. A stream that
+answers the cursor the snapshot just gave with `sync` as it first opens (two feeds behind one
+URL, say) refuses it, so `subscribe()` loads the snapshot again after a backoff that doubles from
+1 s to 30 s, not straight away; a `sync` later or after a reconnect (a `reset`) loads it at
+once. Against a feed that answers every stream with `sync`, one page made 544 snapshot requests
+in 3.5 s with the runtime before the backoff and 3 with it in Chromium (Firefox 328 and 3, WebKit
+221 and 3; measured with the check in `scripts/smoke.mjs`, which holds the 3). `corten-cluster`
 runs one feed across instances (Postgres outbox, a leased relay to NATS JetStream): in the
 failover benchmark (200 clients, 50 writes a second, each instance killed and restarted under
 load), every patch arrived in both committed runs: 777,600 of 777,600, and 800,000 of 800,000
 with clients back on the other instance after 1.1 s at the median (measured,
-`examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). An instance serves
+`examples/listings-feed/results/failover-r1.json` and `failover-r2.json`). Those 200
+clients are the benchmark's own Node client of the feed's protocol, on its own retry schedule,
+and it counts a gap in `seq` as lost rather than loading a snapshot: they show what the server
+sends through a failover. Beside them a Chromium page runs `subscribe()` itself through the
+same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one snapshot each).
+`subscribe()`'s recovery from a gap in `seq`, a stream answered with an HTTP error and a failed
+snapshot is checked in Chromium, Firefox and WebKit by `scripts/smoke.mjs`, and from a `sync`
+in all three except a `sync` on a stream already open, which WebKit skips. What the cluster does on the
+way is logged through the app's subscriber, as the feed's own events are (target `corten::feed`,
+fields `instance` and `feed`): a warning for a gap in a feed's patches (`have`, `got`) and the
+reload it starts, a patch dropped as invalid, a reload, the JetStream consumer or a resubscribe
+that failed, and a feed loaded with no replay log (clients that move to the instance resync), and
+`relay active` and `relay standing by` as the relay's lease moves, so a log pipeline counts gaps
+and failovers. `Cluster::start` starts the relay before `serve` installs Corten's default
+subscriber, so events while the app starts (an instance taking the lease as it starts, or failing
+to) print only with a `tracing` subscriber the app installed before `Cluster::start`
+(`tracing-subscriber`'s, for one). An instance serves
 many feeds, and loading one (on first use, after an idle unload or a gap) or applying a patch to
 one does not hold up requests for the others: a feed is built from its rows on a blocking
 thread, outside the lock that finds a feed. Reading the rows (the app's `Source::rows`) runs on
@@ -271,55 +295,36 @@ up other requests while its rows are read.
 Native apps and agents follow the same feed with `corten-protocol`'s `Replica`; see
 [Surfaces](../architecture.md).
 
-## Named events: `corten::event_stream`
+## Which one
 
-For a script that reads a stream itself with `EventSource` (a job's progress drawn in a bar, a
-status a native client follows), `corten::event_stream(stream)` (feature `json`) sends each
-`StreamEvent` as `event: <name>` with `data: <JSON>`. The route is a JSON route: a failure before
-the stream starts is answered as JSON. As with `corten::live`, the stream is kept alive with a
-comment every 15 seconds and ends when the app starts shutting down, so a deploy is not held open
-by its clients.
+Corten has two kinds of push of its own, chosen by who keeps what is sent:
 
-```rust,ignore
-// GET /jobs/{job}/progress: the job's state each time it moves, until it is done
-async fn progress(State(jobs): State<Jobs>, Params(at): Params<url::JobProgress>, since: LiveSince)
-    -> Result<EventStreamResponse, JsonError> {
-    let job = jobs.find(at.job).await?.ok_or(Error::status(StatusCode::NOT_FOUND))?;
-    if job.is_done() && since.0.as_deref() == Some(job.last_version().as_str()) {
-        return Ok(EventStreamResponse::ended()); // 204: the EventSource stops
-    }
-    Ok(corten::event_stream(jobs.changes(job, since).map(|state| {
-        StreamEvent::new("progress", &state).cursor(state.version.to_string())
-    })))
-}
-```
+1. The server can draw the part: `<corten-live>`. A job's progress is a `<progress value max>`
+   the stream draws again as the job moves; a growing log or a generated answer is a
+   `view::Append(id, lines)` per piece, so each event carries only what is new.
+2. A script keeps the data: a feed, whose rows are typed from the route to the script. One job
+   followed by a script is a feed of one row, keyed by the job. A feed does not end on its own:
+   the script subscribes with `AbortSignal.any([signal, done.signal])`, a controller `done` of its
+   own beside the signal it was given, and calls `done.abort()` when the row says the job is done.
 
-The markup passes the route to the script, never a URL written as text:
-`<div on:connect={js::follow(url::JobProgress { job: id }, signal)}>`.
+A stream in a format someone else defines (server-sent events a partner's client already reads)
+is that protocol, not a page's, and the app writes it: a `Relay` of its own body
+(`Body::from_stream`, `text/event-stream`). Corten adds none of what it gives its own streams,
+so the app does three things itself:
 
-```js
-/** @param {string} url @param {AbortSignal} signal */
-export function follow(url, signal) {
-  const progress = new EventSource(url);
-  signal.addEventListener("abort", () => progress.close());
-  progress.addEventListener("progress", (event) => {
-    const state = JSON.parse(event.data);
-    draw(state);
-    if (state.finished) progress.close(); // saves the reconnect ended() would answer
-  });
-}
-```
+1. Sends `X-Accel-Buffering: no` in the `Relay`'s headers and writes a comment line (`:`) on a
+   quiet stream at least every 15 seconds, or a proxy in front holds the events back or closes
+   the stream ([Deploying, Live streams](deploy.md#live-streams)).
+2. Bounds it at shutdown. Corten does not end it when shutdown begins, as it does its own
+   streams; its connection is closed after the longer of the app's grace and the deadline of the
+   route's area or API (30 seconds unless set), past `docker stop`'s 10. Put the route in an area
+   or API with a short `deadline`: the handler only has to return the stream within it, and a
+   stream still open at shutdown is closed when that bound passes.
+3. Accepts how an OpenAPI document lists it: a `Relay` is any answer of another service, and an
+   app cannot describe it as `text/event-stream` instead.
 
-An event's cursor is its `id`, which a reconnecting `EventSource` sends back as
-`Last-Event-ID`; `LiveSince` reads it (or the `since` query parameter on the URL the script
-opens first), so the handler resumes after it. An event without a cursor keeps the one before it,
-so a reconnect sends it again. When the stream ends, an `EventSource` connects again a few
-seconds later: a stream that is over answers that with `EventStreamResponse::ended()`, a `204`,
-which stops it. A name is one line of text that is not empty, and a cursor has no line break or
-NUL; another panics in debug builds, and in release the event is not sent (a bad name) or is sent
-without its cursor.
+A two-way connection is a protocol switch (`corten::upgrade`), the app guide's Other protocols.
 
-The names and the data are not checked against the script, as a feed's rows are (design, Limits;
-[#591 An event stream's names and data are strings the script reads untyped, where a feed's rows are checked from the route to the script](https://github.com/corten-run/corten/issues/591), not planned until an app needs it; one would start from `#[event]`). Prefer `<corten-live>` when the server can draw the part, and a feed when the script
-keeps rows: both are typed, and both resume, reconnect and stop with the element. Named events are
-for data a script of the app's own draws that neither fits.
+Corten had a third, `corten::event_stream` of named JSON events a script read with
+`EventSource`. Its names and data were strings at the seam, and nothing used it, so it was
+removed ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).

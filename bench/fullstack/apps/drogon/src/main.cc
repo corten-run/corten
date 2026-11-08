@@ -2,6 +2,8 @@
 // views with the same markup and stylesheets, htmx for the form, "show all" and navigation,
 // the item as JSON, and the live benchmark's server-sent events.
 #include "items.h"
+#include "catalog.h"
+#include "marketplace.h"
 #include "live.h"
 #include "model.h"
 
@@ -49,6 +51,9 @@ int main()
     std::setvbuf(stdout, nullptr, _IOLBF, 0);
     // Load the fixture (if any) before listening, like the other apps.
     items::load();
+    catalog::load();
+    marketplace::load();
+    marketplace::routes();
     const char *port = std::getenv("PORT");
 
     // Corten's 404 page, for a missing item and for any address no handler serves.
@@ -110,6 +115,30 @@ int main()
             });
         },
         {Get});
+
+    app().registerHandler(
+        "/catalog/{id}",
+        [](const HttpRequestPtr &req, Callback &&callback, const std::string &id) {
+            catalog::get(id, [req, callback = std::move(callback)](catalog::RecordPtr record, bool failed) {
+                if (failed) return callback(failure());
+                if (!record) return callback(HttpResponse::newNotFoundResponse(req));
+                HttpViewData data;
+                data.insert("title", record->title);
+                data.insert("catalog_page", true);
+                data.insert("record", record);
+                data.insert("prefix", req->getParameter("field"));
+                callback(HttpResponse::newHttpViewResponse("CatalogPage", data));
+            });
+        }, {Get});
+    app().registerHandler(
+        "/api/catalog/{id}",
+        [](const HttpRequestPtr &, Callback &&callback, const std::string &id) {
+            catalog::get(id, [callback = std::move(callback)](catalog::RecordPtr record, bool failed) {
+                if (failed) return callback(failure());
+                if (!record) return callback(HttpResponse::newHttpResponse(k404NotFound, CT_TEXT_PLAIN));
+                callback(HttpResponse::newHttpJsonResponse(record->toJson()));
+            });
+        }, {Get});
 
     // The live benchmark (bench/live): server-sent events, and the publisher that feeds them.
     app().registerHandler(

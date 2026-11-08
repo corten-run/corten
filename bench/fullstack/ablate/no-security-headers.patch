@@ -1,0 +1,29 @@
+diff --git a/crates/corten/src/app.rs b/crates/corten/src/app.rs
+index 78188364..81b4331b 100644
+--- a/crates/corten/src/app.rs
++++ b/crates/corten/src/app.rs
+@@ -1932,7 +1932,9 @@ impl<S: Steps> Layer<S> {
+             }
+         }
+         // A page's nonce is made only if its HTML asks for one; an API route never has one.
+-        let nonce = mount.is_none().then(|| NonceSlot::new(shell, csp.script_loads));
++        // Ablation: no nonce, so no script carries one and no CSP names one.
++        let nonce: Option<NonceSlot> = None;
++        let _ = (shell, mount.is_none());
+         if let Some(nonce) = &nonce {
+             req.extensions_mut().insert(nonce.clone());
+         }
+@@ -2003,11 +2005,8 @@ impl<S: Steps> Layer<S> {
+         if foreign {
+             res.headers_mut().insert(header::ALLOW, axum::http::HeaderValue::from_static(""));
+         }
+-        // First: the security headers reserve room for `Cache-Control` and `Vary` too.
+-        self.policy.headers(&mut res, nonce.as_ref(), csp);
+-        if mount.is_none() {
+-            self.policy.document(&mut res, csp, mode.swaps());
+-        }
++        // Ablation: no security headers or CSP on an answer.
++        let _ = (csp, &nonce);
+         let nonced = nonce.as_ref().is_some_and(|slot| slot.taken().is_some());
+         let seen = Seen {
+             credentials,

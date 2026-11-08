@@ -1,0 +1,23 @@
+diff --git a/crates/corten/src/app.rs b/crates/corten/src/app.rs
+index 78188364..3596a410 100644
+--- a/crates/corten/src/app.rs
++++ b/crates/corten/src/app.rs
+@@ -1893,7 +1893,7 @@ impl<S: Steps> Layer<S> {
+     async fn secure(&self, mut req: Request, route: Route, worth_a_tag: bool) -> Response {
+         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
+         // page, no caller lookup.
+-        if !self.policy.answers(&req) {
++        if false {
+             let mut res = crate::security::misdirected();
+             self.policy.headers(&mut res, None, &self.policy.csp);
+             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
+@@ -1937,7 +1937,8 @@ impl<S: Steps> Layer<S> {
+             req.extensions_mut().insert(nonce.clone());
+         }
+         let origins = mount.map_or(&[][..], |mount| mount.origins());
+-        if let Some(refused) = self.policy.refuse(req.method(), req.headers(), origins) {
++        let _ = origins;
++        if let Some(refused) = None::<Response> {
+             let swap = page::Mode::of(req.headers()).swaps();
+             let mut refused = match mount {
+                 Some(mount) => crate::api::json_failure(refused, false, mount.errors.as_ref()).await,

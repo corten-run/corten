@@ -116,8 +116,8 @@ impl crate::Middleware for AsViewer {
     }
 }
 
-/// Stamps every answer with a request id and two `Server-Timing` values, and answers 429 with
-/// `Retry-After` itself when asked to by `x-flood`.
+/// Stamps every answer with a request id, two `Server-Timing` values and `Vary: origin`, and
+/// answers 429 with `Retry-After` itself when asked to by `x-flood`.
 struct Stamp;
 
 impl crate::Middleware for Stamp {
@@ -134,21 +134,30 @@ impl crate::Middleware for Stamp {
         headers.insert("x-request-id", HeaderValue::from_static("r-1"));
         headers.append("server-timing", HeaderValue::from_static("app;dur=1"));
         headers.append("server-timing", HeaderValue::from_static("db;dur=2"));
+        headers.append(header::VARY, HeaderValue::from_static("origin"));
         headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=600"));
         res
     }
 }
 
 /// A failure that becomes the error page keeps what the handler and the middleware said besides
-/// the body (a request id, `Retry-After`, every `Server-Timing` value), in every mode; the error
-/// page's own type and `Cache-Control` win.
+/// the body (a request id, `Retry-After`, every `Server-Timing` value, what it varies on beside
+/// what the error page does), in every mode; the error page's own type and `Cache-Control` win.
 #[tokio::test]
 async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
     use axum::http::header;
-    let routes = Router::new().route(
-        "/busy",
-        get(|| async { (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "30"), (header::CONTENT_TYPE, "text/x-old")]) }),
-    );
+    async fn must_sign_in() -> crate::Result<&'static str> {
+        Err(crate::Refused::sign_in(&caller_url::SignIn))?;
+        Ok("never")
+    }
+    let routes = Router::new()
+        .route(
+            "/busy",
+            get(|| async {
+                (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "30"), (header::CONTENT_TYPE, "text/x-old")])
+            }),
+        )
+        .route("/mine", get(must_sign_in));
     let router = App::new(Routes::from(routes)).error_page(test_error_page, ()).middleware(Stamp).router();
     for mode in [None, Some("nav")] {
         for (uri, flood, status, retry) in
@@ -168,11 +177,55 @@ async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
             assert_eq!(headers["x-request-id"], "r-1", "{at}");
             let timing: Vec<_> = headers.get_all("server-timing").iter().collect();
             assert_eq!(timing, ["app;dur=1", "db;dur=2"], "{at}");
+            let vary: Vec<_> = headers.get_all(header::VARY).iter().flat_map(|v| v.to_str().unwrap().split(", ")).collect();
+            assert!(vary.contains(&"origin") && vary.contains(&"corten"), "{at}: {vary:?}");
             assert_eq!(headers.get(header::RETRY_AFTER).map(|v| v.to_str().unwrap()), retry, "{at}");
             assert!(headers[header::CONTENT_TYPE].to_str().unwrap().starts_with("text/html"), "{at}: {headers:?}");
             assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache", "{at}: an error page is never shared");
             let body = res.into_body().collect().await.unwrap().to_bytes();
             assert!(String::from_utf8_lossy(&body).contains("<h1>"), "{at}: the error page");
+        }
+        // A refusal that sends the caller to sign in keeps them too, and varies on both, once each.
+        let mut req = Request::get("/mine").header("accept", "text/html");
+        if let Some(mode) = mode {
+            req = req.header("corten", mode);
+        }
+        let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(
+            (res.status(), &res.headers()[header::LOCATION]),
+            (StatusCode::SEE_OTHER, &"/sign-in".parse().unwrap()),
+            "{mode:?}"
+        );
+        assert_eq!(res.headers()["x-request-id"], "r-1", "{mode:?}");
+        let vary: Vec<_> = res.headers().get_all(header::VARY).iter().flat_map(|v| v.to_str().unwrap().split(", ")).collect();
+        assert_eq!(vary.iter().filter(|v| **v == "origin").count(), 1, "{mode:?}: {vary:?}");
+        assert_eq!(vary.iter().filter(|v| **v == "corten").count(), 1, "{mode:?}: {vary:?}");
+    }
+}
+
+/// The error page is drawn in the language the request asked for, as the page it replaces would
+/// have been: its `Req` reads the `Accept-Language` the request came with, in every mode.
+#[tokio::test]
+async fn the_error_page_is_in_the_language_asked_for() {
+    crate::i18n::messages! { struct ErrorMsg { "en" => "src/i18n/en.json", "fr" => "src/i18n/fr.json" } }
+    async fn in_lang(_: Failure, req: Req) -> HtmlResult {
+        let lang = req.lang();
+        req.test_page("Not found", html! { <p>"in "{lang}</p> })
+    }
+    let router = App::new(Routes::from(Router::new())).error_page(in_lang, ()).messages::<ErrorMsg>().router();
+    for mode in [None, Some("nav")] {
+        for (asked, lang) in [("fr-CA, en;q=0.5", "fr"), ("en", "en"), ("de", "en")] {
+            let mut req = Request::get("/nope").header("accept", "text/html").header("accept-language", asked);
+            if let Some(mode) = mode {
+                req = req.header("corten", mode);
+            }
+            let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::NOT_FOUND);
+            let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+            assert!(body.contains(&format!("<p>in {lang}</p>")), "{mode:?} {asked}: {body}");
+            if mode.is_none() {
+                assert!(body.contains(&format!(r#"<html lang="{lang}">"#)), "{asked}: {body}");
+            }
         }
     }
 }
@@ -408,7 +461,7 @@ async fn a_live_watch_sends_the_latest_value_from_where_the_page_is() {
 /// the median and slowest time from a change to the last stream having it. `WATCH_ROUNDS` (3)
 /// rounds of `WATCH_MODE` (`per-stream`, `once`, or both when unset); counting one mode at two
 /// numbers of changes under callgrind gives its instructions per change. Run in release:
-/// `cargo test --release -p corten --lib -- --ignored --nocapture what_a_change_costs_live_watch`
+/// `cargo test --release -p corten-run --lib -- --ignored --nocapture what_a_change_costs_live_watch`
 #[test]
 #[ignore]
 fn what_a_change_costs_live_watch() {
@@ -514,109 +567,6 @@ fn what_a_change_costs_live_watch() {
             );
         }
     }
-}
-
-/// Named events of the app's own JSON, each with its cursor when it has one; a line break in the
-/// JSON is split into data lines, which a client joins back.
-#[cfg(feature = "json")]
-#[tokio::test]
-async fn an_event_stream_sends_named_json_with_its_cursor() {
-    use crate::StreamEvent;
-    #[derive(crate::ToJson)]
-    struct Batch {
-        done: u32,
-        note: &'static str,
-    }
-    let messages = || {
-        futures_util::stream::iter([
-            StreamEvent::new("batch", &Batch { done: 3, note: "a" }).cursor("v3"),
-            StreamEvent::new("error", "no such batch"),
-            StreamEvent::new("raw", &crate::json::Raw::new(b"{\n\"a\": 1}".to_vec()).unwrap()),
-        ])
-    };
-    let router = Router::new().route("/", get(move || async move { crate::event_stream(messages()) }));
-    let (status, headers, body) = call(router, "GET", None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(headers["content-type"], "text/event-stream");
-    assert_eq!(headers["x-accel-buffering"], "no");
-    assert_eq!(
-        body,
-        "event: batch\nid: v3\ndata: {\"done\":3,\"note\":\"a\"}\n\nevent: error\ndata: \"no such batch\"\n\nevent: raw\ndata: {\ndata: \"a\": 1}\n\n",
-        "no end event of Corten's: the app's script reads only its own"
-    );
-}
-
-#[cfg(all(feature = "json", debug_assertions))]
-#[test]
-#[should_panic(expected = "one line of text that is not empty")]
-fn an_event_name_is_one_line() {
-    let _ = crate::StreamEvent::new("batch\nevent: other", &1);
-}
-
-#[cfg(all(feature = "json", debug_assertions))]
-#[test]
-#[should_panic(expected = "one line of text that is not empty")]
-fn an_event_name_is_not_empty() {
-    let _ = crate::StreamEvent::new("", &1);
-}
-
-/// In release, an event whose name would break the stream is not sent; the others are.
-#[cfg(all(feature = "json", not(debug_assertions)))]
-#[tokio::test]
-async fn an_event_with_a_broken_name_is_not_sent() {
-    use crate::StreamEvent;
-    let events = || {
-        futures_util::stream::iter([
-            StreamEvent::new("batch\nevent: other", &1),
-            StreamEvent::new("", &2),
-            StreamEvent::new("kept", &3),
-        ])
-    };
-    let router = Router::new().route("/", get(move || async move { crate::event_stream(events()) }));
-    let (_, _, body) = call(router, "GET", None).await;
-    assert_eq!(body, "event: kept\ndata: 3\n\n");
-}
-
-/// An event stream in a routes module: a failure before it starts is JSON, as on any JSON route,
-/// and a stream that is over answers a reconnect `204`, which an `EventSource` does not retry.
-#[cfg(feature = "json")]
-#[tokio::test]
-async fn an_event_stream_route_fails_as_json_and_ends_with_204() {
-    let router = App::new(event_stream_url::router()).router();
-    let (status, headers, body) = call_with(router.clone(), "GET", "/jobs/7/progress", None, Some("text/html")).await;
-    assert_eq!(
-        (status, headers["content-type"].to_str().unwrap()),
-        (StatusCode::NOT_FOUND, "application/problem+json"),
-        "{body}"
-    );
-    let (status, _, body) = call_with(router.clone(), "GET", "/jobs/1/progress", None, None).await;
-    assert_eq!((status, &body[..]), (StatusCode::OK, "event: progress\nid: 3\ndata: 3\n\n"));
-    let res =
-        router.oneshot(Request::get("/jobs/1/progress").header("last-event-id", "3").body(Body::empty()).unwrap()).await.unwrap();
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
-}
-
-#[cfg(feature = "json")]
-#[crate::routes]
-mod event_stream_url {
-    #[route("/jobs/{job}/progress", get = job_progress)]
-    pub struct JobProgress {
-        pub job: u32,
-    }
-}
-
-#[cfg(feature = "json")]
-async fn job_progress(
-    crate::Params(at): crate::Params<event_stream_url::JobProgress>,
-    since: crate::LiveSince,
-) -> Result<crate::EventStreamResponse, JsonError> {
-    if at.job != 1 {
-        return Err(Error::status(StatusCode::NOT_FOUND).into());
-    }
-    if since.0.as_deref() == Some("3") {
-        return Ok(crate::EventStreamResponse::ended());
-    }
-    Ok(crate::event_stream(futures_util::stream::iter([crate::StreamEvent::new("progress", &3).cursor("3")])))
 }
 
 #[tokio::test]
@@ -927,11 +877,70 @@ async fn markup_rendered_ahead_keeps_its_custom_properties_and_raw_markup_is_rep
     assert!(body.contains("data-vars=&quot;--meter__fill:42.5%&quot; and no rule for it"), "{body}");
     // In a debug build, a component rendered ahead counts as rendered where it is placed. A
     // release build does not note a view's components, so only a debug build reports it.
+    // Outside `corten dev` too, as an app's own router test runs (#1029): the message describes the
+    // app's code, so the error page's detail keeps it.
     if cfg!(debug_assertions) {
-        let (status, _, body) = call(placed_meters_listing(true, |body| Box::new(body), &[]), "GET", None).await;
-        assert_eq!(status, 500, "{body}");
-        assert!(body.contains("renders Meter, which the app does not list"), "{body}");
+        for dev in [true, false] {
+            let (status, _, body) = call(placed_meters_listing(dev, |body| Box::new(body), &[]), "GET", None).await;
+            assert_eq!(status, 500, "{body}");
+            assert!(body.contains("renders Meter, which the app does not list"), "dev {dev}: {body}");
+        }
     }
+}
+
+/// Outside `corten dev`, a handler's own error keeps its message out of the error page: only the
+/// debug build's errors about the app's code (above) keep theirs.
+#[tokio::test]
+async fn a_handlers_error_keeps_its_message_off_the_page_outside_dev() {
+    let page = |_: Req| async { Err::<Response, _>(Error::new("database password wrong")) };
+    let panics = || async {
+        if true {
+            panic!("the vault key is 1234")
+        } else {
+            "never"
+        }
+    };
+    let rejects = |axum::extract::Path(n): axum::extract::Path<u32>| async move { n.to_string() };
+    let html = Some("text/html");
+    for dev in [true, false] {
+        let routes = Router::new().route("/", get(page)).route("/panic", get(panics)).route("/n/{n}", get(rejects));
+        let router = App::new(Routes::from(routes)).dev(dev).error_page(test_error_page, ()).router();
+        for mode in [None, Some("nav")] {
+            let (status, _, body) = call_with(router.clone(), "GET", "/", mode, html).await;
+            assert_eq!(status, 500, "{body}");
+            assert_eq!(body.contains("database password wrong"), dev, "dev {dev} {mode:?}: {body}");
+            let (status, _, body) = call_with(router.clone(), "GET", "/panic", mode, html).await;
+            assert_eq!(status, 500, "{body}");
+            assert_eq!(body.contains("the vault key"), dev, "a panic, dev {dev} {mode:?}: {body}");
+            let (status, _, body) = call_with(router.clone(), "GET", "/n/abc", mode, html).await;
+            assert_eq!(status, 400, "{body}");
+            assert_eq!(body.contains("Invalid URL"), dev, "a rejection, dev {dev} {mode:?}: {body}");
+        }
+    }
+}
+
+/// An error page that fails too (the same unlisted component in the layout) is plain text, which
+/// in a debug build keeps what the page's failure says about the app's code, and nothing else.
+#[cfg(debug_assertions)]
+#[tokio::test]
+async fn an_error_page_that_fails_keeps_the_pages_detail_about_the_apps_code_in_its_text() {
+    async fn broken(_: Failure, _: Req) -> HtmlResult {
+        Err(Error::new("the error page broke"))
+    }
+    let routes = Router::new()
+        .route(
+            "/",
+            get(|| async {
+                Err::<Response, _>(crate::page::unserved(false, "the page draws Meter, which the app does not list".into()))
+            }),
+        )
+        .route("/secret", get(|| async { Err::<Response, _>(Error::new("database password wrong")) }));
+    let router = App::new(Routes::from(routes)).dev(false).error_page(broken, ()).router();
+    let (status, _, body) = call_with(router.clone(), "GET", "/", None, Some("text/html")).await;
+    assert_eq!(status, 500, "{body}");
+    assert!(body.starts_with("The page could not be shown.") && body.contains("the page draws Meter"), "{body}");
+    let (status, _, body) = call_with(router, "GET", "/secret", None, Some("text/html")).await;
+    assert_eq!((status.as_u16(), body.as_str()), (500, "The page could not be shown."));
 }
 
 #[derive(crate::view::Id)]
@@ -1195,6 +1204,9 @@ async fn an_extractor_rejection_gets_the_error_page_in_a_browser_and_its_text_in
     assert!(body.contains("<title>Something went wrong</title>") && !body.contains("parse"), "{body}");
     let (_, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", Some("nav"), None).await;
     assert_eq!(headers["corten-page"], "1", "a navigation swaps the error page in: {body}");
+    // The whole page after a write, which `fetch` asks for with `Accept: */*` (#1034).
+    let (_, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", Some("page"), Some("*/*")).await;
+    assert!(body.contains("<title>Something went wrong</title>") && headers.contains_key("corten-shell"), "{body}");
     let (_, _, body) = call_with(App::new(Routes::from(routes())).dev(true).router(), "GET", "/n/abc", None, html).await;
     assert!(body.contains("<pre>Invalid URL"), "the default error page shows it: {body}");
     let (status, headers, body) = call_with(app(routes(), None), "GET", "/n/abc", None, Some("application/json")).await;
@@ -2403,6 +2415,9 @@ async fn a_page_with_a_refresh_header_is_an_error_in_debug_builds() {
         let res = app(routes.clone(), None).oneshot(request_in(mode)).await.unwrap();
         assert_eq!(res.status(), StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}");
         assert!(!res.headers().contains_key("refresh"), "{mode:?}");
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("sends a Refresh header"), "it names the mistake outside dev too: {body}");
     }
     let api = Router::new().route("/", get(|| async { ([("refresh", "2")], "ok") }));
     assert_eq!(call(app(api, None), "GET", None).await.0, StatusCode::OK, "only pages are checked");
@@ -2615,7 +2630,11 @@ async fn a_redirect_outside_form_action_names_the_origin_and_a_sign_in_is_checke
     let (status, _, body) =
         call_with(App::new(Routes::from(routes.clone())).router(), "POST", "/go", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-    assert!(!body.contains("else.example"), "outside dev the page does not say: {body}");
+    assert!(body.contains("https://else.example") && body.contains("Policy::form_action"), "outside dev too: {body}");
+    let (status, _, body) =
+        call_with(App::new(Routes::from(routes.clone())).router(), "POST", "/account", None, Some("text/html")).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(body.contains("https://id.example"), "a sign-in's outside dev too: {body}");
     // A report-only policy stops nothing.
     let watching = App::new(Routes::from(routes)).policy(crate::security::Policy::new().report_only());
     let (status, ..) = call_with(watching.router(), "POST", "/go", None, Some("text/html")).await;
@@ -2830,15 +2849,77 @@ async fn a_redirect_to_a_place_keeps_its_fragment_in_every_mode() {
     let place = "/items/pika%20chu#place-7%20%26%208";
     let (status, headers, _) = call(app(routes.clone(), None), "GET", None).await;
     assert_eq!((status, &headers["location"]), (StatusCode::SEE_OTHER, &place.parse().unwrap()), "a full load follows it");
-    // fetch would follow a 303 and drop the fragment, so the runtime is told where to go.
-    for mode in ["nav", "action"] {
+    // fetch would follow a 303 and drop the fragment, so the runtime is told where to go: for a
+    // navigation, a patch's read, and the whole page it fetches after a write (`corten: page`,
+    // #1034).
+    for mode in ["nav", "action", "page"] {
         let (status, headers, _) = call(app(routes.clone(), None), "GET", Some(mode)).await;
         assert_eq!((status, &headers["corten-location"]), (StatusCode::NO_CONTENT, &place.parse().unwrap()), "{mode}");
     }
-    let (status, headers, _) = call_with(app(routes.clone(), None), "GET", "/old", Some("nav"), None).await;
-    assert_eq!((status, &headers["corten-location"]), (StatusCode::NO_CONTENT, &"/items/pika#place-7".parse().unwrap()));
+    for mode in ["nav", "page"] {
+        let (status, headers, _) = call_with(app(routes.clone(), None), "GET", "/old", Some(mode), None).await;
+        assert_eq!(
+            (status, &headers["corten-location"]),
+            (StatusCode::NO_CONTENT, &"/items/pika#place-7".parse().unwrap()),
+            "{mode}"
+        );
+    }
     let (status, headers, _) = call_with(app(routes, None), "GET", "/old", None, Some("text/html")).await;
     assert_eq!((status, &headers["location"]), (StatusCode::MOVED_PERMANENTLY, &"/items/pika#place-7".parse().unwrap()));
+}
+
+/// A redirect's answer depends on the `corten` header, so it varies on it, and the runtime's is the
+/// browser's alone: a cache that keys on the URL alone never hands its `corten-location` to a full
+/// load, nor a full load's 303 or 301 to the runtime's `fetch`, which would drop the `#id` (#1034).
+#[tokio::test]
+async fn a_redirect_varies_on_the_mode_and_the_runtimes_is_not_shared() {
+    #[derive(crate::Route)]
+    #[route("/items/{slug}")]
+    struct Item<'a> {
+        slug: &'a str,
+    }
+    #[derive(crate::view::Id)]
+    struct SpotId<'a>(&'a str);
+    let minute = std::time::Duration::from_secs(60);
+    let routes = Router::new()
+        .route("/", get(move |req: Req| async move { Public::new(minute, req.redirect(&Item { slug: "pika" }.at(SpotId("7")))) }))
+        .route("/old", get(|req: Req| async move { req.moved::<ForOne>(&Item { slug: "pika" }.at(SpotId("7"))) }))
+        .route("/done", get(move |req: Req| async move { Public::new(minute, req.redirect(&Done)) }));
+    for (uri, mode, status, shared) in [
+        ("/", None, StatusCode::SEE_OTHER, true),
+        ("/", Some("page"), StatusCode::NO_CONTENT, false),
+        ("/", Some("nav"), StatusCode::NO_CONTENT, false),
+        ("/old", None, StatusCode::MOVED_PERMANENTLY, false),
+        ("/old", Some("page"), StatusCode::NO_CONTENT, false),
+        ("/done", None, StatusCode::SEE_OTHER, true),
+        ("/done", Some("page"), StatusCode::SEE_OTHER, false),
+    ] {
+        let (got, headers, _) = call_with(app(routes.clone(), None), "GET", uri, mode, Some("text/html")).await;
+        let case = format!("{uri} {mode:?}: {headers:?}");
+        assert_eq!(got, status, "{case}");
+        let vary =
+            headers.get_all(header::VARY).iter().flat_map(|v| v.to_str().unwrap().split(',')).any(|v| v.trim() == "corten");
+        assert!(vary, "{case}");
+        assert_eq!(headers[header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), shared, "{case}");
+    }
+    // A `corten` value the runtime does not send is no fetch of its: a data client's redirect.
+    let (status, headers, _) = call_with(app(routes, None), "GET", "/", Some("x"), Some("application/json")).await;
+    assert_eq!((status, &headers["location"]), (StatusCode::SEE_OTHER, &"/items/pika#spot-7".parse().unwrap()));
+}
+
+/// The error page's request is asked as the failed one was: the whole page after a write keeps
+/// `corten: page`, so an error page that sends the browser to a place names it in `corten-location`.
+#[tokio::test]
+async fn the_error_page_of_the_whole_page_after_a_write_redirects_as_its_request_would() {
+    async fn moves(_: Failure, req: Req) -> HtmlResult {
+        req.redirect(&Done.at(MsgId))
+    }
+    let router = || App::new(Routes::from(Router::new())).error_page(moves, ()).router();
+    // The error page keeps the failure's status (404); what it says of the place is the mode's.
+    let (_, headers, _) = call_with(router(), "GET", "/missing", Some("page"), None).await;
+    assert!(headers["corten-location"] == "/done#msg" && !headers.contains_key("location"), "{headers:?}");
+    let (_, headers, _) = call_with(router(), "GET", "/missing", None, Some("text/html")).await;
+    assert!(headers["location"] == "/done#msg" && !headers.contains_key("corten-location"), "{headers:?}");
 }
 
 /// A client navigation's `fetch` cannot follow a redirect to another origin (the CSP's
@@ -2858,7 +2939,7 @@ async fn a_redirect_to_another_origin_is_named_to_a_client_navigation() {
         ("/away", "https://shop.example/sales?x=1", StatusCode::SEE_OTHER),
         ("/moved", "//shop.example/sales", StatusCode::MOVED_PERMANENTLY),
     ] {
-        for mode in ["nav", "action"] {
+        for mode in ["nav", "action", "page"] {
             let (status, headers, _) = call_with(app(routes.clone(), None), "GET", uri, Some(mode), None).await;
             assert_eq!((status, &headers["corten-location"]), (StatusCode::NO_CONTENT, &to.parse().unwrap()), "{uri} {mode}");
             assert!(!headers.contains_key("location"), "{uri} {mode}: nothing for fetch to follow");
@@ -2867,9 +2948,29 @@ async fn a_redirect_to_another_origin_is_named_to_a_client_navigation() {
         assert_eq!((status, &headers["location"]), (full, &to.parse().unwrap()), "{uri}: a full load follows it");
     }
     // A path on this origin is still a redirect fetch follows, in one round trip.
-    let (status, headers, _) = call_with(app(routes, None), "GET", "/here", Some("nav"), None).await;
-    assert_eq!(status, StatusCode::SEE_OTHER);
-    assert!(!headers.contains_key("corten-location"));
+    for mode in ["nav", "page"] {
+        let (status, headers, _) = call_with(app(routes.clone(), None), "GET", "/here", Some(mode), None).await;
+        assert_eq!(status, StatusCode::SEE_OTHER, "{mode}");
+        assert!(!headers.contains_key("corten-location"), "{mode}");
+    }
+}
+
+/// The whole page the runtime fetches after a write (`corten: page`) is drawn as a full load's,
+/// its layout and `corten-shell` included, not as a navigation's `<main>` (#1034).
+#[tokio::test]
+async fn the_whole_page_after_a_write_is_drawn_as_a_full_load() {
+    let routes = Router::new()
+        .route("/", get(|req: Req| async move { req.page::<ForOne>(Shell { req: &req, title: "A", head: "", children: "a" }) }));
+    let (status, headers, body) = call(app(routes.clone(), None), "GET", Some("page")).await;
+    let (_, _, full) = call(app(routes.clone(), None), "GET", None).await;
+    let (_, _, nav) = call(app(routes, None), "GET", Some("nav")).await;
+    assert_eq!(status, StatusCode::OK);
+    let key = headers["corten-shell"].to_str().unwrap();
+    assert_eq!(meta_content(&body, "corten-shell"), key, "the document, as a full load gets it");
+    assert!(
+        body.starts_with("<!DOCTYPE html>") && full.starts_with("<!DOCTYPE html>") && !nav.starts_with("<!DOCTYPE html>"),
+        "{body}"
+    );
 }
 
 /// A place on a page outside the app keeps its `#fragment` through `moved` and `redirect`, which
@@ -2924,23 +3025,23 @@ struct SignUp {
 pub(crate) struct Shipping {
     pub street_line: String,
     postal_code: Option<Vec<(u8, String)>>,
-    r#type: std::collections::HashMap<String, fn(u8) -> u8>,
+    r#type: std::collections::HashMap<String, Vec<(u8, bool)>>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, crate::UrlValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, crate::UrlValue)]
 #[serde(rename_all = "kebab-case")]
 enum Domain {
     SellerPortal,
     Catalog,
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize, Fields)]
+#[derive(Debug, PartialEq, Fields)]
 struct Address {
     street: String,
     zip: Option<u32>,
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize, Fields)]
+#[derive(Debug, PartialEq, Fields)]
 struct DomainLimits {
     max_concurrent: u32,
     #[serde(default)]
@@ -2949,7 +3050,7 @@ struct DomainLimits {
     contact: Address,
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize, Fields)]
+#[derive(Debug, PartialEq, Fields)]
 struct Limits {
     name: String,
     #[fields(group)]
@@ -3043,26 +3144,26 @@ fn groups_and_rows_name_each_field_and_read_back_by_key() {
     );
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Line {
     qty: u32,
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Limits2 {
     #[fields(rows)]
     #[serde(default)]
     lines: std::collections::BTreeMap<String, Line>,
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Numbered {
     #[fields(rows)]
     #[serde(default)]
     lines: std::collections::BTreeMap<u32, Line>,
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Counts {
     note: String,
     #[fields(map)]
@@ -3094,13 +3195,13 @@ fn a_map_names_each_keys_value() {
     assert!(!errors.has(f.counts.at(&12)));
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Search {
     q: String,
     go: Option<String>,
 }
 
-#[derive(Debug, serde::Deserialize, Fields)]
+#[derive(Debug, Fields)]
 struct Moded {
     q: String,
     #[serde(rename = "q-mode")]
@@ -4262,6 +4363,45 @@ async fn a_refusal_tells_the_client_why_and_when_to_try_again() {
     assert_eq!(body, r#"{"type":"error","error":{"code":429,"message":"Too many failed attempts; try again later"}}"#);
 }
 
+#[derive(crate::Route)]
+#[route("/api/refuses")]
+struct ApiRefuses;
+
+/// A handler's own refusal says why in the API's own shape, as an extractor's does (#890): its
+/// message, a lockout's `Retry-After`, and a lookup that is down as a 503.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
+    async fn refuses(headers: axum::http::HeaderMap) -> crate::Result<&'static str> {
+        let refused = match headers.get("x-case").map(|v| v.as_bytes()) {
+            Some(b"forbid") => crate::Refused::forbidden().message("Not your item"),
+            Some(b"lock") => crate::Refused::too_many(std::time::Duration::from_millis(1500)).message("Slow down"),
+            Some(b"down") => crate::Refused::unavailable("the session store is down"),
+            _ => return Ok("ok"),
+        };
+        Err(refused.into())
+    }
+    let router = api_app(|api| {
+        api.route::<ApiRefuses>(crate::Methods::reads(get(refuses))).errors(|status, message| ShapedError {
+            r#type: "error",
+            error: ShapedDetail { code: status.as_u16(), message: message.to_string() },
+        })
+    });
+    for (case, status, retry, message) in [
+        ("forbid", 403, None, "Not your item"),
+        ("lock", 429, Some("2"), "Slow down"),
+        ("down", 503, None, "Service Unavailable"),
+    ] {
+        let req = Request::get("/api/refuses").header("x-case", case).body(Body::empty()).unwrap();
+        let res = router.clone().oneshot(req).await.unwrap();
+        let got = (res.status().as_u16(), res.headers().get("retry-after").map(|v| v.to_str().unwrap().to_owned()));
+        assert_eq!(got, (status, retry.map(str::to_owned)), "{case}");
+        let body = res.into_body().collect().await.unwrap().to_bytes();
+        let want = format!(r#"{{"type":"error","error":{{"code":{status},"message":{message:?}}}}}"#);
+        assert_eq!(String::from_utf8(body.to_vec()).unwrap(), want, "{case}");
+    }
+}
+
 #[tokio::test]
 async fn an_allowed_origin_may_call_the_api_from_the_browser_but_not_post_the_pages() {
     let router = api_app(|api| api.allow_origin("https://partner.example/"));
@@ -4671,7 +4811,7 @@ fn a_query_set_that_is_a_rule_reads_inside_another() {
     assert_eq!(read.outer.chosen, Chosen { listing: Some("l1".into()), options: vec![("form".into(), "graded".into())] });
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, serde::Deserialize, crate::UrlValue)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, crate::UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum Filter {
     #[default]
@@ -5960,6 +6100,622 @@ async fn a_download_names_its_file_and_stays_private() {
     assert_eq!(res.headers()[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
 }
 
+/// A streamed download (`Media::stream`) is `Media` in every header, sends its length only when
+/// it knows it, is compressed a chunk at a time when its type is text, gets no `ETag`, and a
+/// `HEAD` never pulls it (#1001).
+#[tokio::test]
+async fn a_streamed_download_is_media_sent_as_it_is_made() {
+    use futures_util::StreamExt;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let row = |i: usize| format!("{i},Pikachu\n").repeat(100);
+    let csv: String = (0..4).map(row).collect();
+    let length = csv.len() as u64;
+    let pulled = Arc::new(AtomicUsize::new(0));
+    let rows = move |pulled: Arc<AtomicUsize>| {
+        futures_util::stream::iter(0..4).map(move |i| {
+            pulled.fetch_add(1, Ordering::SeqCst);
+            Ok::<_, std::io::Error>(crate::Bytes::from(row(i)))
+        })
+    };
+    let (export, sized) = (pulled.clone(), pulled.clone());
+    let routes = Router::new()
+        .route(
+            "/export",
+            get(move || {
+                let pulled = export.clone();
+                async move { crate::Media::stream("text/csv", rows(pulled)).attachment("Pokémon.csv") }
+            }),
+        )
+        .route(
+            "/sized",
+            get(move || {
+                let pulled = sized.clone();
+                async move { crate::Media::stream_sized("text/csv", length, rows(pulled)) }
+            }),
+        )
+        .route(
+            "/empty",
+            get(|| async {
+                crate::Media::stream("text/csv", futures_util::stream::empty::<Result<crate::Bytes, std::io::Error>>())
+            }),
+        )
+        .route(
+            "/empty-sized",
+            get(|| async {
+                crate::Media::stream_sized("text/csv", 0, futures_util::stream::empty::<Result<crate::Bytes, std::io::Error>>())
+            }),
+        )
+        .route(
+            "/small",
+            get(|| async {
+                let rows =
+                    futures_util::stream::iter(["a,1\n", "b,2\n"].map(|row| Ok::<_, std::io::Error>(crate::Bytes::from(row))));
+                crate::Media::stream_sized("text/csv", 8, rows)
+            }),
+        )
+        .route(
+            "/picture",
+            get(|| async {
+                let png = futures_util::stream::once(async { Ok::<_, std::io::Error>(crate::Bytes::from(vec![7u8; 4096])) });
+                Public::new(Duration::from_secs(60), crate::Media::stream("image/png", png))
+            }),
+        );
+    let router = app(routes, None);
+    let get_with = |path: &str, encoding: Option<&str>| {
+        let mut req = Request::get(path);
+        if let Some(encoding) = encoding {
+            req = req.header("accept-encoding", encoding);
+        }
+        let router = router.clone();
+        let req = req.body(Body::empty()).unwrap();
+        async move {
+            let (parts, body) = router.oneshot(req).await.unwrap().into_parts();
+            (parts.status, parts.headers, body.collect().await.unwrap().to_bytes())
+        }
+    };
+
+    let (status, headers, body) = get_with("/export", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "text/csv");
+    assert_eq!(headers[header::CONTENT_DISPOSITION], "attachment; filename=\"Pok_mon.csv\"; filename*=UTF-8''Pok%C3%A9mon.csv");
+    assert_eq!(headers[header::CACHE_CONTROL], "private, no-cache");
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert!(!headers.contains_key(header::CONTENT_LENGTH) && !headers.contains_key(header::ETAG), "{headers:?}");
+    assert_eq!(body, csv.as_bytes());
+
+    let (_, headers, body) = get_with("/sized", None).await;
+    assert_eq!(headers[header::CONTENT_LENGTH], length.to_string());
+    assert!(!headers.contains_key(header::ETAG));
+    assert_eq!(body, csv.as_bytes());
+
+    let (status, _, body) = get_with("/empty", None).await;
+    assert_eq!((status, body.len()), (StatusCode::OK, 0));
+
+    // A HEAD gets the headers, the length when it is known, and never pulls the stream.
+    pulled.store(0, Ordering::SeqCst);
+    let res = router.clone().oneshot(Request::head("/sized").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.headers()[header::CONTENT_LENGTH], length.to_string());
+    assert!(res.into_body().collect().await.unwrap().to_bytes().is_empty());
+    assert_eq!(pulled.load(Ordering::SeqCst), 0, "a HEAD never pulls the stream");
+
+    let (_, headers, body) = get_with("/picture", Some("zstd")).await;
+    assert_eq!(headers[header::CACHE_CONTROL], "public, max-age=60");
+    assert!(!headers.contains_key(header::CONTENT_ENCODING), "an image is sent as it is: {headers:?}");
+    assert_eq!(body.len(), 4096);
+
+    #[cfg(feature = "compress")]
+    {
+        use std::io::Read;
+        // Decoded by readers that check for the coding's end: a body without zstd's frame end or
+        // brotli's last block is an error, not a short file.
+        let decoded = |coding: &str, body: &[u8]| -> std::io::Result<Vec<u8>> {
+            let mut out = Vec::new();
+            match coding {
+                "zstd" => zstd::stream::read::Decoder::new(body)?.read_to_end(&mut out)?,
+                _ => brotli::Decompressor::new(body, 4096).read_to_end(&mut out)?,
+            };
+            Ok(out)
+        };
+        for coding in ["zstd", "br"] {
+            for path in ["/export", "/sized"] {
+                let (_, headers, body) = get_with(path, Some(&format!("gzip, {coding}"))).await;
+                assert_eq!(headers[header::CONTENT_ENCODING], coding, "{path}");
+                assert_eq!(headers[header::VARY], "accept-encoding");
+                assert!(!headers.contains_key(header::CONTENT_LENGTH), "the length is the uncompressed one: {path}");
+                assert!(body.len() < csv.len() / 10, "{path}: {} of {}", body.len(), csv.len());
+                assert_eq!(decoded(coding, &body).unwrap(), csv.as_bytes(), "{coding} {path}");
+            }
+            // An empty stream is a whole, empty frame; one that says it is empty is sent as it is.
+            let (_, headers, body) = get_with("/empty", Some(coding)).await;
+            assert_eq!(headers[header::CONTENT_ENCODING], coding);
+            assert_eq!(decoded(coding, &body).unwrap(), b"", "{coding}");
+            let (_, headers, body) = get_with("/empty-sized", Some(coding)).await;
+            assert!(!headers.contains_key(header::CONTENT_ENCODING) && body.is_empty(), "{headers:?}");
+            assert_eq!(headers[header::CONTENT_LENGTH], "0");
+            // One whose length is too small to be worth compressing keeps it, as a buffered body does.
+            let (_, headers, body) = get_with("/small", Some(coding)).await;
+            assert!(!headers.contains_key(header::CONTENT_ENCODING), "{headers:?}");
+            assert_eq!((headers[header::CONTENT_LENGTH].to_str().unwrap(), &body[..]), ("8", &b"a,1\nb,2\n"[..]));
+            assert_eq!(headers[header::VARY], "accept-encoding");
+        }
+        // A client that takes only gzip gets it as it is, with its length.
+        let (_, headers, body) = get_with("/sized", Some("gzip")).await;
+        assert!(!headers.contains_key(header::CONTENT_ENCODING));
+        assert_eq!(headers[header::CONTENT_LENGTH], length.to_string());
+        assert_eq!(body, csv.as_bytes());
+    }
+}
+
+/// Over a socket, a body read as it arrives (`pieces_up_to`, #1003): the handler has its first
+/// piece before the client has sent the rest, and a client that sends the whole body before it
+/// reads, as a browser does, reads the 413 of one over the limit, whether it sent its length or
+/// sent it chunked, rather than a closed connection.
+#[tokio::test]
+async fn a_body_read_as_it_arrives_is_read_before_it_ends_and_refused_where_a_browser_reads_it() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const MAX: usize = 1 << 20;
+    let (first, mut got_first) = tokio::sync::mpsc::unbounded_channel::<usize>();
+    let routes = Router::new().route(
+        "/up",
+        axum::routing::put(move |request: crate::extract::Request| {
+            let first = first.clone();
+            async move {
+                let mut pieces = crate::extract::pieces_up_to(request.into_body(), MAX);
+                let mut stored = 0;
+                while let Some(piece) = pieces.chunk().await? {
+                    if stored == 0 {
+                        let _ = first.send(piece.len());
+                    }
+                    stored += piece.len();
+                }
+                Ok::<_, Error>(stored.to_string())
+            }
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+        let _ = stopped.await;
+    }));
+    let answer = |mut stream: tokio::net::TcpStream| async move {
+        let mut read = Vec::new();
+        stream.read_to_end(&mut read).await.expect("the answer, not a reset connection");
+        String::from_utf8_lossy(&read).into_owned()
+    };
+
+    // Half the body, then the rest only once the handler has a piece of it.
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let head = format!("PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: {MAX}\r\n\r\n");
+    stream.write_all(head.as_bytes()).await.unwrap();
+    stream.write_all(&vec![7u8; MAX / 2]).await.unwrap();
+    let piece = tokio::time::timeout(Duration::from_secs(10), got_first.recv()).await.expect("a piece before the end");
+    assert!(piece.is_some_and(|len| len > 0 && len <= MAX / 2));
+    stream.write_all(&vec![7u8; MAX / 2]).await.unwrap();
+    let got = answer(stream).await;
+    assert!(got.starts_with("HTTP/1.1 200") && got.ends_with(&MAX.to_string()), "{got}");
+
+    // Over the limit, with its length (a byte over, and 8 MiB over) and chunked: all of it sent
+    // before the answer is read.
+    for over in [1, 8 << 20] {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let len = MAX + over;
+        let head = format!("PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: {len}\r\n\r\n");
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream.write_all(&vec![7u8; len]).await.unwrap();
+        let got = answer(stream).await;
+        assert!(got.starts_with("HTTP/1.1 413"), "{over} over, with its length: {got}");
+    }
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(b"PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ntransfer-encoding: chunked\r\n\r\n")
+        .await
+        .unwrap();
+    let piece = vec![7u8; 64 << 10];
+    for _ in 0..(2 * MAX / piece.len()) {
+        stream.write_all(format!("{:x}\r\n", piece.len()).as_bytes()).await.unwrap();
+        stream.write_all(&piece).await.unwrap();
+        stream.write_all(b"\r\n").await.unwrap();
+    }
+    stream.write_all(b"0\r\n\r\n").await.unwrap();
+    let got = answer(stream).await;
+    assert!(got.starts_with("HTTP/1.1 413"), "chunked: {got}");
+
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// What a large upload read as it arrives (`pieces_up_to`) costs the server: `UPLOAD_MIB` (1024)
+/// over a socket as fast as the client sends, each piece dropped as a store would take it. Prints
+/// the time and the process's peak resident memory before and after (`VmHWM`, Linux). In release:
+/// `cargo test --release -p corten-run --all-features --lib -- --ignored what_a_large_upload_costs --nocapture`
+/// (#1003).
+#[tokio::test]
+#[ignore]
+async fn what_a_large_upload_costs() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mib: usize = std::env::var("UPLOAD_MIB").ok().and_then(|n| n.parse().ok()).unwrap_or(1024);
+    let peak = || {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find(|l| l.starts_with("VmHWM:"))
+                    .map(|l| l.split_whitespace().nth(1).unwrap_or("0").parse::<u64>().unwrap_or(0) / 1024)
+            })
+            .unwrap_or(0)
+    };
+    let routes = Router::new().route(
+        "/up",
+        axum::routing::put(|request: crate::extract::Request| async move {
+            let mut pieces = crate::extract::pieces_up_to(request.into_body(), usize::MAX);
+            let (mut stored, mut largest) = (0usize, 0usize);
+            while let Some(piece) = pieces.chunk().await? {
+                stored += piece.len();
+                largest = largest.max(piece.len());
+            }
+            Ok::<_, Error>(format!("{stored} {largest}"))
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).deadline(None);
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let before = peak();
+    let started = std::time::Instant::now();
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let len = mib << 20;
+    let head = format!("PUT /up HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\ncontent-length: {len}\r\n\r\n");
+    stream.write_all(head.as_bytes()).await.unwrap();
+    let piece = vec![7u8; 256 << 10];
+    for _ in 0..len / piece.len() {
+        stream.write_all(&piece).await.unwrap();
+    }
+    let mut answer = String::new();
+    stream.read_to_string(&mut answer).await.unwrap();
+    let last = answer.lines().last().unwrap_or_default().to_owned();
+    println!(
+        "{mib} MiB up in {:?}: stored and largest piece {last}; peak resident {} MiB (before the request {before} MiB)",
+        started.elapsed(),
+        peak()
+    );
+    assert!(last.starts_with(&len.to_string()), "{answer}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// On an app with no deadline, over a socket, a body trickled in a byte every 100 ms, each byte
+/// well within the read's idle time (here 500 ms), is answered the 408 once it falls the idle time
+/// behind the minimum rate, about half a second in, and the connection is closed after it: the
+/// route's deadline is not what bounds it (#1074).
+#[tokio::test]
+async fn a_body_trickled_in_on_a_route_with_no_deadline_is_a_408() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let routes = Router::new().route(
+        "/up",
+        axum::routing::put(|request: crate::extract::Request| async move {
+            let mut pieces = crate::extract::pieces_up_to(request.into_body(), usize::MAX).idle(Duration::from_millis(500));
+            let mut stored = 0;
+            while let Some(piece) = pieces.chunk().await? {
+                stored += piece.len();
+            }
+            Ok::<_, Error>(stored.to_string())
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).deadline(None);
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let (mut from, mut to) = stream.into_split();
+    let started = std::time::Instant::now();
+    to.write_all(b"PUT /up HTTP/1.1\r\nhost: localhost\r\ncontent-length: 10000\r\n\r\n").await.unwrap();
+    let trickle = tokio::spawn(async move {
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if to.write_all(b"x").await.is_err() {
+                break;
+            }
+        }
+    });
+    let mut read = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_secs(10), from.read_to_end(&mut read)).await;
+    closed.expect("the connection closed after the answer").expect("the answer, not a reset connection");
+    let took = started.elapsed();
+    let got = String::from_utf8_lossy(&read);
+    assert!(got.starts_with("HTTP/1.1 408"), "{got}");
+    assert!(took < Duration::from_secs(5), "answered in {took:?}");
+    trickle.abort();
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// What a large download costs the server, streamed (`Media::stream`) and held (`Media::new`):
+/// `DOWNLOAD_MIB` (512) of generated bytes over a socket, read as fast as the client can. Prints
+/// the time to the first body bytes, the time to the last, and the process's peak resident memory
+/// after each (`VmHWM`, Linux), so run the streamed one first, each in its own process. In release:
+/// `DOWNLOAD=stream cargo test --release -p corten-run --all-features --lib -- --ignored what_a_large_download_costs --nocapture`
+/// and again with `DOWNLOAD=held` (#1001).
+#[tokio::test]
+#[ignore]
+async fn what_a_large_download_costs() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mib: usize = std::env::var("DOWNLOAD_MIB").ok().and_then(|n| n.parse().ok()).unwrap_or(512);
+    let held = std::env::var("DOWNLOAD").is_ok_and(|kind| kind == "held");
+    let peak = || {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status
+                    .lines()
+                    .find(|l| l.starts_with("VmHWM:"))
+                    .map(|l| l.split_whitespace().nth(1).unwrap_or("0").parse::<u64>().unwrap_or(0) / 1024)
+            })
+            .unwrap_or(0)
+    };
+    // 64 KiB chunks of CSV-like text, made as they are asked for.
+    let chunk = |i: usize| crate::Bytes::from(format!("{i:>10},Pikachu,Base Set,Near Mint,1999\n").repeat(64 * 1024 / 46));
+    let chunks = mib * 1024 * 1024 / chunk(0).len();
+    let routes = Router::new().route(
+        "/export",
+        get(move || async move {
+            if held {
+                let mut all = Vec::new();
+                for i in 0..chunks {
+                    all.extend_from_slice(&chunk(i));
+                }
+                crate::Media::new("application/octet-stream", all)
+            } else {
+                crate::Media::stream(
+                    "application/octet-stream",
+                    futures_util::stream::iter((0..chunks).map(move |i| Ok::<_, std::io::Error>(chunk(i)))),
+                )
+            }
+        }),
+    );
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+        let _ = stopped.await;
+    }));
+    let before = peak();
+    let started = std::time::Instant::now();
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream.write_all(b"GET /export HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+    let (mut got, mut first, mut buf) = (0usize, None, vec![0u8; 256 * 1024]);
+    loop {
+        let read = stream.read(&mut buf).await.unwrap();
+        if read == 0 {
+            break;
+        }
+        got += read;
+        // The head is a few hundred bytes; past it, body bytes have arrived.
+        if first.is_none() && got > 1024 {
+            first = Some(started.elapsed());
+        }
+    }
+    let total = started.elapsed();
+    println!(
+        "{} {mib} MiB: first body bytes {:?}, all {:?}, {got} bytes; peak resident {} MiB (before the request {before} MiB)",
+        if held { "held" } else { "stream" },
+        first.unwrap(),
+        total,
+        peak()
+    );
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// Over a socket: the first chunk of a streamed download reaches the client before the rest is
+/// made, a client that stops reading stops the stream being pulled, one that leaves drops it,
+/// and a stream that fails after it began, or does not keep its length, ends the connection
+/// without the body's end (#1001).
+#[tokio::test]
+async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_leaves() {
+    use std::sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    struct Dropped(Arc<AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    fn then(error: Option<&'static str>) -> impl futures_util::Stream<Item = Result<crate::Bytes, &'static str>> + Send {
+        futures_util::stream::unfold(0, move |step| async move {
+            match step {
+                0 => Some((Ok(crate::Bytes::from_static(b"abc")), 1)),
+                1 => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    error.map(|error| (Err(error), 2))
+                }
+                _ => None,
+            }
+        })
+    }
+    let go = Arc::new(tokio::sync::Notify::new());
+    let made = Arc::new(AtomicU64::new(0));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let routes = {
+        let (go, made, dropped) = (go.clone(), made.clone(), dropped.clone());
+        Router::new()
+            // "first", then the rest only once the test says so.
+            .route(
+                "/paced",
+                get(move || {
+                    let go = go.clone();
+                    async move {
+                        let chunks = futures_util::stream::unfold(0, move |step| {
+                            let go = go.clone();
+                            async move {
+                                match step {
+                                    0 => Some((Ok::<_, std::io::Error>(crate::Bytes::from_static(b"first")), 1)),
+                                    1 => {
+                                        go.notified().await;
+                                        Some((Ok(crate::Bytes::from_static(b"rest")), 2))
+                                    }
+                                    _ => None,
+                                }
+                            }
+                        });
+                        crate::Media::stream("application/octet-stream", chunks)
+                    }
+                }),
+            )
+            // No end: 64 KiB at a time, counted, with a guard that says when it is dropped.
+            .route(
+                "/endless",
+                get(move || {
+                    let (made, guard) = (made.clone(), Dropped(dropped.clone()));
+                    async move {
+                        let chunk = crate::Bytes::from(vec![b'x'; 64 * 1024]);
+                        crate::Media::stream(
+                            "application/octet-stream",
+                            futures_util::stream::repeat_with(move || {
+                                let _ = &guard;
+                                made.fetch_add(chunk.len() as u64, Ordering::SeqCst);
+                                Ok::<_, std::io::Error>(chunk.clone())
+                            }),
+                        )
+                    }
+                }),
+            )
+            // A chunk, then, a moment later (so the chunk is sent), a failure or the stream's end.
+            .route(
+                "/broken",
+                get(|| async { crate::Media::stream("application/octet-stream", then(Some("the store went away"))) }),
+            )
+            .route("/short", get(|| async { crate::Media::stream_sized("application/octet-stream", 10, then(None)) }))
+            .route(
+                "/long",
+                get(|| async {
+                    // The second a moment after the first, so the first is sent.
+                    let chunks = futures_util::stream::iter(["abc", "def"]).then(|part| async move {
+                        if part == "def" {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                        Ok::<_, &str>(crate::Bytes::from(part))
+                    });
+                    crate::Media::stream_sized("application/octet-stream", 5, chunks)
+                }),
+            )
+            // Text, so compressed: a failure after compressed bytes ends it the same way.
+            .route("/broken-text", get(|| async { crate::Media::stream("text/csv", then(Some("the store went away"))) }))
+    };
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+        let _ = stopped.await;
+    }));
+    let request_with = |path: &'static str, headers: &'static str| async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(format!("GET {path} HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n{headers}\r\n").as_bytes())
+            .await
+            .unwrap();
+        stream
+    };
+    let request = |path: &'static str| request_with(path, "");
+    let read_all = |mut stream: tokio::net::TcpStream| async move {
+        let mut answer = Vec::new();
+        let _ =
+            tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut answer)).await.expect("the server closes it");
+        String::from_utf8_lossy(&answer).into_owned()
+    };
+
+    // The first chunk arrives while the stream is still waiting to make the rest.
+    let mut paced = request("/paced").await;
+    let mut seen = Vec::new();
+    let mut buf = [0u8; 1024];
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !String::from_utf8_lossy(&seen).contains("first") {
+            let read = paced.read(&mut buf).await.unwrap();
+            assert!(read > 0, "closed before the first chunk");
+            seen.extend_from_slice(&buf[..read]);
+        }
+    })
+    .await
+    .expect("the first chunk arrives before the rest is made");
+    go.notify_one();
+    let rest = read_all(paced).await;
+    assert!(rest.contains("rest") && rest.ends_with("0\r\n\r\n"), "then the rest and the body's end: {rest}");
+
+    // A client that does not read: the stream is pulled until the buffers fill, then not at all.
+    let stalled = request("/endless").await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let filled = made.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(made.load(Ordering::SeqCst), filled, "no more is made while nothing is read");
+    assert!(filled < 64 << 20, "only what the buffers hold: {filled} bytes");
+    assert!(!dropped.load(Ordering::SeqCst));
+    // Gone: the stream is dropped, and with it what made it.
+    drop(stalled);
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !dropped.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the stream is dropped when its client leaves");
+
+    // After the headers, a failure or a broken length ends the connection without the body's end.
+    let broken = read_all(request("/broken").await).await;
+    assert!(broken.starts_with("HTTP/1.1 200 ") && broken.contains("abc"), "{broken}");
+    assert!(!broken.ends_with("0\r\n\r\n"), "no end of the body: {broken}");
+    let short = read_all(request("/short").await).await;
+    assert!(short.contains("content-length: 10") && short.ends_with("\r\n\r\nabc"), "{short}");
+    // One that makes more than it said sends what fits and ends there.
+    let long = read_all(request("/long").await).await;
+    assert!(long.contains("content-length: 5") && long.ends_with("\r\n\r\nabc"), "{long}");
+    #[cfg(feature = "compress")]
+    for (coding, accept) in [("zstd", "accept-encoding: zstd\r\n"), ("br", "accept-encoding: br\r\n")] {
+        use std::io::Read;
+        let mut stream = request_with("/broken-text", accept).await;
+        let mut raw = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(5), stream.read_to_end(&mut raw)).await.expect("the server closes it");
+        let head_end = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("a head") + 4;
+        let head = String::from_utf8_lossy(&raw[..head_end]);
+        assert!(head.starts_with("HTTP/1.1 200 ") && head.contains(&format!("content-encoding: {coding}")), "{head}");
+        assert!(head.contains("transfer-encoding: chunked") && !raw.ends_with(b"0\r\n\r\n"), "no end of the body: {head}");
+        // The chunks that arrived hold no coding end either, so a decoder that checks for one
+        // sees a cut-off file, not a whole one.
+        let (mut body, mut at) = (Vec::new(), head_end);
+        while let Some(line) = raw.get(at..).and_then(|rest| rest.windows(2).position(|w| w == b"\r\n")) {
+            let size = usize::from_str_radix(std::str::from_utf8(&raw[at..at + line]).unwrap(), 16).unwrap();
+            let start = at + line + 2;
+            if size == 0 || start + size > raw.len() {
+                break;
+            }
+            body.extend_from_slice(&raw[start..start + size]);
+            at = start + size + 2;
+        }
+        assert!(!body.is_empty(), "{coding}: compressed bytes were sent before the failure");
+        let mut out = Vec::new();
+        let decoded = match coding {
+            "zstd" => zstd::stream::read::Decoder::new(&body[..]).unwrap().read_to_end(&mut out),
+            _ => brotli::Decompressor::new(&body[..], 4096).read_to_end(&mut out),
+        };
+        assert!(decoded.is_err(), "{coding}: a failed stream does not end its coding: {out:?}");
+    }
+
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 #[tokio::test]
 async fn what_the_app_renders_is_private_unless_it_says_otherwise() {
     let router = app(cached_routes(), None);
@@ -6898,6 +7654,78 @@ async fn an_area_takes_modules_with_callers_of_their_own() {
     }
 }
 
+/// A route's handlers may take sixteen arguments with the caller and the address last, in either
+/// order (#933).
+#[crate::routes(area = super::admin_url::Admin, caller = Staff)]
+mod wide_url {
+    #[route("/admin/wide/{id}", get = wide, post = wide_save, no_store(post))]
+    pub struct Wide {
+        pub id: u32,
+    }
+}
+
+type M = axum::http::Method;
+
+#[allow(clippy::too_many_arguments)]
+async fn wide(
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    at: crate::Params<wide_url::Wide>,
+    Caller(staff): Caller<Staff>,
+) -> String {
+    format!("wide {} {}", at.id, staff.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn wide_save(
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    _: M,
+    Caller(staff): Caller<Staff>,
+    at: crate::Params<wide_url::Wide>,
+) -> String {
+    format!("saved {} {}", at.id, staff.0)
+}
+
+#[tokio::test]
+async fn a_sixteen_argument_handler_takes_its_caller_and_address_last() {
+    let router = App::new(caller_url::router())
+        .error_page(test_error_page, ())
+        .area(|area| wide_url::area(admin_url::area(area)))
+        .router();
+    for (method, viewer, want) in
+        [("GET", "bob", (StatusCode::OK, "wide 7 bob")), ("POST", "ada", (StatusCode::OK, "saved 7 ada"))]
+    {
+        let (status, _, body) = guarded(&router, method, "/admin/wide/7", Some(viewer), &[]).await;
+        assert_eq!((status, &body[..]), want, "{method} as {viewer}");
+    }
+    let (status, _, _) = guarded(&router, "GET", "/admin/wide/7", Some("carol"), &[]).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
 async fn guarded(
     router: &Router,
     method: &str,
@@ -7082,6 +7910,52 @@ async fn a_sign_in_page_that_needs_a_caller_is_an_error_not_a_loop() {
     let (status, res, body) = guarded(&router, "GET", "/sign-in", None, &[("accept", "text/html")]).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "not a redirect the browser follows forever");
     assert!(!res.contains_key("location") && !body.contains("itself"), "the message stays in the log: {body}");
+}
+
+/// A handler's own refusal is answered as an extractor's is (#890): a sign-in is a redirect for a
+/// browser, a `corten-location` for the runtime's form and a 401 problem for a data client.
+/// `with_status` makes it a plain failure at that status, which says the refusal's message.
+#[tokio::test]
+async fn a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors() {
+    async fn must_sign_in() -> crate::Result<&'static str> {
+        Err(crate::Refused::sign_in(&caller_url::SignIn))?;
+        Ok("never")
+    }
+    async fn moved() -> crate::Result<&'static str> {
+        Err(Error::from(crate::Refused::forbidden().message("not yours")).with_status(StatusCode::NOT_FOUND))
+    }
+    async fn hidden() -> crate::Result<&'static str> {
+        Err(Error::from(crate::Refused::forbidden()).with_status(StatusCode::NOT_FOUND))
+    }
+    async fn gone() -> crate::Result<&'static str> {
+        Err(Error::not_found())
+    }
+    let routes = Router::new()
+        .route("/mine", get(must_sign_in).post(must_sign_in))
+        .route("/moved", get(moved))
+        .route("/hidden", get(hidden))
+        .route("/gone", get(gone));
+    let router = App::new(Routes::from(routes)).error_page(test_error_page, ()).router();
+    for (method, headers) in [("GET", &[][..]), ("POST", &[][..]), ("GET", &[("corten", "nav")][..])] {
+        let (status, res, _) = guarded(&router, method, "/mine", None, headers).await;
+        assert_eq!((status, &res["location"]), (StatusCode::SEE_OTHER, &"/sign-in".parse().unwrap()), "{method} {headers:?}");
+    }
+    let (status, res, _) = guarded(&router, "POST", "/mine", None, &[("corten", "action")]).await;
+    assert_eq!((status, &res["corten-location"]), (StatusCode::NO_CONTENT, &"/sign-in".parse().unwrap()));
+    let (status, res, body) = guarded(&router, "GET", "/mine", None, &[("accept", "application/json")]).await;
+    assert_eq!((status, &body[..]), (StatusCode::UNAUTHORIZED, r#"{"title":"Unauthorized","status":401}"#), "a data client");
+    assert_eq!(res["content-type"], "application/problem+json");
+
+    let (status, res, _) = guarded(&router, "GET", "/moved", None, &[("accept", "text/html")]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "the status with_status gave");
+    assert!(!res.contains_key("location"));
+    let (status, _, body) = guarded(&router, "GET", "/moved", None, &[("accept", "application/json")]).await;
+    assert_eq!((status, &body[..]), (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404,"detail":"not yours"}"#));
+    // Without a message of its own, a refusal moved to 404 says what any 404 does, not that it was a 403.
+    let json = [("accept", "application/json")];
+    let (hidden, gone) =
+        (guarded(&router, "GET", "/hidden", None, &json).await, guarded(&router, "GET", "/gone", None, &json).await);
+    assert_eq!((hidden.0, &hidden.2), (gone.0, &gone.2));
 }
 
 #[cfg(feature = "json")]
@@ -8898,6 +9772,120 @@ impl crate::Middleware for DenyMore {
 }
 
 crate::assets::embed!(struct RefusedStatic = "src/assets/fixture");
+crate::assets::embed!(struct IconStatic = "src/assets/favicon-ico");
+crate::assets::embed!(struct SvgIconStatic = "src/assets/favicon-svg");
+
+#[crate::routes]
+mod favicon_url {
+    #[route("/favicon.ico", get = own_icon)]
+    pub struct OwnIcon;
+}
+
+#[crate::routes(api = RootApi)]
+mod root_api {
+    #[route("/")]
+    pub struct RootApi;
+
+    #[route("/v1/ping", get = root_ping)]
+    pub struct RootPing;
+}
+
+async fn root_ping() -> &'static str {
+    "pong"
+}
+
+#[crate::routes(api = IconApiRoot)]
+mod icon_api {
+    #[route("/")]
+    pub struct IconApiRoot;
+
+    #[route("/favicon.ico", get = own_icon)]
+    pub struct ApiIcon;
+}
+
+async fn own_icon() -> &'static str {
+    "the app's own"
+}
+
+/// `/favicon.ico`, which browsers ask for on their own, is the static directory's icon at a fixed
+/// path: its `favicon.ico` when it has one, else its `favicon.svg`, each as its type with a
+/// day's cache and its ETag, and a 304 for a cache that has it. No page is drawn (#1056).
+#[tokio::test]
+async fn the_favicon_path_is_the_static_directory_s_icon() {
+    let ico = App::new(policy_url::router()).assets(IconStatic).router();
+    let svg = App::new(policy_url::router()).assets(SvgIconStatic).router();
+    for (router, kind, bytes) in [
+        (ico, "image/x-icon", &include_bytes!("assets/favicon-ico/favicon.ico")[..]),
+        (svg, "image/svg+xml", &include_bytes!("assets/favicon-svg/favicon.svg")[..]),
+    ] {
+        let res = router.clone().oneshot(Request::get("/favicon.ico").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{kind}");
+        assert_eq!(res.headers()[header::CONTENT_TYPE], kind);
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "public, max-age=86400", "{kind}");
+        let etag = res.headers()[header::ETAG].clone();
+        assert_eq!(&res.into_body().collect().await.unwrap().to_bytes()[..], bytes, "{kind}");
+        // Compared weakly: the tag as sent, marked weak by a proxy, in a list, or `*`.
+        let tag = etag.to_str().unwrap();
+        let strong = tag.strip_prefix("W/").unwrap_or(tag);
+        let weak = format!("W/{strong}");
+        let listed = format!(r#""other", {}"#, etag.to_str().unwrap());
+        for tag in [tag, strong, &weak, &listed, "*"] {
+            let again = Request::get("/favicon.ico").header(header::IF_NONE_MATCH, tag).body(Body::empty()).unwrap();
+            assert_eq!(router.clone().oneshot(again).await.unwrap().status(), StatusCode::NOT_MODIFIED, "{kind}: {tag}");
+        }
+        let head = router.oneshot(Request::head("/favicon.ico").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(
+            (head.status(), &head.headers()[header::CONTENT_TYPE]),
+            (StatusCode::OK, &kind.parse::<header::HeaderValue>().unwrap())
+        );
+        assert!(head.into_body().collect().await.unwrap().to_bytes().is_empty(), "{kind}: HEAD has no body");
+    }
+}
+
+/// An API at `/` leaves `/favicon.ico` to Corten, the icon or the empty 404 whatever the client
+/// accepts, unless the API has a route there (#1056).
+#[tokio::test]
+async fn an_api_at_the_root_leaves_the_favicon_path_to_corten_unless_it_has_a_route_there() {
+    let icon = App::new(Routes::new()).assets(IconStatic).api(root_api::api).router();
+    let (status, headers, _) = call_with(icon, "GET", "/favicon.ico", None, Some("application/json")).await;
+    assert_eq!(
+        (status, &headers[header::CONTENT_TYPE]),
+        (StatusCode::OK, &"image/x-icon".parse::<header::HeaderValue>().unwrap())
+    );
+    for accept in ["text/html", "application/json"] {
+        // The API's own settings (its middleware here) are not Corten's route's, as for the
+        // health checks.
+        let none = App::new(Routes::new()).api(|routes| root_api::api(routes).middleware(Stamp)).router();
+        let (status, headers, body) = call_with(none.clone(), "GET", "/favicon.ico", None, Some(accept)).await;
+        assert_eq!((status, body.as_str()), (StatusCode::NOT_FOUND, ""), "{accept}");
+        assert!(!headers.contains_key(header::CONTENT_TYPE), "{accept}: not the API's problem document");
+        assert!(!headers.contains_key("x-request-id"), "{accept}: the API's middleware does not run");
+        let (_, headers, _) = call_with(none, "GET", "/v1/ping", None, Some(accept)).await;
+        assert_eq!(headers["x-request-id"], "r-1", "{accept}: it does for the API's routes");
+    }
+    let (_, _, body) = call_with(App::new(Routes::new()).api(root_api::api).router(), "GET", "/nope", None, None).await;
+    assert!(body.starts_with('{'), "another unknown URL is the API's: {body}");
+    let own = App::new(Routes::new()).assets(IconStatic).api(icon_api::api).router();
+    let (status, _, body) = call_with(own, "GET", "/favicon.ico", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "the app's own"));
+}
+
+/// A route of the app's that matches `/favicon.ico` by a parameter or a catch-all takes it too,
+/// as the router would pick it with no route of Corten's there (#1056).
+#[tokio::test]
+async fn a_catch_all_route_keeps_the_favicon_path() {
+    let router = App::new(leading_url::router()).assets(IconStatic).router();
+    let (status, _, body) = call_with(router, "GET", "/favicon.ico", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "favicon.ico"));
+}
+
+/// A route of the app's at `/favicon.ico` answers it, not Corten's (#1056).
+#[tokio::test]
+async fn an_app_route_at_the_favicon_path_takes_it() {
+    let router = App::new(favicon_url::router()).assets(IconStatic).router();
+    let (status, _, body) = call_with(router, "GET", "/favicon.ico", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "the app's own"));
+}
 
 /// An error page whose layout names a static file, as an app's does.
 async fn asset_error_page(failure: Failure, req: Req) -> HtmlResult {
@@ -9068,7 +10056,7 @@ async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_
 }
 
 /// A form whose writes carry a submit key.
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 #[allow(dead_code)]
 struct KeyedWrite {
     submit: crate::SubmitKey,
@@ -9909,9 +10897,39 @@ mod layout_reads {
         Ok(req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page or file"</p> } })?.into())
     }
 
+    /// A cart page whose route says it gives the count (`gives(CartCount)`), and does.
+    async fn gives_count(req: Req) -> HtmlResult {
+        Ok(req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })?.give::<CartCount>(7))
+    }
+
+    /// A page whose route says it gives the count, and does not.
+    async fn forgets_count(req: Req) -> HtmlResult {
+        req.page(Layout { req: &req, children: html! { <p>"forgot"</p> } })
+    }
+
+    /// A page whose route says it gives the count, which finds nothing.
+    async fn gives_but_gone(_req: Req) -> HtmlResult {
+        Err(Error::not_found())
+    }
+
     /// The shop's routes `#[corten::routes]` makes, which say what they answer.
     #[crate::routes]
     mod shop_url {
+        #[route("/given", get = gives_count, post = forgets_count, gives(CartCount))]
+        pub struct Given;
+
+        #[route("/forgot-plain", get = forgets_count)]
+        pub struct ForgotPlain;
+
+        #[route("/given-any", any = gives_count, gives(CartCount))]
+        pub struct GivenAny;
+
+        #[route("/forgot", get = forgets_count, gives(CartCount, SignedIn))]
+        pub struct Forgot;
+
+        #[route("/given-gone", get = gives_but_gone, gives(CartCount))]
+        pub struct GivenGone;
+
         #[route("/public", get = for_all)]
         pub struct ForAll;
 
@@ -9923,6 +10941,16 @@ mod layout_reads {
 
         #[route("/page-or-file", get = page_or_file)]
         pub struct PageOrFile;
+    }
+
+    /// A handler's own check refuses the request (#890).
+    async fn not_yours() -> crate::Result<HtmlResponse> {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        Err(crate::Refused::forbidden().into())
+    }
+
+    async fn handler_slows() -> crate::Result<HtmlResponse> {
+        Err(crate::Refused::too_many(Duration::from_secs(2)).into())
     }
 
     fn shop(count: CartCount, page_delay: Duration) -> Router {
@@ -9969,6 +10997,8 @@ mod layout_reads {
             .route("/down", get(|_req: Req| async move { (StatusCode::SERVICE_UNAVAILABLE, "down for maintenance") }))
             .route("/gone", get(|_req: Req| async move { Err::<HtmlResponse, _>(Error::not_found()) }))
             .route("/refuse-write", axum::routing::post(|_req: Req| async move { crate::Refused::forbidden().into_response() }))
+            .route("/not-yours", get(not_yours))
+            .route("/handler-slows", get(handler_slows))
             .route(
                 "/who",
                 get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"who"</p> } }) }),
@@ -9999,6 +11029,32 @@ mod layout_reads {
             .layout_read(SignedIn)
             .middleware(AsViewer(Some("ada")))
             .router()
+    }
+
+    /// With no icon in the static directory, `/favicon.ico` is a 404 with no body that starts no
+    /// layout read and draws no page, where any other unknown URL is the error page in the layout
+    /// with its reads (#1056).
+    #[tokio::test]
+    async fn the_favicon_path_without_an_icon_is_a_404_that_reads_nothing() {
+        let count = CartCount::default();
+        let req = Request::get("/favicon.ico").header("accept", "image/avif,image/webp,*/*").body(Body::empty()).unwrap();
+        let res = shop(count.clone(), Duration::ZERO).oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "public, max-age=3600", "an hour, so an icon added is seen soon");
+        assert!(res.into_body().collect().await.unwrap().to_bytes().is_empty(), "no page");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0, "no layout read");
+        // The icon, in an app with the same reads.
+        let icon = App::new(Routes::new()).assets(IconStatic).layout_read(count.clone()).router();
+        let (status, headers, _) = call_with(icon, "GET", "/favicon.ico", None, None).await;
+        assert_eq!(
+            (status, &headers[header::CONTENT_TYPE]),
+            (StatusCode::OK, &"image/x-icon".parse::<header::HeaderValue>().unwrap())
+        );
+        assert_eq!(count.started.load(Ordering::SeqCst), 0, "no layout read for the icon");
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/no-such-page", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "another unknown URL reads the layout's values");
     }
 
     #[tokio::test]
@@ -10058,6 +11114,70 @@ mod layout_reads {
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(count.finished.load(Ordering::SeqCst), 0, "neither read ran to its end");
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "a write that redirects starts none");
+    }
+
+    /// `gives(CartCount)`: the route's page gives the count, so the read is never started (#869),
+    /// and the other reads are.
+    #[tokio::test]
+    async fn a_route_that_gives_a_read_does_not_start_it() {
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/given", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<header>Cart <span class="count">7</span><b>ada</b></header>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0, "never started");
+        // Its error page is not the page that gives it: started there, and drawn.
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/given-gone", None, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>404</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started for the error page");
+        // An `any = ..` route serves `GET` too.
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/given-any", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<span class="count">7</span>"#), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+        // `gives` is about its `GET`: a write that draws a page starts the reads it draws, and a
+        // `HEAD` starts none.
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "POST", "/given", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>forgot</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1);
+        let count = CartCount::default();
+        let (status, _, _) = call_with(shop(count.clone(), Duration::ZERO), "HEAD", "/given", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+    }
+
+    /// A route that says it gives a read whose page does not: a debug build refuses the page; a
+    /// release build draws nothing there.
+    #[tokio::test]
+    async fn a_route_that_says_it_gives_a_read_and_does_not_is_refused_in_debug() {
+        // The same page from a route that does not say so draws the read.
+        let (status, _, body) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/forgot-plain", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains(r#"<span class="count">3</span>"#), "{body}");
+        let count = CartCount::default();
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/forgot", None, None).await;
+        assert_eq!(count.started.load(Ordering::SeqCst), 0);
+        if cfg!(debug_assertions) {
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+            // Named where a router test, with no logger and outside `corten dev`, sees it: on the
+            // default error page, which draws the failure's detail, behind the app's middleware.
+            let router = App::new(shop_url::router())
+                .layout_read(CartCount::default())
+                .layout_read(SignedIn)
+                .middleware(AsViewer(Some("ada")))
+                .dev(false)
+                .router();
+            let (status, _, body) = call_with(router, "GET", "/forgot", None, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+            assert!(body.contains("layout_reads::CartCount) off the route") && body.contains("did not give it"), "{body}");
+        } else {
+            assert_eq!(status, StatusCode::OK);
+            assert!(body.contains("<header>Cart </header>") && body.contains("<p>forgot</p>"), "{body}");
+        }
     }
 
     #[tokio::test]
@@ -10131,6 +11251,28 @@ mod layout_reads {
         assert!(body.contains("<header>Cart <b>guest</b></header>") && body.contains("<p>404</p>"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 1, "started for the error page");
         assert_eq!(count.finished.load(Ordering::SeqCst), 0);
+    }
+
+    /// A handler's own refusal (`Err(Refused::forbidden())?`) is the request's fault, as an
+    /// extractor's is: its error page waits for the reads and draws them (#890). A 429 from it
+    /// keeps its `Retry-After` and, as an extractor's 429, waits for none.
+    #[tokio::test]
+    async fn a_handlers_refusal_is_answered_as_an_extractors() {
+        let count = CartCount { delay: Duration::from_millis(30), ..CartCount::default() };
+        let (status, _, body) = call_with(shop(count.clone(), Duration::ZERO), "GET", "/not-yours", None, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+        assert_eq!(count.started.load(Ordering::SeqCst), 1, "started once, by the route");
+
+        let at = std::time::Instant::now();
+        let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
+        let res = shop(slow, Duration::ZERO)
+            .oneshot(Request::get("/handler-slows").header("accept", "text/html").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(res.headers().get("retry-after").and_then(|v| v.to_str().ok()), Some("2"));
+        assert!(at.elapsed() < Duration::from_secs(1), "{:?}", at.elapsed());
     }
 
     #[tokio::test]
@@ -10762,6 +11904,58 @@ mod layout_reads {
         assert_eq!(status, StatusCode::OK, "{body}");
     }
 
+    #[derive(crate::view::Id)]
+    struct PartNavId;
+
+    /// An element of the layout marked `page` is sent with a navigation, as `<main>` is, so a place
+    /// for a layout read in it is an error on a full load too; one beside it (a `<nav>` of the same
+    /// name inside it included) is not.
+    // A debug build's check.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_place_for_a_read_inside_an_element_marked_page_is_an_error() {
+        let page = |in_part: bool| {
+            get(move |req: Req| async move {
+                req.page::<ForOne>(html! {
+                    <html>
+                        <head>
+                            <title>"Shop"</title>
+                            <Corten />
+                        </head>
+                        <body>
+                            <nav page id={PartNavId}>
+                                <nav>"Sections"</nav>
+                                if in_part {
+                                    {later::<CartCount>()}
+                                }
+                            </nav>
+                            <header>
+                                if !in_part {
+                                    {later::<CartCount>()}
+                                }
+                            </header>
+                            <main>"Shop"</main>
+                        </body>
+                    </html>
+                })
+            })
+        };
+        let routes = Router::new().route("/part", page(true)).route("/beside", page(false));
+        let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).router();
+        for mode in [Some("nav"), None] {
+            let (status, _, body) = call_with(router.clone(), "GET", "/part", mode, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{mode:?}: {body}");
+        }
+        let (status, _, body) = call_with(router.clone(), "GET", "/beside", None, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#"<nav data-corten-page id="part-nav"><nav>Sections</nav></nav>"#), "{body}");
+        let (status, _, body) = call_with(router, "GET", "/beside", Some("nav"), None).await;
+        assert_eq!(
+            (status, body.as_str()),
+            (StatusCode::OK, r#"<title>Shop</title><nav data-corten-page id="part-nav"><nav>Sections</nav></nav>Shop"#)
+        );
+    }
+
     /// An answer type of the app's own that wraps a page and does not say it is one.
     struct Wrapped(HtmlResponse);
 
@@ -10794,9 +11988,11 @@ mod layout_reads {
     #[tokio::test]
     async fn a_page_whose_answer_type_is_not_a_page_is_an_error() {
         let count = CartCount::default();
-        let router = App::new(wrapped_url::router()).layout_read(count.clone()).router();
+        let router = App::new(wrapped_url::router()).layout_read(count.clone()).layout_read(SignedIn).dev(false).router();
         let (status, _, body) = call_with(router, "GET", "/wrapped", None, None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        // Named where a router test, with no logger and outside `corten dev`, sees it.
+        assert!(body.contains("layout_reads::CartCount&gt;()") && body.contains("(Answer::PAGE)"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }
 
@@ -10874,6 +12070,46 @@ mod layout_reads {
         }
     }
 
+    /// The app's middleware, refusing what the route answered as the request's fault (an error
+    /// page that waits for its reads).
+    struct ForbidAfter;
+
+    impl crate::Middleware for ForbidAfter {
+        async fn call(&self, req: axum::extract::Request, next: impl crate::middleware::Next) -> axum::response::Response {
+            let _ = next.run(req).await;
+            axum::response::IntoResponse::into_response(crate::Refused::forbidden())
+        }
+    }
+
+    /// The shop's pages behind middleware that refuses each after it was filled: `/page` draws its
+    /// reads, `/cart` gives the count, and `/given` gives it and says so (`gives(CartCount)`).
+    fn refused_after<M: crate::Middleware>(count: CartCount, refuse: M) -> Router {
+        let typed = shop_url::router();
+        let routes = Router::new()
+            .route(
+                "/page",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page"</p> } }) }),
+            )
+            .route(
+                "/cart",
+                get(|req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })
+                        .map(|page| page.give::<CartCount>(7))
+                }),
+            );
+        App::new(Routes(typed.0.merge(routes), typed.1))
+            .error_page(
+                |failure: Failure, req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
+                },
+                (),
+            )
+            .layout_read(count)
+            .layout_read(SignedIn)
+            .middleware((AsViewer(Some("ada")), refuse))
+            .router()
+    }
+
     /// A read in by the time the route answers with no page stays for the error page the app's
     /// middleware turns the answer into.
     #[tokio::test]
@@ -10901,6 +12137,67 @@ mod layout_reads {
         let (status, _, body) = call_with(router, "GET", "/away", None, None).await;
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert!(body.contains(r#"<span class="count">3</span>"#) && body.contains("<p>403</p>"), "{body}");
+    }
+
+    /// What a whole document that draws two layout reads costs: `READ_PAGES` (200) requests in
+    /// process, one at a time. Counting it under callgrind at two numbers of requests gives the
+    /// instructions per request. Run in release:
+    /// `READ_PAGES=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_a_page_with_layout_reads_costs`
+    #[test]
+    #[ignore]
+    fn what_a_page_with_layout_reads_costs() {
+        let pages: usize = std::env::var("READ_PAGES").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        // `READ_GIVES=1`: a page that gives the count itself (`give`), the other read drawn.
+        let gives = std::env::var("READ_GIVES").is_ok_and(|v| v == "1");
+        let routes = Router::new()
+            .route(
+                "/page",
+                get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: html! { <p>"page"</p> } }) }),
+            )
+            .route(
+                "/cart",
+                get(|req: Req| async move {
+                    req.page::<ForOne>(Layout { req: &req, children: html! { <p>"cart"</p> } })
+                        .map(|page| page.give::<CartCount>(7))
+                }),
+            );
+        let router = App::new(Routes::from(routes))
+            .layout_read(CartCount::default())
+            .layout_read(SignedIn)
+            .middleware(AsViewer(Some("ada")))
+            .router();
+        let (path, count) = if gives { ("/cart", 7) } else { ("/page", 3) };
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            for _ in 0..pages {
+                let (status, _, body) = call_with(router.clone(), "GET", path, None, None).await;
+                assert!(status == StatusCode::OK && body.contains(&format!(r#"<span class="count">{count}</span>"#)), "{body}");
+            }
+        });
+    }
+
+    /// A page the app's middleware throws away after it was filled, answering an error itself: the
+    /// error page draws the values the page drew, its reads' and those it gave, without reading
+    /// them again, whether the error page waits for its reads (a refusal, the request's fault) or
+    /// not (a bare 403) (#911).
+    #[tokio::test]
+    async fn the_error_page_middleware_makes_of_a_filled_page_draws_its_values() {
+        // The page's path, the count it drew, and how many times the count is read.
+        for (path, drawn, reads) in [("/page", 3, 1), ("/cart", 7, 1), ("/given", 7, 0)] {
+            for forbid in [false, true] {
+                let count = CartCount::default();
+                let router =
+                    if forbid { refused_after(count.clone(), ForbidAfter) } else { refused_after(count.clone(), RefuseAfter) };
+                let (status, _, body) = call_with(router, "GET", path, None, None).await;
+                let case = format!("{path}, forbidden {forbid}: {body}");
+                assert_eq!(status, StatusCode::FORBIDDEN, "{case}");
+                assert!(!body.contains("<p>page</p>") && body.contains("<p>403</p>"), "{case}");
+                let header = format!(r#"<header>Cart <span class="count">{drawn}</span><b>ada</b></header>"#);
+                assert!(body.contains(&header), "{case}");
+                assert!(body.contains(&format!(r#"<footer><span class="count">{drawn}</span></footer>"#)), "{case}");
+                assert_eq!(count.started.load(Ordering::SeqCst), reads, "{case}");
+            }
+        }
     }
 
     /// A read that finishes on the same tick the route answers is in by the time it answered: the
@@ -11068,4 +12365,67 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
             .collect()
     ));
     assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
+}
+
+/// An error's message (`Display`) is its source's, what the log says, and `status_code` the
+/// status of the answer it makes, for each way an error is made: checked against the answer, so
+/// the two cannot drift apart.
+#[test]
+fn an_error_says_its_message_and_status() {
+    let sign_in: axum::http::Uri = "https://id.example/sign-in".parse().unwrap();
+    /// What it is, how it is made, its message and its status.
+    type Case = (&'static str, Box<dyn Fn() -> Error>, &'static str, StatusCode);
+    let cases: Vec<Case> = vec![
+        ("new", Box::new(|| Error::new("no item 7")), "no item 7", StatusCode::INTERNAL_SERVER_ERROR),
+        (
+            "with_status",
+            Box::new(|| Error::new("no item 7").with_status(StatusCode::NOT_FOUND)),
+            "no item 7",
+            StatusCode::NOT_FOUND,
+        ),
+        ("not_found", Box::new(Error::not_found), "Not Found", StatusCode::NOT_FOUND),
+        ("status", Box::new(|| Error::status(StatusCode::CONFLICT)), "Conflict", StatusCode::CONFLICT),
+        (
+            "?",
+            Box::new(|| std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset").into()),
+            "connection reset",
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
+        (
+            "refused, said",
+            Box::new(|| crate::Refused::forbidden().message("not yours").into()),
+            "not yours",
+            StatusCode::FORBIDDEN,
+        ),
+        ("refused", Box::new(|| crate::Refused::forbidden().into()), "refused: 403 Forbidden", StatusCode::FORBIDDEN),
+        // The log keeps the cause a 404 hides from the client: the app's to send or not.
+        (
+            "refused, hidden",
+            Box::new(|| Error::from(crate::Refused::forbidden()).with_status(StatusCode::NOT_FOUND)),
+            "refused: 403 Forbidden",
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "sign-in",
+            Box::new(move || crate::Refused::sign_in(&sign_in).into()),
+            "refused: 401 Unauthorized",
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "too many",
+            Box::new(|| crate::Refused::too_many(Duration::from_secs(30)).into()),
+            "refused: 429 Too Many Requests",
+            StatusCode::TOO_MANY_REQUESTS,
+        ),
+        (
+            "unavailable",
+            Box::new(|| crate::Refused::unavailable("sessions are down").into()),
+            "who is asking cannot be known: sessions are down",
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ];
+    for (case, error, message, status) in cases {
+        assert_eq!((error().to_string().as_str(), error().status_code()), (message, status), "{case}");
+        assert_eq!(error().into_response().status(), status, "{case}: the answer has the status read");
+    }
 }

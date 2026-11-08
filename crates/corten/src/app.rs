@@ -646,7 +646,9 @@ impl<M: Middleware> App<M> {
     }
 
     /// How long a handler may take to answer (30 seconds unless set). Past it the client gets
-    /// the 503 error page, the handler's future is dropped, and the request's [`crate::Signal`]
+    /// the 503 error page (a 408 when the handler was waiting for the client to send the body, as
+    /// for an upload that stopped: the request did not arrive in time; the 413 while a body over its
+    /// limit is read past), the handler's future is dropped, and the request's [`crate::Signal`]
     /// aborts with [`crate::Abort::Deadline`] for work the handler spawned. It bounds the time to
     /// the response's start, so a stream (a feed, server-sent events) runs as long as it needs;
     /// reading the request body counts, so an app that takes large uploads raises it. `None`
@@ -1064,6 +1066,9 @@ impl<M: Middleware> App<M> {
                 mount.inherit(around);
             }
         }
+        for (mount, _) in &self.apis {
+            mount.finish();
+        }
         self.apis.reverse();
         for area in &self.areas {
             if let Some((mount, ..)) = self.apis.iter().find(|(mount, ..)| mount.contains(area.prefix)) {
@@ -1136,6 +1141,18 @@ impl<M: Middleware> App<M> {
         if let Some(assets) = &assets {
             own.prefixes.push(assets.mount_prefix());
             routes = routes.merge(assets.routes());
+        }
+        // The icon browsers ask for on their own, unless a route of the app's matches the path
+        // (a catch-all or a parameter one too, whatever its methods), as the router would pick it.
+        let favicon = crate::assets::FAVICON_PATH;
+        let api_paths: Vec<(&'static str, bool)> = self.api_paths.iter().map(|path| (*path, true)).collect();
+        let taken = std::iter::once(&self.pages[..])
+            .chain(self.areas.iter().map(|area| &area.pages[..]))
+            .chain(std::iter::once(&api_paths[..]))
+            .any(|routes| crate::route::chosen(routes, favicon).is_some());
+        if !taken {
+            own.exact.push(favicon);
+            routes = routes.merge(crate::assets::favicon(assets.as_ref()));
         }
         routes = routes.merge(match self.ready {
             None => crate::health(|| async { true }),
@@ -1313,7 +1330,7 @@ impl<M: Middleware> From<App<M>> for Router {
 /// shutdown is quick: `corten::serve(App::new(routes)).await`. Without `HOST` it listens on the
 /// loopback addresses, `127.0.0.1` and `[::1]`, so `http://localhost:PORT` answers at once
 /// however the system resolves `localhost`; `PORT` defaults to 3000. With feature `log`, prints
-/// logs to stderr (`RUST_LOG` style filtering is the app's choice: set its own subscriber first).
+/// logs to stdout (`RUST_LOG` style filtering is the app's choice: set its own subscriber first).
 ///
 /// Shutdown, on the first Ctrl-C or `SIGTERM`: the app's [tasks](App::task) are told to stop,
 /// live streams end, the listeners close, requests in progress finish (a connection still
@@ -1363,7 +1380,7 @@ where
     M: Middleware,
 {
     #[cfg(feature = "log")]
-    let _ = tracing_subscriber::fmt().with_target(false).try_init();
+    crate::log::init();
     if listeners.is_empty() {
         return Err(std::io::Error::other("corten::serve_on: no listeners to serve on"));
     }
@@ -1391,7 +1408,7 @@ where
     M: Middleware,
 {
     #[cfg(feature = "log")]
-    let _ = tracing_subscriber::fmt().with_target(false).try_init();
+    crate::log::init();
     if listeners.is_empty() {
         return Err(std::io::Error::other("corten::serve_wrapped: no listeners to serve on"));
     }
@@ -1677,7 +1694,8 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
     }
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
-        let req = req.map(axum::body::Body::new);
+        // Marks a read of the body that waits for the client, for the deadline (#1061).
+        let req = req.map(|body| axum::body::Body::new(crate::extract::Arriving(body)));
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         if let Some(bound) = &self.bound {
             bound.arrived();
@@ -1990,7 +2008,7 @@ impl<S: Steps> Layer<S> {
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let (mut res, caller, mode) = self.run(req, route, mount, deadline, scope).await;
+        let (mut res, caller, (mode, fetched)) = self.run(req, route, mount, deadline, scope).await;
         #[cfg(debug_assertions)]
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;
@@ -2009,8 +2027,9 @@ impl<S: Steps> Layer<S> {
         let seen = Seen {
             credentials,
             caller,
-            // A page route answers several forms at one URL; only the full document may be shared.
-            partial: mount.is_none() && mode != Mode::Document,
+            // A page route answers several forms at one URL; only the full document may be shared,
+            // and not as the runtime fetched it (`corten: page`), whose redirect differs (#1034).
+            partial: mount.is_none() && (mode != Mode::Document || fetched),
             nonce: nonced,
             dev: self.shared.dev,
         };
@@ -2031,7 +2050,7 @@ impl<S: Steps> Layer<S> {
     /// sent it ([`Failure::CrossSite`]), with the signal that ends with its answer; otherwise the
     /// status line answers it.
     fn cross_site(&self, req: &mut Request) -> Option<(Asked, Watch)> {
-        let mode = page::Mode::of(req.headers());
+        let (mode, fetched) = page::Mode::asked(req.headers());
         let browser = matches!(mode, Mode::Navigation | Mode::Action)
             || (mode == Mode::Document
                 && req.headers().get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("text/html")));
@@ -2042,7 +2061,7 @@ impl<S: Steps> Layer<S> {
         // state (its static files, head tags, import map, the visitor's zone) from it.
         let watch = Watch(self.signal(req.headers()));
         req.extensions_mut().insert(watch.0.clone());
-        Some((Asked::new(req, self.shared.clone(), Credentials::of(req.headers())), watch))
+        Some((Asked::new(req, &self.shared, Credentials::of(req.headers()), (mode, fetched)), watch))
     }
 
     /// Whether a streamed answer's fragments are written in the visitor's zone
@@ -2067,7 +2086,8 @@ impl<S: Steps> Layer<S> {
         Signal::for_app(self.shared.clone())
     }
 
-    /// The response, whether anything read who is asking, and the request's mode.
+    /// The response, whether anything read who is asking, and the request's mode with whether the
+    /// runtime sent it ([`page::Mode::asked`]).
     async fn run<'a>(
         &'a self,
         mut req: Request,
@@ -2075,12 +2095,12 @@ impl<S: Steps> Layer<S> {
         api: Option<&Mount>,
         deadline: Option<Duration>,
         scope: S::Scope<'a>,
-    ) -> (Response, bool, Mode) {
+    ) -> (Response, bool, (Mode, bool)) {
         // Dropped with this future if the client leaves first; then the response's. The zone the
         // browser reported is read once, here.
         let watch = Watch(self.signal(req.headers()));
         req.extensions_mut().insert(watch.0.clone());
-        let mode = page::Mode::of(req.headers());
+        let mode = page::Mode::asked(req.headers());
         let next = Next { steps: &self.steps, scope, route };
         let res = page::render_errors(&self.shared, req, next, deadline, &watch.0, api, mode).await;
         let personal = watch.0.is_personal();

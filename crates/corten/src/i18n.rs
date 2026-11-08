@@ -357,6 +357,7 @@ use crate::view::{escape_display, escape_into, AttrValue, Render};
 
 mod display_digits;
 mod format;
+pub(crate) use format::civil_from_days;
 mod visitor;
 
 pub(crate) use visitor::Scope;
@@ -1614,11 +1615,89 @@ mod tests {
         }
     }
 
+    /// `render` writes what `write` (`to_string`) does: the short path (a symbol's money and a
+    /// number under 1,000 with at most two fraction digits) and the rest, in every locale; and
+    /// every template the short path splits has one place for the digits.
+    #[test]
+    fn rendering_writes_what_display_does_in_every_locale() {
+        let locales: &[(&str, &__private::LocaleData)] = corten_macros::__all_locales!();
+        // `1 << 32` and above: a mantissa whose low 32 bits alone would pass for a short one.
+        let mantissas = [
+            0i128,
+            1,
+            5,
+            9,
+            10,
+            27,
+            99,
+            100,
+            101,
+            999,
+            1000,
+            9999,
+            12345,
+            99_999,
+            100_000,
+            123_456_789,
+            1 << 32,
+            (1 << 32) + 1234,
+            i128::from(u64::MAX),
+        ];
+        let mut checked = 0;
+        for (tag, data) in locales {
+            let mut values: Vec<Formatted> = Vec::new();
+            for code in ["USD", "EUR", "JPY", "KWD", "CHF", "INR", "GBP", "XXX", "BRL"] {
+                let currency = Currency::parse(code).unwrap();
+                for &n in &mantissas {
+                    for n in [n, -n] {
+                        values.push(Formatted::money(data, &Minor(n), currency));
+                        values.push(Formatted::signed_money(data, &Minor(n), currency));
+                    }
+                }
+            }
+            for &n in &mantissas {
+                for scale in [0u8, 1, 2, 3] {
+                    for n in [n, -n] {
+                        values.push(Formatted::number(data, Decimal::new(n, scale)));
+                        values.push(Formatted::percent(data, Decimal::new(n, scale), 1));
+                    }
+                }
+            }
+            // Negative zero (as parsed, or an amount that rounds to it) takes the loss's template.
+            let usd = Currency::parse("USD").unwrap();
+            for text in ["-0", "-0.0", "-0.00"] {
+                values.push(Formatted::number(data, Decimal::parse(text).unwrap()));
+                values.push(Formatted::money(data, &Decimal::parse(text).unwrap(), usd));
+            }
+            values.push(Formatted::money(data, &Decimal::parse("-0.001").unwrap(), usd));
+            values.push(Formatted::change(data, Decimal::parse("0.0123").unwrap(), 1));
+            // One place for the digits in every symbol template and number template, which the
+            // short path assumes.
+            for &(key, positive, loss) in data.currencies {
+                assert!([positive, loss].iter().all(|t| t.matches('\u{1}').count() == 1), "{tag} {}", code_of(key));
+            }
+            assert!(data.number.iter().all(|t| t.matches('\u{1}').count() == 1), "{tag}");
+            for v in &values {
+                let mut rendered = String::new();
+                crate::view::Render::render(v, &mut rendered);
+                assert_eq!(rendered, v.to_string(), "{tag}");
+                checked += 1;
+            }
+        }
+        assert!(checked > 50_000, "{checked}");
+    }
+
     /// Every case `scripts/locale-data.mjs` had Intl write, for every locale: numbers, money and
     /// dates in fixed zones.
     #[test]
     fn every_locale_writes_numbers_money_and_dates_as_intl_does() {
         let locales: &[(&str, &__private::LocaleData)] = corten_macros::__all_locales!();
+        let rendered = |f: Formatted, expected: &str, line: &str| {
+            let mut out = String::new();
+            crate::view::Render::render(&f, &mut out);
+            assert_eq!(out, expected, "rendered: {line}");
+            f.to_string()
+        };
         let mut checked = 0;
         for line in include_str!("i18n/cases.tsv").lines().filter(|l| !l.starts_with('#') && !l.is_empty()) {
             let mut cols = line.split('\t');
@@ -1626,7 +1705,8 @@ mod tests {
                 (cols.next().unwrap(), cols.next().unwrap(), cols.next().unwrap(), cols.next().unwrap());
             let data = locales.iter().find(|(t, _)| *t == tag).expect(tag).1;
             let ours = match kind.split(' ').collect::<Vec<_>>()[..] {
-                ["number"] => Formatted::number(data, Decimal::parse(input).unwrap()).to_string(),
+                // A number and money are also rendered, as `html!` writes them (its short path).
+                ["number"] => rendered(Formatted::number(data, Decimal::parse(input).unwrap()), expected, line),
                 ["percent", digits] => {
                     Formatted::percent(data, Decimal::parse(input).unwrap(), digits.parse().unwrap()).to_string()
                 }
@@ -1635,7 +1715,11 @@ mod tests {
                 }
                 ["money"] => {
                     let (amount, code) = input.split_once(' ').unwrap();
-                    Formatted::money(data, &Decimal::parse(amount).unwrap(), Currency::parse(code).unwrap()).to_string()
+                    rendered(
+                        Formatted::money(data, &Decimal::parse(amount).unwrap(), Currency::parse(code).unwrap()),
+                        expected,
+                        line,
+                    )
                 }
                 ["signed_money"] => {
                     let (amount, code) = input.split_once(' ').unwrap();

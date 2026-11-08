@@ -5,6 +5,12 @@
 Both sides use one idea, the web's `AbortSignal`: work belongs to something, and stops when
 that thing ends.
 
+In a browser handler, keep the original `signal` across an `await`. If an operation cannot take
+it (for example `navigator.clipboard.writeText`), check `signal.aborted` after the await before
+changing UI, dispatching an event or starting a timer. The same element may have left and
+returned while the operation ran: `isConnected` alone does not identify that earlier lifetime.
+CopyButton follows this rule; it cannot cancel the clipboard write itself.
+
 | Where | The signal | Aborts when |
 |---|---|---|
 | a handler | the `signal` keyword: `on:connect={js::watch(signal)}` | the element with the `on:` leaves the page; pass it to `addEventListener`, `fetch`, `subscribe` and `mount`, which is the only cleanup |
@@ -29,9 +35,12 @@ that connection finds it, so a connection given such state closes when it is dro
 ([a lock whose snapshot follows it](requests-and-forms.md#when-the-works-snapshot-must-follow-the-lock)). `App::deadline` (30 seconds unless set, `None` for
 none) bounds the time to a response's start and answers 503 with the error page; streams run as
 long as they need. It includes reading the request body, so an app that takes large uploads
-raises it. A client closing an HTTP/1.1 connection mid-request is seen at once (an
-integration test closes the socket and waits for `Disconnected`). The deadline's timer starts
-only when a handler waits, so a page rendered from memory registers none.
+raises it. A deadline that finds the handler waiting for more of the body is the client's 408
+instead (the request had not arrived whole in time; a 413 while a body over its limit is read
+past), and is warned of as the 503 is ([design.md, Choice 30](../design.md#choice-deadline-body)).
+A client closing an HTTP/1.1 connection mid-request is seen at once (an integration test closes
+the socket and waits for `Disconnected`). The deadline's timer starts only when a handler waits,
+so a page rendered from memory registers none.
 
 Routes that start their answer later than pages should (an upstream that answers in minutes, a
 report, large uploads) get a deadline of their own where they are mounted, so the rest of the
@@ -49,9 +58,9 @@ App::new(url::router())
     .api::<Proxy>(|proxy| proxy.route::<Compact>(post(compact)).deadline(Duration::from_secs(600)))
 ```
 
-Each answers the same way past it: the 503 (the error page, or JSON under an API) and
-`Abort::Deadline`. `None` removes it for those routes only. A single slow route goes in an area
-or an API of its own.
+Each answers the same way past it: the 503 (the error page, or JSON under an API), or the 408
+while the handler waits for the body, and `Abort::Deadline`. `None` removes it for those routes
+only. A single slow route goes in an area or an API of its own.
 
 ## Work that must finish
 

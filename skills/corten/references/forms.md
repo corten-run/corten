@@ -3,7 +3,7 @@
 ## A form that patches part of the page
 
 ```rust
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct GreetForm { name: String }
 
 fn home_page(req: &Req, name: &str) -> impl Document {
@@ -55,7 +55,9 @@ req.notice(), failed: false }, failed, .. }`; after a navigation the runtime dis
 toaster takes it). Render it
 once, in the layout: a full load shows it only where the page renders it. Its `failed` text is
 what it says when a `data-patch` submit gets no answer (`corten:error`); a screen that says that
-itself calls `preventDefault()` on the event. An action with no form to draw again (a button)
+itself calls `preventDefault()` on the event, in a handler typed `@param {CortenError} event`
+(`/** @import { CortenError } from "corten" */`; `CortenNotice` for `corten:notice`), never a
+`CustomEvent<..>` cast of its own. An action with no form to draw again (a button)
 that did not do what was asked answers its refusal (below: `Conflict`, `Gone`, `Upstream`, by why)
 with `req.invalid(&errors, Toast { message: errors.form(), failed: true }, page)`, a layout that
 takes the answer's `Toast` drawing it in the page: marked and kept like the failed text. `to` is a
@@ -71,7 +73,7 @@ Name the input with a `Files` field of the form struct and take `Upload<T>`, nev
 answers 415) or a raw body with a parser of your own:
 
 ```rust
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct NewListing { title: String, photos: Files }   // <input type="file" name={f.photos} multiple>
 
 async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
@@ -93,10 +95,22 @@ async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
 A body over `upload.limit` makes every read return `UploadError::TooLarge` (`?`: a 413 and the
 error page). To answer it in the form, put the reads in one `async` block returning
 `Result<_, UploadError>` and match `Err(UploadError::TooLarge { .. })` once; never compare
-statuses or check `Content-Length` by hand.
+statuses or check `Content-Length` by hand. A client that stops sending for a minute, or trickles
+the body in until it is a minute behind 240 bytes a second, is `UploadError::Stalled` (408);
+`upload.idle(d)` changes the minute, `upload.idle(None)` leaves only the route's deadline (never
+on a route with no deadline). A deadline that passes while the handler waits for the body (a
+page's 30 s comes before the minute) is a 408 as well, so no idle time needs setting under the
+deadline; never wrap the reads in a `tokio::time::timeout` of the handler's own.
 
 Types, counts and per-file sizes are the handler's checks, reported with `errors.add(f.photos, ..)`
 so the form is drawn again with the message beside the input.
+
+To show how much of an upload is sent, put `on:corten:progress={js::sending(event, bar)}` on the
+`data-patch` `<form method="post" enctype="multipart/form-data">` (each required at compile time; never on another element or `on:document:`; it does not bubble) and fill a
+native `<progress ref={bar}>` in a handler typed `@param {ProgressEvent} event`: `loaded` and
+`total` count the whole request. Once `loaded` reaches `total` the server is still working, so
+drop the bar's `value` (indeterminate) rather than say it is done; the form stays `aria-busy` until
+the answer is drawn. Never send the form with your own `XMLHttpRequest` or `fetch`.
 
 To serve an upload back, read its type from its first bytes (never `file.content_type()`, which is
 the client's word) and return `corten::Media::new("image/png", bytes)`. At a URL that names the
@@ -104,7 +118,11 @@ bytes (a hash), return `Public::immutable(answer)` so every cache keeps it for a
 cannot read who is asking. A download names its file with `.attachment("cards.csv")` (or
 `.inline(..)` to show it), which escapes the name; never set `Content-Disposition` yourself.
 Link to it with `download` (`data-reload` for an `inline` file), so the runtime does not fetch
-it on hover and again on click. Never build the response by hand. A download that may be
+it on hover and again on click. Never build the response by hand. An export too large to hold
+is `Media::stream(type, chunks)` (a stream of `Result<Bytes, E>`, chunks of some kilobytes;
+`Media::stream_sized` with an exact length for a progress bar): read what can fail first (the
+first page of rows), since a failure after it starts ends the download, not with an error page.
+Never use `Relay` for the app's own file. A download that may be
 refused returns `corten::Result<PageOr<Media>>` (`PageOr<Relay>` for a relayed file) and
 answers the page with why, or a redirect, with `.into()`; never relay a redirect of the app's own.
 Its form is a plain `method="post"` form: a file answered to a `data-patch` submit is not saved.
@@ -116,7 +134,7 @@ Its form is a plain `method="post"` form: a file answered to a `data-patch` subm
 nothing for an unchecked box:
 
 ```rust
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct ArchiveInput {
     #[serde(default)]
     ids: Vec<String>,   // one <input type="checkbox" name={f.ids} value={id}> per row
@@ -266,6 +284,6 @@ Keep the HTML attributes (`required`, `type="email"`, `inputmode`) too: the brow
 first, and the server check is the one that counts. A field required only for some values of
 another goes in `corten_ui::RequiredWhen` (`control={f.kind} values={&[Kind::Partial]}`), never a
 script of the app's, and the handler checks the same rule. A field with a fixed set of values
-(a select, radios, a `corten_ui::ComboBox`) is a `#[derive(UrlValue, Deserialize)]` enum in the form
+(a select, radios, a `corten_ui::ComboBox`) is a `#[derive(UrlValue)]` enum in the form
 struct, and the markup writes its variants (`value={Kind::Partial}`, `Choice { value: Kind::Partial, .. }`),
 not their words as strings.

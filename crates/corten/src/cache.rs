@@ -25,9 +25,10 @@
 //!   [`crate::Caller`] for it (an API key in a header of the app's own included), the response is
 //!   `private, no-cache`;
 //! - when it is not the full document (a client navigation, a form answer, a data client's JSON
-//!   from the same URL as the page), only the browser keeps it (`private`, same lifetime), so a
-//!   cache that ignores `Vary` cannot hand one form to another client. An [`crate::App::api`]
-//!   route has one form only, so it may be shared;
+//!   from the same URL as the page), or is the document as the runtime fetches it after a write
+//!   (`corten: page`, whose redirect to a place differs), only the browser keeps it (`private`,
+//!   same lifetime), so a cache that ignores `Vary` cannot hand one form to another client. An
+//!   [`crate::App::api`] route has one form only, so it may be shared;
 //! - a response that keeps a lifetime also varies on `cookie`: after the user signs in or out,
 //!   the browser fetches the page again instead of reusing the other one.
 //!
@@ -419,15 +420,13 @@ fn weak_tag(body: &[u8], headers: &HeaderMap) -> [u8; 20] {
     }
     let hash = hasher.finish();
     let mut tag = *b"W/\"0000000000000000\"";
-    for (i, digit) in tag[3..19].iter_mut().enumerate() {
-        *digit = b"0123456789abcdef"[(hash >> (60 - 4 * i)) as usize & 0xf];
-    }
+    crate::ascii::hex(hash, (&mut tag[3..19]).try_into().expect("16 bytes"));
     tag
 }
 
 /// Whether an `If-None-Match` line names `opaque` (a tag with its quotes, `W/` aside), compared
 /// weakly (RFC 9110 8.8.3.2), or is `*`. A line that does not parse names nothing.
-fn names(line: &[u8], opaque: &[u8]) -> bool {
+pub(crate) fn names(line: &[u8], opaque: &[u8]) -> bool {
     if line.trim_ascii() == b"*" {
         return true;
     }

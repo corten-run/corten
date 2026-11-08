@@ -2,7 +2,7 @@
 use corten::{Component, prelude::*};
 
 use crate::{
-    app::{Builder, Deck, DeckQuery, Sort},
+    app::{Builder, Deck, DeckQuery, Sort, url},
     cards::{Card, TOP_COST},
     text::Msg,
 };
@@ -15,15 +15,32 @@ corten::assets::embed! {
 mod collection_row;
 mod deck_builder;
 mod deck_line;
+mod deck_preview;
+mod draft_notes;
+mod preview_export;
 mod save_note;
 
 pub use collection_row::CollectionRow;
 pub use deck_builder::{DeckBuilder, DeckFormId};
 pub use deck_line::DeckLine;
+pub use deck_preview::{DeckEditor, DeckPreview, DeckSummary, PreviewHelp};
+pub use draft_notes::DraftNotes;
+pub use preview_export::PreviewExport;
 pub use save_note::{Answer, DeckAnswered, SaveNote};
 
 /// What the app lists in `App::components`: the scripts, the stylesheet and the rows' views.
-pub const COMPONENTS: &[Component] = &[DeckBuilder, CollectionRow, DeckLine, SaveNote];
+pub const COMPONENTS: &[Component] = &[
+    DeckBuilder,
+    CollectionRow,
+    DeckLine,
+    SaveNote,
+    DeckPreview,
+    DeckEditor,
+    DeckSummary,
+    DraftNotes,
+    PreviewExport,
+    PreviewHelp,
+];
 
 /// The document around the page.
 #[component]
@@ -48,6 +65,32 @@ pub fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
             </body>
         </html>
     }
+}
+
+/// The page for a failed request (`App::error_page`), in the layout, so a failure keeps the app's
+/// design and its way back; under `corten dev` it shows what went wrong.
+pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
+    let (title, text) = match failure {
+        Failure::NotFound => ("Not found", "There is nothing at this address."),
+        Failure::TimedOut | Failure::Offline | Failure::Unidentified { .. } => {
+            ("Not available", "Check your connection and try again.")
+        }
+        Failure::CrossSite => ("Not allowed", "This request came from another site."),
+        Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
+        Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
+            ("Something went wrong", "Please try again.")
+        }
+    };
+    req.page(html! {
+        <Layout req={&req} title={title}>
+            <h1>{title}</h1>
+            <p>{text}</p>
+            <p><a href={url::Home::default()}>"Back to the builder"</a></p>
+            if let Some(detail) = failure.detail() {
+                <pre>{detail}</pre>
+            }
+        </Layout>
+    })
 }
 
 /// A card in the deck, with its copies.

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="<%= content_for(:lang) || "en" %>">
   <head>
     <meta charset="utf-8">
     <title><%= content_for(:title) || "Card Market" %></title>
@@ -7,6 +7,7 @@
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
     <%= stylesheet_link_tag "style", "components", "data-turbo-track": "reload" %>
+    <%= yield :head %>
     <%= javascript_importmap_tags %>
   </head>
   <body>

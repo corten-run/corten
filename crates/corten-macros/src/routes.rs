@@ -30,6 +30,10 @@ struct Routed {
     prefetch: Option<TokenStream>,
     /// `no_store`: which handlers' answers are kept by no cache, as `NoStore` would make them.
     no_store: NoStore,
+    /// Its doc comment, a line per `///`, for its operations in an OpenAPI document.
+    doc: String,
+    /// `gives(CartCount)`: the layout reads its `GET` page gives itself, as written.
+    gives: Vec<TokenStream>,
 }
 
 /// Which of a route's handlers answer as `NoStore` would make them: none, every one (`no_store`),
@@ -68,6 +72,10 @@ struct Serves {
     prefetch_at: Option<Span>,
     /// `no_store` or `no_store(post)`: what those handlers answer is kept by no cache.
     no_store: NoStore,
+    /// `gives(CartCount)`: the layout reads its `GET` page gives itself.
+    gives: Vec<TokenStream>,
+    /// Where `gives(..)` is.
+    gives_at: Option<Span>,
 }
 
 /// What `#[corten::routes(..)]` says: what the handlers share (`state = Db`), the area the
@@ -79,6 +87,8 @@ struct Args {
     area: Option<TokenStream>,
     api: Option<TokenStream>,
     caller: Option<TokenStream>,
+    /// The API's route that serves its OpenAPI document (`openapi = ApiDoc`).
+    openapi: Option<TokenStream>,
 }
 
 /// Where a module's routes go: the app, an area or an API.
@@ -89,7 +99,7 @@ enum Kind {
 }
 
 fn parse_args(args: TokenStream) -> Result<Args, Error> {
-    const USAGE: &str = "#[corten::routes] takes the state the handlers share, the area or API the routes are in and the caller every handler takes, if any: #[corten::routes(state = Db, area = Admin, caller = Staff)] or #[corten::routes(api = ApiRoot)]";
+    const USAGE: &str = "#[corten::routes] takes the state the handlers share, the area or API the routes are in, the caller every handler takes and an API's OpenAPI document route, if any: #[corten::routes(state = Db, area = Admin, caller = Staff)] or #[corten::routes(api = ApiRoot, openapi = ApiDoc)]";
     let tokens: Vec<TokenTree> = args.into_iter().collect();
     let mut out = Args::default();
     for part in tokens.split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
@@ -101,6 +111,7 @@ fn parse_args(args: TokenStream) -> Result<Args, Error> {
                     "area" => &mut out.area,
                     "api" => &mut out.api,
                     "caller" => &mut out.caller,
+                    "openapi" => &mut out.openapi,
                     _ => return err(key.span(), USAGE),
                 };
                 if slot.is_some() {
@@ -110,6 +121,13 @@ fn parse_args(args: TokenStream) -> Result<Args, Error> {
             }
             [first, ..] => return err(first.span(), USAGE),
         }
+    }
+    if let (None, Some(document)) = (&out.api, &out.openapi) {
+        let span = document.clone().into_iter().next().map_or(Span::call_site(), |t| t.span());
+        return err(
+            span,
+            "openapi names the route an API serves its OpenAPI document at, so it goes with api: #[corten::routes(api = ApiRoot, openapi = ApiDoc)]",
+        );
     }
     if let (Some(_), Some(api)) = (&out.area, &out.api) {
         let span = api.clone().into_iter().next().map_or(Span::call_site(), |t| t.span());
@@ -122,7 +140,8 @@ fn parse_args(args: TokenStream) -> Result<Args, Error> {
 }
 
 pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error> {
-    let Args { state, area, api, caller } = parse_args(args)?;
+    let Args { state, area, api, caller, openapi } = parse_args(args)?;
+    let document_name = openapi.as_ref().map(|d| d.to_string().replace(' ', ""));
     // The routes' container: an area or an API, with the struct at its prefix.
     let within = area.map(|a| (Kind::Area, a)).or_else(|| api.map(|a| (Kind::Api, a)));
     let prefix_name = within.as_ref().map(|(_, p)| p.to_string().replace(' ', ""));
@@ -136,7 +155,28 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
     };
     let TokenTree::Ident(module) = tokens[tokens.len() - 2].clone() else { unreachable!("is_mod checked") };
     let area = matches!(within, Some((Kind::Area, _)));
-    let (mut items, routed) = scan(body.stream(), prefix_name.as_deref(), area)?;
+    let (mut items, routed) = scan(body.stream(), prefix_name.as_deref(), area, document_name.as_deref())?;
+    // The document's route: one of the module's, serving nothing but the document.
+    let mut document = None;
+    if let (Some(name), Some(given)) = (&document_name, &openapi) {
+        let span = given.clone().into_iter().next().map_or(Span::call_site(), |t| t.span());
+        match routed.iter().find(|r| &r.name.to_string() == name) {
+            None => {
+                return err(
+                    span,
+                    format!("openapi = {name} names a route of this module, with no handler, where the document is served: #[route(\"/api/openapi.json\")] pub struct {name};"),
+                )
+            }
+            Some(route) if !route.handlers.is_empty() || route.path.contains('{') || prefix_name.as_deref() == Some(name.as_str()) => {
+                return err(
+                    route.span,
+                    format!("{name} serves the OpenAPI document, so it has no handler or parameters and is not the API's prefix: #[route(\"/api/openapi.json\")] pub struct {name};"),
+                )
+            }
+            Some(route) => document = Some(route.name.clone()),
+        }
+    }
+    let mut operations = TokenStream::new();
     // Handlers are named from where the module is declared, so one a `use` inside it brings in is
     // not found there: say so at the `use`, not as "cannot find value" at each handler.
     // Only a private `use` the module itself never names is meant for a handler: one the module
@@ -271,6 +311,43 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 ),
                 at,
             );
+            if let (Some(_), Some(args)) = (&document, &route.args) {
+                // The operation, described by the handler's argument and answer types: one the
+                // document cannot describe is an error at the handler's name, as `call` is.
+                let id = handler.clone().into_iter().last().map(|t| t.to_string()).unwrap_or_default();
+                let ty: TokenStream = format!("{module}::{}{args}", route.name).parse().expect("a route's type parses");
+                let mut describe = respan(
+                    q(
+                        "::corten::openapi::__private::operation::<__A0, _, _, __A1, __A2, _>",
+                        &[ty, state_ty.clone(), params.clone()],
+                    ),
+                    at,
+                );
+                let reference = q("&__A0", std::slice::from_ref(handler));
+                describe.extend([TokenTree::Group(Group::new(
+                    Delimiter::Parenthesis,
+                    q(
+                        "&mut __document, __A0, __A1, __A2, __A3, __A4",
+                        &[
+                            TokenTree::Literal(proc_macro::Literal::string(&method.to_string())).into(),
+                            TokenTree::Literal(proc_macro::Literal::string(&id)).into(),
+                            TokenTree::Literal(proc_macro::Literal::string(&route.name.to_string())).into(),
+                            TokenTree::Literal(proc_macro::Literal::string(&route.doc)).into(),
+                            reference,
+                        ],
+                    ),
+                ))]);
+                operations.extend(describe);
+                operations.extend(q(";", &[]));
+            } else if document.is_some() {
+                return err(
+                    route.span,
+                    format!(
+                        "{} has a type parameter, so its operation cannot be described: give its fields concrete types",
+                        route.name
+                    ),
+                );
+            }
             let mut call = call;
             call.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, handler.clone()))]);
             if i > 0 {
@@ -282,6 +359,15 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             } else {
                 methods.extend(call);
             }
+        }
+        // `gives(CartCount)`: the route's methods, marked with the reads its page gives.
+        if !route.gives.is_empty() {
+            let mut list = TokenStream::new();
+            for given in &route.gives {
+                let at = given.clone().into_iter().last().map_or(route.span, |t| t.span());
+                list.extend(respan(q("::corten::route::__private::gives::<__A0>,", std::slice::from_ref(given)), at));
+            }
+            methods = q("::corten::Methods::__gives(__A0, &[__A1])", &[methods, list]);
         }
         let template = if within.is_some() {
             ".route::<__A0::__A1>(::corten::Methods::with_state(__A2, state.clone()))"
@@ -337,6 +423,17 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 &[ty, rows.clone()],
             ));
         }
+    }
+    if let Some(name) = &document {
+        // Built once, with the routes, from the handlers' types; titled by the app's crate.
+        calls.extend(q(
+            ".__openapi::<__A0::__A1>(::corten::__openapi_document!({
+                let mut __document = ::corten::openapi::__private::document(::core::env!(\"CARGO_PKG_NAME\"), ::core::env!(\"CARGO_PKG_VERSION\"));
+                __A2
+                __document
+            }))",
+            &[TokenTree::Ident(module.clone()).into(), TokenTree::Ident(name.clone()).into(), operations],
+        ));
     }
     if let Some((kind, prefix)) = within {
         let mut out = expand_within(kind, tokens, body, items, &module, calls, prefix, state);
@@ -616,7 +713,12 @@ fn is_mod(tokens: &[TokenTree]) -> bool {
 /// (`area`) is then a prefix and nothing more (`::corten::Prefix`, no `href`), since no page is
 /// at its URL; an API's stays a route, which an endpoint built from a value (the MCP endpoint) is
 /// added at by hand.
-fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStream, Vec<Routed>), Error> {
+fn scan(
+    body: TokenStream,
+    prefix: Option<&str>,
+    area: bool,
+    document: Option<&str>,
+) -> Result<(TokenStream, Vec<Routed>), Error> {
     let tokens: Vec<TokenTree> = body.into_iter().collect();
     let mut out: Vec<TokenTree> = Vec::new();
     let mut routed = Vec::new();
@@ -624,6 +726,8 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
     // route's path and what it serves.
     let mut start = None;
     let mut derives = None;
+    // The current item's doc comment.
+    let mut docs = String::new();
     let mut route: Option<(String, Span, Serves)> = None;
     // Where the current item's `#[route(..)]` is in `out`, and the prefix's impl, if any.
     let mut route_at = None;
@@ -635,6 +739,16 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                 start.get_or_insert(out.len());
                 if derives_route(g) {
                     derives = Some(g.span());
+                }
+                if let [TokenTree::Ident(key), TokenTree::Punct(eq), TokenTree::Literal(text)] =
+                    g.stream().into_iter().collect::<Vec<_>>().as_slice()
+                {
+                    if key.to_string() == "doc" && eq.as_char() == '=' {
+                        if let Some(text) = crate::tokens::string_value(text) {
+                            docs.push_str(text.strip_prefix(' ').unwrap_or(&text));
+                            docs.push('\n');
+                        }
+                    }
                 }
                 let attr = match route_attr(g)? {
                     Some((path, span, serves, cut)) => {
@@ -670,10 +784,18 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             ),
                         );
                     }
+                    if let Some(at) = serves.gives_at {
+                        if !serves.handlers.iter().any(|(m, _)| ["get", "any"].contains(&m.to_string().as_str())) {
+                            return err(at, format!("gives(..) names the layout reads {name}'s GET page gives itself, and it has no get or any: #[route(\"{path}\", get = .., gives(CartCount))]"));
+                        }
+                    }
                     if serves.no_store.said() && serves.handlers.is_empty() {
                         return err(span, format!("no_store says what {name}'s handlers answer, and it has none: #[route(\"{path}\", get = .., no_store)]"));
                     }
-                    if serves.handlers.is_empty() && prefix != Some(name.to_string().as_str()) {
+                    if serves.handlers.is_empty()
+                        && prefix != Some(name.to_string().as_str())
+                        && document != Some(name.to_string().as_str())
+                    {
                         return err(
                             span,
                             format!(
@@ -719,8 +841,11 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                             rows: None,
                             prefetch: None,
                             no_store: NoStore::Not,
+                            doc: std::mem::take(&mut docs),
+                            gives: Vec::new(),
                         });
                         start = None;
+                        docs.clear();
                         derives = None;
                         route_at = None;
                         out.push(tokens[i].clone());
@@ -757,12 +882,15 @@ fn scan(body: TokenStream, prefix: Option<&str>, area: bool) -> Result<(TokenStr
                         rows: serves.rows,
                         prefetch: serves.prefetch,
                         no_store: serves.no_store,
+                        doc: std::mem::take(&mut docs),
+                        gives: serves.gives,
                     });
                 }
             }
             _ => {}
         }
         start = None;
+        docs.clear();
         derives = None;
         route = None;
         route_at = None;
@@ -883,6 +1011,12 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.rows = Some(stream(rows.iter().cloned()));
             }
+            [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "gives" => {
+                return err(
+                    key.span(),
+                    format!("gives names its layout reads in parentheses: #[route(\"{path}\", get = show, gives(CartCount))]"),
+                );
+            }
             [TokenTree::Ident(method), TokenTree::Punct(eq), handler @ ..] if eq.as_char() == '=' => {
                 let key = method.to_string();
                 if !METHODS.contains(&key.as_str()) {
@@ -909,13 +1043,50 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.handlers.push((method.clone(), stream(handler.iter().cloned())));
             }
+            // `gives(CartCount, Unread)`: the layout reads the route's `GET` page gives itself.
+            [TokenTree::Ident(key), TokenTree::Group(list)]
+                if key.to_string() == "gives" && list.delimiter() == Delimiter::Parenthesis =>
+            {
+                if serves.gives_at.is_some() {
+                    return err(key.span(), "gives is named twice: name every read in one gives(..)");
+                }
+                serves.gives_at = Some(key.span());
+                let items: Vec<TokenTree> = list.stream().into_iter().collect();
+                for item in items.split(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
+                    match item {
+                        [] => {}
+                        read if is_path(read) => {
+                            let read = stream(read.iter().cloned());
+                            if serves.gives.iter().any(|g| g.to_string() == read.to_string()) {
+                                return err(item[0].span(), format!("{read} is named twice in gives(..)"));
+                            }
+                            serves.gives.push(read);
+                        }
+                        [other, ..] => {
+                            return err(
+                                other.span(),
+                                format!("gives(..) names layout read types: #[route(\"{path}\", get = show, gives(CartCount))]"),
+                            );
+                        }
+                    }
+                }
+                if serves.gives.is_empty() {
+                    return err(list.span(), format!("gives(..) names the layout reads the page gives itself: #[route(\"{path}\", get = show, gives(CartCount))]"));
+                }
+            }
+            [TokenTree::Ident(key), ..] if key.to_string() == "gives" => {
+                return err(
+                    key.span(),
+                    format!("gives names its layout reads in parentheses: #[route(\"{path}\", get = show, gives(CartCount))]"),
+                );
+            }
             [TokenTree::Ident(key), ..] if key.to_string() == "no_store" => {
                 return err(key.span(), format!("no_store is alone, or names its methods in parentheses: #[route(\"{path}\", get = show, no_store)] or no_store(post)"));
             }
             _ => {
                 return err(
                     part[0].span(),
-                    "expected a handler (get = show), rows = .., prefetch = .., no_store or no_store(post)",
+                    "expected a handler (get = show), rows = .., prefetch = .., no_store, no_store(post) or gives(CartCount)",
                 )
             }
         }

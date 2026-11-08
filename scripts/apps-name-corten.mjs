@@ -1,7 +1,8 @@
 // Checks that the template `corten new` writes and the examples name Corten, not the server
 // library under it: no `axum::` in their tracked files and no axum dependency in their manifests
-// (docs/design.md, Choice 21). The one
-// exception is card-market's benchmark against bare axum, which builds axum's own router.
+// (docs/design.md#choice-own-extractors). The exceptions are card-market's benchmark against bare axum,
+// which builds axum's own router, and a test's stand-in for a service the app calls, whose
+// `corten::axum::Router` and `corten::axum::serve` are allowed in a test file (`tests.rs`, `tests/`).
 // Run by npm run check.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -21,6 +22,12 @@ const files = execFileSync("git", ["ls-files", "-z", "--", "examples", "crates/c
   .split("\0")
   .filter((file) => file && !file.includes("node_modules/"));
 
+/** A test file, where a stand-in server is axum's `Router` and `serve`. */
+const testFile = (/** @type {string} */ file) => /(^|\/)(tests\.rs$|tests\/)/.test(file);
+/** What a stand-in names of axum, and only that: `corten::axum::Router` and `corten::axum::serve`. */
+const standIn = (/** @type {string} */ line) =>
+  [...line.matchAll(/axum::[A-Za-z_:]*/g)].every(([name]) => /^axum::(Router(::new)?|serve)$/.test(name));
+
 const problems = [];
 for (const file of files) {
   if (!existsSync(join(root, file))) continue;
@@ -33,7 +40,9 @@ for (const file of files) {
     }
     if (!line.includes("axum::")) return;
     if (allowed.get(file)?.includes(line.trim())) return;
-    problems.push(`${file}:${i + 1}: names axum (${line.trim()}); use corten::extract, corten::middleware, corten::answer::Body or corten::Bytes`);
+    if (testFile(file) && /corten::axum::/.test(line) && standIn(line)) return;
+    const stand = testFile(file) ? " (a test's stand-in server writes corten::axum::Router::new() and corten::axum::serve as paths)" : "";
+    problems.push(`${file}:${i + 1}: names axum (${line.trim()}); use corten::extract (bytes_up_to for a whole body), corten::middleware, corten::answer::Body or corten::Bytes${stand}`);
   });
 }
 

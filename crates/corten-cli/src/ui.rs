@@ -200,10 +200,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
 /// older than the copies it replaces), and the rest print the note, saying `diff` compares with
 /// this command's kit.
 fn pinned(sub: Option<&str>, note: Option<crate::pin::Note>) -> Result<Option<String>, String> {
-    let Some(crate::pin::Note { text, this }) = note else { return Ok(None) };
+    let Some(crate::pin::Note { text, this, package }) = note else { return Ok(None) };
     match sub {
         Some("add" | "init") => Err(format!(
-            "not copying: {text}\nor, to take this command's kit, move the app to its corten first: {this} for corten in Cargo.toml, then cargo update -p corten"
+            "not copying: {text}\nor, to take this command's kit, move the app to its corten first: {this} for corten in Cargo.toml, then cargo update -p {package}"
         )),
         Some("diff") => Ok(Some(format!(
             "{text}\nui diff compares the copies with this command's kit, not the pin's, and ui add refuses until the two match"
@@ -1231,7 +1231,7 @@ fn add_to(root: &Path, args: &[String], out: &mut dyn Write) -> Result<(), Strin
     }
     if !lacking.sizes.is_empty() {
         todo.push(format!(
-            "these read sizes your theme does not declare{}: add each to it\n    \
+            "these read sizes or type your theme does not declare{}: add each to it\n    \
              as the kit's theme has it; the app does not start while one is missing\n    {}",
             if lacking.kit_theme { " (one an older kit set up lacks the newer ones)" } else { "" },
             lacking.sizes.join(",\n    ")
@@ -1284,7 +1284,8 @@ fn add_to(root: &Path, args: &[String], out: &mut dyn Write) -> Result<(), Strin
 /// compiles, naming the file.
 #[derive(Debug, Default, PartialEq)]
 struct Lacking {
-    /// The kit theme's line for each size (`"control-height": { .. }`), which a theme takes as it is.
+    /// The kit theme's line for each size, weight or tracking (`"control-height": { .. }`), the
+    /// same in every theme, which a theme takes as it is.
     sizes: Vec<String>,
     /// Each color's name: an app's own theme gives it as a reference to one of its colors, so it
     /// follows the app's dark theme too, where the kit's light value would not.
@@ -1501,20 +1502,29 @@ fn workspace_manifest(root: &Path) -> Result<(String, String), String> {
     Ok((found.display().to_string(), text))
 }
 
-/// Whether `corten`'s line is a key of the table (`corten = ..`, `corten.workspace = ..`).
+/// Whether `corten`'s line is a key of the table (`corten = ..`, `corten.workspace = ..`), by its
+/// name in the code or by its package (`corten-run = ..`, as `cargo add corten-run` writes, which
+/// the code still calls `corten`).
 fn is_corten_line(line: &str) -> bool {
+    corten_key(line).is_some()
+}
+
+/// The key `corten`'s line starts with, `corten` or its package's name; None for another line.
+fn corten_key(line: &str) -> Option<&'static str> {
     let line = line.trim_start();
-    ["corten ", "corten=", "corten."].iter().any(|start| line.starts_with(start))
+    ["corten", crate::pin::PACKAGES[0]]
+        .into_iter()
+        .find(|key| line.strip_prefix(key).is_some_and(|rest| rest.starts_with([' ', '=', '.'])))
 }
 
 /// Why `table` of `lines` has no `corten` line this reads: `otherwise`, unless corten is a table of
-/// its own (`[workspace.dependencies.corten]`), which this does not read.
+/// its own (`[workspace.dependencies.corten]`, or keyed by its package), which this does not read.
 fn lacking(lines: &[&str], table: &str, otherwise: String) -> String {
-    let own = format!("{}.corten]", table.trim_end_matches(']'));
-    if lines.iter().any(|l| header(l) == own) {
-        format!("its corten is a table of its own, {own}, which this does not read")
-    } else {
-        otherwise
+    let within = table.trim_end_matches(']');
+    let own = ["corten", crate::pin::PACKAGES[0]].map(|key| format!("{within}.{key}]"));
+    match own.iter().find(|own| lines.iter().any(|l| header(l) == own.as_str())) {
+        Some(own) => format!("its corten is a table of its own, {own}, which this does not read"),
+        None => otherwise,
     }
 }
 
@@ -1538,11 +1548,12 @@ fn corten_at(lines: &[&str], table: &str) -> Result<Option<usize>, String> {
 /// error for another dotted key (`corten.git = ..`), which this does not read.
 fn from_workspace(line: &str) -> Result<Option<&'static str>, String> {
     let key = line.trim_start().split(['=', ' ']).next().unwrap_or_default();
-    if key == "corten.workspace" {
+    let dotted = corten_key(line).and_then(|name| key.strip_prefix(name)?.strip_prefix('.'));
+    if dotted == Some("workspace") {
         return Ok(Some("corten-ui.workspace = true"));
     }
-    if key.starts_with("corten.") {
-        return Err("corten's line is a dotted key other than corten.workspace".into());
+    if let Some(name) = corten_key(line).filter(|_| dotted.is_some()) {
+        return Err(format!("corten's line is a dotted key other than {name}.workspace"));
     }
     let fields = dependency_fields(line)?;
     Ok(fields.iter().any(|(k, v)| k == "workspace" && v == "true").then_some("corten-ui = { workspace = true }"))
@@ -1575,7 +1586,7 @@ fn depend_in(text: &str, table: &str, ui: Option<&str>) -> Result<Option<String>
 
 /// `corten-ui`'s line from where `corten`'s `line` takes it.
 fn ui_from(line: &str) -> Result<String, String> {
-    if line.trim_start().starts_with("corten.") {
+    if corten_key(line).is_some_and(|name| line.trim_start()[name.len()..].starts_with('.')) {
         return Err("corten's line is a dotted key, which this does not read".into());
     }
     let fields = dependency_fields(line)?;
@@ -2349,9 +2360,9 @@ fn clashes(app: &[(String, String)], pieces: &[&Piece]) -> Vec<(String, String, 
 #[cfg(test)]
 mod tests {
     use super::{
-        INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, kit_text, lacks,
-        list_in, list_ui_widgets, merge3, merged, namesake_note, namesakes, own_theme, report, role_tokens, sources, stamp_of,
-        stamped, styled_components, undeclared, unified, wire_app,
+        INIT, KIT, Lacking, OWN_THEME_MODULE, Piece, WAS, apply, clashes, depend_on_ui, depend_on_ui_at, fnv, from_workspace,
+        is_corten_line, kit_text, lacks, list_in, list_ui_widgets, merge3, merged, namesake_note, namesakes, own_theme, report,
+        role_tokens, sources, stamp_of, stamped, styled_components, undeclared, unified, wire_app,
     };
 
     fn piece(name: &str) -> &'static Piece {
@@ -2519,7 +2530,7 @@ mod tests {
         {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 37, "{names:?}");
+        assert_eq!(names.len(), 44, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
@@ -2650,7 +2661,7 @@ mod tests {
             assert!(error.starts_with("not copying: this corten command was built from corten dd028b94"), "{error}");
             assert!(
                 error.ends_with(&format!(
-                    "move the app to its corten first: rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+                    "move the app to its corten first: package = \"corten-run\", rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
                 )),
                 "{error}"
             );
@@ -2674,14 +2685,14 @@ mod tests {
         let line = crate::pin::note(&dir, "0.1.0", rev, Some(spaced)).unwrap().text;
         let own = spaced.join("corten-cli-00000000").display().to_string();
         assert!(line.contains(&format!("--target-dir \"{own}\"\n")), "{line}");
-        // A release: the app names this command's version.
-        let release = "[[package]]\nname = \"corten\"\nversion = \"0.0.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
+        // A release: the app names this command's version, under the package name the lock gives it.
+        let release = "[[package]]\nname = \"corten-run\"\nversion = \"0.0.9\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n";
         std::fs::write(dir.join("Cargo.lock"), release).unwrap();
         let error = super::pinned(Some("add"), crate::pin::note(&dir, "0.1.0", rev, Some(shared))).unwrap_err();
         assert!(error.contains("cargo install corten-cli --version 0.0.9 --locked\n"), "{error}");
         assert!(
             error.ends_with(&format!(
-                "version = \"0.1.0\" if this command is that release, or git = corten's repository and rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten"
+                "package = \"corten-run\" with version = \"0.1.0\" if this command is that release, or with git = corten's repository and rev = \"{rev}\" for corten in Cargo.toml, then cargo update -p corten-run"
             )),
             "{error}"
         );
@@ -2734,7 +2745,12 @@ mod tests {
         let theme = std::fs::read_to_string(dir.join("tokens/ui.tokens.json")).unwrap();
         let old: String = theme
             .lines()
-            .filter(|l| !l.contains("\"control-") && !l.contains("-font-size\"") && !l.contains("\"card-padding\""))
+            .filter(|l| {
+                !l.contains("\"control-")
+                    && !l.contains("-font-size\"")
+                    && !l.contains("\"card-padding\"")
+                    && !l.contains("\"stat-")
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let old = format!("{}\n}}\n", old.trim_end().trim_end_matches('}').trim_end().trim_end_matches(','));
@@ -2750,6 +2766,27 @@ mod tests {
             "{old}"
         );
         assert!(undeclared(&dir, &app_now, &[piece("button")]).sizes.iter().any(|l| l.starts_with("\"control-height-sm\": ")));
+        // A figure's weights and tracking are named with its sizes; its face and its label's case,
+        // which the stylesheet reads with a fallback, are the app's to declare or not.
+        let stats = undeclared(&dir, &app_now, &[piece("stats")]).sizes;
+        let names: Vec<&str> = stats.iter().map(|l| l.split('"').nth(1).unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "stat-label-font-size",
+                "stat-label-font-weight",
+                "stat-label-tracking",
+                "stat-value-font-size",
+                "stat-value-font-weight",
+                "stat-value-tracking",
+                "stat-value-font-size-narrow"
+            ],
+            "{stats:?}"
+        );
+        assert!(
+            stats.contains(&r#""stat-value-font-weight": { "$type": "fontWeight", "$value": 600 }"#.to_string()),
+            "{stats:?}"
+        );
         // One a stylesheet under static/ declares is declared, as the app's startup check counts it.
         std::fs::create_dir_all(dir.join("static/css")).unwrap();
         let css =
@@ -2968,7 +3005,25 @@ mod tests {
         let release = "[dependencies]\ncorten = { version = \"0.1.0\", features = [\"compress\"] }\n\n[dev-dependencies]\ntower = \"0.5\"\n";
         let text = depend_on_ui(release).unwrap().unwrap();
         assert!(text.contains(&format!("corten-ui = \"{}\"\n\n[dev-dependencies]", env!("CARGO_PKG_VERSION"))), "{text}");
+        // The line `corten new` writes, which names the package: corten-ui's own name is its package.
+        let named = "[dependencies]\ncorten = { package = \"corten-run\", version = \"0.2.0\", features = [\"compress\"] }\n";
+        let text = depend_on_ui(named).unwrap().unwrap();
+        assert!(text.ends_with(&format!("}}\ncorten-ui = \"{}\"\n", env!("CARGO_PKG_VERSION"))), "{text}");
         assert!(depend_on_ui("[dependencies]\nserde = \"1\"\n").is_err());
+        // A line keyed by the package, as cargo add corten-run writes it, is corten's too.
+        let by_package = depend_on_ui("[dependencies]\ncorten-run = \"0.2.0\"\n").unwrap().unwrap();
+        assert_eq!(
+            by_package,
+            format!("[dependencies]\ncorten-run = \"0.2.0\"\ncorten-ui = \"{}\"\n", env!("CARGO_PKG_VERSION"))
+        );
+        let by_path = depend_on_ui("[dependencies]\ncorten-run = { path = \"../corten/crates/corten\" }\n").unwrap().unwrap();
+        assert!(by_path.ends_with("}\ncorten-ui = { path = \"../corten/crates/corten-ui\" }\n"), "{by_path}");
+        assert_eq!(from_workspace("corten-run.workspace = true"), Ok(Some("corten-ui.workspace = true")));
+        assert_eq!(
+            from_workspace("corten-run.git = \"x\""),
+            Err("corten's line is a dotted key other than corten-run.workspace".into())
+        );
+        assert!(!is_corten_line("corten-ui = \"0.2.0\""));
         let git = "[dependencies]\ncorten = { git = \"https://github.com/corten-run/corten\", rev = \"abc123\", features = [\"compress\"] }\n";
         let text = depend_on_ui(git).unwrap().unwrap();
         assert!(
@@ -3072,7 +3127,32 @@ mod tests {
                 "corten = { path = \"../corten\" }\ncorten-ui = { path = \"../corten-ui\" }\n",
             )
             .replace("corten.workspace = true\n", "corten.workspace = true\ncorten-ui.workspace = true\n");
-        assert_eq!(depend_on_ui_at(&alone).unwrap(), [("Cargo.toml".to_string(), both)]);
+        assert_eq!(depend_on_ui_at(&alone).unwrap(), [("Cargo.toml".to_string(), both.clone())]);
+        // Keyed by the package, as cargo add corten-run writes it: the same lines beside it.
+        let own_run = own.replace("corten = {", "corten-run = {").replace("corten.workspace", "corten-run.workspace");
+        std::fs::write(alone.join("Cargo.toml"), &own_run).unwrap();
+        let both_run = both.replace("corten = {", "corten-run = {").replace("corten.workspace", "corten-run.workspace");
+        assert_eq!(depend_on_ui_at(&alone).unwrap(), [("Cargo.toml".to_string(), both_run)]);
+        let workspace_run = workspace.replace("corten = {", "corten-run = {");
+        std::fs::write(dir.join("Cargo.toml"), &workspace_run).unwrap();
+        let dotted_run = dotted.replace("corten.workspace", "corten-run.workspace");
+        std::fs::write(member.join("Cargo.toml"), &dotted_run).unwrap();
+        let edits = depend_on_ui_at(&member).unwrap();
+        assert!(
+            edits[0].1.contains("corten-run = { git = \"https://example.com/c\", rev = \"abc\" }\ncorten-ui = { git = \"https://example.com/c\", rev = \"abc\" }\nserde"),
+            "{edits:?}"
+        );
+        assert_eq!(
+            edits[1].1,
+            dotted_run.replace("corten-run.workspace = true\n", "corten-run.workspace = true\ncorten-ui.workspace = true\n")
+        );
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"crates/*\"]\n\n[workspace.dependencies.corten-run]\ngit = \"https://example.com/c\"\n",
+        )
+        .unwrap();
+        let why = depend_on_ui_at(&member).unwrap_err();
+        assert!(why.contains("its corten is a table of its own, [workspace.dependencies.corten-run]"), "{why}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -3126,10 +3206,18 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The properties a kit stylesheet reads that the app may declare and the kit's theme does
+    /// not: a figure's face and its label's case.
+    const OPTIONAL: [&str; 2] = ["stat-value-font-family", "stat-label-text-transform"];
+
     #[test]
     fn every_property_a_component_reads_is_a_token_of_the_theme() {
         let tokens = |path: &str| INIT.iter().find(|(p, _)| *p == path).unwrap().1;
         let (light, dark) = (tokens("tokens/ui.tokens.json"), tokens("tokens/ui-dark.tokens.json"));
+        for name in OPTIONAL {
+            let read = KIT.iter().flat_map(|p| p.files.iter()).any(|(_, t)| t.contains(&format!("var(--{name},")));
+            assert!(read, "no kit stylesheet reads --{name}: rename it in OPTIONAL and the kit guide too");
+        }
         for piece in KIT {
             for (file, text) in piece.files.iter().filter(|(f, _)| f.ends_with(".css")) {
                 for read in text.split("var(--").skip(1) {
@@ -3139,9 +3227,16 @@ mod tests {
                         continue;
                     }
                     let line = light.lines().find(|l| l.starts_with(&format!("  \"{name}\": ")));
+                    // The app's alone, read with a fallback, since no token's value says "the
+                    // page's" (the guide names each): never in the kit's theme, so never asked for.
+                    if OPTIONAL.contains(&name) {
+                        assert!(line.is_none() && read[name.len()..].trim_start().starts_with(','), "{file} reads --{name}");
+                        continue;
+                    }
                     assert!(line.is_some(), "{file} reads --{name}, which the theme lacks");
-                    // A size (`radius`, a control's height) is the same in the dark theme.
-                    if !line.is_some_and(|l| l.contains("\"dimension\"")) {
+                    // Only a color differs in the dark theme: a size (`radius`, a control's
+                    // height), a weight or a figure's tracking is the same in both.
+                    if line.is_some_and(|l| l.contains("\"$type\": \"color\"")) {
                         assert!(dark.contains(&format!("\n  \"{name}\": ")), "{file} reads --{name}, which the dark theme lacks");
                     }
                 }
@@ -3227,17 +3322,19 @@ mod tests {
             }
             // An alert's tones and its soft and solid emphases are the badge's, checked above; an
             // outline alert's text is the tone on the card (the pairs above), and its paragraph 85% of
-            // the tone in the foreground, on the card.
+            // the tone in the foreground, on the card. A list in an alert is colored as its paragraph is.
             let alert = include_str!("../kit/alert.css");
             for rule in [
                 ".soft { background: color-mix(in srgb, var(--kit-tone) 12%, var(--card)); color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground));",
                 ".solid { background: var(--kit-tone-fill); color: var(--kit-tone-text);",
-                ".outline > p { color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }",
+                ".outline > :is(p, ol, ul) { color: color-mix(in srgb, var(--kit-tone) 85%, var(--foreground)); }",
                 ".outline { background: var(--card); color: var(--kit-tone);",
                 ".neutral.solid { border-color: var(--border); }",
                 ".neutral.outline { color: var(--card-foreground);",
-                ".neutral.outline > p { color: var(--muted-foreground); }",
+                ".neutral.outline > :is(p, ol, ul) { color: var(--muted-foreground); }",
                 ".alert > p { margin: 0; color: inherit; }",
+                // A list takes the paragraph's color in every emphasis, so it is checked with it.
+                ".alert > :is(ol, ul), .alert li > :is(ol, ul) { color: inherit;",
             ] {
                 assert!(
                     alert.contains(rule)
@@ -3322,23 +3419,63 @@ mod tests {
         }
     }
 
-    /// A progress bar is drawn in the meter's colors in every engine: its track in the border color
-    /// and its fill in the primary color, which the meter's test holds to 3:1 in both themes; with no
-    /// value, the band is the element's own background, the engines' parts cleared, and it moves only
-    /// when the reader has not asked for less motion.
+    /// A progress bar is drawn in every engine with its track in the border color and its fill in its
+    /// tone's color (primary, info, success, warning or destructive), each 3:1 against the track in
+    /// both themes, as a meter's fill is; with no value, the band is the element's own background,
+    /// the engines' parts cleared, and it moves only when the reader has not asked for less motion.
     #[test]
     fn a_progress_bar_is_drawn_in_the_meters_colors() {
         let css = include_str!("../kit/progress.css");
         let rule =
             |start: &str| css.lines().find(|l| l.starts_with(start)).unwrap_or_else(|| panic!("progress.css has no {start}"));
         let block = &css[css.find(".progress {").unwrap()..];
-        assert!(block[..block.find('}').unwrap()].contains("background: var(--border);"), "the track");
+        let block = &block[..block.find('}').unwrap()];
+        assert!(block.contains("background: var(--border);"), "the track");
+        assert!(block.contains("--kit-tone: var(--primary);"), "a bar's tone is primary unless it names another");
+        // Each tone's rule comes after the bar's, so it wins at the same specificity, and its color
+        // stands out from the track by 3:1 in both themes, as a meter's fill does.
+        let tones = ["info", "success", "warning", "destructive"];
+        for tone in tones {
+            let at = css.find(&format!(".{tone} {{ --kit-tone: var(--{tone}); }}")).unwrap_or_else(|| panic!("no {tone} tone"));
+            assert!(at > css.find(".progress {").unwrap(), "the {tone} tone comes after .progress");
+        }
+        assert_eq!(css.matches("--kit-tone: var(--").count(), tones.len() + 1, "a rule for each tone and the default");
+        let tokens = |path: &str| INIT.iter().find(|(p, _)| *p == path).unwrap().1;
+        for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
+            let text = tokens(file);
+            let luminance = |name: &str| {
+                let line = text.lines().find(|l| l.starts_with(&format!("  \"{name}\": "))).unwrap();
+                let at = line.find("\"hex\": \"#").unwrap() + "\"hex\": \"#".len();
+                let rgb = u32::from_str_radix(&line[at..at + 6], 16).unwrap();
+                let channel = |c: u32| {
+                    let c = f64::from(c & 255) / 255.0;
+                    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                };
+                0.2126 * channel(rgb >> 16) + 0.7152 * channel(rgb >> 8) + 0.0722 * channel(rgb)
+            };
+            for fill in std::iter::once("primary").chain(tones) {
+                let (x, y) = (luminance(fill), luminance("border"));
+                let r = (x.max(y) + 0.05) / (x.min(y) + 0.05);
+                assert!(r >= 3.0, "{file}: a {fill} progress bar on its track is {r:.2}:1, under 3:1");
+            }
+        }
         assert!(rule(".progress::-webkit-progress-bar {").ends_with("background: var(--border); }"));
-        assert!(rule(".progress::-webkit-progress-value {").ends_with("background: var(--primary); }"));
-        assert!(rule(".progress::-moz-progress-bar {").ends_with("background: var(--primary); }"));
+        assert!(rule(".progress::-webkit-progress-value {").ends_with("background: var(--kit-tone); }"));
+        assert!(rule(".progress::-moz-progress-bar {").ends_with("background: var(--kit-tone); }"));
+        assert_eq!(css.matches("var(--primary)").count(), 1, "every fill and band is the tone's, primary only its default");
         assert!(rule(".progress:indeterminate::-webkit-progress-bar {").ends_with("background: transparent; }"));
         assert!(rule(".progress:indeterminate::-moz-progress-bar {").ends_with("background: transparent; }"));
-        assert!(rule(".progress:indeterminate {").contains("repeating-linear-gradient"), "stripes with no motion");
+        assert!(
+            rule(".progress:indeterminate {")
+                .contains("repeating-linear-gradient(-45deg, var(--kit-tone) 0 .25rem, var(--border) .25rem .5rem)"),
+            "stripes with no motion, in the tone on the track"
+        );
+        assert!(
+            css.contains(
+                "background: linear-gradient(var(--kit-tone), var(--kit-tone)) no-repeat 0 0 / 30% 100%, var(--border);"
+            ),
+            "the moving band, in the tone on the track"
+        );
         let motion = &css[css.find("@media (prefers-reduced-motion: no-preference) {").expect("the band moves only here")..];
         assert!(motion[..motion.find("}\n}").unwrap()].contains("animation: progress-sweep"));
         assert_eq!(css.matches("animation:").count(), 1, "no animation outside the media query");
@@ -3356,6 +3493,46 @@ mod tests {
         }
     }
 
+    /// A filled segmented control is a grid of equal parts across its box, and its rules are one class
+    /// more than the track's and the choices', so they win wherever the stylesheets are linked; its
+    /// choices may wrap, at least a control's height (#1060).
+    #[test]
+    fn a_filled_segmented_control_outranks_its_track() {
+        let css = include_str!("../kit/segmented.css");
+        let block = |start: &str| {
+            let at = css.find(start).unwrap_or_else(|| panic!("segmented.css has no {start}"));
+            &css[at..at + css[at..].find('}').unwrap()]
+        };
+        let track = block(".segmented.fill [role=\"radiogroup\"], .links.fill, .radios.fill > .track {");
+        for part in [
+            "display: grid;",
+            "grid-auto-flow: column;",
+            "grid-auto-columns: minmax(0, 1fr);",
+            "box-sizing: border-box; width: 100%;",
+        ] {
+            assert!(track.contains(part), "the filled track: {part}");
+        }
+        let choice = block(".segmented.fill [role=\"radio\"], .links.fill > a, .radios.fill .choice {");
+        for part in [
+            "min-width: 0; height: auto; min-height: var(--control-height-sm);",
+            "white-space: normal;",
+            "overflow-wrap: anywhere;",
+        ] {
+            assert!(choice.contains(part), "a filled choice: {part}");
+        }
+        assert!(
+            css.contains(
+                ".segmented.fill [role=\"radio\"] > *, .links.fill > a > *, .radios.fill .choice > span { min-width: 0; }"
+            ),
+            "a choice's text shrinks"
+        );
+        assert!(css.contains(".segmented [role=\"radiogroup\"], .links, .track {"), "the track the fill outranks");
+        let fieldset = css
+            .find(".radios.fill { box-sizing: border-box; width: 100%; justify-items: stretch; }")
+            .expect("the fieldset fills");
+        assert!(fieldset > css.find(".radios {").unwrap(), "after .radios");
+    }
+
     /// A stack's children take its width whatever the app's element rules say (a new app's
     /// `form { align-items: end }`): `.stack` is one class, which beats an element. Its margin rule
     /// has no specificity, so the app's own margin rules win. And a figure is the same surface as a
@@ -3370,6 +3547,18 @@ mod tests {
         let stack = include_str!("../kit/stack.css");
         assert!(stack.lines().any(|l| l.starts_with(".stack {") && l.contains("align-items: stretch;")));
         assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > * { margin-block: 0; }"));
+        // StackStart keeps a stack's children their own width: two classes, so it beats .stack and does
+        // nothing beside a Cluster or alone; its cap on a child's width, the word break and a picture's
+        // shape have no specificity, so an app's rule on a child wins.
+        assert!(stack.contains(".stack.start { align-items: flex-start; }"), "StackStart's rule");
+        assert!(
+            stack.contains(":where(.stack.start) > * { max-width: 100%; overflow-wrap: anywhere; }"),
+            "a child is at most the stack's width"
+        );
+        assert!(
+            stack.contains(":where(.stack.start) > :where(img, video, canvas) { height: auto; }"),
+            "a picture keeps its shape"
+        );
         let (stat, card) =
             (block(include_str!("../kit/stats.css"), ".stat {"), block(include_str!("../kit/card.css"), ".card, .panel {"));
         let declarations =

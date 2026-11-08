@@ -268,6 +268,22 @@ pub(crate) mod tests {
         assert!(html.ends_with(r#" role="alert"><p>The policy was retired &lt;meanwhile&gt;.</p></div>"#), "{html}");
     }
 
+    /// A dialog's failure text in the alert's look is one live region that stays rendered, and in
+    /// it the destructive alert, `said`, hidden and with no role of its own (#969).
+    #[test]
+    fn a_dialogs_failure_text_is_one_alert() {
+        use corten::{Errors, view::Render};
+        let errors = Errors::new();
+        let html = crate::gallery::RenameDialog { name: "", errors: &errors }.to_html();
+        assert_eq!(html.matches("role=").count(), 1, "{html}");
+        assert!(
+            html.contains(
+                r#"<div role="alert" class="alert__region"><div data-ref="said" class="alert__alert alert__destructive alert__soft" hidden><p>"#
+            ),
+            "{html}"
+        );
+    }
+
     /// A component's page link may be a closure named before the markup, passed by value, that
     /// borrows the page's data and gives a boxed link of that lifetime (#862).
     #[corten::component]
@@ -286,6 +302,45 @@ pub(crate) mod tests {
                 link={page_link}
             />
         }
+    }
+
+    /// A list that knows only its neighbours: a link with `rel` for each one there is, and a
+    /// disabled end in the same look for one that is not (#1073).
+    #[test]
+    fn previous_next_links_the_neighbours_it_is_given_and_disables_the_others() {
+        use super::pagination::PreviousNext;
+        use corten::{Href, route::Local, view::Render};
+        let older = Local::parse("/payouts?before=p2").unwrap();
+        let html = PreviousNext {
+            label: "Payouts",
+            previous_label: "Newer",
+            next_label: "Older",
+            previous: None,
+            next: Some(&older as &dyn Href),
+        }
+        .to_html();
+        assert!(html.starts_with(r#"<nav class="pagination__pagination" aria-label="Payouts"><ul>"#), "{html}");
+        assert!(
+            html.contains(r#"<span class="pagination__step pagination__previous" aria-disabled="true">Newer</span>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<a class="pagination__step pagination__next" href="/payouts?before=p2" rel="next">Older</a>"#),
+            "{html}"
+        );
+        // Only the two steps: no page numbers, which such a list does not know.
+        assert!(!html.contains("pagination__page"), "{html}");
+        let newer = Local::parse("/payouts").unwrap();
+        let html = PreviousNext {
+            label: "Payouts",
+            previous_label: "Newer",
+            next_label: "Older",
+            previous: Some(&newer as &dyn Href),
+            next: None,
+        }
+        .to_html();
+        assert!(html.contains(r#"href="/payouts" rel="prev">Newer</a>"#), "{html}");
+        assert!(html.contains(r#"pagination__next" aria-disabled="true">Older</span>"#), "{html}");
     }
 
     #[test]
@@ -317,6 +372,29 @@ pub(crate) mod tests {
         assert_eq!(list, r#"<dl class="stats__stats stats__plain"></dl>"#);
     }
 
+    /// `Gap::App` writes only the layout's class, in a stack and a cluster, so the app's own gap
+    /// class beside it is the one; a literal gap still writes its class.
+    #[test]
+    fn an_app_gap_writes_no_gap_class_of_the_kit_s() {
+        use super::stack::{Cluster, Gap, Stack};
+        use corten::view::Render;
+        let stack = corten::html! { <div class={Stack { gap: Gap::App }}></div> }.to_html();
+        assert_eq!(stack, r#"<div class="stack__stack"></div>"#);
+        let cluster = corten::html! { <div class={Cluster { gap: Gap::App }}></div> }.to_html();
+        assert_eq!(cluster, r#"<div class="stack__cluster"></div>"#);
+        let literal = corten::html! { <div class={(Stack { gap: Gap::Md }, Cluster { gap: Gap::Sm })}></div> }.to_html();
+        assert_eq!(literal, r#"<div class="stack__stack stack__md stack__cluster stack__sm"></div>"#);
+    }
+
+    /// `StackStart` is a class beside the stack's, so the column keeps its children their own width.
+    #[test]
+    fn a_stack_start_is_a_class_beside_the_stack() {
+        use super::stack::{Gap, Stack, StackStart};
+        use corten::view::Render;
+        let start = corten::html! { <div class={(Stack { gap: Gap::Xs }, StackStart {})}></div> }.to_html();
+        assert_eq!(start, r#"<div class="stack__stack stack__xs stack__start"></div>"#);
+    }
+
     /// A look imported under another name, beside an app type that has its name, keeps the kit's
     /// classes: they follow the component, not the name it is imported as.
     #[test]
@@ -325,15 +403,45 @@ pub(crate) mod tests {
         struct Progress {
             done: u32,
         }
-        use super::progress::{Progress as KitProgress, ProgressSize};
+        use super::progress::{Progress as KitProgress, ProgressSize, ProgressTone};
         use corten::view::Render;
-        let html =
-            corten::html! { <progress class={KitProgress { size: ProgressSize::Sm }} max="4" value="1"></progress> }.to_html();
+        let html = corten::html! {
+            <progress class={KitProgress { size: ProgressSize::Sm, tone: ProgressTone::Primary }} max="4" value="1"></progress>
+        }
+        .to_html();
         assert_eq!(html, r#"<progress class="progress__progress progress__sm" max="4" value="1"></progress>"#);
         // Or by its module's path, with no import of the name.
-        let by_path =
-            corten::html! { <progress class={super::progress::Progress { size: ProgressSize::Sm }}></progress> }.to_html();
+        let by_path = corten::html! {
+            <progress class={super::progress::Progress { size: ProgressSize::Sm, tone: ProgressTone::Primary }}></progress>
+        }
+        .to_html();
         assert_eq!(by_path, r#"<progress class="progress__progress progress__sm"></progress>"#);
+    }
+
+    /// A progress bar's tone is a class beside its size, and the primary one, a task under way, is
+    /// none: the bar's own rule fills it.
+    #[test]
+    fn a_progress_tone_is_a_class() {
+        use super::progress::{Progress, ProgressSize, ProgressTone};
+        use corten::view::Render;
+        let bar = |size, tone| corten::html! { <progress class={Progress { size, tone }}></progress> }.to_html();
+        assert_eq!(bar(ProgressSize::Md, ProgressTone::Primary), r#"<progress class="progress__progress"></progress>"#);
+        assert_eq!(
+            bar(ProgressSize::Md, ProgressTone::Info),
+            r#"<progress class="progress__progress progress__info"></progress>"#
+        );
+        assert_eq!(
+            bar(ProgressSize::Md, ProgressTone::Success),
+            r#"<progress class="progress__progress progress__success"></progress>"#
+        );
+        assert_eq!(
+            bar(ProgressSize::Sm, ProgressTone::Warning),
+            r#"<progress class="progress__progress progress__sm progress__warning"></progress>"#
+        );
+        assert_eq!(
+            bar(ProgressSize::Md, ProgressTone::Destructive),
+            r#"<progress class="progress__progress progress__destructive"></progress>"#
+        );
     }
 
     /// The column a table sorted in place sorts by: a Rust type the script's parameter is declared
@@ -355,8 +463,8 @@ pub(crate) mod tests {
                 <SortHeader
                     label="Total"
                     sort={Some(Sort::Ascending)}
-                    ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp) }}
-                    descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                    ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp), payout: None }}
+                    descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown), payout: None }}
                     first={Sort::Ascending}
                     class={TableNumeric {}}
                     on:sort={js::sortBy(event, TotalsBy::Total)}
@@ -364,8 +472,8 @@ pub(crate) mod tests {
                 <SortHeader
                     label="Placed"
                     sort={None}
-                    ascending={&url::Orders { page: Some(1), sort: None }}
-                    descending={&url::Orders { page: Some(2), sort: None }}
+                    ascending={&url::Orders { page: Some(1), sort: None, payout: None }}
+                    descending={&url::Orders { page: Some(2), sort: None, payout: None }}
                     first={Sort::Descending}
                     class={()}
                     on:sort={js::sortBy(event, TotalsBy::Placed)}
@@ -389,8 +497,8 @@ pub(crate) mod tests {
         let served = super::table::SortHeader {
             label: "Total",
             sort: None,
-            ascending: &crate::app::url::Orders { page: None, sort: None },
-            descending: &crate::app::url::Orders { page: None, sort: None },
+            ascending: &crate::app::url::Orders { page: None, sort: None, payout: None },
+            descending: &crate::app::url::Orders { page: None, sort: None, payout: None },
             first: super::table::Sort::Ascending,
             class: (),
             on_sort: &None::<corten::prelude::Handler>,
@@ -418,14 +526,31 @@ pub(crate) mod tests {
     /// keeps it from being drawn; a shown one has none.
     #[test]
     fn a_segmented_radios_legend_is_shown_or_hidden() {
-        use super::segmented::{Legend, SegmentedRadios};
+        use super::segmented::{Legend, SegmentedRadios, SegmentedWidth};
         use corten::view::Render;
-        let hidden = SegmentedRadios { legend: Legend::Hidden("View"), children: "" }.to_html();
+        let hidden = SegmentedRadios { legend: Legend::Hidden("View"), width: SegmentedWidth::Fit, children: "" }.to_html();
         assert!(
             hidden.starts_with(r#"<fieldset class="segmented__radios"><legend class="segmented__hidden">View</legend>"#),
             "{hidden}"
         );
-        let shown = SegmentedRadios { legend: Legend::Shown("View"), children: "" }.to_html();
+        let shown = SegmentedRadios { legend: Legend::Shown("View"), width: SegmentedWidth::Fit, children: "" }.to_html();
         assert!(shown.starts_with(r#"<fieldset class="segmented__radios"><legend>View</legend>"#), "{shown}");
+    }
+
+    /// Each form of the segmented control takes a width: `Fit` writes no class, `Fill` the one that
+    /// shares the row among the choices.
+    #[test]
+    fn a_segmented_control_fits_its_choices_or_fills_its_box() {
+        use super::segmented::{Legend, Segmented, SegmentedLinks, SegmentedRadios, SegmentedWidth};
+        use corten::view::Render;
+        let links = |width| corten::html! { <nav class={SegmentedLinks { width }}></nav> }.to_html();
+        assert_eq!(links(SegmentedWidth::Fit), r#"<nav class="segmented__links"></nav>"#);
+        assert_eq!(links(SegmentedWidth::Fill), r#"<nav class="segmented__links segmented__fill"></nav>"#);
+        let around = Segmented { width: SegmentedWidth::Fill, children: "" }.to_html();
+        assert_eq!(around, r#"<div class="segmented__segmented segmented__fill"></div>"#);
+        let fit = Segmented { width: SegmentedWidth::Fit, children: "" }.to_html();
+        assert_eq!(fit, r#"<div class="segmented__segmented"></div>"#);
+        let radios = SegmentedRadios { legend: Legend::Shown("View"), width: SegmentedWidth::Fill, children: "" }.to_html();
+        assert!(radios.starts_with(r#"<fieldset class="segmented__radios segmented__fill"><legend>"#), "{radios}");
     }
 }

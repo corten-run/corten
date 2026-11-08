@@ -6,6 +6,7 @@
 <title>{% esc(@@.get<std::string>("title")) %}</title>
 <link rel="stylesheet" href="/style.css">
 <link rel="stylesheet" href="/components.css">
+<%c++ if (@@.get<bool>("catalog_page")) { %><link rel="stylesheet" href="/catalog.css"><%c++ } %>
 <script src="/htmx.min.js" defer></script>
 <script src="/item.js" defer></script>
 </head>

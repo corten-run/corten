@@ -111,7 +111,8 @@ live region (`role="alert"`) that stays rendered: a region shown at the moment i
 reliably announced, while text added to one already there is. It is shown, the toaster says
 nothing (`preventDefault()`), and the next submit in the dialog or its closing hides it again. A
 dialog closed by the time the failure comes (Escape while the submit was on its way) shows
-nothing, and the toaster says it. Give every dialog with a `data-patch` form one.
+nothing, and the toaster says it. Give every dialog with a `data-patch` form one. The UI kit's
+`FailedAlert` ([kit](kit.md)) is that region with the text in the destructive alert's look.
 
 A dialog the address opens (a record beside its list, `/items?selected=it_1`, closed by a link to
 `/items`) is drawn `open` the same way, but Escape on a modal dialog closes it where the address

@@ -19,7 +19,7 @@ use corten::{
     http::StatusCode,
     prelude::*,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::{
     cards::{self, Card, Refusal},
@@ -217,6 +217,7 @@ pub fn app(builder: Builder) -> App {
         .components(views::COMPONENTS)
         .components(&[corten_ui::CopyButton])
         .messages::<Msg>()
+        .error_page(views::error_page, ())
 }
 
 #[corten::routes(state = Builder)]
@@ -241,7 +242,7 @@ pub mod url {
 
 /// How the collection is shown without JavaScript: a filter and an order. With it, the page
 /// filters and sorts as the player types and clicks, with no request.
-#[derive(Clone, Default, Deserialize, Route, Fields)]
+#[derive(Clone, Default, Route, Fields)]
 #[route(query)]
 pub struct DeckQuery {
     pub q: Option<String>,
@@ -249,7 +250,7 @@ pub struct DeckQuery {
 }
 
 /// The collection's order.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "kebab-case")]
 pub enum Sort {
     Name,
@@ -260,7 +261,7 @@ pub enum Sort {
 /// The deck as its form posts it: each line's card and count (`card[i]` has `count[i]`), the
 /// version it was built on, and, without JavaScript, the card an Add button names or the picked
 /// cards with Add selected.
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct DeckInput {
     /// The generation of the version the deck was built on.
     pub generation: String,
@@ -367,6 +368,17 @@ mod tests {
         cards::STARTER.to_vec()
     }
 
+    /// A failure is drawn in the layout, with the way back (`App::error_page`).
+    #[tokio::test]
+    async fn an_unknown_url_gets_the_error_page_in_the_layout() {
+        let app = app(Builder::from(60, Some(GEN), KEPT_FOR)).test();
+        let missing = app.get(&corten::Local::parse("/nope").unwrap()).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let html = missing.text();
+        assert!(html.contains("<h1>Not found</h1>") && html.contains("<strong>Deck builder</strong>"), "{html}");
+        assert!(html.contains(r#"<a href="/">Back to the builder</a>"#), "{html}");
+    }
+
     #[tokio::test]
     async fn a_save_writes_the_deck_once_per_key_and_answers_with_its_version() {
         let builder = Builder::from(60, Some(GEN), KEPT_FOR);
@@ -402,7 +414,10 @@ mod tests {
     #[test]
     fn a_version_from_before_a_restart_is_stale_after_it() {
         let key = |i: usize| {
-            use serde::de::{IntoDeserializer, value::Error};
+            use serde::{
+                Deserialize,
+                de::{IntoDeserializer, value::Error},
+            };
             SubmitKey::deserialize(IntoDeserializer::<Error>::into_deserializer(KEYS[i])).unwrap()
         };
         let deck = |extra: &str| {
@@ -426,7 +441,10 @@ mod tests {
     #[test]
     fn a_save_sent_again_after_its_key_is_forgotten_is_stale_and_unsure() {
         let key = |i: usize| {
-            use serde::de::{IntoDeserializer, value::Error};
+            use serde::{
+                Deserialize,
+                de::{IntoDeserializer, value::Error},
+            };
             SubmitKey::deserialize(IntoDeserializer::<Error>::into_deserializer(KEYS[i])).unwrap()
         };
         let mut deck: Deck = cards::STARTER.iter().map(|&(id, n)| (id.to_string(), n)).collect();

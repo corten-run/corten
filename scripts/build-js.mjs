@@ -2,6 +2,8 @@
 //   dist/corten.js  the runtime, minified (the source keeps its comments; browsers get none)
 //   dist/format.js  numbers, money and dates for a script (a `%{..}` handler argument): a module of
 //                   its own, which only pages whose handlers take a format load
+//   dist/upload.js  a multipart submit by XMLHttpRequest, for its progress: a module of its own,
+//                   which only pages with a form that has an on:corten:progress handler load
 //   dist/keys.js    shortcut() for a page-wide shortcut (`corten/keys`): a module of its own, which
 //                   only apps whose scripts import it serve, preloaded with those scripts
 //   dist/view.js    rows() and the helpers of the generated view classes, which Corten puts at
@@ -29,6 +31,11 @@ const outputs = [
     name: "format.js",
     entryPoints: [join(js, "format.js")],
     banner: { js: "// Corten script formats (MIT). Built from crates/corten/js/format.js by scripts/build-js.mjs; do not edit." },
+  },
+  {
+    name: "upload.js",
+    entryPoints: [join(js, "upload.js")],
+    banner: { js: "// Corten upload (MIT). Built from crates/corten/js/upload.js by scripts/build-js.mjs; do not edit." },
   },
   {
     name: "keys.js",

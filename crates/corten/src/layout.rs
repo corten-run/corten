@@ -38,10 +38,11 @@ use crate::view::Render;
 /// page is the same for everyone, so it draws no one's value. A write that draws a page rather
 /// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
 /// answered. The error page for a failure Corten finds the request at fault for (an unknown
-/// address, a wrong method, a refusal other than a 429, which slows a client down, a request that
-/// does not parse) starts the reads not started yet and waits for them as a page does, so a 404
-/// draws the count every other page does. For any other failure (a handler's [`crate::Error`] at
-/// any status but 404, a 5xx, a 429, a cross-site write) it starts none and waits for none: it
+/// address, a wrong method, a refusal other than a 429 by an extractor or by the handler's own
+/// `Refused` (a 429 slows a client down), a request that does not parse) starts the reads not
+/// started yet and waits for them as a page does, so a 404 draws the count every other page does.
+/// For any other failure (a handler's [`crate::Error`] at any status but 404, a 5xx, a 429, a
+/// cross-site write) it starts none and waits for none: it
 /// draws a value only if its read is in already, since what made the request fail (a database
 /// that is down) is likely what the read needs. An answer that draws no layout (a redirect) drops
 /// the read, which cancels it. A place goes in the `<body>` around `<main>`, not in `<head>` or
@@ -152,8 +153,9 @@ pub trait LayoutRead: Send + Sync + 'static {
     type Value: Send + 'static;
 
     /// Starts the read for a request whose answer draws the layout, or `None` where there is
-    /// nothing to read (no one is signed in, or the page gives the value itself,
-    /// [`crate::HtmlResponse::give`]). Whatever it uses is taken by value: the read is
+    /// nothing to read (no one is signed in). Not called for a route whose page gives the value
+    /// itself and says so, `#[route("/cart", get = cart, gives(CartCount))]`
+    /// ([`crate::HtmlResponse::give`]). Whatever it uses is taken by value: the read is
     /// `Send + 'static`.
     fn start(&self, parts: &Parts) -> Option<impl Future<Output = Self::Value> + Send + 'static>;
 
@@ -193,9 +195,7 @@ fn fresh_token() -> u64 {
 /// `token` as a mark writes it: 16 lowercase hex digits.
 fn hex(token: u64) -> [u8; 16] {
     let mut out = [0; 16];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = b"0123456789abcdef"[(token >> (60 - 4 * i)) as usize & 0xf];
-    }
+    crate::ascii::hex(token, &mut out);
     out
 }
 
@@ -511,6 +511,20 @@ struct Here {
     kept: Option<Parts>,
     /// The error page is for a failure the request is at fault for, so it waits for its reads.
     error_waits: bool,
+    /// The reads the route's `GET` page gives itself (`gives(..)`), so not started for it.
+    gives: &'static [fn() -> TypeId],
+    /// The values a filled page gave itself, kept for an error page made of it.
+    given: Vec<Gift>,
+}
+
+/// `gives(CartCount)` on a route in a `#[corten::routes]` module: the layout reads its `GET`
+/// page gives itself ([`crate::HtmlResponse::give`]), so none of them is started for it.
+#[derive(Clone, Copy)]
+pub(crate) struct Gives(pub(crate) &'static [fn() -> TypeId]);
+
+/// Whether `id` is one of the reads `gives` names.
+fn names(gives: &[fn() -> TypeId], id: TypeId) -> bool {
+    gives.iter().any(|given| given() == id)
 }
 
 impl StartHere {
@@ -522,6 +536,8 @@ impl StartHere {
             reads: Reads::default(),
             kept: None,
             error_waits: false,
+            gives: &[],
+            given: Vec::new(),
         })))
     }
 
@@ -572,6 +588,12 @@ impl StartHere {
         if here.state == State::Waiting {
             here.kept = None;
             here.start_with(parts, |_| true);
+        } else if here.state == State::Started && !here.gives.is_empty() {
+            // The route's page would have given these; the error page is not that page. One the
+            // page did give is kept, drawn as the page drew it.
+            let gives = std::mem::take(&mut here.gives);
+            let given: Vec<TypeId> = here.given.iter().map(|(id, _)| *id).collect();
+            here.start_with(parts, |id| names(gives, id) && !given.contains(&id));
         }
     }
 
@@ -612,14 +634,19 @@ impl StartHere {
             // is ready at once, and the request's timer polls the page first): a wait added after
             // it would turn a page in time into a 503.
             Some(until) => {
-                if tokio::time::timeout_at(until, all).await.is_err() && !now {
-                    let here = self.lock();
-                    for Started { index, step, .. } in &here.reads.0 {
-                        if matches!(step, Step::Running(_)) {
-                            let name = here.shared.layout_reads.get(*index).map_or("", |read| read.name());
-                            tracing::warn!("corten: the layout read {name} passed the request's deadline, so the layout draws nothing for it");
+                if tokio::time::timeout_at(until, all).await.is_err() {
+                    let mut here = self.lock();
+                    if !now {
+                        for Started { index, step, .. } in &here.reads.0 {
+                            if matches!(step, Step::Running(_)) {
+                                let name = here.shared.layout_reads.get(*index).map_or("", |read| read.name());
+                                tracing::warn!("corten: the layout read {name} passed the request's deadline, so the layout draws nothing for it");
+                            }
                         }
                     }
+                    // Dropped, which stops them: nothing waits for them after this, whatever the
+                    // page turns out to be.
+                    here.reads.0.retain(|started| !matches!(started.step, Step::Running(_)));
                 }
             }
             None => all.await,
@@ -688,12 +715,36 @@ impl StartHere {
                 if !cfg!(debug_assertions) {
                     not_a_page(name);
                 } else {
+                    let dev = here.shared.dev;
                     drop(here);
+                    // About the app's code: the error page keeps it outside dev too.
                     let message = format!(
-                    "corten: the page draws later::<{name}>(), but its route's answer type says it is not a page (Answer::PAGE), so no read is started for it: return HtmlResult, or set const PAGE: bool = true on the answer type (or forward its page's)"
-                );
-                    tracing::error!("{message}");
-                    return crate::Error::new(message).into_response();
+                        "the page draws later::<{name}>(), but its route's answer type says it is not a page (Answer::PAGE), so no read is started for it: return HtmlResult, or set const PAGE: bool = true on the answer type (or forward its page's)"
+                    );
+                    return crate::page::unserved(dev, message).into_response();
+                }
+            }
+            // A route that says its page gives a read (`gives(..)`) did not start it, so a page that
+            // draws it without giving it draws nothing there: a debug build refuses that page.
+            if !here.gives.is_empty() && !pending.signal.is_error_page() {
+                let said = here.gives;
+                let missing = pending
+                    .places
+                    .slots
+                    .iter()
+                    .find(|slot| slot.placed && !slot.head && names(said, slot.id) && !gifts.contains(&slot.id));
+                if let Some(slot) = missing {
+                    if !cfg!(debug_assertions) {
+                        not_given(slot.name);
+                    } else {
+                        let dev = here.shared.dev;
+                        drop(here);
+                        let message = format!(
+                            "the page draws later::<{0}>() and its route says gives({0}), so the read is not started, but the page did not give it: give it (page.give::<{0}>(..)), or take gives({0}) off the route",
+                            slot.name
+                        );
+                        return crate::page::unserved(dev, message).into_response();
+                    }
                 }
             }
             let refused = for_all || matches!(here.state, State::Refused | State::NotAPage);
@@ -702,18 +753,6 @@ impl StartHere {
             (shared.clone(), refused, *error_waits)
         };
         self.finish(pending.signal.is_error_page() && !error_waits).await;
-        let reads = std::mem::take(&mut self.lock().reads.0);
-        // Each value by its read's type, and whether that read looked up who is asking. A `Public`
-        // page draws none, not even one it gave.
-        let mut values: Vec<(TypeId, Box<dyn Any + Send>, bool)> = Vec::new();
-        if !refused {
-            values.extend(given.into_iter().map(|(id, value)| (id, value, false)));
-        }
-        for Started { index, step, asked } in reads {
-            if let (Step::Done(value), Some(read)) = (step, shared.layout_reads.get(index)) {
-                values.push((read.id(), value, asked.load(Ordering::Relaxed)));
-            }
-        }
         let (head, body) = res.into_parts();
         let page = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(page) => page,
@@ -732,6 +771,26 @@ impl StartHere {
         // A view that drew this request's submit key makes the page one no tag stands for
         // (`cache::Unrepeatable`), as the page's own render does.
         crate::form::DREW_KEY.set(false);
+        // The reads in are drawn from where they are and stay there, and the values the page gave
+        // are kept beside them (`Here::given`), for an error page the app's middleware may still
+        // make of this page, which draws them as this one does (#911); they live as long as the
+        // request. Held to the end of the splice: a read's view is given no request, so nothing
+        // it draws takes this again.
+        let mut here = self.lock();
+        here.reads.0.retain(|started| matches!(started.step, Step::Done(_)));
+        // Each value by its read's type, and whether that read looked up who is asking. A `Public`
+        // page draws none, not even one it gave (and started none, so none is in).
+        let mut values: Vec<(TypeId, &(dyn Any + Send), bool)> = Vec::new();
+        if !refused {
+            values.extend(given.iter().map(|(id, value)| (*id, &**value, false)));
+            // An error page made of a filled page: what that page gave, after the error page's own.
+            values.extend(here.given.iter().map(|(id, value)| (*id, &**value, false)));
+        }
+        for Started { index, step, asked } in &here.reads.0 {
+            if let (Step::Done(value), Some(read)) = (step, shared.layout_reads.get(*index)) {
+                values.push((read.id(), &**value, asked.load(Ordering::Relaxed)));
+            }
+        }
         let out = splice(page, pending.places.token, &pending.places.slots, |_, slot, out| {
             // A read the app does not start draws nothing, a value the page gave included; looked
             // for first, wherever the place is, so it is logged.
@@ -743,10 +802,17 @@ impl StartHere {
                 return;
             }
             let Some((_, value, asked)) = values.iter().find(|(id, ..)| *id == slot.id) else { return };
-            if draw(&**read, &**value, &shared, &pending.signal, out) {
+            if draw(&**read, *value, &shared, &pending.signal, out) {
                 personal |= *asked;
             }
         });
+        drop(values);
+        // What the page gave stays for that error page, moved, not copied; a `Public` page's stays
+        // out, as its reads do.
+        if !refused && !given.is_empty() {
+            here.given = given;
+        }
+        drop(here);
         if personal {
             pending.signal.mark_personal();
         }
@@ -768,6 +834,16 @@ fn not_a_page(name: &'static str) {
     }
 }
 
+/// A release build's page whose route says it gives a read (`gives(..)`) and that did not (a
+/// debug build refuses the page): logged once.
+#[cold]
+fn not_given(name: &'static str) {
+    static LOGGED: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+    if first_time(&LOGGED, name) {
+        tracing::warn!("corten: a page draws later::<{name}>() and its route says gives({name}), but the page did not give it, so nothing is drawn there: give it, or take gives({name}) off the route");
+    }
+}
+
 /// A release build's page that draws a read the app does not start (a debug build refuses the
 /// page): logged once.
 #[cold]
@@ -784,7 +860,13 @@ impl Here {
     fn at_route(&mut self, parts: &mut Parts) {
         use axum::http::Method;
         match parts.method {
-            Method::GET => self.start_with(parts, |_| true),
+            Method::GET => {
+                if let Some(Gives(gives)) = parts.extensions.get::<Gives>().copied() {
+                    self.gives = gives;
+                }
+                let gives = self.gives;
+                self.start_with(parts, |id| !names(gives, id));
+            }
             Method::HEAD => self.state = State::Refused,
             _ => {
                 if self.kept.is_none() {

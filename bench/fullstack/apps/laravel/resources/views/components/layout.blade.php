@@ -1,12 +1,13 @@
-@props(['title' => 'Card Market'])
+@props(['title' => 'Card Market', 'lang' => 'en'])
 <!doctype html>
-<html lang="en">
+<html lang="{{ $lang }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ $title }}</title>
 <link rel="stylesheet" href="{{ asset('style.css') }}">
 <link rel="stylesheet" href="{{ asset('components.css') }}">
+{{ $head ?? '' }}
 @livewireStyles
 <script>
 // The browser benchmark reads this mark: Livewire and Alpine have started.

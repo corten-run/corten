@@ -43,7 +43,15 @@ pub fn app(source: Source) -> App {
         Err(_) => WRITES_PER_MINUTE,
     };
     let keys = |name: &str| std::env::var(name).unwrap_or_default();
-    app_with(source, Keys { partners: Partners::parse(&keys("API_KEYS")), agents: &keys("AGENT_TOKENS") }, writes)
+    let app = app_with(source, Keys { partners: Partners::parse(&keys("API_KEYS")), agents: &keys("AGENT_TOKENS") }, writes);
+    // The most connections held open at once (`MAX_CONNECTIONS`), so many idle or slow clients
+    // cannot hold every socket the process may open; no limit unless set.
+    match std::env::var("MAX_CONNECTIONS") {
+        Ok(n) => {
+            app.max_connections(n.trim().parse().ok().filter(|&n| n > 0).expect("MAX_CONNECTIONS is a whole number above zero"))
+        }
+        Err(_) => app,
+    }
 }
 
 /// Who may call the JSON routes: partners by API key, agents by token (`AGENT_TOKENS`, comma
@@ -136,9 +144,12 @@ impl Partners {
         Partners(Arc::new(pairs.map(|(name, key)| (key.to_string(), Arc::from(name))).collect()))
     }
 
+    /// The header a partner sends its key in, read here and named in the API's document.
+    const HEADER: &'static str = "x-api-key";
+
     /// The partner whose key the request sends (`X-Api-Key`).
     fn named(&self, headers: &HeaderMap) -> Option<&Arc<str>> {
-        self.0.get(headers.get("x-api-key")?.to_str().ok()?)
+        self.0.get(headers.get(Self::HEADER)?.to_str().ok()?)
     }
 }
 
@@ -147,6 +158,13 @@ impl Partners {
 #[derive(Clone, Hash)]
 pub(crate) struct Partner {
     pub name: Arc<str>,
+}
+
+/// In the API's OpenAPI document, the key it is known by and the header it is read from.
+impl corten::openapi::Argument for Partner {
+    fn describe(operation: &mut corten::openapi::Operation<'_>) {
+        operation.api_key(Partners::HEADER, "The partner's API key.");
+    }
 }
 
 impl Identify<ApiState> for Partner {
@@ -710,6 +728,15 @@ mod tests {
         assert!(body.contains("<h1>Category promo</h1>") && body.contains(r#"<a href="/">Back to popular items</a>"#));
     }
 
+    /// The API's OpenAPI document, kept beside the code for partners and client generators, and
+    /// validated by `npm run check`.
+    #[tokio::test]
+    async fn the_openapi_document_is_current() {
+        let doc = app().get(&crate::api::ApiDoc).await;
+        assert_eq!(doc.status(), StatusCode::OK);
+        corten::openapi::sync(concat!(env!("CARGO_MANIFEST_DIR"), "/openapi.json"), doc.text());
+    }
+
     /// The scripts are checked against these declarations by `npm run check`.
     #[test]
     fn script_types_match_the_server() {
@@ -877,6 +904,35 @@ mod tests {
         }
     }
 
+    /// What reading the item API's responses costs, for callgrind: each of the 500 benchmark
+    /// responses read once by `read_all`, with `FromJson` or (`READ_WITH=serde`) serde_json. Build
+    /// with `cargo test --release -p card-market --no-run`, then run the binary it names:
+    /// `CORTEN_FIXTURE=/path/items.json valgrind --tool=callgrind --collect-atstart=no
+    /// --toggle-collect='*read_all*' <test binary> --ignored --exact app::tests::read_cost`; the
+    /// instructions over 500 are one response's. Take both readers: `FromJson` falling back to
+    /// serde_json on a response shows as its count nearing serde_json's.
+    #[test]
+    #[ignore]
+    fn read_cost() {
+        #[inline(never)]
+        fn read_all(responses: &[&str], serde: bool) -> usize {
+            let read = |r: &str| {
+                if serde {
+                    serde_json::from_str::<crate::model::ApiItem>(r).is_ok()
+                } else {
+                    corten::json::from_str::<crate::model::ApiItem>(r).is_ok()
+                }
+            };
+            responses.iter().filter(|r| read(std::hint::black_box(r))).count()
+        }
+        let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
+        let text = std::fs::read_to_string(&path).unwrap();
+        let raw: std::collections::HashMap<String, &serde_json::value::RawValue> = serde_json::from_str(&text).unwrap();
+        let responses: Vec<&str> = (1..=500).map(|n| raw[&format!("item_{n}")].get()).collect();
+        let serde = std::env::var("READ_WITH").is_ok_and(|w| w == "serde");
+        assert_eq!(read_all(&responses, serde), responses.len());
+    }
+
     #[tokio::test]
     #[ignore]
     async fn route_loop() {
@@ -901,21 +957,36 @@ mod tests {
             "document" => (super::app(source.clone()).router(), "/items/", None),
             other => panic!("unknown LOOP_TARGET {other}"),
         };
+        // What the client sends: `curl`'s `identity` by default. A browser's names its compressions
+        // (`LOOP_ENCODING="gzip, deflate, br, zstd"`) and has the page's tag hashed; `LOOP_TAG`, an
+        // `If-None-Match` that matches nothing, has it hashed without compressing it.
+        let encoding = std::env::var("LOOP_ENCODING").unwrap_or_else(|_| "identity".into());
+        let tag = std::env::var("LOOP_TAG").ok().filter(|tag| !tag.is_empty());
         let paths: Vec<String> = (1..=500).map(|n| format!("{prefix}item_{n}")).collect();
+        let request = |path: &str| {
+            let mut req = Request::get(path).header("accept-encoding", encoding.as_str());
+            if let Some(tag) = &tag {
+                req = req.header("if-none-match", tag.as_str());
+            }
+            if let Some(mode) = mode {
+                req = req.header("corten", mode);
+            }
+            req.body(Body::empty()).unwrap()
+        };
         let start = Instant::now();
         let mut count = 0u64;
         while start.elapsed() < Duration::from_secs(seconds) {
             for path in &paths {
-                let mut req = Request::get(path.as_str()).header("accept-encoding", "identity");
-                if let Some(mode) = mode {
-                    req = req.header("corten", mode);
-                }
-                let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+                let res = router.clone().oneshot(request(path)).await.unwrap();
                 std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes());
             }
             count += paths.len() as u64;
         }
-        println!("{target}: {count} requests, {:.2} us per request", start.elapsed().as_secs_f64() * 1e6 / count as f64);
+        let per = start.elapsed().as_secs_f64() * 1e6 / count as f64;
+        let res = router.clone().oneshot(request(&paths[0])).await.unwrap();
+        let header = |name| res.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or("none").to_owned();
+        println!("{target} ({encoding}): tag {}, content-encoding {}", header("etag"), header("content-encoding"));
+        println!("{target}: {count} requests, {per:.2} us per request");
     }
 
     #[tokio::test]

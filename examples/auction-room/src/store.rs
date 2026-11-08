@@ -317,11 +317,17 @@ impl Store {
         self.pool.close().await;
     }
 
-    /// Every bid on lot `id`, oldest first, for its history file.
-    pub async fn history(&self, id: &str) -> Result<Vec<Bid>, Error> {
-        let rows =
-            sqlx::query("SELECT bidder, cents, at FROM bids WHERE lot = ? ORDER BY id").bind(id).fetch_all(&self.pool).await?;
-        Ok(rows.iter().map(bid).collect())
+    /// Up to `limit` bids on lot `id` after the bid `after` (0 for the first), oldest first, and
+    /// the last one's key to ask for the next: a page of its history file.
+    pub async fn history(&self, id: &str, after: i64, limit: u32) -> Result<(Vec<Bid>, i64), Error> {
+        let rows = sqlx::query("SELECT id, bidder, cents, at FROM bids WHERE lot = ? AND id > ? ORDER BY id LIMIT ?")
+            .bind(id)
+            .bind(after)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+        let last = rows.last().map_or(after, |row| row.get("id"));
+        Ok((rows.iter().map(bid).collect(), last))
     }
 
     /// Bids `cents` on lot `id` for `bidder`, once per `submit` key: taken only while the lot is
@@ -404,6 +410,20 @@ mod tests {
         assert_eq!(store.bid("drake", "Grace", 1500, "k5").await.unwrap(), Ok(Placed::New { outbid: None }));
         let standing = store.standing("drake").await.unwrap().unwrap();
         assert_eq!((standing.count, standing.top().map(|b| b.cents), standing.minimum()), (3, Some(1500), 1600));
+    }
+
+    /// A lot's history is read a page at a time, each page after the last one's key.
+    #[tokio::test]
+    async fn a_lots_history_is_read_a_page_at_a_time() {
+        let store = store().await;
+        for (i, cents) in [1000, 1100, 1200].into_iter().enumerate() {
+            assert!(store.bid("drake", "Ada", cents, &format!("k{i}")).await.unwrap().is_ok());
+        }
+        let (first, after) = store.history("drake", 0, 2).await.unwrap();
+        assert_eq!(first.iter().map(|b| b.cents).collect::<Vec<_>>(), [1000, 1100]);
+        let (rest, last) = store.history("drake", after, 2).await.unwrap();
+        assert_eq!(rest.iter().map(|b| b.cents).collect::<Vec<_>>(), [1200]);
+        assert_eq!(store.history("drake", last, 2).await.unwrap(), (Vec::new(), last), "then nothing");
     }
 
     #[tokio::test]

@@ -1,9 +1,9 @@
 //! The seller's orders: the kit's other components on a page an app would have, a list of orders
 //! with its pages, the shipping settings and the questions sellers ask.
+use corten::Href;
 use corten::form::HintId;
 use corten::i18n::Minor;
 use corten::prelude::*;
-use serde::Deserialize;
 
 use corten_ui::MenuButton;
 
@@ -20,15 +20,15 @@ use crate::ui::{
     field::Field,
     icon::{self, Icon},
     meter::Meter,
-    pagination::Pagination,
+    pagination::{Pagination, PreviousNext},
     popover::Popover,
-    progress::{Progress, ProgressSize},
-    segmented::{Legend, SegmentedLinks, SegmentedRadio, SegmentedRadios},
+    progress::{Progress, ProgressSize, ProgressTone},
+    segmented::{Legend, SegmentedLinks, SegmentedRadio, SegmentedRadios, SegmentedWidth},
     select::Select,
     separator::{Orientation, Separator},
     skeleton::{Skeleton, SkeletonShape},
     slider::Slider,
-    stack::{Cluster, Gap, Stack},
+    stack::{Cluster, Gap, Stack, StackStart},
     stats::{Stat, StatTone, Stats, StatsSurface},
     status_dot::{StatusDot, StatusTone},
     steps::{Step, StepState, Steps, StepsLayout},
@@ -69,7 +69,7 @@ impl Status {
 }
 
 /// The order the table is sorted in, by the `sort` query value; newest first when there is none.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderSort {
     TotalUp,
@@ -112,7 +112,7 @@ pub const PER_PAGE: usize = 4;
 pub const PAGES: usize = ORDERS.len().div_ceil(PER_PAGE);
 
 /// Where the seller ships from, by the word the settings form posts.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum Warehouse {
     Portland,
@@ -133,7 +133,7 @@ impl Warehouse {
 }
 
 /// The size of the shipping labels the seller prints, by the word the settings form posts.
-#[derive(Clone, Copy, PartialEq, Debug, UrlValue, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
 #[serde(rename_all = "snake_case")]
 pub enum LabelSize {
     Thermal,
@@ -149,7 +149,7 @@ impl LabelSize {
     }
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct SettingsForm {
     pub warehouse: Warehouse,
     /// The segmented radios: one of the two sizes, sent as any radio's value.
@@ -187,19 +187,86 @@ struct PayoutTitle;
 #[derive(Id)]
 struct LimitId;
 
-/// The label run's bars: the run's labels, and the current label's pages, not known yet.
+/// The label run's bars: the run's labels, the current label's pages, not known yet, and the
+/// morning's run, finished.
 #[derive(Id)]
 struct LabelsId;
 #[derive(Id)]
 struct LabelPagesId;
+#[derive(Id)]
+struct MorningLabelsId;
 
 /// The most a seller may sell in a month, in cents, until they have 50 sales.
 const LIMIT_CENTS: u64 = 15_000;
 
-/// The orders page: `page` counts from 1, `sort` is the table's order, and `photo` is the
-/// picture of a buyer who has one.
+/// A payout: the day it was asked for and what happened to it, in order.
+pub struct Payout {
+    pub day: &'static str,
+    pub steps: [Step<'static>; 3],
+}
+
+/// The seller's payouts, newest first. The card shows one, paged by the one before and the one
+/// after it, as a list an API pages by cursor is. The newest was refused by the bank.
+pub const PAYOUTS: [&Payout; 3] = [&MAR_21, &MAR_14, &MAR_7];
+
+const MAR_21: Payout = Payout {
+    day: "Mar 21",
+    steps: [
+        Step { label: "Requested", description: Some("Mar 21, 9:00 AM"), link: None, state: StepState::Done("(done)") },
+        Step {
+            label: "Sent to the bank",
+            description: Some("Mar 21, 9:02 AM, reference PX-20431"),
+            link: None,
+            state: StepState::Done("(done)"),
+        },
+        Step {
+            label: "Paid",
+            description: Some("The bank refused the account number. Check it in Settings, then ask again."),
+            link: None,
+            state: StepState::Failed("(failed)"),
+        },
+    ],
+};
+
+const MAR_14: Payout = Payout {
+    day: "Mar 14",
+    steps: [
+        Step { label: "Requested", description: Some("Mar 14, 9:00 AM"), link: None, state: StepState::Done("(done)") },
+        Step {
+            label: "Sent to the bank",
+            description: Some("Mar 14, 9:01 AM, reference PX-20377"),
+            link: None,
+            state: StepState::Done("(done)"),
+        },
+        Step { label: "Paid", description: Some("Mar 16"), link: None, state: StepState::Done("(done)") },
+    ],
+};
+
+const MAR_7: Payout = Payout {
+    day: "Mar 7",
+    steps: [
+        Step { label: "Requested", description: Some("Mar 7, 9:00 AM"), link: None, state: StepState::Done("(done)") },
+        Step {
+            label: "Sent to the bank",
+            description: Some("Mar 7, 9:03 AM, reference PX-20318"),
+            link: None,
+            state: StepState::Done("(done)"),
+        },
+        Step { label: "Paid", description: Some("Mar 9"), link: None, state: StepState::Done("(done)") },
+    ],
+};
+
+/// The orders page: `page` counts from 1, `sort` is the table's order, `payout` is which of
+/// `PAYOUTS` the payouts card shows, and `photo` is the picture of a buyer who has one.
 #[component(css)]
-pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) -> impl Render {
+pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, photo: &'a str) -> impl Render {
+    // The payouts card knows only its neighbours: a newer one unless it shows the newest, an older
+    // one unless it shows the oldest. Each keeps the table's page and order, as the table's pages
+    // keep the payout.
+    let shown = Some(page).filter(|p| *p > 1);
+    let shown_payout = PAYOUTS[payout];
+    let newer = (payout > 0).then(|| url::Orders { page: shown, sort, payout: Some(payout - 1).filter(|p| *p > 0) });
+    let older = (payout + 1 < PAYOUTS.len()).then(|| url::Orders { page: shown, sort, payout: Some(payout + 1) });
     let f = SettingsForm::FIELDS;
     let mut sorted: Vec<&Order> = ORDERS.iter().collect();
     match sort {
@@ -236,6 +303,10 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
             <Alert variant={AlertVariant::Warning} emphasis={AlertEmphasis::Soft}>
                 <strong>"One order is past its ship-by date"</strong>
                 <p>"Ada Lovelace's Ashen Drake was due to ship yesterday. Ship it today or message the buyer."</p>
+                <ul>
+                    <li>"Ship it today with its postage bought."</li>
+                    <li>"Or message the buyer and give a new date."</li>
+                </ul>
                 <div class={Cluster { gap: Gap::Sm }}>
                     <button class={Button { variant: ButtonVariant::Success, size: ButtonSize::Sm }} type="button">
                         "Mark shipped"
@@ -282,18 +353,28 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                     <div class={CardContent {}}>
                         <Alert variant={AlertVariant::Info} emphasis={AlertEmphasis::Outline}>
                             <p>"Orders paid before 3 pm ship the same day."</p>
+                            <ul>
+                                <li>
+                                    "Paid later, they ship the next day,"
+                                    <ul>
+                                        <li>"or on Monday when that is a Sunday."</li>
+                                    </ul>
+                                </li>
+                            </ul>
                         </Alert>
                         // Each order is a view the server renders: links, the current one marked.
-                        <nav class={SegmentedLinks {}} aria-label="Order the orders by">
-                            <a href={url::Orders { page: None, sort: None }} aria-current={current(None)}>"Newest"</a>
+                        <nav class={SegmentedLinks { width: SegmentedWidth::Fit }} aria-label="Order the orders by">
+                            <a href={url::Orders { page: None, sort: None, payout: None }} aria-current={current(None)}>
+                                "Newest"
+                            </a>
                             <a
-                                href={url::Orders { page: None, sort: Some(OrderSort::TotalUp) }}
+                                href={url::Orders { page: None, sort: Some(OrderSort::TotalUp), payout: None }}
                                 aria-current={current(Some(OrderSort::TotalUp))}
                             >
                                 "Lowest total"
                             </a>
                             <a
-                                href={url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                                href={url::Orders { page: None, sort: Some(OrderSort::TotalDown), payout: None }}
                                 aria-current={current(Some(OrderSort::TotalDown))}
                             >
                                 "Highest total"
@@ -312,8 +393,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                         <SortHeader
                                             label="Total"
                                             sort={by_total}
-                                            ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp) }}
-                                            descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                                            ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp), payout: None }}
+                                            descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown), payout: None }}
                                             first={Sort::Ascending}
                                             class={TableNumeric {}}
                                             on:sort={None::<Handler>}
@@ -354,7 +435,10 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                                         }}
                                                     >
                                                         <a role="menuitem" href={url::Help}>"Help with this order"</a>
-                                                        <a role="menuitem" href={url::Orders { page: None, sort: None }}>
+                                                        <a
+                                                            role="menuitem"
+                                                            href={url::Orders { page: None, sort: None, payout: None }}
+                                                        >
                                                             "Back to every order"
                                                         </a>
                                                     </MenuButton>
@@ -373,7 +457,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                             next_label="Next"
                             pages={PAGES}
                             current={page}
-                            link={|page| url::Orders { page: Some(page).filter(|p| *p > 1), sort }}
+                            link={|page| url::Orders { page: Some(page).filter(|p| *p > 1), sort, payout: Some(payout).filter(|p| *p > 0) }}
                         />
                     </footer>
                 </section>
@@ -403,6 +487,13 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                     {t.money(Minor(sold), USD)}
                                 </meter>
                             </Field>
+                            // A column whose children keep their own width: a link as wide as its words, a badge.
+                            <div class={(Stack { gap: Gap::Xs }, StackStart {})}>
+                                <a href={url::Help}>"How selling limits work"</a>
+                                <span class={Badge { tone: BadgeTone::Neutral, emphasis: BadgeEmphasis::Outline }}>
+                                    "Lifts at 50 sales"
+                                </span>
+                            </div>
                         </div>
                     </section>
                     <section class={Card {}}>
@@ -424,48 +515,60 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                         </div>
                     </section>
                     <section class={Card {}}>
-                        <header class={CardHeader {}}><h2>"Last payout"</h2></header>
+                        <header class={CardHeader {}}><h2>"Payout of "{shown_payout.day}</h2></header>
                         <div class={CardContent {}}>
                             // What happened to the payout, in order: each step's time or reason
                             // shown at every width, and a refused step told from a blocked one.
                             <Steps
                                 label="Payout"
                                 layout={StepsLayout::Timeline}
-                                steps={&[
-                                    Step {
-                                        label: "Requested",
-                                        description: Some("Mar 21, 9:00 AM"),
-                                        link: None,
-                                        state: StepState::Done("(done)"),
-                                    },
-                                    Step {
-                                        label: "Sent to the bank",
-                                        description: Some("Mar 21, 9:02 AM, reference PX-20431"),
-                                        link: None,
-                                        state: StepState::Done("(done)"),
-                                    },
-                                    Step {
-                                        label: "Paid",
-                                        description: Some("The bank refused the account number. Check it in Settings, then ask again."),
-                                        link: None,
-                                        state: StepState::Failed("(failed)"),
-                                    },
-                                ]}
+                                steps={&shown_payout.steps}
                             />
                         </div>
+                        <footer class={CardFooter {}}>
+                            <PreviousNext
+                                label="Payouts"
+                                previous_label="Newer"
+                                next_label="Older"
+                                previous={newer.as_ref().map(|r| r as &dyn Href)}
+                                next={older.as_ref().map(|r| r as &dyn Href)}
+                            />
+                        </footer>
                     </section>
                     <section class={Card {}}>
                         <header class={CardHeader {}}><h2>"Printing labels"</h2></header>
                         <div class={CardContent {}}>
-                            // Progress: how far the run is, and, nested under it, a step whose size is not known yet.
+                            // Progress: how far the run is, and, nested under it, a step whose size is not known yet;
+                            // then a run that finished, in the success tone, its words saying so.
                             <div class={Stack { gap: Gap::Md }}>
                                 <Field id={LabelsId} label="Labels printed" hint="" error="">
-                                    <progress class={Progress { size: ProgressSize::Md }} id={LabelsId} max="12" value="5">
+                                    <progress
+                                        class={Progress { size: ProgressSize::Md, tone: ProgressTone::Primary }}
+                                        id={LabelsId}
+                                        max="12"
+                                        value="5"
+                                    >
                                         "5 of 12"
                                     </progress>
                                 </Field>
                                 <Field id={LabelPagesId} label="Sending the next label" hint="" error="">
-                                    <progress class={Progress { size: ProgressSize::Sm }} id={LabelPagesId}>"Starting"</progress>
+                                    <progress
+                                        class={Progress { size: ProgressSize::Sm, tone: ProgressTone::Primary }}
+                                        id={LabelPagesId}
+                                    >
+                                        "Starting"
+                                    </progress>
+                                </Field>
+                                <Field id={MorningLabelsId} label="Morning labels" hint="All 8 printed" error="">
+                                    <progress
+                                        class={Progress { size: ProgressSize::Md, tone: ProgressTone::Success }}
+                                        id={MorningLabelsId}
+                                        max="8"
+                                        value="8"
+                                        aria-describedby={HintId(&MorningLabelsId)}
+                                    >
+                                        "8 of 8"
+                                    </progress>
                                 </Field>
                             </div>
                         </div>
@@ -474,7 +577,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                     <section class={(CardPanel {}, Stack { gap: Gap::Md })} aria-labelledby={PayoutTitle}>
                         <h2 class={Title} id={PayoutTitle}>"Next payout"</h2>
                         // The shape the payout's live region shows before its first value.
-                        <div class={Payout} aria-busy="true">
+                        // A gap off the kit's scale: `Gap::App` sets none, so the page's `.payout` is the one.
+                        <div class={(Cluster { gap: Gap::App }, Payout)} aria-busy="true">
                             <span class={VisuallyHidden {}}>"Working out your next payout."</span>
                             <Skeleton shape={SkeletonShape::Circle} />
                             <div class={Lines}>
@@ -496,7 +600,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                         }
                                     </select>
                                 </Field>
-                                <SegmentedRadios legend={Legend::Shown("Label size")}>
+                                // A choice in the form's column: the field's width, each size an equal part.
+                                <SegmentedRadios legend={Legend::Shown("Label size")} width={SegmentedWidth::Fill}>
                                     <SegmentedRadio label={LabelSize::Thermal.label()}>
                                         <input type="radio" name={f.labels} value={LabelSize::Thermal} checked>
                                     </SegmentedRadio>

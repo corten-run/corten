@@ -54,6 +54,14 @@
 // So the code `html!` generates (`::corten::view::...`) also compiles inside this crate.
 extern crate self as corten;
 
+/// What Corten's derives name in the code they generate, so an app needs no dependency of its own
+/// for it: serde, whose `Deserialize` `#[derive(Fields)]` and `#[derive(UrlValue)]` implement. Not
+/// a public API.
+#[doc(hidden)]
+pub mod __private {
+    pub use serde;
+}
+
 /// What `#[derive(ToJson)]` and `#[derive(FromJson)]` wrap their JSON Schema impls in: kept with
 /// the `types` feature, dropped without it. Not a public API.
 #[cfg(feature = "types")]
@@ -70,6 +78,26 @@ macro_rules! __if_types {
 #[macro_export]
 macro_rules! __if_types {
     ($($item:tt)*) => {};
+}
+
+/// What `#[corten::routes(api = .., openapi = ..)]` builds its document in: the document with the
+/// `types` feature, an error that names the feature without it. Not a public API.
+#[cfg(feature = "types")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __openapi_document {
+    ($($document:tt)*) => { $($document)* };
+}
+
+/// What `#[corten::routes(api = .., openapi = ..)]` builds its document in: the document with the
+/// `types` feature, an error that names the feature without it. Not a public API.
+#[cfg(not(feature = "types"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __openapi_document {
+    ($($document:tt)*) => {
+        ::core::compile_error!("openapi = .. serves an OpenAPI document, built from the routes' JSON Schemas, so it needs corten's feature types: corten = { .., features = [\"types\"] }")
+    };
 }
 
 #[cfg(feature = "feed")]
@@ -94,7 +122,11 @@ pub mod i18n;
 #[cfg(feature = "json")]
 pub mod json;
 mod layout;
+#[cfg(feature = "log")]
+mod log;
 pub mod middleware;
+#[cfg(feature = "types")]
+pub mod openapi;
 mod page;
 pub mod pwa;
 pub mod route;
@@ -132,7 +164,7 @@ pub use answer::{
     Answer, FileAnswer, ForAll, ForOne, HtmlResponse, HtmlResult, LiveResponse, Media, NoStore, PageOr, Public, Relay,
 };
 #[cfg(feature = "json")]
-pub use answer::{EventStreamResponse, JsonError, JsonResponse, JsonResult};
+pub use answer::{JsonError, JsonResponse, JsonResult};
 pub use api::Api;
 pub use app::{listeners, serve, serve_on, serve_wrapped, App, Area};
 /// The axum version Corten is built on, so an app never depends on a second one.
@@ -148,10 +180,66 @@ pub use axum_core::extract::FromRef;
 pub use bytes::Bytes;
 pub use caller::{Caller, Identify, Refused};
 pub use client::{ClientIp, ClientZone};
-/// Form field names as constants: `#[derive(Deserialize, Fields)] struct AlertInput { email: String }`
+/// Form field names as constants: `#[derive(Fields)] struct AlertInput { email: String }`
 /// gives `AlertInput::FIELDS.email`, the [`FieldName`] `"email"` (serde `rename` and `rename_all`
 /// applied). Use them for `name=` in the form and in [`Errors::add`], and a renamed or misspelled
 /// field fails to compile instead of posting a field the handler never reads.
+///
+/// The derive also reads the form: it implements serde's `Deserialize` as serde's derive would
+/// from the same `#[serde(..)]`, so the names posted and the names read are one list and the
+/// struct derives nothing else for [`Form`]:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Fields)]
+/// #[serde(rename_all = "camelCase")]
+/// struct Offer { item_id: String, #[serde(default)] gift: bool, note: Option<String> }
+///
+/// let read: Offer = corten::form::from_bytes(b"itemId=7&gift=on").unwrap();
+/// assert_eq!((read.item_id.as_str(), read.gift, read.note), ("7", true, None));
+/// assert_eq!(Offer::FIELDS.item_id.as_str(), "itemId");
+/// ```
+///
+/// A `#[serde(..)]` that reads in a way the derive does not follow does not compile; give such a
+/// field a type of its own that implements `Deserialize`:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// fn parse<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> { serde::Deserialize::deserialize(d) }
+///
+/// #[derive(Fields)]
+/// struct Offer { #[serde(deserialize_with = "parse")] cents: u32 }
+/// ```
+///
+/// Nor does one that reads the whole type another way, or a `borrow` of a lifetime the field does
+/// not have:
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+///
+/// #[derive(Fields)]
+/// #[serde(try_from = "String")]
+/// struct Offer { cents: u32 }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// use std::borrow::Cow;
+///
+/// #[derive(Fields)]
+/// struct Offer<'a, 'b> { #[serde(borrow = "'b")] note: Cow<'a, str>, other: Cow<'b, str> }
+/// ```
+///
+/// Deriving serde's `Deserialize` beside it is a second impl of the same trait:
+///
+/// ```compile_fail,E0119
+/// use corten::prelude::*;
+///
+/// #[derive(serde::Deserialize, Fields)]
+/// struct Offer { cents: u32 }
+/// ```
 pub use corten_macros::Fields;
 /// The app's shared state, split for handlers: each field gets a [`FromRef`] impl, so a handler
 /// takes the part it reads (`State<Market>`) while the routes share one struct
@@ -518,57 +606,6 @@ fn event_cursor(cursor: String, of: &str) -> Option<String> {
     Some(cursor)
 }
 
-/// Streams named events of JSON, server-sent events the app's own script (`EventSource`), a
-/// native client or an agent reads: a job's progress, a status that changes. Each item is a
-/// [`StreamEvent`], `event: <name>` with `data: <JSON>`, and its cursor, if any, as the event's
-/// `id`, which a reconnecting client sends back as `Last-Event-ID` ([`LiveSince`]). As with
-/// [`live`], the stream is kept alive with a comment every 15 seconds, and it ends when the app
-/// starts shutting down, so a graceful shutdown is not held open by its clients (an `EventSource`
-/// reconnects, to another instance or this one restarted).
-///
-/// When `events` ends, the response ends, and an `EventSource` connects again a few seconds
-/// later. A stream that is over (the job is done) answers that reconnect with
-/// [`EventStreamResponse::ended`], a `204`, which the standard says stops it: send the last event
-/// with its cursor, and answer `ended()` to a `LiveSince` at that cursor. A script that closes
-/// its `EventSource` on the last event saves the request.
-///
-/// The event names and their data are not checked against the script that reads them (see
-/// `docs/design.md`, Limits).
-///
-/// ```
-/// use corten::{prelude::*, EventStreamResponse, StreamEvent};
-/// use futures_util::stream;
-///
-/// #[derive(ToJson)]
-/// struct Progress { done: u32, of: u32 }
-///
-/// async fn progress() -> EventStreamResponse {
-///     corten::event_stream(stream::iter((1..=3).map(|done| StreamEvent::new("progress", &Progress { done, of: 3 }).cursor(done.to_string()))))
-/// }
-/// ```
-///
-/// A route answering it is a JSON route: a failure before the stream starts is answered as JSON.
-#[cfg(feature = "json")]
-pub fn event_stream<S>(events: S) -> crate::EventStreamResponse
-where
-    S: Stream<Item = StreamEvent> + Send + 'static,
-{
-    let events = events.filter_map(|StreamEvent { name, data, cursor }| async move {
-        let name = name?;
-        let event = Event::default().event(name);
-        Some(Ok::<_, Infallible>(
-            match cursor {
-                Some(cursor) => event.id(cursor),
-                None => event,
-            }
-            .data(data),
-        ))
-    });
-    crate::answer::EventStreamResponse(unbuffered(
-        Sse::new(events.take_until(draining())).keep_alive(KeepAlive::default()).into_response(),
-    ))
-}
-
 /// An event stream that asks a proxy in front of the app to pass each event on as it is written:
 /// nginx holds a stream it buffers (or gzips) until the buffer fills, and reads
 /// `X-Accel-Buffering: no` per response (and does not send it on to the browser). Only event
@@ -579,56 +616,16 @@ pub(crate) fn unbuffered(mut res: Response) -> Response {
     res
 }
 
-/// One event of an [`event_stream`]: its name, its data as JSON and the app's cursor after it.
-#[cfg(feature = "json")]
-pub struct StreamEvent {
-    /// None for a name that would break the stream, which is not sent.
-    name: Option<&'static str>,
-    data: String,
-    cursor: Option<String>,
-}
-
-#[cfg(feature = "json")]
-impl StreamEvent {
-    /// The event `name` (what `addEventListener(name, ..)` listens for) with `data`'s JSON. A name
-    /// is one line of text that is not empty: another would end the event or be read as the
-    /// default `message`, so it panics in debug builds, and in release the event is not sent
-    /// (logged).
-    pub fn new(name: &'static str, data: &(impl crate::ToJson + ?Sized)) -> Self {
-        let name = if name.is_empty() || name.contains(['\n', '\r', '\0']) {
-            let message = format!("corten: an event's name is one line of text that is not empty: {name:?}");
-            if cfg!(debug_assertions) {
-                panic!("{message}");
-            }
-            tracing::error!("{message}");
-            None
-        } else {
-            Some(name)
-        };
-        StreamEvent { name, data: data.to_json(), cursor: None }
-    }
-
-    /// The app's cursor after this event: the point in its data a reconnect resumes from
-    /// ([`LiveSince`]). An event without one keeps the cursor before it, so a reconnect sends it
-    /// again. A cursor cannot hold a line break or a NUL: that panics in debug builds, and in
-    /// release the event is sent without it (logged).
-    pub fn cursor(mut self, cursor: impl Into<String>) -> Self {
-        self.cursor = event_cursor(cursor.into(), "stream event");
-        self
-    }
-}
-
 impl From<String> for Fragment {
     fn from(html: String) -> Self {
         Fragment::new(html)
     }
 }
 
-/// Where a [`live`] or [`event_stream`] stream resumes: the cursor of the last event the client
-/// received, from `Last-Event-ID` when it reconnects, or else the `since` query parameter on the
-/// first connection: the one the page gave its element, `<corten-live src={..} since={cursor}>`,
-/// or, for an event stream, the one on the URL the script opens. `None` when there is
-/// neither, and the handler draws the part as it is now.
+/// Where a [`live`] stream resumes: the cursor of the last event the client received, from
+/// `Last-Event-ID` when it reconnects, or else the `since` query parameter on the first
+/// connection: the one the page gave its element, `<corten-live src={..} since={cursor}>`.
+/// `None` when there is neither, and the handler draws the part as it is now.
 ///
 /// A handler sends what changed after the cursor, or nothing until the next change when the
 /// cursor is current, so a page view or a reconnect costs no extra read or render.
@@ -842,7 +839,12 @@ pub async fn shutdown_signal() {
 
 /// An error that ends the request with a status (500 unless set). The message is logged with
 /// `tracing` and never sent to the browser (except under `corten dev`); the app's error page is
-/// what the user sees.
+/// what the user sees. A handler that answers in a shape of its own reads the message with
+/// `Display` (`error.to_string()`) and the status with [`Error::status_code`]. The message is the
+/// log's, written for the app's developers: it can name a 5xx's internals, or a cause a
+/// [`Error::with_status`] hid (a [`Refused`] answered as a 404 still says `refused: 403
+/// Forbidden`), so sending it, in a body of the app's own or written into markup (`{error}`),
+/// is the app's choice, made where it knows the error is meant for the client.
 #[derive(Debug)]
 pub struct Error {
     status: StatusCode,
@@ -854,9 +856,11 @@ impl Error {
         Error { status: StatusCode::INTERNAL_SERVER_ERROR, source: error.into() }
     }
 
-    /// An error with a specific status, for example 403 for a permission check (404 is
-    /// [`Error::not_found`]): `return Err(Error::status(StatusCode::FORBIDDEN))` (in a JSON handler,
-    /// `Err(Error::status(..))?` or `.into()`, since its error is a [`JsonError`]).
+    /// An error with a specific status, for example 409 for a write that lost a race (404 is
+    /// [`Error::not_found`]): `return Err(Error::status(StatusCode::CONFLICT))` (in a JSON handler,
+    /// `Err(Error::status(..))?` or `.into()`, since its error is a [`JsonError`]). A permission
+    /// check refuses with [`Refused`] instead (`Err(Refused::forbidden())?`), so the error page
+    /// treats it as the request's fault.
     pub fn status(status: StatusCode) -> Self {
         Error { status, source: status.canonical_reason().unwrap_or("error").into() }
     }
@@ -882,16 +886,65 @@ impl Error {
 
     /// The same error with another status: `Error::new("no item 7").with_status(StatusCode::NOT_FOUND)`.
     /// A JSON client (an [`App::api`] route, or a request for `application/json`) gets a 4xx
-    /// error's message, so give it one written for the client; the error page never shows it.
+    /// error's message, so give it one written for the client; the error page never shows it. On a
+    /// handler's [`Refused`], another status makes it a plain failure at that status.
     pub fn with_status(mut self, status: StatusCode) -> Self {
         self.status = status;
         self
+    }
+
+    /// The status of the answer the error makes: 500 for [`Error::new`] and an error converted
+    /// with `?`, the one given to [`Error::status`] or [`Error::with_status`], a [`Refused`]'s own
+    /// (a sign-in's 401, which a browser is then sent to sign in from as a redirect). Named apart
+    /// from [`Error::status`], which makes an error.
+    ///
+    /// ```
+    /// use corten::{http::StatusCode, Error};
+    ///
+    /// let missing = Error::new("no item 7").with_status(StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.status_code(), StatusCode::NOT_FOUND);
+    /// assert_eq!(missing.to_string(), "no item 7");
+    /// ```
+    pub fn status_code(&self) -> StatusCode {
+        self.status
+    }
+}
+
+/// The error's message, as it is logged: the source's own `Display`.
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.source, f)
     }
 }
 
 impl<E: std::error::Error + Send + Sync + 'static> From<E> for Error {
     fn from(error: E) -> Self {
         Error::new(error)
+    }
+}
+
+/// A handler refuses the request as an extractor does: `Err(Refused::forbidden())?` (or
+/// `.into()`). It is answered as a [`Caller`]'s refusal is: the error page for a browser, at the
+/// refusal's status (a sign-in is a redirect, a 429 carries `Retry-After`), and the page treats it
+/// as the request's fault, so it draws the layout's reads ([`LayoutRead`]) as for a 404. A plain
+/// `Error::status(StatusCode::FORBIDDEN)` stays a failure that may be the app's own (a service
+/// that is down answered with a 4xx), which starts none.
+///
+/// ```
+/// use corten::{http::StatusCode, prelude::*};
+///
+/// fn owned(owner: u64, user: u64) -> corten::Result<()> {
+///     if owner != user {
+///         Err(Refused::forbidden())?;
+///     }
+///     Ok(())
+/// }
+/// # use corten::middleware::IntoResponse;
+/// assert_eq!(owned(1, 2).unwrap_err().into_response().status(), StatusCode::FORBIDDEN);
+/// ```
+impl From<Refused> for Error {
+    fn from(refused: Refused) -> Self {
+        Error { status: refused.status(), source: Box::new(caller::AsError(refused)) }
     }
 }
 
@@ -902,13 +955,42 @@ pub(crate) struct Failed(pub Arc<str>);
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        match self.source.downcast::<caller::AsError>() {
+            // A handler's refusal (`From<Refused>`): answered as an extractor's is.
+            Ok(refused) if refused.0.status() == self.status => refused.into_response(),
+            // `with_status` gave it another status, which is answered as a plain failure's is,
+            // telling a client only the refusal's own message: without one, the new status's
+            // reason, so a 404 that hides a record does not say it was a 403. The log has the cause.
+            Ok(refused) if refused.message().is_some() => Error { status: self.status, source: refused }.answer(),
+            Ok(refused) => {
+                let reason = self.status.canonical_reason().unwrap_or("Error");
+                Error { status: self.status, source: refused }.answer_saying(Arc::from(reason))
+            }
+            Err(source) => Error { status: self.status, source }.answer(),
+        }
+    }
+}
+
+impl Error {
+    fn answer(self) -> Response {
+        let detail = Arc::from(self.source.to_string());
+        let keeps_detail = cfg!(debug_assertions) && self.source.is::<page::Unserved>();
+        let mut res = self.answer_saying(detail);
+        if keeps_detail {
+            res.extensions_mut().insert(page::KeepsDetail);
+        }
+        res
+    }
+
+    /// The failure's answer, logged with its source and telling a client `detail`.
+    fn answer_saying(self, detail: Arc<str>) -> Response {
         if self.status.is_server_error() {
             tracing::error!(status = self.status.as_u16(), error = %self.source, "corten: request failed");
         } else {
             tracing::debug!(status = self.status.as_u16(), error = %self.source, "corten: request refused");
         }
         let mut res = (self.status, self.status.canonical_reason().unwrap_or("Error")).into_response();
-        res.extensions_mut().insert(Failed(Arc::from(self.source.to_string())));
+        res.extensions_mut().insert(Failed(detail));
         res
     }
 }

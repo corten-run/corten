@@ -25,18 +25,38 @@ export const buildBudgetMinutes = 240;
  */
 export const compiledFirst = ["corten", "leptos", "topcoat", "axum-maud", "gin", "drogon"];
 
+/**
+ * Why a round's name does not fit its tier, or null. A full round of the defaults tier is r<n>,
+ * the rounds trend.mjs reads; a full round of the matched tier is m<n>, so its numbers, measured
+ * with the production profile, never enter the defaults tier's trend. A step run on its own (one
+ * app measured again, a matrix alone) may use another name, as the defaults tier's experiments do,
+ * but never writes the matched tier's numbers into an r<n> round or the defaults' into an m<n>.
+ * @param {string} round
+ * @param {string} tier "defaults" or "matched"
+ * @param {{ full?: boolean }=} options full: run-all.mjs, summarize.mjs and droplet.mjs, which
+ *   make or read a whole round
+ */
+export const roundNameError = (round, tier, { full = false } = {}) => {
+  if (tier === "matched") {
+    if (/^m\d+$/.test(round)) return null;
+    if (full || /^r\d+$/.test(round)) return `a matched-tier round is named m<n> (m1), not ${round}, so the defaults tier's trend (r<n>) never reads it`;
+    return null;
+  }
+  return /^m\d+$/.test(round) ? `${round} is a matched-tier round's name (m<n>): run it with BENCH_TIER=matched (droplet.mjs --tier matched), or name it otherwise` : null;
+};
+
 /** The minutes run-all.mjs may wait for each app to start before the browser step. */
 export const startMinutes = 2;
 
 /**
  * The hours a full-stack round's unit may run (droplet.mjs): every call's limit, the waits for the
  * apps to start and the build budget fit in it (round.test.mjs checks). r14 ran in 6.3 hours, from
- * cold start to its summary.
+ * cold start to its summary. 23 from #813, whose mixed phase gave the api page call 80 minutes more.
  */
-export const fullstackHours = 21;
+export const fullstackHours = 23;
 
 /** The minutes each of run-ssr.mjs's four calls may take for one pass (`calls`). */
-const ssrLimits = [140, 150, 140, 150];
+const ssrLimits = [140, 150, 220, 150];
 
 /**
  * The hours a full-stack round of `passes` load passes may run: `fullstackHours`, and each pass
@@ -58,19 +78,21 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * run-ssr.mjs call 66 to 69 (the JSON calls have 150, since they take the JSON-only apps too:
  * nineteen with aspnet-aot, about 72, estimated by app count), count 33, look.mjs 3.2, browser
  * timing 14.7, the others under a minute, and build.mjs, one call an app, at most 14.2 (Leptos),
- * against its 90. conform.mjs, new after r14, took about 2.8 minutes an app locally (two apps in
+ * against its 90. The api page call has 220: from #813 it ends each app with the mixed phase, its
+ * 60 s, up to 60 s for the answers still to come after it and the page and one post before it,
+ * about 2 minutes an app, so about 105 with eighteen (estimated). conform.mjs, new after r14, took about 2.8 minutes an app locally (two apps in
  * 340 s, Docker Desktop on a busy machine), so nineteen about 55 (estimated): it has 120. A build
  * call that is stopped skips only its app.
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps that render the pages (they serve the JSON too)
- * @param {number[]} ports their ports, in the same order
+ * @param {string[]} urls where the browser step reaches each, in the same order (the matched tier's through the edge)
  * @param {string[]} [jsonOnly] the apps that serve only the JSON (`pages: false`)
  * @param {number} [passes] each load phase's passes (run-ssr.mjs): its calls' limits are that many
  *   times one pass's
  * @returns {[string, number, string, ...string[]][]}
  */
-export const calls = (round, browserRuns, names, ports, jsonOnly = [], passes = 1) => [
+export const calls = (round, browserRuns, names, urls, jsonOnly = [], passes = 1) => [
   ["cold-start", 30, "cold-start.mjs", round, "10", [...names, ...jsonOnly].join(",")],
   ["fixture", ssrLimits[0] * passes, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page", String(passes)],
   ["fixture", ssrLimits[1] * passes, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json", String(passes)],
@@ -82,7 +104,7 @@ export const calls = (round, browserRuns, names, ports, jsonOnly = [], passes = 
   ["browser", 10, "parity.mjs"],
   ["browser", 15, "look.mjs"],
   ["browser", 10, "bytes.mjs", round],
-  ["browser", 30, "browser.mjs", ...names.map((n, i) => `${n}=http://localhost:${ports[i]}`), `runs=${browserRuns}`, `out=${round}/browser.json`],
+  ["browser", 30, "browser.mjs", ...names.map((n, i) => `${n}=${urls[i]}`), `runs=${browserRuns}`, `out=${round}/browser.json`],
   ...[...names].sort((a, b) => rank(a) - rank(b)).map((n) => /** @type {[string, number, string, ...string[]]} */ (["build", 90, "build.mjs", round, n])),
 ];
 

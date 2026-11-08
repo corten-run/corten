@@ -48,6 +48,10 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let mut many_words = false;
     // Each variant's word, and its name, so two that write the same word are refused.
     let mut words: Vec<(String, String)> = Vec::new();
+    // The words, as a list for an OpenAPI document's parameter schema.
+    let mut listed = TokenStream::new();
+    // Each variant as serde reads it, for the `Deserialize` impl.
+    let mut read = Vec::new();
     for tokens in split(body.stream(), ',') {
         let mut j = 0;
         let mut attrs = Vec::new();
@@ -62,6 +66,8 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             return err(ident.span(), format!("UrlValue: {ident} has fields; only a unit variant is one word in a URL"));
         }
         let mut rename = None;
+        let mut aliases = std::collections::BTreeSet::new();
+        let mut other = false;
         for arg in serde_args_for(&attrs, NAME)? {
             match (arg.key.as_str(), &arg.value) {
                 ("rename", Value::Str(given)) => rename = Some(given.clone()),
@@ -77,7 +83,15 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                     )
                 }
                 // Other words serde also reads, and what only writing JSON uses.
-                ("alias" | "other", _) => many_words = true,
+                ("alias", Value::Str(given)) => {
+                    many_words = true;
+                    aliases.insert(given.clone());
+                }
+                ("alias", _) => return err(arg.span, "UrlValue: use #[serde(alias = \"...\")]"),
+                ("other", Value::Bare) => {
+                    many_words = true;
+                    other = true;
+                }
                 ("skip_serializing" | "serialize_with" | "bound", _) => {}
                 _ => {
                     return err(
@@ -102,6 +116,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             );
         }
         words.push((word.clone(), ident.to_string()));
+        aliases.insert(word.clone());
+        read.push(crate::deserialize::Variant { ident: ident.clone(), names: aliases, other });
+        listed.extend(q("__A0,", &[TokenTree::Literal(Literal::string(&word)).into()]));
         arms.extend(q(
             "Self::__A0 => __A1,",
             &[TokenTree::Ident(ident.clone()).into(), TokenTree::Literal(Literal::string(&word)).into()],
@@ -144,5 +161,22 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         out.extend(item.where_clause.clone());
         out.extend([TokenTree::Group(Group::new(Delimiter::Brace, q(body, &[arms.clone()])))]);
     }
+    // Its words, for an API's OpenAPI document (feature `types`): none when serde reads others too.
+    if many_words {
+        listed = TokenStream::new();
+    }
+    let mut words_impl = q("#[automatically_derived] impl", &[]);
+    words_impl.extend(item.impl_generics.clone());
+    words_impl.extend(q("::corten::route::__private::UrlWords for", &[]));
+    words_impl.extend([TokenTree::Ident(item.name.clone())]);
+    words_impl.extend(item.type_generics.clone());
+    words_impl.extend(item.where_clause.clone());
+    words_impl.extend([TokenTree::Group(Group::new(
+        Delimiter::Brace,
+        q("const __WORDS: &'static [&'static ::core::primitive::str] = &[__A0];", &[listed]),
+    ))]);
+    out.extend(q("::corten::__if_types! { __A0 }", &[words_impl]));
+    // serde's `Deserialize`, so the enum needs no `#[derive(Deserialize)]` beside this one.
+    out.extend(crate::deserialize::for_unit_enum(&item, &read)?);
     Ok(out)
 }

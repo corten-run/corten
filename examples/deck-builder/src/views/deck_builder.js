@@ -8,7 +8,8 @@
 // says what became of it. The saved deck's feed says when another tab saved.
 import { keep, subscribe } from "corten";
 import { CollectionRow, DeckLine, rows } from "corten/views";
-/** @import { FeedUrl, Message, NumberFormat } from "corten" */
+import { DeckPreviewChanged } from "corten/events";
+/** @import { CortenError, FeedUrl, Message, NumberFormat } from "corten" */
 /** @import { Holds } from "corten/views" */
 /** @import { DeckAnswered } from "corten/events" */
 
@@ -38,6 +39,7 @@ import { CollectionRow, DeckLine, rows } from "corten/views";
  * @property {HTMLButtonElement} keep
  * @property {HTMLParagraphElement} unsure
  * @property {HTMLTextAreaElement} list
+ * @property {HTMLElement[]} previews
  * @property {HTMLParagraphElement} empty
  * @property {NumberFormat} number
  */
@@ -185,7 +187,7 @@ export function start(parts, feed, signal) {
     "corten:error",
     (event) => {
       s.sending = false;
-      const status = /** @type {CustomEvent<{ status: number }>} */ (event).detail.status;
+      const status = /** @type {CortenError} */ (event).detail.status;
       if (status > 0 && status < 500) s.unanswered = [];
       say(parts, "offline");
       heard(s, parts);
@@ -312,6 +314,7 @@ function draw(s, parts, deck) {
     if (out) out.value = parts.number(n);
   }
   parts.list.value = items.map((item) => `${item.count} ${item.name}`).join("\n");
+  for (const preview of parts.previews) preview.dispatchEvent(new DeckPreviewChanged({ total, text: parts.list.value }));
   parts.empty.hidden = items.length > 0;
   parts.undo.disabled = s.undo.length === 0;
   parts.redo.disabled = s.redo.length === 0;

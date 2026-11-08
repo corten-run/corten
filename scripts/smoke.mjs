@@ -5,11 +5,18 @@ import { chromium, firefox, webkit } from "@playwright/test";
 import { retrying, steady } from "./steady.mjs";
 import http from "node:http";
 import zlib from "node:zlib";
+import { readFileSync } from "node:fs";
 import { stall } from "./stall.mjs";
 import { browserBug } from "./browser-bugs.mjs";
 
 const base = process.argv[2] ?? "http://localhost:18480";
 const engines = { chromium, firefox, webkit };
+/**
+ * The runtime swaps this request's answer into the page (`corten: nav` or `action`); the page it
+ * fetches whole after a write asks with `corten: page` and is drawn as a full load's.
+ * @param {import("@playwright/test").Request} r
+ */
+const swapped = (r) => ["nav", "action"].includes(r.headers()["corten"] ?? "");
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
 // The markup this test writes into pages goes through a policy of its own, which the watchlist
 // allows only when run with SMOKE_TRUSTED_TYPES=1 (CONTRIBUTING): without it, say so here rather
@@ -198,6 +205,25 @@ if (skipped.length) console.log(`\n${skipped.length} skipped`);
 console.log(failures.length ? `\n${failures.length} failed:\n${failures.join("\n")}` : "\nall passed");
 process.exit(failures.length ? 1 : 0);
 
+/** Whether the browser lets a navigation say when its address changes: the Navigation API with `precommitHandler`. */
+function precommits() {
+  return "navigation" in window && "NavigationPrecommitController" in window;
+}
+
+/**
+ * Starts recording in `window.__addresses` every address the page has as its history entry
+ * changes, the moment it changes (`currententrychange`). Returns how many history entries there
+ * are when it starts, for the check to count the ones the navigation adds.
+ */
+function entriesWhileRecordingAddresses() {
+  /** @type {string[]} */
+  const addresses = [location.pathname];
+  /** @type {any} */ (window).__addresses = addresses;
+  const navigation = /** @type {any} */ (window).navigation;
+  navigation?.addEventListener("currententrychange", () => addresses.push(location.pathname));
+  return navigation?.entries().length ?? 0;
+}
+
 /** @param {import("@playwright/test").Browser} browser */
 async function run(browser) {
   // A console error the browser logs for its own bug (scripts/browser-bugs.mjs) is not the page's.
@@ -244,7 +270,15 @@ async function run(browser) {
   // stylesheet that failed), and the stream the status check drops on purpose, as an error, in one
   // of two wordings.
   const cut = /was interrupted while the page was loading|can.t establish a connection to the server at \S+\/live\/(trades|flaky)/;
-  page.on("console", (m) => m.type() === "error" && !bug(m.text()) && !cut.test(m.text()) && errors.push(m.text()));
+  // While `located` is set, each error is named with where it came from (Chromium and WebKit
+  // give a failed resource's URL only there): the feed checks below tell their own errors apart.
+  let located = false;
+  page.on("console", (m) => {
+    const text = m.type() === "error" ? m.text() : "";
+    if (!text || bug(text) || cut.test(text)) return;
+    const at = located ? m.location()?.url : "";
+    errors.push(at ? `${text} at ${at}` : text);
+  });
   page.on("pageerror", (e) => errors.push(e.message));
   // Every EventSource the page opens, to see which are still open.
   await page.addInitScript(() => {
@@ -286,7 +320,7 @@ async function run(browser) {
   // Navigation requests the runtime sends (`corten: nav`), prefetches included.
   /** @type {string[]} */
   const navRequests = [];
-  page.on("request", (request) => request.headers()["corten"] === "nav" && navRequests.push(request.url()));
+  page.on("request", (request) => request.headers()["corten"] === "nav" && navRequests.push(`${request.url()}${request.headers()["purpose"] === "prefetch" ? " (prefetch)" : ""}`));
   page.on("requestfailed", (request) => {
     const error = request.failure()?.errorText ?? "";
     if (request.url().endsWith("/watch") && !offline.has(request)) abandoned.push(error);
@@ -337,14 +371,76 @@ async function run(browser) {
   const live = "[data-scope=live-prices]";
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("on:connect runs the script's watch(), which subscribes to the feed", (await page.getAttribute(live, "data-status")) === "live");
+  // The optional views helper, using its actual built bytes under the watchlist's CSP. This
+  // fixture needs no app view class: the nested deck-builder smoke also uses generated classes.
+  await page.route("**/smoke-views.js", (route) => route.fulfill({ contentType: "text/javascript", body:
+    readFileSync(new URL("../crates/corten/js/dist/view.js", import.meta.url), "utf8") + "\nexport { view };\n",
+  }));
+  const branches = await page.evaluate(async () => {
+    const { view } = await import("/smoke-views.js");
+    class View { constructor(el) { this.el = el; } }
+    const host = document.createElement("div");
+    host.innerHTML = __html('<section id="smoke-branch-a"><label for="smoke-note">Note</label><input id="smoke-note" value="server"></section>');
+    document.body.append(host);
+    const template = document.createElement("template");
+    template.innerHTML = __html(host.innerHTML);
+    const ssr = host.firstElementChild;
+    const input = host.querySelector("input");
+    input.value = "draft";
+    input.focus();
+    const adopted = view(host, View, template).el === ssr && input.value === "draft" && document.activeElement === input;
+    template.innerHTML = __html('<article id="smoke-branch-b" data-vars="--smoke-width:13px"><label for="smoke-export">Export</label><textarea id="smoke-export">text</textarea></article>');
+    const branch = view(host, View, template).el;
+    const copied = branch.id === "smoke-branch-b" && branch.querySelector("label").control === branch.querySelector("textarea") && branch.style.getPropertyValue("--smoke-width") === "13px";
+    const external = branch.cloneNode(true);
+    branch.replaceWith(external);
+    const follows = view(host, View, template).el === external;
+    const outside = document.createElement("div");
+    outside.id = "smoke-outside";
+    document.body.append(outside);
+    let refused = 0;
+    for (const html of [
+      '<section id="smoke-new"><input id="smoke-outside"></section>',
+      '<section id="smoke-new"><input id="smoke-twice"><input id="smoke-twice"></section>',
+      '<section>no id</section>',
+      '<section id="smoke-new"></section><p>extra root</p>',
+      '<section id="smoke-new"><script></script></section>',
+    ]) {
+      template.innerHTML = __html(html);
+      try { view(host, View, template); } catch { if (host.firstElementChild === external) refused++; }
+    }
+    outside.id = "smoke-export";
+    template.innerHTML = __html('<section id="smoke-new"><input id="smoke-export"></section>');
+    let rejectsHiddenCollision = false;
+    try { view(host, View, template); } catch { rejectsHiddenCollision = host.firstElementChild === external; }
+    host.remove(); outside.remove();
+    return { adopted, copied, follows, refused, rejectsHiddenCollision };
+  });
+  check("view adopts SSR without replacing local state, focus or identity", branches.adopted);
+  check("view clones a branch with intact label IDs and CSP-safe custom properties", branches.copied);
+  check("view follows external replacement rather than a detached cache", branches.follows);
+  check("view refuses ID collisions, malformed templates and scripts before removing the active tree", branches.refused === 5, JSON.stringify(branches));
+  check("view refuses an outside ID even when the outgoing tree has the first match", branches.rejectsHiddenCollision);
   // A module the network drops twice (the page's module script, then the runtime's import of it)
   // is imported again, so on:connect still runs its handler rather than never.
   {
     const dropped = await browser.newPage();
     let tries = 0;
     let status = null;
+    // What happened when, said only when the check fails, so a failure names its cause (#1053).
+    /** @type {string[]} */
+    const seen = [];
+    const started = Date.now();
+    dropped.on("console", (m) => m.type() === "error" && seen.push(`${Date.now() - started} ms: ${m.text().slice(0, 200)}`));
     try {
-      await dropped.route((url) => url.pathname.endsWith("/scripts/live_prices.js"), (route) => ((tries += 1) <= 2 ? route.abort("internetdisconnected") : route.continue()));
+      await dropped.route(
+        (url) => url.pathname.endsWith("/scripts/live_prices.js"),
+        (route) => {
+          tries += 1;
+          seen.push(`${Date.now() - started} ms: request ${tries} (${route.request().resourceType()})`);
+          return tries <= 2 ? route.abort("internetdisconnected") : route.continue();
+        },
+      );
       await dropped.goto(base);
       // The script tag fails, then the runtime's import; it is tried again 0.5 s after the import fails.
       await dropped.waitForSelector(`${live}[data-status="live"]`, { timeout: 15_000 }).catch(() => {});
@@ -352,7 +448,8 @@ async function run(browser) {
     } finally {
       await dropped.close();
     }
-    check("a script module whose first two requests fail is imported again, and its on:connect handler runs", status === "live" && tries > 2, `${status}, ${tries} requests`);
+    const imported = status === "live" && tries > 2;
+    check("a script module whose first two requests fail is imported again, and its on:connect handler runs", imported, `${status}, ${tries} requests${imported ? "" : `: ${seen.join("; ")}`}`);
   }
 
   const prices = () => page.$$eval('[data-ref="price"]', (cells) => cells.map((c) => c.textContent));
@@ -877,6 +974,66 @@ async function run(browser) {
   // The form's on:corten:error runs (the runtime's event, on the form): it says the change failed.
   const told = await page.waitForSelector("#watch-form [role=alert]", { state: "visible", timeout: 5000 }).then(() => true, () => false);
   check("a form's on:corten:error handler runs for a submit the network fails", told);
+  // A form with controls named hasAttribute and getAttribute still runs its handlers, as the
+  // runtime reads its attributes through Element's own methods: the form the page loaded with,
+  // hearing an event that bubbles, and copies put in after load, bound to an event no element
+  // listened for until they joined (so only the runtime's scan of them can hear it), one hearing
+  // it bubble and one not.
+  const shadowed = await page.evaluate(async () => {
+    const names = ["hasAttribute", "getAttribute"];
+    const inputs = names.map((name) => `<input type="hidden" name="${name}" value="x">`).join("");
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
+    const markup = form.outerHTML.replace(/^<form[^>]*>/, (open) => open + inputs);
+    for (const n of [1, 2]) {
+      const copy = markup
+        .replace(/ id="([^"]+)"/g, (_, id) => ` id="smoke-${n}-${id}"`)
+        .replace(/data-on="corten:error:([\w.]+)\(@(\w+)\)"/, (_, f, ref) => `data-on="smoke-shadowed-${n}:${f}(@${ref}) smoke-closest-${n}:${f}(^${ref})"`);
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", /** @type {any} */ (window).__html(copy));
+    }
+    form.insertAdjacentHTML("afterbegin", /** @type {any} */ (window).__html(inputs));
+    // The copies' handlers are bound as they join the page, once the runtime hears they did.
+    await new Promise((r) => setTimeout(r, 100));
+    const heard = (/** @type {string} */ id, /** @type {string} */ type, /** @type {boolean} */ bubbles) => {
+      const at = /** @type {Element} */ (document.getElementById(id));
+      const note = /** @type {HTMLElement} */ (document.querySelector(`#${id} [role=alert]`));
+      note.hidden = true;
+      Element.prototype.dispatchEvent.call(at, new CustomEvent(type, { bubbles, cancelable: true, detail: { status: 0 } }));
+      return !note.hidden;
+    };
+    // A handler on the form given the element the event came from (`^ref`), which it finds by
+    // reading the form's own scope.
+    // From the ref, it is found; from another element of the form, the runtime reads the form
+    // on the way and finds none, so the handler is skipped and nothing is reported.
+    const closest = () => {
+      const note = /** @type {HTMLElement} */ (document.querySelector("#smoke-1-watch-form [role=alert]"));
+      const heading = /** @type {HTMLElement} */ (document.querySelector("#smoke-1-watch-form h2"));
+      let reported = 0;
+      const report = () => (reported += 1);
+      window.addEventListener("error", report);
+      note.hidden = true;
+      heading.dispatchEvent(new CustomEvent("smoke-closest-1", { bubbles: true }));
+      const skipped = note.hidden && reported === 0;
+      note.dispatchEvent(new CustomEvent("smoke-closest-1", { bubbles: true }));
+      window.removeEventListener("error", report);
+      return skipped && !note.hidden && reported === 0;
+    };
+    try {
+      return {
+        loaded: heard("watch-form", "corten:error", true),
+        added: heard("smoke-1-watch-form", "smoke-shadowed-1", true),
+        notBubbling: heard("smoke-2-watch-form", "smoke-shadowed-2", false),
+        closest: closest(),
+      };
+    } finally {
+      for (const n of [1, 2]) document.getElementById(`smoke-${n}-watch-form`)?.remove();
+      for (const name of names) document.querySelector(`#watch-form > input[name="${name}"]`)?.remove();
+    }
+  });
+  check(
+    "a form with controls named hasAttribute and getAttribute runs its handlers, loaded with the page or added after, for events that bubble or not",
+    shadowed.loaded && shadowed.added && shadowed.notBubbling && shadowed.closest,
+    JSON.stringify(shadowed),
+  );
   // A newer submit that waited for a write the network failed is not sent: it would fail the
   // same way, and the user sends it again.
   let afterFailure = 0;
@@ -1040,7 +1197,7 @@ async function run(browser) {
   await page.evaluate(() =>
     document.querySelector("main")?.insertAdjacentHTML(
       "beforeend",
-      __html('<form id="shadowed" method="post" action="/watch" data-patch><input type="hidden" name="id" value="GLBX"><input type="hidden" name="method" value="x"><input type="hidden" name="enctype" value="x"><input type="hidden" name="elements" value="x"><input type="hidden" name="setAttribute" value="x"><button name="action" value="go">Watch</button></form>'),
+      __html('<form id="shadowed" method="post" action="/watch" data-patch><input type="hidden" name="id" value="GLBX"><input type="hidden" name="method" value="x"><input type="hidden" name="enctype" value="x"><input type="hidden" name="elements" value="x"><input type="hidden" name="setAttribute" value="x"><input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x"><button name="action" value="go">Watch</button></form>'),
     ),
   );
   const shadowedPosts = /** @type {string[]} */ ([]);
@@ -1051,13 +1208,52 @@ async function run(browser) {
     !new URL(r.url()).pathname.startsWith("/feed/") &&
     shadowedPosts.push(`${r.method()} ${new URL(r.url()).pathname} ${new URLSearchParams(r.postData() ?? "").get("id")}`);
   page.on("request", onShadowed);
-  await page.click("#shadowed button");
+  // The answer draws the watch form again: one with controls named hasAttribute and getAttribute
+  // is replaced as any other, and no corten:error says the write failed.
+  await page.evaluate(() => {
+    document
+      .getElementById("watch-form")
+      ?.insertAdjacentHTML("afterbegin", __html('<input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x">'));
+    /** @type {any} */ (window).__shadowedErrors = 0;
+    document.addEventListener("corten:error", () => (/** @type {any} */ (window).__shadowedErrors += 1));
+  });
+  // Clicked from the page: Playwright's own click reads the form's getAttribute, which the
+  // control named getAttribute shadows.
+  await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#shadowed button")).click());
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Globex"), null, { timeout: 4000 }).catch(() => {});
   page.off("request", onShadowed);
   check(
     "controls named action, method, id and the like do not change the post",
     ((await page.textContent("#watch-message")) ?? "").startsWith("Watching Globex") && shadowedPosts.join() === "POST /watch GLBX",
     `${shadowedPosts.join()}; ${await page.textContent("#watch-message")}`,
+  );
+  const redrawn = await page.evaluate(() => ({
+    replaced: !document.querySelector("#watch-form > input[name=hasAttribute]"),
+    errors: /** @type {any} */ (window).__shadowedErrors,
+  }));
+  // And an answer that carries such controls itself, as the server's would for a form that has
+  // them: drawn as any other, its reads of the new form go through Element's own methods too.
+  const carried = await page.evaluate(async () => {
+    const { patch } = await import("corten");
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
+    const inputs = '<input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x">';
+    const fresh = form.outerHTML.replace(/^<form[^>]*>/, (open) => open + inputs);
+    /** @type {unknown} */
+    let failed = null;
+    try {
+      await patch(__html(fresh));
+    } catch (error) {
+      failed = String(error);
+    }
+    const now = document.getElementById("watch-form");
+    const drawn = now !== form && !!now?.querySelector("input[name=hasAttribute]");
+    for (const input of Array.from(now?.querySelectorAll("input[name=hasAttribute], input[name=getAttribute]") ?? [])) input.remove();
+    return { drawn, failed };
+  });
+  check(
+    "a patch draws again a form with controls named hasAttribute and getAttribute, and says no write failed",
+    redrawn.replaced && redrawn.errors === 0 && carried.drawn && carried.failed === null,
+    JSON.stringify({ ...redrawn, ...carried }),
   );
   await page.evaluate(() => document.getElementById("shadowed")?.remove());
 
@@ -1196,8 +1392,97 @@ async function run(browser) {
   // The browser logs the 503, 500 and 409 the smoke answered; nothing else is expected.
   errors.splice(queueLogged, errors.length, ...errors.slice(queueLogged).filter((e) => !/Failed to load resource/.test(e)));
 
+  // A data-patch form's submit marks the button that sent it busy with the form, one outside the
+  // form (`form=`) too, until the answer is drawn; a newer submit by another button takes the
+  // marks, and the first button's goes (#1063).
+  await page.route("**/busy-read*", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const by = new URL(route.request().url()).searchParams.get("by");
+    await route.fulfill({ headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body: `<p id="busy-said">read ${by}</p>` }).catch(() => {});
+  });
+  await page.evaluate(() =>
+    document.querySelector("main")?.insertAdjacentHTML(
+      "beforeend",
+      __html('<form id="busy-form" method="get" action="/busy-read" data-patch></form><p id="busy-said"></p><button id="busy-a" form="busy-form" name="by" value="a">A</button><button id="busy-b" form="busy-form" name="by" value="b">B</button>'),
+    ),
+  );
+  const busyMarks = () => page.evaluate(() => ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
+  await page.click("#busy-a");
+  const whileA = await busyMarks();
+  await page.click("#busy-b");
+  const whileB = await busyMarks();
+  await page.waitForFunction(() => document.querySelector("#busy-said")?.textContent === "read b", null, { timeout: 5000 }).catch(() => {});
+  const busyAfter = await busyMarks();
+  check(
+    "a data-patch form's submit marks the button that sent it, one outside the form too, until its answer is drawn",
+    whileA === "true,true,-" && whileB === "true,-,true" && busyAfter === "-,-,-",
+    `${whileA} | ${whileB} | ${busyAfter}`,
+  );
+  await page.unroute("**/busy-read*");
+  await page.evaluate(() => ["busy-form", "busy-said", "busy-a", "busy-b"].forEach((id) => document.getElementById(id)?.remove()));
+
+  // A write is not cut short by another button: the one pressed while it is on its way is marked
+  // beside it and sends once its answer is drawn. A write whose answer sends the browser to
+  // another page keeps its button marked until that page is in, and then clears it, a button in
+  // the header (outside what the page swaps) included (#1063).
+  await page.route("**/busy-write*", async (route) => {
+    const by = new URLSearchParams(route.request().postData() ?? "").get("by");
+    await new Promise((resolve) => setTimeout(resolve, by === "b" ? 0 : 600));
+    const headers = by === "go" ? { "corten-location": "/" } : { "content-type": "text/html; charset=utf-8", "corten-patch": "1" };
+    await route.fulfill({ headers, body: by === "go" ? "" : `<p id="busy-w-said">wrote ${by}</p>` }).catch(() => {});
+  });
+  await page.evaluate(() => {
+    document
+      .querySelector("main")
+      ?.insertAdjacentHTML(
+        "beforeend",
+        __html('<form id="busy-w" method="post" action="/busy-write" data-patch></form><p id="busy-w-said"></p><button id="busy-wa" form="busy-w" name="by" value="a">A</button><button id="busy-wb" form="busy-w" name="by" value="b">B</button>'),
+      );
+    document.querySelector("header")?.insertAdjacentHTML("beforeend", __html('<button id="busy-wgo" form="busy-w" name="by" value="go">Go</button>'));
+    const held = /** @type {HTMLElement} */ (document.getElementById("busy-wgo"));
+    /** @type {any} */ (window).__goHeld = held;
+    // Whether the page the write sent the browser to was in (the form gone) when the mark went.
+    new MutationObserver((_, observer) => {
+      if (held.getAttribute("aria-busy") === "true") return;
+      /** @type {any} */ (window).__goCleared = { pageIn: !document.getElementById("busy-w") };
+      observer.disconnect();
+    }).observe(held, { attributes: true, attributeFilter: ["aria-busy"] });
+  });
+  const writeMarks = () => page.evaluate(() => ["busy-w", "busy-wa", "busy-wb"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
+  await page.click("#busy-wa");
+  await page.click("#busy-wb");
+  const whileWrite = await writeMarks();
+  await page.waitForFunction(() => document.querySelector("#busy-w-said")?.textContent === "wrote b" && !document.querySelector("#busy-w[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+  const afterWrites = await writeMarks();
+  check(
+    "a button pressed while a write is on its way is marked beside it and sends after its answer",
+    whileWrite === "true,true,true" && afterWrites === "-,-,-",
+    `${whileWrite} | ${afterWrites}`,
+  );
+  const redirectName = "a write that sends the browser to another page keeps its button busy until that page is in";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(redirectName, "without the Navigation API the browser loads that page in full");
+  else {
+    await page.click("#busy-wgo");
+    const goBusy = await page.evaluate(() => /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"));
+    await page
+      .waitForFunction(() => !document.getElementById("busy-w") && /** @type {any} */ (window).__goHeld.getAttribute("aria-busy") !== "true" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
+      .catch(() => {});
+    const goAfter = await page.evaluate(() => ({
+      held: /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"),
+      cleared: /** @type {any} */ (window).__goCleared ?? null,
+      path: location.pathname,
+      form: !!document.getElementById("busy-w"),
+    }));
+    check(redirectName, goBusy === "true" && goAfter.held === null && goAfter.cleared?.pageIn === true && goAfter.path === "/" && !goAfter.form, JSON.stringify({ goBusy, goAfter }));
+  }
+  await page.unroute("**/busy-write*");
+  await page.evaluate(() => ["busy-w", "busy-w-said", "busy-wa", "busy-wb", "busy-wgo"].forEach((id) => document.getElementById(id)?.remove()));
+
   const current = () => page.$$eval("a[data-nav][aria-current=page]", (links) => links.map((l) => l.getAttribute("href")).join());
   check("the shell marks the current link", (await current()) === "/");
+  // The sector links beside <main> are marked `page`: each navigation brings the page's.
+  const sectors = () => page.$$eval("#sector-nav a", (links) => links.length);
+  check("a layout element marked page is the page's: no sector links outside the news", (await sectors()) === 0);
   check("one feed stream while the component is on the page", (await openFeeds()) === 1);
   // The news page's disclaimer is in an area (Area::components): its stylesheet loads before the page is
   // swapped in, so the note is styled the moment it joins the page.
@@ -1230,6 +1515,7 @@ async function run(browser) {
   check("the feed stream closes when its component leaves the page (its signal aborts)", (await openFeeds()) === 0);
   check("the <corten-live> stream closes when it leaves the page", (await openStreams("/live/trades")) === 0);
   check("client navigation moves aria-current in the shell", (await current()) === "/news");
+  check("a navigation into the news brings the layout's sector links (marked page)", (await sectors()) === 5);
   check("main is not left busy", (await page.getAttribute("main", "aria-busy")) === null);
   check("client navigation swaps <main>", (await page.textContent("main h1")) === "Market news");
   if (swaps) {
@@ -1331,7 +1617,7 @@ async function run(browser) {
       const probed = [];
       page.on("request", (r) => r.url().endsWith("?swap-preload") && probed.push(r.url()));
       await page.route(news, async (route) => {
-        const nav = route.request().headers()["corten"];
+        const nav = swapped(route.request());
         if (route.request().method() !== "GET" || nav) return route.fallback();
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
@@ -1475,7 +1761,7 @@ async function run(browser) {
       // is, with what the user typed, and one whose layout changed draws it (#690).
       {
         /** @param {import("@playwright/test").Request} r */
-        const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !r.headers()["corten"];
+        const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !swapped(r);
         let reads = 0;
         /** The notice each read again sent back. @type {(string | undefined)[]} */
         const sentBack = [];
@@ -1534,10 +1820,10 @@ async function run(browser) {
       {
         /** @type {string[]} */
         const asked = [];
-        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/" && asked.push(r.headers()["corten"] ?? "whole");
+        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/" && asked.push(swapped(r) ? r.headers()["corten"] : "whole");
         slow = true;
         await page.evaluate(() => scrollTo(0, 0));
-        const held = page.waitForRequest((r) => news(new URL(r.url())) && !r.headers()["corten"], { timeout: 5000 });
+        const held = page.waitForRequest((r) => news(new URL(r.url())) && !swapped(r), { timeout: 5000 });
         await thank();
         await held;
         page.on("request", onStocks);
@@ -1696,6 +1982,61 @@ async function run(browser) {
         linkBusy.with && linkBusy.then?.path === "/" && linkBusy.then.stories === 0 && !(await more.$("[aria-busy]")),
         JSON.stringify(linkBusy),
       );
+      // And a button outside its GET form (`form=`), in the header the swap keeps: it is busy
+      // with main too, as the form is, and cleared when the page is in (#1063).
+      await more.evaluate(() => {
+        document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<form id="nav-busy" method="get" action="/news"></form>'));
+        document.querySelector("header")?.insertAdjacentHTML("beforeend", __html('<button id="nav-busy-go" form="nav-busy">News</button>'));
+      });
+      await watchBusy(more, "#nav-busy-go");
+      await more.click("#nav-busy-go");
+      await more.waitForFunction(() => location.pathname === "/news" && !document.querySelector("main[aria-busy]"));
+      const buttonBusy = await busyEnded(more);
+      check("a button outside its GET form is busy with main until the page it started is in", buttonBusy.with && buttonBusy.then?.path === "/news", JSON.stringify(buttonBusy));
+      await more.evaluate(() => document.getElementById("nav-busy-go")?.remove());
+      await more.click('header a[href="/"]');
+      await more.waitForFunction(() => location.pathname === "/" && !document.querySelector("main[aria-busy]"));
+      // Where the browser lets a navigation say when its address changes (precommitHandler), a
+      // slow page's address changes when its answer is in, as a full load's does, not at the click
+      // while the old page is still on screen (#992). Read every frame: how long the old page was
+      // shown busy at the old address, and how long the new address showed the old page (the body
+      // read and the swap after the answer's headers).
+      if (await more.evaluate(precommits)) {
+        /** @param {URL} url */
+        const news = (url) => url.pathname === "/news" && url.search === "";
+        await more.route(news, async (route) => {
+          if (route.request().headers().corten === "nav") await new Promise((resolve) => setTimeout(resolve, 800));
+          await route.continue().catch(() => {});
+        });
+        await more.evaluate(() => {
+          /** @type {[number, string, number, boolean][]} */
+          const frames = [];
+          /** @type {any} */ (window).__frames = frames;
+          const read = (/** @type {number} */ at) => {
+            const stories = document.querySelectorAll("#stories > li").length;
+            frames.push([at, location.pathname, stories, !!document.querySelector("main[aria-busy]")]);
+            if (frames.length < 5000 && !(location.pathname === "/news" && stories > 0)) requestAnimationFrame(read);
+          };
+          requestAnimationFrame(read);
+        });
+        await more.click('header a[href="/news"]');
+        await more.waitForFunction(() => location.pathname === "/news" && document.querySelectorAll("#stories > li").length > 0 && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 });
+        /** @type {[number, string, number, boolean][]} */
+        const frames = await more.evaluate(() => /** @type {any} */ (window).__frames);
+        /** @param {(frame: [number, string, number, boolean]) => boolean} which */
+        const span = (which) => {
+          const times = frames.filter(which).map(([at]) => at);
+          return times.length ? Math.round(times.at(-1) - times[0]) : 0;
+        };
+        const waited = span(([, path, , busy]) => path === "/" && busy);
+        const ahead = span(([, path, stories]) => path === "/news" && stories === 0);
+        check(
+          "a slow page's address changes with its content, not before",
+          waited >= 500 && ahead < 200,
+          `busy at the old address ${waited} ms, the new address on the old page ${ahead} ms`,
+        );
+        await more.unroute(news);
+      } else skip("a slow page's address changes with its content, not before", "no precommitHandler: the address changes at the click");
       // A GET form whose controls are named like the methods that mark it still navigates.
       await more.evaluate(() =>
         document
@@ -1741,6 +2082,7 @@ async function run(browser) {
       skip("the GET form that starts a navigation is busy with main until its page is in", noSwaps);
       skip("a sector's box lists only its stories", noSwaps);
       skip("the link that starts a navigation is busy with main until its page is in", noSwaps);
+      skip("a button outside its GET form is busy with main until the page it started is in", noSwaps);
       skip("a GET form with a control named setAttribute navigates and is not left busy", noSwaps);
       skip("a link whose navigation another replaced is not left busy", noSwaps);
     }
@@ -1754,6 +2096,7 @@ async function run(browser) {
     const away = await browser.newPage();
     const awayErrors = [];
     away.on("console", (m) => m.type() === "error" && !bug(m.text()) && awayErrors.push(m.text()));
+    away.on("pageerror", (e) => awayErrors.push(e.message));
     await away.route("https://news.example.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>Elsewhere</title>" }));
     let asked = 0;
     away.on("request", (r) => new URL(r.url()).pathname === "/news/acme-outlook/read" && asked++);
@@ -1780,6 +2123,7 @@ async function run(browser) {
   await page.waitForFunction(() => document.title === "Stocks | Watchlist");
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   check("back navigation restores the watchlist and on:connect resubscribes", (await page.getAttribute(live, "data-status")) === "live");
+  check("back out of the news empties the sector links", (await sectors()) === 0);
   if (swaps) {
     check("a section's stylesheet stays when the page leaves the section", (await styleLinks()) === 1);
     await page.goForward();
@@ -1790,6 +2134,81 @@ async function run(browser) {
     await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   } else {
     for (const name of ["a section's stylesheet stays when the page leaves the section", "coming back into the section does not link its stylesheet twice"]) skip(name, noSwaps);
+  }
+  // A link followed from the sector links, whose page draws them the same, leaves them in place.
+  if (swaps) {
+    const partPage = await (await browser.newContext()).newPage();
+    await partPage.goto(`${base}/news`);
+    await partPage.evaluate(() => ((/** @type {any} */ (document.querySelector("#sector-nav"))).__kept = 1));
+    await partPage.focus("#sector-nav a:nth-child(2)");
+    await partPage.keyboard.press("Enter");
+    await partPage.waitForURL(/sector=energy/);
+    await partPage.waitForFunction(() => document.querySelectorAll("#stories > li").length === 3 && !document.querySelector("main[aria-busy]"));
+    const kept = await partPage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
+    check("a part marked page that the next page draws the same is left in place", kept);
+    await partPage.context().close();
+    // The same when its links are nav links (`req.nav`) and the next page marks another one
+    // current: the answers are rewritten so the sector links carry `data-nav`, and the second
+    // page's marks its own sector's link, as the server marks a section's page.
+    const navPage = await (await browser.newContext()).newPage();
+    await navPage.route(/\/news(\?|$)/, async (r) => {
+      // Uncompressed, so the rewrite reads text: Firefox asks for zstd, which route.fetch keeps.
+      const res = await r.fetch({ headers: { ...r.request().headers(), "accept-encoding": "identity" } });
+      const sector = new URL(r.request().url()).searchParams.get("sector");
+      const body = (await res.text()).replace(/<a href="(\/news\?sector=[^"]*)"/g, (_, href) =>
+        href === `/news?sector=${sector}` ? `<a href="${href}" data-nav aria-current="page"` : `<a href="${href}" data-nav`,
+      );
+      const headers = { ...res.headers() };
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      await r.fulfill({ status: res.status(), headers, body });
+    });
+    await navPage.goto(`${base}/news`);
+    await navPage.evaluate(() => ((/** @type {any} */ (document.querySelector("#sector-nav"))).__kept = 1));
+    await navPage.click("#sector-nav a:nth-child(2)");
+    await navPage.waitForURL(/sector=energy/);
+    await navPage.waitForFunction(() => document.querySelectorAll("#stories > li").length === 3 && !document.querySelector("main[aria-busy]"));
+    const navKept = await navPage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
+    check("a part marked page whose nav links the next page marks differently is left in place", navKept);
+    await navPage.context().close();
+    // A part a write's page drew anew is what the next navigation compares with: the first load's
+    // sector links carry a mark the server never draws again, so the write's page replaces them,
+    // and a link that draws them the same then leaves them in place.
+    const writePage = await (await browser.newContext()).newPage();
+    let first = true;
+    await writePage.route(/\/news$/, async (r) => {
+      if (!first || r.request().method() !== "GET" || r.request().resourceType() !== "document") return r.continue();
+      first = false;
+      const res = await r.fetch({ headers: { ...r.request().headers(), "accept-encoding": "identity" } });
+      const body = (await res.text()).replace('id="sector-nav"', 'id="sector-nav" data-first');
+      const headers = { ...res.headers() };
+      delete headers["content-encoding"];
+      delete headers["content-length"];
+      await r.fulfill({ status: res.status(), headers, body });
+    });
+    await writePage.goto(`${base}/news`);
+    const marked = await writePage.evaluate(() => document.querySelector("#sector-nav")?.hasAttribute("data-first"));
+    await writePage.evaluate(() => {
+      // Gone if the write's page loaded in full rather than being drawn into this one.
+      (/** @type {any} */ (window)).__noLoad = 1;
+      /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "part@example.com";
+      /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+    });
+    await writePage
+      .waitForFunction(() => document.querySelector("#briefing [role=status]")?.textContent === "You're on the list for the morning briefing." && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
+      .catch(() => {});
+    const redrawn = await writePage.evaluate(() => (/** @type {any} */ (window)).__noLoad === 1 && !document.querySelector("#sector-nav")?.hasAttribute("data-first"));
+    await writePage.evaluate(() => ((/** @type {any} */ (document.querySelector("#sector-nav"))).__kept = 1));
+    await writePage.click("#sector-nav a:nth-child(2)");
+    await writePage.waitForURL(/sector=energy/);
+    await writePage.waitForFunction(() => document.querySelectorAll("#stories > li").length === 3 && !document.querySelector("main[aria-busy]"));
+    const writeKept = await writePage.evaluate(() => (/** @type {any} */ (document.querySelector("#sector-nav")))?.__kept === 1);
+    check("a part a write's page drew anew is left in place by the next link that draws it the same", marked && redrawn && writeKept, `marked ${marked} redrawn ${redrawn} kept ${writeKept}`);
+    await writePage.context().close();
+  } else {
+    skip("a part marked page that the next page draws the same is left in place", noSwaps);
+    skip("a part marked page whose nav links the next page marks differently is left in place", noSwaps);
+    skip("a part a write's page drew anew is left in place by the next link that draws it the same", noSwaps);
   }
   // Back to a page the runtime swapped in puts back what the user typed or chose there, as the
   // browser does without the script; the page is still drawn again from the server.
@@ -2130,6 +2549,7 @@ async function run(browser) {
   check("a page whose handlers take no format does not load the format module", !(await formatLoaded()));
   // A visitor's header has no account link (the sign-in button is in its place), so the page gets one.
   await page.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-account" href="/account">Account</a>')));
+  const entriesBefore = await page.evaluate(entriesWhileRecordingAddresses);
   await page.click("#to-account");
   await page.waitForFunction(() => document.title === "Stocks | Watchlist", null, { timeout: 5000 }).catch(() => {});
   check(
@@ -2137,6 +2557,88 @@ async function run(browser) {
     (await page.title()) === "Stocks | Watchlist" && new URL(page.url()).pathname === "/",
     page.url(),
   );
+  // Where the address waits for the answer, a redirect's target is the only address the link
+  // gives, in one new history entry, as a full load's redirect is (#992).
+  if (await page.evaluate(precommits)) {
+    // A page loaded in full in its place has no record: none, which fails the check.
+    const [addresses, entries] = await page.evaluate(() => [/** @type {any} */ (window).__addresses ?? [], /** @type {any} */ (window).navigation.entries().length]);
+    check(
+      "a link the server redirects shows only the redirect's address, in one history entry",
+      addresses.join() === "/news,/" && entries === entriesBefore + 1,
+      `${addresses.join(" -> ")}, ${entriesBefore} -> ${entries} entries`,
+    );
+    // The same for a link the server sends to a place on a page (`corten-location`, which `fetch`
+    // cannot follow with its `#id`): the place's address alone, with its `#id`, in one new entry.
+    const placed = await (await browser.newContext()).newPage();
+    /** @type {string[]} */
+    const placedErrors = [];
+    placed.on("console", (m) => m.type() === "error" && !bug(m.text()) && placedErrors.push(m.text()));
+    placed.on("pageerror", (e) => placedErrors.push(e.message));
+    await placed.route(
+      (url) => url.pathname === "/to-briefing",
+      (route) => (route.request().headers().corten ? route.fulfill({ status: 204, headers: { "corten-location": "/news#briefing" } }) : route.fallback()),
+    );
+    await placed.goto(`${base}/alerts`);
+    await placed.evaluate(() => document.querySelector("main")?.insertAdjacentHTML("afterbegin", __html('<a id="to-briefing" href="/to-briefing">Briefing</a>')));
+    const placedBefore = await placed.evaluate(entriesWhileRecordingAddresses);
+    await placed.click("#to-briefing");
+    await placed.waitForFunction(() => document.title === "News | Watchlist" && !document.querySelector("[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const [placedAddresses, placedEntries, hash, busy] = await placed.evaluate(() => [
+      /** @type {any} */ (window).__addresses ?? [],
+      /** @type {any} */ (window).navigation.entries().length,
+      location.hash,
+      document.querySelectorAll("[aria-busy]").length,
+    ]);
+    // The link's navigation is left for the place's before its address changes: it ends quietly,
+    // with nothing left busy.
+    check(
+      "a link the server sends to a place shows only the place's address, in one history entry",
+      placedAddresses.join() === "/alerts,/news" && hash === "#briefing" && placedEntries === placedBefore + 1 && busy === 0 && placedErrors.length === 0,
+      `${placedAddresses.join(" -> ")}${hash}, ${placedBefore} -> ${placedEntries} entries, ${busy} busy, errors: ${placedErrors.join(" | ")}`,
+    );
+    await placed.context().close();
+  } else {
+    const why = "no precommitHandler: the address changes at the click";
+    skip("a link the server redirects shows only the redirect's address, in one history entry", why);
+    skip("a link the server sends to a place shows only the place's address, in one history entry", why);
+  }
+  // After a write, the page it sends the browser to is fetched whole; when that page's handler
+  // sends it on to a place, the server names the place (`corten-location`, for the runtime's
+  // `corten: page`), so it keeps its `#id` rather than `fetch` following a 303 without it
+  // (#1034). The stand-in answers as the server does: `corten-location` to the runtime's
+  // fetches, a 303 to any other.
+  const wholePlaceName = "a page fetched whole after a write that sends the browser to a place lands on the place";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(wholePlaceName, "without the Navigation API a write's page is a full load");
+  else {
+    const whole = await (await browser.newContext()).newPage();
+    /** @type {string[]} */
+    const asked = [];
+    await whole.route(
+      (url) => url.pathname === "/whole-write",
+      (route) => route.fulfill({ status: 204, headers: { "corten-location": "/whole-next" } }),
+    );
+    await whole.route(
+      (url) => url.pathname === "/whole-next",
+      (route) => {
+        const mode = route.request().headers().corten;
+        asked.push(mode ?? "-");
+        return mode
+          ? route.fulfill({ status: 204, headers: { "corten-location": "/news#briefing" } })
+          : route.fulfill({ status: 303, headers: { location: "/news#briefing" } });
+      },
+    );
+    await whole.goto(`${base}/alerts`);
+    await whole.evaluate(() =>
+      document
+        .querySelector("main")
+        ?.insertAdjacentHTML("afterbegin", __html('<form id="whole-write" method="post" action="/whole-write" data-patch><button id="whole-go">Save</button></form>')),
+    );
+    await whole.click("#whole-go");
+    await whole.waitForFunction(() => document.title === "News | Watchlist" && !document.querySelector("[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const landed = await whole.evaluate(() => ({ path: location.pathname, hash: location.hash }));
+    check(wholePlaceName, landed.path === "/news" && landed.hash === "#briefing" && asked.join() === "page", JSON.stringify({ landed, asked }));
+    await whole.context().close();
+  }
   // The watchlist's live prices take the money format: reached from the news page, it loads the
   // module before its markup joins, and the script writes prices with it.
   const firstPrices = await prices();
@@ -2189,7 +2691,7 @@ async function run(browser) {
         (/** @type {any} */ (window)).__marker = 5;
         (/** @type {any} */ (document.querySelector("header"))).__same = 1;
       });
-      const page_ = page.waitForResponse((r) => new URL(r.url()).pathname === "/news" && r.request().method() === "GET" && !r.request().headers()["corten"], { timeout: 5000 });
+      const page_ = page.waitForResponse((r) => new URL(r.url()).pathname === "/news" && r.request().method() === "GET" && !swapped(r.request()), { timeout: 5000 });
       await page.evaluate(() => {
         /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
         /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
@@ -2306,6 +2808,198 @@ async function run(browser) {
     JSON.stringify(resumes),
   );
   await page.evaluate(() => document.querySelector("#resume-live")?.remove());
+
+  // A feed whose stream refuses the cursor its own snapshot gives as it opens (here every stream
+  // is `sync`, as when one URL serves more than one feed) loads the snapshot again after a backoff
+  // that doubles (1 s, then 2 s), not straight away in a loop, and stops when its signal aborts
+  // (#1067). A `sync` that comes later on a stream (a server restarted, its cursor gone) loads the
+  // snapshot at once.
+  /**
+   * Subscribes to a feed of the smoke's own at `/feed/{name}` and counts what it asks for: the
+   * `n`th stream is answered `stream(n)` (a body, or a status with no stream), or sent to
+   * `forward`, and the `n`th snapshot `snapshot(n)`'s status (200: epoch `a`, seq 1, no rows).
+   * @param {string} name @param {(n: number) => string | { status: number }} stream
+   * @param {{ forward?: string, snapshot?: (n: number) => number }} [options]
+   */
+  const feedTimes = async (name, stream, { forward, snapshot } = {}) => {
+    const times = { snapshots: /** @type {number[]} */ ([]), streams: 0, streamsAt: /** @type {number[]} */ ([]), since: /** @type {(string | null)[]} */ ([]) };
+    await page.route(`**/feed/${name}`, (route) => {
+      times.snapshots.push(Date.now());
+      const status = snapshot?.(times.snapshots.length) ?? 200;
+      return route.fulfill({ status, contentType: "application/json", body: status === 200 ? '{"epoch":"a","seq":1,"rows":[]}' : "{}" });
+    });
+    await page.route(`**/feed/${name}/live*`, (route) => {
+      times.streams += 1;
+      times.streamsAt.push(Date.now());
+      times.since.push(new URL(route.request().url()).searchParams.get("since"));
+      if (forward) return route.continue({ url: forward });
+      const answer = stream(times.streams);
+      if (typeof answer !== "string") return route.fulfill({ status: answer.status, body: "" });
+      return route.fulfill({ status: 200, headers: { "content-type": "text/event-stream" }, body: answer });
+    });
+    await page.evaluate(async (name) => {
+      const { subscribe } = /** @type {any} */ (await import(/** @type {string} */ ("corten")));
+      const w = /** @type {any} */ (window);
+      w.__feeds ??= {};
+      const stop = new AbortController();
+      const feed = (w.__feeds[name] = { stop, states: /** @type {string[]} */ ([]), patches: /** @type {number[]} */ ([]) });
+      subscribe(
+        `/feed/${name}`,
+        { snapshot() {}, patch: (/** @type {unknown} */ _, /** @type {number} */ seq) => feed.patches.push(seq), status: (/** @type {string} */ s) => feed.states.push(s) },
+        { signal: stop.signal },
+      );
+    }, name);
+    return times;
+  };
+  /** Aborts the subscription and gives its status calls. @param {string} name */
+  const stopFeed = (name) =>
+    page.evaluate((name) => {
+      const feed = (/** @type {any} */ (window)).__feeds[name];
+      feed.stop.abort();
+      return /** @type {string} */ (feed.states.join(" "));
+    }, name);
+  /** The seqs the subscription handed to `patch`. @param {string} name */
+  const feedPatches = (name) => page.evaluate((name) => /** @type {number[]} */ ((/** @type {any} */ (window)).__feeds[name].patches), name);
+  /** Waits until the subscription has gone live `times` times. @param {string} name @param {number} times */
+  const feedLive = (name, times, timeout = 5000) =>
+    page
+      .waitForFunction(
+        ([name, times]) => (/** @type {any} */ (window)).__feeds[name].states.filter((/** @type {string} */ s) => s === "live").length >= times,
+        /** @type {[string, number]} */ ([name, times]),
+        { timeout },
+      )
+      .catch(() => {});
+  /** @param {string} name */
+  const unrouteFeed = async (name) => {
+    await page.unroute(`**/feed/${name}`);
+    await page.unroute(`**/feed/${name}/live*`);
+  };
+  const refusedFeed = await feedTimes("refused", () => 'event: sync\ndata: {"reason":"cursor-expired"}\n\n');
+  for (const end = Date.now() + 6000; refusedFeed.snapshots.length < 3 && Date.now() < end; ) await page.waitForTimeout(50);
+  const refusedAt = refusedFeed.snapshots.slice(0, 3);
+  const refusedStates = await stopFeed("refused");
+  // The next snapshot was due 4 s after the third: wait past it with the routes still counting.
+  await page.waitForTimeout(5000);
+  await unrouteFeed("refused");
+  const gaps = refusedAt.slice(1).map((at, i) => at - refusedAt[i]);
+  check(
+    "a feed whose stream refuses its own snapshot's cursor backs off 1 s then 2 s, and stops when its signal aborts",
+    gaps.length === 2 && gaps[0] >= 900 && gaps[0] < 1700 && gaps[1] >= 1900 && gaps[1] < 2800 && refusedFeed.snapshots.length === 3 && !refusedStates.includes("syncing syncing"),
+    `snapshots ${gaps.map((g) => `+${g} ms`).join(", ")}, ${refusedFeed.snapshots.length - refusedAt.length} in the 5 s after the abort; ${refusedStates}`,
+  );
+  // The first stream is accepted and ends; the browser reconnects 400 ms later, and that stream
+  // answers `sync` (a feed reset while the page was away); later streams are accepted.
+  const quietFeed = await feedTimes("quiet", (n) => (n === 1 ? "retry: 400\n\n" : n === 2 ? 'event: sync\ndata: {"reason":"cursor-expired"}\n\n' : "retry: 60000\n\n"));
+  await page.waitForTimeout(2000);
+  await stopFeed("quiet");
+  await unrouteFeed("quiet");
+  const quietGap = quietFeed.snapshots.length === 2 ? quietFeed.snapshots[1] - quietFeed.snapshots[0] : NaN;
+  check(
+    "a sync on a stream the browser reconnected loads the snapshot at once, not after a backoff",
+    quietFeed.snapshots.length === 2 && quietFeed.streams >= 2 && quietGap < 900,
+    `${quietFeed.snapshots.length} snapshots, ${quietFeed.streams} streams, the second snapshot +${quietGap} ms after the first`,
+  );
+  // A feed reset while its stream is open: the first connection stays open, and 1.5 s after it
+  // opened the server sends `sync`. A server of the smoke's own holds the stream (a route cannot
+  // answer in two parts); later streams are held open with nothing on them.
+  const resetName = "a sync on a stream open longer than its first moments loads the snapshot at once";
+  if (engine === "webkit") skip(resetName, "a routed request is cross-origin there");
+  else {
+    /** @type {number[]} */
+    const syncsSent = [];
+    /** @type {import("node:http").ServerResponse[]} */
+    const held = [];
+    const resetServer = http.createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+      res.write("retry: 60000\n\n");
+      held.push(res);
+      if (held.length === 1)
+        setTimeout(() => {
+          syncsSent.push(Date.now());
+          res.end('event: sync\ndata: {"reason":"cursor-expired"}\n\n');
+        }, 1500);
+    });
+    await new Promise((resolve) => resetServer.listen(0, "127.0.0.1", () => resolve(undefined)));
+    const resetPort = /** @type {import("node:net").AddressInfo} */ (resetServer.address()).port;
+    /** @type {Awaited<ReturnType<typeof feedTimes>>} */
+    let resetFeed = { snapshots: [], streams: 0, streamsAt: [], since: [] };
+    try {
+      resetFeed = await feedTimes("reset", () => "", { forward: `http://127.0.0.1:${resetPort}/live` });
+      for (const end = Date.now() + 5000; resetFeed.snapshots.length < 2 && Date.now() < end; ) await page.waitForTimeout(50);
+      await stopFeed("reset");
+    } finally {
+      await unrouteFeed("reset");
+      for (const res of held) res.destroy();
+      resetServer.close();
+    }
+    const resetGap = resetFeed.snapshots.length === 2 && syncsSent.length ? resetFeed.snapshots[1] - syncsSent[0] : NaN;
+    check(resetName, resetFeed.snapshots.length === 2 && resetGap < 500, `${resetFeed.snapshots.length} snapshots, the second ${resetGap} ms after the sync was sent`);
+  }
+
+  // subscribe()'s other recovery paths (#1068). A patch already applied is dropped, and one that
+  // skips a seq loads a new snapshot: seq 2, 2 again, 3, then 5.
+  const feedsLogged = errors.length;
+  located = true;
+  /** @param {number} seq */
+  const patchEvent = (seq) => `event: patch\nid: a-${seq}\ndata: {"seq":${seq},"changes":[]}\n\n`;
+  const gapFeed = await feedTimes("gap", (n) => (n === 1 ? `${patchEvent(2)}${patchEvent(2)}${patchEvent(3)}${patchEvent(5)}` : "retry: 60000\n\n"));
+  await feedLive("gap", 2);
+  const gapPatches = await feedPatches("gap");
+  const gapStates = await stopFeed("gap");
+  await unrouteFeed("gap");
+  check(
+    "a patch that skips a seq loads a new snapshot, and a patch already applied is dropped",
+    gapFeed.snapshots.length === 2 && gapFeed.streams === 2 && gapPatches.join() === "2,3" && gapFeed.since[1] === "a-1" && gapStates.startsWith("syncing live syncing live"),
+    `${gapFeed.snapshots.length} snapshots, patches ${gapPatches.join(",")}, second stream since ${gapFeed.since[1]}; ${gapStates}`,
+  );
+  // A stream answered with an HTTP error ends EventSource for good: subscribe() listens again from
+  // the last patch's cursor, with no snapshot, waiting longer after each error in a row (1 s, 2 s),
+  // and a stream that opens starts the count again (1 s). The first stream sends seq 2 and ends;
+  // the browser reconnects (after 100 ms) to a 503, then subscribe() twice more, to a 503 and a
+  // stream that ends; the browser reconnects to a 503, and subscribe() to a stream.
+  const failedFeed = await feedTimes("failed", (n) =>
+    n === 1 ? `retry: 100\n\n${patchEvent(2)}` : n === 4 ? "retry: 100\n\n" : n <= 5 ? { status: 503 } : "retry: 60000\n\n",
+  );
+  await feedLive("failed", 3, 10000);
+  const failedStates = await stopFeed("failed");
+  await unrouteFeed("failed");
+  const failedGaps = [2, 3, 5].map((i) => failedFeed.streamsAt[i] - failedFeed.streamsAt[i - 1]);
+  check(
+    "a stream answered with an error is listened to again from the last patch, after 1 s then 2 s, and 1 s again after a stream opened, with no snapshot",
+    failedFeed.snapshots.length === 1 &&
+      failedFeed.streams === 6 &&
+      failedFeed.since.slice(2).every((since) => since === "a-2") &&
+      failedGaps[0] >= 900 &&
+      failedGaps[0] < 1900 &&
+      failedGaps[1] >= 1900 &&
+      failedGaps[1] < 3500 &&
+      failedGaps[2] >= 900 &&
+      failedGaps[2] < 1900 &&
+      failedStates.includes("reconnecting live"),
+    `${failedFeed.snapshots.length} snapshots, ${failedFeed.streams} streams since ${failedFeed.since.join(" ")}, ${failedGaps.map((g) => `+${g} ms`).join(", ")}; ${failedStates}`,
+  );
+  // A snapshot that fails is fetched again after 1 s, and the feed goes live once one arrives.
+  const retriedFeed = await feedTimes("retried", () => "retry: 60000\n\n", { snapshot: (n) => (n === 1 ? 500 : 200) });
+  await feedLive("retried", 1);
+  const retriedStates = await stopFeed("retried");
+  await unrouteFeed("retried");
+  const retriedGap = retriedFeed.snapshots.length === 2 ? retriedFeed.snapshots[1] - retriedFeed.snapshots[0] : NaN;
+  check(
+    "a snapshot that fails is fetched again after 1 s, and the feed goes live",
+    retriedFeed.snapshots.length === 2 && retriedGap >= 900 && retriedGap < 1900 && retriedFeed.streams === 1 && retriedStates.startsWith("syncing live"),
+    `${retriedFeed.snapshots.length} snapshots, +${retriedGap} ms, ${retriedFeed.streams} streams; ${retriedStates}`,
+  );
+  // The browsers' own errors for the 503 streams and the 500 snapshot are the point of these
+  // checks, not faults, and the runtime logs the failed snapshot once (Firefox gives the logged
+  // error's text as `Error`, so there it is known by coming from the runtime).
+  located = false;
+  const feedErrors = errors.slice(feedsLogged).filter((e) => !/(can.t establish a connection to the server at|Failed to load resource: .* at) \S+\/feed\/(failed|retried)\b/.test(e));
+  const snapshotLogged = feedErrors.filter((e) => /^(Error: )?corten: feed \/feed\/retried answered 500\b|^Error at \S+\/corten\.js$/.test(e));
+  check("a snapshot that fails is logged once", snapshotLogged.length === 1, feedErrors.join(" | ") || "nothing logged");
+  const feedOthers = feedErrors.filter((e) => !snapshotLogged.includes(e));
+  // Checked here, while their text names where each came from, and not again at the end.
+  check("the feed checks log no other console error", feedOthers.length === 0, feedOthers.join(" | "));
+  errors.splice(feedsLogged);
 
   // A patch replaces markup but keeps what the user is doing: edited fields keep their state,
   // untouched ones take the server's, and focus and caret stay put (here a <corten-live> style
@@ -2634,7 +3328,7 @@ async function run(browser) {
       await redrawPage.route(
         (url) => url.pathname === "/news",
         async (route) => {
-          if (route.request().method() !== "GET" || route.request().headers()["corten"]) return route.fallback();
+          if (route.request().method() !== "GET" || swapped(route.request())) return route.fallback();
           // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
           const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
           const headers = res.headers();
@@ -2991,13 +3685,37 @@ async function run(browser) {
     const afterNewest = navRequests.length;
     await page.click('header a.hovered[href="/news?p=0"]');
     await page.waitForFunction(() => location.search === "?p=0");
-    // The address changes when the navigation starts, before the runtime sends its request.
+    // Playwright can report the request after the address changes.
     for (let waited = 0; navRequests.length < 11 && waited < 2000; waited += 50) await page.waitForTimeout(50);
     check(
       "prefetch keeps the 8 newest pages: the newest is reused, the oldest is fetched again",
       hoveredCount === 10 && afterNewest === 10 && navRequests.length === 11,
-      `${hoveredCount}, ${afterNewest}, ${navRequests.length}`,
+      `${hoveredCount}, ${afterNewest}, ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
     );
+
+    // The page a visit is fetching is not prefetched as well, by the dwell the click cut short or
+    // by the pointer leaving its link and coming back: the address stays this page's until that
+    // page is in, so the prefetch would fetch it a second time (#1053). Its answer is held so both
+    // dwells end while it is fetched.
+    await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?p=held">held</a>')));
+    /** @param {URL} url */
+    const heldPage = (url) => url.pathname === "/news" && url.searchParams.get("p") === "held";
+    await page.route(heldPage, async (route) => {
+      if (route.request().headers()["purpose"] !== "prefetch") await new Promise((resolve) => setTimeout(resolve, 600));
+      await route.continue().catch(() => {});
+    });
+    navRequests.length = 0;
+    await page.click('header a.hovered[href="/news?p=held"]');
+    await page.mouse.move(0, 0);
+    await page.hover('header a.hovered[href="/news?p=held"]');
+    await page.waitForTimeout(150);
+    await page.waitForFunction(() => location.search === "?p=held");
+    check(
+      "a link followed during its hover's dwell is fetched once, with no prefetch of its page",
+      navRequests.length === 1,
+      navRequests.map((u) => u.replace(base, "")).join(" ") || "none",
+    );
+    await page.unroute(heldPage);
     await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
 
     // A prefetch pushed out while its answer is still coming is aborted, so the server sees the
@@ -3120,6 +3838,7 @@ async function run(browser) {
       'data-nav="section" marks the link on pages under it',
       "data-no-prefetch: hovering the link fetches nothing",
       "prefetch keeps the 8 newest pages",
+      "a link followed during its hover's dwell is fetched once, with no prefetch of its page",
       "a prefetch dropped before it answers is aborted",
       "a hover's prefetch says so (purpose: prefetch), and the click uses it",
       "a prefetch answered with no page is not asked for again on a hover, is fetched again on the click, and swapped in",
@@ -3563,6 +4282,227 @@ async function run(browser) {
   const overForm = await upload({ name: "card.png", mimeType: "image/png", buffer: png });
   await page.evaluate(() => document.getElementById("smoke-note")?.remove());
   check("a form that keeps more than its limit is answered in the form", overForm === "The form is over 1 MB.", overForm);
+
+  // The picture's form hears its upload's progress (`on:corten:progress`), so its multipart
+  // writes go by XMLHttpRequest: the uploads above were answered through it. Each event is the
+  // browser's ProgressEvent for the whole body, while the form is busy; the bar shows only then,
+  // and the component's handler (this listener runs after it) has set its value to the share sent,
+  // with none once all of it is.
+  await page.evaluate(() => {
+    const form = document.querySelector("main form[enctype]");
+    /** @type {any} */ (window).__progress = [];
+    form?.addEventListener("corten:progress", (e) => {
+      const p = /** @type {ProgressEvent} */ (e);
+      const bar = /** @type {HTMLProgressElement | null} */ (form.querySelector("progress"));
+      const seen = {
+        loaded: p.loaded,
+        total: p.total,
+        computable: p.lengthComputable,
+        busy: form.getAttribute("aria-busy"),
+        shown: bar ? getComputedStyle(bar).display !== "none" : false,
+      };
+      /** @type {any} */ (window).__progress.push(seen);
+    });
+    // What the component's handler, which runs once its module's import resolves, sets the bar to.
+    /** @type {any} */ (window).__barValues = [];
+    const bar = form?.querySelector("progress");
+    if (bar) {
+      // A batch of changes gives each value set by the change after it (its old value), then the bar's.
+      new MutationObserver((records) => {
+        for (const record of records.slice(1)) /** @type {any} */ (window).__barValues.push(record.oldValue);
+        /** @type {any} */ (window).__barValues.push(bar.getAttribute("value"));
+      }).observe(bar, { attributes: true, attributeFilter: ["value"], attributeOldValue: true });
+    }
+  });
+  // Chromium sends it slowly (2 MB/s up), so the bar is seen part way; the other engines have no
+  // throttle a script can set, and send it at localhost's speed.
+  const throttle = engine === "chromium" ? await page.context().newCDPSession(page) : null;
+  await throttle?.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: 2 << 20 });
+  const progressed = await upload({ name: "slow.jpg", mimeType: "image/jpeg", buffer: Buffer.alloc(600 << 10, 7) });
+  await throttle?.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  await throttle?.detach();
+  /** @type {{ loaded: number, total: number, computable: boolean, busy: string | null, shown: boolean }[]} */
+  const events = await page.evaluate(() => /** @type {any} */ (window).__progress);
+  /** @type {(string | null)[]} */
+  const barValues = await page.evaluate(() => /** @type {any} */ (window).__barValues);
+  const last = events.at(-1);
+  check(
+    "a form's on:corten:progress hears its whole body sent, while it is busy and its bar shows",
+    !!last && last.computable && last.loaded === last.total && last.total > 600 << 10 && events.every((e) => e.busy === "true" && e.shown) && progressed.startsWith("The picture is over 64 KB"),
+    `${events.length} events, last ${JSON.stringify(last)}, ${progressed}`,
+  );
+  check(
+    "the handler the form names fills the bar with the share sent, and leaves it indeterminate once all is",
+    // Firefox reports only the last step of a body sent at localhost's speed: the bar is never
+    // given a value then.
+    (barValues.length === 0 || barValues.at(-1) === null) &&
+      events.some((e) => e.computable && e.loaded === e.total) &&
+      events
+        .filter((e) => e.computable && e.loaded < e.total)
+        .every((e) => barValues.some((v) => v !== null && Math.abs(Number(v) - e.loaded / e.total) < 0.001)) &&
+      (engine !== "chromium" || events.some((e) => e.computable && e.loaded > 0 && e.loaded < e.total)),
+    JSON.stringify({ events: events.map((e) => [e.loaded, e.total]), bar: barValues }),
+  );
+  const barAfter = await page.evaluate(() => {
+    const form = document.querySelector("main form[enctype]");
+    const bar = form?.querySelector("progress");
+    return [form?.getAttribute("aria-busy") ?? null, bar ? getComputedStyle(bar).display : "none"];
+  });
+  check("once the answer is drawn the form is not busy and the bar is hidden", barAfter[0] === null && barAfter[1] === "none", JSON.stringify(barAfter));
+  // A network failure reaches the form as corten:error, as a fetch's does. The browser logs the
+  // request it fails on purpose (Chromium's net::ERR_FAILED), and the one a navigation abandons.
+  const failedOnPurpose = errors.length;
+  await page.route("**/avatar", (route) => route.abort());
+  const uploadFailed = page.evaluate(
+    () =>
+      new Promise((resolve) => {
+        document.querySelector("main form[enctype]")?.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true });
+        setTimeout(() => resolve("none"), 8000);
+      }),
+  );
+  await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+  await page.click("main form[enctype] button");
+  check("an upload the network fails dispatches corten:error with status 0", (await uploadFailed) === 0, String(await uploadFailed));
+  await page.unroute("**/avatar");
+  // A followed redirect on the progress path: the answer the upload module hands the runtime has
+  // the redirect's URL (`responseURL`), as fetch's has, which the runtime reads to know the answer
+  // is this origin's before it draws it. The module is called as the runtime calls it, and its
+  // POST answered with a 303 to the news page. Playwright's WebKit cannot answer a request with a
+  // redirect.
+  if (engine === "webkit") skip("an upload's answer after a followed redirect has the redirect's URL, as fetch's does", "Playwright cannot fulfill a redirect in WebKit");
+  else {
+    const redirectContext = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext();
+    await redirectContext.addCookies(await page.context().cookies());
+    const redirected = await redirectContext.newPage();
+    await redirected.route("**/avatar", (route) => route.fulfill({ status: 303, headers: { location: "/news" } }));
+    await redirected.goto(`${base}/account`);
+    const answered = await redirected.evaluate(async () => {
+      const url = performance
+        .getEntriesByType("resource")
+        .map((e) => e.name)
+        .find((name) => /\/corten-upload\.js(\?|$)/.test(name));
+      if (!url) return { url: "", status: 0, path: "no module loaded" };
+      /** @type {typeof import("../crates/corten/js/upload.js")} */
+      const module = await import(url);
+      const body = new FormData(/** @type {HTMLFormElement} */ (document.querySelector("main form[enctype]")));
+      const res = await module.upload(new URL("/avatar", location.href), "POST", body, new AbortController().signal, () => {});
+      return { url: res.url, status: res.status, path: new URL(res.url, location.href).pathname };
+    });
+    await redirectContext.close();
+    check(
+      "an upload's answer after a followed redirect has the redirect's URL, as fetch's does",
+      answered.status === 200 && answered.path === "/news" && answered.url.startsWith(base),
+      JSON.stringify(answered),
+    );
+  }
+  // A navigation abandons an upload still waiting for its answer: no progress reaches the form after
+  // it, nor its answer the page. In a context of its own (with the session's cookie), closed after,
+  // since a request Playwright held and answered after the page let it go leaves the context's
+  // next request to the same path unanswered.
+  const leaveContext = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext();
+  await leaveContext.addCookies(await page.context().cookies());
+  const leave = await leaveContext.newPage();
+  await leave.goto(`${base}/account`);
+  await leave.evaluate(() => {
+    /** @type {any} */ (window).__progress = 0;
+    document.querySelector("main form[enctype]")?.addEventListener("corten:progress", () => (/** @type {any} */ (window).__progress += 1));
+  });
+  /** @type {import("playwright").Route[]} */
+  const heldUploads = [];
+  await leave.route("**/avatar", (route) => {
+    heldUploads.push(route);
+  });
+  await leave.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+  await leave.click("main form[enctype] button");
+  const wasBusy = await leave
+    .waitForFunction(() => document.querySelector("main form[enctype]")?.getAttribute("aria-busy") === "true", null, { timeout: 4000 })
+    .then(() => true)
+    .catch(() => false);
+  const beforeLeaving = await leave.evaluate(() => /** @type {any} */ (window).__progress);
+  await leave.click('header a[href="/"]');
+  await leave.waitForFunction(() => !document.querySelector("main form[enctype]"), null, { timeout: 5000 }).catch(() => {});
+  // The held upload then answers, sending the page elsewhere: an upload still listened to would
+  // take the page there.
+  for (const route of heldUploads) await route.fulfill({ status: 204, headers: { "corten-location": "/news" } }).catch(() => {});
+  await leave.waitForTimeout(500);
+  const afterLeaving = await leave.evaluate(() => /** @type {any} */ (window).__progress);
+  const leftFor = await leave.evaluate(() => location.pathname);
+  const formLeft = !!(await leave.$("main form[enctype]"));
+  await leaveContext.close();
+  check(
+    "a navigation abandons a waiting upload, its progress and its answer",
+    wasBusy && heldUploads.length === 1 && afterLeaving === beforeLeaving && leftFor === "/" && !formLeft,
+    `busy ${wasBusy}, ${heldUploads.length} held, ${beforeLeaving} then ${afterLeaving} events, at ${leftFor}`,
+  );
+  // A navigation while the upload module is still loading: the upload is never sent, as a fetch
+  // is never sent with an aborted signal, and its answer cannot take the page.
+  // In a context of its own (with the session's cookie), closed after, so nothing it holds reaches
+  // the pages after it.
+  const raceContext = await /** @type {import("playwright").Browser} */ (page.context().browser()).newContext();
+  await raceContext.addCookies(await page.context().cookies());
+  const race = await raceContext.newPage();
+  /** @type {import("playwright").Route[]} */
+  const heldModules = [];
+  await race.route("**/corten-upload*", (route) => {
+    heldModules.push(route);
+  });
+  let sentUploads = 0;
+  /** @param {import("playwright").Request} request */
+  const countUpload = (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/avatar") sentUploads += 1;
+  };
+  race.on("request", countUpload);
+  // The form is put on a page that did not load the module (as a script or a patch may add one),
+  // so its first submit waits for the module to load.
+  const accountPage = await (await race.request.get(`${base}/account`)).text();
+  const pictureForm = /<form[^>]*enctype="multipart\/form-data"[\s\S]*?<\/form>/.exec(accountPage)?.[0] ?? "";
+  await race.goto(`${base}/`);
+  await race.evaluate((html) => {
+    const holder = document.createElement("div");
+    holder.id = "smoke-upload-race";
+    holder.innerHTML = /** @type {any} */ (/** @type {any} */ (window).__html(html));
+    document.querySelector("main")?.append(holder);
+  }, pictureForm);
+  await race.waitForTimeout(100);
+  await race.setInputFiles("#smoke-upload-race input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+  await race.click("#smoke-upload-race button");
+  await race.waitForTimeout(200);
+  await race.click('header a[href="/news"]');
+  await race.waitForFunction(() => location.pathname === "/news" && !document.querySelector("#smoke-upload-race"), null, { timeout: 5000 }).catch(() => {});
+  const moduleHeld = heldModules.length;
+  // Answered from a request of the test's own, so the held request ends here whatever the page did.
+  for (const route of heldModules) {
+    const module = await race.request.get(route.request().url());
+    await route.fulfill({ response: module }).catch(() => {});
+  }
+  await race.unroute("**/corten-upload*", { behavior: "ignoreErrors" });
+  await race.waitForTimeout(500);
+  race.off("request", countUpload);
+  const landed = await race.evaluate(() => location.pathname);
+  await raceContext.close();
+  check("an upload left while its module loads is never sent", moduleHeld > 0 && sentUploads === 0 && landed === "/news", `${moduleHeld} module requests held, ${sentUploads} uploads sent, at ${landed}`);
+  await page.goto(`${base}/account`);
+  // A multipart form with no progress handler and a control named getAttribute is still sent (by
+  // fetch): the submit's check for a progress handler reads the form through Element's methods.
+  await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+  const ordinary = await page.evaluate(async () => {
+    const form = /** @type {HTMLFormElement} */ (document.querySelector("main form[enctype]"));
+    form.removeAttribute("data-on");
+    const shadow = document.createElement("input");
+    shadow.type = "hidden";
+    shadow.name = "getAttribute";
+    form.prepend(shadow);
+    const result = document.querySelector("#avatar-result");
+    if (result) result.textContent = "";
+    /** @type {string[]} */
+    const failed = [];
+    form.addEventListener("corten:error", (e) => failed.push(String(/** @type {CustomEvent} */ (e).detail?.status)), { once: true });
+    HTMLFormElement.prototype.requestSubmit.call(form);
+    for (let i = 0; i < 80 && !document.querySelector("#avatar-result")?.textContent && !failed.length; i++) await new Promise((r) => setTimeout(r, 100));
+    return { answer: document.querySelector("#avatar-result")?.textContent ?? "", failed, busy: Element.prototype.getAttribute.call(form, "aria-busy"), files: /** @type {HTMLInputElement | null} */ (form.querySelector("input[type=file]"))?.files?.length ?? -1 };
+  });
+  check("a multipart form without a progress handler, with a control named getAttribute, is still sent", ordinary.answer !== "" && !ordinary.failed.length, JSON.stringify(ordinary));
+  errors.splice(failedOnPurpose, errors.length, ...errors.slice(failedOnPurpose).filter((e) => !/ERR_FAILED|ERR_ABORTED|NS_BINDING_ABORTED|cancelled/i.test(e)));
   if (!signsIn) await page.context().clearCookies({ name: "session" });
 
   // The posts answered 415, and the uploads 422 and 413 (the form over its limit), on purpose; the

@@ -93,9 +93,9 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 name = "auction-room"
 version = "0.1.0"
 dependencies = [
- "corten",
+ "corten-run",
  "corten-ui",
- "serde",
+ "futures-util",
  "sqlx",
  "tokio",
 ]
@@ -114,7 +114,6 @@ checksum = "31b698c5f9a010f6573133b09e0de5408834d0c82f8d7475a89fc1867a71cd90"
 dependencies = [
  "axum-core",
  "bytes",
- "form_urlencoded",
  "futures-util",
  "http",
  "http-body",
@@ -130,13 +129,11 @@ dependencies = [
  "serde_core",
  "serde_json",
  "serde_path_to_error",
- "serde_urlencoded",
  "sync_wrapper",
  "tokio",
  "tower",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -155,7 +152,6 @@ dependencies = [
  "sync_wrapper",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -246,7 +242,7 @@ dependencies = [
 name = "card-market"
 version = "0.1.0"
 dependencies = [
- "corten",
+ "corten-run",
  "http-body-util",
  "reqwest",
  "serde",
@@ -308,7 +304,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
-name = "corten"
+name = "corten-cli"
+version = "0.1.0"
+
+[[package]]
+name = "corten-cluster"
+version = "0.1.0"
+dependencies = [
+ "async-nats",
+ "corten-run",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "corten-feed"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "corten-protocol",
+ "futures-util",
+ "http-body-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "corten-macros"
+version = "0.1.0"
+
+[[package]]
+name = "corten-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "corten-run"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -341,54 +381,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "corten-cli"
-version = "0.1.0"
-
-[[package]]
-name = "corten-cluster"
-version = "0.1.0"
-dependencies = [
- "async-nats",
- "corten",
- "futures-util",
- "serde",
- "serde_json",
- "sqlx",
- "tokio",
-]
-
-[[package]]
-name = "corten-feed"
-version = "0.1.0"
-dependencies = [
- "axum",
- "corten-protocol",
- "futures-util",
- "http-body-util",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "corten-macros"
-version = "0.1.0"
-
-[[package]]
-name = "corten-protocol"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "corten-ui"
 version = "0.1.0"
 dependencies = [
- "corten",
- "serde",
+ "corten-run",
 ]
 
 [[package]]
@@ -494,7 +490,7 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 name = "deck-builder"
 version = "0.1.0"
 dependencies = [
- "corten",
+ "corten-run",
  "corten-ui",
  "serde",
  "tokio",
@@ -1207,8 +1203,8 @@ name = "listings-feed"
 version = "0.1.0"
 dependencies = [
  "async-nats",
- "corten",
  "corten-cluster",
+ "corten-run",
  "serde",
  "serde_json",
  "sqlx",
@@ -1822,7 +1818,7 @@ dependencies = [
 name = "seller-desk"
 version = "0.1.0"
 dependencies = [
- "corten",
+ "corten-run",
  "serde",
  "serde_json",
  "tokio",
@@ -2475,7 +2471,6 @@ dependencies = [
  "tokio",
  "tower-layer",
  "tower-service",
- "tracing",
 ]
 
 [[package]]
@@ -2590,7 +2585,7 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 name = "ui-gallery"
 version = "0.1.0"
 dependencies = [
- "corten",
+ "corten-run",
  "corten-ui",
  "serde",
  "tokio",
@@ -2749,7 +2744,7 @@ dependencies = [
 name = "watchlist"
 version = "0.1.0"
 dependencies = [
- "corten",
+ "corten-run",
  "futures-util",
  "serde",
  "tokio",

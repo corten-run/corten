@@ -8,7 +8,7 @@
 //! ```
 //! use corten::prelude::*;
 //!
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Archive {
 //!     #[serde(default)]
 //!     ids: Vec<String>,
@@ -27,14 +27,14 @@
 //! struct does not compile, rather than failing the first time someone checks nothing:
 //!
 //! ```compile_fail
-//! #[derive(serde::Deserialize, corten::Fields)]
+//! #[derive(corten::Fields)]
 //! struct Archive {
 //!     ids: Vec<String>,
 //! }
 //! ```
 //!
 //! ```compile_fail
-//! #[derive(serde::Deserialize, corten::Fields)]
+//! #[derive(corten::Fields)]
 //! struct Alert {
 //!     notify: bool,
 //! }
@@ -111,13 +111,13 @@
 //! use std::collections::BTreeMap;
 //! use corten::prelude::*;
 //!
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Address { street: String }
 //!
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Line { qty: u32, #[serde(default)] gift: bool }
 //!
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Order {
 //!     #[fields(group)]
 //!     ship_to: Address,
@@ -143,9 +143,9 @@
 //! ```compile_fail,E0308
 //! # use std::collections::BTreeMap;
 //! # use corten::prelude::*;
-//! # #[derive(serde::Deserialize, Fields)]
+//! # #[derive(Fields)]
 //! # struct Line { qty: u32 }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Order {
 //!     #[fields(rows)]
 //!     #[serde(default)]
@@ -159,9 +159,9 @@
 //! ```compile_fail,E0609
 //! # use std::collections::BTreeMap;
 //! # use corten::prelude::*;
-//! # #[derive(serde::Deserialize, Fields)]
+//! # #[derive(Fields)]
 //! # struct Line { qty: u32 }
-//! # #[derive(serde::Deserialize, Fields)]
+//! # #[derive(Fields)]
 //! # struct Order { #[fields(rows)] #[serde(default)] lines: BTreeMap<u32, Line> }
 //! let mut errors = Errors::new();
 //! errors.add(Order::FIELDS.lines.qty, "At least 1.");
@@ -171,9 +171,9 @@
 //!
 //! ```compile_fail
 //! # use std::collections::BTreeMap;
-//! # #[derive(serde::Deserialize, corten::Fields)]
+//! # #[derive(corten::Fields)]
 //! # struct Line { qty: u32 }
-//! #[derive(serde::Deserialize, corten::Fields)]
+//! #[derive(corten::Fields)]
 //! struct Order {
 //!     #[fields(rows)]
 //!     lines: BTreeMap<u32, Line>,
@@ -184,7 +184,7 @@
 //!
 //! ```compile_fail
 //! # use std::collections::BTreeMap;
-//! #[derive(serde::Deserialize, corten::Fields)]
+//! #[derive(corten::Fields)]
 //! struct Counts {
 //!     #[fields(map)]
 //!     counts: BTreeMap<u32, u32>,
@@ -195,7 +195,7 @@
 //!
 //! ```
 //! # use std::collections::BTreeMap;
-//! #[derive(serde::Deserialize, corten::Fields)]
+//! #[derive(corten::Fields)]
 //! struct Counts {
 //!     #[fields(map)]
 //!     #[serde(default)]
@@ -210,7 +210,7 @@
 //!
 //! ```compile_fail
 //! # use std::collections::BTreeMap;
-//! #[derive(serde::Deserialize, corten::Fields)]
+//! #[derive(corten::Fields)]
 //! struct Counts {
 //!     #[fields(list)]
 //!     #[serde(default)]
@@ -219,7 +219,7 @@
 //! ```
 //!
 //! ```compile_fail
-//! #[derive(serde::Deserialize, corten::Fields)]
+//! #[derive(corten::Fields)]
 //! struct Order {
 //!     #[serde(rename = "ship.zip")]
 //!     zip: String,
@@ -231,11 +231,11 @@
 //!
 //! ```compile_fail,E0080
 //! # use corten::prelude::*;
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Street { line: String }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Address { #[fields(group)] street: Street }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Order { #[fields(group)] ship_to: Address }
 //! let _ = Order::FIELDS;
 //! ```
@@ -243,11 +243,11 @@
 //! ```compile_fail,E0080
 //! # use std::collections::BTreeMap;
 //! # use corten::prelude::*;
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Line { qty: u32 }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Address { #[fields(rows)] #[serde(default)] lines: BTreeMap<u32, Line> }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Order { #[fields(group)] ship_to: Address }
 //! let _ = Order::FIELDS;
 //! ```
@@ -255,11 +255,11 @@
 //! ```compile_fail,E0080
 //! # use std::collections::BTreeMap;
 //! # use corten::prelude::*;
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Part { qty: u32 }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Line { #[fields(rows)] #[serde(default)] parts: BTreeMap<u32, Part> }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Order { #[fields(rows)] #[serde(default)] lines: BTreeMap<u32, Line> }
 //! let _ = Order::FIELDS;
 //! ```
@@ -270,27 +270,27 @@
 //!
 //! ```compile_fail,E0080
 //! # use corten::prelude::*;
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Notices { #[serde(default)] email: bool, #[serde(default)] text: bool }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Account { name: String, #[fields(group)] notices: Notices }
 //! let _ = Account::FIELDS;
 //! ```
 //!
 //! ```compile_fail,E0080
 //! # use corten::prelude::*;
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Proof { scan: Files }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Claim { title: String, #[fields(group)] proof: Proof }
 //! let _ = Claim::FIELDS;
 //! ```
 //!
 //! ```
 //! # use corten::prelude::*;
-//! #[derive(serde::Deserialize, Fields, Default, PartialEq, Debug)]
+//! #[derive(Fields, Default, PartialEq, Debug)]
 //! struct Notices { #[serde(default)] email: bool, #[serde(default)] text: bool }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Account { name: String, #[fields(group)] #[serde(default)] notices: Notices }
 //! let _ = Account::FIELDS;
 //! let read: Account = corten::form::from_bytes(b"name=Ada").unwrap();
@@ -302,9 +302,9 @@
 //!
 //! ```compile_fail
 //! # use corten::prelude::*;
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Address { street: Option<String> }
-//! #[derive(serde::Deserialize, Fields)]
+//! #[derive(Fields)]
 //! struct Order { #[fields(group)] #[serde(default)] ship_to: Option<Address> }
 //! ```
 
@@ -322,7 +322,7 @@ use crate::view::{escape_into, quoted, AttrValue, Attrs, Id, Render};
 mod bounds;
 pub(crate) mod de;
 mod number;
-mod upload;
+pub(crate) mod upload;
 pub use bounds::{Bounds, Numeric};
 pub use de::{from_bytes, FormError};
 pub use number::{read_number, Entry};
@@ -433,10 +433,10 @@ deref!(Form);
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(Clone, Copy, PartialEq, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, UrlValue)]
 /// enum Condition { Mint, Played }
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Sell { condition: Option<Condition>, #[serde(default)] tags: Vec<String> }
 ///
 /// let condition: FieldName<Condition> = Sell::FIELDS.condition;
@@ -448,7 +448,7 @@ deref!(Form);
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Search<'a> {
 ///     q: &'a str,
 ///     #[serde(borrow)]
@@ -470,7 +470,7 @@ deref!(Form);
 /// ```compile_fail,E0308
 /// use corten::prelude::*;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Sell { price: u32, note: String }
 ///
 /// let _: FieldName<u32> = Sell::FIELDS.note;
@@ -591,7 +591,7 @@ impl<P: Place, T> AttrValue for FieldName<T, P> {
 /// use corten::prelude::*;
 /// use corten::form::keep_query;
 ///
-/// #[derive(Clone, Default, serde::Deserialize, Route, Fields)]
+/// #[derive(Clone, Default, Route, Fields)]
 /// #[route("/slab-pricing")]
 /// struct Choice { cert: Option<String>, seller: Option<String>, #[serde(default)] trail: Vec<String>, grade: Option<u8> }
 ///
@@ -626,7 +626,7 @@ impl<P: Place, T> AttrValue for FieldName<T, P> {
 /// use corten::prelude::*;
 /// use corten::form::keep_query;
 ///
-/// #[derive(Default, serde::Deserialize, Route)]
+/// #[derive(Default, Route)]
 /// #[route("/slab-pricing")]
 /// struct Choice { grade: Option<u8> }
 ///
@@ -952,14 +952,14 @@ fn encode_key(key: &str, out: &mut String) {
 /// use std::collections::BTreeMap;
 /// use corten::prelude::*;
 ///
-/// #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, UrlValue)]
 /// #[serde(rename_all = "kebab-case")]
 /// enum Condition { #[serde(alias = "nm")] NearMint, Played }
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Price { cents: u32 }
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Prices {
 ///     #[fields(rows)]
 ///     #[serde(default)]
@@ -1077,7 +1077,106 @@ pub struct Refused;
 /// Used by the code `#[derive(Fields)]` generates.
 #[doc(hidden)]
 pub mod __private {
+    use std::{borrow::Cow, marker::PhantomData};
+
+    use serde::de::{Deserialize, Deserializer, Error, Visitor};
+
     use super::*;
+
+    /// A field the input leaves out that has no default: `None` for an `Option`, and serde's
+    /// missing-field error for anything else, as serde's derive reads one.
+    pub fn missing_field<'de, V: Deserialize<'de>, E: Error>(field: &'static str) -> Result<V, E> {
+        struct Missing<E>(&'static str, PhantomData<E>);
+        impl<'de, E: Error> Deserializer<'de> for Missing<E> {
+            type Error = E;
+            fn deserialize_any<V: Visitor<'de>>(self, _: V) -> Result<V::Value, E> {
+                Err(E::missing_field(self.0))
+            }
+            fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, E> {
+                visitor.visit_none()
+            }
+            serde::forward_to_deserialize_any! {
+                bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf unit
+                unit_struct newtype_struct seq tuple tuple_struct map struct enum identifier ignored_any
+            }
+        }
+        V::deserialize(Missing(field, PhantomData))
+    }
+
+    /// A `#[serde(borrow)]` `Cow<'a, str>` or `Cow<'a, [u8]>` field: borrowed from the input where
+    /// the input lends it, owned where it was decoded, as serde's derive reads one.
+    pub struct Borrow<T>(pub T);
+
+    impl<'de: 'a, 'a> Deserialize<'de> for Borrow<Cow<'a, str>> {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct Text;
+            impl<'de> Visitor<'de> for Text {
+                type Value = Cow<'de, str>;
+                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("a string")
+                }
+                fn visit_borrowed_str<E: Error>(self, text: &'de str) -> Result<Cow<'de, str>, E> {
+                    Ok(Cow::Borrowed(text))
+                }
+                fn visit_str<E: Error>(self, text: &str) -> Result<Cow<'de, str>, E> {
+                    Ok(Cow::Owned(text.to_owned()))
+                }
+                fn visit_string<E: Error>(self, text: String) -> Result<Cow<'de, str>, E> {
+                    Ok(Cow::Owned(text))
+                }
+                fn visit_borrowed_bytes<E: Error>(self, bytes: &'de [u8]) -> Result<Cow<'de, str>, E> {
+                    match std::str::from_utf8(bytes) {
+                        Ok(text) => Ok(Cow::Borrowed(text)),
+                        Err(_) => Err(E::invalid_value(serde::de::Unexpected::Bytes(bytes), &self)),
+                    }
+                }
+                fn visit_bytes<E: Error>(self, bytes: &[u8]) -> Result<Cow<'de, str>, E> {
+                    match std::str::from_utf8(bytes) {
+                        Ok(text) => Ok(Cow::Owned(text.to_owned())),
+                        Err(_) => Err(E::invalid_value(serde::de::Unexpected::Bytes(bytes), &self)),
+                    }
+                }
+                fn visit_byte_buf<E: Error>(self, bytes: Vec<u8>) -> Result<Cow<'de, str>, E> {
+                    match String::from_utf8(bytes) {
+                        Ok(text) => Ok(Cow::Owned(text)),
+                        Err(e) => Err(E::invalid_value(serde::de::Unexpected::Bytes(&e.into_bytes()), &self)),
+                    }
+                }
+            }
+            deserializer.deserialize_str(Text).map(Borrow)
+        }
+    }
+
+    impl<'de: 'a, 'a> Deserialize<'de> for Borrow<Cow<'a, [u8]>> {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            struct Bytes;
+            impl<'de> Visitor<'de> for Bytes {
+                type Value = Cow<'de, [u8]>;
+                fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    f.write_str("a byte array")
+                }
+                fn visit_borrowed_str<E: Error>(self, text: &'de str) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Borrowed(text.as_bytes()))
+                }
+                fn visit_str<E: Error>(self, text: &str) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Owned(text.as_bytes().to_vec()))
+                }
+                fn visit_string<E: Error>(self, text: String) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Owned(text.into_bytes()))
+                }
+                fn visit_borrowed_bytes<E: Error>(self, bytes: &'de [u8]) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Borrowed(bytes))
+                }
+                fn visit_bytes<E: Error>(self, bytes: &[u8]) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Owned(bytes.to_vec()))
+                }
+                fn visit_byte_buf<E: Error>(self, bytes: Vec<u8>) -> Result<Cow<'de, [u8]>, E> {
+                    Ok(Cow::Owned(bytes))
+                }
+            }
+            deserializer.deserialize_bytes(Bytes).map(Borrow)
+        }
+    }
 
     pub const fn group(name: &'static str) -> Group {
         Group(name)
@@ -1452,7 +1551,7 @@ impl<I: Id> Within<'static, I> {
     /// #[derive(Id)]
     /// struct LookUpId;
     ///
-    /// #[derive(serde::Deserialize, Fields)]
+    /// #[derive(Fields)]
     /// struct LookUp { grader: String }
     ///
     /// let f = LookUp::FIELDS;
@@ -1501,7 +1600,7 @@ impl<I: Id> Within<'_, I> {
     /// #[derive(Id)]
     /// struct SignUpId;
     ///
-    /// #[derive(serde::Deserialize, Fields)]
+    /// #[derive(Fields)]
     /// struct SignUp { email: String }
     ///
     /// let (f, errors) = (SignUp::FIELDS, Errors::new());
@@ -1533,7 +1632,7 @@ impl<I: Id> Within<'_, I> {
     /// #[derive(Id)]
     /// struct SignUpId;
     ///
-    /// #[derive(serde::Deserialize, Fields)]
+    /// #[derive(Fields)]
     /// struct SignUp { email: String }
     ///
     /// let (f, errors) = (SignUp::FIELDS, Errors::new());
@@ -1550,7 +1649,7 @@ impl<I: Id> Within<'_, I> {
     /// #[derive(Id)]
     /// struct SignUpId;
     ///
-    /// #[derive(serde::Deserialize, Fields)]
+    /// #[derive(Fields)]
     /// struct SignUp { email: String }
     ///
     /// let (f, errors) = (SignUp::FIELDS, Errors::new());
@@ -1866,7 +1965,7 @@ impl<I: Id, P: Place> Render for FieldMessage<'_, I, P> {
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Alert {
 ///     email: String,
 ///     submit: SubmitKey,
@@ -1909,7 +2008,7 @@ impl<I: Id, P: Place> Render for FieldMessage<'_, I, P> {
 /// ```compile_fail,E0308
 /// use corten::prelude::*;
 ///
-/// #[derive(serde::Deserialize, Fields)]
+/// #[derive(Fields)]
 /// struct Alert { email: String, submit: SubmitKey }
 ///
 /// let _ = SubmitKey::field(Alert::FIELDS.email);
@@ -1931,7 +2030,7 @@ impl SubmitKey {
     /// ```
     /// use corten::prelude::*;
     ///
-    /// #[derive(serde::Deserialize, Fields)]
+    /// #[derive(Fields)]
     /// struct Pay { amount: u32, submit: SubmitKey }
     ///
     /// let posted: Pay = corten::form::from_bytes(b"amount=5&submit=3f2504e0-4f89-41d3-9a0c-0305e82c3301").unwrap();
@@ -1944,7 +2043,7 @@ impl SubmitKey {
     /// ```compile_fail,E0308
     /// use corten::prelude::*;
     ///
-    /// #[derive(serde::Deserialize, Fields)]
+    /// #[derive(Fields)]
     /// struct Pay { amount: u32, submit: SubmitKey }
     ///
     /// let posted: Pay = corten::form::from_bytes(b"amount=5&submit=3f2504e0-4f89-41d3-9a0c-0305e82c3301").unwrap();

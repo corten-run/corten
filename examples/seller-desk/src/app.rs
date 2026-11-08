@@ -24,7 +24,7 @@ use corten::{
     prelude::*,
     view::Remove,
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::{
     text::{Msg, USD},
@@ -210,6 +210,7 @@ pub fn app(desk: Desk) -> App<ServerTiming> {
         .assets(views::Static)
         .components(views::COMPONENTS)
         .messages::<Msg>()
+        .error_page(views::error_page, ())
         .middleware(ServerTiming)
         .task("sales", move |signal| simulate_sales(sales, signal))
 }
@@ -271,7 +272,7 @@ async fn home(req: Req, State(desk): State<Desk>) -> HtmlResult {
     req.page(html! { <views::Layout req={&req} title="Inventory">{view}</views::Layout> })
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct PriceInput {
     pub price: String,
 }
@@ -305,7 +306,7 @@ async fn set_price(
     req.patch_or(cell, || async { req.redirect(&url::Home) }).await
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct ArchiveInput {
     /// The checked rows' ids, one `ids` per checkbox: each row's box belongs to the archive form.
     #[serde(default)]
@@ -407,6 +408,16 @@ mod tests {
     /// The desk's app, its items `desk`'s.
     fn client(desk: &Desk) -> Client {
         app(desk.clone()).test()
+    }
+
+    /// A failure is drawn in the layout, with its sections (`App::error_page`).
+    #[tokio::test]
+    async fn an_unknown_url_gets_the_error_page_in_the_layout() {
+        let missing = client(&Desk::new(3)).get(&corten::Local::parse("/nope").unwrap()).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let html = missing.text();
+        assert!(html.contains("<h1>Not found</h1>") && html.contains(r#"aria-label="Sections""#), "{html}");
+        assert!(html.contains(r#"<a href="/">Back to the inventory</a>"#), "{html}");
     }
 
     /// The archive form's submit, as the runtime sends it: the rows `ids` checked.

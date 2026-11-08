@@ -2,6 +2,7 @@
   "name": "item-page-nextjs",
   "private": true,
   "scripts": {
+    "test:marketplace": "node --test marketplace.test.mjs",
     "build": "next build",
     "start": "node .next/standalone/server.js"
   },

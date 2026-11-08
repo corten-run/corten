@@ -13,7 +13,6 @@
 //! | `GET /orders?page=2` | the seller's orders, a page of them: the kit's other components |
 //! | `POST /orders/settings` | the shipping settings: back to the orders, whose toaster says they were saved |
 use corten::{Component, Refusal, i18n::Currency, prelude::*};
-use serde::Deserialize;
 use std::time::{Duration, SystemTime};
 
 use corten_ui::{Toast, Toaster};
@@ -21,7 +20,7 @@ use corten_ui::{Toast, Toaster};
 use crate::gallery::{
     CARD, Condition, Gallery, MarketTab, MenuResult, OrderResult, Period, Pricing, Region, RenameDialog, Sale, Times,
 };
-use crate::orders::{Orders, PAGES, SettingsForm};
+use crate::orders::{Orders, PAGES, PAYOUTS, SettingsForm};
 use crate::ui::{
     button::{Button, ButtonSize, ButtonVariant},
     nav_bar::{NavActions, NavBar, NavBrand, NavSections},
@@ -81,6 +80,8 @@ pub mod url {
     pub struct Orders {
         pub page: Option<usize>,
         pub sort: Option<crate::orders::OrderSort>,
+        /// Which payout the payouts card shows, newest first: none is the newest.
+        pub payout: Option<usize>,
     }
 
     #[route("/orders/settings", post = settings)]
@@ -97,6 +98,7 @@ pub fn app() -> App {
         .components(COMPONENTS)
         .components(corten_ui::COMPONENTS)
         .zoned_dates()
+        .error_page(error_page, ())
 }
 
 /// No toast: what a page that is not an action's answer gives its layout.
@@ -126,7 +128,7 @@ fn Layout<'a>(req: &'a Req, title: &'a str, toast: Toast<&'a str>, children: imp
                     <a class={NavBrand {}} href={DRAFT}>"corten-ui"</a>
                     <nav class={NavSections {}} aria-label="Sections">
                         <a {..req.nav(&DRAFT)}>"Draft"</a>
-                        <a {..req.nav(&url::Orders { page: None, sort: None })}>"Orders"</a>
+                        <a {..req.nav(&url::Orders { page: None, sort: None, payout: None })}>"Orders"</a>
                     </nav>
                     <div class={NavActions {}}>
                         <a class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }} href={url::Help}>"Help"</a>
@@ -144,6 +146,32 @@ fn Layout<'a>(req: &'a Req, title: &'a str, toast: Toast<&'a str>, children: imp
             </body>
         </html>
     }
+}
+
+/// The page for a failed request (`App::error_page`), in the layout, so a failure keeps the app's
+/// design and its way back; under `corten dev` it shows what went wrong.
+async fn error_page(failure: Failure, req: Req) -> HtmlResult {
+    let (title, text) = match failure {
+        Failure::NotFound => ("Not found", "There is nothing at this address."),
+        Failure::TimedOut | Failure::Offline | Failure::Unidentified { .. } => {
+            ("Not available", "Check your connection and try again.")
+        }
+        Failure::CrossSite => ("Not allowed", "This request came from another site."),
+        Failure::Refused { .. } => ("Not allowed", "You do not have access to this page."),
+        Failure::WrongMethod | Failure::Rejected { .. } | Failure::Failed { .. } | Failure::Panicked { .. } => {
+            ("Something went wrong", "Please try again.")
+        }
+    };
+    req.page(html! {
+        <Layout req={&req} title={title} toast={QUIET}>
+            <h1>{title}</h1>
+            <p>{text}</p>
+            <p><a href={DRAFT}>"Back to the draft"</a></p>
+            if let Some(detail) = failure.detail() {
+                <pre>{detail}</pre>
+            }
+        </Layout>
+    })
 }
 
 /// The offer's relative times, as of now.
@@ -185,7 +213,7 @@ async fn home(req: Req, Params(q): Params<url::Home>) -> HtmlResult {
     gallery(&req, Gallery { tab, period, sold: q.sold, sale: q.sale == Some(Sale::Last), ..listings(&req, &none) })
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct SellForm {
     /// A count as typed: one that does not read, or is out of `QTY`, is a message, and the form
     /// is drawn again with what was sent.
@@ -279,7 +307,7 @@ async fn publish(req: Req) -> HtmlResult {
     req.invalid(&sold, toast(), page).await
 }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 pub struct RenameForm {
     pub name: String,
 }
@@ -316,11 +344,12 @@ async fn menu_action(req: Req, text: &'static str) -> HtmlResult {
 /// A page of the orders: one past the last is the last.
 async fn orders(req: Req, Params(q): Params<url::Orders>) -> HtmlResult {
     let page = q.page.unwrap_or(1).clamp(1, PAGES);
+    let payout = q.payout.unwrap_or(0).min(PAYOUTS.len() - 1);
     // The avatar takes the address as text.
     let (t, photo) = (req.t(), req.asset(Static::FAVICON_SVG).to_string());
     req.page(html! {
         <Layout req={&req} title="Orders | corten-ui" toast={QUIET}>
-            <Orders t={t} page={page} sort={q.sort} photo={&photo} />
+            <Orders t={t} page={page} sort={q.sort} payout={payout} photo={&photo} />
         </Layout>
     })
 }
@@ -331,7 +360,7 @@ async fn settings(req: Req, Form(form): Form<SettingsForm>) -> HtmlResult {
     let emails = if form.notify { "on" } else { "off" };
     let note = if form.note.trim().is_empty() { "no note" } else { "your note" };
     req.redirect_with_notice(
-        &url::Orders { page: None, sort: None },
+        &url::Orders { page: None, sort: None, payout: None },
         format_args!("Saved: ships from {from} in {days} days on {labels} labels with {note}; shipping emails {emails}."),
     )
 }
@@ -379,6 +408,16 @@ mod tests {
         app().test()
     }
 
+    /// A failure is drawn in the layout, with its sections and the way back (`App::error_page`).
+    #[tokio::test]
+    async fn an_unknown_url_gets_the_error_page_in_the_layout() {
+        let missing = client().get(&Local::parse("/nope").unwrap()).await;
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        let html = missing.text();
+        assert!(html.contains("<h1>Not found</h1>") && html.contains(r#"aria-label="Sections""#), "{html}");
+        assert!(html.contains(r#"<a href="/">Back to the draft</a>"#), "{html}");
+    }
+
     /// The page at `to`, as text.
     async fn page(to: &url::Home) -> String {
         client().get(to).await.text().to_string()
@@ -386,7 +425,7 @@ mod tests {
 
     /// The orders at `page`, sorted by `sort`.
     async fn orders(page: Option<usize>, sort: Option<OrderSort>) -> String {
-        client().get(&url::Orders { page, sort }).await.text().to_string()
+        client().get(&url::Orders { page, sort, payout: None }).await.text().to_string()
     }
 
     /// The sale form, filled in with one copy at an ounce in Lightly Played: the rest as given.
@@ -647,7 +686,7 @@ mod tests {
 
         #[derive(Id)]
         struct CopiesFormId;
-        #[derive(serde::Deserialize, Fields)]
+        #[derive(Fields)]
         struct Copies {
             #[expect(dead_code, reason = "the test reads only the field's name")]
             copies: u32,

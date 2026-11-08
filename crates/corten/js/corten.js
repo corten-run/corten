@@ -75,6 +75,14 @@ const scriptsDir = document.querySelector('meta[name="corten-scripts"]')?.getAtt
 // loads the handlers' own modules.
 const FORMAT = "corten-format";
 
+// A multipart submit whose progress a form's `on:corten:progress` handler is told of goes by
+// XMLHttpRequest (upload.js), a module of its own that only a page with such a form loads, as
+// soon as the form's handlers are read; fetch reports no upload progress. Without it (it did not
+// load), the submit is a fetch, with no progress.
+const UPLOAD = "corten-upload";
+/** The runtime's event on such a form, a `ProgressEvent`. */
+const PROGRESS = "corten:progress";
+
 /** Script modules by name, once imported. @type {Map<string, Record<string, unknown>>} */
 const modules = new Map();
 /** @type {Map<string, Promise<unknown>>} */
@@ -152,16 +160,32 @@ function load(name) {
   return pending;
 }
 
+/**
+ * Element's own `getAttribute` and `hasAttribute`, for an element that may be a form: a form
+ * control's `name` shadows the form's member of that name (`<input name="hasAttribute">` makes
+ * `form.hasAttribute` the input), so the runtime reads the attributes of an element it dispatches
+ * to, binds, finds refs in, patches or draws again through these. They are formCall's rule for
+ * the two members read on every event and every element a patch puts in, without its lookup.
+ */
+const { getAttribute, hasAttribute } = Element.prototype;
+/** @param {Element} el @param {string} name */
+const attrOf = (el, name) => getAttribute.call(el, name);
+/** @param {Element} el @param {string} name */
+const hasAttr = (el, name) => hasAttribute.call(el, name);
+
 /** Each element's parsed `data-on`, until the attribute changes. @type {WeakMap<Element, { source: string, list: Binding[] }>} */
 const parsed = new WeakMap();
 
 /** @param {Element} el */
 function bindings(el) {
-  const source = el.getAttribute("data-on") ?? "";
+  const source = attrOf(el, "data-on") ?? "";
   let entry = parsed.get(el);
   if (!entry || entry.source !== source) {
     entry = { source, list: parseOn(source) };
-    for (const b of entry.list) if (b.args.some(formatted)) formats.add(b);
+    for (const b of entry.list) {
+      if (b.args.some(formatted)) formats.add(b);
+      if (b.type === PROGRESS) load(UPLOAD);
+    }
     parsed.set(el, entry);
   }
   return entry.list;
@@ -214,12 +238,12 @@ function findRefs(from, owner, name) {
   const changes = refChanges.get(name) ?? 0;
   const hit = cached.get(name);
   if (hit && hit.changes === changes && hit.found.every((el) => el.isConnected)) return hit.found.slice();
-  const own = scope.getAttribute("data-scope");
+  const own = attrOf(scope, "data-scope");
   const qualified = `${own}/${name}`;
   /** @type {Element[]} */
   const found = [];
   const check = (/** @type {Element} */ el) => {
-    const ref = el.getAttribute("data-ref");
+    const ref = attrOf(el, "data-ref");
     if (ref === name ? el.closest("[data-scope]") === scope : ref === qualified && el.closest(`[data-scope="${own}"]`) === scope) found.push(el);
   };
   check(scope);
@@ -241,7 +265,7 @@ const refCache = new WeakMap();
 
 /** @param {Element} el @param {Set<string>} names */
 function refName(el, names) {
-  const ref = el.getAttribute("data-ref");
+  const ref = attrOf(el, "data-ref");
   if (ref !== null) names.add(ref.slice(ref.indexOf("/") + 1));
 }
 
@@ -298,11 +322,11 @@ const SKIP = Symbol("skip");
  */
 function closestRef(el, owner, name, event) {
   const scope = scopeOf(el, owner);
-  const own = scope.getAttribute("data-scope");
+  const own = attrOf(scope, "data-scope");
   const qualified = `${own}/${name}`;
   for (const node of event.composedPath()) {
     if (!(node instanceof Element)) continue;
-    const ref = node.getAttribute("data-ref");
+    const ref = attrOf(node, "data-ref");
     if (ref === name ? node.closest("[data-scope]") === scope : ref === qualified && node.closest(`[data-scope="${own}"]`) === scope) return node;
     if (node === scope) break;
   }
@@ -324,6 +348,22 @@ function closestRef(el, owner, name, event) {
  * one that the server's markup names. To a script it is a string; the markup's call is what takes
  * no string in its place, since the crate checks it when it compiles.
  * @typedef {string} ElementId
+ */
+
+/**
+ * The runtime's event on a `data-patch` form whose submit got no answer it can draw (it bubbles,
+ * and is cancelable): `status` is that answer's (one with no patch or page to draw), or 0 when
+ * none could be used (offline, the server unreachable, or an answer whose body failed to read or
+ * draw), with the `error` that stopped it. A handler takes it as `@param {CortenError} event`,
+ * so the markup that passes it is checked (`on:corten:error={js::failed(event, target)}`).
+ * @typedef {CustomEvent<{ status: number, error?: unknown }>} CortenError
+ */
+
+/**
+ * The runtime's event on the document for a redirect's notice the page did not draw: `message` is
+ * its text. A handler takes it as `@param {CortenNotice} event`
+ * (`on:document:corten:notice={js::said(event)}`).
+ * @typedef {CustomEvent<{ message: string }>} CortenNotice
  */
 
 /**
@@ -390,7 +430,7 @@ function resolve(arg, el, event, binding) {
     case "*":
       return findRefs(el, arg.owner, arg.name);
     case "#":
-      return new Map(findRefs(el, arg.owner, arg.name).map((found) => [found.getAttribute("data-key"), found]));
+      return new Map(findRefs(el, arg.owner, arg.name).map((found) => [attrOf(found, "data-key"), found]));
     case "^":
       return closestRef(el, arg.owner, arg.name, event) ?? SKIP;
     case "{": {
@@ -493,7 +533,7 @@ function listen(type) {
     if (!event.bubbles) return;
     for (const node of event.composedPath()) {
       if (!(node instanceof Element)) continue;
-      if (node.hasAttribute("data-on")) for (const b of bindings(node)) if (b.type === type) run(node, b, event);
+      if (hasAttr(node, "data-on")) for (const b of bindings(node)) if (b.type === type) run(node, b, event);
       // A handler that stops a submit's propagation keeps it from the page's outer handlers, not
       // from the runtime: a data-patch form is still sent as a patch.
       if (event.cancelBubble) return type === "submit" && patchSubmit(event);
@@ -512,7 +552,7 @@ function listen(type) {
     type,
     (event) => {
       const target = event.composedPath()[0];
-      if (event.bubbles || !(target instanceof Element) || !target.hasAttribute("data-on")) return;
+      if (event.bubbles || !(target instanceof Element) || !hasAttr(target, "data-on")) return;
       for (const b of bindings(target)) if (b.type === type) run(target, b, event);
     },
     { capture: true },
@@ -533,7 +573,7 @@ function scan(root, names, inside = false) {
   for (const template of Array.from(root.getElementsByTagName("template"))) modulesOf(template.content);
   const marked = Array.from(root.querySelectorAll("[data-on]"));
   if (!inside) {
-    if (root.hasAttribute("data-on")) marked.unshift(root);
+    if (hasAttr(root, "data-on")) marked.unshift(root);
     refName(root, names);
   }
   // Rows cloned from one template carry the same refs, so a name is added once per run of them.
@@ -541,7 +581,7 @@ function scan(root, names, inside = false) {
     const refs = root.querySelectorAll("[data-ref]");
     let last = null;
     for (let i = 0; i < refs.length; i += 1) {
-      const ref = refs[i].getAttribute("data-ref");
+      const ref = attrOf(refs[i], "data-ref");
       if (ref !== last && ref !== null) names.add(ref.slice(ref.indexOf("/") + 1));
       last = ref;
     }
@@ -576,7 +616,7 @@ function fewRefNames(root, names) {
   for (let seen = 0; seen < FEW_NAMES; seen += 1) {
     const el = root.querySelector(selector);
     if (!el) return true;
-    const ref = /** @type {string} */ (el.getAttribute("data-ref"));
+    const ref = /** @type {string} */ (attrOf(el, "data-ref"));
     names.add(ref.slice(ref.indexOf("/") + 1));
     selector += `:not([data-ref="${CSS.escape(ref)}"])`;
   }
@@ -680,6 +720,8 @@ export function subscribe(url, handlers, { signal } = {}) {
   let timer;
   let seq = 0;
   let failures = 0;
+  // Snapshots in a row whose own cursor the stream refused as it opened.
+  let refused = 0;
   const status = handlers.status ?? (() => {});
   signal?.addEventListener(
     "abort",
@@ -691,19 +733,24 @@ export function subscribe(url, handlers, { signal } = {}) {
     { once: true },
   );
 
-  /** Runs `next` after a backoff that grows with each failure in a row. @param {() => void} next */
-  function retry(next) {
-    failures += 1;
+  /** Runs `next` after a backoff that grows with `times`. @param {() => void} next @param {number} times */
+  function wait(next, times) {
     clearTimeout(timer);
-    timer = setTimeout(next, Math.min(30_000, 500 * 2 ** failures));
+    timer = setTimeout(next, Math.min(30_000, 500 * 2 ** times));
   }
 
-  async function sync() {
+  /** Runs `next` after a backoff that grows with each failure in a row. @param {() => void} next */
+  function retry(next) {
+    wait(next, (failures += 1));
+  }
+
+  /** @param {boolean} [shown] the status already says `syncing` */
+  async function sync(shown = false) {
     source?.close();
     source = null;
     request?.abort();
     if (signal?.aborted) return;
-    status("syncing");
+    if (!shown) status("syncing");
     const current = (request = new AbortController());
     try {
       const res = await fetch(url, { headers: { accept: "application/json" }, signal: current.signal });
@@ -713,21 +760,25 @@ export function subscribe(url, handlers, { signal } = {}) {
       failures = 0;
       seq = snap.seq;
       handlers.snapshot(snap.rows, snap.seq, snap.epoch);
-      listen(`${url}/live?since=${encodeURIComponent(`${snap.epoch}-${snap.seq}`)}`);
+      listen(`${url}/live?since=${encodeURIComponent(`${snap.epoch}-${snap.seq}`)}`, true);
     } catch (error) {
       if (current.signal.aborted) return;
       console.error(error);
-      retry(sync);
+      retry(() => sync(true));
     }
   }
 
-  /** @param {string} liveUrl */
-  function listen(liveUrl) {
+  /** @param {string} liveUrl @param {boolean} [fresh] its cursor is the snapshot's just loaded */
+  function listen(liveUrl, fresh = false) {
     const es = new EventSource(liveUrl);
     source = es;
     let cursor = new URL(liveUrl, location.href).searchParams.get("since") ?? "";
+    let opened = 0;
+    let opens = 0;
     es.addEventListener("open", () => {
       failures = 0;
+      opened = performance.now();
+      opens += 1;
       status("live");
     });
     // EventSource retries by itself and sends Last-Event-ID, so the server resumes after `seq`.
@@ -737,7 +788,20 @@ export function subscribe(url, handlers, { signal } = {}) {
       status("reconnecting");
       if (es.readyState === EventSource.CLOSED && source === es) retry(() => listen(`${url}/live?since=${encodeURIComponent(cursor)}`));
     });
-    es.addEventListener("sync", () => sync());
+    // A stream that answers the cursor the snapshot just gave with `sync` as it first opens
+    // refuses it (the URL serves more than one feed, say): load the snapshot again after a
+    // backoff that grows, not straight away in a loop. A `sync` later, or after a reconnect (a
+    // reset), loads it at once. 900 ms leaves room for a task that delays the event.
+    es.addEventListener("sync", () => {
+      if (!fresh || opens > 1 || performance.now() - opened > 900) {
+        refused = 0;
+        return void sync();
+      }
+      es.close();
+      source = null;
+      status("syncing");
+      wait(() => sync(true), (refused += 1));
+    });
     es.addEventListener("patch", (event) => {
       const receivedAt = performance.now();
       /** @type {{ seq: number, changes: FeedChange<Row>[] }} */
@@ -745,6 +809,8 @@ export function subscribe(url, handlers, { signal } = {}) {
       if (batch.seq <= seq) return;
       if (batch.seq !== seq + 1) return void sync();
       seq = batch.seq;
+      fresh = false;
+      refused = 0;
       cursor = /** @type {MessageEvent} */ (event).lastEventId;
       handlers.patch(batch.changes, batch.seq, receivedAt);
     });
@@ -784,7 +850,7 @@ function setVars(root) {
     // A template's markup gets its values too, so they move with it when a script puts its content
     // in the page (`rows.append(rest.content)`).
     if (el instanceof HTMLTemplateElement) setVars(el.content);
-    const vars = el.getAttribute("data-vars");
+    const vars = attrOf(el, "data-vars");
     if (!vars || !(el instanceof HTMLElement || el instanceof SVGElement)) continue;
     for (const one of vars.split(";")) {
       const at = one.indexOf(":");
@@ -803,7 +869,7 @@ function setVars(root) {
 function modulesOf(node) {
   /** @type {Promise<unknown>[]} */
   const pending = [];
-  if (node instanceof Element && node.hasAttribute("data-on")) for (const b of bindings(node)) pending.push(loadFor(b));
+  if (node instanceof Element && hasAttr(node, "data-on")) for (const b of bindings(node)) pending.push(loadFor(b));
   for (const el of Array.from(node.querySelectorAll("[data-on]"))) for (const b of bindings(el)) pending.push(loadFor(b));
   for (const template of Array.from(node.querySelectorAll("template"))) pending.push(modulesOf(template.content));
   return Promise.all(pending);
@@ -848,25 +914,26 @@ async function apply(html, signal, sent, took, own = true, asked) {
   // Whether it removes a nav link, which can leave another of its nav current.
   let navs = false;
   for (const el of Array.from(content.children)) {
-    const id = idOf(el);
+    // Read from the attribute, as `target.id` is a control named id when the target is a form.
+    const id = idOf(el) ?? "";
     const target = id ? document.getElementById(id) : null;
-    if (el.hasAttribute("data-corten-read-again")) again = el;
-    else if (el instanceof HTMLTemplateElement && el.hasAttribute("data-remove")) {
+    if (hasAttr(el, "data-corten-read-again")) again = el;
+    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-remove")) {
       // Focus in it goes to the nearest element around it that can take focus.
       const up = target?.contains(document.activeElement) && target.parentElement;
       navs ||= !!target && holdsNav(target);
-      if (target?.parentElement) changedIn(target.parentElement, ["x", target.id, []]);
+      if (target?.parentElement) changedIn(target.parentElement, ["x", id, []]);
       target?.remove();
       if (up) focusNear(up);
     }
     else if (!target) console.error(`corten: patch element <${el.localName}> needs an id that exists on the page`, el);
-    else if (el instanceof HTMLTemplateElement && el.hasAttribute("data-append")) {
+    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
       put.push(...Array.from(el.content.children));
       serve(el.content);
-      changedIn(target, ["a", target.id, Array.from(el.content.childNodes)]);
+      changedIn(target, ["a", id, Array.from(el.content.childNodes)]);
       target.append(el.content);
     } else {
-      if (target.parentElement) changedIn(target.parentElement, ["r", target.id, [el]]);
+      if (target.parentElement) changedIn(target.parentElement, ["r", id, [el]]);
       replaceKeeping(target, el, sent, took);
       put.push(el);
     }
@@ -892,7 +959,7 @@ async function apply(html, signal, sent, took, own = true, asked) {
  */
 function partTagBeside(put) {
   for (const el of put) {
-    if (!el.id || !el.parentElement) continue;
+    if (!idOf(el) || !el.parentElement) continue;
     const tag = Array.from(el.parentElement.children).find((sibling) => sibling.matches(PART_AGAIN));
     if (tag) return tag;
   }
@@ -944,7 +1011,7 @@ const PART_AGAIN = "template[data-corten-read-again][data-from]";
  */
 function readPartsAgain(main) {
   for (const tag of Array.from(main.querySelectorAll(PART_AGAIN))) {
-    readPatchAgain(tag, [tag, ...Array.from(/** @type {Element} */ (tag.parentElement).children).filter((el) => el.id)]);
+    readPatchAgain(tag, [tag, ...Array.from(/** @type {Element} */ (tag.parentElement).children).filter((el) => idOf(el))]);
   }
 }
 
@@ -977,7 +1044,7 @@ function stateOf(f, initial) {
  * when it has one (see formProperty), and any element may be a form.
  * @param {Element} el
  */
-const idOf = (el) => el.getAttribute("id");
+const idOf = (el) => attrOf(el, "id");
 
 /**
  * The form's own property `name`, past a control named like it: in the DOM `<button name="action">`
@@ -1045,7 +1112,7 @@ function counterpart(root, fresh, el, exact, ids) {
   let anchor = /** @type {Element} */ (el.parentElement);
   while (anchor !== root && !idOf(anchor)) anchor = /** @type {Element} */ (anchor.parentElement);
   const home = anchor === root ? fresh : counterpart(root, fresh, anchor, false, ids);
-  const name = el.getAttribute("name");
+  const name = attrOf(el, "name");
   if (!home) return null;
   if (name) {
     const selector = named(el, name);
@@ -1110,7 +1177,7 @@ function opened(root, fresh, ids) {
   for (const el of [root, ...Array.from(root.querySelectorAll("details, dialog, [popover]"))]) {
     const dialog = el instanceof HTMLDialogElement;
     const toggles = dialog || el instanceof HTMLDetailsElement;
-    const popover = el.hasAttribute("popover");
+    const popover = hasAttr(el, "popover");
     const shown = popover && el.matches(":popover-open");
     const now = toggles && /** @type {HTMLDialogElement} */ (el).open;
     // Left as the server sent it, and not a shown popover: the fresh markup says, so its
@@ -1119,7 +1186,7 @@ function opened(root, fresh, ids) {
     // A dialog or popover only by id: by place, another row's could open over the page.
     const to = counterpart(root, fresh, el, dialog || popover, ids);
     if (!to || to.localName !== el.localName) continue;
-    if (shown && to.hasAttribute("popover")) later.push(() => /** @type {HTMLElement} */ (to).showPopover());
+    if (shown && hasAttr(to, "popover")) later.push(() => /** @type {HTMLElement} */ (to).showPopover());
     if (!toggles) continue;
     // Unchanged since the server sent it (or unknown, markup a script added): the fresh markup
     // says. Changed by the user: theirs, which is also what a server that changed it now says.
@@ -1152,8 +1219,10 @@ function opened(root, fresh, ids) {
  * caret. Markup cannot give back a file input's files, so it keeps them unless the answer `took`
  * the ones it sent.
  * @param {Element} root @param {Element} fresh @param {Map<Element, string | undefined> | null} sent @param {boolean} [took]
+ * @param {boolean} [focus] whether focus in `root`, and its caret, is carried into `fresh`: a
+ *   page's part a link replaces leaves it to the navigation, which moves it as a link does
  */
-function replaceKeeping(root, fresh, sent, took) {
+function replaceKeeping(root, fresh, sent, took, focus = true) {
   // A layout element keeps its place in the layout a write's page is compared with.
   if (drawn.has(root)) drawn.set(fresh, markupOf(fresh));
   serve(fresh);
@@ -1161,16 +1230,16 @@ function replaceKeeping(root, fresh, sent, took) {
   const ids = idsIn(fresh);
   const reopen = opened(root, fresh, ids);
   const focused = document.activeElement;
-  const inside = focused && focused !== document.body && root.contains(focused);
+  const inside = focus && focused && focused !== document.body && root.contains(focused);
   const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
   /** File inputs of `fresh` and the files to give them once they are in the page. @type {[any, FileList | null][]} */
   const files = [];
   for (const f of [root, ...Array.from(root.querySelectorAll("input, textarea, select"))]) {
     // A submit key stays the form's own: renewed in place once an answer took the write, and kept
     // as sent after a 5xx (which may hide a write that applied), whatever key the answer drew.
-    if (f instanceof HTMLInputElement && f.hasAttribute("data-submit")) {
+    if (f instanceof HTMLInputElement && hasAttr(f, "data-submit")) {
       const to = counterpart(root, fresh, f, true, ids);
-      if (to instanceof HTMLInputElement && to.hasAttribute("data-submit")) to.value = f.value;
+      if (to instanceof HTMLInputElement && hasAttr(to, "data-submit")) to.value = f.value;
       continue;
     }
     const now = stateOf(f);
@@ -1216,7 +1285,7 @@ function focusNear(el, root, fresh) {
   while (el && el !== document.body) {
     const to = fresh ? counterpart(/** @type {Element} */ (root), fresh, el) : el;
     if (to instanceof HTMLElement) {
-      const made = !to.hasAttribute("tabindex");
+      const made = !hasAttr(to, "tabindex");
       if (made) to.tabIndex = -1;
       to.focus({ preventScroll: true });
       if (document.activeElement === to) {
@@ -1258,6 +1327,35 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
     reload(notice);
     return false;
   }
+  const main = document.querySelector("main");
+  if (!main) throw new Error("corten: the shell must render a <main> element");
+  // The layout's elements that are the page's (`page` in `html!`, a section's nav), each for the
+  // one on screen with its id, taken out of the answer so what is left is `<main>`'s children,
+  // which the user's place is found in by position. One the page lacks is another layout's: the
+  // page loads in full. One a patch replaced has no `page` mark, and is still the one to replace.
+  // An app without them skips the walk: a search of the text costs less than one of the answer.
+  /** @type {[Element, Element][]} */
+  const parts = [];
+  if (html.includes(" data-corten-page")) {
+    for (const part of Array.from(content.children)) {
+      if (!hasAttr(part, "data-corten-page")) continue;
+      const id = idOf(part);
+      const old = id ? document.getElementById(id) : null;
+      if (!old || main.contains(old)) {
+        reload(notice);
+        return false;
+      }
+      part.remove();
+      // One the server drew as the one on screen is left as it is: its scroll, its scripts' state
+      // and the focus in it, as a write's page leaves a layout element that did not change. Compared
+      // as layout elements are, so a nav link's `aria-current` (`req.nav`), which `markCurrent`
+      // moves, does not count.
+      const markup = markupOf(part);
+      if (partSent.get(old) === markup) continue;
+      partSent.set(part, markup);
+      parts.push([old, part]);
+    }
+  }
   const title = content.querySelector("title");
   if (title) {
     document.title = title.textContent ?? "";
@@ -1266,8 +1364,6 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const tags = Array.from(content.querySelectorAll("[data-corten-head]"));
   for (const old of Array.from(document.head.querySelectorAll("[data-corten-head]"))) old.remove();
   document.head.append(...tags);
-  const main = document.querySelector("main");
-  if (!main) throw new Error("corten: the shell must render a <main> element");
   const view = stay ? viewOf(main, content) : null;
   // The page being left, as it is now, under the entry it was drawn for: a replace keeps the entry
   // (a link that redirects replaces the entry it pushed, not the one left), and so does a read again.
@@ -1283,9 +1379,16 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   if (typed) putTyped(content, typed);
   serve(content);
   const [x, y] = [scrollX, scrollY];
+  for (const [old, part] of parts) {
+    // One inside an element the layout drew changes what a write's page is compared with, as a
+    // patch there does; one that is such an element takes its place (`replaceKeeping`).
+    if (!drawn.has(old) && old.parentElement) changedIn(old.parentElement, ["r", /** @type {string} */ (idOf(part)), [part]]);
+    // A link followed moves the focus as one in the header does; a read again keeps it.
+    replaceKeeping(old, part, null, false, !!stay);
+  }
   main.replaceChildren(content);
   // A page that sets no value skips the walk: a search of the text costs less than one of the DOM.
-  if (html.includes("data-vars")) setVars(main);
+  if (html.includes("data-vars")) for (const el of [main, ...parts.map(([, part]) => part)]) setVars(el);
   layout?.apply();
   scrolledIn.clear();
   sideways.clear();
@@ -1338,12 +1441,21 @@ const comparable = (html) =>
 const drawn = new WeakMap();
 
 /**
+ * The markup each of the layout's elements that are the page's (`data-corten-page`) was sent as
+ * (`markupOf`), so a navigation whose answer draws it the same leaves the one on screen in place.
+ * One a patch or a write's page changed in place is forgotten, so the next navigation draws it.
+ * @type {WeakMap<Element, string>}
+ */
+const partSent = new WeakMap();
+
+/**
  * A patch (`put`) changed what the server drew inside `el`: the layout element around it, if any,
  * applies it to its copy, so the next write's page is compared with what the server and the
  * patches drew there.
  * @param {Element} el @param {Put} put
  */
 function changedIn(el, [how, id, nodes]) {
+  partSent.delete(/** @type {Element} */ (el.closest("[data-corten-page]")));
   for (let up = /** @type {Element | null} */ (el); up; up = up.parentElement) {
     const was = drawn.get(up);
     if (was === undefined) continue;
@@ -1383,6 +1495,7 @@ for (let el = document.querySelector("main"); el && el !== document.body; el = e
   // As sent, made comparable only if a write's page is compared with it, so a load pays for the copy alone.
   for (const beside of Array.from(el.parentElement?.children ?? [])) if (beside !== el) drawn.set(beside, beside.outerHTML);
 }
+for (const part of Array.from(document.querySelectorAll("[data-corten-page]"))) partSent.set(part, markupOf(part));
 
 /**
  * What a write's page can change only by loading in full, one entry each: the element path from
@@ -1465,10 +1578,17 @@ function layoutChanges(doc, notice) {
         // page: it stays.
         if (!old.isConnected || drawn.get(old) !== was) continue;
         const markup = markupOf(el);
+        // The server's markup of each page's part in it, before drawing adds what the user had
+        // (a <details> they opened) or a focus move's tabindex.
+        const parts = [el, ...Array.from(el.querySelectorAll("[data-corten-page]"))]
+          .filter((part) => hasAttr(part, "data-corten-page"))
+          .map((part) => /** @type {const} */ ([part, part === el ? markup : markupOf(part)]));
         const as = was === undefined ? null : drawnAs(was);
         drawLayout(old, el, as === null ? null : parse(as).firstElementChild, said);
         const now = old.isConnected ? old : el;
         drawn.set(now, markup);
+        // A page's part the write's page drew anew is what the next navigation compares with.
+        if (now !== old) for (const [part, sent] of parts) partSent.set(part, sent);
         setVars(now);
       }
     },
@@ -1497,17 +1617,19 @@ const shows = (el, said) =>
  */
 function drawLayout(old, fresh, before, said, inside = false) {
   if (old.localName !== fresh.localName || !(inside || old.matches(LIVE) || old.querySelector(LIVE))) return replaceKeeping(old, fresh, null);
-  const wiring = () => ["data-on", "data-ref", "data-scope"].map((a) => old.getAttribute(a)).join("\n");
+  // Changed in place: a page's part that is or holds it is drawn by the next navigation.
+  partSent.delete(/** @type {Element} */ (old.closest("[data-corten-page]")));
+  const wiring = () => ["data-on", "data-ref", "data-scope"].map((a) => attrOf(old, a)).join("\n");
   const was = wiring();
   // The ref it had too, whose holders look again.
   const names = new Set();
   refName(old, names);
   // What the user opened or closed stays as they left it, as a patch keeps it ({@link opened}).
   const toggles = old instanceof HTMLDetailsElement || old instanceof HTMLDialogElement;
-  for (const a of Array.from(old.attributes)) if (!fresh.hasAttribute(a.name) && !(toggles && a.name === "open")) old.removeAttribute(a.name);
-  for (const a of Array.from(fresh.attributes)) if (old.getAttribute(a.name) !== a.value && !(toggles && a.name === "open")) old.setAttribute(a.name, a.value);
+  for (const a of Array.from(old.attributes)) if (!hasAttr(fresh, a.name) && !(toggles && a.name === "open")) old.removeAttribute(a.name);
+  for (const a of Array.from(fresh.attributes)) if (attrOf(old, a.name) !== a.value && !(toggles && a.name === "open")) old.setAttribute(a.name, a.value);
   if (toggles) {
-    const [now, want] = [old.open, fresh.hasAttribute("open")];
+    const [now, want] = [old.open, hasAttr(fresh, "open")];
     // Left as the server sent it: the server's state now. A modal one closes by `close()`, which
     // also ends the rest of the page being inert; taking away its `open` would not.
     if ((!served.has(old) || served.get(old) === now) && now !== want) {
@@ -1869,7 +1991,10 @@ function prefetch(target) {
   if (!(link instanceof HTMLAnchorElement) || link.target || link.hasAttribute("download")) return;
   if (link.closest("[data-reload], [data-no-prefetch]")) return;
   const url = new URL(link.href, location.href);
-  if (url.origin !== location.origin || pageKey(url) === pageKey(new URL(location.href))) return;
+  // The page a visit is fetching is not prefetched as well: the address stays this page's until
+  // it is in, and a hover then (the pointer back on its link, on a part of it, on another link to
+  // it) would fetch it a second time.
+  if (url.origin !== location.origin || pageKey(url) === pageKey(new URL(location.href)) || pageKey(url) === fetching?.key) return;
   const key = pageKey(url);
   // The user asked the browser to save data.
   if (/** @type {any} */ (navigator).connection?.saveData) return;
@@ -1897,6 +2022,9 @@ function prefetch(target) {
   prefetched.set(key, { at: now, response, stop });
 }
 
+/** The page the newest visit is fetching, until that visit ends. @type {{ key: string } | null} */
+let fetching = null;
+
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let hoverTimer;
 document.addEventListener("pointerover", (event) => {
@@ -1916,15 +2044,19 @@ document.addEventListener("touchstart", (event) => prefetch(event.target), { pas
  *   answer, not marked busy, and not swapped when nothing changed
  * @param {ReturnType<typeof placeOf>} [place] where a `data-keep-place` navigation leaves the
  *   user, handed on when the server redirects
- * @param {Element | null} [source] the link or GET form that started it, marked busy with `main`
+ * @param {Element | null} [source] what started it, marked busy with `main`: a link, a form, or
+ *   the button that sent a form (and that button's form)
  * @param {boolean} [written] sent by a write: the page is fetched whole and its layout drawn again
+ * @param {Precommit} [precommit] where the address waits for the answer ({@link interceptVisit})
  */
-async function visit(url, signal, redirected, again, place, source, written) {
+async function visit(url, signal, redirected, again, place, source, written, precommit) {
   // A write's page reading itself again is read whole as well, as a browser without JavaScript
   // reads it: what its layout could not read yet (a cart count while the write lands) is drawn
   // when the read finds it. It stays whole while the page asks to be read again.
   const whole = !!written || (!!again && swappedWhole !== "");
   const key = pageKey(url);
+  // A read again fetches the page on screen, which no prefetch takes.
+  const going = again ? null : { key };
   const hit = again || written ? undefined : prefetched.get(key);
   prefetched.delete(key);
   const fresh = hit && performance.now() - hit.at < PREFETCH_FRESH_MS;
@@ -1933,9 +2065,11 @@ async function visit(url, signal, redirected, again, place, source, written) {
   // A visit left before its prefetched answer is used stops that request too.
   else signal.addEventListener("abort", () => discard(hit), { once: true });
   // Marked busy as this visit's (past a form control named setAttribute): a newer visit's mark
-  // is not cleared when this one ends.
+  // is not cleared when this one ends. A form's navigation marks the form and the button that
+  // sent it, one outside it (`form=`) too.
   const mine = {};
-  const busy = again ? [] : [document.querySelector("main"), source];
+  const form = source instanceof HTMLButtonElement || source instanceof HTMLInputElement ? source.form : null;
+  const busy = again ? [] : [document.querySelector("main"), form ?? source, form && source];
   for (const el of busy) if (el) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
   // Cleared when the visit ends, or at once when it is abandoned: a prefetched answer it awaits
   // is not cancelled with it.
@@ -1943,6 +2077,7 @@ async function visit(url, signal, redirected, again, place, source, written) {
     for (const el of busy) if (el && busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   };
   signal.addEventListener("abort", idle);
+  if (going) fetching = going;
   try {
     /** @type {Response} */
     let res;
@@ -1958,22 +2093,32 @@ async function visit(url, signal, redirected, again, place, source, written) {
       if (signal.aborted) throw error;
       // Offline or the server is unreachable: load the URL as a normal navigation, which the
       // service worker (if any) answers with the offline page, and the browser otherwise explains.
+      await precommit?.commit();
+      signal.throwIfAborted();
       reload();
       return;
     }
+    signal.throwIfAborted();
+    // Sent to a place on a page (`route.at(id)`) or another site: the server names it here, since
+    // `fetch` follows a redirect but drops its `#id`, and cannot read another origin's answer.
+    // Where the address waits for the answer, this navigation has not changed it yet: the next one
+    // takes its place in history (a link's new entry) and this one ends unseen, so the link's
+    // address never shows. Elsewhere the link's address is already in, and is replaced.
+    // Read against the answer's URL, as a full load's redirect is, whatever the address is now.
+    const to = res.headers.get("corten-location");
+    if (to) {
+      go(new URL(to, res.url).href, { history: precommit?.history ?? "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source, [WRITTEN]: whole } });
+      return;
+    }
+    // The address changes now that the answer is here, as a full load's does: whatever is done
+    // with the answer after this (a swap, a full load) starts from it.
+    const took = (await precommit?.commit(res)) ?? false;
     signal.throwIfAborted();
     const notice = noticeOf(res);
     // A read again's notice is the one the page drew and the user has seen: a full load in its
     // place does not say it again. The answer does not say whether the notice was sent back or is
     // another tab's cookie notice for this path; that one is then not announced here either.
     if (again) notice?.set("r", "");
-    // Sent to a place on a page (`route.at(id)`): the server names it here, since `fetch` follows a
-    // redirect but drops its `#id`.
-    const to = res.headers.get("corten-location");
-    if (to) {
-      navigation.navigate(to, { history: "replace", info: { [LOAD]: true, [KEEP_PLACE]: place, [SOURCE]: source } });
-      return;
-    }
     if (!res.headers.has(whole ? "corten-shell" : "corten-page") || shellChanged(res)) {
       reload(notice);
       return;
@@ -1981,10 +2126,10 @@ async function visit(url, signal, redirected, again, place, source, written) {
     // The server redirected (a `Caller` sending someone to sign in). Changing the address with
     // history.replaceState would abort this navigation and the body with it, so read the body,
     // then navigate again to where it came from, in place of this entry, with the page in hand.
-    if (res.redirected && !redirected) {
+    if (res.redirected && !redirected && !took) {
       const page = new Response(await res.text(), { headers: res.headers });
       signal.throwIfAborted();
-      navigation.navigate(res.url, { history: "replace", info: { [REDIRECTED]: page, [KEEP_PLACE]: place, [SOURCE]: source, [WRITTEN]: whole } });
+      go(res.url, { history: "replace", info: { [REDIRECTED]: page, [KEEP_PLACE]: place, [SOURCE]: source, [WRITTEN]: whole } });
       return;
     }
     const html = await res.text();
@@ -2003,17 +2148,20 @@ async function visit(url, signal, redirected, again, place, source, written) {
   } finally {
     signal.removeEventListener("abort", idle);
     idle();
+    if (fetching === going) fetching = null;
   }
 }
 
 /**
- * A visit's request headers: `corten: nav` for `<main>` alone, none for the whole document, and
- * on a read again the notice the page on screen drew ({@link shown}), with the page it is for.
+ * A visit's request headers: `corten: nav` for `<main>` alone, `corten: page` for the whole
+ * document (rendered as a full load's, but a redirect to a place or another site is named in
+ * `corten-location`, which `fetch` cannot follow with its `#id`), and on a read again the notice
+ * the page on screen drew ({@link shown}), with the page it is for.
  * @param {boolean} whole @param {boolean | undefined} again @returns {Record<string, string>}
  */
 function readHeaders(whole, again) {
   /** @type {Record<string, string>} */
-  const headers = whole ? {} : { corten: "nav" };
+  const headers = { corten: whole ? "page" : "nav" };
   if (again && shown !== null) headers[NOTICE] = new URLSearchParams({ p: location.pathname, m: shown }).toString();
   return headers;
 }
@@ -2073,7 +2221,7 @@ function readAgainLater() {
       // A read cancelled on its way (a script's `replaceState`, as a sort in place does) is read
       // again later while this is still the entry: only a swapped page starts the next. A read
       // that failed stops them, as before.
-      navigation.navigate(location.href, { history: "replace", info: { [READ_AGAIN]: true } }).finished.catch((/** @type {unknown} */ error) => {
+      go(location.href, { history: "replace", info: { [READ_AGAIN]: true } }).catch((/** @type {unknown} */ error) => {
         const cancelled = error instanceof DOMException && error.name === "AbortError";
         if (cancelled && page === readAgainPage && navigation.currentEntry?.key === entry) readAgainLater();
       });
@@ -2107,7 +2255,7 @@ const KEEP_PLACE = Symbol("corten.keepPlace");
  * when only the `#id` differs from the address, since the write may have changed the page.
  */
 const LOAD = Symbol("corten.load");
-/** The link or GET form that started a navigation the server redirected, still marked busy. */
+/** What started a navigation the server redirected, or a write's answer sent on: still marked busy. */
 const SOURCE = Symbol("corten.source");
 /**
  * Key of the navigation a write sent the browser on: its page is fetched whole, as a full load
@@ -2149,12 +2297,12 @@ function sendsAs(form, submitter) {
 }
 
 /**
- * The link or GET form that started a navigation (a submit button's form), if any.
+ * What started a navigation, if anything: a link, a form, or the button that sent one.
  * @param {any} event
  */
 function startedBy(event) {
   const el = event.info?.[SOURCE] ?? event.sourceElement;
-  return el?.form instanceof HTMLFormElement ? el.form : el instanceof Element ? el : null;
+  return el instanceof Element ? el : null;
 }
 
 /**
@@ -2188,6 +2336,9 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
   if (skip) return;
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
+  // The dwell of the link followed ends: the server may answer with another page (a redirect),
+  // which a prefetch of the link would fetch again. A read again leaves a dwell over another link.
+  if (!again) clearTimeout(hoverTimer);
   // The page is about to change: replies to its pending submits would patch the wrong page.
   if (!again) for (const pending of submits.values()) pending.controller.abort();
   const redirected = event.info?.[REDIRECTED];
@@ -2205,8 +2356,7 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
     // A new page starts at its `#id`, else at the top. Scrolled here, not left to the browser:
     // Chromium leaves a swapped page where the last one was scrolled, and Firefox does not scroll
     // to an `#id` the address already had.
-    const handler = async () => {
-      await visit(url, event.signal, redirected, false, undefined, startedBy(event), written);
+    const after = () => {
       if (event.signal.aborted) return;
       let id = url.hash.slice(1);
       try {
@@ -2216,11 +2366,10 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
       if (at) at.scrollIntoView();
       else scrollTo(0, 0);
     };
-    event.intercept({ handler, scroll: "manual" });
+    interceptVisit(event, (precommit) => visit(url, event.signal, redirected, false, undefined, startedBy(event), written, precommit), after, { scroll: "manual" });
     return;
   }
-  const handler = async () => {
-    await visit(url, event.signal, redirected, again, place, startedBy(event), written);
+  const after = () => {
     // Back to the control, unless the user has moved on meanwhile.
     const now = document.activeElement;
     const el = /** @type {HTMLInputElement | undefined} */ (place && (!now || now === document.body) ? document.querySelectorAll(place.at)[place.nth] : undefined);
@@ -2231,8 +2380,100 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
       if (start !== null) el.setSelectionRange(start, end, direction);
     } catch {}
   };
-  event.intercept({ handler, scroll: "manual", focusReset: "manual" });
+  const visiting = (/** @type {Precommit | undefined} */ precommit) => visit(url, event.signal, redirected, again, place, startedBy(event), written, precommit);
+  // A page reading itself again keeps its address: nothing to wait for.
+  interceptVisit(event, visiting, after, { scroll: "manual", focusReset: "manual" }, !again);
 });
+
+/**
+ * The runtime's own navigation (a redirect followed, a `corten-location`, a write's page):
+ * `navigation.navigate`, with its `committed` promise handled, since one that another navigation
+ * replaces before its address changes (the user clicks on while the page is on its way) rejects
+ * it, which the browser would log as uncaught. Returns `finished`, for the caller that wants to know how it ended.
+ * @param {string} url
+ * @param {object} options
+ * @returns {Promise<unknown>}
+ */
+function go(url, options) {
+  const { committed, finished } = navigation.navigate(url, options);
+  committed.catch(() => {});
+  return finished;
+}
+
+/** Whether the browser lets a navigation say when its address changes (`precommitHandler`). */
+const PRECOMMIT = "NavigationPrecommitController" in window;
+
+/**
+ * A navigation whose address waits for its answer: `commit` changes the address once the answer
+ * is in (none when there is none), to the redirect's target when the server redirected, and is
+ * true when it took that target; `history` is how the navigation enters history, for the one
+ * that takes its place before it commits (a `corten-location`).
+ * @typedef {{ commit(res?: Response): Promise<boolean>, history: "push" | "replace" }} Precommit
+ */
+
+/**
+ * Intercepts `event` with `run`, a visit, and then `after`. Where the browser lets it
+ * (`precommitHandler`), the address waits for the page's answer, as a full load's does: it changes
+ * when the answer is in, to the redirect's target when the server redirected (one entry, never the
+ * link's), so reloading, copying or sharing the address during a slow handler gets the page on
+ * screen (#992). A `corten-location` answer is followed before the address changes, by a
+ * navigation that takes this one's place in history (`Precommit.history`), so the link's address
+ * never shows. `main` is busy from the click either way. Elsewhere, and for back and forward, the
+ * address changes at once, as before.
+ * @param {any} event
+ * @param {(precommit: Precommit | undefined) => Promise<void>} run
+ * @param {() => void} after
+ * @param {object} options
+ * @param {boolean} [early] whether the address may wait for the answer (not a page read again)
+ */
+function interceptVisit(event, run, after, options, early = true) {
+  if (!early || !PRECOMMIT || !event.cancelable || event.navigationType === "traverse") {
+    event.intercept({ ...options, handler: () => run(undefined).then(after) });
+    return;
+  }
+  /** @type {() => void} */
+  let committed = () => {};
+  // The commit's handler runs once the address is the page's; an abandoned navigation never gets
+  // there, so its abort lets the visit stop waiting.
+  const ready = new Promise((resolve) => {
+    committed = () => resolve(undefined);
+    event.signal.addEventListener("abort", committed, { once: true });
+  });
+  /** @type {Promise<void>} */
+  let visiting = Promise.resolve();
+  event.intercept({
+    ...options,
+    precommitHandler: (/** @type {any} */ controller) =>
+      new Promise((answered, failed) => {
+        const commit = async (/** @type {Response | undefined} */ res) => {
+          let took = false;
+          if (res?.redirected) {
+            // `fetch` drops the `#id`; a full load's redirect keeps the link's when it names none.
+            const to = new URL(res.url);
+            to.hash ||= new URL(event.destination.url).hash;
+            try {
+              controller.redirect(to.href);
+              took = true;
+            } catch {
+              // Not one the address can take (another origin): navigated to again, as before.
+            }
+          }
+          answered(undefined);
+          await ready;
+          return took;
+        };
+        visiting = run({ commit, history: event.navigationType === "replace" ? "replace" : "push" });
+        // A visit that ends before its answer (a full load) lets the navigation end too. One left
+        // for another (back, or a second link) ends quietly: the browser does not handle a
+        // precommit handler's failure once its navigation is aborted, and would log it.
+        visiting.then(answered, (error) => (event.signal.aborted ? answered(undefined) : failed(error)));
+      }),
+    handler: () => {
+      committed();
+      return visiting.then(after);
+    },
+  });
+}
 
 /**
  * What the user typed or chose in the page of each history entry they left, by the entry's key:
@@ -2279,7 +2520,7 @@ for (const type of ["input", "change"])
 function unkept(f) {
   const field = /** @type {HTMLInputElement} */ (f);
   const form = field.form;
-  const auto = f.getAttribute("autocomplete")?.trim() || (form && formCall(form, "getAttribute", "autocomplete")?.trim());
+  const auto = f.getAttribute("autocomplete")?.trim() || (form && attrOf(form, "autocomplete")?.trim());
   return /^(password|file)$/.test(field.type) || f.hasAttribute("data-submit") || auto?.toLowerCase() === "off";
 }
 
@@ -2439,7 +2680,7 @@ addEventListener("pagehide", () => (left += 1));
  * of the form's state (409, 410), a 5xx, an answer the runtime does not draw, a redirect, a reload
  * or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
- * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null }>}
+ * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
 const submits = new Map();
 
@@ -2462,7 +2703,7 @@ addEventListener("submit", patchSubmit);
 /** Sends a `data-patch` form's submit as a patch, unless a handler cancelled it. @param {Event} event */
 function patchSubmit(event) {
   const form = event.target;
-  if (event.defaultPrevented || !(form instanceof HTMLFormElement) || !formCall(form, "hasAttribute", "data-patch")) return;
+  if (event.defaultPrevented || !(form instanceof HTMLFormElement) || !hasAttr(form, "data-patch")) return;
   const submitter = /** @type {SubmitEvent} */ (event).submitter;
   const sends = sendsAs(form, submitter);
   // A dialog's form closes the dialog and sends nothing: the browser's to do.
@@ -2486,8 +2727,12 @@ async function send(form, submitter, sends) {
   const key = `${method} ${url.href} ${fields} ${Array.from(data.values(), (v) => (typeof v === "string" ? "" : `${v.size}/${v.lastModified}`))}`;
   const previous = submits.get(form);
   if (previous?.write) {
-    // Sent once the write's answer is in; the same values as the write's again send nothing.
+    // Sent once the write's answer is in; the same values as the write's again send nothing. A
+    // button that waits is busy with the write's marks, one it replaced no longer.
+    const waiting = previous.next;
     previous.next = previous.key === key ? undefined : (submitter ?? null);
+    if (waiting && waiting !== previous.next && waiting !== previous.by && busyBy.get(waiting) === previous.mine) formCall(waiting, "removeAttribute", "aria-busy");
+    if (previous.next) previous.busy.push(previous.next), busyBy.set(previous.next, previous.mine), formCall(previous.next, "setAttribute", "aria-busy", "true");
     return;
   }
   if (previous?.key === key) return;
@@ -2495,7 +2740,12 @@ async function send(form, submitter, sends) {
   const sent = sentState(form);
   const controller = new AbortController();
   const { signal } = controller;
-  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined) };
+  // The form and the control that sent it (a button outside it, by `form=`, too) are busy until
+  // the answer is drawn, as this submit's: a newer submit's marks are not cleared when this one
+  // ends.
+  const mine = {};
+  const busy = submitter ? [form, submitter] : [form];
+  const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
   submits.set(form, pending);
   /** @type {RequestInit} */
@@ -2508,7 +2758,7 @@ async function send(form, submitter, sends) {
     init.body = plain ? entries.map(([name, value]) => `${name}=${value}\r\n`).join("") : fields.toString();
     init.headers = { corten: "action", "content-type": plain ? "text/plain" : "application/x-www-form-urlencoded" };
   }
-  formCall(form, "setAttribute", "aria-busy", "true");
+  for (const el of busy) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
   // A write can change any page, so nothing fetched before it is reused, nor anything prefetched
   // while it was on its way (which may predate it, or use up a notice it sets).
   const forget = () => {
@@ -2518,7 +2768,19 @@ async function send(form, submitter, sends) {
   };
   forget();
   try {
-    const res = await fetch(url, init);
+    // A multipart write whose form has an `on:corten:progress` handler goes by XMLHttpRequest, which
+    // reports how much of the body is sent; fetch does not. Any other submit is a fetch.
+    const progress =
+      init.body instanceof FormData && url.origin === location.origin && hasAttr(form, "data-on") && bindings(form).some((b) => b.type === PROGRESS);
+    const upload = progress && (await load(UPLOAD), /** @type {typeof import("./upload.js") | undefined} */ (modules.get(UPLOAD)))?.upload;
+    // Left while the module loaded (a navigation; a newer submit of a write waits for this one):
+    // nothing is sent.
+    signal.throwIfAborted();
+    const res = upload
+      ? await upload(url, method, /** @type {FormData} */ (init.body), signal, ({ loaded, total, lengthComputable }) => {
+          if (!signal.aborted) formCall(form, "dispatchEvent", new ProgressEvent(PROGRESS, { loaded, total, lengthComputable }));
+        })
+      : await fetch(url, init);
     forget();
     // A whole answer below 500 is definitive: the write applied or was refused, and the form gets
     // a new key. A 5xx (a 502 from a proxy can hide a committed write), a network error, an abort
@@ -2532,7 +2794,8 @@ async function send(form, submitter, sends) {
       submits.delete(form);
       if (navigation) {
         stale ||= method !== "GET";
-        navigation.navigate(location_, { info: { [LOAD]: true, [WRITTEN]: method !== "GET" } });
+        // The page it sends the browser to keeps the marks until it is drawn.
+        go(location_, { info: { [LOAD]: true, [WRITTEN]: method !== "GET", [SOURCE]: submitter ?? form } });
       } else {
         // Without the Navigation API, a URL that differs only in its `#id` would only scroll.
         const to = new URL(location_, location.href);
@@ -2578,9 +2841,12 @@ async function send(form, submitter, sends) {
     pending.next = undefined;
     formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: 0, error } }));
   } finally {
-    if (submits.get(form)?.controller === controller) {
+    // Cleared when this submit ends, but not those a newer submit of the form or the page a
+    // redirect sends the browser to marked again (theirs, cleared when they end).
+    const current = submits.get(form)?.controller === controller;
+    for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
+    if (current) {
       submits.delete(form);
-      formCall(form, "removeAttribute", "aria-busy");
       // In a task of its own, after the answer is drawn; not into a page being left.
       const next = pending.next;
       if (next !== undefined && !signal.aborted) setTimeout(() => left === leftAt && sendAgain(form, next));
@@ -2600,7 +2866,7 @@ async function send(form, submitter, sends) {
 function sendAgain(form, submitter) {
   const id = idOf(form);
   const now = formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
-  if (!(now instanceof HTMLFormElement) || !formCall(now, "hasAttribute", "data-patch")) return;
+  if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
   const all = /** @type {HTMLElement[]} */ (Array.from(/** @type {HTMLFormControlsCollection} */ (formProperty(now, "elements"))));
   const by =
     !submitter || all.includes(submitter)

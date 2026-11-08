@@ -9,6 +9,12 @@ import { networkInterfaces } from "node:os";
 
 const base = process.argv[2] ?? "http://localhost:18482";
 const engines = { chromium, firefox, webkit };
+/**
+ * The runtime swaps this request's answer into the page (`corten: nav` or `action`); the page it
+ * fetches whole after a write asks with `corten: page` and is drawn as a full load's.
+ * @param {import("@playwright/test").Request} r
+ */
+const swapped = (r) => ["nav", "action"].includes(r.headers()["corten"] ?? "");
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
 const failures = [];
 let engine = "";
@@ -483,6 +489,67 @@ async function run(browser) {
     return { gap: t.left - i.right, rem: parseFloat(getComputedStyle(document.documentElement).fontSize) / 2, off: i.top + i.height / 2 - (t.top + t.height / 2) };
   });
   check("Icon: beside a button's text, the button's gap apart and on the text's middle", spacedLikeButton(buttonIcon), JSON.stringify(buttonIcon));
+  // A busy Button (the runtime marks the one that sent a form, #1063): a ring after the label in
+  // the text's color, turning unless the user asks for less motion, and drawn under forced colors.
+  const busyButton = page.getByRole("button", { name: "List for sale" });
+  const ring = () =>
+    busyButton.evaluate((b) => {
+      const s = getComputedStyle(b, "::after");
+      return {
+        content: s.content,
+        border: s.borderTopStyle,
+        color: s.borderTopColor,
+        text: getComputedStyle(b).color,
+        end: s.borderRightColor,
+        animation: s.animationName,
+        running: document
+          .getAnimations()
+          .filter((a) => /** @type {CSSAnimation} */ (a).animationName === "button-busy" && /** @type {KeyframeEffect} */ (a.effect)?.target === b && /** @type {KeyframeEffect} */ (a.effect)?.pseudoElement === "::after").length,
+        cursor: getComputedStyle(b).cursor,
+      };
+    });
+  const idleRing = await ring();
+  await busyButton.evaluate((b) => b.setAttribute("aria-busy", "true"));
+  const busyRing = await ring();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const stillRing = await ring();
+  await page.emulateMedia({ reducedMotion: null });
+  /** @type {Awaited<ReturnType<typeof ring>> | null} */
+  let forcedBusy = null;
+  if (engine !== "webkit") {
+    await page.emulateMedia({ forcedColors: "active" });
+    forcedBusy = await ring();
+    await page.emulateMedia({ forcedColors: "none" });
+  }
+  await busyButton.evaluate((b) => b.removeAttribute("aria-busy"));
+  check(
+    "Button: busy, a ring after its label in the text's color that turns, still under reduced motion and drawn under forced colors",
+    idleRing.content === "none" &&
+      busyRing.content === '""' &&
+      busyRing.border === "solid" &&
+      busyRing.color === busyRing.text &&
+      busyRing.end === "rgba(0, 0, 0, 0)" &&
+      busyRing.animation.endsWith("button-busy") &&
+      busyRing.running > 0 &&
+      busyRing.cursor === "progress" &&
+      stillRing.animation === "none" &&
+      stillRing.running === 0 &&
+      (forcedBusy === null || (forcedBusy.border === "solid" && forcedBusy.color !== "rgba(0, 0, 0, 0)" && forcedBusy.end === "rgba(0, 0, 0, 0)")),
+    JSON.stringify({ idleRing, busyRing, stillRing, forcedBusy }),
+  );
+  // A busy Icon button: the ring takes the icon's place, and a text inside it (a visually hidden
+  // name) is not hidden with it.
+  const busyIcon = await page.evaluate(() => {
+    const icon = /** @type {HTMLElement} */ (document.querySelector("a[aria-labelledby][interestfor]")?.cloneNode(true));
+    icon.removeAttribute("interestfor");
+    icon.append(Object.assign(document.createElement("span"), { textContent: "Orders" }));
+    icon.setAttribute("aria-busy", "true");
+    document.querySelector("main")?.append(icon);
+    const seen = { svg: getComputedStyle(/** @type {Element} */ (icon.querySelector("svg"))).display, name: getComputedStyle(/** @type {Element} */ (icon.querySelector("span"))).display, ring: getComputedStyle(icon, "::after").content };
+    icon.remove();
+    return seen;
+  });
+  check("Button: a busy Icon button draws the ring in its icon's place and keeps a text inside it", busyIcon.svg === "none" && busyIcon.name !== "none" && busyIcon.ring === '""', JSON.stringify(busyIcon));
   // Under forced colors the box shadow is not drawn: the group's outline is the focus ring.
   const forcedRingName = "InputGroup: under forced colors its input's focus draws the group's outline";
   if (engine === "webkit") skip(forcedRingName, "Playwright's WebKit does not emulate forced colors");
@@ -1344,16 +1411,51 @@ async function run(browser) {
   // dialog::failed: a rename that gets no answer is said in the modal dialog, not by the toaster
   // the dialog covers; the next submit in it, or closing it, hides it again.
   {
-    const said = rename.locator('[role="alert"] > p');
+    const said = rename.locator('[role="alert"] > div');
     const cutRename = (/** @type {import("@playwright/test").Route} */ route) =>
       route.request().method() === "POST" ? route.abort("connectionreset") : route.fallback();
     const errorsAt = errors.length;
     await page.route("**/rename", cutRename);
     await page.getByRole("button", { name: "Rename draft" }).click();
-    // The live region: rendered in the open dialog (so text added to it is announced), and empty.
+    // The live region: rendered in the open dialog (so text added to it is announced), and empty,
+    // with no box until the kit's FailedAlert in it is shown, tinted.
     const region = () =>
-      rename.locator('[role="alert"]').evaluate((r) => ({ rendered: r.getClientRects().length > 0 && getComputedStyle(r).visibility === "visible", empty: !(/** @type {HTMLElement} */ (r).innerText ?? "").trim() }));
+      rename.locator('[role="alert"]').evaluate((r) => ({
+        rendered: r.getClientRects().length > 0 && getComputedStyle(r).visibility === "visible",
+        empty: !(/** @type {HTMLElement} */ (r).innerText ?? "").trim(),
+        height: r.getBoundingClientRect().height,
+        background: getComputedStyle(/** @type {HTMLElement} */ (r.querySelector("[data-ref=said]"))).backgroundColor,
+        // In the flow (a row of the dialog's grid, under the heading) or out of it.
+        position: getComputedStyle(r).position,
+        belowHeading: r.getBoundingClientRect().top >= /** @type {HTMLElement} */ (r.parentElement?.querySelector("h2")).getBoundingClientRect().bottom,
+      }));
     const regionBefore = await region();
+    // Chromium's accessibility tree, through CDP: out of the flow and back in, the region stays an
+    // assertive alert that is not ignored. (A node's id there is its DOM node's, so it is not
+    // compared.) Whether a screen reader then announces it is not something CDP can show, and
+    // Firefox and WebKit expose no such API to Playwright.
+    const cdp = engine === "chromium" ? await page.context().newCDPSession(page) : null;
+    await cdp?.send("Accessibility.enable");
+    const axNode = async () => {
+      if (!cdp) return null;
+      const { root } = await cdp.send("DOM.getDocument", { depth: 0 });
+      const { nodeId } = await cdp.send("DOM.querySelector", { nodeId: root.nodeId, selector: '#rename [role="alert"]' });
+      if (!nodeId) return null;
+      const { nodes } = await cdp.send("Accessibility.getPartialAXTree", { nodeId, fetchRelatives: false });
+      const node = nodes[0];
+      return { ignored: node.ignored, role: node.role?.value, live: node.properties?.find((p) => p.name === "live")?.value?.value };
+    };
+    const axBefore = await axNode();
+    // An empty region adds no row or gap to the dialog's grid: the form starts one gap under the
+    // heading, as it would with no region between them (measured without changing the page; WebKit
+    // rounds layout to a fraction of a pixel, and a row would add at least the gap).
+    const rowless = await rename.evaluate((d) => {
+      const heading = /** @type {HTMLElement} */ (d.querySelector("h2")).getBoundingClientRect().bottom;
+      const form = /** @type {HTMLElement} */ (d.querySelector("form")).getBoundingClientRect().top;
+      const gap = parseFloat(getComputedStyle(d).rowGap) || 0;
+      return { heading, gap, form };
+    });
+    check("an empty FailedAlert adds no row to the dialog's grid", Math.abs(rowless.form - (rowless.heading + rowless.gap)) < 1, JSON.stringify(rowless));
     await page.locator("#rename-name").fill("Cut draft");
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const shown = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
@@ -1369,19 +1471,37 @@ async function run(browser) {
       JSON.stringify({ shown, toast }),
     );
     // The next submit hides it (and, cut again, says it again); closing the dialog hides it.
-    const hidOnSubmit = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector('#rename [role="alert"] > p')).hidden)), { once: true })));
+    const hidOnSubmit = page.evaluate(() => new Promise((resolve) => document.addEventListener("submit", () => queueMicrotask(() => resolve(/** @type {HTMLElement} */ (document.querySelector('#rename [role="alert"] > div')).hidden)), { once: true })));
     await page.getByRole("button", { name: "Rename", exact: true }).click();
     const again = await said.waitFor({ state: "visible", timeout: 5000 }).then(() => true, () => false);
     const regionSaying = await region();
+    const axSaying = await axNode();
+    if (cdp) {
+      const alert = (/** @type {{ ignored: boolean, role: string, live: string } | null} */ n) => !!n && !n.ignored && n.role === "alert" && n.live === "assertive";
+      check("out of the flow and back in, the region is an assertive alert in the accessibility tree (Chromium)", alert(axBefore) && alert(axSaying), JSON.stringify({ axBefore, axSaying }));
+      await cdp.detach();
+    }
     await page.keyboard.press("Escape");
     // The dialog's `close` event is dispatched in a task after Escape.
     // Its own `hidden`, not its visibility: the closed dialog hides it either way.
     const closedHidden = await page
-      .waitForFunction(() => /** @type {HTMLElement | null} */ (document.querySelector('#rename [role="alert"] > p'))?.hidden === true, null, { timeout: 5000 })
+      .waitForFunction(() => /** @type {HTMLElement | null} */ (document.querySelector('#rename [role="alert"] > div'))?.hidden === true, null, { timeout: 5000 })
       .then(() => true, () => false);
     const hid = await hidOnSubmit;
     check("the next submit in the dialog hides it and a second failure says it again; closing the dialog hides it", hid === true && again && closedHidden, JSON.stringify({ hid, again, closedHidden, open: await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open) }));
-    check("the alert region is in the open dialog before the failure and while it is said, only the text in it hidden and shown", regionBefore.rendered && regionBefore.empty && regionSaying.rendered && !regionSaying.empty, JSON.stringify({ regionBefore, regionSaying }));
+    check("the alert region is in the open dialog before the failure and while it is said, only the alert in it hidden and shown", regionBefore.rendered && regionBefore.empty && regionSaying.rendered && !regionSaying.empty, JSON.stringify({ regionBefore, regionSaying }));
+    // Shown, it is a row of the dialog again: in the flow, under the heading, not over it.
+    check("the region FailedAlert speaks in is back in the dialog's flow, under its heading", regionBefore.position === "absolute" && regionSaying.position === "static" && regionSaying.belowHeading, JSON.stringify({ regionBefore, regionSaying }));
+    // The soft destructive Alert's own background, from a probe with its classes in the dialog.
+    const softDestructive = await rename.evaluate((d) => {
+      const probe = document.createElement("div");
+      probe.className = "alert__alert alert__destructive alert__soft";
+      d.append(probe);
+      const background = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return background;
+    });
+    check("FailedAlert draws no box before the failure, and the soft destructive alert while it is said", regionBefore.height === 0 && regionSaying.height > 0 && regionSaying.background === softDestructive && !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(softDestructive), JSON.stringify({ regionBefore, regionSaying, softDestructive }));
     await page.unroute("**/rename", cutRename);
     // Closed while the submit was on its way (Escape), the dialog shows nothing and the toaster says it.
     {
@@ -1482,7 +1602,7 @@ async function run(browser) {
     // the runtime loads it in full, and the notice, whose cookie that answer removed, goes with it.
     await page.route("**/*", async (route) => {
       const req = route.request();
-      if (req.method() !== "GET" || req.resourceType() !== "fetch" || req.headers()["corten"]) return route.fallback();
+      if (req.method() !== "GET" || req.resourceType() !== "fetch" || swapped(req)) return route.fallback();
       const res = await route.fetch();
       await page.context().clearCookies({ name: "__Host-corten-notice" });
       const body = (await res.text()).replace("<html ", '<html data-frame="changed" ');
@@ -1503,7 +1623,7 @@ async function run(browser) {
   if (engine !== "webkit") {
     const nest = async (/** @type {import("@playwright/test").Route} */ route) => {
       const req = route.request();
-      const whole = req.resourceType() === "document" || (req.resourceType() === "fetch" && !req.headers()["corten"]);
+      const whole = req.resourceType() === "document" || (req.resourceType() === "fetch" && !swapped(req));
       if (req.method() !== "GET" || !whole || new URL(req.url()).pathname !== "/") return route.fallback();
       // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
       const res = await route.fetch({ headers: { ...req.headers(), "accept-encoding": "identity" } });
@@ -1695,6 +1815,31 @@ async function run(browser) {
   await clip.waitForFunction(() => document.querySelector('[data-scope=ui-copy-button] [aria-live]')?.textContent === "Copy", null, { timeout: 5000 }).catch(() => {});
   check("then its label again", (await said.textContent()) === "Copy", await said.textContent());
   await clip.context().close();
+  // Removal cancels even a write that has not answered yet. Returning the same button starts
+  // a new lifetime; the previous click must not publish into it or start a new label timer.
+  {
+    const late = await browser.newPage();
+    late.on("pageerror", (e) => errors.push(e.message));
+    await late.addInitScript(() => Object.defineProperty(navigator, "clipboard", { value: {
+      writeText: () => new Promise((resolve) => { window.finishCopy = resolve; }),
+    } }));
+    await late.goto(`${base}/`);
+    await late.getByRole("button", { name: "Copy", exact: true }).click();
+    await late.evaluate(() => {
+      window.lateButton = document.querySelector('[data-scope="ui-copy-button"]');
+      window.returnCopy = document.createComment("copy returns here");
+      window.lateButton.before(window.returnCopy);
+      window.lateButton.remove();
+    });
+    await late.waitForTimeout(50);
+    await late.evaluate(() => window.returnCopy.replaceWith(window.lateButton));
+    await late.waitForTimeout(50);
+    await late.evaluate(() => window.finishCopy());
+    await late.waitForTimeout(50);
+    check("a copy finishing after removal and reconnect cannot change the new lifetime's label or report a copy",
+      await late.locator('[data-scope="ui-copy-button"] [aria-live]').textContent() === "Copy" && await late.locator('output[aria-label="Copies"]').textContent() === "0");
+    await late.close();
+  }
   {
     const glyphPage = await (await browser.newContext()).newPage();
     await glyphPage.goto(`${base}/`);
@@ -2058,6 +2203,36 @@ async function run(browser) {
   // Alert's role follows its variant: a warning is an alert, read at once.
   const alertRole = await orders.locator("strong", { hasText: "past its ship-by date" }).evaluate((s) => s.parentElement?.getAttribute("role"));
   check("Alert: a warning is role=alert", alertRole === "alert", String(alertRole));
+  // A list in an alert is spaced and colored as its paragraph is: no margin of its own (the alert's
+  // grid gap apart), indented 1.25rem, and a list in one of its items as much again. In the outline
+  // alert the paragraph's color is not the alert's own (the tone), so a list that took the alert's
+  // color instead of the paragraph's shows.
+  const list = (/** @type {import("@playwright/test").Locator} */ alert) =>
+    alert.evaluate((alert) => {
+      const [p, ul] = [alert.querySelector(":scope > p"), alert.querySelector(":scope > ul")];
+      const inner = alert.querySelector(":scope > ul li > ul");
+      if (!p || !ul) return null;
+      const [ps, us, as] = [getComputedStyle(p), getComputedStyle(ul), getComputedStyle(alert)];
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+      return {
+        margin: us.marginTop + " " + us.marginBottom,
+        gap: ul.getBoundingClientRect().top - p.getBoundingClientRect().bottom,
+        rowGap: parseFloat(as.rowGap),
+        indent: parseFloat(us.paddingInlineStart) / rem,
+        inner: inner ? parseFloat(getComputedStyle(inner).paddingInlineStart) / rem : null,
+        asParagraph: us.color === ps.color,
+        notAlert: us.color !== as.color,
+      };
+    });
+  const spaced = (/** @type {any} */ l) => !!l && l.margin === "0px 0px" && Math.abs(l.gap - l.rowGap) < 1 && Math.abs(l.indent - 1.25) < 0.01 && l.asParagraph;
+  const soft = await list(orders.locator("strong", { hasText: "past its ship-by date" }).locator(".."));
+  check("Alert: a list has no margin of its own, sits the grid's gap under the paragraph, is indented 1.25rem and colored as the paragraph", spaced(soft), JSON.stringify(soft));
+  const outline = await list(orders.locator("p", { hasText: "Orders paid before 3 pm" }).locator(".."));
+  check(
+    "Alert: in an outline alert a list is the paragraph's color, not the alert's, and a list in an item is indented 1.25rem again",
+    spaced(outline) && !!outline && outline.notAlert && outline.inner !== null && Math.abs(outline.inner - 1.25) < 0.01,
+    JSON.stringify(outline),
+  );
   // The tones the kit's looks take, as each engine computes them: a soft alert is its tone mixed
   // 12% into the card, an outline one the card's, a solid one its tone's fill and text, and a
   // toned button is filled with its tone.
@@ -2446,6 +2621,52 @@ async function run(browser) {
     links.current === "Newest" && links.fits && links.fills[0] !== clear && links.fills[0] !== links.track && links.fills.slice(1).every((c) => c === clear),
     JSON.stringify(links),
   );
+  // StackStart: a column whose children keep their own width, a link as wide as its words and a
+  // badge, each at most the column's; at 320px a word wider than the column breaks inside its link,
+  // and a picture wider than the column narrows in its shape (#1119).
+  const startColumn = async () =>
+    orders.getByRole("link", { name: "How selling limits work" }).evaluate((a) => {
+      const column = /** @type {HTMLElement} */ (a.parentElement);
+      const box = column.getBoundingClientRect();
+      const kids = [...column.children].map((c) => c.getBoundingClientRect());
+      return {
+        column: Math.round(box.width),
+        widths: kids.map((k) => Math.round(k.width)),
+        atStart: kids.every((k) => Math.abs(k.left - box.left) <= 0.5),
+        inside: kids.every((k) => k.right <= box.right + 0.5),
+      };
+    });
+  const startWide = await startColumn();
+  const startSize = orders.viewportSize();
+  await orders.setViewportSize({ width: 320, height: 640 });
+  const startLong = await orders.getByRole("link", { name: "How selling limits work" }).evaluate(async (a) => {
+    const column = /** @type {HTMLElement} */ (a.parentElement);
+    const [was, one] = [a.textContent, a.getBoundingClientRect().height];
+    // One word, far wider than the column: only the kit's break keeps it in.
+    a.textContent = "W".repeat(100);
+    const link = a.getBoundingClientRect();
+    const box = column.getBoundingClientRect();
+    const word = { inside: link.right <= box.right + 0.5, overflow: a.scrollWidth > a.clientWidth + 1 || column.scrollWidth > column.clientWidth + 1, wrapped: link.height > one * 1.5 };
+    a.textContent = was;
+    // A square picture twice the column's width, its size in its own width and height (the page's
+    // own icon, which the page's CSP lets it load): narrowed to the column, and still square.
+    const img = document.createElement("img");
+    img.width = 640;
+    img.height = 640;
+    img.alt = "";
+    img.src = /** @type {HTMLLinkElement} */ (document.querySelector("link[rel=icon]")).href;
+    column.append(img);
+    await img.decode().catch(() => {});
+    const pic = img.getBoundingClientRect();
+    img.remove();
+    return { ...word, picture: { width: Math.round(pic.width), height: Math.round(pic.height), column: Math.round(box.width) } };
+  });
+  if (startSize) await orders.setViewportSize(startSize);
+  check(
+    "StackStart: a column's link and badge keep their own width at its start; on a phone a word wider than it breaks inside its link and a picture narrows in its shape",
+    startWide.widths.every((w) => w < startWide.column - 8) && startWide.atStart && startWide.inside && startLong.inside && !startLong.overflow && startLong.wrapped && Math.abs(startLong.picture.width - startLong.picture.column) <= 1 && Math.abs(startLong.picture.height - startLong.picture.width) <= 1,
+    JSON.stringify({ startWide, startLong }),
+  );
   // Card: an action on the heading's row at its end, the description under them; a panel is one
   // element with the card's padding on every side; a compact card is denser (#573, #605).
   const cards = await orders.evaluate(() => {
@@ -2725,6 +2946,32 @@ async function run(browser) {
   );
   await progressBlank.close();
   check("Progress: drawn in the primary color up to its value, on the border color", near(progressDrawn.fill, progressDrawn.want) && near(progressDrawn.past, progressDrawn.empty), JSON.stringify(progressDrawn));
+  // A finished run in the success tone: a full bar, so its middle is the fill, in the theme's
+  // success color and not the primary one (sampled on pages of their own, as above).
+  const doneProbe = await (await browser.newContext()).newPage();
+  await doneProbe.goto(`${base}/orders`);
+  const doneShot = (await doneProbe.getByLabel("Morning labels").screenshot()).toString("base64");
+  await doneProbe.context().close();
+  const doneBlank = await orders.context().newPage();
+  const doneDrawn = await doneBlank.evaluate(
+    async ([png, color]) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${png}`;
+      await img.decode();
+      const canvas = document.createElement("canvas");
+      [canvas.width, canvas.height] = [img.width, img.height];
+      const g = /** @type {CanvasRenderingContext2D} */ (canvas.getContext("2d"));
+      g.drawImage(img, 0, 0);
+      const fill = [...g.getImageData(Math.round(img.width / 2), Math.floor(img.height / 2), 1, 1).data].slice(0, 3);
+      g.clearRect(0, 0, 1, 1);
+      g.fillStyle = color;
+      g.fillRect(0, 0, 1, 1);
+      return { fill, want: [...g.getImageData(0, 0, 1, 1).data].slice(0, 3) };
+    },
+    /** @type {[string, string]} */ ([doneShot, tokens["--success"]]),
+  );
+  await doneBlank.close();
+  check("Progress: a finished run's success tone fills it in the success color", near(doneDrawn.fill, doneDrawn.want) && !near(doneDrawn.fill, progressDrawn.want), JSON.stringify(doneDrawn));
   const band = async () =>
     orders.getByLabel("Sending the next label").evaluate((p) => ({
       // Whether the page sees the emulated preference, so a failure says if emulation applied.
@@ -3598,8 +3845,9 @@ async function run(browser) {
     return { plain, large };
   });
   const fitsPayout = await payout.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
-  // A history is a list named by its label, not a navigation landmark: it goes nowhere.
-  const payoutLandmarks = await payout.getByRole("navigation", { name: "Payout" }).count();
+  // A history is a list named by its label, not a navigation landmark: it goes nowhere. Exact,
+  // as the payouts card's pager below it is a navigation named "Payouts".
+  const payoutLandmarks = await payout.getByRole("navigation", { name: "Payout", exact: true }).count();
   // Under forced colors the line down keeps the text's color and a failed step its cross.
   const forcedTimeline = engine === "webkit" ? null : await (async () => {
     await payout.emulateMedia({ forcedColors: "active" });
@@ -3697,6 +3945,37 @@ async function run(browser) {
     };
   });
   check("Stats: labelled figures on one row", stats.terms === "Sales,Orders,To ship,Late" && stats.rows === 1, JSON.stringify(stats));
+  // The figure's type is the theme's: the kit's values by default, the value in the page's face
+  // and the label as written; a theme's tokens, its face and its case change them in one place.
+  const statType = await orders.evaluate(() => {
+    const dl = /** @type {HTMLElement} */ (document.querySelector("dl[class*='stats__stats']"));
+    const root = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const read = () => {
+      const label = getComputedStyle(/** @type {Element} */ (dl.querySelector("dt")));
+      const value = getComputedStyle(/** @type {Element} */ (dl.querySelector("[class*='stats__value']")));
+      const size = (/** @type {CSSStyleDeclaration} */ s) => parseFloat(s.fontSize) / root;
+      const tracking = (/** @type {CSSStyleDeclaration} */ s) => Math.round(((parseFloat(s.letterSpacing) || 0) / parseFloat(s.fontSize)) * 1000) / 1000;
+      return {
+        label: [size(label), label.fontWeight, label.textTransform, tracking(label)].join(" "),
+        value: [size(value), value.fontWeight, tracking(value)].join(" "),
+        face: value.fontFamily,
+      };
+    };
+    const kit = read();
+    const page = getComputedStyle(dl).fontFamily;
+    const themed = { "--stat-label-font-size": ".75rem", "--stat-label-font-weight": "600", "--stat-label-tracking": ".05", "--stat-label-text-transform": "uppercase",
+      "--stat-value-font-size": "2rem", "--stat-value-font-weight": "700", "--stat-value-tracking": "0", "--stat-value-font-family": "Georgia, serif" };
+    for (const [name, value] of Object.entries(themed)) dl.style.setProperty(name, value);
+    const theme = read();
+    for (const name of Object.keys(themed)) dl.style.removeProperty(name);
+    return { kit, page, theme };
+  });
+  check(
+    "Stats: the figure's type is the theme's, the value in the page's face until a theme names one",
+    statType.kit.label === "0.875 500 none 0" && statType.kit.value === "1.5 600 -0.01" && statType.kit.face === statType.page &&
+      statType.theme.label === "0.75 600 uppercase 0.05" && statType.theme.value === "2 700 0" && /Georgia/.test(statType.theme.face),
+    JSON.stringify(statType),
+  );
   // Two to a row on a small phone and a large one, the figure in the phone's size (1.25rem).
   for (const width of [390, 430]) {
     await orders.setViewportSize({ width, height: 844 });
@@ -3711,16 +3990,24 @@ async function run(browser) {
       const items = [...(document.querySelector("dl[class*='stats__stats']")?.children ?? [])];
       const value = items[0]?.querySelector("[class*='stats__value']");
       const boxes = items.map((i) => i.getBoundingClientRect());
+      const rem = (/** @type {Element | null | undefined} */ e) =>
+        e ? parseFloat(getComputedStyle(e).fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) : 0;
+      // A theme's phone size is its own token.
+      const list = /** @type {HTMLElement | null} */ (value?.closest("dl") ?? null);
+      list?.style.setProperty("--stat-value-font-size-narrow", "1.5rem");
+      const themed = rem(value);
+      list?.style.removeProperty("--stat-value-font-size-narrow");
       return {
         tops: boxes.map((r) => Math.round(r.top)),
-        size: value ? parseFloat(getComputedStyle(value).fontSize) / parseFloat(getComputedStyle(document.documentElement).fontSize) : 0,
+        size: rem(value),
+        themed,
         // For a failure: what the page was laid out at, and where each card was.
         at: { width: innerWidth, scrollY: Math.round(scrollY) },
         boxes: boxes.map((r) => [r.left, r.top, r.width, r.height].map(Math.round)),
       };
     });
     const [a, b, c, d] = phone.tops;
-    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, phone.at.width === width && new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25, JSON.stringify(phone));
+    check(`Stats: two to a row on a phone, in the phone's size (${width}px)`, phone.at.width === width && new Set(phone.tops).size === 2 && a === b && c === d && phone.size === 1.25 && phone.themed === 1.5, JSON.stringify(phone));
   }
   await orders.setViewportSize({ width: 390, height: 844 });
   await orders.waitForFunction(() => innerWidth === 390, null, { timeout: 5000 }).catch(() => {});
@@ -3780,6 +4067,19 @@ async function run(browser) {
     };
   });
   check("StatusDot and Stack: the dot is not read, and a stack's gap is its only space", spacing.dot && spacing.gap === 1.5 && spacing.paragraph === 1 && spacing.margins === 0, JSON.stringify(spacing));
+  // Gap::App: the payout row is a cluster with no gap class of the kit's, so the page's .75rem is its gap.
+  const appGap = await orders.evaluate(() => {
+    const row = document.querySelector("[class*='orders__payout']");
+    if (!row) return null;
+    const style = getComputedStyle(row);
+    return {
+      cluster: /stack__cluster/.test(row.className),
+      kitGap: /stack__(xs|sm|md|lg|xl)\b/.test(row.className),
+      wraps: style.flexWrap,
+      gap: parseFloat(style.columnGap) / parseFloat(getComputedStyle(document.documentElement).fontSize),
+    };
+  });
+  check("Cluster with Gap::App: no kit gap class, so the page's own gap is the row's", appGap?.cluster === true && !appGap.kitGap && appGap.wraps === "wrap" && appGap.gap === 0.75, JSON.stringify(appGap));
   await orders.getByRole("button", { name: "Share the shop" }).click();
   check("Popover: its button opens it", await orders.locator("#share").evaluate((p) => p.matches(":popover-open")));
   await orders.keyboard.press("Escape");
@@ -3790,6 +4090,41 @@ async function run(browser) {
   await orders.getByRole("link", { name: "Next" }).click();
   await orders.locator("caption", { hasText: "Page 2 of 3" }).waitFor({ timeout: 5000 }).catch(() => {});
   check("Pagination: Next goes to the next page", new URL(orders.url()).search === "?page=2" && (await orders.locator('[aria-current="page"]').last().textContent()) === "2", orders.url());
+  // PreviousNext: the payouts card knows only its neighbours, so each end it is at is a disabled
+  // step in Pagination's look and each neighbour a link with its rel (#1073).
+  {
+    const payouts = orders.getByRole("navigation", { name: "Payouts" });
+    /** Each step's tag, rel and aria-disabled. */
+    const steps = () =>
+      payouts.locator("[class*='pagination__step']").evaluateAll((all) =>
+        all.map((el) => `${el.tagName.toLowerCase()} ${el.getAttribute("rel") ?? "-"} ${el.getAttribute("aria-disabled") ?? "-"}`).join(", "),
+      );
+    /** The card's heading and its timeline's references, so a pager that moves only the address fails. */
+    const shown = async () => {
+      // The innermost section around the pager: the card, not a column around it.
+      const card = orders.locator("section", { has: payouts }).last();
+      const heading = await card.locator("h2").textContent();
+      const refs = (await card.getByRole("list", { name: "Payout", exact: true }).textContent())?.match(/PX-\d+/g) ?? [];
+      return `${heading} ${refs.join()}`;
+    };
+    check("PreviousNext: the newest payout is shown first", (await shown()) === "Payout of Mar 21 PX-20431", await shown());
+    const newest = await steps();
+    check("PreviousNext: the newest payout's Newer is disabled and Older a next link", newest === "span - true, a next -", newest);
+    await payouts.getByRole("link", { name: "Older" }).click();
+    await orders.getByRole("heading", { name: "Payout of Mar 14" }).waitFor({ timeout: 5000 }).catch(() => {});
+    const middle = await steps();
+    const older = await shown();
+    check("PreviousNext: Older goes to the older payout on the same page of orders, whose both neighbours are links", new URL(orders.url()).search === "?page=2&payout=1" && middle === "a prev -, a next -" && older === "Payout of Mar 14 PX-20377", `${orders.url()} ${middle} ${older}`);
+    await payouts.getByRole("link", { name: "Older" }).click();
+    await orders.getByRole("heading", { name: "Payout of Mar 7" }).waitFor({ timeout: 5000 }).catch(() => {});
+    const oldest = await steps();
+    const look = await payouts.locator("[aria-disabled='true']").evaluate((el) => getComputedStyle(el).opacity);
+    const oldestShown = await shown();
+    check("PreviousNext: the oldest payout's Older is disabled in Pagination's look", oldest === "a prev -, span - true" && look === "0.5" && oldestShown === "Payout of Mar 7 PX-20318", `${oldest} opacity ${look} ${oldestShown}`);
+    await payouts.getByRole("link", { name: "Newer" }).click();
+    await orders.getByRole("heading", { name: "Payout of Mar 14" }).waitFor({ timeout: 5000 }).catch(() => {});
+    check("PreviousNext: Newer goes back", new URL(orders.url()).search === "?page=2&payout=1" && (await shown()) === "Payout of Mar 14 PX-20377", `${orders.url()} ${await shown()}`);
+  }
   // SegmentedRadios: native radios in a fieldset, the checked one's label raised from :has(:checked),
   // the arrow keys moving the choice and the focus ring with it, a disabled fieldset drawn disabled,
   // and under forced colors the checked one outlined. The form sends the choice (below).
@@ -3803,6 +4138,41 @@ async function run(browser) {
     // An Icon after a choice's input, beside its label, as beside a button's text (#793).
     const radioIcon = await sizes.locator("label", { hasText: "Letter" }).evaluate(besideText);
     check("SegmentedRadios: an icon beside a choice's label is the kit's gap apart and on its middle", spacedLikeButton(radioIcon), JSON.stringify(radioIcon));
+    // SegmentedWidth::Fill: the track is the fieldset's width and its choices equal parts of it,
+    // also on a phone, where nothing reaches past the track (#1060).
+    const filled = async () =>
+      sizes.evaluate((fieldset) => {
+        const track = /** @type {HTMLElement} */ (fieldset.querySelector("[class*='segmented__track']"));
+        const parts = [...track.querySelectorAll("label")].map((l) => l.getBoundingClientRect());
+        const box = track.getBoundingClientRect();
+        return {
+          track: Math.round(box.width),
+          fieldset: Math.round(fieldset.getBoundingClientRect().width),
+          parts: parts.map((p) => Math.round(p.width)),
+          inside: parts.every((p) => p.left >= box.left - 0.5 && p.right <= box.right + 0.5),
+        };
+      });
+    const wide = await filled();
+    const phoneSize = orders.viewportSize();
+    await orders.setViewportSize({ width: 320, height: 640 });
+    const narrow = await filled();
+    // A word wider than its part breaks inside it: the label's text stays in its choice and nothing
+    // reaches past the track (the word is put in for the measure and taken out after).
+    const long = await sizes.evaluate((fieldset) => {
+      const text = /** @type {HTMLElement} */ (fieldset.querySelector("label:last-of-type > span"));
+      const was = text.textContent;
+      text.textContent = "InternationalizationPreferences";
+      const [choice, words] = [/** @type {HTMLElement} */ (text.parentElement).getBoundingClientRect(), text.getBoundingClientRect()];
+      const track = /** @type {HTMLElement} */ (fieldset.querySelector("[class*='segmented__track']"));
+      const at = { inside: words.left >= choice.left - 0.5 && words.right <= choice.right + 0.5, sideways: track.scrollWidth > track.clientWidth + 1 };
+      text.textContent = was;
+      return at;
+    });
+    if (phoneSize) await orders.setViewportSize(phoneSize);
+    const even = (/** @type {{ track: number, fieldset: number, parts: number[], inside: boolean }} */ f) =>
+      Math.abs(f.track - f.fieldset) <= 1 && f.parts.every((w) => Math.abs(w - f.parts[0]) <= 1) && f.inside;
+    check("SegmentedRadios: a filled control is its fieldset's width, its choices equal parts, on a phone too", even(wide) && even(narrow) && narrow.track < wide.track, JSON.stringify({ wide, narrow }));
+    check("SegmentedRadios: a filled choice's long word breaks inside it, and nothing reaches past the track", long.inside && !long.sideways, JSON.stringify(long));
     await sizes.getByRole("radio", { name: "4 x 6 in" }).focus();
     await orders.keyboard.press("ArrowRight");
     const after = await raised();

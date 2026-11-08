@@ -1,0 +1,19 @@
+@page "/catalog/{id}"
+@model CatalogModel
+@{ ViewData["Title"] = Model.Record.Title; ViewData["Catalog"] = true; var record = Model.Record; }
+<article aria-label="Catalog record">
+<h1>@record.Title</h1>
+<p>@record.Subtitle</p>
+<p>@record.Description</p>
+<ul aria-label="Tags">@foreach (var tag in record.Tags) {<li>@tag</li>}</ul>
+<form method="get" asp-page="/Catalog" asp-route-id="@record.Id">
+<label>Field name <input name="field" value="@Model.Prefix"></label>
+<button type="submit">Filter</button>
+</form>
+<table>
+<caption>Record fields</caption>
+<thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+<tbody>@foreach (var field in record.Fields.Where(f => f.Name.StartsWith(Model.Prefix, StringComparison.Ordinal))) {<tr><th scope="row">@field.Name</th><td>@field.Value</td></tr>}</tbody>
+</table>
+<nav aria-label="Related records"><ul>@foreach (var related in record.Related) {<li><a asp-page="/Catalog" asp-route-id="@related.Id">@related.Title</a></li>}</ul></nav>
+</article>

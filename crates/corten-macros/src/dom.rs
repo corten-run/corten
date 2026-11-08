@@ -150,6 +150,9 @@ pub const ELEMENTS: &[&str] = &[
 
 /// `HTMLElementEventMap`: the interface of an event (`click` is `PointerEvent`). `connect`, which
 /// Corten fires when an element joins the page, and events lib.dom does not list are `Event`.
+/// `scripts/events.mjs` (`npm run check`) holds this to lib.dom both ways: a name it types more
+/// narrowly than `Event` has an arm here with its interface, or is in that script's list of events
+/// an element fires as a plain `Event` (the `Event` arm below), and no arm is narrower than lib.dom.
 pub fn event(name: &str) -> &'static str {
     match name {
         "click" | "auxclick" | "contextmenu" | "pointerdown" | "pointerup" | "pointermove" | "pointerover" | "pointerout"
@@ -161,6 +164,8 @@ pub fn event(name: &str) -> &'static str {
         "beforeinput" => "InputEvent",
         "focus" | "blur" | "focusin" | "focusout" => "FocusEvent",
         "submit" => "SubmitEvent",
+        "formdata" => "FormDataEvent",
+        "securitypolicyviolation" => "SecurityPolicyViolationEvent",
         "toggle" | "beforetoggle" => "ToggleEvent",
         "wheel" => "WheelEvent",
         "drag" | "dragstart" | "dragend" | "dragenter" | "dragleave" | "dragover" | "drop" => "DragEvent",
@@ -169,17 +174,25 @@ pub fn event(name: &str) -> &'static str {
         "transitionstart" | "transitionend" | "transitionrun" | "transitioncancel" => "TransitionEvent",
         "copy" | "cut" | "paste" => "ClipboardEvent",
         "compositionstart" | "compositionupdate" | "compositionend" => "CompositionEvent",
-        "error" => "ErrorEvent",
-        "corten:error" | "corten:notice" => "CustomEvent",
+        // lib.dom types these as the window's (`ErrorEvent`, `UIEvent`) or as XMLHttpRequest's
+        // (`ProgressEvent`), but an image, media or other element fires a plain `Event` for
+        // each, and no `on:` hears the window.
+        "error" | "abort" | "progress" | "resize" => "Event",
+        // The runtime's own, each a `CustomEvent` whose `detail` corten.js declares.
+        "corten:error" => "CortenError",
+        "corten:notice" => "CortenNotice",
+        // A `data-patch` form's upload progress: a `ProgressEvent` of the multipart body sent.
+        "corten:progress" => "ProgressEvent",
         _ => "Event",
     }
 }
 
 /// Whether `name` is an event the runtime dispatches: `corten:error` on a `data-patch` form that
 /// got no answer it can draw (it bubbles), `corten:notice` on the document for a redirect's notice
-/// the page did not draw. The only event names with a colon an `on:` takes.
+/// the page did not draw, `corten:progress` on a `data-patch` form while its multipart body is
+/// sent. The only event names with a colon an `on:` takes.
 pub fn is_runtime_event(name: &str) -> bool {
-    matches!(name, "corten:error" | "corten:notice")
+    matches!(name, "corten:error" | "corten:notice" | "corten:progress")
 }
 
 /// Whether a browser event of this name bubbles to the document, so a listener there hears it
@@ -216,7 +229,9 @@ pub fn reaches_document(name: &str) -> bool {
             | "change"
             | "select"
             | "submit"
+            | "formdata"
             | "reset"
+            | "securitypolicyviolation"
             | "focusin"
             | "focusout"
             | "drag"
@@ -265,10 +280,15 @@ pub const EVENTS: &[&str] = &[
     "CompositionEvent",
     "TouchEvent",
     "SubmitEvent",
+    "FormDataEvent",
+    "SecurityPolicyViolationEvent",
     "ToggleEvent",
     "AnimationEvent",
     "TransitionEvent",
     "ClipboardEvent",
     "ErrorEvent",
     "CustomEvent",
+    "CortenError",
+    "CortenNotice",
+    "ProgressEvent",
 ];

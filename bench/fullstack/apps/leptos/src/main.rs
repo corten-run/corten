@@ -10,11 +10,16 @@ async fn main() {
     let conf = get_configuration(None).expect("leptos configuration");
     // Load the fixture (if any) before listening, like the other apps.
     item_page_leptos::app::warm_fixture();
+    item_page_leptos::catalog::source::init();
+    item_page_leptos::marketplace::source::init();
     let leptos_options = conf.leptos_options;
     let addr = leptos_options.site_addr;
     let routes = generate_route_list(App);
     let app = Router::new()
         .route("/api/items/{id}", axum::routing::get(item_page_leptos::app::item_json))
+        .route("/api/catalog/{id}", axum::routing::get(item_page_leptos::catalog_page::catalog_json))
+        .route("/api/marketplace/{id}", axum::routing::get(item_page_leptos::marketplace_page::marketplace_json))
+        .route("/marketplace/{locale}/{id}", axum::routing::post(item_page_leptos::marketplace_page::marketplace_post))
         .merge(live::routes())
         .leptos_routes(&leptos_options, routes, {
             let options = leptos_options.clone();

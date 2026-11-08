@@ -16,9 +16,42 @@ export function shortcut(event, line) {
   if (event.key === "Delete") line.remove();
 }
 
-/** @param {CustomEvent} event @param {HTMLFormElement} form */
+/** @import { CortenError, CortenNotice } from "corten" */
+
+/** @param {CortenError} event @param {HTMLFormElement} form */
 export function failed(event, form) {
   form.dataset.failed = String(event.detail.status);
+}
+
+/** @param {CortenNotice} event */
+export function said(event) {
+  document.title = event.detail.message;
+}
+
+/** @param {CustomEvent<{ status: number }>} event */
+export function sent(event) {
+  document.title = String(event.detail.status);
+}
+
+/** @param {ProgressEvent} event @param {HTMLProgressElement} bar */
+export function progressed(event, bar) {
+  if (event.lengthComputable) bar.value = event.loaded / event.total;
+  else bar.removeAttribute("value");
+}
+
+/** @param {FormDataEvent} event */
+export function tidy(event) {
+  for (const [key, value] of Array.from(event.formData.entries())) if (value === "") event.formData.delete(key);
+}
+
+/** @param {SecurityPolicyViolationEvent} event */
+export function refused(event) {
+  document.title = event.violatedDirective;
+}
+
+/** @param {ErrorEvent} event */
+export function crashed(event) {
+  document.title = event.message;
 }
 
 /** @param {HTMLElement} line */

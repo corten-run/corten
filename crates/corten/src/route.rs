@@ -150,7 +150,7 @@
 //! ```
 //! use corten::prelude::*;
 //!
-//! #[derive(Route, serde::Deserialize)]
+//! #[derive(Route)]
 //! #[route("/search")]
 //! #[serde(rename_all = "camelCase")]
 //! struct Search {
@@ -170,7 +170,7 @@
 //! ```compile_fail
 //! use corten::prelude::*;
 //!
-//! #[derive(Route, serde::Deserialize)]
+//! #[derive(Route)]
 //! #[route("/items/{item_id}")]
 //! #[serde(rename_all = "camelCase")]
 //! struct Item { item_id: String }
@@ -179,7 +179,7 @@
 //! ```compile_fail
 //! use corten::prelude::*;
 //!
-//! #[derive(Route, serde::Deserialize)]
+//! #[derive(Route)]
 //! #[route("/search")]
 //! struct Search { #[serde(rename = "price min")] price_min: Option<u32> }
 //! ```
@@ -240,11 +240,11 @@ pub use corten_macros::Route;
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(Clone, Copy, UrlValue, serde::Deserialize)]
+/// #[derive(Clone, Copy, UrlValue)]
 /// #[serde(rename_all = "kebab-case")]
 /// enum Tab { Open, AwaitingLabel, #[serde(rename = "done")] Shipped }
 ///
-/// #[derive(Route, serde::Deserialize)]
+/// #[derive(Route)]
 /// #[route("/orders")]
 /// struct Orders { tab: Option<Tab> }
 ///
@@ -257,19 +257,19 @@ pub use corten_macros::Route;
 /// handler refuses; neither compiles:
 ///
 /// ```compile_fail
-/// #[derive(corten::UrlValue, serde::Deserialize)]
+/// #[derive(corten::UrlValue)]
 /// enum Sort { Price { descending: bool } }
 /// ```
 ///
 /// ```compile_fail
-/// #[derive(corten::UrlValue, serde::Deserialize)]
+/// #[derive(corten::UrlValue)]
 /// enum Tab { Open, #[serde(skip_deserializing)] Draft }
 /// ```
 ///
 /// Nor do two variants written as one word, since a link to one would read back as the other:
 ///
 /// ```compile_fail
-/// #[derive(corten::UrlValue, serde::Deserialize)]
+/// #[derive(corten::UrlValue)]
 /// #[serde(rename_all = "lowercase")]
 /// enum Plan { Ab, AB }
 /// ```
@@ -277,7 +277,7 @@ pub use corten_macros::Route;
 /// Nor does an attribute that changes the words in a way it does not follow:
 ///
 /// ```compile_fail
-/// #[derive(corten::UrlValue, serde::Deserialize)]
+/// #[derive(corten::UrlValue)]
 /// #[serde(rename_all(deserialize = "kebab-case"))]
 /// enum Tab { Open, AwaitingLabel }
 /// ```
@@ -600,6 +600,80 @@ pub use corten_macros::UrlValue;
 ///
 /// async fn users(req: Req) -> HtmlResult {
 ///     req.page(html! { <html><head><title>"Users"</title><Corten /></head><body><main></main></body></html> })
+/// }
+/// # fn main() {}
+/// ```
+///
+/// A route whose page always gives a layout read's value itself ([`crate::LayoutRead`],
+/// [`crate::HtmlResponse::give`]) names it, `gives(CartCount)`, so Corten does not start the read
+/// for it (it starts before the handler, so its query would run and be dropped):
+///
+/// ```
+/// # use std::future::Future;
+/// use corten::{http::request::Parts, prelude::*, LayoutRead};
+///
+/// struct CartCount;
+/// impl LayoutRead for CartCount {
+///     type Value = u32;
+///     fn start(&self, _: &Parts) -> Option<impl Future<Output = u32> + Send + 'static> {
+///         Some(async { 3 }) // a real read asks the cart store
+///     }
+///     fn view(count: &u32) -> impl Render + '_ {
+///         html! { {*count} }
+///     }
+/// }
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/cart", get = cart, gives(CartCount))]
+///     pub struct Cart;
+/// }
+///
+/// async fn cart(req: Req) -> HtmlResult {
+///     let lines = 2; // the cart the page read
+///     Ok(req.page(html! { <html><head><title>"Cart"</title><Corten /></head><body><header>{later::<CartCount>()}</header><main></main></body></html> })?.give::<CartCount>(lines))
+/// }
+/// # fn main() { let _ = corten::App::new(url::router()).layout_read(CartCount); }
+/// ```
+///
+/// Each type it names is a layout read, and the route has a `get`:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+///
+/// struct NotARead;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/cart", get = cart, gives(NotARead))]
+///     pub struct Cart;
+/// }
+///
+/// async fn cart(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Cart"</title><Corten /></head><body><main></main></body></html> })
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// # use std::future::Future;
+/// # use corten::{http::request::Parts, LayoutRead};
+/// # struct CartCount;
+/// # impl LayoutRead for CartCount {
+/// #     type Value = u32;
+/// #     fn start(&self, _: &Parts) -> Option<impl Future<Output = u32> + Send + 'static> { Some(async { 3 }) }
+/// #     fn view(count: &u32) -> impl Render + '_ { html! { {*count} } }
+/// # }
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/cart", post = add, gives(CartCount))]
+///     pub struct Cart;
+/// }
+///
+/// async fn add(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Cart"</title><Corten /></head><body><main></main></body></html> })
 /// }
 /// # fn main() {}
 /// ```
@@ -1207,7 +1281,7 @@ impl<R: Route + ?Sized, I: crate::view::Id> fmt::Display for At<'_, R, I> {
 /// ```
 /// use corten::prelude::*;
 ///
-/// #[derive(Clone, Default, serde::Deserialize, Route, Fields)]
+/// #[derive(Clone, Default, Route, Fields)]
 /// #[route(query)]
 /// struct ItemQuery { search: Option<String>, page: Option<u32> }
 ///
@@ -1225,8 +1299,8 @@ impl<R: Route + ?Sized, I: crate::view::Id> fmt::Display for At<'_, R, I> {
 /// assert_eq!(Items { filters: ItemQuery::default() }.href(), "/items");
 ///
 /// // A route's handler reads them back as the field of its `Params<Items>`, each by its key as
-/// // the route reads its own, which needs no `Deserialize`. The filter form that posts the same
-/// // names (`Fields`) is read by serde:
+/// // the route reads its own. The filter form that posts the same names (`Fields`) is read as a
+/// // form:
 /// let read: ItemQuery = corten::form::from_bytes(b"search=red%20%26%20blue&page=2").unwrap();
 /// assert_eq!((read.search.as_deref(), read.page), (Some("red & blue"), Some(2)));
 /// ```
@@ -1583,6 +1657,11 @@ impl<T: FromQuery> __private::ReadKeys for T {
         // The read set's: the names links write and any it only reads, which no other may take.
         <T::Read as ReadKeys>::__KEYS
     };
+
+    #[inline]
+    fn __describe(parameters: &mut __private::Parameters) {
+        <T::Read as __private::ReadKeys>::__describe(parameters)
+    }
 }
 
 impl<T: FromQuery> QueryParams for T {
@@ -1799,6 +1878,12 @@ impl<T: Pairs + ?Sized> Pairs for &T {
 ///
 /// let _ = Filter { action: &"/pull-sheet/7" };
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a link",
+    label = "a link goes here",
+    note = "a link is a `#[derive(Route)]` value or a reference to a route, `route.at(id)`, a `#[derive(Href)]` enum of routes, an `Elsewhere`, a `Uri` or a `Local`; another link held by reference is a `&dyn Href`",
+    note = "text is not a link: a path from outside the code is `Local::parse(text)` (`None` when it is not a path on this site); a `Box` of a route is passed as the route itself, or boxed as `Box<dyn Href>`"
+)]
 pub trait Href {
     /// Writes the URL; with `html`, escaped for an attribute's value (`&` as `&amp;`).
     fn write_link(&self, out: &mut String, html: bool);
@@ -2877,6 +2962,11 @@ pub trait FromUrl {
     type Path;
     /// The fields, from the path's parameters and the query string.
     fn __read(path: Self::Path, query: &str) -> Result<Self::Params, crate::form::FormError>;
+
+    /// Its parameters as an OpenAPI document describes them (`corten::openapi`): each path
+    /// parameter, query parameter and set's. Written by the derive.
+    #[inline]
+    fn __describe(_: &mut __private::Parameters) {}
 }
 
 /// A route's handlers, one per method: `get(show)`, `get(show).post(save)`. What
@@ -2948,6 +3038,13 @@ impl<S: Clone + Send + Sync + 'static> Methods<S> {
     #[doc(hidden)]
     pub fn __merge(self, other: Methods<S>) -> Self {
         Methods(self.0.merge(other.0), self.1 || other.1, self.2.or(other.2))
+    }
+
+    /// Used by `#[corten::routes]`: `gives(CartCount)`, the layout reads the route's `GET` page
+    /// gives itself, so none of them is started for it. Not a public API.
+    #[doc(hidden)]
+    pub fn __gives(self, gives: &'static [fn() -> std::any::TypeId]) -> Self {
+        Methods(self.0.layer(Giving { gives, inner: () }), self.1, self.2)
     }
 
     /// Handlers built here by hand, among them one for `GET`.
@@ -3278,6 +3375,40 @@ where
     }
 }
 
+/// [`Methods::__gives`]'s layer and service: marks the request with the reads its page gives, for
+/// [`crate::layout`] to leave unstarted. A service of its own, as [`Suffixed`] is.
+#[derive(Clone)]
+struct Giving<S> {
+    gives: &'static [fn() -> std::any::TypeId],
+    inner: S,
+}
+
+impl<S> tower_layer::Layer<S> for Giving<()> {
+    type Service = Giving<S>;
+
+    fn layer(&self, inner: S) -> Giving<S> {
+        Giving { gives: self.gives, inner }
+    }
+}
+
+impl<S> tower_service::Service<axum::extract::Request> for Giving<S>
+where
+    S: tower_service::Service<axum::extract::Request>,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = S::Future;
+
+    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), S::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, mut req: axum::extract::Request) -> Self::Future {
+        req.extensions_mut().insert(crate::layout::Gives(self.gives));
+        self.inner.call(req)
+    }
+}
+
 /// The crate's tests build routers by hand, to test what `App` does with any response.
 #[cfg(test)]
 impl From<axum::Router> for Routes {
@@ -3490,6 +3621,191 @@ pub mod __private {
     )]
     pub trait ReadKeys {
         const __KEYS: &'static [Key];
+
+        /// The set's query parameters as an OpenAPI document describes them. Written by the derive.
+        #[inline]
+        fn __describe(_: &mut Parameters) {}
+    }
+
+    /// A route's parameters as an OpenAPI document describes them, collected by
+    /// `FromUrl::__describe` (feature `types`; without it, nothing is kept).
+    #[derive(Default)]
+    pub struct Parameters {
+        #[cfg(feature = "types")]
+        pub(crate) generator: crate::json::schema::Generator,
+        #[cfg(feature = "types")]
+        pub(crate) list: Vec<serde_json::Value>,
+        /// `#[route(prefix = ..)]` families, which no OpenAPI parameter describes.
+        #[cfg(feature = "types")]
+        pub(crate) prefixes: Vec<&'static str>,
+    }
+
+    /// How a parameter's value is described: its type's JSON Schema (feature `types`). A type
+    /// with none is recorded as a miss, so the document fails to build naming it, as a body's
+    /// does, rather than describing it as any text (an enum's values would be lost).
+    #[derive(Clone, Copy)]
+    pub struct Schema(#[cfg(feature = "types")] fn(&mut crate::json::schema::Generator) -> serde_json::Value);
+
+    /// A parameter of type `T`, which has no JSON Schema.
+    #[cfg(feature = "types")]
+    fn missed<T: ?Sized>(generator: &mut crate::json::schema::Generator) -> serde_json::Value {
+        generator.miss(std::any::type_name::<T>(), true);
+        serde_json::json!({ "type": "string" })
+    }
+
+    impl Parameters {
+        /// `{name}` in the path.
+        #[cfg_attr(not(feature = "types"), allow(unused_variables))]
+        pub fn path(&mut self, name: &'static str, schema: Schema) {
+            #[cfg(feature = "types")]
+            {
+                let schema = (schema.0)(&mut self.generator);
+                self.list.push(serde_json::json!({ "name": name, "in": "path", "required": true, "schema": schema }));
+            }
+        }
+
+        /// `name=` in the query: `required` when a request without it is refused, a list as one
+        /// `name=` per item.
+        #[cfg_attr(not(feature = "types"), allow(unused_variables))]
+        pub fn query(&mut self, name: &'static str, required: bool, schema: Schema) {
+            #[cfg(feature = "types")]
+            {
+                let schema = (schema.0)(&mut self.generator);
+                let mut parameter = serde_json::json!({ "name": name, "in": "query", "schema": schema });
+                if required {
+                    parameter["required"] = serde_json::Value::Bool(true);
+                }
+                self.list.push(parameter);
+            }
+        }
+
+        /// A `#[route(prefix = ..)]` family, `dim.<key>=<value>`.
+        #[cfg_attr(not(feature = "types"), allow(unused_variables))]
+        pub fn prefix(&mut self, prefix: &'static str) {
+            #[cfg(feature = "types")]
+            self.prefixes.push(prefix);
+        }
+    }
+
+    /// The derive's probe for a parameter's type, `(&&Probe::<T>::new()).__schema()`: its JSON
+    /// Schema when it has one, found before the fallback that records a miss, which takes `Probe`
+    /// itself; and
+    /// `(&&Probe::<T>::new()).__required()`, false for an `Option` or a list, which a request
+    /// may leave out.
+    pub struct Probe<T: ?Sized>(std::marker::PhantomData<fn() -> T>);
+
+    impl<T: ?Sized> Probe<T> {
+        #[allow(clippy::new_without_default)]
+        #[inline]
+        pub const fn new() -> Self {
+            Probe(std::marker::PhantomData)
+        }
+    }
+
+    pub trait SchemaText {
+        fn __schema(&self) -> Schema;
+    }
+
+    impl<T: ?Sized> SchemaText for Probe<T> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema(
+                #[cfg(feature = "types")]
+                missed::<T>,
+            )
+        }
+    }
+
+    pub trait SchemaOwn {
+        fn __schema(&self) -> Schema;
+    }
+
+    #[cfg(feature = "types")]
+    impl<T: crate::json::schema::FromJsonSchema + ?Sized> SchemaOwn for &Probe<T> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema(T::json_schema)
+        }
+    }
+
+    /// The words a `#[derive(UrlValue)]` enum is written as, for its parameter's schema (feature
+    /// `types`); none for one whose serde reads other words too (`alias`, `other`), which is any
+    /// text. Written by the derive.
+    pub trait UrlWords {
+        const __WORDS: &'static [&'static str];
+    }
+
+    #[cfg(feature = "types")]
+    fn words<T: UrlWords + ?Sized>(_: &mut crate::json::schema::Generator) -> serde_json::Value {
+        match T::__WORDS {
+            [] => serde_json::json!({ "type": "string" }),
+            words => serde_json::json!({ "type": "string", "enum": words }),
+        }
+    }
+
+    /// A `UrlValue` enum's parameter is one of its words: a level above `SchemaOwn`, so an enum
+    /// that also derives `FromJson` is described as a URL writes it.
+    pub trait SchemaWords {
+        fn __schema(&self) -> Schema;
+    }
+
+    #[cfg(feature = "types")]
+    impl<T: UrlWords> SchemaWords for &&Probe<T> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema(words::<T>)
+        }
+    }
+
+    #[cfg(feature = "types")]
+    impl<T: UrlWords> SchemaWords for &&&Probe<Option<T>> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema(words::<T>)
+        }
+    }
+
+    /// An `Option`'s parameter is its value's, since leaving it out is the `None`: one level above
+    /// `SchemaOwn`, called as `(&&&Probe::<T>::new()).__schema()`.
+    pub trait SchemaInner {
+        fn __schema(&self) -> Schema;
+    }
+
+    #[cfg(feature = "types")]
+    impl<T: crate::json::schema::FromJsonSchema> SchemaInner for &&Probe<Option<T>> {
+        #[inline]
+        fn __schema(&self) -> Schema {
+            Schema(T::json_schema)
+        }
+    }
+
+    pub trait Required {
+        fn __required(&self) -> bool;
+    }
+
+    impl<T: ?Sized> Required for Probe<T> {
+        #[inline]
+        fn __required(&self) -> bool {
+            true
+        }
+    }
+
+    pub trait LeftOut {
+        fn __required(&self) -> bool;
+    }
+
+    impl<T> LeftOut for &Probe<Option<T>> {
+        #[inline]
+        fn __required(&self) -> bool {
+            false
+        }
+    }
+
+    impl<T> LeftOut for &Probe<Vec<T>> {
+        #[inline]
+        fn __required(&self) -> bool {
+            false
+        }
     }
 
     /// How many names `keys` has, sets flattened; only those a link writes when `written`.
@@ -3708,6 +4024,13 @@ pub mod __private {
         }
     }
 
+    /// `gives(CartCount)`: each type named is a [`crate::LayoutRead`], or the route does not
+    /// compile (registering it with `App::layout_read` is the app's, as for `later`).
+    #[inline]
+    pub fn gives<T: crate::LayoutRead>() -> std::any::TypeId {
+        std::any::TypeId::of::<T>()
+    }
+
     /// The handler with its answer in its type, so a JSON route's failures are marked as JSON, and
     /// whether the answer is the same for everyone (`Public`, known when the crate compiles).
     #[inline]
@@ -3733,13 +4056,59 @@ pub mod __private {
         fn into_handler(self) -> Self::Handler;
     }
 
-    impl<H: Handler<T, S>, T, S> RouteHandler<T, S> for H {
-        type Handler = H;
+    // One impl per arity, with axum's own bounds written out (and `S: Clone`, which every route
+    // already asks of its state), rather than one over every axum `Handler`: a handler that
+    // misses one of them then fails this trait, in its words, instead of axum's `Handler` bound,
+    // which the compiler would report for a blanket impl.
+    impl<F, Fut, S, Res> RouteHandler<((),), S> for F
+    where
+        F: FnOnce() -> Fut + Clone + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Res> + Send,
+        S: Clone + Send + Sync + 'static,
+        Res: axum::response::IntoResponse,
+    {
+        type Handler = F;
         #[inline(always)]
-        fn into_handler(self) -> H {
+        fn into_handler(self) -> F {
             self
         }
     }
+
+    macro_rules! route_handlers {
+        ([$($ty:ident),*], $last:ident) => {
+            impl<F, Fut, S, Res, M, $($ty,)* $last> RouteHandler<(M, $($ty,)* $last,), S> for F
+            where
+                F: FnOnce($($ty,)* $last,) -> Fut + Clone + Send + Sync + 'static,
+                Fut: std::future::Future<Output = Res> + Send,
+                S: Clone + Send + Sync + 'static,
+                Res: axum::response::IntoResponse,
+                $( $ty: axum::extract::FromRequestParts<S> + Send, )*
+                $last: axum::extract::FromRequest<S, M> + Send,
+            {
+                type Handler = F;
+                #[inline(always)]
+                fn into_handler(self) -> F {
+                    self
+                }
+            }
+        };
+    }
+    route_handlers!([], T1);
+    route_handlers!([T1], T2);
+    route_handlers!([T1, T2], T3);
+    route_handlers!([T1, T2, T3], T4);
+    route_handlers!([T1, T2, T3, T4], T5);
+    route_handlers!([T1, T2, T3, T4, T5], T6);
+    route_handlers!([T1, T2, T3, T4, T5, T6], T7);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7], T8);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8], T9);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9], T10);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10], T11);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11], T12);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12], T13);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13], T14);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14], T15);
+    route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15], T16);
 
     // A path parameter: one segment, percent-encoded (a `/` in the value is `%2F`), or with
     // `rest` the rest of the path (`{*rest}`), slashes kept. A text field is encoded straight from
@@ -3919,7 +4288,7 @@ mod tests {
 
     macro_rules! words {
         ($($name:ident = $rule:literal),*) => {$(
-            #[derive(Clone, Copy, PartialEq, Debug, corten::UrlValue, serde::Deserialize)]
+            #[derive(Clone, Copy, PartialEq, Debug, corten::UrlValue)]
             #[serde(rename_all = $rule)]
             #[allow(clippy::upper_case_acronyms)]
             enum $name {
@@ -3950,7 +4319,7 @@ mod tests {
         ScreamingKebab = "SCREAMING-KEBAB-CASE"
     );
 
-    #[derive(corten::UrlValue, serde::Deserialize, Clone, Copy, PartialEq, Debug)]
+    #[derive(corten::UrlValue, Clone, Copy, PartialEq, Debug)]
     enum Plain {
         Open,
         AwaitingLabel,

@@ -2,7 +2,7 @@
 // A dedicated host keeps other work off the cores, pins each piece to its own cores, and exposes
 // hardware counters for `count.mjs`. Needs `doctl` (authenticated), `ssh`, `scp` and `tar`.
 // Usage (from the repository root or anywhere):
-//   node bench/fullstack/droplet.mjs <round> --ssh-key <DO key id> [--size c-8] [--region sfo2]
+//   node bench/fullstack/droplet.mjs <round> --ssh-key <DO key id> [--size c-8 (c-16 for --tier matched)] [--region sfo2]
 //   node bench/fullstack/droplet.mjs <round> --host <ip> [--keep]   (reuse a droplet)
 //   --detach: start the round and leave: it runs on the droplet by itself; collect it later.
 //   --collect: look at the round once: download its results and destroy the droplet if it has
@@ -17,6 +17,17 @@
 //   --passes <n>: each load phase n times (BENCH_PASSES on the droplet), the apps taking turns, so
 //     the tables give each number's median and range and say which differences are within noise
 //     (passes.mjs); about n times the load phases' hours, so mostly with --apps. One unless set.
+//   --tier matched: a full-stack round of the matched tier (BENCH_TIER on the droplet): its apps,
+//     each with the production profile (README, "The matched tier"), reached through the edge
+//     (edge.mjs) on cores 4-9 of its own, so on a c-16 or larger (a round on fewer than 16 vCPUs
+//     stops before it starts). Its own round name, as the tier runs on its own cadence; the
+//     defaults tier unless set.
+//   --edge off: a matched round without the edge (BENCH_EDGE=off on the droplet), to compare the
+//     same apps reached directly; its summary says so (edge: "off").
+//   --suite harden: the hardening step alone (harden.mjs: slow clients, oversized requests and
+//     connection floods) for every app of the tier, or those --apps names; results in
+//     bench/fullstack/results/<round>/hardening.json. It runs on its own cadence, not every round,
+//     and needs no edge, so a matched one runs on the defaults tier's droplet size.
 //   --suite browser: only the browser pass of this comparison (run-all.mjs from "browser": parity,
 //     bytes, browser timing), then bench/browser's run-all.mjs; results in both results folders.
 // Results land in bench/fullstack/results/<round>/; a finished full-stack round's raw output is
@@ -31,14 +42,14 @@
 // droplet that stops answering for --stall minutes while this waits or collects is power-cycled,
 // which does the same.
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apps } from "./apps.mjs";
+import { allApps } from "./apps.mjs";
 import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
-import { hoursFor, quote, steps, unit } from "./round.mjs";
+import { hoursFor, quote, roundNameError, steps, unit } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -49,17 +60,33 @@ if (!round || round.startsWith("--")) throw new Error("usage: node droplet.mjs <
 // The round goes into droplet and unit names, paths and shell commands unquoted.
 if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(round)) throw new Error("the round is letters, digits, - and _ (r10)");
 const suite = flag("suite", "fullstack") ?? "fullstack";
+// An m<n> round is the matched tier's, so --collect and --attach need no --tier for it.
+const tier = flag("tier") ?? (/^m\d+$/.test(round) ? "matched" : "defaults");
+if (tier !== "defaults" && tier !== "matched") throw new Error("--tier is defaults or matched");
+const edgeOff = flag("edge") === "off";
+if (flag("edge") !== undefined && !edgeOff) throw new Error("--edge is off or not given");
+if (edgeOff && (tier !== "matched" || suite !== "fullstack")) throw new Error("--edge off is for a matched full-stack round, whose apps are otherwise reached through the edge");
+// The matched tier's edge takes six cores the defaults tier gives k6, so its full-stack droplet is
+// larger; the hardening step reaches each app directly.
+const edged = tier === "matched" && suite === "fullstack";
+const size = edged ? "c-16" : "c-8";
+if (tier !== "defaults" && suite !== "fullstack" && suite !== "harden") throw new Error(flag("tier") ? "--tier is for a full-stack or hardening round" : `${round} is a matched-tier round's name (m<n>), and that tier is a full-stack or hardening round's: name this one otherwise`);
+// A hardening round of the matched tier is not an r<n> round, nor the defaults' an m<n> one.
+if (suite === "harden" && roundNameError(round, tier)) throw new Error(/** @type {string} */ (roundNameError(round, tier)));
+if (suite === "fullstack" && roundNameError(round, tier, { full: true })) throw new Error(/** @type {string} */ (roundNameError(round, tier, { full: true })));
+// The tier's apps, whatever BENCH_TIER says here: the droplet's run reads it from the round's env.
+const apps = tier === "matched" ? Object.fromEntries(Object.entries(allApps).filter(([, app]) => /** @type {{ matched?: boolean }} */ (app).matched)) : allApps;
 const only = flag("apps")?.split(",").map((n) => n.trim()).filter(Boolean);
-for (const app of only ?? []) if (!(app in apps)) throw new Error(`--apps names ${app}, which is not an app`);
+for (const app of only ?? []) if (!(app in apps)) throw new Error(`--apps names ${app}, which is not an app${tier === "matched" ? " of the matched tier" : ""}`);
 if (only && !only.includes("corten")) throw new Error("--apps must include corten, the reference");
-if (only && suite !== "fullstack") throw new Error("--apps is for a full-stack round");
+if (only && suite !== "fullstack" && suite !== "harden") throw new Error("--apps is for a full-stack or hardening round");
 if (args.includes("--passes") && !/^\d+$/.test(flag("passes") ?? "")) throw new Error("--passes takes a count: 1, 3 or 5");
 // A round going on from a step takes the passes its earlier results were run with (launch).
 let passes = passesOf(flag("passes"));
 if (passes > 1 && suite !== "fullstack") throw new Error("--passes is for a full-stack round");
 // The names go into the round's script unquoted.
 if (only?.some((app) => !/^[a-z0-9-]+$/.test(app))) throw new Error("an app name is lowercase letters, digits and -");
-if (!["fullstack", "live", "browser"].includes(suite)) throw new Error("--suite is fullstack, live or browser");
+if (!["fullstack", "live", "browser", "harden"].includes(suite)) throw new Error("--suite is fullstack, live, browser or harden");
 const suiteDir = `/bench/bench/${suite === "live" ? "live" : "fullstack"}`;
 const name = `corten-bench-${suite === "fullstack" ? "" : `${suite}-`}${round}`;
 const unitName = `corten-bench-${round}`;
@@ -139,9 +166,13 @@ process.on("SIGINT", () => {
   process.exit(130);
 });
 
-// Cores: 0 the system and Docker, 1 the app under test, 2-3 the item API (fullstack only), the
-// rest the load; with items in memory the item API is idle, so the load also gets 2-3. Builds,
-// which run after the rest, get 1-4: the four vCPUs of a standard CI runner.
+// Cores: 0 the system and Docker, 1 the app under test, 2-3 the item API (fullstack only), in
+// the matched tier 4-9 the edge (edge.mjs), the rest the load; with items in memory the item API is idle, so the load also gets 2-3. Builds,
+// which run after the rest, get 1-4: the four vCPUs of a standard CI runner; Corten's and axum +
+// Maud's clean build runs again on two vCPUs (1-2) and on all of them, nothing else running then.
+// On a c-16 (the matched tier) all of them is sixteen, not a c-8's eight, so that build's time is
+// not comparable with a defaults round's; the four- and two-vCPU builds are.
+// A droplet's vCPUs are hyperthreads, so all of them may add sibling threads rather than cores.
 // The tree goes up without .git, so the commit it is (and whether it differs from it) is said here,
 // for conform.mjs's record of what the round's images were built from.
 const treeCommit = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout?.trim() || "unknown";
@@ -149,7 +180,7 @@ const treeDirty = (spawnSync("git", ["status", "--porcelain", "--", ".", ":!benc
 const imagesFrom = treeCommit + (treeDirty ? "-dirty" : "");
 const envFor = (/** @type {number} */ passes) => suite === "live"
   ? "BENCH_APP_CPUS=1 BENCH_LOAD_CPUS=2-$(($(nproc)-1)) BENCH_LIVE_WORKERS=$(($(nproc)-2))"
-  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_API_CONTAINER=item-api BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1)) CONFORM_IMAGES_FROM=${imagesFrom}${only ? ` BENCH_APPS=${only.join(",")}` : ""}${passes > 1 ? ` BENCH_PASSES=${passes}` : ""}`;
+  : `BENCH_APP_CPUS=1 BENCH_BUILD_CPUS=1-4 BENCH_BUILD_SCALE=1-2,0-$(($(nproc)-1)) BENCH_API_CONTAINER=item-api ${edged ? "BENCH_EDGE_CPUS=4-9 BENCH_LOAD_CPUS=10-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-3,10-$(($(nproc)-1))" : "BENCH_LOAD_CPUS=4-$(($(nproc)-1)) BENCH_FIXTURE_LOAD_CPUS=2-$(($(nproc)-1))"} CONFORM_IMAGES_FROM=${imagesFrom}${only ? ` BENCH_APPS=${only.join(",")}` : ""}${passes > 1 ? ` BENCH_PASSES=${passes}` : ""}${tier === "matched" ? " BENCH_TIER=matched" : ""}${edgeOff ? " BENCH_EDGE=off" : ""}`;
 // BatchMode: never wait at a prompt. A connection that goes silent is dropped after two minutes.
 const sshOptions = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"];
 const ssh = (/** @type {string} */ script, /** @type {{ quiet?: boolean, allowFail?: boolean, timeout?: number }=} */ options) => run("ssh", [...sshOptions, `root@${host}`, script], options);
@@ -173,7 +204,7 @@ const write = (/** @type {string} */ path, /** @type {string} */ text) => `echo 
 
 const log = `${suiteDir}/results-${round}.log`;
 // host.txt: the CPU model and the rest, since droplets of one size are not all the same machine.
-const hostInfo = "(lscpu; free -m; uname -r; docker --version; node --version; npx playwright --version)";
+const hostInfo = "(lscpu; lscpu -e; free -m; uname -r; docker --version; node --version; npx playwright --version)";
 const download = async (/** @type {string} */ remoteDir, /** @type {string} */ localName, /** @type {string} */ label) => {
   const local = join(here, "..", localName, "results");
   mkdirSync(local, { recursive: true });
@@ -200,7 +231,12 @@ const launch = async () => {
     // A droplet already named so (a --keep run's, or a round still running) is never reused or,
     // below, mistaken for this one.
     if (tagged().some(([, n]) => n === name)) throw new Error(`a corten-bench droplet named ${name} already exists: collect or delete it, or pick another round`);
-    const created = run("doctl", ["compute", "droplet", "create", name, "--size", flag("size", "c-8") ?? "c-8", "--region", flag("region", "sfo2") ?? "sfo2",
+    // The round script refuses fewer than 16 vCPUs too; refusing here costs no droplet. A slug whose
+    // count this cannot read (not c-N, c2-N or ..-Nvcpu-..) is left to that check.
+    const slug = flag("size", size) ?? size;
+    const vcpus = Number(/^c2?-(\d+)$/.exec(slug)?.[1] ?? /-(\d+)vcpu-/.exec(slug)?.[1] ?? NaN);
+    if (edged && vcpus < 16) throw new Error(`--size ${slug} has ${vcpus} vCPUs: the matched tier needs 16 (the edge on 4-9, k6 on 10 and up)`);
+    const created = run("doctl", ["compute", "droplet", "create", name, "--size", slug, "--region", flag("region", "sfo2") ?? "sfo2",
       "--image", "ubuntu-24-04-x64", "--ssh-keys", key, "--tag-names", `corten-bench,${runTag}`, "--wait", "--format", "ID,PublicIPv4", "--no-header"], { quiet: true, allowFail: true, timeout: 10 * minute });
     if (created.status !== 0) {
       // The droplet may exist even though the call failed or timed out: find it so it is deleted.
@@ -289,13 +325,16 @@ const launch = async () => {
     live: `node run.mjs ${round}; node summarize.mjs ${round}; echo all done`,
     browser: `. "$HOME/.cargo/env"; node run-all.mjs ${round} 10 browser; cd /bench/bench/browser && node run-all.mjs ${round}`,
     fullstack: `exec node run-all.mjs ${round} 10 ${from ?? steps[0]} --unattended`,
+    // Each app's phases run against a freshly started app; the step needs no load generator.
+    harden: `node harden.mjs ${only ? only.join(",") : "all"} ${round} && echo all done`,
   }[suite];
   const script = `/bench/round-${round}.sh`;
   await retry(3, () => remote([
-    write(script, `cd ${suiteDir}\nexport ${env}\n${command}\n`),
+    // The matched tier's edge has cores 4-9, so its round needs 16 vCPUs, or k6 gets too few.
+    write(script, `cd ${suiteDir}\n${edged ? 'if [ "$(nproc)" -lt 16 ]; then echo "round failed: the matched tier needs 16 vCPUs (the edge on 4-9, k6 on 10 and up), this host has $(nproc)"; exit 1; fi\n' : ""}export ${env}\n${command}\n`),
     // The full comparison's calls have their own limits and its builds a budget (round.mjs: they
     // fit in hoursFor(passes) together); the unit's limit is a backstop. live and browser take about an hour.
-    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? hoursFor(passes) : 3 })),
+    write(`/etc/systemd/system/${unitName}.service`, unit({ description: `corten benchmark round ${round} (${suite})`, script, log, atBoot: suite === "fullstack", hours: suite === "fullstack" ? hoursFor(passes) : suite === "harden" ? 5 : 3 })),
     // A new round starts a new log and progress file; one going on from a step keeps the log.
     `rm -f ${suiteDir}/results-${round}.progress`,
     from ? `touch ${log}` : `: > ${log}`,
@@ -305,7 +344,7 @@ const launch = async () => {
   // Starting a unit that has started does nothing, so this can be tried again.
   mayDestroy = false;
   await retry(3, () => ssh(`systemctl start ${unitName} && systemctl is-active --quiet ${unitName}`));
-  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", fullstack: passes > 1 ? `about ${Math.round(((only?.length ?? Object.keys(apps).length) * (25 + 16 * (passes - 1))) / 6) / 10} hours with ${passes} passes of each load phase (estimated: about twenty-five minutes an app for the first pass, its build included, and about sixteen for each pass after, its four sets of load phases; the unit stops at ${hoursFor(passes)})` : only ? `about twenty-five minutes an app, its build included, for ${only.length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
+  console.log(`running round ${round} on the droplet by itself (${{ live: "about an hour", browser: "about an hour", harden: `about eight minutes an app, for ${(only ?? Object.keys(apps)).length} (estimated: six phases of 45 to 90 seconds each and each app's start, from two apps locally)`, fullstack: passes > 1 ? `about ${Math.round(((only?.length ?? Object.keys(apps).length) * (25 + 16 * (passes - 1))) / 6) / 10} hours with ${passes} passes of each load phase (estimated: about twenty-five minutes an app for the first pass, its build included, and about sixteen for each pass after, its four sets of load phases; the unit stops at ${hoursFor(passes)})` : only || tier === "matched" ? `about twenty-five minutes an app, its build included, for ${(only ?? Object.keys(apps)).length} (estimated: r14's eighteen apps averaged 21, and aot1's three, one without pages, took 42 minutes with no build step)` : "about six and a half hours, the builds included (r14's eighteen apps took 6.3 from cold start to the summary)" }[suite]})`);
 };
 
 // Finds the droplet of a round started earlier, by its name.
@@ -400,6 +439,12 @@ try {
       await downloadAll("results");
       // A finished round keeps its summaries as files and its raw output in one archive (pack.mjs).
       // A failure there leaves the files as downloaded and the droplet's fate as it was.
+      // harden.mjs prints the marker only when every phase ran and its file was written; a download
+      // without the file is not a finished hardening round.
+      if (suite === "harden" && !existsSync(join(here, "results", round, "hardening.json"))) {
+        console.log(`results/${round}/hardening.json did not come down with the round`);
+        process.exitCode = 1;
+      }
       if (suite === "fullstack") {
         try {
           // A round collected before was packed: the download brought every file again, so its

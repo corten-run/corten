@@ -4,6 +4,8 @@ use crate::{GreetForm, url};
 
 corten::assets::embed! {
     /// The files in `static/`, compiled into the program: `Static::STYLE_CSS` is `static/style.css`.
+    /// Corten also answers `/favicon.ico` with `favicon.svg` (or a `favicon.ico` added here), for
+    /// a tab that shows a PDF or an image, which names no icon.
     pub struct Static = "static";
 }
 
@@ -54,6 +56,10 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
         ),
         Failure::TimedOut | Failure::Offline => {
             ("Not available", "Check your connection and try again.")
+        }
+        // The request did not arrive whole in time (a 408): an upload that stopped.
+        Failure::Failed { status, .. } if *status == StatusCode::REQUEST_TIMEOUT => {
+            ("Not received", "Check your connection and try again.")
         }
         Failure::WrongMethod
         | Failure::Rejected { .. }

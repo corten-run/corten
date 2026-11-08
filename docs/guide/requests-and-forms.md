@@ -14,11 +14,27 @@ app names about a request is Corten's too: an extractor of its own implements
 `corten::extract::FromRequestParts` (with `FromRef` for a part of the state, beside the derive of
 the same name), a middleware takes `corten::extract::Request` and answers a
 `corten::middleware::Response` (`IntoResponse` makes one of a `Refused` or a status), a relay's
-body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a `corten::Listener`, and a test sends its
-requests with `app.test()`. These are axum's own traits and types, named from Corten so the app
-imports one crate ([design Choice 21](../design.md#choices)). A route's path and query are read
-as its `Params`, never another way. `corten::axum` stays for a stand-in server in a test (its
-`Router`).
+body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a
+`corten::Listener`, and a test sends its requests with `app.test()`. These are axum's own traits
+and types, named from Corten so the app imports one crate
+([design Choice 21](../design.md#choice-own-extractors)). A handler that takes the whole `Request` and answers
+a body over a limit of its own itself (a route that keeps another server's error shape) reads it
+with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A body too
+large to hold (a file `PUT` as `application/octet-stream`) is passed on as it arrives instead:
+`let mut pieces = corten::extract::pieces_up_to(request.into_body(), max)`, then
+`while let Some(piece) = pieces.chunk().await? { .. }`, writing each piece to the disk or store
+before asking for the next, so the request holds one piece, not the body. It counts what arrives,
+whatever the length says, and refuses a body over `max` as `bytes_up_to` does, reading past the
+rest until the body has sent 64 MiB more than `max`, so a browser, which sends the whole body
+before it reads, gets the 413 rather than a closed connection. A client that sends nothing for a
+minute (`.idle(d)` to change it), or trickles the body in so slowly that it falls that minute
+behind 240 bytes a second, is a 408 (still the 413 when it stops past the limit), and a body that
+breaks is a 400; each is a
+`corten::extract::BodyError` to match or pass on with `?`. The handler removes what it wrote of a
+body it does not finish, and puts the route in an API with a `deadline` that leaves time to read
+it, which shutdown also waits for. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
+path and query are read as its `Params`, never another way. `corten::axum` stays for a stand-in
+server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-app)).
 
 ### Request modes
 
@@ -26,12 +42,12 @@ as its `Params`, never another way. `corten::axum` stays for a stand-in server i
 |---|---|---|---|
 | `GET`, no `corten` header | first load, reload, no JavaScript | `req.page(doc)`: the app's layout with the page in it | renders HTML |
 | `GET` with `corten: nav` | runtime, same-origin link or back/forward | the same call: `<title>`, head tags and the page only | swaps `<main>` |
+| `GET` with `corten: page` | runtime, the page a write sends the browser to | the same call: the whole document, as a first load gets it (`req.mode` is `Mode::Document`) | swaps the page and draws its layout again |
 | `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `req.patch(view)` | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
 | `POST`, no header | a form without JavaScript | `req.page(..)` or `req.redirect(&route)` | renders the page |
 | any, `Accept: application/json` | native screen, agent, test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
 | any, under an `App::api` prefix | a webhook, a service, a partner's site | JSON (`corten::Json`), errors as Problem Details (`application/problem+json`) | reads the JSON |
 | SSE | `<corten-live src>` | `corten::live(stream_of_views)` | applies each like a patch |
-| SSE of JSON | the app's script (`EventSource`), a native client | `corten::event_stream(stream_of_events)`: `event: <name>`, `data: <JSON>`; `EventStreamResponse::ended()` (204) when it is over | reads each by name |
 | `GET {feed}`, `{feed}/live` | a handler's `subscribe()`, or `Replica` | `feed.snapshot()`, `feed.live(since)` | snapshot, then ordered patches |
 
 One handler serves every mode, and `req.mode` says which. A `data-patch` form's handler answers
@@ -48,9 +64,17 @@ one does), the deploy and its layout, and when a navigation answers with a diffe
 never stale.
 
 While a request is on its way, the runtime marks what waits for it with `aria-busy="true"`: a
-`data-patch` form until its answer comes, and for a navigation `<main>` and the link or GET form
-that started it (through a redirect too), until the new page is swapped in. When another
-navigation replaces one, the first one's marks go at once, and the newer one's stay. Showing which control is working is then CSS
+`data-patch` form and the button that sent it until its answer is drawn (or, when the answer
+sends the browser to another page, until that page is), and for a navigation `<main>` and the
+link or GET form that started it, with the form's button, until the new page is swapped in
+(through a redirect too). A button outside its form (`form="open"`, a row's action for one form
+the rows share) is marked as well, so the one pressed shows it is working, and the kit's `Button`
+draws that. When another navigation replaces one, or another button sends the same form by GET,
+the first one's marks go at once, and the newer one's stay. A write is never cut short that way:
+a button pressed while it is on its way is marked beside it and sends once its answer is drawn,
+when that answer took the write or refused only its input (a 2xx or a 422); after any other (a
+409, a 5xx, a failed network, another page) its mark goes and it is not sent.
+Showing which control is working is then CSS
 alone, in the component's stylesheet:
 
 ```css
@@ -61,6 +85,42 @@ alone, in the component's stylesheet:
 
 Back and forward mark only `<main>`, since nothing on the page started them, and a page reading
 itself again marks nothing.
+
+A `data-patch` form that sends files can also show how much of its body is sent. Its
+`on:corten:progress` handler is called with the browser's `ProgressEvent` while the multipart body
+goes out: `loaded` and `total` count the whole request, not one file, and `lengthComputable` says
+whether `total` is known. The app draws a native `<progress>` and fills it. Only a page with such
+a form loads the module that sends it (every page's runtime carries the few lines that load it), by `XMLHttpRequest`, since
+`fetch` reports no upload progress; every other submit is still a `fetch`. The answer is handled
+as any submit's is (a patch, a refusal, a redirect, `corten:error`), and the form stays
+`aria-busy` until it is drawn. So "all of it is sent" is not "saved": once `loaded` reaches
+`total`, the server is still working, and a bar with no `value` says so. A navigation abandons the
+upload: its events stop, and its answer is not drawn (one left before it was sent is never sent). A
+newer submit of the same form waits for it, as any write's does. Without JavaScript the form posts
+as it always does. The handler is checked like any other: one that takes a `ProgressEvent` takes no
+other event, and `corten:progress` is heard only on a `<form>` the runtime sends with it (it does
+not bubble): one with `data-patch`, `method="post"` (or another method with a body) and
+`enctype="multipart/form-data"`, so a form that would never report progress does not compile.
+The form itself carries them: a button's `formmethod` or `formenctype` is not read for the check. The watchlist's profile
+picture (`examples/watchlist/src/account.rs`, `picture_upload.js`) shows the bar only while the form
+is busy:
+
+```js
+/** @param {ProgressEvent} event @param {HTMLProgressElement} bar */
+export function sending(event, bar) {
+  if (event.lengthComputable && event.loaded < event.total) bar.value = event.loaded / event.total;
+  else bar.removeAttribute("value");
+}
+```
+
+The address changes when the page's answer is in, as a full load's does, not at the click: while a
+slow handler runs, the address still names the page on screen, so reloading, copying or sharing it
+gets that page, and a link the server redirects, or sends to a place on a page, shows only the
+address it ends at, in one history entry. This holds where the browser lets a navigation say when
+its address changes (the Navigation API's `precommitHandler`; the runtime checks for the feature,
+not for a browser). Elsewhere, and for back and forward, the address changes at the click while
+the old page is shown busy until the new one comes; `main[aria-busy]` is the hook for styling
+that wait.
 
 Back and forward draw the page again from the server, as a link does, and put back what the user
 typed or chose in it, as the browser does for a page it loaded: each field of `<main>` the user
@@ -145,7 +205,14 @@ error shape (`Api::errors`), the 422 stays a Problem Details document with its `
 written in the API's.
 
 `Form` (a form's body, or a `GET` form's query string) and `Params` (a route's own parameters,
-below) read what a browser sends the way it sends it, a key once per value.
+below) read what a browser sends the way it sends it, a key once per value. A form's type derives
+`Fields` alone, and a word in a form or a link `UrlValue` alone: each implements serde's
+`Deserialize` the way serde's derive would, from the same `#[serde(..)]` attributes (`rename`,
+`rename_all`, `alias`, `default`, `skip`, `other`, `deny_unknown_fields`, `borrow`, `bound`,
+`expecting`), so the names a form posts, a link writes and the handler reads are one list. An
+attribute that reads the type some other way (`flatten`, `with`, `deserialize_with`, `from`,
+`try_from`, `transparent`, `remote`, `tag`, `untagged`) does not compile; such a field needs a
+type of its own that implements `Deserialize`.
 
 | Field type | Reads | A browser sends |
 |---|---|---|
@@ -164,7 +231,7 @@ them, or `None` for the field's message, whatever the client sent:
 ```rust,ignore
 const COPIES: Bounds<u32> = Bounds::new(0, 3); // decimals: Bounds::new(0.0, 10_000.0).step(0.01)
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 struct Line { copies: Entry<u32> }
 
 // <input type="number" name={f.copies} value={&input.copies} {..COPIES}> writes min="0" max="3"
@@ -278,7 +345,7 @@ When several routes carry the same parameters (a list's filters, which its `<cor
 its bulk preview and its confirm need too), declare them once as a query set and include it:
 
 ```rust,ignore
-#[derive(Clone, Default, serde::Deserialize, Route, Fields)]
+#[derive(Clone, Default, Route, Fields)]
 #[route(query)]
 struct ItemQuery { search: Option<String>, page: Option<u32>, #[serde(default)] status: Vec<String> }
 
@@ -442,10 +509,10 @@ takes only a reference to the map's key type. An error on one row's field marks 
 (`limits-domains[seller-portal].max_concurrent-error`):
 
 ```rust,ignore
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 struct DomainLimits { max_concurrent: u32, #[serde(default)] adaptive: bool }
 
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 struct Limits { #[fields(rows)] #[serde(default)] domains: BTreeMap<Domain, DomainLimits> }
 
 let f = Limits::FIELDS;
@@ -516,7 +583,7 @@ an idempotency key, so the app passes the key on as it is for a write that belon
 submission:
 
 ```rust,ignore
-#[derive(Deserialize, Fields)]
+#[derive(Fields)]
 struct OrderInput { quantity: u32, submit: SubmitKey }
 
 html! { <form method="post" action={url::Orders} data-patch>{SubmitKey::field(f.submit)} .. </form> }
@@ -1052,7 +1119,7 @@ by a `Files` field of the form struct, so the markup (`name={f.photos}`), the fi
 all take the same `FieldName`:
 
 ```rust,ignore
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct NewListing { title: String, price: u32, photos: Files }
 
 async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
@@ -1127,6 +1194,23 @@ that the connection is closed. The limit for one file, the types a field accepts
 it takes are the handler's rules, so it checks them and adds a message to `Errors`. The form
 is then drawn again with its other fields kept and the message next to the input.
 
+A client that sends nothing for a minute while the handler reads a file, passes one over or reads
+the fields is `UploadError::Stalled`, a 408, as for [`pieces_up_to`](#http-types) (nginx's
+`client_body_timeout`). The minute holds for each piece, and is also the body's allowance against
+a client that sends a byte now and then, which would reset it forever: the reads may wait for the
+client that minute plus a second for every 240 bytes that came (Kestrel's minimum rate), in all,
+and past that the read is `Stalled` too. Time the handler spends between reads (writing a piece to
+a slow store) is not counted, so the bound holds as long as the handler asks for the next piece
+when it is done with one; a read dropped and begun again (inside a `timeout` or `select!`) does
+not start the minute again. So a large upload sent at any real speed is never cut off, and the
+route's deadline ([app guide](app.md)) is what bounds it in all; one that stops while a body over
+the limit is read past is still the 413. `upload.idle(d)` changes the minute (and so the
+allowance), and `upload.idle(None)` leaves only the route's deadline, for both. A page's deadline
+is 30 seconds unless set, so there a client that stops is caught by the deadline first: since the
+handler was waiting for the body, that answer is a 408 too (the error page's `Failure::Failed`
+with status 408, or the JSON 408), not the deadline's 503. The idle time matters on a route whose
+deadline is longer (an upload API's).
+
 A JSON route takes an upload the same way. One with no text fields still names its file input
 with a `Files` field and takes the file by that name (`file.is(..)`); the struct is not dead code,
 since `#[derive(Fields)]` marks a `Files` field read. In an [API](app.md#json-only-routes) its
@@ -1139,7 +1223,7 @@ its status:
 use corten::{http::StatusCode, prelude::*, Error};
 
 /// A CSV export a client posts as `multipart/form-data` in its `file` input.
-#[derive(serde::Deserialize, Fields)]
+#[derive(Fields)]
 struct Export { file: Files }
 
 async fn import(mut upload: Upload<Export>) -> JsonResult<serde_json::Value> {
@@ -1181,6 +1265,46 @@ runtime fetches the link on hover and again on click, running the handler twice.
 async fn export(caller: Caller<Viewer>) -> corten::Result<Media> {
     let csv = shipments_csv(&caller).await?;
     Ok(Media::new("text/csv", csv).attachment("shipments.csv"))
+}
+```
+
+An export too large to hold (every order as CSV, an archive) is `Media::stream(type, chunks)`,
+with `chunks` a stream of `Result<Bytes, E>`: each chunk goes out as it is made, so the client
+has the first before the last exists, and the stream is pulled only as fast as the client reads,
+so memory stays at a few chunks. When the client leaves, the stream is dropped, and with it what
+makes it: a cursor closes, a channel's sender fails. Read what can fail before returning it (the
+first page of rows, the file being there), since that error is still an error page; once the
+stream starts, the status and headers are sent, and an `Err` chunk ends the connection without
+the body's end, so the browser reports the download failed, and the error is logged. It cannot
+become an error page or a redirect. `Media::stream_sized(type, length, chunks)` sends a
+`Content-Length` so the browser shows progress; the stream must make exactly that many bytes, or
+the connection ends there as for a failure. A text type is compressed a chunk at a time (zstd or
+brotli, ended when the stream ends; uncompressed for a client that takes only gzip, as a script
+whose HTTP library has neither may), so make chunks of some kilobytes, a few hundred rows, not a
+row each. No `ETag` is made for a stream, and the request's deadline bounds the handler, not the
+download: `App::send_timeout` closes the connection of a client that stops reading, but nothing
+bounds a source that stops making chunks while the client waits, so give each page's read a time
+limit (a query timeout). A failed chunk is logged with the media type only, so its error should
+say which export it was.
+auction-room's bid history (`examples/auction-room/src/app.rs`, `history`) reads a lot's bids a
+page at a time this way.
+
+```rust,ignore
+async fn export(State(store): State<Store>) -> corten::Result<Media> {
+    // The first page before the answer: a store that fails now is an error page.
+    let first = store.orders_after(0).await?;
+    let pages = futures_util::stream::try_unfold((Some(first), 0), move |(page, after)| {
+        let store = store.clone();
+        async move {
+            let page = match page {
+                Some(page) => page,
+                None => store.orders_after(after).await?,
+            };
+            let Some(last) = page.last().map(|order| order.id) else { return Ok(None) };
+            Ok(Some((Bytes::from(csv(&page)), (None, last))))
+        }
+    });
+    Ok(Media::stream("text/csv", pages).attachment("orders.csv"))
 }
 ```
 
@@ -1330,10 +1454,14 @@ The browser scrolls to a route's place after a full load and after the runtime's
 alike; the runtime fetches the page again even when only the `#id` differs from the address,
 since the write may have changed it.
 A client navigation the server sends to a place gets `corten-location` instead of a 303,
-because `fetch` follows a redirect but drops its fragment. So does one sent to another site
+because `fetch` follows a redirect but drops its fragment, and so does the whole page the
+runtime fetches after a write (`corten: page`), so a page a write leads to that sends the browser
+on to a place lands there. So does one sent to another site
 (a `corten::http::Uri` such as `https://pay.example/..`), which `fetch` may not read (the CSP's
 `connect-src`, else CORS): the browser goes there itself, in one request to the app. The same
-holds for `req.moved`.
+holds for `req.moved`. Each of these answers varies on `corten`, and one to the runtime's fetch
+is kept by the browser alone, so a cache never hands a full load's 303 to the runtime or its
+`corten-location` to a full load.
 
 A place on a page outside the app (another site, another app of the same product) has an id
 that page's markup owns, so it is text: `Elsewhere::at(&uri, "fee-calculator")` is
@@ -1565,9 +1693,15 @@ page that sends one.
 
 A page handler returns `HtmlResult`; any `std::error::Error` converts with `?` and becomes a
 500. A record that is not there is `Error::not_found()` (`load(id).await?.ok_or_else(Error::not_found)?`),
-and `Error::status(StatusCode::FORBIDDEN)` (or `.with_status(..)` on an error) sets any other
-status. The app's error page is rendered in the request's mode (a page or a swap) and
-the message is logged, never shown, except under `corten dev`. An extractor's own rejection (a
+and `Error::status(StatusCode::CONFLICT)` (or `.with_status(..)` on an error) sets any other
+status. A handler that refuses the caller (the record is not theirs) returns the refusal an
+extractor gives, `Err(Refused::forbidden())?`, which the error page treats as the request's
+fault; `.with_status(..)` on it makes it a plain failure at that status. The app's error page is
+rendered in the request's mode (a page or a swap) and the message is logged, never shown, except
+under `corten dev`. A handler that answers in a shape of its own reads both: `error.to_string()`
+is the message the log has, and `error.status_code()` the status. The message is written for the
+log, so it can name a 5xx's internals or the cause a `.with_status(..)` hid (a refusal answered as
+a 404 says `refused: 403 Forbidden`); send it only where the error is meant for the client. An extractor's own rejection (a
 path segment that does not parse, a form of the wrong type) gets the error page too when a
 browser asked; a field the user types is text or an `Entry`, so its mistake is a message
 instead. The page is given a `Failure` that says which case it is
