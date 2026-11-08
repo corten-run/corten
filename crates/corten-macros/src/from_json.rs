@@ -54,10 +54,10 @@ fn impls(item: &Item) -> Result<TokenStream, Error> {
 }
 
 /// [`impls`]; with `by_serde`, the `FromJson` impl is the trait's own body (serde_json reads the
-/// text) and its bounds are only the type's own, and a generic type's impl also asks for
-/// `Self: DeserializeOwned`, the trait's supertrait, since the bounds serde infers for its
-/// `Deserialize` need not follow from them. The derive's own impl keeps `T: FromJson` on each
-/// parameter and nothing else, as before.
+/// text) and its bounds are only the type's own. A generic type's impl also asks for
+/// `Self: DeserializeOwned`, the trait's supertrait, on either path: the bounds inferred for its
+/// `Deserialize` (`T: Default` for a defaulted `T`) need not follow from the ones here, the
+/// derive's own `Deserialize` included.
 fn impls_with(item: &Item, by_serde: bool) -> Result<TokenStream, Error> {
     let container = Container::read(&item.attrs, item.is_enum)?;
     let schema;
@@ -109,7 +109,7 @@ fn impls_with(item: &Item, by_serde: bool) -> Result<TokenStream, Error> {
     } else {
         bounded(&item.impl_generics, &item.where_clause, "::corten::json::FromJson")
     };
-    if by_serde && !item.impl_generics.is_empty() {
+    if !item.impl_generics.is_empty() {
         let last = where_clause.clone().into_iter().last();
         where_clause.extend(q(
             match last {
