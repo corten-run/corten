@@ -1356,7 +1356,8 @@ pub async fn serve<M: Middleware>(app: App<M>) -> std::io::Result<()> {
 /// `port` when `PORT` is not set (`serve` passes 3000). For an app that serves HTTPS on them
 /// ([`serve_wrapped`]), or whose own default port is not 3000
 /// (`corten::serve_on(corten::listeners(8320).await?, app)`, with no `PORT` to set from the
-/// program).
+/// program). Each holds up to 511 connections the kernel has finished and the app not yet
+/// accepted, where `TcpListener::bind` holds 128.
 pub async fn listeners(port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
     let host = std::env::var("HOST").ok();
     let port: u16 = match std::env::var("PORT") {

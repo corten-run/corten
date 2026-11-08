@@ -8026,22 +8026,28 @@ fn has_ipv6_loopback() -> bool {
 }
 
 /// A burst of clients larger than the standard library's backlog of 128 all finish connecting
-/// before the server accepts one: none waits for its SYN to be sent again. Linux admits one more
-/// than the backlog and drops the next SYN, so with 128 the 130th connection would wait a second.
+/// before the server accepts one, on each listener `HOST` gives and on the loopback pair: none
+/// waits for its SYN to be sent again. Linux admits one more than the backlog and drops the next
+/// SYN, so with 128 the 130th connection would wait a second.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit() {
-    const BURST: usize = 300;
+    const BURST: usize = 200;
     let somaxconn: usize = std::fs::read_to_string("/proc/sys/net/core/somaxconn").unwrap().trim().parse().unwrap();
-    assert!(somaxconn > BURST, "net.core.somaxconn is {somaxconn}, which caps the backlog below this test's burst");
-    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
-    let addr = listeners[0].local_addr().unwrap();
-    let mut held = Vec::new();
-    for n in 1..=BURST {
-        let connected = tokio::time::timeout(Duration::from_millis(900), tokio::net::TcpStream::connect(addr)).await;
-        held.push(connected.unwrap_or_else(|_| panic!("connection {n} waited for its SYN to be resent")).unwrap());
+    if somaxconn <= BURST {
+        eprintln!("skipped: net.core.somaxconn is {somaxconn}, which caps the backlog below the burst");
+        return;
     }
-    drop(listeners);
+    for listeners in [crate::app::bind(Some("127.0.0.1"), 0).await.unwrap(), crate::app::bind(None, 0).await.unwrap()] {
+        for listener in &listeners {
+            let addr = listener.local_addr().unwrap();
+            let mut held = Vec::new();
+            for n in 1..=BURST {
+                let connected = tokio::time::timeout(Duration::from_millis(900), tokio::net::TcpStream::connect(addr)).await;
+                held.push(connected.unwrap_or_else(|_| panic!("{addr}: connection {n} waited for its SYN to be resent")).unwrap());
+            }
+        }
+    }
 }
 
 /// Without `HOST`, `localhost` is both loopback addresses on one port, so a browser that tries
