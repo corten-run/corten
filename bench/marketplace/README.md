@@ -5,11 +5,13 @@ gate.** Every selected app must pass the Docker/browser checks before any load t
 No v2 performance baseline is published here. Passing the formatting-capture checker alone
 never qualifies an app for load testing.
 
-Keep both workloads. [Catalog](../catalog/README.md) isolates a strings-only page and JSON;
+Keep both workloads' history. [Catalog](../catalog/README.md) isolates a strings-only page and JSON;
 marketplace v2 measures a richer application with equivalent locale formatting. Neither
 replaces the other's results. Historical [marketplace rounds](../fullstack/README.md) keep
 their recorded implementation and caveats. V2 starts a new baseline, not an r16 speedup.
-The existing nightly automation and catalog c1 parameters are unchanged.
+Nightly execution moves to v2 starting at official r17; catalog remains a separate optional
+diagnostic, not a duplicate nightly run. Old marketplace tables have non-equivalent
+localization work and cannot establish general framework speed rankings.
 
 ## Shared work
 
@@ -76,6 +78,21 @@ not their legacy LiveView/Livewire examples. V2 result labels name these workloa
 
 ## Running
 
+The [nightly procedure](nightly.md) describes detached launch and collection. From a clean,
+committed checkout, with durable state outside that checkout:
+
+```sh
+node bench/marketplace/droplet.mjs r17 --ssh-key <id> --state-dir <outside-checkout>/marketplace-r17 --detach
+node bench/marketplace/droplet.mjs r17 --state-dir <outside-checkout>/marketplace-r17 --collect
+```
+
+Use a fresh official `rN` with N >= 17 for each nightly round. The dedicated c-8 runs three
+passes with `--duration 15 --warmup 10 --rate 150`, pinned to app CPU 1, upstream CPUs 2-3
+and load-generator CPUs 4-7. These are short measurement windows: publish medians and ranges,
+not a guaranteed finish by 7 am or an unsupported claim about small differences.
+
+For local development, `wN` remains the development identity:
+
 ```sh
 npm ci
 node bench/marketplace/fixtures.mjs
@@ -90,7 +107,7 @@ Use a fresh `wN` each time: an existing result directory is never overwritten. `
 select individual apps for development checks. A full publishable baseline needs all eighteen
 apps and three passes; the read-only reporter rejects subsets, check-only runs, dirty commits,
 missing profiles or passes, failed cleanup and aggregates that disagree with saved passes.
-These commands do not create a droplet, collect c1, update nightly state or publish anything.
+The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
 
 The deterministic fixture is 500 new rich trading-card records, not the old marketplace
 fixture with a new label: normal records have 25 listings, 12 offers, images, badges, fields,
@@ -114,8 +131,9 @@ catalog gate and this gate for each of the eighteen apps.
 Load uses a one-CPU app quota, a four-CPU load-generator quota and a two-CPU upstream quota.
 For disjoint pinning set `MARKETPLACE_APP_CPUS`, `MARKETPLACE_LOAD_CPUS` and
 `MARKETPLACE_API_CPUS`; overlaps are rejected. Without those settings quotas do not prove core
-isolation. Pages are measured separately in all three locales; JSON is repeated alongside
-each locale as a control, not as localized output. Three passes rotate framework order.
+isolation. Pages are measured separately in all three locales (`en-US`, `fr-FR`, `de-DE`);
+locale-neutral JSON is measured once per source per pass, not repeated as a locale control.
+Three passes rotate framework order.
 Warmup precedes fixed-rate, 64-user and 256-user phases. Results retain commit/dirty state,
 fixture hash, resolved image IDs, raw k6 output, counted cgroup CPU, memory, cold-start clock,
 configuration, errors and cleanup failures. Image IDs and build logs identify dependency
@@ -124,7 +142,9 @@ versions; record runtime/ICU/CLDR versions when publishing a baseline.
 The private upstream is a single Node process, even with a two-CPU quota. Its busy CPU is a
 measurement limit, not evidence of framework saturation. The reporter flags it and app CPU
 below 95%, and prints medians and ranges rather than claiming every difference is meaningful.
-This runner does not measure build cost, instructions, bytes or load-to-interactive timing.
+The nightly measurement scope is CPU, memory, load and cold start. This runner does not
+measure build cost, instructions, bytes or load-to-interactive timing yet. Historical build,
+browser and instruction measurements remain evidence only for their original workloads.
 
 ## Formatting conformance
 
@@ -173,9 +193,9 @@ always reports `readyForLoad: false`: no standalone formatting test certifies a 
    behavior unchanged, and do not rewrite historical result files.
 2. Review request-time native localization and serializer paths, not just captured answers.
    Missing support is a failed contract, not a fast row.
-3. Use the independent `wN` identity, a clean measured commit and complete provenance.
-   Integrate nightly execution only after review, separately from this migration.
-   No v2 droplet launcher exists here.
+3. Use a fresh `wN` for development or official `rN` (N >= 17) for nightly execution, a clean
+   measured commit and complete provenance. V2 starts a new baseline: compare only compatible
+   v2 rounds, with no r16 or catalog c1 delta.
 4. Validate the load generator, CPU placement, upstream headroom and concurrency range. A
    low-utilization app's observed req/s is not its proven maximum; a busy upstream bounds the
    end-to-end measurement. Keep those warnings alongside the table, not in a hidden footnote.
@@ -205,6 +225,6 @@ lacks a feature. Progressive enhancement, typed interfaces, security defaults, l
 partial updates and live data need a runnable example or check, not a performance-derived
 checkmark. Record which implementations maintainers have reviewed.
 
-Never claim build times, instruction counts or interactive timings from the catalog load suite;
+Never claim build times, instruction counts, bytes or interactive timings from the nightly load suite;
 those need their own measurements. Do not present preliminary catalog c1 data as a completed
 comparison or compare it with marketplace r16 as a before/after change.
