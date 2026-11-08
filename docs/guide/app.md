@@ -672,8 +672,8 @@ handshake but are not yet accepted (nginx's and Node's number), not the standard
 On Linux, which caps it at `net.core.somaxconn` (4096 since 5.4), a burst of clients faster than
 the server accepts them then waits in that queue rather than a second or more for a resent SYN.
 macOS caps it at `kern.ipc.somaxconn`, 128 by default, so there the change takes a raised
-setting. Windows holds 200 (measured on Windows 11 with a Winsock listener asking for 511) and
-refuses a connection past them rather than leaving it to wait.
+setting. Windows 11 held 200 (one run, a Winsock listener on loopback asking for 511) and refused a
+connection past them, the client seeing the error after about 2 s; Windows Server was not tried.
 A listener of the app's own sets its own.
 
 HTTPS is a step on each connection before HTTP, which `corten::serve_wrapped` takes: the TLS

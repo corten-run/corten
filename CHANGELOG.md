@@ -4078,7 +4078,7 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 - `corten::listeners` (and so `serve`) listens with a queue of 511 finished connections on Linux
-  (200 on Windows; macOS keeps its 128 unless raised), not mio's and the standard library's 128.
+  (Windows 11 held 200 in one run; macOS keeps its 128 unless raised), not mio's and the standard library's 128.
   With 1,024 clients connecting at once to a page on one CPU (Docker Desktop's Linux VM), the
   kernel counted 142 and 485 listen-queue overflows (two runs) and the slowest connect
   took 1.27 and 2.08 s; with 511, no overflows and 0.28 and 0.24 s.
