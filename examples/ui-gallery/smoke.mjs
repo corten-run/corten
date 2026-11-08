@@ -2689,27 +2689,44 @@ async function run(browser) {
     ["[class*='segmented__track'] > label:has(> input:checked)", "[class*='segmented__track'] > label:not(:has(> input:checked))"],
   ]);
   check("SegmentedLinks and SegmentedRadios: each choice's weight and the chosen one's color are the theme's", tabTypeIsTheThemes(linksType), JSON.stringify(linksType));
-  // Under the pointer the checked SegmentedRadio keeps the theme's chosen color: the hover rule,
-  // which weighs more than the checked one, leaves a checked choice alone.
-  const hoverTheme = await orders.evaluate(() => {
+  // Under the pointer the checked SegmentedRadio and the current SegmentedLinks link keep the
+  // theme's chosen color: the radio's hover rule, which weighs more than its checked one, leaves a
+  // checked choice alone, and the link's chosen rule comes after its hover rule.
+  const hoverTheme = await orders.evaluateHandle(() => {
     const sheet = new CSSStyleSheet();
     sheet.replaceSync(":root { --tab-selected-color: var(--primary); } * { transition: none !important; }");
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-    return document.adoptedStyleSheets.length - 1;
+    return sheet;
   });
-  const checkedSize = orders.locator("[class*='segmented__track'] > label:has(> input:checked)");
-  await checkedSize.hover();
-  const hoveredChoice = await checkedSize.evaluate((label, at) => {
-    const probe = document.createElement("span");
-    probe.style.color = "var(--primary)";
-    document.body.append(probe);
-    const out = { hovered: label.matches(":hover"), color: getComputedStyle(label).color, primary: getComputedStyle(probe).color };
-    probe.remove();
-    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((_, i) => i !== at);
-    return out;
-  }, hoverTheme);
-  await orders.mouse.move(0, 0);
-  check("SegmentedRadios: the checked choice keeps the theme's chosen color under the pointer", hoveredChoice.hovered && hoveredChoice.color === hoveredChoice.primary, JSON.stringify(hoveredChoice));
+  /** @type {{ hovered: boolean, color: string, primary: string }[]} */
+  const hoveredChoices = [];
+  try {
+    for (const chosen of ["[class*='segmented__track'] > label:has(> input:checked)", "nav[class*='segmented__links'] > a[aria-current='page']"]) {
+      const choice = orders.locator(chosen);
+      await choice.hover();
+      hoveredChoices.push(
+        await choice.evaluate((el) => {
+          const probe = document.createElement("span");
+          probe.style.color = "var(--primary)";
+          document.body.append(probe);
+          const out = { hovered: el.matches(":hover"), color: getComputedStyle(el).color, primary: getComputedStyle(probe).color };
+          probe.remove();
+          return out;
+        }),
+      );
+    }
+  } finally {
+    await orders.evaluate((sheet) => {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+    }, hoverTheme);
+    await hoverTheme.dispose();
+    await orders.mouse.move(0, 0);
+  }
+  check(
+    "SegmentedRadios and SegmentedLinks: the chosen choice keeps the theme's chosen color under the pointer",
+    hoveredChoices.length === 2 && hoveredChoices.every((c) => c.hovered && c.color === c.primary),
+    JSON.stringify(hoveredChoices),
+  );
   // StackStart: a column whose children keep their own width, a link as wide as its words and a
   // badge, each at most the column's; at 320px a word wider than the column breaks inside its link,
   // and a picture wider than the column narrows in its shape (#1119).
