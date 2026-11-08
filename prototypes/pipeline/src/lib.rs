@@ -79,6 +79,23 @@
 //! }
 //! ```
 //!
+//! The context holds one value of each type. A second stage that gives a type already in it is
+//! ambiguous to the compiler, which says only "type annotations needed" (E0283), not the
+//! framework's message; a real version would refuse the second stage itself:
+//!
+//! ```compile_fail,E0283
+//! use pipeline::{get, stages::{Cancel, Signal}, Router, Stages};
+//!
+//! async fn search(signal: Signal) -> &'static str {
+//!     if signal.is_aborted() { "gone" } else { "found" }
+//! }
+//!
+//! async fn start(listener: tokio::net::TcpListener) -> std::io::Result<()> {
+//!     let app = Stages::new().with(Cancel).with(Cancel).serve(Router::new().route("/", get(search)));
+//!     pipeline::server::serve(listener, app).await
+//! }
+//! ```
+//!
 //! ```
 //! use std::time::Duration;
 //! use pipeline::{get, stages::{Cancel, Deadline}, Router, Stages};
@@ -123,7 +140,7 @@ pub trait Stage<Cx>: Send + Sync + 'static {
 }
 
 /// Stages to put around an endpoint, outermost first. The only way to add behavior to a request:
-/// the app's defaults are a `Stages` value ([`Stages::standard`]), and so is a route's own.
+/// the app's defaults are a `Stages` value ([`Stages::api`]), and so is a route's own.
 #[derive(Clone)]
 pub struct Stages<L>(L);
 

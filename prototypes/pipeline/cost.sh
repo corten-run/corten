@@ -7,7 +7,7 @@ set -eu
 BIN=${BIN:-/target/release/examples/cost}
 N1=${N1:-200}
 N2=${N2:-1200}
-VARIANTS=${VARIANTS:-"raw router host same-origin cancel deadline panic secure cache errors api api-on-route secure-presized api-presized signal-cx signal-ext axum corten"}
+VARIANTS=${VARIANTS:-"raw router host same-origin cancel deadline panic secure cache errors api router-wait cancel-wait deadline-wait api-wait api-on-route secure-presized api-presized signal-cx signal-ext axum corten"}
 count() {
   valgrind --tool=callgrind --callgrind-out-file=/dev/null "$BIN" "$1" "$2" 2>&1 | sed -n 's/.*Collected : \([0-9]*\).*/\1/p'
 }

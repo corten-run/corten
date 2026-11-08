@@ -1,0 +1,14 @@
+variant	allocations	bytes
+raw	7	1592
+router	8	2352
+api	11	3728
+api-wait	12	3824
+api-on-route	11	3792
+signal-cx	9	2672
+signal-ext	12	2852
+axum	19	2566
+corten	28	9113
+socket-router	7	9800
+socket-api	10	11176
+socket-axum	18	10030
+socket-corten	28	16584

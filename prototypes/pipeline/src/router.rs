@@ -112,11 +112,7 @@ impl<Cx: Send + 'static> Router<Cx> {
     /// The handlers at `path` (`/items/{id}`, `/files/{*rest}`). Panics when two paths clash, as
     /// the app starts.
     pub fn route(mut self, path: &'static str, methods: Methods<Cx>) -> Self {
-        let keys: Vec<&'static str> = path
-            .split('/')
-            .filter_map(|segment| segment.strip_prefix('{')?.strip_suffix('}'))
-            .map(|key| key.strip_prefix('*').unwrap_or(key))
-            .collect();
+        let keys = param_names(path);
         assert!(keys.len() <= MAX_PARAMS, "{path}: at most {MAX_PARAMS} parameters");
         let has = |method: &Method| methods.handlers.iter().any(|(m, _)| m == method);
         let mut allowed: Vec<&str> = methods.handlers.iter().map(|(m, _)| m.as_str()).collect();
@@ -139,10 +135,14 @@ impl<Cx: Send + 'static> Endpoint<Cx> for Router<Cx> {
             return Either::Left(std::future::ready(Failure::not_found().into_response()));
         };
         let route = &self.routes[*found.value];
-        let base = req.uri().path().as_ptr() as usize;
+        let path = req.uri().path();
+        let base = path.as_ptr() as usize;
         let mut ranges = [(0u16, 0u16); MAX_PARAMS];
-        for (slot, (_, value)) in ranges.iter_mut().zip(found.params.iter()) {
+        for (at, (slot, (key, value))) in ranges.iter_mut().zip(found.params.iter()).enumerate() {
+            // matchit hands back slices of the path, which http caps below 64 KiB.
+            debug_assert_eq!(route.keys.get(at), Some(&key), "the route's names, in matchit's order");
             let start = value.as_ptr() as usize - base;
+            debug_assert!(start + value.len() <= path.len() && path.len() <= u16::MAX as usize);
             *slot = (start as u16, (start + value.len()) as u16);
         }
         let head = req.method() == Method::HEAD;
@@ -159,9 +159,14 @@ impl<Cx: Send + 'static> Endpoint<Cx> for Router<Cx> {
         let params = Params { uri: req.uri().clone(), keys: route.keys, ranges };
         let answer = handler.call_boxed(req, (params, cx));
         if head && *method == Method::GET {
-            // The GET's answer without its body, its length kept.
+            // The GET's answer without its body, its length kept. A failure keeps its body, which
+            // holds no bytes, so the stages around the router still describe it (and hyper sends
+            // no body for a HEAD whatever the description is).
             return Either::Right(Either::Left(async move {
                 let (mut parts, body) = answer.await.into_parts();
+                if body.failure().is_some() {
+                    return Response::from_parts(parts, body);
+                }
                 if let Some(length) = http_body::Body::size_hint(&body).exact() {
                     parts.headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
                 }
@@ -210,14 +215,38 @@ impl Params {
     }
 }
 
+/// The parameters a route pattern names, in order, as matchit reads it: `{name}` and `{*name}`,
+/// with `{{` and `}}` a literal brace.
+fn param_names(path: &'static str) -> Vec<&'static str> {
+    let bytes = path.as_bytes();
+    let mut names = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        match (bytes[at], bytes.get(at + 1)) {
+            (b'{', Some(b'{')) | (b'}', Some(b'}')) => at += 2,
+            (b'{', _) => {
+                let end = path[at..].find('}').map(|end| at + end).unwrap_or_else(|| panic!("{path}: a `{{` with no `}}`"));
+                let name = &path[at + 1..end];
+                names.push(name.strip_prefix('*').unwrap_or(name));
+                at = end + 1;
+            }
+            _ => at += 1,
+        }
+    }
+    names
+}
+
 fn decode(raw: &str) -> Option<String> {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut at = 0;
     while at < bytes.len() {
         if bytes[at] == b'%' {
-            let hex = std::str::from_utf8(bytes.get(at + 1..at + 3)?).ok()?;
-            out.push(u8::from_str_radix(hex, 16).ok()?);
+            let digits = bytes.get(at + 1..at + 3)?;
+            if !digits.iter().all(u8::is_ascii_hexdigit) {
+                return None;
+            }
+            out.push(u8::from_str_radix(std::str::from_utf8(digits).ok()?, 16).ok()?);
             at += 3;
         } else {
             out.push(bytes[at]);

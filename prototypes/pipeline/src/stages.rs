@@ -1,4 +1,4 @@
-//! Corten's defaults, each a [`Stage`]: put together by [`Stages::api`] and [`Stages::page`] in
+//! Corten's defaults, each a [`Stage`]: put together by [`Stages::api`] in
 //! Corten's order, or one at a time with [`Stages::with`].
 
 use std::{
@@ -67,11 +67,23 @@ impl Host {
     fn answers(&self, headers: &HeaderMap) -> bool {
         let Some(host) = headers.get(header::HOST) else { return true };
         let Ok(host) = host.to_str() else { return false };
+        // A port, when there is one, is digits.
+        let port = |port: &str| !port.is_empty() && port.len() <= 5 && port.bytes().all(|b| b.is_ascii_digit());
         let name = match host.strip_prefix('[') {
             // An IPv6 literal.
-            Some(rest) => return rest.split_once(']').is_some_and(|(ip, _)| ip.parse::<std::net::Ipv6Addr>().is_ok()),
-            None => host.rsplit_once(':').map_or(host, |(name, _)| name),
+            Some(rest) => {
+                return rest.split_once(']').is_some_and(|(ip, after)| {
+                    ip.parse::<std::net::Ipv6Addr>().is_ok() && (after.is_empty() || after.strip_prefix(':').is_some_and(port))
+                });
+            }
+            None => match host.rsplit_once(':') {
+                Some((name, digits)) if port(digits) => name,
+                Some(_) => return false,
+                None => host,
+            },
         };
+        // A fully qualified name (`localhost.`) is the same name.
+        let name = name.strip_suffix('.').unwrap_or(name);
         if name.parse::<std::net::Ipv4Addr>().is_ok() {
             return true;
         }
@@ -123,7 +135,8 @@ impl SameOrigin {
         let host = headers.get(header::HOST).map(HeaderValue::as_bytes);
         let origin = origin.as_bytes();
         let rest = origin.strip_prefix(b"https://").or_else(|| origin.strip_prefix(b"http://"));
-        rest.is_some_and(|rest| Some(rest) == host)
+        // Host names are case-insensitive.
+        rest.zip(host).is_some_and(|(rest, host)| rest.eq_ignore_ascii_case(host))
     }
 }
 
@@ -320,6 +333,7 @@ impl<F: Future<Output = Response>> Future for Within<F> {
         match timer.as_mut().poll(context) {
             Poll::Ready(()) => {
                 this.signal.abort(Abort::Deadline);
+                tracing::warn!(limit_ms = this.limit.as_millis() as u64, "a request passed its deadline");
                 Poll::Ready(Failure::new(StatusCode::SERVICE_UNAVAILABLE).detail("past its deadline").into_response())
             }
             Poll::Pending => Poll::Pending,
@@ -336,8 +350,23 @@ impl<Cx: Send + 'static> Stage<Cx> for CatchPanic {
 
     #[inline]
     fn call<'a, E: Endpoint<Cx>>(&'a self, req: Request, cx: Cx, inner: &'a E) -> impl Future<Output = Response> + Send + 'a {
-        Caught { answer: inner.call(req, cx) }
+        // An endpoint that panics as it is called, before it has a future (one written by hand,
+        // or a stage that does its work in `call`), is caught too.
+        match std::panic::catch_unwind(AssertUnwindSafe(|| inner.call(req, cx))) {
+            Ok(answer) => Either::Left(Caught { answer }),
+            Err(panic) => Either::Right(std::future::ready(panicked(panic))),
+        }
     }
+}
+
+fn panicked(panic: Box<dyn std::any::Any + Send>) -> Response {
+    let message = panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "a panic with no message".into());
+    tracing::error!("the endpoint panicked: {message}");
+    Failure::new(StatusCode::INTERNAL_SERVER_ERROR).detail(message).into_response()
 }
 
 pin_project_lite::pin_project! {
@@ -354,14 +383,7 @@ impl<F: Future<Output = Response>> Future for Caught<F> {
         let answer = self.project().answer;
         match std::panic::catch_unwind(AssertUnwindSafe(|| answer.poll(context))) {
             Ok(polled) => polled,
-            Err(panic) => {
-                let message = panic
-                    .downcast_ref::<&str>()
-                    .map(|s| s.to_string())
-                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "a panic with no message".into());
-                Poll::Ready(Failure::new(StatusCode::INTERNAL_SERVER_ERROR).detail(message).into_response())
-            }
+            Err(panic) => Poll::Ready(panicked(panic)),
         }
     }
 }
@@ -504,10 +526,19 @@ impl<Cx: Send + 'static> Stage<Cx> for Errors {
             let described = (self.describe)(failure, self.dev);
             // The failure's status and headers (`Allow`, `Retry-After`), the description's body
             // and the headers it sets.
+            // A header the description sets replaces the failure's, every value of it kept
+            // (`Set-Cookie`, `Link`).
             let (mut parts, _) = res.into_parts();
             let (new, body) = described.into_parts();
-            for (name, value) in &new.headers {
-                parts.headers.insert(name, value.clone());
+            let mut current = None;
+            for (name, value) in new.headers {
+                if let Some(name) = name {
+                    parts.headers.remove(&name);
+                    current = Some(name);
+                }
+                if let Some(name) = &current {
+                    parts.headers.append(name.clone(), value);
+                }
             }
             Response::from_parts(parts, body)
         })

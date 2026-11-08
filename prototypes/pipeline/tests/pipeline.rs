@@ -8,7 +8,7 @@ use http_body_util::BodyExt;
 use pipeline::{
     Body, Endpoint, Failure, Json, Params, Request, Response, Router, Stages, get, handler,
     handler::State,
-    stages::{Cancel, Deadline, Errors, Host, Secure, Share, Signal},
+    stages::{Cancel, CatchPanic, Deadline, Errors, Host, Secure, Share, Signal},
 };
 
 async fn send<E: Endpoint<()>>(
@@ -174,16 +174,23 @@ async fn the_host_and_same_origin_checks_refuse_before_the_app_runs() {
 
 #[tokio::test(start_paused = true)]
 async fn past_its_deadline_a_request_answers_503_and_its_signal_aborts() {
-    let app = Stages::new()
-        .with(Errors::json().dev(true))
-        .with(Cancel)
-        .with(Deadline::new(Duration::from_secs(2)))
-        .serve(Router::new().route("/slow", get(slow)));
+    use pipeline::stages::Abort;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(None::<Signal>));
+    let keep = seen.clone();
+    let app = Stages::new().with(Errors::json().dev(true)).with(Cancel).with(Deadline::new(Duration::from_secs(2))).serve(
+        Router::new().route(
+            "/slow",
+            get(move |signal: Signal| {
+                *keep.lock().unwrap() = Some(signal.clone());
+                slow(signal)
+            }),
+        ),
+    );
     let (status, _, body) = send(&app, Method::GET, "/slow", &[]).await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body, r#"{"title":"Service Unavailable","status":503,"detail":"past its deadline"}"#);
+    assert_eq!(seen.lock().unwrap().as_ref().unwrap().reason(), Some(Abort::Deadline));
 }
-
 #[tokio::test]
 async fn a_signal_aborts_when_the_answer_is_sent_or_the_client_leaves() {
     use pipeline::stages::Abort;
@@ -236,6 +243,29 @@ async fn a_panic_answers_500_with_its_detail_only_for_a_developer() {
     let app = Stages::api().serve(Router::new().route("/boom", get(boom)));
     let (status, _, body) = send(&app, Method::GET, "/boom", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::INTERNAL_SERVER_ERROR, r#"{"title":"Internal Server Error","status":500}"#));
+    let dev = Stages::new().with(Errors::json().dev(true)).with(CatchPanic).serve(Router::new().route("/boom", get(boom)));
+    let (status, _, body) = send(&dev, Method::GET, "/boom", &[]).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, r#"{"title":"Internal Server Error","status":500,"detail":"the handler broke"}"#);
+}
+
+/// Panics as it is called, before it has a future to poll.
+struct PanicsInCall;
+
+impl<Cx: Send + 'static> Endpoint<Cx> for PanicsInCall {
+    fn call(&self, _: Request, _: Cx) -> impl std::future::Future<Output = Response> + Send + '_ {
+        panic!("broke in call");
+        #[allow(unreachable_code)]
+        std::future::ready(Response::new(Body::empty()))
+    }
+}
+
+#[tokio::test]
+async fn a_panic_in_an_endpoints_call_is_caught_too() {
+    let app = Stages::new().with(Errors::json().dev(true)).with(CatchPanic).serve(PanicsInCall);
+    let (status, _, body) = send(&app, Method::GET, "/", &[]).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, r#"{"title":"Internal Server Error","status":500,"detail":"broke in call"}"#);
 }
 
 #[tokio::test]
@@ -275,4 +305,118 @@ async fn an_app_can_build_its_own_order_and_describe_failures_its_own_way() {
     let (status, headers, body) = send(&app, Method::GET, "/missing", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::NOT_FOUND, "<h1>404</h1>"));
     assert!(headers.get(header::CONTENT_SECURITY_POLICY).unwrap().to_str().unwrap().starts_with("default-src 'self'"));
+}
+
+#[tokio::test]
+async fn a_head_request_for_a_failure_gets_the_failures_description() {
+    let app = Stages::api().with(Share(Db("Mox"))).serve(Router::new().route("/items/{id}", get(item)));
+    let (status, headers, body) = send(&app, Method::HEAD, "/items/0", &[]).await;
+    assert_eq!(
+        (status, body.as_str()),
+        (StatusCode::NOT_FOUND, r#"{"title":"Not Found","status":404}"#),
+        "hyper drops the body of a HEAD"
+    );
+    assert_eq!(headers.get(header::CONTENT_TYPE).unwrap(), "application/problem+json");
+}
+
+#[tokio::test]
+async fn path_parameters_are_read_as_matchit_names_them_and_percent_decoded() {
+    async fn two(params: Params) -> String {
+        format!("{}|{}", params.get("shelf").unwrap(), params.get("rest").unwrap())
+    }
+    async fn braces(params: Params) -> String {
+        params.get("id").map(|id| id.into_owned()).unwrap_or_else(|| "none".into())
+    }
+    let app = Router::new().route("/shelves/{shelf}/files/{*rest}", get(two)).route("/{{v}}/{id}", get(braces));
+    let (status, _, body) = send(&app, Method::GET, "/shelves/a%20b/files/x/y%2Fz", &[]).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "a b|x/y/z"));
+    let (status, _, body) = send(&app, Method::GET, "/{v}/42", &[]).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "42"));
+    // Not percent-encoding: no value, so `parse` answers 404 rather than reading `a\u{5}b`.
+    let (status, _, body) = send(&app, Method::GET, "/{v}/a%+5b", &[]).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "none"));
+}
+
+#[tokio::test]
+async fn the_host_check_reads_ports_and_a_trailing_dot_and_the_origin_check_ignores_case() {
+    let app = Stages::new().with(Host::loopback()).with(pipeline::stages::SameOrigin).serve(Pong);
+    assert_eq!(send(&app, Method::GET, "/", &[("host", "localhost.")]).await.0, StatusCode::OK);
+    assert_eq!(send(&app, Method::GET, "/", &[("host", "localhost.:3000")]).await.0, StatusCode::OK);
+    assert_eq!(send(&app, Method::GET, "/", &[("host", "localhost:abc")]).await.0, StatusCode::MISDIRECTED_REQUEST);
+    assert_eq!(send(&app, Method::GET, "/", &[("host", "[::1]:x")]).await.0, StatusCode::MISDIRECTED_REQUEST);
+    let mixed = [("host", "LocalHost:3000"), ("origin", "http://localhost:3000")];
+    assert_eq!(send(&app, Method::POST, "/", &mixed).await.0, StatusCode::OK);
+    let null = [("host", "localhost:3000"), ("origin", "null")];
+    assert_eq!(send(&app, Method::POST, "/", &null).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(send(&app, Method::POST, "/", &[("sec-fetch-site", "same-site")]).await.0, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn a_description_keeps_every_value_of_a_header_it_sets() {
+    fn page(_: &Failure, _: bool) -> Response {
+        let mut res = Response::new(Body::from("gone"));
+        res.headers_mut().append(header::SET_COOKIE, HeaderValue::from_static("a=1"));
+        res.headers_mut().append(header::SET_COOKIE, HeaderValue::from_static("b=2"));
+        res
+    }
+    let app = Stages::new().with(Errors::with(page)).serve(Router::new().route("/", get(|| async { "home" })));
+    let (status, headers, _) = send(&app, Method::POST, "/", &[]).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    let cookies: Vec<_> = headers.get_all(header::SET_COOKIE).iter().map(|v| v.to_str().unwrap()).collect();
+    assert_eq!(cookies, ["a=1", "b=2"]);
+    assert_eq!(headers.get(header::ALLOW).unwrap(), "GET, HEAD", "the failure's own headers stay");
+}
+
+#[tokio::test]
+async fn a_body_over_the_limit_is_413() {
+    let app = Stages::api()
+        .serve(Router::new().route("/upload", pipeline::post(|bytes: Bytes| async move { bytes.len().to_string() })));
+    let mut req = Request::new(Body::from(vec![0u8; pipeline::handler::BODY_LIMIT + 1]));
+    *req.method_mut() = Method::POST;
+    *req.uri_mut() = "/upload".parse().unwrap();
+    assert_eq!(app.call(req, ()).await.status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn a_streamed_answers_signal_aborts_when_its_last_byte_is_read() {
+    use pipeline::stages::Abort;
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(None::<Signal>));
+    let keep = seen.clone();
+    let app = Stages::new().with(Cancel).serve(Router::new().route(
+        "/",
+        get(move |signal: Signal| {
+            *keep.lock().unwrap() = Some(signal);
+            async { Response::new(Body::stream(http_body_util::StreamBody::new(futures_stream()))) }
+        }),
+    ));
+    let mut req = Request::new(Body::empty());
+    *req.uri_mut() = "/".parse().unwrap();
+    let res = app.call(req, ()).await;
+    let signal = seen.lock().unwrap().clone().unwrap();
+    assert_eq!(signal.reason(), None, "sent only once the body is");
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(bytes, "ab");
+    assert_eq!(signal.reason(), Some(Abort::Responded));
+}
+
+fn futures_stream() -> impl futures_util::Stream<Item = Result<http_body::Frame<Bytes>, std::io::Error>> {
+    futures_util::stream::iter([
+        Ok(http_body::Frame::data(Bytes::from_static(b"a"))),
+        Ok(http_body::Frame::data(Bytes::from_static(b"b"))),
+    ])
+}
+
+#[tokio::test]
+async fn the_cache_default_leaves_an_answers_own_cache_control_alone() {
+    async fn public() -> Response {
+        let mut res = Response::new(Body::from("kept"));
+        res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=60"));
+        res
+    }
+    let app = Stages::api().serve(Router::new().route("/public", get(public)).route("/private", get(|| async { "mine" })));
+    let (status, headers, _) = send(&app, Method::GET, "/public", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get_all(header::CACHE_CONTROL).iter().collect::<Vec<_>>(), ["public, max-age=60"]);
+    let (_, headers, _) = send(&app, Method::GET, "/private", &[]).await;
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "private, no-cache");
 }

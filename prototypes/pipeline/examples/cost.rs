@@ -54,6 +54,14 @@ async fn item(params: Params) -> Result<Response, pipeline::Failure> {
     Ok(json(item_json(id)))
 }
 
+/// The same handler, waiting once before it answers, as a handler that reads a database does:
+/// its first poll is pending, so a stage that waits beside it (the deadline's timer) is made.
+async fn item_waits(params: Params) -> Result<Response, pipeline::Failure> {
+    let id: u32 = params.parse("id")?;
+    tokio::task::yield_now().await;
+    Ok(json(item_json(id)))
+}
+
 /// The same handler, reading the request's signal from the typed context.
 async fn item_with_signal(params: Params, signal: Signal) -> Result<Response, pipeline::Failure> {
     let id: u32 = params.parse("id")?;
@@ -102,6 +110,10 @@ fn routes<Cx: Send + Sync + 'static>() -> Router<Cx> {
     Router::new().route("/api/items/{id}", get(item))
 }
 
+fn routes_waiting<Cx: Send + Sync + 'static>() -> Router<Cx> {
+    Router::new().route("/api/items/{id}", get(item_waits))
+}
+
 fn axum_router() -> axum::Router {
     async fn item(axum::extract::Path(id): axum::extract::Path<u32>) -> impl axum::response::IntoResponse {
         ([(header::CONTENT_TYPE, HeaderValue::from_static("application/json"))], item_json(id))
@@ -141,6 +153,42 @@ async fn run_tower(router: axum::Router, n: usize) {
     }
 }
 
+/// The request over a socket: one keep-alive connection on loopback, one request at a time, the
+/// client in the same process. Its count is the whole server's work for a request (hyper reading
+/// and writing it, the pipeline, the handler) and the client's, which is the same for every
+/// variant. User instructions only; the kernel's side of each read and write is not counted.
+async fn run_socket(addr: std::net::SocketAddr, n: usize) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    const REQUEST: &[u8] = b"GET /api/items/7 HTTP/1.1\r\nhost: localhost:3000\r\n\r\n";
+    let mut tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tcp.set_nodelay(true).unwrap();
+    let mut buf = Vec::with_capacity(4096);
+    for _ in 0..n {
+        tcp.write_all(REQUEST).await.unwrap();
+        buf.clear();
+        // The client's own work is the same for every variant, however long the answer's head:
+        // it reads until the bytes end with the item, then checks the status line.
+        while !buf.ends_with(EXPECTED) {
+            assert!(tcp.read_buf(&mut buf).await.unwrap() > 0, "closed: {:?}", String::from_utf8_lossy(&buf));
+        }
+        assert!(buf.starts_with(b"HTTP/1.1 200 OK\r\n"), "{:?}", String::from_utf8_lossy(&buf));
+    }
+}
+
+async fn socket_prototype<E: Endpoint<()>>(app: E, n: usize) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(pipeline::server::serve(listener, app));
+    run_socket(addr, n).await;
+}
+
+async fn socket_axum(router: axum::Router, n: usize) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, router).await });
+    run_socket(addr, n).await;
+}
+
 const DEADLINE: Duration = Duration::from_secs(30);
 
 fn main() {
@@ -164,6 +212,14 @@ fn main() {
             "errors" => run_prototype(Stages::new().with(Errors::json()).serve(routes()), n).await,
             // Every default, Corten's order.
             "api" => run_prototype(Stages::api().serve(routes()), n).await,
+            // A handler that waits once: the router alone, the cancel stage, cancel and the
+            // deadline (whose timer is made only now), and every default.
+            "router-wait" => run_prototype(routes_waiting(), n).await,
+            "cancel-wait" => run_prototype(Stages::new().with(Cancel).serve(routes_waiting()), n).await,
+            "deadline-wait" => {
+                run_prototype(Stages::new().with(Cancel).with(Deadline::new(DEADLINE)).serve(routes_waiting()), n).await
+            }
+            "api-wait" => run_prototype(Stages::api().serve(routes_waiting()), n).await,
             "secure-presized" => {
                 let routes = Router::new().route("/api/items/{id}", get(item_presized));
                 run_prototype(Stages::new().with(Secure::api()).serve(routes), n).await
@@ -189,6 +245,13 @@ fn main() {
             // The same request elsewhere.
             "axum" => run_tower(axum_router(), n).await,
             "corten" => run_tower(corten_router(), n).await,
+            // Over a socket: the prototype on its accept loop, axum and Corten's router on
+            // axum's (Corten's own loop adds its connection limits and timeouts, not counted).
+            "socket-raw" => socket_prototype(Raw, n).await,
+            "socket-router" => socket_prototype(routes(), n).await,
+            "socket-api" => socket_prototype(Stages::api().serve(routes()), n).await,
+            "socket-axum" => socket_axum(axum_router(), n).await,
+            "socket-corten" => socket_axum(corten_router(), n).await,
             // The size of one request's future through each stack, in bytes.
             "sizes" => {
                 fn size<E: Endpoint<()>>(name: &str, app: &E) {
@@ -201,15 +264,9 @@ fn main() {
                 size("api", &Stages::api().serve(routes()));
                 let on_route: Router<()> = Router::new().route("/api/items/{id}", get(Stages::api().serve(handler(item))));
                 size("api-on-route (outer)", &on_route);
+                let params = Params::probe("/api/items/7");
                 let handler_alone = handler(item);
-                let mut req = request();
-                let params = {
-                    let probe: Router<()> = Router::new();
-                    let _ = probe;
-                    req.headers_mut();
-                    Params::probe("/api/items/7")
-                };
-                let answer = Endpoint::<(Params, ())>::call(&handler_alone, req, (params.clone(), ()));
+                let answer = Endpoint::<(Params, ())>::call(&handler_alone, request(), (params.clone(), ()));
                 println!("handler\t{}", std::mem::size_of_val(&answer));
                 let stacked = Stages::api().serve(handler(item));
                 let answer = Endpoint::<(Params, ())>::call(&stacked, request(), (params, ()));

@@ -25,6 +25,8 @@ pin-project-lite = "0.2"
 serde = { version = "1", default-features = false, features = ["std"] }
 serde_json = "1"
 tokio = { version = "1", default-features = false, features = ["net", "rt", "sync", "time", "macros"] }
+# Already in Corten's tree: failures and refusals are logged.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Only for examples/cost.rs, which measures the same request through Corten today and axum alone.
@@ -33,6 +35,8 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 tower = { version = "0.5", features = ["util"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["rt", "macros", "time", "test-util", "io-util", "net"] }
+# A stream for the tests' streamed answer.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [profile.release]
 opt-level = 3
