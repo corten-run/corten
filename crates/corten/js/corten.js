@@ -399,7 +399,12 @@ function closestRef(el, owner, name, event) {
  * @returns {(args: Record<string, string | number>) => string}
  */
 function message(parts) {
-  return (args) => parts.map((part, i) => (i % 2 ? String(args[part]) : part)).join("");
+  // `parts` alternates text and names and starts and ends with text, so each read is in range.
+  return (args) => {
+    let text = /** @type {string} */ (parts[0]);
+    for (let i = 1; i < parts.length; i += 2) text += String(args[/** @type {string} */ (parts[i])]) + parts[i + 1];
+    return text;
+  };
 }
 
 /**
@@ -574,9 +579,11 @@ function scan(root, names, inside = false) {
   }
   // Rows cloned from one template carry the same refs, so a name is added once per run of them.
   if (!(inside && fewRefNames(root, names))) {
+    // Indexed, as it was: this runs for every element a change adds (rows a view makes too).
+    const refs = root.querySelectorAll("[data-ref]");
     let last = null;
-    for (const el of root.querySelectorAll("[data-ref]")) {
-      const ref = attrOf(el, "data-ref");
+    for (let i = 0; i < refs.length; i += 1) {
+      const ref = attrOf(/** @type {Element} */ (refs[i]), "data-ref");
       if (ref !== last && ref !== null) names.add(ref.slice(ref.indexOf("/") + 1));
       last = ref;
     }

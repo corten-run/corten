@@ -105,8 +105,8 @@ function number(spec, at, int, frac) {
   }
   body = digits(spec.z, body);
   if (frac) body += decimal + digits(spec.z, frac);
-  const t = /** @type {NonNullable<Spec["t"]>} */ (spec.t);
-  return (t[at] ?? t[0]).replace("\u0001", () => body);
+  // The server writes a template for each `at` it asks for.
+  return /** @type {string} */ (/** @type {NonNullable<Spec["t"]>} */ (spec.t)[at]).replace("\u0001", () => body);
 }
 
 /**
@@ -127,7 +127,13 @@ function plural(spec, table, forms) {
     const a = whole ? BigInt(count) * (String(count).startsWith("-") ? -1n : 1n) : 0n;
     const at = whole ? Number(table[a < 200n ? Number(a) : a % 1_000_000n === 0n ? 200 : 100 + Number(a % 100n)]) : 5;
     const parts = forms[at] ?? /** @type {string[]} */ (forms[5]);
-    return parts.map((name, i) => (i % 2 ? (name === "count" && Number.isFinite(n) && typeof count === "number" ? write(n) : String(args[name])) : name)).join("");
+    // Text and names alternating, text first and last, as a message's.
+    let text = /** @type {string} */ (parts[0]);
+    for (let i = 1; i < parts.length; i += 2) {
+      const name = /** @type {string} */ (parts[i]);
+      text += (name === "count" && Number.isFinite(n) && typeof count === "number" ? write(n) : String(args[name])) + parts[i + 1];
+    }
+    return text;
   };
 }
 
@@ -173,6 +179,7 @@ function zone(spec, offset, n) {
   if (!offset) return /** @type {string} */ (spec.u);
   const east = Math.abs(offset);
   const minutes = Math.floor((east % 3600) / 60);
-  const template = /** @type {string[]} */ (spec.g)[(minutes ? 2 : 0) + (offset < 0 ? 1 : 0)] ?? "";
+  // The server writes all four: whole hours and with minutes, east and west.
+  const template = /** @type {string} */ (/** @type {string[]} */ (spec.g)[(minutes ? 2 : 0) + (offset < 0 ? 1 : 0)]);
   return template.replace("\u0001", () => n(Math.floor(east / 3600))).replace("\u0003", () => n(minutes, 1));
 }

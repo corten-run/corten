@@ -707,7 +707,7 @@ else, and a handler that gets the list's parent (and the `<template>`, to make n
 
 | `rows()` | |
 |---|---|
-| `at(i)`, `get(key)`, `of(event.target)`, `indexOf(view)`, `length`, iteration | the views of the rows; `at`, `get` and `of` give none for a row that is not there (`at(-1)` is the last, as an array's) |
+| `at(i)`, `get(key)`, `of(event.target)`, `indexOf(view)`, `length`, iteration | the views of the rows; `at`, `get` and `of` give none for a row that is not there, and a negative `at` counts back from the last, as an array's (`at(-1)` is the last row, so the row before the first is `i > 0 ? list.at(i - 1) : undefined`) |
 | `push(items)`, `remove(view)`, `swap(i, j)`, `clear()` | change the rows; new ones are clones of the template's row, filled with their data |
 | `replace(items)` | shows exactly `items`: rows with a key it had keep their element and are filled again |
 

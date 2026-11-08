@@ -28,7 +28,10 @@ export function append(body, template) {
 /** @param {Holds<Row, HTMLTableSectionElement>} body */
 export function update(body) {
   const list = rows(body, Row);
-  for (let i = 0; i < list.length; i += 10) list.at(i).label += " !!!";
+  for (let i = 0; i < list.length; i += 10) {
+    const row = list.at(i);
+    if (row) row.label += " !!!";
+  }
 }
 
 /** @param {Holds<Row, HTMLTableSectionElement>} body */
@@ -44,13 +47,17 @@ export function clear(body) {
 /** @param {Holds<Row, HTMLTableSectionElement>} body */
 export function patch1(body) {
   const list = rows(body, Row);
-  list.at(list.length >> 1).label += " *";
+  const row = list.at(list.length >> 1);
+  if (row) row.label += " *";
 }
 
 /** @param {Holds<Row, HTMLTableSectionElement>} body */
 export function patch100(body) {
   const list = rows(body, Row);
-  for (const i of patched(list.length)) list.at(i).label += " *";
+  for (const i of patched(list.length)) {
+    const row = list.at(i);
+    if (row) row.label += " *";
+  }
 }
 
 /**

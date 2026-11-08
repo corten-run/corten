@@ -163,7 +163,7 @@ export function branch(host, template, plain) {
   view(host, Other, template);
 }
 
-// The checks beyond strict (docs/guide/scripts.md, What tsc checks).
+// The checks beyond strict (docs/guide/scripts.md, What the compiler checks).
 /** @param {string[]} names @param {Record<string, number>} counts @param {"a" | "b"} kind */
 export function beyondStrict(names, counts, kind) {
   const [first] = names;

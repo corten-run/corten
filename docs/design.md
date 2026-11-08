@@ -1096,44 +1096,54 @@ rules something out.
 
 32. <a id="choice-script-checks"></a>**Scripts are type-checked with `strict`, `noUncheckedIndexedAccess` and
     `noFallthroughCasesInSwitch`, not `exactOptionalPropertyTypes`.** `strict` is not every
-    check `tsc` has, and the ones it leaves out were tried on the runtime, the kit, the
-    examples, the template and the typing fixture before any was turned on.
+    check `tsc` has, and the ones it leaves out were each tried alone on the runtime, the kit,
+    the examples, the template and the typing fixture before any was turned on.
     `noUncheckedIndexedAccess` makes an element read from an array, or a value from a record, by
-    index `T | undefined` until the code checks it: it found 76 such reads, two of them bugs (the
+    index `T | undefined` until the code checks it. It found 76 such reads, two of them bugs: the
     kit's `ComboBox` with no options threw on Enter after Arrow Down, and `rows(..).at(i)` past
-    the end gave a view of no row, now `undefined` as an array's `at()` is). The other 74 were
-    reads a loop's bound or a length check already kept in range; they were rewritten to loops
-    that need no index (`for .. of`, `map`, destructuring) or given a check, except the loops
-    over rows in `view.js`, a client operation's hot path, which keep the shape they had and
-    cast what they read (below: the rewrite was slower), so their minified code is what it was.
-    The runtime's minified build (gzip, level 9): `corten.js` 14,836 to 14,820 bytes,
-    `format.js` 1,494 to 1,493, and `view.js` 2,149 to 2,162, the 13 bytes `at()`'s check
-    of the ends. `noFallthroughCasesInSwitch` found
-    nothing and costs nothing; a case that runs into the next one is a mistake the compiler can
-    see. An app and the repository are checked the same way: `corten check` writes the app's
-    config with the options of the repository's `jsconfig.json`, and a test fails when they
-    differ.
-    Not chosen: `exactOptionalPropertyTypes` (5 errors, none a bug: each was a property set to
-    `undefined`, which a DOM option object such as `addEventListener`'s `{ signal }` takes as
-    left out, as Web IDL says, and which JSON leaves out, so the check refuses code that works);
-    `noPropertyAccessFromIndexSignature` (48 errors, all `el.dataset.value` to be written
-    `el.dataset["value"]`, a style that catches nothing a record's `T | undefined` does not);
-    `noImplicitReturns` (3, all functions meant to give `undefined` on one path, which
-    `strict` already makes each caller handle); `noImplicitOverride` (no class overrides
-    anything).
+    the end gave a view of no row (it is now `undefined` there, as an array's `at()` is,
+    negative indexes counting back from the last as they do there). The other 74 were reads a
+    loop's bound, a length check or the server's own data kept in range. Outside the runtime's
+    hot loops they were rewritten to need no index (`for .. of`, destructuring) or given a
+    check; inside them (`view.js`'s loops over rows, `scan`'s over the refs a change adds, a
+    message's parts, the templates the server writes for a format) they keep the loop they had
+    and cast what they read, with a comment saying what keeps it in range, since `rows()` with
+    those loops rewritten timed slower (below) and a cast costs nothing once minified. The
+    runtime's minified build (gzip, level 9): `corten.js` 14,836 to 14,842 bytes, `format.js`
+    1,494 to 1,498, and `view.js` 2,149 to 2,161, most of it `at()`'s check of the ends.
+    `noFallthroughCasesInSwitch` found nothing and costs nothing; a case that runs into the next
+    one is a mistake the compiler can see. An app, the repository and the browser benchmark's
+    view apps are checked the same way: `corten check` writes the app's config with the options
+    of the repository's `jsconfig.json`, and a test fails when any of the three differ.
+    Not chosen: `exactOptionalPropertyTypes`, which tells a property left out from one set to
+    `undefined` (5 errors, none a bug: two were `addEventListener`'s `{ signal }` with
+    `signal` possibly `undefined`, which Web IDL reads as left out, and three were Corten's own
+    option types, which would need `| undefined` written on each property; the difference it
+    checks is one neither a DOM option object nor JSON makes, so it costs annotations and
+    catches nothing here); `noPropertyAccessFromIndexSignature` (48 errors, reads such as
+    `el.dataset.value` to be written `el.dataset["value"]`, a style that catches nothing a
+    record's `T | undefined` does not); `noImplicitReturns` (3, all functions meant to give
+    `undefined` on one path, which `strict` already makes each caller handle);
+    `noImplicitOverride` (no class overrides anything).
 
     Stands on: measured (`tsc` 5.9.3 with each option alone over `jsconfig.json`'s files on
-    `c65c10ec`, the counts above, and the minified sizes before and after); measured
-    (Chromium through Playwright 1.64.1 on a busy Windows workstation, rows() with 1,000 and 4,000 rows, paired medians of 41 samples taking turns with main's view.js: with its loops rewritten not to index (`forEach`, `reduceRight`), keeping some rows and making the rest was 4.3% to 13.7% slower at 1,000 rows in seven of seven runs, where main against itself was -3.0% to 4.7%); platform (Web IDL converts a dictionary member that is `undefined` as one that
-    is not present, and `JSON.stringify` leaves out a property whose value is `undefined`);
-    reasoned (a read past the end the checker cannot see is a `TypeError` far from the read, as
-    the `ComboBox`'s was); value (Mistakes fail at compile time, Values 4, after the user's
-    speed, Values 1, which is why `view.js` casts instead).
+    `c65c10ec`, the counts above, and the minified sizes before and after); measured (Chromium
+    through Playwright 1.64.1 on a busy Windows workstation, `bench/browser/rows-ab.mjs`,
+    `rows()` with 1,000 rows, paired medians of 41 samples taking turns with `c65c10ec`'s
+    `view.js`: with its loops rewritten not to index, keeping some rows and making the rest was
+    4.3% to 13.7% slower in seven of seven runs, where `c65c10ec` against itself was -3.0% to
+    4.7%; the noise is too large to say what the cast loops cost, which minify to the code they
+    were); platform (Web IDL converts a dictionary member that is `undefined` as one that is not
+    present, and `JSON.stringify` leaves out a property whose value is `undefined`); reasoned (a
+    read past the end the checker cannot see is a `TypeError` far from the read, as the
+    `ComboBox`'s was); value (Mistakes fail at compile time, Values 4, after the user's speed,
+    Values 1, which is why the hot loops cast instead).
 
     Revisit when: lib.dom's option dictionaries accept `undefined` under
-    `exactOptionalPropertyTypes` (the reason against it would be gone), a TypeScript release adds a
-    check that `strict` leaves out, or a timing on a quiet host shows `view.js`'s loops
-    rewritten not to index cost nothing (its casts could then go).
+    `exactOptionalPropertyTypes` and a script of Corten's comes to tell a property left out from
+    one set to `undefined`, a TypeScript release adds a check that `strict` leaves out, or a
+    timing on a quiet host shows the hot loops rewritten not to index cost nothing (their casts
+    could then go).
 
     Last checked: 2026-11-08, TypeScript 5.9.3 on `c65c10ec` and the change, and the timings in
     Chromium (Playwright 1.64.1).

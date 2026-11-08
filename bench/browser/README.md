@@ -37,6 +37,7 @@ node build.mjs          # out/<app>/: index.html and app.js, and sizes (runs gen
 node list-check.mjs     # list() against 3,000 random edits in a real DOM
 node view-check.mjs     # rows() (corten/views) against 3,000 random edits, some made without it
 node rows-cost.mjs      # what rows() costs: removing rows by key, push then get, replace
+node rows-ab.mjs <a.js> <b.js>  # two builds of view.js taking turns, for a few percent on a busy machine
 node patch-cost.mjs     # what a patch of rows with a menu, or a form, on each costs
 node run.mjs            # client operations, memory and load (two rounds, in alternating order)
 node ssr.mjs            # 1,000 server-rendered rows: take over, then interact

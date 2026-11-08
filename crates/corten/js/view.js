@@ -343,7 +343,7 @@ export function rows(parent, View, template) {
         parent.textContent = "";
         add(items, next, 0, null);
       } else {
-        for (const j of where.values()) els[j]?.remove();
+        for (const j of where.values()) /** @type {Element} */ (els[j]).remove();
         // Elements on the longest run already in order stay; the rest move or are made.
         const stay = lis(from);
         let s = stay.length - 1;
