@@ -164,6 +164,9 @@ corten-live[status="reconnecting"]::before { content: "Reconnecting"; }
 corten-live[status="closed"] .reload { display: inline; }
 ```
 
+The UI kit's `LiveDot` reads the same attribute: a badge's dot inside the element pulses only while
+it is `live` ([kit](kit.md)).
+
 Each change of `status` also dispatches a bubbling `corten-status` event on the element, for a
 script that writes text CSS cannot ("Stale since 10:42", in the user's time zone). A handler
 takes it like any other and reads the attributes, which hold the state:

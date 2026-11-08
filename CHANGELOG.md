@@ -2537,6 +2537,15 @@ Corten is pre-1.0, so any minor version may change the API.
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
 
+277. The kit's `status_dot` has `LiveDot { tone }`, the dot of a live view's badge: its opacity
+    pulses while the stream is live, so a glance tells a live view from a frozen one. Inside a
+    `<corten-live>` it follows the element's `status`, pulsing only while it is `live` and still
+    while it connects, reconnects or has closed or ended; outside one it always pulses. It is
+    still under `prefers-reduced-motion: reduce` and forced colors, and the words beside it name
+    the state. `StatusDot` is unchanged, and its doc test no longer names a class that a live form
+    could have. MEASUREMENT The ui-gallery's orders page has a Live badge
+    ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
