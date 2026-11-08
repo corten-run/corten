@@ -1352,8 +1352,8 @@ Under the prefix:
    `FromJson` (item 8) with the value and the rejections axum's `Json` gives: Corten's reader takes
    an `application/json` body, and axum (`serde_json`) any other JSON content type and any body
    the reader gives up on. What it writes is a `ToJson`: derive it
-   (`#[derive(ToJson)]`, also in the prelude) on the response type, next to `Serialize` if other
-   surfaces read it too. The derive lays the JSON out when the crate compiles, so a response
+   (`#[derive(ToJson)]`, also in the prelude) on the response type; it needs no `Serialize`, which
+   only code of the app's that writes it with serde does (an agent tool's output is a `ToJson` too). The derive lays the JSON out when the crate compiles, so a response
    copies one byte string between each pair of values instead of writing every key, quote and
    comma, into a `Vec` sized from the type's last response that the body keeps. It reads
    `#[serde(...)]` and writes the bytes `serde_json` would. A `#[serde(flatten)]` field whose type
@@ -1393,7 +1393,7 @@ test reads the contract the handlers enforce, not a copy beside them:
 ```rust
 use corten::prelude::*;
 
-#[derive(serde::Serialize, ToJson)]
+#[derive(ToJson)]
 struct Price { lowest: String }
 
 #[corten::routes(api = ApiRoot, openapi = ApiDoc)]

@@ -4090,6 +4090,18 @@ Corten is pre-1.0, so any minor version may change the API.
     through serde_json alone, before and after (callgrind, release build, `read_cost` in
     `examples/card-market`, two runs each)
     ([#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
+173. An agent tool's output (`Tools::tool`, `idempotent_tool`, `read_tool`) is a `ToJson` and
+    is written by it, so it derives `ToJson` alone, as every other JSON answer does, where it
+    needed serde's `Serialize` beside it. The answer is the same JSON, and an `items.get` call
+    in `examples/card-market` costs a fifth fewer instructions: 211,736 and 210,459 a call,
+    against 265,961 and 268,013 (callgrind, release build, `tool_cost`, 1,200 calls less 200
+    over 1,000, two runs each). No data-role attribute is added beside `ToJson` and
+    `FromJson`, which already name each type's direction (design Choice 34). **Breaking:** an
+    output that implements `Serialize` and `ToJsonSchema` by hand and not `ToJson` no longer
+    compiles as one; implement `ToJson` (or derive it). A field whose own `Serialize` fails (a map
+    with a key JSON cannot hold, inside another crate's type) now panics, as in any `ToJson`
+    answer, where the call answered an internal error
+    ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 
 ### Fixed
 - The fixed favicon keeps its weak content tag when background compression finishes, so a

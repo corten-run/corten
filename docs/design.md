@@ -1104,6 +1104,40 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
+34. <a id="choice-json-derives"></a>**A type's JSON role is the derive that names its direction, `ToJson` to write and
+    `FromJson` to read, not a data-role attribute.** Each derive is already the one thing a type
+    declares for its direction: `ToJson` lays out the JSON a response, a screen's data, a typed
+    script argument or an agent tool's output writes, and its schema (feature `types`);
+    `FromJson` reads it, with its `Deserialize` ([Choice 26](#choice-derived-deserialize)).
+    An attribute such as `#[corten::data(write)]` would spell the same derive another way: it
+    takes no line off a type, and two spellings of one thing is what Values 5 and 6 rule out.
+    The direction stays in the type's own declaration, so nothing is written because it appears
+    in a handler's signature, and no type of another module or crate is exposed by it. The one
+    pair a JSON type still needed, `Serialize` beside `ToJson` on an agent tool's output, goes
+    by bounding tool outputs on `ToJson`, so a tool's output is written by the code every other
+    response is:
+
+    ```rust,ignore
+    // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
+    #[derive(serde::Serialize, corten::ToJson)]
+    struct Adjusted { id: String, quantity: i64 }
+    // After, and not chosen beside it: #[corten::data(write)] struct Adjusted { .. }
+    #[derive(corten::ToJson)]
+    struct Adjusted { id: String, quantity: i64 }
+    ```
+
+    Not chosen: the attribute, a synonym; an attribute that derives both directions, since a type
+    read from a service and one written to a client are seldom the same, and one that is derives
+    both
+    ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
+
+    Stands on: reasoned (one declaration per direction, Values 4, 5 and 6); measured (callgrind, release build, card-market's `tool_cost`: an agent's `items.get` call through `/mcp`, 1,200 calls less 200 over 1,000, two runs each, costs 265,961 and 268,013 instructions on `a791d9ba` and 211,736 and 210,459 with outputs written by `ToJson`, the same 16,800-byte answers).
+
+    Revisit when: a direction needs more than its derive, two impls a type must keep in step that
+    one derive cannot write, as `FromJson` and `Deserialize` were before Choice 26 covered it.
+
+    Last checked: 2026-11-08, the derives and the agent endpoint's bounds.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

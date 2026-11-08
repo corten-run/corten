@@ -12,7 +12,7 @@
 //! use corten::agent::Tools;
 //! #[derive(serde::Deserialize)]
 //! struct Adjust { id: String }
-//! #[derive(serde::Serialize, corten::ToJson)]
+//! #[derive(corten::ToJson)]
 //! struct Done { ok: bool }
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
@@ -23,7 +23,7 @@
 //! use corten::agent::Tools;
 //! #[derive(corten::FromJson)]
 //! struct Adjust { id: String }
-//! #[derive(serde::Serialize, corten::ToJson)]
+//! #[derive(corten::ToJson)]
 //! struct Done { ok: bool }
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
@@ -51,9 +51,20 @@
 //!
 //! A screen's data is already available to agents through [`crate::Req::screen`]; tools cover
 //! the writes. Results go back as `structuredContent` and as the same JSON in a text block, for
-//! clients that only read text. The output is serialized once and written into the response as
-//! is, so a tool returning a large borrowed value (`Arc<T>` with serde's `rc` feature) costs one
-//! serialization and no copy.
+//! clients that only read text. The output is written once, by its `ToJson` (the same JSON
+//! serde's `Serialize` writes, laid out when the crate compiles), into the response as is, so a
+//! tool returning a large shared value (`Arc<T>`) costs one write and no copy. An output needs
+//! `ToJson` and no `Serialize`; one that only derives `Serialize` has no schema and is not
+//! written by Corten, so it does not compile as one:
+//!
+//! ```compile_fail,E0277
+//! use corten::agent::Tools;
+//! #[derive(corten::FromJson)]
+//! struct Adjust { id: String }
+//! #[derive(serde::Serialize)]
+//! struct Done { ok: bool }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
 
 use std::{
     collections::BTreeMap,
@@ -68,10 +79,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-use crate::json::schema::{FromJsonSchema, Generator, ToJsonSchema};
+use crate::json::{
+    schema::{FromJsonSchema, Generator, ToJsonSchema},
+    ToJson,
+};
 
 /// Protocol revisions this server speaks, newest first.
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
@@ -464,7 +478,7 @@ impl<A: Send + 'static> Tools<A> {
     pub fn tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
         I: DeserializeOwned + FromJsonSchema + Send + 'static,
-        O: Serialize + ToJsonSchema + 'static,
+        O: ToJson + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
@@ -477,7 +491,7 @@ impl<A: Send + 'static> Tools<A> {
     pub fn idempotent_tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
         I: DeserializeOwned + FromJsonSchema + Send + 'static,
-        O: Serialize + ToJsonSchema + 'static,
+        O: ToJson + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
@@ -488,7 +502,7 @@ impl<A: Send + 'static> Tools<A> {
     pub fn read_tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
         I: DeserializeOwned + FromJsonSchema + Send + 'static,
-        O: Serialize + ToJsonSchema + 'static,
+        O: ToJson + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
@@ -498,7 +512,7 @@ impl<A: Send + 'static> Tools<A> {
     fn add<I, O, F, Fut>(mut self, name: &str, description: &str, read_only: bool, idempotent: bool, handler: F) -> Self
     where
         I: DeserializeOwned + FromJsonSchema + Send + 'static,
-        O: Serialize + ToJsonSchema + 'static,
+        O: ToJson + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
     {
@@ -520,8 +534,7 @@ impl<A: Send + 'static> Tools<A> {
             let handler = handler.clone();
             Box::pin(async move {
                 let input: I = serde_json::from_value(args)?;
-                let output = handler(caller, input).await?;
-                serde_json::to_string(&output).map_err(ToolError::internal)
+                Ok(handler(caller, input).await?.to_json())
             })
         });
         let tools = Arc::get_mut(&mut self.tools).expect("add tools before serving");
@@ -794,7 +807,7 @@ mod tests {
         note: Option<String>,
     }
 
-    #[derive(Serialize, crate::json::ToJson)]
+    #[derive(crate::json::ToJson)]
     struct Adjusted {
         id: String,
         quantity: i64,
@@ -815,7 +828,7 @@ mod tests {
         assert!(matches!(refused(crate::Refusal::Upstream, "no answer"), ToolError::Upstream(m) if m == "no answer"));
     }
 
-    #[derive(Serialize, crate::json::ToJson)]
+    #[derive(crate::json::ToJson)]
     struct Pong {
         pong: bool,
     }
@@ -1261,7 +1274,7 @@ mod tests {
         submit: Option<crate::SubmitKey>,
     }
 
-    #[derive(Serialize, crate::json::ToJson)]
+    #[derive(crate::json::ToJson)]
     struct Placed {
         key: String,
     }

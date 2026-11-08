@@ -484,7 +484,7 @@ pub(crate) struct CreateAlert {
     target_price: String,
 }
 
-#[derive(Serialize, ToJson)]
+#[derive(ToJson)]
 pub(crate) struct AlertSet {
     message: String,
     /// The partner the alert was set for, when a partner set it; agents do not have one.
@@ -535,7 +535,7 @@ fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
                 let source = read_source.clone();
                 async move {
                     let item = source.item(&input.id).await.map_err(ToolError::internal)?;
-                    // The cached item, serialized where it is: no copy.
+                    // The cached item, written where it is: no copy.
                     item.ok_or_else(|| ToolError::Invalid(format!("no item {}", input.id)))
                 }
             },
@@ -931,6 +931,43 @@ mod tests {
         let responses: Vec<&str> = (1..=500).map(|n| raw[&format!("item_{n}")].get()).collect();
         let serde = std::env::var("READ_WITH").is_ok_and(|w| w == "serde");
         assert_eq!(read_all(&responses, serde), responses.len());
+    }
+
+    /// What an agent's `items.get` call costs, for callgrind: `TOOL_CALLS` calls through `/mcp`,
+    /// one item after another from the fixture, each answered with the item as written by its
+    /// `ToJson`. Build with `cargo test --release -p card-market --no-run`, then run the binary
+    /// twice, `CORTEN_FIXTURE=/path/items.json TOOL_CALLS=200` and `=1200`, under
+    /// `valgrind --tool=callgrind <test binary> --ignored --exact app::tests::tool_cost`: the
+    /// difference over 1,000 is one call, without startup and setup.
+    #[tokio::test]
+    #[ignore]
+    async fn tool_cost() {
+        use corten::{answer::Body, http::Request};
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
+        let source = Source::fixture(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let router = super::app_with(source, Keys { partners: Partners::parse(""), agents: "t" }, WRITES_PER_MINUTE).router();
+        let calls: usize = std::env::var("TOOL_CALLS").expect("TOOL_CALLS").parse().unwrap();
+        let bodies: Vec<String> = (1..=500)
+            .map(|n| {
+                json!({ "jsonrpc": "2.0", "id": n, "method": "tools/call", "params": { "name": "items.get", "arguments": { "id": format!("item_{n}") } } })
+                    .to_string()
+            })
+            .collect();
+        let mut bytes = 0;
+        for body in bodies.iter().cycle().take(calls) {
+            let req = Request::post(mcp::Mcp::PATH)
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .header("authorization", "Bearer t")
+                .body(Body::from(body.clone()))
+                .unwrap();
+            let res = router.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            bytes += std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes()).len();
+        }
+        println!("{calls} calls, {} bytes avg", bytes / calls);
     }
 
     #[tokio::test]

@@ -230,8 +230,9 @@ audience with `authorization.resource()`; a token missing a scope is
 
 `Json` is the prelude's `corten::Json`: axum's extractor, and a response written in one buffer
 (faster than `axum::Json`; keep the prelude's unless a crate hands you axum's). The response type
-derives `ToJson` next to `Serialize` (`#[derive(Serialize, ToJson)] struct Price ..`); it reads the
-same `#[serde(...)]` attributes, and one it cannot write as serde does is a compile error.
+derives `ToJson` (`#[derive(ToJson)] struct Price ..`; `Serialize` only if the app's own code also
+writes it with serde, and an agent tool's output needs none); it reads the same `#[serde(...)]`
+attributes, and one it cannot write as serde does is a compile error.
 Every failure under the prefix is an RFC 9457 Problem Details document (`application/problem+json`,
 `{"title","status","detail"}`) whatever the client accepts;
 a 4xx message is sent, so write it for the client. Validation is `Errors` as the error. There
