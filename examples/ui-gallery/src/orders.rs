@@ -196,9 +196,62 @@ struct LabelPagesId;
 /// The most a seller may sell in a month, in cents, until they have 50 sales.
 const LIMIT_CENTS: u64 = 15_000;
 
-/// The seller's payouts, newest first, by the day each was asked for. The card shows one, paged by
-/// the one before and the one after it, as a list an API pages by cursor is.
-pub const PAYOUTS: [&str; 3] = ["Mar 21", "Mar 14", "Mar 7"];
+/// A payout: the day it was asked for and what happened to it, in order.
+pub struct Payout {
+    pub day: &'static str,
+    pub steps: [Step<'static>; 3],
+}
+
+/// The seller's payouts, newest first. The card shows one, paged by the one before and the one
+/// after it, as a list an API pages by cursor is. The newest was refused by the bank.
+pub const PAYOUTS: [&Payout; 3] = [&MAR_21, &MAR_14, &MAR_7];
+
+const MAR_21: Payout = Payout {
+    day: "Mar 21",
+    steps: [
+        Step { label: "Requested", description: Some("Mar 21, 9:00 AM"), link: None, state: StepState::Done("(done)") },
+        Step {
+            label: "Sent to the bank",
+            description: Some("Mar 21, 9:02 AM, reference PX-20431"),
+            link: None,
+            state: StepState::Done("(done)"),
+        },
+        Step {
+            label: "Paid",
+            description: Some("The bank refused the account number. Check it in Settings, then ask again."),
+            link: None,
+            state: StepState::Failed("(failed)"),
+        },
+    ],
+};
+
+const MAR_14: Payout = Payout {
+    day: "Mar 14",
+    steps: [
+        Step { label: "Requested", description: Some("Mar 14, 9:00 AM"), link: None, state: StepState::Done("(done)") },
+        Step {
+            label: "Sent to the bank",
+            description: Some("Mar 14, 9:01 AM, reference PX-20377"),
+            link: None,
+            state: StepState::Done("(done)"),
+        },
+        Step { label: "Paid", description: Some("Mar 16"), link: None, state: StepState::Done("(done)") },
+    ],
+};
+
+const MAR_7: Payout = Payout {
+    day: "Mar 7",
+    steps: [
+        Step { label: "Requested", description: Some("Mar 7, 9:00 AM"), link: None, state: StepState::Done("(done)") },
+        Step {
+            label: "Sent to the bank",
+            description: Some("Mar 7, 9:03 AM, reference PX-20318"),
+            link: None,
+            state: StepState::Done("(done)"),
+        },
+        Step { label: "Paid", description: Some("Mar 9"), link: None, state: StepState::Done("(done)") },
+    ],
+};
 
 /// The orders page: `page` counts from 1, `sort` is the table's order, `payout` is which of
 /// `PAYOUTS` the payouts card shows, and `photo` is the picture of a buyer who has one.
@@ -208,6 +261,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
     // one unless it shows the oldest. Each keeps the table's page and order, as the table's pages
     // keep the payout.
     let shown = Some(page).filter(|p| *p > 1);
+    let shown_payout = PAYOUTS[payout];
     let newer = (payout > 0).then(|| url::Orders { page: shown, sort, payout: Some(payout - 1).filter(|p| *p > 0) });
     let older = (payout + 1 < PAYOUTS.len()).then(|| url::Orders { page: shown, sort, payout: Some(payout + 1) });
     let f = SettingsForm::FIELDS;
@@ -451,33 +505,14 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                         </div>
                     </section>
                     <section class={Card {}}>
-                        <header class={CardHeader {}}><h2>"Payout of "{PAYOUTS[payout]}</h2></header>
+                        <header class={CardHeader {}}><h2>"Payout of "{shown_payout.day}</h2></header>
                         <div class={CardContent {}}>
                             // What happened to the payout, in order: each step's time or reason
                             // shown at every width, and a refused step told from a blocked one.
                             <Steps
                                 label="Payout"
                                 layout={StepsLayout::Timeline}
-                                steps={&[
-                                    Step {
-                                        label: "Requested",
-                                        description: Some("Mar 21, 9:00 AM"),
-                                        link: None,
-                                        state: StepState::Done("(done)"),
-                                    },
-                                    Step {
-                                        label: "Sent to the bank",
-                                        description: Some("Mar 21, 9:02 AM, reference PX-20431"),
-                                        link: None,
-                                        state: StepState::Done("(done)"),
-                                    },
-                                    Step {
-                                        label: "Paid",
-                                        description: Some("The bank refused the account number. Check it in Settings, then ask again."),
-                                        link: None,
-                                        state: StepState::Failed("(failed)"),
-                                    },
-                                ]}
+                                steps={&shown_payout.steps}
                             />
                         </div>
                         <footer class={CardFooter {}}>
