@@ -45,9 +45,9 @@ export function send(event, el, tables) {
  * pointer over it (before the runtime prefetches it), focus (before Enter follows it), a click, a
  * middle click and its menu ("Copy link", "Open in new tab"). A link to another origin or without
  * `href` is left. A component's links take it as a prop (the kit's `Pagination` and
- * `PreviousNext`, `on:link`), whose handler gets an `HTMLElement`, so that is what it takes;
- * the compiler no longer refuses another element, so one that is not a link (an `<a>` or
- * `<area>`), which has no address to keep, is reported in the console and left.
+ * `PreviousNext`, `on:link`), whose handler gets an `HTMLElement`, so that is what it takes.
+ * An element that is not a link (an `<a>` or `<area>`) has no address to keep: it is reported
+ * in the console and left.
  * @param {HTMLElement} a the link @param {ElementId[]} tables @param {AbortSignal} signal
  */
 export function link(a, tables, signal) {

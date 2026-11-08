@@ -826,6 +826,8 @@ async function run(browser) {
           `<a id="mid" href="/sales-back?src=3" ${linked(["sales-box"])}>Middle</a> ` +
           `<form id="far" method="get" action="https://example.com/far" ${on("submit", ["sales-box"])}><input type="hidden" name="sold" value="day"><button>Far</button></form>` +
           `<a id="away" href="/sales-back?sold=day" ${linked(["find"])}>Away</a> <a id="bare" ${linked(["sales-box"])}>Bare</a>` +
+          // An image map's link is a link too.
+          `<map name="sales-map"><area id="mapped" shape="rect" coords="0,0,10,10" href="/sales-back?src=4" alt="Mapped" ${linked(["sales-box"])}></map>` +
           // An element that is not a link, which the compiler cannot refuse to a pager's handler.
           `<span id="unlinked" ${linked(["sales-box"])}>Not a link</span>`;
         // The wrapper holds a table without sort links first: the sorted one is still found.
@@ -879,6 +881,11 @@ async function run(browser) {
     await outside.getByText("Middle", { exact: true }).click({ button: "middle" });
     const middle = (await seen()).slice(sortedSeen.length);
     const bare = await outside.evaluate(() => document.getElementById("bare")?.hasAttribute("href"));
+    const mapped = await outside.evaluate(() => {
+      const area = document.getElementById("mapped");
+      area?.dispatchEvent(new PointerEvent("pointerover"));
+      return area?.getAttribute("href");
+    });
     // Each submit above was cancelled: a GET form's listener ended with its submit's task, so a
     // list of its fields made later reads its hidden input as drawn.
     const later = await outside.evaluate(() => new FormData(/** @type {HTMLFormElement} */ (document.getElementById("source"))).get("sold"));
@@ -903,9 +910,10 @@ async function run(browser) {
             null,
           ]) &&
         bare === false &&
+        mapped === "/sales-back?src=4&sold=price" &&
         middle.length > 0 &&
         middle.every((to) => to === "/sales-back?src=3&sold=price"),
-      `${JSON.stringify(unsortedSeen)} ${JSON.stringify(sortedSeen)} bare href ${bare} middle ${JSON.stringify(middle)}`,
+      `${JSON.stringify(unsortedSeen)} ${JSON.stringify(sortedSeen)} bare href ${bare} area ${mapped} middle ${JSON.stringify(middle)}`,
     );
     // Drawn again after the sort (as a patch does), the form still sends the order, and the
     // browser goes there. (The runtime may have fetched a link above as a navigation.)
