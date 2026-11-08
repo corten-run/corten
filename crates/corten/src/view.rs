@@ -1966,7 +1966,8 @@ pub mod __private {
     #[diagnostic::on_unimplemented(
         message = "this value cannot be written in an attribute",
         label = "not text, a link, an id or an attribute value",
-        note = "an attribute takes text (a type that implements `Display`), a link (a typed route, `&dyn Href` or `Box<dyn Href>`), a `#[derive(Id)]` id, or a type that implements `AttrValue`"
+        note = "an attribute takes text (a type that implements `Display`), a link (a typed route, `&dyn Href` or `Box<dyn Href>`), a `#[derive(Id)]` id, or a type that implements `AttrValue`",
+        note = "an `Option` leaves the attribute out when it is `None`, and takes text (`&str`, `String`, a number), a `#[derive(UrlValue)]` enum or another `AttrValue`; for other `Display` text write `.map(|v| v.to_string())`"
     )]
     pub trait AttrText {
         fn __text(&self, name: &str, out: &mut String);
