@@ -11,6 +11,8 @@ categories = ["web-programming::http-server", "asynchronous"]
 
 [dependencies]
 corten-protocol.workspace = true
+# `#[derive(Row)]`, re-exported beside the trait; the macros crate has no dependencies.
+corten-macros.workspace = true
 # None of axum's features: the feed uses only its body, extractor and response types. Its
 # defaults here would turn `original-uri`, `form` and `query` back on for every app with a feed
 # (Cargo joins a crate's features across the build).

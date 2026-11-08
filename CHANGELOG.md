@@ -2551,6 +2551,16 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+282. `#[derive(Row)]` (`corten::feed::Row`, the derive and the trait at once): a feed row's key is
+    the field marked `#[row(id)]`, in place of the `impl Row` each row wrote by hand, so a renamed
+    key field moves the key with it. The row's `Clone` and `Serialize` stay in its derive list
+    (design Choice 32). A row with no field marked or two, an id that is not text (`String`,
+    `Box<str>`, `&'static str`, `Cow<'static, str>`), or an enum does not compile, and the
+    trait's `Send` and `Sync` still hold. The listings-feed, watchlist, seller-desk and
+    deck-builder rows take it; an `impl Row` written by hand still works. The feed sends the same
+    bytes (`tests/derived_row.rs` compares a snapshot and a replayed patch with a hand-written
+    row's), so nothing on the request path changed to measure
+    ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

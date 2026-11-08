@@ -317,9 +317,8 @@
 //! # mod app {
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String, qty: u32 }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String, qty: u32 }
 //!
 //! #[corten::routes(state = Feed<Level>)]
 //! pub mod url {

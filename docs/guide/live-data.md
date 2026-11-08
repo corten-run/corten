@@ -204,6 +204,69 @@ For scripts that keep state (a table of live prices, a grid), a `corten::feed::F
 (feature `feed`) holds keyed rows and serves a snapshot plus ordered patches; an `on:connect`
 handler calls `subscribe(feed, { snapshot, patch, status }, { signal })`.
 
+A row derives `Row` beside `Clone` and `Serialize`, and marks the field that keys it, the id
+its upserts and removes name: a `String` or another type that derefs to `str` (`Box<str>`,
+`&'static str`). The feed sends what `Serialize` writes, so `#[serde(..)]` on the row, the id
+included, changes the JSON and not the key. `Row` is the derive and the trait at once (`use
+corten::feed::Row`), and a row that is an enum, or keeps its key inside another field, implements
+it by hand.
+
+```rust
+# #[cfg(feature = "feed")]
+# mod rows {
+use corten::feed::Row;
+
+#[derive(Clone, serde::Serialize, Row)]
+pub struct Stock {
+    #[row(id)]
+    pub ticker: String,
+    pub price_cents: u32,
+}
+
+// By hand, for a row that is an enum.
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "kind")]
+pub enum Entry { Note { key: String, text: String }, Tag { key: String } }
+impl Row for Entry {
+    fn id(&self) -> &str {
+        match self {
+            Entry::Note { key, .. } | Entry::Tag { key } => key,
+        }
+    }
+}
+# }
+```
+
+A row with no field marked, two marked, an id that is not text, or an enum does not compile:
+
+```compile_fail
+#[derive(Clone, serde::Serialize, corten::feed::Row)]
+struct Stock { ticker: String, price_cents: u32 }
+```
+
+```compile_fail
+#[derive(Clone, serde::Serialize, corten::feed::Row)]
+struct Stock { #[row(id)] ticker: String, #[row(id)] isin: String }
+```
+
+```compile_fail,E0308
+#[derive(Clone, serde::Serialize, corten::feed::Row)]
+struct Stock { #[row(id)] number: u64 }
+```
+
+```compile_fail
+#[derive(Clone, serde::Serialize, corten::feed::Row)]
+enum Stock { Open { #[row(id)] ticker: String } }
+```
+
+The trait's bounds hold too: a row that is not `Clone`, `Send` and `Sync` (a `Cell` in it) does
+not compile.
+
+```compile_fail,E0277
+#[derive(Clone, serde::Serialize, corten::feed::Row)]
+struct Stock { #[row(id)] ticker: String, views: std::cell::Cell<u32> }
+```
+
 ```rust,ignore
 let stocks = Feed::new(rows);
 // in the routes module: each feed route names its rows

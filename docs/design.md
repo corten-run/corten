@@ -1094,6 +1094,31 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
+32. <a id="choice-derived-row"></a>**A feed row's key is the field marked `#[row(id)]`, which `#[derive(Row)]` reads; the
+    row's `Clone` and `Serialize` stay in its derive list.** The impl every row wrote by hand
+    (`fn id(&self) -> &str { &self.id }`) is one attribute on the field, so the key is named where
+    the field is and moves with it when it is renamed. The derive writes nothing else. A derive adds
+    impls, not other derives, and writing the row's `Serialize` itself would be a second
+    serializer beside serde's to keep in step, to save one word in a derive list; `Clone` is the
+    compiler's own derive. So a row still lists `Clone` and `Serialize` (and `ToJson` where a
+    script reads its type), and Rust checks each with the trait's `Send`, `Sync` and `'static`
+    bounds. Not chosen: an attribute macro (`#[corten::row(id = id)]`) that adds the derives to the
+    item, which hides standard derives behind a spelling of Corten's and names the field in an
+    argument rather than on it; taking a field named `id` without a mark, since a row's key is
+    better said (`sku`, `ticker`) than guessed. A row that is an enum, or keeps its key inside another
+    field, implements the trait by hand
+    ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
+
+    Stands on: reasoned (one declaration for the key, and no second way to derive `Clone` or
+    `Serialize`, Values 5 and 6); measured (nothing to measure: the impl is the one written by
+    hand and the feed's path is unchanged, which `crates/corten/tests/derived_row.rs` checks by
+    comparing a derived row's snapshot and replayed patch with a hand-written one's).
+
+    Revisit when: rows often need a key made from more than one field, which a mark on one field
+    cannot say.
+
+    Last checked: 2026-11-08, the derive and the rows of the four example apps, from `c65c10ec`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
