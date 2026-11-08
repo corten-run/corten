@@ -1231,7 +1231,7 @@ fn add_to(root: &Path, args: &[String], out: &mut dyn Write) -> Result<(), Strin
     }
     if !lacking.sizes.is_empty() {
         todo.push(format!(
-            "these read sizes your theme does not declare{}: add each to it\n    \
+            "these read sizes or type your theme does not declare{}: add each to it\n    \
              as the kit's theme has it; the app does not start while one is missing\n    {}",
             if lacking.kit_theme { " (one an older kit set up lacks the newer ones)" } else { "" },
             lacking.sizes.join(",\n    ")
@@ -1284,7 +1284,8 @@ fn add_to(root: &Path, args: &[String], out: &mut dyn Write) -> Result<(), Strin
 /// compiles, naming the file.
 #[derive(Debug, Default, PartialEq)]
 struct Lacking {
-    /// The kit theme's line for each size (`"control-height": { .. }`), which a theme takes as it is.
+    /// The kit theme's line for each size, weight or tracking (`"control-height": { .. }`), the
+    /// same in every theme, which a theme takes as it is.
     sizes: Vec<String>,
     /// Each color's name: an app's own theme gives it as a reference to one of its colors, so it
     /// follows the app's dark theme too, where the kit's light value would not.
@@ -2529,7 +2530,7 @@ mod tests {
         {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 37, "{names:?}");
+        assert_eq!(names.len(), 44, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
@@ -2744,7 +2745,12 @@ mod tests {
         let theme = std::fs::read_to_string(dir.join("tokens/ui.tokens.json")).unwrap();
         let old: String = theme
             .lines()
-            .filter(|l| !l.contains("\"control-") && !l.contains("-font-size\"") && !l.contains("\"card-padding\""))
+            .filter(|l| {
+                !l.contains("\"control-")
+                    && !l.contains("-font-size\"")
+                    && !l.contains("\"card-padding\"")
+                    && !l.contains("\"stat-")
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let old = format!("{}\n}}\n", old.trim_end().trim_end_matches('}').trim_end().trim_end_matches(','));
@@ -2760,6 +2766,27 @@ mod tests {
             "{old}"
         );
         assert!(undeclared(&dir, &app_now, &[piece("button")]).sizes.iter().any(|l| l.starts_with("\"control-height-sm\": ")));
+        // A figure's weights and tracking are named with its sizes; its face and its label's case,
+        // which the stylesheet reads with a fallback, are the app's to declare or not.
+        let stats = undeclared(&dir, &app_now, &[piece("stats")]).sizes;
+        let names: Vec<&str> = stats.iter().map(|l| l.split('"').nth(1).unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "stat-label-font-size",
+                "stat-label-font-weight",
+                "stat-label-tracking",
+                "stat-value-font-size",
+                "stat-value-font-weight",
+                "stat-value-tracking",
+                "stat-value-font-size-narrow"
+            ],
+            "{stats:?}"
+        );
+        assert!(
+            stats.contains(&r#""stat-value-font-weight": { "$type": "fontWeight", "$value": 600 }"#.to_string()),
+            "{stats:?}"
+        );
         // One a stylesheet under static/ declares is declared, as the app's startup check counts it.
         std::fs::create_dir_all(dir.join("static/css")).unwrap();
         let css =
@@ -3179,10 +3206,18 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The properties a kit stylesheet reads that the app may declare and the kit's theme does
+    /// not: a figure's face and its label's case.
+    const OPTIONAL: [&str; 2] = ["stat-value-font-family", "stat-label-text-transform"];
+
     #[test]
     fn every_property_a_component_reads_is_a_token_of_the_theme() {
         let tokens = |path: &str| INIT.iter().find(|(p, _)| *p == path).unwrap().1;
         let (light, dark) = (tokens("tokens/ui.tokens.json"), tokens("tokens/ui-dark.tokens.json"));
+        for name in OPTIONAL {
+            let read = KIT.iter().flat_map(|p| p.files.iter()).any(|(_, t)| t.contains(&format!("var(--{name},")));
+            assert!(read, "no kit stylesheet reads --{name}: rename it in OPTIONAL and the kit guide too");
+        }
         for piece in KIT {
             for (file, text) in piece.files.iter().filter(|(f, _)| f.ends_with(".css")) {
                 for read in text.split("var(--").skip(1) {
@@ -3192,9 +3227,16 @@ mod tests {
                         continue;
                     }
                     let line = light.lines().find(|l| l.starts_with(&format!("  \"{name}\": ")));
+                    // The app's alone, read with a fallback, since no token's value says "the
+                    // page's" (the guide names each): never in the kit's theme, so never asked for.
+                    if OPTIONAL.contains(&name) {
+                        assert!(line.is_none() && read[name.len()..].trim_start().starts_with(','), "{file} reads --{name}");
+                        continue;
+                    }
                     assert!(line.is_some(), "{file} reads --{name}, which the theme lacks");
-                    // A size (`radius`, a control's height) is the same in the dark theme.
-                    if !line.is_some_and(|l| l.contains("\"dimension\"")) {
+                    // Only a color differs in the dark theme: a size (`radius`, a control's
+                    // height), a weight or a figure's tracking is the same in both.
+                    if line.is_some_and(|l| l.contains("\"$type\": \"color\"")) {
                         assert!(dark.contains(&format!("\n  \"{name}\": ")), "{file} reads --{name}, which the dark theme lacks");
                     }
                 }
@@ -3505,6 +3547,18 @@ mod tests {
         let stack = include_str!("../kit/stack.css");
         assert!(stack.lines().any(|l| l.starts_with(".stack {") && l.contains("align-items: stretch;")));
         assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > * { margin-block: 0; }"));
+        // StackStart keeps a stack's children their own width: two classes, so it beats .stack and does
+        // nothing beside a Cluster or alone; its cap on a child's width, the word break and a picture's
+        // shape have no specificity, so an app's rule on a child wins.
+        assert!(stack.contains(".stack.start { align-items: flex-start; }"), "StackStart's rule");
+        assert!(
+            stack.contains(":where(.stack.start) > * { max-width: 100%; overflow-wrap: anywhere; }"),
+            "a child is at most the stack's width"
+        );
+        assert!(
+            stack.contains(":where(.stack.start) > :where(img, video, canvas) { height: auto; }"),
+            "a picture keeps its shape"
+        );
         let (stat, card) =
             (block(include_str!("../kit/stats.css"), ".stat {"), block(include_str!("../kit/card.css"), ".card, .panel {"));
         let declarations =

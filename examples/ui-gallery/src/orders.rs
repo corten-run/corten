@@ -28,7 +28,7 @@ use crate::ui::{
     separator::{Orientation, Separator},
     skeleton::{Skeleton, SkeletonShape},
     slider::Slider,
-    stack::{Cluster, Gap, Stack},
+    stack::{Cluster, Gap, Stack, StackStart},
     stats::{Stat, StatTone, Stats, StatsSurface},
     status_dot::{StatusDot, StatusTone},
     steps::{Step, StepState, Steps, StepsLayout},
@@ -488,6 +488,13 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                                     {t.money(Minor(sold), USD)}
                                 </meter>
                             </Field>
+                            // A column whose children keep their own width: a link as wide as its words, a badge.
+                            <div class={(Stack { gap: Gap::Xs }, StackStart {})}>
+                                <a href={url::Help}>"How selling limits work"</a>
+                                <span class={Badge { tone: BadgeTone::Neutral, emphasis: BadgeEmphasis::Outline }}>
+                                    "Lifts at 50 sales"
+                                </span>
+                            </div>
                         </div>
                     </section>
                     <section class={Card {}}>

@@ -439,6 +439,15 @@ pub(crate) mod tests {
         assert_eq!(literal, r#"<div class="stack__stack stack__md stack__cluster stack__sm"></div>"#);
     }
 
+    /// `StackStart` is a class beside the stack's, so the column keeps its children their own width.
+    #[test]
+    fn a_stack_start_is_a_class_beside_the_stack() {
+        use super::stack::{Gap, Stack, StackStart};
+        use corten::view::Render;
+        let start = corten::html! { <div class={(Stack { gap: Gap::Xs }, StackStart {})}></div> }.to_html();
+        assert_eq!(start, r#"<div class="stack__stack stack__xs stack__start"></div>"#);
+    }
+
     /// A look imported under another name, beside an app type that has its name, keeps the kit's
     /// classes: they follow the component, not the name it is imported as.
     #[test]
