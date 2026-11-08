@@ -774,6 +774,8 @@ twin! { status, corten::FromJson,
         AwaitingLabel,
         #[serde(alias = "sent")]
         Shipped,
+        // Never read, so never built.
+        #[allow(dead_code)]
         #[serde(skip)]
         Hidden,
     }
