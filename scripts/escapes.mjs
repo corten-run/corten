@@ -1,5 +1,5 @@
 // Checks that the scripts Corten ships (the runtime, the kit, the template, the examples) have no
-// explicit `any` and no comment that turns the checker off: a value of unknown shape is
+// explicit `any` (nor JSDoc's `*` or `?`) and no comment that turns the checker off: a value of unknown shape is
 // `unknown` and is narrowed, or cast once where it enters with a comment saying what vouches for
 // it (docs/design.md#choice-script-boundaries). `@ts-expect-error` belongs to the typing
 // fixtures, which are not among these files. Types are read with TypeScript's parser: those in
@@ -18,26 +18,29 @@ export function problems(file, text) {
   const at = (/** @type {number} */ pos) => `${file}:${source.getLineAndCharacterOfPosition(pos).line + 1}`;
   /** @param {ts.Node} node */
   const visit = (node) => {
-    if (node.kind === ts.SyntaxKind.AnyKeyword) found.push(`${at(node.getStart(source))}: \`any\` is unchecked; use \`unknown\` and narrow it, or the type it is`);
+    // `*` and `?` are JSDoc's own spellings of it.
+    if (node.kind === ts.SyntaxKind.AnyKeyword || node.kind === ts.SyntaxKind.JSDocAllType || node.kind === ts.SyntaxKind.JSDocUnknownType) found.push(`${at(node.getStart(source))}: \`any\` is unchecked; use \`unknown\` and narrow it, or the type it is`);
     // A node's JSDoc is not among its children.
     for (const doc of /** @type {{ jsDoc?: ts.JSDoc[] }} */ (node).jsDoc ?? []) visit(doc);
     ts.forEachChild(node, visit);
   };
   visit(source);
   for (const range of commentsOf(source)) {
-    const off = /@ts-(ignore|nocheck|expect-error)\b/.exec(text.slice(range.pos, range.end));
+    // Where TypeScript reads one: at the start of the comment or of one of its lines.
+    const off = /^\s*(?:\/\/\/?|\/\*+|\*+)?\s*@ts-(ignore|nocheck|expect-error)\b/m.exec(text.slice(range.pos, range.end));
     if (off) found.push(`${at(range.pos)}: @ts-${off[1]} turns the type check off here; fix the type, or narrow the value`);
   }
   return found;
 }
 
-/** Every comment in `source`: each is in the trivia before a token. @param {ts.SourceFile} source */
+/** Every comment in `source`: each is in the trivia before a token or after one on its line. @param {ts.SourceFile} source */
 function commentsOf(source) {
   /** @type {Map<number, ts.CommentRange>} */
   const all = new Map();
   /** @param {ts.Node} node */
   const visit = (node) => {
     for (const range of ts.getLeadingCommentRanges(source.text, node.pos) ?? []) all.set(range.pos, range);
+    for (const range of ts.getTrailingCommentRanges(source.text, node.end) ?? []) all.set(range.pos, range);
     for (const child of node.getChildren(source)) visit(child);
   };
   visit(source);

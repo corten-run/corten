@@ -1190,7 +1190,8 @@ rules something out.
     API's `info` found a read the checker had not seen: the place a `data-keep-place`
     navigation returns to was read when it could be `null`, kept safe only by the element
     lookup before it, now checked. `scripts/escapes.mjs` (in `npm run check`) reads those
-    files with TypeScript's parser and fails on an `any` in a JSDoc type or a declaration file,
+    files with TypeScript's parser and fails on an `any` (or JSDoc's `*` or `?`) in a JSDoc type or
+    a declaration file,
     and on a `@ts-ignore`, `@ts-nocheck` or `@ts-expect-error` comment, which belong to the
     typing fixtures. An implicit `any` (what `JSON.parse` returns, used as it is) is not found
     by it, which is why each parse is listed here. Casts stay: the DOM gives an `Element` where

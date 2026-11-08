@@ -79,8 +79,9 @@ optional, and the DOM's option objects (`{ signal }` for `addEventListener`) tak
 as JSON does, so it rejects scripts that work ([design Choice 32](../design.md#choice-script-checks)).
 Types are erased when the script runs, so they hold only for values the checker saw made. What
 comes from outside it (JSON a script fetches or parses, storage, a message from another window or
-a worker) is `unknown` until the script checks it, and Corten's runtime does that with what it
-reads: a feed's envelope is checked, while its rows are trusted as the server's own type
+a worker) is typed `any` by the DOM library (`JSON.parse`, `res.json()`, `event.data`), so
+`JSON.parse(text).x.y` passes the check: give it the type `unknown` (`/** @type {unknown} */`) and
+check it before use. Corten's runtime does that with what it reads: a feed's envelope is checked, while its rows are trusted as the server's own type
 ([Live rows](#live-rows)). Corten's own scripts (the runtime, the kit, the template and these
 examples) have no explicit `any` and no `@ts-ignore`, which `npm run check` holds them to; where the DOM
 library lacks a type (the Navigation API, a service worker's global) they declare what they use

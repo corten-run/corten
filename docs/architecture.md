@@ -132,8 +132,8 @@ fails `npm run check`. A subscription that names no type gets `unknown`, never
 `any`, so nothing is read unchecked. `scripts/typecheck-fixture.js` proves each of these with
 `@ts-expect-error` lines that must stay errors. Types are erased at run time: the runtime checks
 a feed's envelope (a snapshot's `epoch`, `seq` and `rows`; a patch's `seq` and each change's `op`
-and `id`) when it arrives and trusts its rows as the
-server's `Row` ([design Choice 33](design.md#choice-script-boundaries)).
+and `id`) when it arrives and trusts its rows as the server's `Row`
+([design Choice 33](design.md#choice-script-boundaries)).
 
 Not checked: `data-*` attributes a script reads through `dataset` (strings on both sides; pass
 the value as a handler argument instead), that a ref inside an `if` is present when a handler
