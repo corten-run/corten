@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test:marketplace": "node --test marketplace.test.mjs",
     "build": "vite build",
     "start": "node .output/server/index.mjs"
   },

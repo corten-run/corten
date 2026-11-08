@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { articleHtml, expectedArticle, filterPrefixes, representativeIds, validateCatalog, validateRecord } from "./contract.mjs";
+import { articleHtml, expectedArticle, expectedPageChecks, filterPrefixes, representativeIds, validateCatalog, validateRecord } from "./contract.mjs";
 import { steady } from "../../scripts/steady.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -213,6 +213,7 @@ export async function checkApp({ base, catalog, source, upstream, browser }) {
       result.upstream = { readsPerRequest: 1, uncachedPage: true, uncachedJson: true, jsonReserialized: true, errors: true };
     } finally { await context.close(); await control(upstream, {}); }
   }
+  assert.equal(result.pages, expectedPageChecks(catalog), "incomplete page checks");
   return result;
 }
 

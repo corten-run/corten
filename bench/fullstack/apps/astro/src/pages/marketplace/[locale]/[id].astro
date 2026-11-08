@@ -1,0 +1,69 @@
+---
+import Base from "../../../layouts/Base.astro";
+import { fetchMarketplaceRecord } from "../../../lib/marketplace";
+import { isLocale, marketplaceView, marketplacePath, alertMessage } from "../../../lib/marketplace-view";
+export const prerender = false;
+const locale = Astro.params.locale ?? "";
+if (!isLocale(locale)) return new Response("Unsupported locale", { status: 400 });
+const record = await fetchMarketplaceRecord(Astro.params.id ?? "");
+if (!record) return new Response("Not found", { status: 404 });
+const view = marketplaceView(record, locale, Astro.url.searchParams);
+let message = "";
+if (Astro.request.method === "POST") {
+  const form = await Astro.request.formData();
+  message = alertMessage(locale, record.title, String(form.get("email") ?? ""), String(form.get("target_price") ?? ""));
+}
+Astro.response.headers.set("Cache-Control", "no-store");
+---
+<Base title="Marketplace | Card Market" lang={locale}>
+  <link slot="head" rel="stylesheet" href="/marketplace.css" />
+  <article class="marketplace">
+    <nav class="marketplace__categories">{record.categories.map((category) => <a href={marketplacePath(locale, "item_1")}>{category.name}</a>)}</nav>
+    <h1>{record.title}</h1>
+    {record.subtitle !== null && <p class="marketplace__subtitle">{record.subtitle}</p>}
+    <ul class="marketplace__badges">{record.badges.map((badge) => <li>{badge}</li>)}</ul>
+    <div class="marketplace__images">{record.images.map((src, i) => <div class="marketplace__image" role="img" aria-label={record.title + " " + (i + 1)} data-src={src}></div>)}</div>
+    <section class="marketplace__summary">
+      {view.summary ? <>
+        <span><strong>{view.summary.lowest}</strong> {view.words.lowest}</span>
+        <span>{view.summary.count}</span><span>{view.summary.quantity} {view.words.available}</span>
+      </> : <span>{view.words.no_listings}</span>}
+    </section>
+    <section class="marketplace__listings">
+      <h2>{view.words.listings}</h2>
+      <form method="get" action={view.path}>
+        <label>{view.words.filter} <input type="text" name="seller" value={view.seller} /></label>
+        <label>{view.words.sort} <select name="sort"><option value="asc" selected={view.sort === "asc"}>{view.words.asc}</option><option value="desc" selected={view.sort === "desc"}>{view.words.desc}</option></select></label>
+        <button type="submit">{view.words.apply}</button>
+      </form>
+      <table>
+        <thead><tr><th scope="col">{view.words.seller}</th><th scope="col">{view.words.condition}</th><th scope="col">{view.words.ships_from}</th><th scope="col">{view.words.qty}</th><th scope="col">{view.words.price}</th><th scope="col">{view.words.reviews}</th></tr></thead>
+        <tbody>{view.listings.map((row) => <tr data-listing-id={row.id}><td>{row.sellerText}</td><td>{row.condition}</td><td>{row.ships_from}</td><td>{row.quantityText}</td><td>{row.priceText}</td><td>{row.reviewsText}</td></tr>)}</tbody>
+      </table>
+    </section>
+    <section class="marketplace__offers">
+      <h2>{view.words.offers}</h2>
+      <table>
+        <thead><tr><th scope="col">{view.words.buyer}</th><th scope="col">{view.words.condition}</th><th scope="col">{view.words.qty}</th><th scope="col">{view.words.price}</th></tr></thead>
+        <tbody>{view.offers.map((row) => <tr data-offer-id={row.id}><td>{row.buyer}</td><td>{row.condition}</td><td>{row.quantityText}</td><td>{row.priceText}</td></tr>)}</tbody>
+      </table>
+      {view.more && <a class="marketplace__more" href={view.more}>{view.words.show_all}</a>}
+    </section>
+    <section class="marketplace__alert">
+      <h2>{view.words.alert}</h2>
+      <form method="post" action={view.path} data-astro-reload>
+        <label>{view.words.email} <input type="email" name="email" /></label>
+        <label>{view.words.target} <input type="text" inputmode="decimal" name="target_price" /></label>
+        <button type="submit">{view.words.submit}</button>
+      </form>
+      <p class="marketplace__message">{message}</p>
+    </section>
+    <section class="marketplace__details">
+      <h2>{view.words.details}</h2><p>{record.description}</p>
+      <dl>{record.fields.map((field) => <><dt>{field.name}</dt><dd>{field.value}</dd></>)}</dl>
+      <ul>{record.tags.map((tag) => <li>{tag}</li>)}</ul>
+    </section>
+    <section class="marketplace__contents"><h2>{view.words.contents}</h2><ul>{view.contents.map((row) => <li><a href={row.href}>{row.title}</a> × {row.quantityText}</li>)}</ul></section>
+    <section class="marketplace__included"><h2>{view.words.included}</h2><ul>{view.included.map((row) => <li><a href={row.href}>{row.title}</a> × {row.quantityText}</li>)}</ul></section>
+  </article>
+</Base>

@@ -1,0 +1,210 @@
+# Marketplace v2: equivalent localization work
+
+**A separate application workload, with eighteen native adapters and a pre-load conformance
+gate.** Every selected app must pass the Docker/browser checks before any load test starts.
+No v2 performance baseline is published here. Passing the formatting-capture checker alone
+never qualifies an app for load testing.
+
+Keep both workloads. [Catalog](../catalog/README.md) isolates a strings-only page and JSON;
+marketplace v2 measures a richer application with equivalent locale formatting. Neither
+replaces the other's results. Historical [marketplace rounds](../fullstack/README.md) keep
+their recorded implementation and caveats. V2 starts a new baseline, not an r16 speedup.
+The existing nightly automation and catalog c1 parameters are unchanged.
+
+## Shared work
+
+1. Every page app receives the same raw marketplace data and renders the same rows, images,
+   initial offers, forms and styles. Corten's output is not the oracle: independently specified
+   content and numeric cases define the required behavior.
+2. Prices are USD minor units, counts are non-negative integers, and ratings are hundredths.
+   Parse into the ecosystem's appropriate numeric types. The in-memory source may parse and
+   construct typed records at startup; HTTP fetches and parses once per request. Both sources
+   format displayed values during the page request, not while loading the fixture.
+3. Select `en-US`, `fr-FR` or `de-DE` for each request, from the same explicit locale input
+   in every adapter. The runner visits every locale, not letting a process-wide default
+   accidentally pass an English-only test. The locale's number grouping, decimal separator,
+   currency symbol placement and count plural form must match the contract. USD has exactly
+   two fraction digits; ratings have at most one, rounded half away from zero.
+4. Each app uses its ordinary localization APIs or an established library, plus its normal
+   templates and JSON serializer. Reusing formatter objects and static translation catalogs is
+   allowed. Caching formatted record values, serialized answers or rendered HTML is not. Typed
+   parsers may skip unused upstream fields; there is no requirement to construct a generic DOM.
+5. JSON remains machine-readable and identical across locales: numeric prices, ratings and
+   counts, not locale-formatted strings. Display formatting is page work, not an artificial
+   requirement added to the JSON route. `records.mjs` validates the exact application schema;
+   the numeric conformance cases below are not that application schema.
+6. Sort, filter, show-all, navigation and price-alert interactions must work with JavaScript
+   enabled and disabled wherever the interaction is available without it. Where an ecosystem
+   naturally makes a round trip, measure and disclose it rather than replacing its pattern.
+7. Compare equivalent required behavior, not identical algorithms. This runner uses the apps'
+   default production settings, not the legacy matched-production tier. Record middleware,
+   compression, cache policy, limits
+   and added libraries; do not silently remove Corten features or add expensive substitutes to
+   another app to obtain a ranking.
+
+The standalone Corten adapter does not modify the production marketplace example. All apps
+use the full labels in `labels.json`; a localized price in an otherwise unverified page is
+insufficient. See [the adapter contract](adapter.md) for routes, schema and every page section.
+
+## Adapter libraries
+
+These are the implementations used in this workload, not a framework feature ranking.
+All use native templates/components and ordinary JSON serializers. Form submission is a
+native POST with each framework's normal protections, not a timed interactive benchmark.
+
+| Adapter | Request-time localization |
+|---|---|
+| Corten | Built-in `messages!`, money, decimal and plural APIs |
+| Next.js, TanStack Start, React Router | `Intl.NumberFormat`, `Intl.PluralRules` |
+| Nuxt, SvelteKit, Astro | `Intl.NumberFormat`, `Intl.PluralRules` |
+| axum + Maud, Leptos, Topcoat | ICU4X decimal, experimental currency and plural libraries |
+| ASP.NET Core | .NET `CultureInfo`/ICU number and currency formatting; MessageFormat plurals |
+| Spring Boot | ICU4J number, currency and plural formatting |
+| Phoenix | ex_cldr_numbers and CLDR cardinal plurals |
+| Django | Babel number, currency and plural APIs |
+| Rails | twitter_cldr number, currency and plural APIs |
+| Laravel | PHP intl number/currency and message formatting |
+| Gin | x/text numbers, bojanz/currency and go-i18n plurals |
+| Drogon | ICU number, currency and plural APIs |
+
+The Corten app is standalone under `corten/`; other adapters add v2 routes without replacing
+their legacy marketplace or catalog routes. Formatter/catalog reuse is allowed; formatted
+record, HTML and serialized-response caches are not. Dependency versions are recorded in
+manifests/lockfiles and resolved image IDs, and should accompany published measurements.
+Next.js uses Pages Router SSR here; Phoenix uses controller/HEEx and Laravel uses Blade,
+not their legacy LiveView/Livewire examples. V2 result labels name these workload choices.
+
+## Running
+
+```sh
+npm ci
+node bench/marketplace/fixtures.mjs
+npm run check:marketplace
+node bench/marketplace/run.mjs w1 --build --check-only
+# From a clean, committed checkout, after reviewing conformance:
+node bench/marketplace/run.mjs w2 --build --passes 3
+node bench/marketplace/report.mjs bench/marketplace/results/w2/summary.json
+```
+
+Use a fresh `wN` each time: an existing result directory is never overwritten. `--apps` may
+select individual apps for development checks. A full publishable baseline needs all eighteen
+apps and three passes; the read-only reporter rejects subsets, check-only runs, dirty commits,
+missing profiles or passes, failed cleanup and aggregates that disagree with saved passes.
+These commands do not create a droplet, collect c1, update nightly state or publish anything.
+
+The deterministic fixture is 500 new rich trading-card records, not the old marketplace
+fixture with a new label: normal records have 25 listings, 12 offers, images, badges, fields,
+tags, category links, contents and included-in links. Empty collections, nulls, escaping,
+negative/zero/fractional money, rating rounding, large counts and plural cases are included.
+This is a new baseline even when run on the same machine as an older workload.
+
+`GET /marketplace/{locale}/{id}` renders the page; its native POST validates the alert.
+`GET /api/marketplace/{id}` serializes the canonical numeric record. `MARKETPLACE_SOURCE=fixture`
+reads `/fixtures/marketplace.json` once into memory; otherwise each request fetches and parses
+`${API_BASE}/marketplace/records/{id}`. Locale selection is in the URL, not ambient machine state.
+
+The gate checks all 500 JSON records and 264 page/interaction observations in twelve profiles
+(three locales, desktop/phone, JS on/off) for each source. It checks the canonical stylesheet,
+responsive application, visible row counts, exact formatted text, escaped content, native
+forms, navigation, missing IDs and unsupported locales. HTTP probes change the record between
+requests and verify one upstream read, reserialization rather than forwarding, and errors.
+Every selected app must pass both sources before *any* app is timed. CI runs both the legacy
+catalog gate and this gate for each of the eighteen apps.
+
+Load uses a one-CPU app quota, a four-CPU load-generator quota and a two-CPU upstream quota.
+For disjoint pinning set `MARKETPLACE_APP_CPUS`, `MARKETPLACE_LOAD_CPUS` and
+`MARKETPLACE_API_CPUS`; overlaps are rejected. Without those settings quotas do not prove core
+isolation. Pages are measured separately in all three locales; JSON is repeated alongside
+each locale as a control, not as localized output. Three passes rotate framework order.
+Warmup precedes fixed-rate, 64-user and 256-user phases. Results retain commit/dirty state,
+fixture hash, resolved image IDs, raw k6 output, counted cgroup CPU, memory, cold-start clock,
+configuration, errors and cleanup failures. Image IDs and build logs identify dependency
+versions; record runtime/ICU/CLDR versions when publishing a baseline.
+
+The private upstream is a single Node process, even with a two-CPU quota. Its busy CPU is a
+measurement limit, not evidence of framework saturation. The reporter flags it and app CPU
+below 95%, and prints medians and ranges rather than claiming every difference is meaningful.
+This runner does not measure build cost, instructions, bytes or load-to-interactive timing.
+
+## Formatting conformance
+
+`contract.mjs` provides numeric edge cases, the eighteen-app inventory, an independent
+ECMA-402/CLDR-based oracle and a formatting-capture validator. It is test tooling, never an
+implementation helper for the apps. No app imports the oracle to produce measured answers.
+
+```sh
+node bench/marketplace/contract.mjs
+node --test bench/marketplace/contract.test.mjs
+node bench/marketplace/check-capture.mjs capture.json
+```
+
+The first command prints the input fixture and its SHA-256, without writing files. A separate
+formatter diagnostic can capture actual rendered prices, ratings and count text, in input order,
+into this capture (all case rows are required; the arrays here are abbreviated):
+
+```json
+{
+  "workload": "marketplace-v2",
+  "app": "corten",
+  "source": "fixture",
+  "locale": "en-US",
+  "fixtureSha256": "the SHA-256 printed by contract.mjs",
+  "prices": [{"id": "price_0", "text": "$0.00"}],
+  "ratings": [{"id": "rating_0", "text": "0"}],
+  "counts": [{"id": "count_0", "text": "0 listings"}]
+}
+```
+
+The oracle checks zero and negative prices, grouping, small amounts, rating rounding, and
+zero/one/two/large counts, including French's million-count plural form. Grouping/currency
+spaces may be ordinary, no-break or narrow no-break spaces; no other punctuation, symbol,
+digit, sign or word difference is hidden. Record runtime/ICU/CLDR versions with results.
+Investigate a semantic difference rather than broadening normalization until it passes.
+
+A capture cannot prove where formatting ran. Before load, validate both sources, all locales,
+changed numeric inputs, rendered row counts, JSON identity, errors and browser interactions;
+inspect the adapters to establish request-time work. Use the same helpers for a real page and
+its conformance cases. A fixture-specific shortcut is not permitted. The capture validator
+always reports `readyForLoad: false`: no standalone formatting test certifies a full app.
+
+## Before measuring
+
+1. Run the eighteen adapters' ecosystem-local tests and Docker/browser gate. Keep catalog
+   behavior unchanged, and do not rewrite historical result files.
+2. Review request-time native localization and serializer paths, not just captured answers.
+   Missing support is a failed contract, not a fast row.
+3. Use the independent `wN` identity, a clean measured commit and complete provenance.
+   Integrate nightly execution only after review, separately from this migration.
+   No v2 droplet launcher exists here.
+4. Validate the load generator, CPU placement, upstream headroom and concurrency range. A
+   low-utilization app's observed req/s is not its proven maximum; a busy upstream bounds the
+   end-to-end measurement. Keep those warnings alongside the table, not in a hidden footnote.
+5. Take repeated passes, rotate execution order and report medians and ranges. Establish
+   repeatability before claiming a small difference. Preserve failures and partial artifacts,
+   but never promote them to a successful full baseline.
+
+## Presentation
+
+Lead with an application a reader can run, then separate four questions:
+
+| Question | Evidence |
+|---|---|
+| How fast does it feel? | Phone load-to-interactive, navigation and form-update latency, bytes sent |
+| What does serving it cost? | Whole-container CPU/request and CPU plus peak memory at the same fixed rate |
+| How much can it handle? | Throughput at a stated latency and error limit, with saturation/headroom evidence |
+| What does development cost? | Clean build, incremental build and development rebuild, with CPU and memory |
+
+Show core catalog and full marketplace results separately. Do not combine them into a weighted
+score or advertise the best ratio from either as overall framework speed. A CPU-normalized
+number is useful but does not replace actual latency, capacity or fixed-rate measurements.
+Compare loaded memory at the same rate as well as at each app's maximum throughput.
+
+Features are a separate, evidence-linked table: built in, available through a named library,
+not implemented in this example, or not evaluated. A missing example is not proof a framework
+lacks a feature. Progressive enhancement, typed interfaces, security defaults, localization,
+partial updates and live data need a runnable example or check, not a performance-derived
+checkmark. Record which implementations maintainers have reviewed.
+
+Never claim build times, instruction counts or interactive timings from the catalog load suite;
+those need their own measurements. Do not present preliminary catalog c1 data as a completed
+comparison or compare it with marketplace r16 as a before/after change.

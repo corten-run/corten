@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import { HeadContent, Link, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
+import { HeadContent, Link, Outlet, Scripts, createRootRoute, useRouterState } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
 import components from "../components.css?url";
 import styles from "../style.css?url";
@@ -14,8 +14,9 @@ export const Route = createRootRoute({
 });
 
 function Document({ children }: { children: ReactNode }) {
+  const locale = useRouterState({ select: (state) => state.location.pathname.match(/^\/marketplace\/(en-US|fr-FR|de-DE)\//)?.[1] ?? "en" });
   return (
-    <html lang="en">
+    <html lang={locale}>
       <head>
         <HeadContent />
       </head>

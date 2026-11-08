@@ -1,0 +1,123 @@
+{
+  "id": "item_1",
+  "title": "Ember <dragon> & \"foil\"",
+  "subtitle": null,
+  "description": "A <trading> card.",
+  "categories": [
+    {
+      "name": "Cards",
+      "slug": "cards"
+    }
+  ],
+  "badges": [],
+  "tags": [],
+  "images": [
+    "/cards/dragon.webp"
+  ],
+  "fields": [
+    {
+      "name": "Set",
+      "value": "Ember Reach"
+    }
+  ],
+  "summary": {
+    "lowest_minor": 123450,
+    "count": 1000000,
+    "quantity": 1000
+  },
+  "listings": [
+    {
+      "id": "a",
+      "seller": "Alice",
+      "rating_hundredths": 425,
+      "reviews": 1234,
+      "condition": "Near Mint",
+      "ships_from": "US",
+      "quantity": 2,
+      "price_minor": 123450
+    },
+    {
+      "id": "b",
+      "seller": "Alfred",
+      "rating_hundredths": null,
+      "reviews": 1000,
+      "condition": "Mint",
+      "ships_from": "DE",
+      "quantity": 1000,
+      "price_minor": 1
+    },
+    {
+      "id": "c",
+      "seller": "alice",
+      "rating_hundredths": 475,
+      "reviews": 0,
+      "condition": "Good",
+      "ships_from": "FR",
+      "quantity": 1,
+      "price_minor": 1
+    },
+    {
+      "id": "d",
+      "seller": " Alice",
+      "rating_hundredths": 499,
+      "reviews": 12,
+      "condition": "Mint",
+      "ships_from": "US",
+      "quantity": 0,
+      "price_minor": null
+    }
+  ],
+  "offers": [
+    {
+      "id": "offer_0",
+      "buyer": "Buyer 0",
+      "condition": "Mint",
+      "quantity": 1000,
+      "price_minor": null
+    },
+    {
+      "id": "offer_1",
+      "buyer": "Buyer 1",
+      "condition": "Mint",
+      "quantity": 1001,
+      "price_minor": 100
+    },
+    {
+      "id": "offer_2",
+      "buyer": "Buyer 2",
+      "condition": "Mint",
+      "quantity": 1002,
+      "price_minor": 200
+    },
+    {
+      "id": "offer_3",
+      "buyer": "Buyer 3",
+      "condition": "Mint",
+      "quantity": 1003,
+      "price_minor": 300
+    },
+    {
+      "id": "offer_4",
+      "buyer": "Buyer 4",
+      "condition": "Mint",
+      "quantity": 1004,
+      "price_minor": 400
+    },
+    {
+      "id": "offer_5",
+      "buyer": "Buyer 5",
+      "condition": "Mint",
+      "quantity": 1005,
+      "price_minor": 500
+    }
+  ],
+  "contents": [
+    {
+      "id": "line_1",
+      "item_id": "item_2",
+      "title": "Another <card>",
+      "quantity": 1000
+    }
+  ],
+  "included_in": []
+}

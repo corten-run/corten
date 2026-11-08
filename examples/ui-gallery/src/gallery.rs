@@ -564,7 +564,7 @@ pub fn Gallery<'a>(
                         <Tooltip id={LastSaleTipId} class={Tip {}}>"Opens beside the draft; Escape closes it"</Tooltip>
                         <a
                             class={Button { variant: ButtonVariant::Link, size: ButtonSize::Sm }}
-                            href={url::Orders { page: None, sort: None }}
+                            href={url::Orders { page: None, sort: None, payout: None }}
                         >
                             "Orders"
                         </a>
@@ -588,7 +588,7 @@ pub fn Gallery<'a>(
                             " "
                             <a
                                 class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Icon }}
-                                href={url::Orders { page: None, sort: None }}
+                                href={url::Orders { page: None, sort: None, payout: None }}
                                 interestfor={OrdersTipId}
                                 aria-labelledby={OrdersTipId}
                             >

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang={assigns[:locale] || "en"}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -8,6 +8,7 @@
     <link phx-track-static rel="stylesheet" href={~p"/css/style.css"} />
     <link phx-track-static rel="stylesheet" href={~p"/css/components.css"} />
     <link :if={assigns[:catalog_page]} phx-track-static rel="stylesheet" href={~p"/css/catalog.css"} />
+    <link :if={assigns[:marketplace_page]} phx-track-static rel="stylesheet" href={~p"/css/marketplace.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
   </head>

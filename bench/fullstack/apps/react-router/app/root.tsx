@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Link, Links, Meta, Outlet, Scripts } from "react-router";
+import { Link, Links, Meta, Outlet, Scripts, useLocation } from "react-router";
 import components from "./components.css?url";
 import styles from "./style.css?url";
 
@@ -9,8 +9,9 @@ export const links = () => [
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
+  const locale = useLocation().pathname.match(/^\/marketplace\/(en-US|fr-FR|de-DE)\//)?.[1] ?? "en";
   return (
-    <html lang="en">
+    <html lang={locale}>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />

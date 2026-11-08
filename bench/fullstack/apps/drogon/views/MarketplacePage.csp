@@ -1,0 +1,57 @@
+<%inc #include "marketplace.h"
+#include "model.h" %>
+<%layout MarketplaceLayout%>
+<%c++ const auto &v = *@@.get<marketplace::ViewPtr>("marketplace");
+const auto &r = *v.record;
+const auto &w = v.words;
+const auto &f = v.format; %>
+<article class="marketplace">
+<nav class="marketplace__categories"><%c++ for (const auto &row : r["categories"]) { %><a href="{% esc(marketplace::url(v.locale, "item_1")) %}">{% esc(row["name"].asString()) %}</a><%c++ } %></nav>
+<h1>{% esc(r["title"].asString()) %}</h1>
+<%c++ if (!r["subtitle"].isNull()) { %><p class="marketplace__subtitle">{% esc(r["subtitle"].asString()) %}</p><%c++ } %>
+<ul class="marketplace__badges"><%c++ for (const auto &row : r["badges"]) { %><li>{% esc(row.asString()) %}</li><%c++ } %></ul>
+<div class="marketplace__images"><%c++ for (Json::ArrayIndex i = 0; i < r["images"].size(); ++i) { %><div class="marketplace__image" role="img" aria-label="{% esc(r["title"].asString()) %} {% i+1 %}" data-src="{% esc(r["images"][i].asString()) %}"></div><%c++ } %></div>
+<section class="marketplace__summary">
+<%c++ if (!r["summary"].isNull()) { const auto &s = r["summary"]; %>
+<span><strong>{% esc(f.money(s["lowest_minor"])) %}</strong> {% esc(w["lowest"].asString()) %}</span>
+<span>{% esc(f.listings(s["count"], w)) %}</span><span>{% esc(f.count(s["quantity"])) %} {% esc(w["available"].asString()) %}</span>
+<%c++ } else { %><span>{% esc(w["no_listings"].asString()) %}</span><%c++ } %>
+</section>
+<section class="marketplace__listings">
+<h2>{% esc(w["listings"].asString()) %}</h2>
+<form method="get" action="{% esc(v.path) %}">
+<label>{% esc(w["filter"].asString()) %} <input type="text" name="seller" value="{% esc(v.seller) %}"></label>
+<label>{% esc(w["sort"].asString()) %} <select name="sort"><option value="asc"<%c++ if (v.sort == "asc") { %> selected<%c++ } %>>{% esc(w["asc"].asString()) %}</option><option value="desc"<%c++ if (v.sort == "desc") { %> selected<%c++ } %>>{% esc(w["desc"].asString()) %}</option></select></label>
+<button type="submit">{% esc(w["apply"].asString()) %}</button>
+</form>
+<table>
+<thead><tr><%c++ for (auto key : {"seller", "condition", "ships_from", "qty", "price", "reviews"}) { %><th scope="col">{% esc(w[key].asString()) %}</th><%c++ } %></tr></thead>
+<tbody><%c++ for (const auto *ptr : v.listings) { const auto &row = *ptr; %>
+<tr data-listing-id="{% esc(row["id"].asString()) %}"><td>{% esc(row["seller"].asString()) %}<%c++ if (!row["rating_hundredths"].isNull()) { %> · {% esc(f.rating(row["rating_hundredths"])) %} ★<%c++ } %></td><td>{% esc(row["condition"].asString()) %}</td><td>{% esc(row["ships_from"].asString()) %}</td><td>{% esc(f.count(row["quantity"])) %}</td><td>{% esc(f.money(row["price_minor"])) %}</td><td>{% esc(f.count(row["reviews"])) %}</td></tr>
+<%c++ } %></tbody></table>
+</section>
+<section class="marketplace__offers">
+<h2>{% esc(w["offers"].asString()) %}</h2>
+<table><thead><tr><%c++ for (auto key : {"buyer", "condition", "qty", "price"}) { %><th scope="col">{% esc(w[key].asString()) %}</th><%c++ } %></tr></thead>
+<tbody><%c++ for (Json::ArrayIndex i = 0; i < v.offersShown; ++i) { const auto &row = r["offers"][i]; %>
+<tr data-offer-id="{% esc(row["id"].asString()) %}"><td>{% esc(row["buyer"].asString()) %}</td><td>{% esc(row["condition"].asString()) %}</td><td>{% esc(f.count(row["quantity"])) %}</td><td>{% esc(f.money(row["price_minor"])) %}</td></tr>
+<%c++ } %></tbody></table>
+<%c++ if (!v.more.empty()) { %><a class="marketplace__more" href="{% esc(v.more) %}">{% esc(w["show_all"].asString()) %}</a><%c++ } %>
+</section>
+<section class="marketplace__alert">
+<h2>{% esc(w["alert"].asString()) %}</h2>
+<form method="post" action="{% esc(v.path) %}">
+<label>{% esc(w["email"].asString()) %} <input type="email" name="email"></label>
+<label>{% esc(w["target"].asString()) %} <input type="text" inputmode="decimal" name="target_price"></label>
+<button type="submit">{% esc(w["submit"].asString()) %}</button>
+</form>
+<p class="marketplace__message">{% esc(v.message) %}</p>
+</section>
+<section class="marketplace__details">
+<h2>{% esc(w["details"].asString()) %}</h2><p>{% esc(r["description"].asString()) %}</p>
+<dl><%c++ for (const auto &row : r["fields"]) { %><dt>{% esc(row["name"].asString()) %}</dt><dd>{% esc(row["value"].asString()) %}</dd><%c++ } %></dl>
+<ul><%c++ for (const auto &row : r["tags"]) { %><li>{% esc(row.asString()) %}</li><%c++ } %></ul>
+</section>
+<section class="marketplace__contents"><h2>{% esc(w["contents"].asString()) %}</h2><ul><%c++ for (const auto &row : r["contents"]) { %><li><a href="{% esc(marketplace::url(v.locale, row["item_id"].asString())) %}">{% esc(row["title"].asString()) %}</a> × {% esc(f.count(row["quantity"])) %}</li><%c++ } %></ul></section>
+<section class="marketplace__included"><h2>{% esc(w["included"].asString()) %}</h2><ul><%c++ for (const auto &row : r["included_in"]) { %><li><a href="{% esc(marketplace::url(v.locale, row["item_id"].asString())) %}">{% esc(row["title"].asString()) %}</a> × {% esc(f.count(row["quantity"])) %}</li><%c++ } %></ul></section>
+</article>
