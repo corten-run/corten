@@ -7,8 +7,11 @@
 //! <div class={Cluster { gap: Gap::Sm }}><h2>"Orders"</h2><span class={Badge { .. }}>"10"</span></div>
 //! ```
 //!
-//! Each child takes the stack's width, a button too: put one in a `Cluster` to keep it its own
-//! size. The browser's default block margins on the children (a paragraph's, a heading's) are
+//! Each child takes the stack's width, a button too. A column whose children keep their own width
+//! (a link as wide as its words, a badge, a button under a line of text) writes `StackStart`
+//! beside the stack: each child is at most the stack's width, so a long link wraps, a word wider
+//! than the stack breaks inside it and a picture narrows in its shape; one button alone in a row is
+//! a `Cluster` too. The browser's default block margins on the children (a paragraph's, a heading's) are
 //! dropped, so the gap is the space between them. The rule has no specificity: an app's rule that
 //! names the element or a class (`static/style.css`'s `form { margin: .. }`) still sets its margin,
 //! and only one with none (`*`, `:where(..)`) ties and loses to the kit's, linked after it. The gaps
@@ -18,6 +21,7 @@
 //!
 //! ```rust,ignore
 //! <div class={(Stack { gap: Gap::App }, gap_3())}>..</div>
+//! <div class={(Stack { gap: Gap::Xs }, StackStart {})}><a href={url::Help}>"How limits work"</a>..</div>
 //! ```
 use corten::prelude::*;
 
@@ -61,6 +65,15 @@ pub fn Stack(gap: Gap) -> impl ClassList {
         Gap::App => None,
     };
     (Stack, gap)
+}
+
+/// Beside a `Stack`: its children keep their own width, at the start of the column, each at most
+/// the stack's (a word wider than that breaks inside it, a picture keeps its shape). Its rule names
+/// both classes, so it wins over the stack's wherever the app links its stylesheets, and does nothing
+/// beside a `Cluster` or alone.
+#[component(css = Stack)]
+pub fn StackStart() -> impl ClassList {
+    Start
 }
 
 /// A row of items, centered across it, that wraps onto the next line when it is full.
