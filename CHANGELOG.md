@@ -2496,6 +2496,17 @@ Corten is pre-1.0, so any minor version may change the API.
     `pagination.css`, so a copied `pagination.rs` takes it from `corten ui diff`. The
     ui-gallery's payouts card pages by it
     ([#1073 Kit Pagination needs every page's link, so a list paged by previous and next links (a cursor, or the API's own) cannot use it](https://github.com/corten-run/corten/issues/1073)).
+275. A kit `Stats` figure's type is the theme's: `--stat-label-font-size`, `--stat-label-font-weight`,
+    `--stat-value-font-size` and `--stat-value-font-weight`, and `--stat-label-tracking` and
+    `--stat-value-tracking` (`number` tokens in ems), with today's values in the kit's theme, so a
+    design system that draws its figures differently sets them in one place and the copy stays
+    the kit's. The value's face and the label's case stay the page's unless the app declares
+    `--stat-value-font-family` (a `fontFamily` token) or `--stat-label-text-transform` (in
+    `static/style.css`, as DTCG has no type for it), which the stylesheet reads with a fallback.
+    An app set up by an older kit adds the six tokens `corten ui add stats --merge` names (or
+    `--force`, for a copy without edits) before it starts. The stylesheet, comments out, grows by
+    324 bytes (gzip 80); measured on the source file, not the served one
+    ([#1054 Kit Stats writes its label and figure type as literals, so a theme with a display face or uppercase labels (Chase Sets' design system) edits the copied stats.css](https://github.com/corten-run/corten/issues/1054)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

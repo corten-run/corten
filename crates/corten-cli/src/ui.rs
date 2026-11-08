@@ -1231,7 +1231,7 @@ fn add_to(root: &Path, args: &[String], out: &mut dyn Write) -> Result<(), Strin
     }
     if !lacking.sizes.is_empty() {
         todo.push(format!(
-            "these read sizes your theme does not declare{}: add each to it\n    \
+            "these read sizes or type your theme does not declare{}: add each to it\n    \
              as the kit's theme has it; the app does not start while one is missing\n    {}",
             if lacking.kit_theme { " (one an older kit set up lacks the newer ones)" } else { "" },
             lacking.sizes.join(",\n    ")
@@ -1284,7 +1284,8 @@ fn add_to(root: &Path, args: &[String], out: &mut dyn Write) -> Result<(), Strin
 /// compiles, naming the file.
 #[derive(Debug, Default, PartialEq)]
 struct Lacking {
-    /// The kit theme's line for each size (`"control-height": { .. }`), which a theme takes as it is.
+    /// The kit theme's line for each size, weight or tracking (`"control-height": { .. }`), the
+    /// same in every theme, which a theme takes as it is.
     sizes: Vec<String>,
     /// Each color's name: an app's own theme gives it as a reference to one of its colors, so it
     /// follows the app's dark theme too, where the kit's light value would not.
@@ -2529,7 +2530,7 @@ mod tests {
         {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 37, "{names:?}");
+        assert_eq!(names.len(), 43, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
@@ -2744,7 +2745,7 @@ mod tests {
         let theme = std::fs::read_to_string(dir.join("tokens/ui.tokens.json")).unwrap();
         let old: String = theme
             .lines()
-            .filter(|l| !l.contains("\"control-") && !l.contains("-font-size\"") && !l.contains("\"card-padding\""))
+            .filter(|l| !l.contains("\"control-") && !l.contains("-font-size\"") && !l.contains("\"card-padding\"") && !l.contains("\"stat-"))
             .collect::<Vec<_>>()
             .join("\n");
         let old = format!("{}\n}}\n", old.trim_end().trim_end_matches('}').trim_end().trim_end_matches(','));
@@ -2760,6 +2761,23 @@ mod tests {
             "{old}"
         );
         assert!(undeclared(&dir, &app_now, &[piece("button")]).sizes.iter().any(|l| l.starts_with("\"control-height-sm\": ")));
+        // A figure's weights and tracking are named with its sizes; its face and its label's case,
+        // which the stylesheet reads with a fallback, are the app's to declare or not.
+        let stats = undeclared(&dir, &app_now, &[piece("stats")]).sizes;
+        let names: Vec<&str> = stats.iter().map(|l| l.split('"').nth(1).unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "stat-label-font-size",
+                "stat-label-font-weight",
+                "stat-label-tracking",
+                "stat-value-font-size",
+                "stat-value-font-weight",
+                "stat-value-tracking"
+            ],
+            "{stats:?}"
+        );
+        assert!(stats.contains(&r#""stat-value-font-weight": { "$type": "fontWeight", "$value": 600 }"#.to_string()), "{stats:?}");
         // One a stylesheet under static/ declares is declared, as the app's startup check counts it.
         std::fs::create_dir_all(dir.join("static/css")).unwrap();
         let css =
@@ -3186,15 +3204,18 @@ mod tests {
         for piece in KIT {
             for (file, text) in piece.files.iter().filter(|(f, _)| f.ends_with(".css")) {
                 for read in text.split("var(--").skip(1) {
-                    let name = &read[..read.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap()];
-                    // One the stylesheet sets itself (a badge's `--kit-tone`) is not the theme's.
-                    if text.contains(&format!("--{name}:")) {
+                    let end = read.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap();
+                    let name = &read[..end];
+                    // One the stylesheet sets itself (a badge's `--kit-tone`) is not the theme's,
+                    // and one with a fallback (a figure's face) is the app's to declare or not.
+                    if text.contains(&format!("--{name}:")) || read[end..].trim_start().starts_with(',') {
                         continue;
                     }
                     let line = light.lines().find(|l| l.starts_with(&format!("  \"{name}\": ")));
                     assert!(line.is_some(), "{file} reads --{name}, which the theme lacks");
-                    // A size (`radius`, a control's height) is the same in the dark theme.
-                    if !line.is_some_and(|l| l.contains("\"dimension\"")) {
+                    // Only a color differs in the dark theme: a size (`radius`, a control's
+                    // height), a weight or a figure's tracking is the same in both.
+                    if line.is_some_and(|l| l.contains("\"$type\": \"color\"")) {
                         assert!(dark.contains(&format!("\n  \"{name}\": ")), "{file} reads --{name}, which the dark theme lacks");
                     }
                 }

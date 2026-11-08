@@ -3867,6 +3867,37 @@ async function run(browser) {
     };
   });
   check("Stats: labelled figures on one row", stats.terms === "Sales,Orders,To ship,Late" && stats.rows === 1, JSON.stringify(stats));
+  // The figure's type is the theme's: the kit's values by default, the value in the page's face
+  // and the label as written; a theme's tokens, its face and its case change them in one place.
+  const statType = await orders.evaluate(() => {
+    const dl = /** @type {HTMLElement} */ (document.querySelector("dl[class*='stats__stats']"));
+    const root = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const read = () => {
+      const label = getComputedStyle(/** @type {Element} */ (dl.querySelector("dt")));
+      const value = getComputedStyle(/** @type {Element} */ (dl.querySelector("[class*='stats__value']")));
+      const size = (/** @type {CSSStyleDeclaration} */ s) => parseFloat(s.fontSize) / root;
+      const tracking = (/** @type {CSSStyleDeclaration} */ s) => Math.round(((parseFloat(s.letterSpacing) || 0) / parseFloat(s.fontSize)) * 1000) / 1000;
+      return {
+        label: [size(label), label.fontWeight, label.textTransform, tracking(label)].join(" "),
+        value: [size(value), value.fontWeight, tracking(value)].join(" "),
+        face: value.fontFamily,
+      };
+    };
+    const kit = read();
+    const page = getComputedStyle(dl).fontFamily;
+    const themed = { "--stat-label-font-size": ".75rem", "--stat-label-font-weight": "600", "--stat-label-tracking": ".05", "--stat-label-text-transform": "uppercase",
+      "--stat-value-font-size": "2rem", "--stat-value-font-weight": "700", "--stat-value-tracking": "0", "--stat-value-font-family": "Georgia, serif" };
+    for (const [name, value] of Object.entries(themed)) dl.style.setProperty(name, value);
+    const theme = read();
+    for (const name of Object.keys(themed)) dl.style.removeProperty(name);
+    return { kit, page, theme };
+  });
+  check(
+    "Stats: the figure's type is the theme's, the value in the page's face until a theme names one",
+    statType.kit.label === "0.875 500 none 0" && statType.kit.value === "1.5 600 -0.01" && statType.kit.face === statType.page &&
+      statType.theme.label === "0.75 600 uppercase 0.05" && statType.theme.value === "2 700 0" && /Georgia/.test(statType.theme.face),
+    JSON.stringify(statType),
+  );
   // Two to a row on a small phone and a large one, the figure in the phone's size (1.25rem).
   for (const width of [390, 430]) {
     await orders.setViewportSize({ width, height: 844 });
