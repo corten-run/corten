@@ -4070,19 +4070,33 @@ async function run(browser) {
   // StatusTone::Text: a dot in a badge is the badge's text color, in a soft badge and a solid one,
   // where a dot in the badge's own tone would be the color of the fill.
   const dotInBadge = await orders.evaluate(() => {
-    const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='status-dot__text']"));
-    const badge = /** @type {HTMLElement} */ (dot.parentElement);
+    const dot = /** @type {HTMLElement | null} */ (document.querySelector("[class*='status-dot__text']"));
+    if (!dot?.parentElement) return { missing: true };
+    const badge = dot.parentElement;
     const drawn = () => ({ dot: getComputedStyle(dot).backgroundColor, text: getComputedStyle(badge).color, fill: getComputedStyle(badge).backgroundColor });
     const soft = drawn();
     const was = badge.className;
     badge.className = was.replace(/badge__soft/, "badge__solid");
     const solid = drawn();
     badge.className = was;
-    return { soft, solid, swapped: was.includes("badge__soft") };
+    // Beside plain text, a dot in a status's own tone is the theme's color for it.
+    const own = document.querySelector("[class*='orders__schedule'] > [class*='status-dot__success']");
+    const probe = document.createElement("span");
+    probe.style.setProperty("background", "var(--success)");
+    document.body.append(probe);
+    const success = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return { soft, solid, swapped: was.includes("badge__soft"), own: own && getComputedStyle(own).backgroundColor, success };
   });
   check(
-    "StatusDot: StatusTone::Text draws the dot in its badge's text color, so it shows on a solid badge's fill",
-    dotInBadge.swapped && dotInBadge.soft.dot === dotInBadge.soft.text && dotInBadge.solid.dot === dotInBadge.solid.text && dotInBadge.solid.dot !== dotInBadge.solid.fill,
+    "StatusDot: StatusTone::Text draws the dot in its badge's text color, so it shows on a solid badge's fill, and a Success dot beside text is the theme's success color",
+    !("missing" in dotInBadge) &&
+      dotInBadge.swapped &&
+      dotInBadge.soft.dot === dotInBadge.soft.text &&
+      dotInBadge.solid.dot === dotInBadge.solid.text &&
+      dotInBadge.solid.dot !== dotInBadge.solid.fill &&
+      dotInBadge.own === dotInBadge.success &&
+      dotInBadge.own !== "rgba(0, 0, 0, 0)",
     JSON.stringify(dotInBadge),
   );
   // LiveDot: inside a <corten-live> whose stream is live it pulses (an opacity animation that
