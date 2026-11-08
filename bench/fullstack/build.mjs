@@ -46,7 +46,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, rea
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cargoBuilds, changeOf, contextOf, crateCost, median, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, median, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..");
@@ -297,10 +297,4 @@ for (const name of appsArg.split(",")) {
   save();
 }
 rmSync(scratch, { recursive: true, force: true });
-const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
-for (const [name, e] of Object.entries(out)) {
-  // Entries written before `complete` was recorded have none, and finished.
-  if (e.failed || e.complete === false) { console.log(`| ${name} | FAILED: ${(e.failed ?? "stopped before it finished").split("\n")[0]} |`); continue; }
-  const dev = e.dev ? `dev ${s(e.dev.clean.ms)}, after the edit ${s(e.dev.rebuild.ms)}` : "";
-  console.log(`| ${name} | deps ${s(e.deps.ms)} | build ${s(e.build.ms)}, ${e.build.cpuS} CPU-s, ${e.build.peakMiB} MiB | clean ${s(e.clean.ms)}, ${e.clean.cpuS} CPU-s | rebuild ${s(e.rebuild.ms)}, ${e.rebuild.cpuS} CPU-s | ${dev} |`);
-}
+for (const [name, e] of Object.entries(out)) console.log(buildRow(name, e));

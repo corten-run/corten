@@ -424,3 +424,19 @@ export function rustcPasses(output) {
 
 /** The median of some numbers. */
 export const median = (/** @type {number[]} */ xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+
+/**
+ * One app's row of the table `build.mjs` prints after a run, from its `build.json` entry. An app
+ * with no build step (`build` null in its recipe) has no build or rebuild to time.
+ * @param {string} name @param {any} e
+ */
+export function buildRow(name, e) {
+  const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
+  // Entries written before `complete` was recorded have none, and finished.
+  if (e.failed || e.complete === false) return `| ${name} | FAILED: ${(e.failed ?? "stopped before it finished").split("\n")[0]} |`;
+  const dev = e.dev ? `dev ${s(e.dev.clean.ms)}, after the edit ${s(e.dev.rebuild.ms)}` : "";
+  const built = e.build
+    ? [`build ${s(e.build.ms)}, ${e.build.cpuS} CPU-s, ${e.build.peakMiB} MiB`, `rebuild ${s(e.rebuild.ms)}, ${e.rebuild.cpuS} CPU-s`]
+    : ["no build step", "nothing to rebuild"];
+  return `| ${name} | deps ${s(e.deps.ms)} | ${built[0]} | clean ${s(e.clean.ms)}, ${e.clean.cpuS} CPU-s | ${built[1]} | ${dev} |`;
+}

@@ -24,7 +24,7 @@ const fixture = process.env.CATALOG_SOURCE === "fixture"
 
 export async function fetchCatalogRecord(id) {
   if (fixture) return fixture.get(id) ?? null;
-  const response = await fetch(`${base}/catalog/records/${encodeURIComponent(id)}`);
+  const response = await fetch(`${base}/catalog/records/${encodeURIComponent(id)}`, { redirect: "manual" });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`catalog API returned ${response.status}`);
   return parseCatalogRecord(await response.json());

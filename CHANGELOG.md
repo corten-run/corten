@@ -2557,8 +2557,8 @@ Corten is pre-1.0, so any minor version may change the API.
     stream, each with its own tests (`python -m unittest`, `node --test`). Neither framework has
     CSRF protection of its own, so each refuses a cross-site post by its `Sec-Fetch-Site` or
     `Origin`, as the Gin and Drogon apps do. Both join the catalog and marketplace gates, CI's matrix
-    and official rounds, which now need all twenty apps: the next nightly marketplace round is a new
-    baseline, not compared with r17's eighteen. Neither has a build step, so build-cost rows say so.
+    and official rounds, which now need all twenty apps, so no marketplace round is compared with
+    one of eighteen. Neither has a build step, so build-cost rows say so.
     They take Spring Boot's and Django's places among the matched tier's four most used frameworks
     ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
 

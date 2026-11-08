@@ -64,7 +64,7 @@ method, every table and the caveats are in [bench/fullstack](../bench/fullstack/
 
 These are historical marketplace measurements with non-equivalent localization, including
 localized prices in Corten's example. The separate [catalog benchmark](../bench/catalog/README.md) measures a strings-only
-record-detail page in the same eighteen frameworks, with no locale formatting in any app.
+record-detail page in those eighteen frameworks and FastAPI and Express, with no locale formatting in any app.
 It has a separate baseline; its throughput has not been measured yet.
 
 ## On the server

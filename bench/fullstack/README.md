@@ -641,7 +641,7 @@ the commit it ran at: the first four phases at `d456063e` with local changes, th
 before the commit that adds it, and the clients that stop reading and the oversized requests run
 again at `330ff623` with none, each keeping its first pass in `earlier`; the first pass's `taken`
 is the file's header from then, marked `fromHeader`, whose time is when it was last written): Corten,
-axum-maud and the six other apps the matched tier names, ASP.NET Core as both its Razor Pages app
+axum-maud and the six other apps the matched tier then named (Next.js, Leptos, Django, Spring, Topcoat and ASP.NET Core), ASP.NET Core as both its Razor Pages app
 and aspnet-aot. Corten is card-market, with its own 10 s request deadline and its write limit
 raised for the probe (Method, The hardening step). The images
 were `cb-corten` and `cb-axum-maud` built at `720c8a88`, `cb-aspnet-aot` at this step's first
@@ -1568,8 +1568,9 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
    Rust service with Postgres and Redis, not in this repository).
-3. JavaScript dependencies are pinned in each `package.json` without lockfiles, so transitive
-   versions can drift between builds; the other apps have lockfiles.
+3. JavaScript dependencies are pinned in each `package.json` without lockfiles, and Python's
+   (Django, FastAPI) in `requirements.txt` without their own dependencies', so transitive versions
+   can drift between builds; the other apps have lockfiles.
 4. The page is small. Apps with large client-side state (a seller grid of live rows) are a
    different test; see [bench/live](../live/README.md) for pushing updates.
 5. Each framework runs its production defaults with the worker count its docs give for one CPU,
@@ -1579,7 +1580,10 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    rendered pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at
    their default level. Drogon runs one IO thread per core, as its docs advise, and counts its
    cores from its CPU affinity capped by the container's CPU quota, since its own count (`0`)
-   sees every core of the host. Two settings differ from a library's default so that the item
+   sees every core of the host. FastAPI runs `fastapi run`, one uvicorn process: its container
+   guide gives one process a container where the container is given its CPUs, and the live stream
+   needs every client in one process. Express runs one Node process with `NODE_ENV=production`, as
+   its production guide says. Two settings differ from a library's default so that the item
    API source does the same work in every app: Gin keeps as many idle connections to the item API
    as its transport allows (Go's default keeps two per host; reqwest, .NET and Node have no
    per-host cap), and Drogon keeps one `HttpClient` (one connection) per request in flight on

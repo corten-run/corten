@@ -1,8 +1,8 @@
 # Nightly localized marketplace rounds
 
 The nightly benchmark is `marketplace-v2`, all twenty adapters, from official **r17**
-onward (r17 had eighteen: FastAPI and Express joined after it). A round whose app set differs
-from its baseline's is a new baseline: `compare.mjs` gives no deltas across it. `wN` remains for explicit development checks. Old fullstack r16 and catalog c1 are
+onward (FastAPI and Express joined after r17, which had eighteen). A round whose app set differs
+from another's is not compared with it: `compare.mjs` gives no deltas across the two. `wN` remains for explicit development checks. Old fullstack r16 and catalog c1 are
 different workloads, not baselines for a new-workload speedup or regression. Do not also run
 the old suite or silently combine its tables with this one.
 

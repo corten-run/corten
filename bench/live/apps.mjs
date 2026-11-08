@@ -16,7 +16,7 @@ export const live = {
   "axum-maud": { image: "cb-axum-maud", port: 18527, transport: "sse", path: "/live/prices", note: "axum Sse + tokio broadcast, no framework" },
   gin: { image: "cb-gin", port: 18525, transport: "sse", path: "/live/prices", note: "Gin SSEvent, a queue per stream" },
   drogon: { image: "cb-drogon", port: 18526, transport: "sse", path: "/live/prices", note: "newAsyncStreamResponse, one stream per client" },
-  fastapi: { image: "cb-fastapi", port: 18528, transport: "sse", path: "/live/prices", note: "StreamingResponse, an asyncio queue per stream" },
+  fastapi: { image: "cb-fastapi", port: 18528, transport: "sse", path: "/live/prices", note: "EventSourceResponse, an asyncio queue per stream" },
   express: { image: "cb-express", port: 18529, transport: "sse", path: "/live/prices", note: "res.write on the response, one per stream" },
   aspnet: { image: "cb-aspnet", port: 18518, transport: "sse", path: "/live/prices", note: "TypedResults.ServerSentEvents" },
   spring: { image: "cb-spring", port: 18519, transport: "sse", path: "/live/prices", note: "SseEmitter on Tomcat" },

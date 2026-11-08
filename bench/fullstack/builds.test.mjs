@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { allApps } from "./apps.mjs";
-import { cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -227,4 +227,14 @@ test("rustc's passes and macro statistics are read from its output", () => {
   assert.deepEqual(macros.map((m) => m.macro), ["#[derive(Deserialize)]", "html!", "#[derive(Id)]", "::core::include_bytes!", "::schemars::_private::serde_json::json!"]);
   assert.deepEqual(macros[1], { macro: "html!", uses: 18, lines: 917, bytes: 44913 });
   assert.equal(macros[4].uses, 10);
+});
+
+test("build.mjs's table has a row for an app with no build step, a built app and a failed one", () => {
+  const step = { ms: 2500, cpuS: 3.1, peakMiB: 120 };
+  assert.equal(buildRow("express", { deps: step, build: null, clean: { ms: 2500, cpuS: 3.1 }, rebuild: null, complete: true }),
+    "| express | deps 2.5 s | no build step | clean 2.5 s, 3.1 CPU-s | nothing to rebuild |  |");
+  assert.equal(buildRow("gin", { deps: step, build: step, clean: { ms: 5000, cpuS: 6.2 }, rebuild: step, complete: true }),
+    "| gin | deps 2.5 s | build 2.5 s, 3.1 CPU-s, 120 MiB | clean 5.0 s, 6.2 CPU-s | rebuild 2.5 s, 3.1 CPU-s |  |");
+  assert.equal(buildRow("leptos", { failed: "exit 1\nmore", deps: step }), "| leptos | FAILED: exit 1 |");
+  assert.equal(buildRow("nuxt", { deps: step, complete: false }), "| nuxt | FAILED: stopped before it finished |");
 });

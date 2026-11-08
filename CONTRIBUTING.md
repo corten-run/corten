@@ -165,7 +165,7 @@ The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its h
 ## Pull requests
 
 For nightly performance evidence, use the [marketplace v2 procedure](bench/marketplace/nightly.md).
-Official `rN` rounds start at r17; `wN` stays for development. Require all eighteen apps, both
+Official `rN` rounds start at r17; `wN` stays for development. Require all twenty apps, both
 sources and every conformance profile before load. The nightly suite measures CPU, memory,
 load and cold start only, with three short-window passes (`--duration 15 --warmup 10 --rate 150`)
 on a dedicated c-8, app CPU 1, upstream CPUs 2-3 and load CPUs 4-7. Time pages in all three

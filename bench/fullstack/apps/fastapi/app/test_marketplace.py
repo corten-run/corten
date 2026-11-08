@@ -109,6 +109,26 @@ class PageTests(unittest.TestCase):
             self.assertEqual(self.client.post(path, data=form, headers=headers).status_code, 403)
         self.assertEqual(self.source.get.call_count, calls)
 
+    def test_each_route_reads_the_upstream_once_and_serializes_its_own_json(self):
+        reads = []
+
+        def answer(request):
+            reads.append(request.url.raw_path.decode())
+            # Spaced out, so an answer passed through as it came would not equal FastAPI's own.
+            return httpx.Response(200, content=json.dumps({**RECORD, "title": str(len(reads))}, indent=2), headers={"content-type": "application/json"})
+
+        source = MarketplaceSource()
+        source.fixture = None
+        source.client = httpx.AsyncClient(base_url="http://upstream.test", transport=httpx.MockTransport(answer), follow_redirects=False)
+        with patch.object(main, "marketplace_source", source):
+            self.assertIn("<h1>1</h1>", self.client.get("/marketplace/en-US/item_1").text)
+            self.assertIn("<h1>2</h1>", self.client.get("/marketplace/de-DE/item_1").text)
+            first = self.client.get("/api/marketplace/item_1")
+            self.assertEqual(first.json()["title"], "3")
+            self.assertNotIn(b"\n", first.content)
+            self.assertEqual(self.client.get("/api/marketplace/item_1").json()["title"], "4")
+        self.assertEqual(reads, ["/marketplace/records/item_1"] * 4)
+
     def test_an_upstream_failure_is_a_502(self):
         self.source.get.side_effect = httpx.ConnectError("refused")
         for path in ["/marketplace/en-US/item_1", "/api/marketplace/item_1"]:

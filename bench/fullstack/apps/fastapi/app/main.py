@@ -3,7 +3,8 @@ from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -143,32 +144,28 @@ async def catalog_json(record_id: str) -> CatalogRecord:
     return record
 
 
-# The live benchmark (bench/live): GET /live/prices is a server-sent event stream and every
-# POST /live/publish body goes to each open stream. One process holds every stream, so the
-# publisher reaches them all.
+# The live benchmark (bench/live): GET /live/prices is FastAPI's server-sent event stream
+# (EventSourceResponse) and every POST /live/publish body goes to each open stream as it came.
+# One process holds every stream, so the publisher reaches them all.
 _clients: set[asyncio.Queue] = set()
 
 
-@app.get("/live/prices")
+@app.get("/live/prices", response_class=EventSourceResponse)
 async def prices():
     queue: asyncio.Queue = asyncio.Queue()
     _clients.add(queue)
-
-    async def events():
-        try:
-            yield ": open\n\n"
-            while True:
-                yield await queue.get()
-        finally:
-            # Starlette cancels the stream when the client disconnects.
-            _clients.discard(queue)
-
-    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+    try:
+        yield ServerSentEvent(comment="open")
+        while True:
+            yield ServerSentEvent(raw_data=await queue.get())
+    finally:
+        # Starlette cancels the stream when the client disconnects.
+        _clients.discard(queue)
 
 
 @app.post("/live/publish", status_code=204)
 async def publish(request: Request):
-    event = f"data: {(await request.body()).decode()}\n\n"
+    data = (await request.body()).decode()
     for queue in _clients:
-        queue.put_nowait(event)
+        queue.put_nowait(data)
     return Response(status_code=204)
