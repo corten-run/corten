@@ -2530,7 +2530,7 @@ mod tests {
         {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 44, "{names:?}");
+        assert_eq!(names.len(), 46, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
@@ -2750,6 +2750,7 @@ mod tests {
                     && !l.contains("-font-size\"")
                     && !l.contains("\"card-padding\"")
                     && !l.contains("\"stat-")
+                    && !l.contains("\"choice-")
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -2766,6 +2767,16 @@ mod tests {
             "{old}"
         );
         assert!(undeclared(&dir, &app_now, &[piece("button")]).sizes.iter().any(|l| l.starts_with("\"control-height-sm\": ")));
+        // The two choice lists read the same two sizes, each named once.
+        let choices = undeclared(&dir, &app_now, &[piece("checkboxes"), piece("radio_group")]).sizes;
+        assert_eq!(
+            choices,
+            [
+                r#""choice-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#,
+                r#""choice-legend-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#
+            ],
+            "{choices:?}"
+        );
         // A figure's weights and tracking are named with its sizes; its face and its label's case,
         // which the stylesheet reads with a fallback, are the app's to declare or not.
         let stats = undeclared(&dir, &app_now, &[piece("stats")]).sizes;

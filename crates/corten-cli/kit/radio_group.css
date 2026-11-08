@@ -1,6 +1,6 @@
 /* corten ui {{version}}: radio_group */
-.group { display: grid; gap: .75rem; margin: 0; padding: 0; border: 0; min-width: 0; }
-.group > legend { margin-bottom: .75rem; padding: 0; font-size: .875rem; font-weight: 500; }
+.group { display: grid; gap: var(--choice-gap); margin: 0; padding: 0; border: 0; min-width: 0; }
+.group > legend { margin-bottom: var(--choice-legend-gap); padding: 0; font-size: .875rem; font-weight: 500; }
 .radio { display: inline-flex; align-items: center; gap: .5rem; font-size: .875rem; line-height: 1.25rem; cursor: pointer; }
 .radio > input {
   appearance: none; flex: none; display: grid; place-content: center; margin: 0;

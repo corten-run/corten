@@ -68,6 +68,8 @@ button and a default or large button, not a small one's, which stays .8125rem; .
 `--control-width-sm`, `--control-width-md` and `--control-width-lg` (`ControlWidth`'s widths; 8, 16
 and 24rem), `--card-padding` (a card's
 padding and the gap between its parts; 1.5rem), `--card-heading-font-size` (a card's heading; 1rem),
+`--choice-gap` and `--choice-legend-gap` (the space between a `Checkboxes` or `RadioGroup`'s
+choices and under its legend, in both groups at once; .75rem each),
 a `Stats` figure's type (below) and `--toasts-inset-bottom` (how far `Toasts` sits above the bottom of the window; 1rem, plus the
 home indicator's inset on a page whose viewport meta has `viewport-fit=cover`). A layout with a
 fixed bar along the bottom (a phone's tab bar) sets it on `body` where the bar shows, so a toast

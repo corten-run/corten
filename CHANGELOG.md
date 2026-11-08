@@ -2552,6 +2552,16 @@ Corten is pre-1.0, so any minor version may change the API.
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
 
+278. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
+    tokens, `choice-gap` and `choice-legend-gap` (.75rem each, the values the two stylesheets
+    printed and kept equal by hand), so a theme with tighter choice lists sets them once and the
+    copies stay the kit's. Not a change for an app that sets nothing, but a theme an older kit wrote
+    lacks the two: the app does not start until they are added, and `corten ui add checkboxes
+    --merge` (or `radio_group`) names each as the kit's theme has it. The ui-gallery's smoke test
+    checks both groups at the kit's values and at a theme's. Asked for by the Chase Sets pilot,
+    which edited both copies to .5rem
+    ([#1082 Kit RadioGroup and Checkboxes print their fieldset's gap and legend margin as literals kept equal by hand, so a theme with tighter choice lists edits both copies](https://github.com/corten-run/corten/issues/1082)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
