@@ -1274,6 +1274,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     a proxy or CDN in front of `corten::serve`. An app with live streams needs one: over HTTP/1.1 a
     browser opens about six connections to a host, each open stream holds one, and requests queue
     behind them once a page with a few `<corten-live>` elements or feeds is open in a few tabs.
+    The same proxy serves native clients: `corten-native` would carry a screen's feeds over one
+    HTTP/2 connection to it, and a platform's own client has a cap per host of its own
+    ([Surfaces](architecture.md#native-apps-next-not-built)).
     That holds for `serve_wrapped` too, which ends TLS but still speaks HTTP/1.1, so an app with
     live streams has a proxy or CDN in front whatever ends its TLS. Measured with
     `examples/watchlist` (two streams a page) in Chromium: over HTTP/1.1 through nginx, a fourth

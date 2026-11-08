@@ -44,11 +44,20 @@ backend.
 1. Web-like screens run in a native shell around the server-rendered pages (Hotwire Native or
    similar). Open decision: Hotwire Native drives pages through Turbo's JavaScript adapter.
    Either the mobile shell pages load Turbo Drive, or `corten.js` implements that adapter.
-   Prototype both before choosing; it changes only the runtime, not apps.
+   Prototype both before choosing; it changes only the runtime, not apps. A shell's web view is
+   a browser, so it holds live streams as [design Limit 14](design.md#limit-http1) says.
 2. Native screens (camera scanning, offline seller work) read `req.screen` JSON, post the same
    actions, and follow feeds with `Replica`. A `corten-native` crate would wrap `Replica`, an
    HTTP/SSE client and an offline outbox (SQLite on the device, an idempotency key per write)
-   behind UniFFI, giving Swift and Kotlin one tested core.
+   behind UniFFI, giving Swift and Kotlin one tested core. Its HTTP/SSE client would be Corten's
+   own Rust code, carrying every feed a screen follows over one HTTP/2 connection to the proxy or
+   CDN the browser already needs ([Deploying](guide/deploy.md#what-the-proxy-must-do), item 3), so
+   neither platform's cap per host applies. An app that follows feeds with its platform's client
+   instead meets that cap: `URLSession` opens at most `httpMaximumConnectionsPerHost` HTTP/1.1
+   connections to a host per session (6 by default; HTTP/2 shares one and ignores it), and OkHttp's
+   `Dispatcher.maxRequestsPerHost` (5 by default) counts asynchronous calls in flight to a host
+   whatever the protocol, so five open feeds through one `OkHttpClient` leave every other call to
+   that host waiting unless the app raises it.
 3. Design tokens come from one source and generate CSS, Swift and Kotlin. Only the components
    native screens use are mirrored.
 
