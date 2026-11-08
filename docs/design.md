@@ -1258,16 +1258,16 @@ by design; where it is known, a limit says what would lift it or why it is so.
     minimum body rate, the idle time being how far behind it a client may fall), counting only the
     time spent waiting for the client, since one byte resets an idle time alone and a long upload's
     route has a long deadline or none. That reader is Corten's own and already notes when a wait
-    begins, so the rate costs it a count for each piece and, for each piece it waited for, a second
-    clock read, a sum, clearing when the client went quiet and taking the earlier of two due times;
-    a request that reads no body makes no reader, so it pays nothing. Counted with
-    callgrind against `fed087d8` (release, 50 and 250 reads, one run each, which callgrind repeats
-    to within 0.1%): a piece `Pieces` waited for, one byte each, went from 2,038 to 2,256
-    instructions (+218, 10.7%); an upload of one-byte pieces from 2,027,784 to 2,196,349 (+8.3%)
-    when they came at once and from 5,353,909 to 5,888,581 (+10.0%) when it waited for each; a
-    body read whole was unchanged. A one-byte piece is the worst case: a piece of a few KiB, as
-    clients send, pays the same instructions over far more bytes. It assumes the handler asks for the next piece promptly, as a
-    handler that spends a fixed time on each piece lets a client that sends one in that time go
+    begins, so the rate costs it a count and clearing when the client went quiet for each piece,
+    and for each piece it waited for a second clock read, a sum and the earlier of two due times; a
+    request that reads no body makes no reader, so it pays nothing. Counted with callgrind against
+    `fed087d8` (release, 50 and 250 reads, one run each, which callgrind repeats to within 0.1%): a
+    piece `Pieces` waited for, one byte each, went from 2,038 to 2,256 instructions (+218, 10.7%);
+    an upload of one-byte pieces from 2,027,784 to 2,196,349 (+8.3%) when they came at once and
+    from 5,353,909 to 5,888,581 (+10.0%) when it waited for each; a body read whole was unchanged.
+    A one-byte piece is the worst case: a piece of a few KiB, as clients send, pays the same
+    instructions over far more bytes. It assumes the handler asks for the next piece promptly, as
+    a handler that spends a fixed time on each piece lets a client that sends one in that time go
     on unbounded, as Kestrel's does. A body read whole (`bytes_up_to`, `Form`, `Json`) is bounded
     by the route's deadline alone, which a route that removes it keeps for those; how many may be
     open is `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from
