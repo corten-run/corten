@@ -61,7 +61,8 @@ const out = existsSync(outFile) ? JSON.parse(readFileSync(outFile, "utf8")) : {}
 /** The commit the working tree is at, and whether it has changes. */
 const source = {
   commit: spawnSync("git", ["rev-parse", "--short=8", "HEAD"], { cwd: repo, encoding: "utf8" }).stdout.trim(),
-  dirty: spawnSync("git", ["status", "--porcelain"], { cwd: repo, encoding: "utf8" }).stdout.trim() !== "",
+  // The results this and the other scripts write are left out.
+  dirty: spawnSync("git", ["status", "--porcelain", "--", ".", ":!bench/fullstack/results"], { cwd: repo, encoding: "utf8" }).stdout.trim() !== "",
 };
 const save = () => { mkdirSync(dirname(outFile), { recursive: true }); writeFileSync(outFile, JSON.stringify(out, null, 1)); };
 

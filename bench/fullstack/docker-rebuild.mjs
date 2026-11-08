@@ -56,7 +56,8 @@ const out = existsSync(outFile) ? JSON.parse(readFileSync(outFile, "utf8")) : {}
 /** The commit the working tree is at, and whether it has changes, since the copy is the tree's. */
 const source = {
   commit: run("git", ["-C", repo, "rev-parse", "--short=8", "HEAD"]).stdout.trim(),
-  dirty: run("git", ["-C", repo, "status", "--porcelain"]).stdout.trim() !== "",
+  // The results this and the other scripts write are left out.
+  dirty: run("git", ["-C", repo, "status", "--porcelain", "--", ".", ":!bench/fullstack/results"]).stdout.trim() !== "",
 };
 const save = () => { mkdirSync(dirname(outFile), { recursive: true }); writeFileSync(outFile, JSON.stringify(out, null, 1)); };
 const scratch = mkdtempSync(join(tmpdir(), "corten-docker-rebuild-"));
