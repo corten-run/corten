@@ -2551,6 +2551,15 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+277. `bench/fullstack` measures what each production default costs in CPU a request under load:
+    `cost-under-load.sh` builds card-market's round image as it is and with each `ablate/` patch,
+    and `ab.mjs` serves the page and the JSON at a fixed 300 a second and with 64 users, alternating,
+    on a droplet's pinned CPU; `cost-under-load.mjs` gives each default's microseconds a request.
+    Three rounds on a c-8 (the README's "What each production default costs under load"): for a
+    browser, compression is 45 of the page's 85 microseconds at 64 users (53%) and 25 of the JSON's
+    57 (44%), and the page's `ETag` 6 (7%); every other default, and every default on `identity`,
+    is within a few microseconds of zero
+    ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
