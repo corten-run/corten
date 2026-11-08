@@ -274,8 +274,17 @@ clients are the benchmark's own Node client of the feed's protocol, on its own r
 and it counts a gap in `seq` as lost rather than loading a snapshot: they show what the server
 sends through a failover. Beside them a Chromium page runs `subscribe()` itself through the
 same run, and it lost nothing either (3,888 of 3,888 and 4,000 of 4,000, one snapshot each).
-`subscribe()`'s recovery from a gap in `seq`, a stream answered with an HTTP error and a failed
-snapshot is checked in Chromium, Firefox and WebKit by `scripts/smoke.mjs`, and from a `sync`
+The runtime checks the envelope of what it is sent: a snapshot's `epoch`, `seq` and `rows`, and a
+patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An answer that is not a
+snapshot (a proxy's page, a server of another version) is a failed snapshot: logged and fetched
+again after a backoff. A patch that is not one has lost its write, so the stream is closed and the
+snapshot loaded again, after a backoff that doubles from 1 s while the patches after it are bad
+too; neither reaches the script. The rows themselves are not checked: each is the feed's `Row`,
+the server's own type, whose JSDoc the browser never sees ([design Choice 33](../design.md#choice-script-boundaries)).
+Next to the `JSON.parse` it follows, its cost was within a timing's noise in Chromium (patches of
+1 to 100 changes).
+`subscribe()`'s recovery from a gap in `seq`, a stream answered with an HTTP error, a failed
+snapshot, a snapshot that is not one and a patch that is not one is checked in Chromium, Firefox and WebKit by `scripts/smoke.mjs`, and from a `sync`
 in all three except a `sync` on a stream already open, which WebKit skips. What the cluster does on the
 way is logged through the app's subscriber, as the feed's own events are (target `corten::feed`,
 fields `instance` and `feed`): a warning for a gap in a feed's patches (`have`, `got`) and the
