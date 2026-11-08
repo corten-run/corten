@@ -17,7 +17,7 @@ class ItemSource
                 self::eachItem(file_get_contents(config('items.fixture_path')), function (string $id, string $json) {
                     $this->fixture[$id] = ItemView::fromApi(json_decode($json, true, 512, JSON_THROW_ON_ERROR));
                 });
-            } catch (\JsonException $error) {
+            } catch (\Throwable $error) {
                 // Octane drops an exception thrown while a worker boots, so say why it stopped.
                 file_put_contents('php://stderr', 'items fixture '.config('items.fixture_path').': '.$error->getMessage()."\n");
 
@@ -37,8 +37,11 @@ class ItemSource
      */
     private static function eachItem(string $json, callable $item): void
     {
+        if (! json_validate($json)) {
+            throw new \JsonException('the fixture is not valid JSON: '.json_last_error_msg());
+        }
         $i = strspn($json, " \t\r\n");
-        if (! json_validate($json) || ($json[$i] ?? '') !== '{') {
+        if ($json[$i] !== '{') {
             throw new \JsonException('the fixture is not a JSON object');
         }
         $i++;
