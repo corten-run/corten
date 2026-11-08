@@ -641,7 +641,8 @@ the commit it ran at: the first four phases at `d456063e` with local changes, th
 before the commit that adds it, and the clients that stop reading and the oversized requests run
 again at `330ff623` with none, each keeping its first pass in `earlier`; the first pass's `taken`
 is the file's header from then, marked `fromHeader`, whose time is when it was last written): Corten,
-axum-maud and the six other apps the matched tier then named (Next.js, Leptos, Django, Spring, Topcoat and ASP.NET Core), ASP.NET Core as both its Razor Pages app
+axum-maud and the six other apps the matched tier then named (Next.js, Leptos, Django, Spring,
+Topcoat and ASP.NET Core), ASP.NET Core as both its Razor Pages app
 and aspnet-aot. Corten is card-market, with its own 10 s request deadline and its write limit
 raised for the probe (Method, The hardening step). The images
 were `cb-corten` and `cb-axum-maud` built at `720c8a88`, `cb-aspnet-aot` at this step's first
@@ -1568,9 +1569,9 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
    Rust service with Postgres and Redis, not in this repository).
-3. JavaScript dependencies are pinned in each `package.json` without lockfiles, and Python's
-   (Django, FastAPI) in `requirements.txt` without their own dependencies', so transitive versions
-   can drift between builds; the other apps have lockfiles.
+3. JavaScript dependencies are pinned in each `package.json` without lockfiles, and the Python
+   apps' (Django, FastAPI) in `requirements.txt`, which pins only the packages it names, so
+   transitive versions can drift between builds; the other apps have lockfiles.
 4. The page is small. Apps with large client-side state (a seller grid of live rows) are a
    different test; see [bench/live](../live/README.md) for pushing updates.
 5. Each framework runs its production defaults with the worker count its docs give for one CPU,

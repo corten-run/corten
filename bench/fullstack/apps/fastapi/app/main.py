@@ -159,7 +159,8 @@ async def prices():
         while True:
             yield ServerSentEvent(raw_data=await queue.get())
     finally:
-        # Starlette cancels the stream when the client disconnects.
+        # FastAPI cancels the generator when the response ends: for a client that left, at the
+        # next write that fails, which its keepalive comment (every 15 s) bounds.
         _clients.discard(queue)
 
 

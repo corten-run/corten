@@ -21,7 +21,7 @@ live page (a price ticker, a seller grid, a notification badge) costs to hold op
 | aspnet | Server-sent events | `TypedResults.ServerSentEvents` over a `Channel<T>` per client | [LivePrices.cs](../fullstack/apps/aspnet/LivePrices.cs) |
 | spring | Server-sent events | Spring MVC `SseEmitter` on Tomcat | [LiveController.java](../fullstack/apps/spring/src/main/java/bench/itempage/LiveController.java) |
 | django | Server-sent events | Async view, `StreamingHttpResponse`, on uvicorn (ASGI) | [live.py](../fullstack/apps/django/itempage/live.py) |
-| fastapi | Server-sent events | `EventSourceResponse`, an `asyncio.Queue` per client | [main.py](../fullstack/apps/fastapi/app/main.py) |
+| fastapi | Server-sent events | `EventSourceResponse`, an `asyncio.Queue` per client; FastAPI's own keepalive comment every 15 s on an idle stream | [main.py](../fullstack/apps/fastapi/app/main.py) |
 | express | Server-sent events | `res.write` on each open response | [server.mjs](../fullstack/apps/express/server.mjs) |
 | rails | WebSocket, Action Cable | A channel, `ActionCable.server.broadcast` | [prices_channel.rb](../fullstack/apps/rails/app/channels/prices_channel.rb) |
 | phoenix | WebSocket, Phoenix Channels | A channel, `Endpoint.broadcast` over PubSub | [prices_channel.ex](../fullstack/apps/phoenix/lib/item_page_web/channels/prices_channel.ex) |

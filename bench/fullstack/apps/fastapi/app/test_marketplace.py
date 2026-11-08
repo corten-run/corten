@@ -1,5 +1,6 @@
 """The FastAPI app's own tests (python -m unittest, with requirements.txt installed): formatting,
 the page's rows and links, the cross-site post check, and both sources, each read per request."""
+import asyncio
 from copy import deepcopy
 import json
 import os
@@ -128,6 +129,7 @@ class PageTests(unittest.TestCase):
             self.assertNotIn(b"\n", first.content)
             self.assertEqual(self.client.get("/api/marketplace/item_1").json()["title"], "4")
         self.assertEqual(reads, ["/marketplace/records/item_1"] * 4)
+        asyncio.run(source.client.aclose())
 
     def test_an_upstream_failure_is_a_502(self):
         self.source.get.side_effect = httpx.ConnectError("refused")
