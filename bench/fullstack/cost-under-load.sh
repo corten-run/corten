@@ -37,10 +37,13 @@ if [ "$(for i in "${images[@]}"; do docker image inspect -f '{{.Id}}' "$i"; done
   echo "two variants built the same image" >&2; exit 1
 fi
 out=bench/fullstack/${OUT:-results/cost-under-load}
+# Read before source.txt is written, and outside results/, so the record does not count itself.
+commit=$(git describe --always --dirty --abbrev=40 2>/dev/null || echo unknown)
+changed=$(git status --porcelain -- . ':!bench/fullstack/results' 2>/dev/null | wc -l)
 mkdir -p "$out"
 {
-  echo "commit $(git describe --always --dirty --abbrev=40 2>/dev/null || echo unknown)"
-  echo "untracked or changed files $(git status --porcelain 2>/dev/null | wc -l)"
+  echo "commit $commit"
+  echo "untracked or changed files outside results/: $changed"
   echo "source $src_hash"
   for i in "${images[@]}"; do echo "image $i $(docker image inspect -f '{{.Id}}' "$i")"; done
   echo "BENCH_APP_CPUS=${BENCH_APP_CPUS-} BENCH_FIXTURE_LOAD_CPUS=${BENCH_FIXTURE_LOAD_CPUS-} BENCH_LOAD_CPUS=${BENCH_LOAD_CPUS-} AB_ROUNDS=${AB_ROUNDS-}"
