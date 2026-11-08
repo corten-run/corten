@@ -911,7 +911,7 @@ rules something out.
     input with no derive beside theirs, and `FromJson` beside them is a second impl as well; a
     generic type (whose bounds serde infers in ways `FromJson`'s do not follow), or one `FromJson`
     cannot read (a field that borrows, an attribute it does not follow), gets none and takes an
-    empty impl. Not chosen: depending on serde_derive from `corten-macros`, which builds on `proc_macro` alone, or
+    empty impl, with a `FromJsonSchema` written by hand where it needs a schema. Not chosen: depending on serde_derive from `corten-macros`, which builds on `proc_macro` alone, or
     keeping the second derive, which a derive cannot add to the item it reads
     ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763),
     [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
