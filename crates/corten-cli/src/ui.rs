@@ -3554,9 +3554,9 @@ mod tests {
         // shape have no specificity, so an app's rule on a child wins.
         assert!(stack.contains(".stack.start { align-items: flex-start; }"), "StackStart's rule");
         assert!(
-            stack
-                .contains(":where(.stack.start) > :where(:not(dialog, [popover])) { max-width: 100%; overflow-wrap: anywhere; }"),
-            "a child is at most the stack's width"
+            stack.contains(":where(.stack.start) > * { overflow-wrap: anywhere; }")
+                && stack.contains(":where(.stack.start) > :where(:not(dialog, [popover])) { max-width: 100%; }"),
+            "a child is at most the stack's width, a dialog's or popover's long words break too"
         );
         assert!(
             stack.contains(":where(.stack.start) > :where(img, video, canvas) { height: auto; }"),

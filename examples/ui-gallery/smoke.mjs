@@ -2662,9 +2662,9 @@ async function run(browser) {
     return { ...word, picture: { width: Math.round(pic.width), height: Math.round(pic.height), column: Math.round(box.width) } };
   });
   // On the phone too: a dialog or popover written in the column (beside the button that opens it)
-  // keeps the browser's margin: auto and width, so a modal with a long line opens in the middle of
-  // the screen, clear of its edges, and a popover without an anchor in the middle (#1124). A
-  // paragraph there still drops its margin.
+  // keeps the browser's margin: auto and width, so a modal with a long word opens in the middle of
+  // the screen, clear of its edges, the word broken inside it, and a popover without an anchor in
+  // the middle (#1124). A paragraph there still drops its margin.
   const topLayer = await orders.getByRole("link", { name: "How selling limits work" }).evaluate((a) => {
     const column = /** @type {HTMLElement} */ (a.parentElement);
     const [dialog, popover, para] = [document.createElement("dialog"), document.createElement("div"), document.createElement("p")];
@@ -2681,7 +2681,7 @@ async function run(browser) {
       const r = el.getBoundingClientRect();
       return [r.top, innerHeight - r.bottom, r.left, innerWidth - r.right].map(Math.round);
     };
-    const at = { dialog: place(dialog), popover: place(popover), para: getComputedStyle(para).marginBlockStart };
+    const at = { dialog: place(dialog), sideways: dialog.scrollWidth > dialog.clientWidth + 1, popover: place(popover), para: getComputedStyle(para).marginBlockStart };
     popover.hidePopover();
     dialog.close();
     for (const el of [dialog, popover, para]) el.remove();
@@ -2690,8 +2690,8 @@ async function run(browser) {
   if (startSize) await orders.setViewportSize(startSize);
   const middle = (/** @type {number[]} */ [top, bottom, left, right]) => Math.abs(top - bottom) <= 1 && Math.abs(left - right) <= 1 && top > 0;
   check(
-    "Stack: a dialog or popover in it opens in the middle of a phone's screen, a dialog with a long line clear of the edges, and a paragraph drops its margin",
-    middle(topLayer.dialog) && topLayer.dialog[2] >= 16 && middle(topLayer.popover) && topLayer.para === "0px",
+    "Stack: a dialog or popover in it opens in the middle of a phone's screen, a dialog with a long word clear of the edges and breaking it, and a paragraph drops its margin",
+    middle(topLayer.dialog) && topLayer.dialog[2] >= 16 && !topLayer.sideways && middle(topLayer.popover) && topLayer.para === "0px",
     JSON.stringify(topLayer),
   );
   check(
