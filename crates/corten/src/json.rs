@@ -187,10 +187,18 @@
 //!
 //! A generic one is a `FromJson` wherever the `Deserialize` they wrote applies (with the bounds
 //! serde infers, such as `T: Default` for a defaulted `T`), read by serde_json rather than
-//! Corten's reader, and a `UrlValue` enum with `#[serde(other)]` reads any other word as that
-//! variant (Corten's reader gives up on it and
-//! the `Deserialize` they wrote reads it). A form input whose fields borrow from the input gets
-//! none and cannot take one, since a `FromJson` reads owned values.
+//! Corten's reader (so inside another value it is read twice: the reader finds its text, then
+//! serde_json reads that). A `UrlValue` enum with `#[serde(other)]` reads any other word as that
+//! variant: Corten's reader gives up on the whole text at such a word and serde_json reads it all
+//! again with the `Deserialize` they wrote. A form input whose fields borrow from the input gets
+//! none and cannot take one, since a `FromJson` reads owned values. `#[derive(FromJson)]` itself
+//! still refuses `#[serde(other)]`, which its reader does not follow; derive `UrlValue` for that:
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Shown { All, Mine, #[serde(other)] Other }
+//! ```
 //!
 //! ```
 //! #[derive(Debug, PartialEq, corten::UrlValue)]

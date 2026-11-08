@@ -968,6 +968,15 @@ fn fields_and_url_value_are_read_from_json_as_they_are() {
     read_alone::<fallback::ours::Fallback, fallback::theirs::Fallback>(r#"{"page":2}"#);
 }
 
+/// A constant a discriminant reads through a qualified path.
+pub trait Width {
+    const N: isize;
+}
+
+impl Width for std::collections::HashMap<u8, u16> {
+    const N: isize = 40;
+}
+
 twin! { shifted, corten::UrlValue,
     #[derive(Clone, Copy)]
     #[serde(rename_all = "snake_case")]
@@ -975,6 +984,8 @@ twin! { shifted, corten::UrlValue,
         Read = 1 << 0,
         Write = 1 << 1,
         Admin = size_of::<std::collections::HashMap<u8, u16>>() as isize,
+        Long = size_of::<fn() -> std::collections::HashMap<u8, u16>>() as isize + 100,
+        Qualified = <std::collections::HashMap<u8, u16> as Width>::N,
     }
 }
 
@@ -1002,11 +1013,15 @@ fn a_generic_form_a_shifted_discriminant_and_another_word_read_as_serde_s() {
     }
     // A generic one is the trait's own body: serde_json reads it, alone and inside another value.
     assert!(corten::json::__read::alone::<generic::ours::Generic<u32>>(r#"{"value":1,"list":[2,3]}"#).is_none());
-    same_read::<Vec<generic::ours::Generic<u32>>, Vec<generic::theirs::Generic<u32>>>(r#"[{"value":1,"list":[2,3]},{"value":4}]"#);
+    same_read::<Vec<generic::ours::Generic<u32>>, Vec<generic::theirs::Generic<u32>>>(
+        r#"[{"value":1,"list":[2,3]},{"value":4}]"#,
+    );
     // Its bounds are the ones serde infers (`T: Default` here), not `FromJson` on each parameter.
-    same_read::<defaults::ours::Defaults<u8, NotRead, NotRead>, defaults::theirs::Defaults<u8, NotRead, NotRead>>(r#"{"kind":null}"#);
+    same_read::<defaults::ours::Defaults<u8, NotRead, NotRead>, defaults::theirs::Defaults<u8, NotRead, NotRead>>(
+        r#"{"kind":null}"#,
+    );
     same_read::<associated::ours::Associated<NoDefault>, associated::theirs::Associated<NoDefault>>(r#"{"value":3}"#);
-    for text in ["\"read\"", "\"write\"", "\"admin\"", "\"Write\"", "1"] {
+    for text in ["\"read\"", "\"write\"", "\"admin\"", "\"long\"", "\"qualified\"", "\"Write\"", "1"] {
         same_read::<shifted::ours::Shifted, shifted::theirs::Shifted>(text);
     }
     read_alone::<shifted::ours::Shifted, shifted::theirs::Shifted>("\"admin\"");

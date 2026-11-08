@@ -54,9 +54,10 @@ fn impls(item: &Item) -> Result<TokenStream, Error> {
 }
 
 /// [`impls`]; with `by_serde`, the `FromJson` impl is the trait's own body (serde_json reads the
-/// text) and its bounds are only the type's own. A generic type's impl also asks for
+/// text) and its bounds are only the type's own, and a generic type's impl also asks for
 /// `Self: DeserializeOwned`, the trait's supertrait, since the bounds serde infers for its
-/// `Deserialize` need not follow from the ones here.
+/// `Deserialize` need not follow from them. The derive's own impl keeps `T: FromJson` on each
+/// parameter and nothing else, as before.
 fn impls_with(item: &Item, by_serde: bool) -> Result<TokenStream, Error> {
     let container = Container::read(&item.attrs, item.is_enum)?;
     let schema;
@@ -108,7 +109,7 @@ fn impls_with(item: &Item, by_serde: bool) -> Result<TokenStream, Error> {
     } else {
         bounded(&item.impl_generics, &item.where_clause, "::corten::json::FromJson")
     };
-    if !item.impl_generics.is_empty() {
+    if by_serde && !item.impl_generics.is_empty() {
         let last = where_clause.clone().into_iter().last();
         where_clause.extend(q(
             match last {
@@ -142,14 +143,14 @@ fn impls_with(item: &Item, by_serde: bool) -> Result<TokenStream, Error> {
             TokenStream::new()
         } else {
             q(
-            "#[allow(unused_mut, unused_variables, unused_imports, clippy::all)]
+                "#[allow(unused_mut, unused_variables, unused_imports, clippy::all)]
             fn __read(__r: &mut ::corten::json::__read::Reader<'_>)
                 -> ::core::result::Result<Self, ::corten::json::__read::Fallback> {
                 use ::corten::json::__read::{ViaDeserialize as _, ViaFromJson as _};
                 __A0
             }",
-            &[body],
-        )
+                &[body],
+            )
         },
     ))]);
     out.extend(schema);
