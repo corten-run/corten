@@ -44,7 +44,9 @@ export function send(event, el, tables) {
  * from the page's address, as `send` does a form's, whenever the link is about to be read: the
  * pointer over it (before the runtime prefetches it), focus (before Enter follows it), a click, a
  * middle click and its menu ("Copy link", "Open in new tab"). A link to another origin or without `href` is left.
- * @param {HTMLAnchorElement} a @param {ElementId[]} tables @param {AbortSignal} signal
+ * A component's links take it as a prop (the kit's `Pagination` and `PreviousNext`, `on:link`),
+ * whose handler gets an `HTMLElement`, so that is what it takes.
+ * @param {HTMLElement} a the link @param {ElementId[]} tables @param {AbortSignal} signal
  */
 export function link(a, tables, signal) {
   const keep = () => {

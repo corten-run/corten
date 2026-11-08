@@ -985,6 +985,31 @@ async function run(browser) {
     const href = await share.getAttribute("href");
     check("a link in the page's markup that calls ordered::link carries the order a sort in place gave", new URL(href ?? "", page.url()).searchParams.get("sold") === "price", String(href));
   }
+  // The kit's pager under the table takes the same call as `on:link`, on each link it draws
+  // (#1107): its Earlier sales link opens the earlier page in the order on screen, and that page's
+  // Later sales link comes back in it.
+  {
+    const pager = page.getByRole("navigation", { name: "Sales pages" });
+    const marks = await pager.evaluate((nav) => Array.from(nav.querySelectorAll("li > *"), (el) => `${el.localName} ${el.hasAttribute("data-on")}`).join(", "));
+    const earlier = pager.getByRole("link", { name: "Earlier sales" });
+    await earlier.hover();
+    const href = await earlier.getAttribute("href");
+    await earlier.click();
+    await page.getByText("This month's earlier sales", { exact: true }).waitFor();
+    const there = new URL(page.url()).searchParams;
+    const prices = await page
+      .locator("table", { has: page.locator("caption", { hasText: "This month's earlier sales" }) })
+      .locator("tbody tr td:last-child")
+      .allTextContents();
+    check(
+      "a kit pager's link that calls ordered::link (on:link) opens its page in the order a sort in place gave, and its disabled end has no handler",
+      marks === "span false, a true" && new URL(href ?? "", page.url()).searchParams.get("sold") === "price" && there.get("sold") === "price" && there.get("sales") === "earlier" && JSON.stringify(prices) === JSON.stringify(["$9.90", "$11.50", "$12.25"]),
+      `${marks} ${href} ${page.url()} ${JSON.stringify(prices)}`,
+    );
+    await page.getByRole("navigation", { name: "Sales pages" }).getByRole("link", { name: "Later sales" }).click();
+    await page.getByText("This month's last sales", { exact: true }).waitFor();
+    check("the earlier page's Later sales link comes back in the same order", new URL(page.url()).searchParams.get("sold") === "price" && !new URL(page.url()).searchParams.has("sales"), page.url());
+  }
   const shownBeforeReload = await sortedBy();
   await page.reload();
   check("a reload after a sort in place shows the order on screen", JSON.stringify(await sortedBy()) === JSON.stringify(shownBeforeReload), `${JSON.stringify(shownBeforeReload)} -> ${JSON.stringify(await sortedBy())}`);

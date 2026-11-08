@@ -287,7 +287,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
         <div class={Stack { gap: Gap::Lg }}>
             <Breadcrumb
                 label="Breadcrumb"
-                crumbs={&[Crumb { label: "Draft listing", link: &url::Home { tab: None, sale: None, period: None, sold: None } }]}
+                crumbs={&[Crumb { label: "Draft listing", link: &url::Home { tab: None, sale: None, period: None, sold: None, sales: None } }]}
                 current="Orders"
             />
             <div class={Cluster { gap: Gap::Sm }}>
@@ -455,6 +455,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                             pages={PAGES}
                             current={page}
                             link={|page| url::Orders { page: Some(page).filter(|p| *p > 1), sort, payout: Some(payout).filter(|p| *p > 0) }}
+                            on:link={None::<Handler>}
                         />
                     </footer>
                 </section>
@@ -522,6 +523,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                                 next_label="Older"
                                 previous={newer.as_ref().map(|r| r as &dyn Href)}
                                 next={older.as_ref().map(|r| r as &dyn Href)}
+                                on:link={None::<Handler>}
                             />
                         </footer>
                     </section>

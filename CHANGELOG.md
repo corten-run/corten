@@ -4014,6 +4014,15 @@ Corten is pre-1.0, so any minor version may change the API.
     again (a `chunk()` inside a `timeout` or `select!`) no longer starts the idle time again, so a
     client that went quiet is given up on after the idle time however the handler reads
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
+168. The kit's `Pagination` and `PreviousNext` take `on:link`, the handler each link they draw runs
+    as it joins the page (its `on:connect`), so a pager under a table sorted in place whose pages
+    read its order passes `corten_ui::ordered::link(target, [sorted(&SupplyId)], signal)` and
+    each link opens its page in the order on screen. Before, a pager's links could carry no
+    handler, so such a page drew its own pager. Breaking for a copy's callers: every
+    `<Pagination>` and `<PreviousNext>` writes `on:link`, `None::<Handler>` for none (take the
+    kit's file with `corten ui add pagination --merge`). `ordered::link` takes an `HTMLElement`,
+    as a prop's handler gets one
+    ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
 
 ### Fixed
 - The fixed favicon keeps its weak content tag when background compression finishes, so a

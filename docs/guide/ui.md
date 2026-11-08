@@ -191,13 +191,20 @@ draws it. Since it is read when the form is sent, a form a patch drew after the 
 too. A link (a "Previous page" whose route reads the order) calls `ordered::link(target,
 [sorted(&SupplyId)], signal)` on `on:connect`, and its `href` takes the order whenever it is about
 to be read: the pointer over it (so the page the runtime prefetches on a hover is the one the
-click opens), focus, a click, a middle click and its menu ("Copy link", "Open in new tab"). A form
-or link that carries the
-order of several sorted tables (one route's query set holding each table's keys) names each
-(`[sorted(&SupplyId), sorted(&ListingsId)]`), and each table's keys are taken from the address
-and the others' left; an id of an element around several sorted tables names them all. A GET
-form's address is its fields, so one that carries the page's query in hidden inputs
-(`corten::form::keep_query`) and calls it sends those keys as the address has them instead
+click opens), focus, a click, a middle click and its menu ("Copy link", "Open in new tab"). A
+pager under the table whose pages read the order passes the same call to the kit's `Pagination`
+or `PreviousNext` as `on:link`, which puts it on each link it draws:
+
+```rust,ignore
+<PreviousNext label="Pages" previous_label="Previous" next_label="Next"
+    previous={before} next={after} on:link={ordered::link(target, [sorted(&SupplyId)], signal)} />
+```
+
+A form or link that carries the order of several sorted tables (one route's query set holding each
+table's keys) names each (`[sorted(&SupplyId), sorted(&ListingsId)]`), and each table's keys are
+taken from the address and the others' left; an id of an element around several sorted tables
+names them all. A GET form's address is its fields, so one that carries the page's query in hidden
+inputs (`corten::form::keep_query`) and calls it sends those keys as the address has them instead
 (set in each list of its fields made while it is sent, the browser's and one another handler
 makes, so nothing is added to the page): replaced, added when the form had
 none, left out when the address has none (the default order). A key a control the user sees
@@ -234,7 +241,8 @@ first page, and the pages' links keep the sort. A page of rows can also be sorte
 an order across pages would cost more than it is worth (pages by a keyset, `after` the last id,
 would need a keyset and an index for each order): `rows::sort` as above, each sort link keeps
 the page (the same `after` or offset) so the server sorts those same rows without the script, and
-the caption says the order covers the rows shown ("These 50 sales, sorted by price").
+the caption says the order covers the rows shown ("These 50 sales, sorted by price"). Its pager
+passes `ordered::link` as `on:link` (above), so the next page opens in the order on screen.
 
 ```rust,ignore
 #[route("/sales")]
