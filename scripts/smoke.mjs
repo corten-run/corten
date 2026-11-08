@@ -1202,7 +1202,9 @@ async function run(browser) {
     /** @type {any} */ (window).__shadowedErrors = 0;
     document.addEventListener("corten:error", () => (/** @type {any} */ (window).__shadowedErrors += 1));
   });
-  await page.click("#shadowed button");
+  // Clicked from the page: Playwright's own click reads the form's getAttribute, which the
+  // control named getAttribute shadows.
+  await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#shadowed button")).click());
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Globex"), null, { timeout: 4000 }).catch(() => {});
   page.off("request", onShadowed);
   check(
