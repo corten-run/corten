@@ -1734,6 +1734,7 @@ node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repe
 # (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some):
 node bench/fullstack/ab.mjs results/ab-x cb-corten cb-corten-next
 node bench/fullstack/flood-memory.mjs results/flood-x cb-corten [runs=3] [floods=8]
+node bench/fullstack/alloc-faults.mjs cb-corten cb-corten-next   # page faults and CPU a request
 ```
 
 ## What the repository keeps

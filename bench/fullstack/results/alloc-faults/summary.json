@@ -1,0 +1,226 @@
+{
+  "images": {
+    "cm-p1011-glibc": "card-market at 81f1f8ef, LD_PRELOAD empty (glibc)",
+    "cm-p1011-je": "card-market at 81f1f8ef, MALLOC_CONF unset (jemalloc 5.3 defaults)",
+    "corten-card-market-p1011b": "card-market at this branch, MALLOC_CONF=background_thread:true,tcache_max:65536"
+  },
+  "requests": 2000,
+  "rows": [
+    {
+      "round": 1,
+      "image": "cm-p1011-je",
+      "enc": "identity",
+      "faults": 0,
+      "cpuMicros": 115,
+      "failed": 0
+    },
+    {
+      "round": 1,
+      "image": "cm-p1011-je",
+      "enc": "browser",
+      "faults": 0,
+      "cpuMicros": 240,
+      "failed": 0
+    },
+    {
+      "round": 1,
+      "image": "cm-p1011-je",
+      "enc": "br",
+      "faults": 19.4,
+      "cpuMicros": 450,
+      "failed": 0
+    },
+    {
+      "round": 1,
+      "image": "corten-card-market-p1011b",
+      "enc": "identity",
+      "faults": 0,
+      "cpuMicros": 120,
+      "failed": 0
+    },
+    {
+      "round": 1,
+      "image": "corten-card-market-p1011b",
+      "enc": "browser",
+      "faults": 0,
+      "cpuMicros": 265,
+      "failed": 0
+    },
+    {
+      "round": 1,
+      "image": "corten-card-market-p1011b",
+      "enc": "br",
+      "faults": 0,
+      "cpuMicros": 325,
+      "failed": 0
+    },
+    {
+      "round": 1,
+      "image": "cm-p1011-glibc",
+      "enc": "identity",
+      "faults": 0,
+      "cpuMicros": 155,
+      "failed": 0
+    },
+    {
+      "round": 1,
+      "image": "cm-p1011-glibc",
+      "enc": "browser",
+      "faults": 0,
+      "cpuMicros": 295,
+      "failed": 0
+    },
+    {
+      "round": 1,
+      "image": "cm-p1011-glibc",
+      "enc": "br",
+      "faults": 0,
+      "cpuMicros": 265,
+      "failed": 0
+    },
+    {
+      "round": 2,
+      "image": "cm-p1011-je",
+      "enc": "identity",
+      "faults": 0,
+      "cpuMicros": 140,
+      "failed": 0
+    },
+    {
+      "round": 2,
+      "image": "cm-p1011-je",
+      "enc": "browser",
+      "faults": 0,
+      "cpuMicros": 290,
+      "failed": 0
+    },
+    {
+      "round": 2,
+      "image": "cm-p1011-je",
+      "enc": "br",
+      "faults": 19.3,
+      "cpuMicros": 525,
+      "failed": 0
+    },
+    {
+      "round": 2,
+      "image": "corten-card-market-p1011b",
+      "enc": "identity",
+      "faults": 0,
+      "cpuMicros": 205,
+      "failed": 0
+    },
+    {
+      "round": 2,
+      "image": "corten-card-market-p1011b",
+      "enc": "browser",
+      "faults": 0,
+      "cpuMicros": 270,
+      "failed": 0
+    },
+    {
+      "round": 2,
+      "image": "corten-card-market-p1011b",
+      "enc": "br",
+      "faults": 0,
+      "cpuMicros": 365,
+      "failed": 0
+    },
+    {
+      "round": 2,
+      "image": "cm-p1011-glibc",
+      "enc": "identity",
+      "faults": 0,
+      "cpuMicros": 155,
+      "failed": 0
+    },
+    {
+      "round": 2,
+      "image": "cm-p1011-glibc",
+      "enc": "browser",
+      "faults": 0,
+      "cpuMicros": 265,
+      "failed": 0
+    },
+    {
+      "round": 2,
+      "image": "cm-p1011-glibc",
+      "enc": "br",
+      "faults": 0,
+      "cpuMicros": 335,
+      "failed": 0
+    },
+    {
+      "round": 3,
+      "image": "cm-p1011-je",
+      "enc": "identity",
+      "faults": 0,
+      "cpuMicros": 165,
+      "failed": 0
+    },
+    {
+      "round": 3,
+      "image": "cm-p1011-je",
+      "enc": "browser",
+      "faults": 0,
+      "cpuMicros": 330,
+      "failed": 0
+    },
+    {
+      "round": 3,
+      "image": "cm-p1011-je",
+      "enc": "br",
+      "faults": 19.3,
+      "cpuMicros": 700,
+      "failed": 0
+    },
+    {
+      "round": 3,
+      "image": "corten-card-market-p1011b",
+      "enc": "identity",
+      "faults": 0,
+      "cpuMicros": 270,
+      "failed": 0
+    },
+    {
+      "round": 3,
+      "image": "corten-card-market-p1011b",
+      "enc": "browser",
+      "faults": 0,
+      "cpuMicros": 375,
+      "failed": 0
+    },
+    {
+      "round": 3,
+      "image": "corten-card-market-p1011b",
+      "enc": "br",
+      "faults": 0,
+      "cpuMicros": 370,
+      "failed": 0
+    },
+    {
+      "round": 3,
+      "image": "cm-p1011-glibc",
+      "enc": "identity",
+      "faults": 0,
+      "cpuMicros": 140,
+      "failed": 0
+    },
+    {
+      "round": 3,
+      "image": "cm-p1011-glibc",
+      "enc": "browser",
+      "faults": 0,
+      "cpuMicros": 365,
+      "failed": 0
+    },
+    {
+      "round": 3,
+      "image": "cm-p1011-glibc",
+      "enc": "br",
+      "faults": 0,
+      "cpuMicros": 520,
+      "failed": 0
+    }
+  ]
+}

@@ -757,9 +757,9 @@ rules something out.
    [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852),
    [#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
    jemalloc's default thread cache stops at 32 KiB, and a brotli response, which a client without
-   zstd gets, allocates buffers above that: with it each brotli page took 19.3 minor page faults
-   (the process's `minflt` over 1,000 to 3,000 requests, every run), with `tcache_max:65536` or any
-   larger value none, as on glibc; the background thread, no decay at all, `retain:false` and
+   zstd gets, allocates buffers above that: with it each brotli page took 19.3 to 19.4 minor page
+   faults (`bench/fullstack/alloc-faults.mjs`, the server's `minflt` over 2,000 requests, three
+   rounds, `results/alloc-faults`), with `tcache_max:65536` or any larger value none, as on glibc; the background thread, no decay at all, `retain:false` and
    `thp:never` each left the 19.3, and `identity` and zstd took none whatever the setting. On the
    benchmark item page (`bench/fullstack/ab.mjs`, the three images alternating, three rounds, 300
    requests a second for 40 seconds, then 64 users) the tuned jemalloc used 12.4% of its core at
@@ -778,7 +778,7 @@ rules something out.
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
    Stands on: measured (memory after eight floods, three runs each, five allocator settings; page
-   faults a brotli response, every run); measured, noisy (CPU and throughput in three rounds on a
+   faults a brotli response, three rounds and every ad hoc run); measured, noisy (CPU and throughput in three rounds on a
    shared desktop, which cannot show a cost smaller than about a quarter); bet (an app's image is
    Debian with the `libjemalloc2` package, 5.3, whose option names these are); reasoned (an image
    package binds only the image, where a `#[global_allocator]` crate compiles C into every build).
