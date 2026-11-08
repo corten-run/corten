@@ -160,13 +160,24 @@ function load(name) {
   return pending;
 }
 
+/**
+ * Element's own `getAttribute` and `hasAttribute`, for an element that may be a form: a form
+ * control's `name` shadows the form's member of that name (`<input name="hasAttribute">` makes
+ * `form.hasAttribute` the input), so the runtime reads every attribute it dispatches, binds and
+ * finds refs by through these (see formProperty).
+ */
+const { getAttribute, hasAttribute } = Element.prototype;
+/** @param {Element} el @param {string} name */
+const attrOf = (el, name) => getAttribute.call(el, name);
+/** @param {Element} el @param {string} name */
+const hasAttr = (el, name) => hasAttribute.call(el, name);
+
 /** Each element's parsed `data-on`, until the attribute changes. @type {WeakMap<Element, { source: string, list: Binding[] }>} */
 const parsed = new WeakMap();
 
 /** @param {Element} el */
 function bindings(el) {
-  // Read through Element's own method: a form control named getAttribute shadows the form's.
-  const source = Element.prototype.getAttribute.call(el, "data-on") ?? "";
+  const source = attrOf(el, "data-on") ?? "";
   let entry = parsed.get(el);
   if (!entry || entry.source !== source) {
     entry = { source, list: parseOn(source) };
@@ -226,12 +237,12 @@ function findRefs(from, owner, name) {
   const changes = refChanges.get(name) ?? 0;
   const hit = cached.get(name);
   if (hit && hit.changes === changes && hit.found.every((el) => el.isConnected)) return hit.found.slice();
-  const own = scope.getAttribute("data-scope");
+  const own = attrOf(scope, "data-scope");
   const qualified = `${own}/${name}`;
   /** @type {Element[]} */
   const found = [];
   const check = (/** @type {Element} */ el) => {
-    const ref = el.getAttribute("data-ref");
+    const ref = attrOf(el, "data-ref");
     if (ref === name ? el.closest("[data-scope]") === scope : ref === qualified && el.closest(`[data-scope="${own}"]`) === scope) found.push(el);
   };
   check(scope);
@@ -253,7 +264,7 @@ const refCache = new WeakMap();
 
 /** @param {Element} el @param {Set<string>} names */
 function refName(el, names) {
-  const ref = el.getAttribute("data-ref");
+  const ref = attrOf(el, "data-ref");
   if (ref !== null) names.add(ref.slice(ref.indexOf("/") + 1));
 }
 
@@ -418,7 +429,7 @@ function resolve(arg, el, event, binding) {
     case "*":
       return findRefs(el, arg.owner, arg.name);
     case "#":
-      return new Map(findRefs(el, arg.owner, arg.name).map((found) => [found.getAttribute("data-key"), found]));
+      return new Map(findRefs(el, arg.owner, arg.name).map((found) => [attrOf(found, "data-key"), found]));
     case "^":
       return closestRef(el, arg.owner, arg.name, event) ?? SKIP;
     case "{": {
@@ -521,7 +532,7 @@ function listen(type) {
     if (!event.bubbles) return;
     for (const node of event.composedPath()) {
       if (!(node instanceof Element)) continue;
-      if (node.hasAttribute("data-on")) for (const b of bindings(node)) if (b.type === type) run(node, b, event);
+      if (hasAttr(node, "data-on")) for (const b of bindings(node)) if (b.type === type) run(node, b, event);
       // A handler that stops a submit's propagation keeps it from the page's outer handlers, not
       // from the runtime: a data-patch form is still sent as a patch.
       if (event.cancelBubble) return type === "submit" && patchSubmit(event);
@@ -540,7 +551,7 @@ function listen(type) {
     type,
     (event) => {
       const target = event.composedPath()[0];
-      if (event.bubbles || !(target instanceof Element) || !target.hasAttribute("data-on")) return;
+      if (event.bubbles || !(target instanceof Element) || !hasAttr(target, "data-on")) return;
       for (const b of bindings(target)) if (b.type === type) run(target, b, event);
     },
     { capture: true },
@@ -561,7 +572,7 @@ function scan(root, names, inside = false) {
   for (const template of Array.from(root.getElementsByTagName("template"))) modulesOf(template.content);
   const marked = Array.from(root.querySelectorAll("[data-on]"));
   if (!inside) {
-    if (root.hasAttribute("data-on")) marked.unshift(root);
+    if (hasAttr(root, "data-on")) marked.unshift(root);
     refName(root, names);
   }
   // Rows cloned from one template carry the same refs, so a name is added once per run of them.
@@ -569,7 +580,7 @@ function scan(root, names, inside = false) {
     const refs = root.querySelectorAll("[data-ref]");
     let last = null;
     for (let i = 0; i < refs.length; i += 1) {
-      const ref = refs[i].getAttribute("data-ref");
+      const ref = attrOf(refs[i], "data-ref");
       if (ref !== last && ref !== null) names.add(ref.slice(ref.indexOf("/") + 1));
       last = ref;
     }
@@ -604,7 +615,7 @@ function fewRefNames(root, names) {
   for (let seen = 0; seen < FEW_NAMES; seen += 1) {
     const el = root.querySelector(selector);
     if (!el) return true;
-    const ref = /** @type {string} */ (el.getAttribute("data-ref"));
+    const ref = /** @type {string} */ (attrOf(el, "data-ref"));
     names.add(ref.slice(ref.indexOf("/") + 1));
     selector += `:not([data-ref="${CSS.escape(ref)}"])`;
   }
@@ -857,7 +868,7 @@ function setVars(root) {
 function modulesOf(node) {
   /** @type {Promise<unknown>[]} */
   const pending = [];
-  if (node instanceof Element && node.hasAttribute("data-on")) for (const b of bindings(node)) pending.push(loadFor(b));
+  if (node instanceof Element && hasAttr(node, "data-on")) for (const b of bindings(node)) pending.push(loadFor(b));
   for (const el of Array.from(node.querySelectorAll("[data-on]"))) for (const b of bindings(el)) pending.push(loadFor(b));
   for (const template of Array.from(node.querySelectorAll("template"))) pending.push(modulesOf(template.content));
   return Promise.all(pending);
@@ -1031,7 +1042,7 @@ function stateOf(f, initial) {
  * when it has one (see formProperty), and any element may be a form.
  * @param {Element} el
  */
-const idOf = (el) => el.getAttribute("id");
+const idOf = (el) => attrOf(el, "id");
 
 /**
  * The form's own property `name`, past a control named like it: in the DOM `<button name="action">`

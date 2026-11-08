@@ -5567,6 +5567,14 @@ Corten is pre-1.0, so any minor version may change the API.
     ETag is now compared as `If-None-Match` is, weakly and in a list or as `*`, so a proxy that
     marks it weak gets a 304 where it got the whole file
     ([#1056 Nothing answers /favicon.ico, so each browser request for it is the app's 404 page with its layout reads](https://github.com/corten-run/corten/issues/1056)).
+196. A form with a control named `hasAttribute` or `getAttribute` never ran its `data-on`
+    handlers (`on:submit`, `on:corten:error`, `on:corten:progress`): the control shadows the
+    form's method of that name, so the runtime's dispatch threw `node.hasAttribute is not a
+    function` and skipped them, for an event that bubbles, one that does not, and a form put in
+    after load. The runtime now reads every attribute it dispatches, binds and finds refs by
+    through Element's own methods, as its submit path already did. The runtime is 49 B smaller
+    and 53 B larger gzipped (41,292 to 41,243 B, 14,839 to 14,892 B gzip)
+    ([#1049 A form with a control named hasAttribute never runs its data-on handlers: the runtime's dispatch calls the form's own methods](https://github.com/corten-run/corten/issues/1049)).
 
 ### Documentation
 

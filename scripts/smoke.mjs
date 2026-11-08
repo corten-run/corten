@@ -968,6 +968,38 @@ async function run(browser) {
   // The form's on:corten:error runs (the runtime's event, on the form): it says the change failed.
   const told = await page.waitForSelector("#watch-form [role=alert]", { state: "visible", timeout: 5000 }).then(() => true, () => false);
   check("a form's on:corten:error handler runs for a submit the network fails", told);
+  // A form with controls named hasAttribute and getAttribute still runs its handlers, as the
+  // runtime reads its attributes through Element's own methods: the form the page loaded with, hearing an event that bubbles,
+  // and copies put in after load, one hearing an event that bubbles and one an event that does not.
+  const shadowed = await page.evaluate(async () => {
+    const names = ["hasAttribute", "getAttribute"];
+    const inputs = names.map((name) => `<input type="hidden" name="${name}" value="x">`).join("");
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
+    const markup = form.outerHTML.replace(/^<form[^>]*>/, (open) => open + inputs);
+    for (const n of [1, 2]) {
+      const copy = markup.replace(/ id="([^"]+)"/g, (_, id) => ` id="smoke-${n}-${id}"`);
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", /** @type {any} */ (window).__html(copy));
+    }
+    form.insertAdjacentHTML("afterbegin", /** @type {any} */ (window).__html(inputs));
+    // The copies' handlers are bound as they join the page, once the runtime hears they did.
+    await new Promise((r) => setTimeout(r, 100));
+    const heard = (/** @type {string} */ id, /** @type {boolean} */ bubbles) => {
+      const at = /** @type {Element} */ (document.getElementById(id));
+      const note = /** @type {HTMLElement} */ (document.querySelector(`#${id} [role=alert]`));
+      note.hidden = true;
+      Element.prototype.dispatchEvent.call(at, new CustomEvent("corten:error", { bubbles, cancelable: true, detail: { status: 0 } }));
+      return !note.hidden;
+    };
+    const seen = { loaded: heard("watch-form", true), added: heard("smoke-1-watch-form", true), notBubbling: heard("smoke-2-watch-form", false) };
+    for (const n of [1, 2]) document.getElementById(`smoke-${n}-watch-form`)?.remove();
+    for (const name of names) document.querySelector(`#watch-form > input[name="${name}"]`)?.remove();
+    return seen;
+  });
+  check(
+    "a form with controls named hasAttribute and getAttribute runs its handlers, loaded with the page or added after, for events that bubble or not",
+    shadowed.loaded && shadowed.added && shadowed.notBubbling,
+    JSON.stringify(shadowed),
+  );
   // A newer submit that waited for a write the network failed is not sent: it would fail the
   // same way, and the user sends it again.
   let afterFailure = 0;
