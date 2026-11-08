@@ -3950,7 +3950,9 @@ Corten is pre-1.0, so any minor version may change the API.
     only the time spent waiting for the client. A byte now and then reset the idle time before,
     so on a route with a long deadline or none (a large upload's) a client trickling the body
     held the connection and the request as long as it liked. A client sending at any real speed
-    is not affected; `idle(None)` turns the rate off with the idle time
+    is not affected; `idle(None)` turns the rate off with the idle time. A read dropped and begun
+    again (a `chunk()` inside a `timeout` or `select!`) no longer starts the idle time again, so a
+    client that went quiet is given up on after the idle time however the handler reads
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
 
 ### Fixed

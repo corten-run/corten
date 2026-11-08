@@ -428,7 +428,8 @@ impl Pieces {
     /// is read past: a minute unless set. It is also the body's allowance against a trickle: the
     /// reads may wait for the client that long plus a second for every 240 bytes that came, in
     /// all (time the handler spends between reads is not counted), so a byte now and then does
-    /// not hold the request. That assumes the handler asks for the next piece promptly: one that
+    /// not hold the request. A read dropped and begun again (inside a `timeout` or `select!`) does
+    /// not start the idle time again. That assumes the handler asks for the next piece promptly: one that
     /// spends a fixed time on each piece lets a client that sends one in that time go on. `None`
     /// leaves only the route's deadline, for both.
     pub fn idle(mut self, idle: impl Into<Option<Duration>>) -> Self {

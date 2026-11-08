@@ -1192,7 +1192,8 @@ a client that sends a byte now and then, which would reset it forever: the reads
 client that minute plus a second for every 240 bytes that came (Kestrel's minimum rate), in all,
 and past that the read is `Stalled` too. Time the handler spends between reads (writing a piece to
 a slow store) is not counted, so the bound holds as long as the handler asks for the next piece
-when it is done with one. So a large upload sent at any real speed is never cut off, and the
+when it is done with one; a read dropped and begun again (inside a `timeout` or `select!`) does
+not start the minute again. So a large upload sent at any real speed is never cut off, and the
 route's deadline ([app guide](app.md)) is what bounds it in all; one that stops while a body over
 the limit is read past is still the 413. `upload.idle(d)` changes the minute (and so the
 allowance), and `upload.idle(None)` leaves only the route's deadline, for both. A page's deadline

@@ -235,7 +235,8 @@ impl<T> Upload<T> {
     /// that came (Kestrel's minimum rate), in all, so a client that sends a byte now and then is
     /// given up on too, while one sending at any real speed is never cut off for taking long in
     /// all, and a large upload's route needs only a deadline that leaves time for it. Time the
-    /// handler spends between reads is not counted, which assumes it asks for the next piece
+    /// handler spends between reads is not counted, and a read dropped and begun again (inside a
+    /// `timeout` or `select!`) does not start the idle time again. That assumes it asks for the next piece
     /// promptly: one that spends a fixed time on each piece lets a client that sends one in that
     /// time go on. While a body over its limit is read past, a
     /// client that stops for the idle time ends that read, and the answer is still the 413.
