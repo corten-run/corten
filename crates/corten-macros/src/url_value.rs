@@ -176,7 +176,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         q("const __WORDS: &'static [&'static ::core::primitive::str] = &[__A0];", &[listed]),
     ))]);
     out.extend(q("::corten::__if_types! { __A0 }", &[words_impl]));
-    // serde's `Deserialize`, so the enum needs no `#[derive(Deserialize)]` beside this one.
+    // serde's `Deserialize`, so the enum needs no `#[derive(Deserialize)]` beside this one, and
+    // its `FromJson`, so it needs no `#[derive(FromJson)]` either (a second `Deserialize`).
     out.extend(crate::deserialize::for_unit_enum(&item, &read)?);
+    out.extend(crate::from_json::beside_deserialize(&item));
     Ok(out)
 }

@@ -773,6 +773,12 @@ pub mod __private {
     pub use super::{Fallback, Reader};
     use super::{FromJson, R};
 
+    /// `s` read by the reader alone, `None` where it gives up: for tests that show the reader
+    /// read a type itself rather than hand it to serde_json.
+    pub fn alone<T: FromJson>(s: &str) -> Option<T> {
+        super::fast(s)
+    }
+
     /// A field that is not in the object and has no default: what serde makes of it, which is
     /// `None` for an `Option` and an error (so serde_json reads the text) for anything else.
     pub fn missing<T: DeserializeOwned>() -> R<T> {

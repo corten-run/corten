@@ -120,6 +120,27 @@
 //! enum Event { Sold { price: f64 } }
 //! ```
 //!
+//! Neither do the attributes serde's derive refuses: a unit struct's `default` or `transparent`,
+//! and `rename_all_fields` on a struct:
+//!
+//! ```compile_fail
+//! #[derive(Default, corten::FromJson)]
+//! #[serde(default)]
+//! struct Marker;
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! struct Marker;
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(rename_all_fields = "camelCase")]
+//! struct Price { amount: f64 }
+//! ```
+//!
 //! Since the derive writes the type's `Deserialize`, serde's derive beside it is a second one and
 //! does not compile (E0119); take it out of the list:
 //!
@@ -127,6 +148,33 @@
 //! #[derive(serde::Deserialize, corten::FromJson)]
 //! struct Price { amount: f64 }
 //! ```
+//!
+//! `#[derive(Fields)]` (a form's input) and `#[derive(UrlValue)]` (a word in a URL) write the
+//! type's `Deserialize` too, and with it its `FromJson` and schema, so a form's input is read
+//! from JSON (and is an agent tool's input) as it is, through Corten's reader:
+//!
+//! ```
+//! #[derive(Debug, PartialEq, corten::UrlValue)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Shipping { Standard, NextDay }
+//!
+//! #[derive(Debug, PartialEq, corten::Fields)]
+//! struct Order { email: String, shipping: Shipping }
+//!
+//! let order: Order = corten::json::from_str(r#"{"email":"a@b.c","shipping":"next_day"}"#).unwrap();
+//! assert_eq!(order, Order { email: "a@b.c".into(), shipping: Shipping::NextDay });
+//! ```
+//!
+//! `FromJson` beside either is a second `Deserialize` as well; take it out of the list:
+//!
+//! ```compile_fail,E0119
+//! #[derive(corten::Fields, corten::FromJson)]
+//! struct Order { email: String }
+//! ```
+//!
+//! A generic type, or one `FromJson` cannot read (a field that borrows, an attribute it does not
+//! follow), gets no `FromJson` from them; an empty `impl corten::FromJson for T {}` makes it one,
+//! read by serde_json through the `Deserialize` they wrote.
 
 use std::{
     borrow::Cow,

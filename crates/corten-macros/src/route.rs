@@ -444,7 +444,7 @@ fn describe_body(fields: &[(&Field, TokenStream)], in_path: &dyn Fn(&Field) -> b
     );
     for (field, ty) in fields {
         let probe = q("(&&::corten::route::__private::Probe::<__A0>::new())", std::slice::from_ref(ty));
-        let schema = q("(&&&::corten::route::__private::Probe::<__A0>::new()).__schema()", std::slice::from_ref(ty));
+        let schema = q("(&&&&::corten::route::__private::Probe::<__A0>::new()).__schema()", std::slice::from_ref(ty));
         if in_path(field) {
             body.extend(q("__d.path(__A0, __A1);", &[string(&field.name).into(), schema]));
         } else if field.attrs.iter().any(is_route_query) {

@@ -1372,6 +1372,9 @@ Under the prefix:
    `serde_json`'s. It reads `#[serde(...)]` as serde's derive does and refuses one it cannot follow
    (`flatten`, `deserialize_with`); a field of a type with only `Deserialize` is read by
    `serde_json`, and an empty `impl corten::FromJson for T {}` lets such a type be read alone.
+   A `#[derive(Fields)]` form input or a `#[derive(UrlValue)]` enum is a `FromJson` already
+   (with feature `json`, unless it is generic), so `FromJson` beside either does not compile
+   either.
 
 Each route is a `#[derive(Route)]` struct, and the API's prefix is one too (`ApiRoot` above), so
 the router and the links name the same URL, and a route outside the prefix (`/apis/items`

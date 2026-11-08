@@ -13,7 +13,7 @@ use proc_macro::{Delimiter, Group, Ident, Literal, Span, TokenStream, TokenTree}
 
 use crate::{
     component::split,
-    derive::parse_item,
+    derive::{parse_item, Item},
     schema::{left_out, Body as Schema, DefaultValue, SchemaField, SchemaVariant, VShape},
     to_json::{bounded, field_rule, serde_args_for, variant_rule, Arg, Value, RULES},
     tokens::{err, is_ident, is_punct, q, Error},
@@ -23,6 +23,34 @@ const NAME: &str = "FromJson";
 
 pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let item = parse_item(input, NAME, true)?;
+    let mut out = impls(&item)?;
+    // serde's `Deserialize`, the fallback, from the same attributes: the type needs no
+    // `#[derive(Deserialize)]` beside this one.
+    out.extend(crate::deserialize::for_from_json(&item)?);
+    Ok(out)
+}
+
+/// What `#[derive(Fields)]` and `#[derive(UrlValue)]` add, since they write the type's
+/// `Deserialize` already: its `FromJson` and schema (with corten's feature `json`), so the type
+/// is read from JSON with no derive beside theirs. Nothing for a generic type, whose bounds
+/// serde infers in ways `FromJson`'s do not follow, or one `FromJson` cannot read (an attribute
+/// it does not follow, or a field that borrows).
+pub fn beside_deserialize(item: &Item) -> TokenStream {
+    let borrows = |tokens: &TokenStream| {
+        tokens.clone().into_iter().any(|t| matches!(&t, TokenTree::Punct(p) if p.as_char() == '\'' || p.as_char() == '&'))
+    };
+    let fields = item.body.iter().chain(&item.tuple).any(|g| borrows(&g.stream()));
+    if !item.impl_generics.is_empty() || fields {
+        return TokenStream::new();
+    }
+    match impls(item) {
+        Ok(code) => q("::corten::__if_json! { __A0 }", &[code]),
+        Err(_) => TokenStream::new(),
+    }
+}
+
+/// The `FromJson` impl and its schema (feature `types`).
+fn impls(item: &Item) -> Result<TokenStream, Error> {
     let container = Container::read(&item.attrs, item.is_enum)?;
     let schema;
     let body = if item.is_enum {
@@ -93,9 +121,10 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         ),
     ))]);
     out.extend(schema);
-    // serde's `Deserialize`, the fallback, from the same attributes: the type needs no
-    // `#[derive(Deserialize)]` beside this one.
-    out.extend(crate::deserialize::for_from_json(&item)?);
+    // Naming a deprecated item warns no more than the item itself does, as serde_derive's.
+    if crate::deserialize::allows_deprecated(&item.attrs) {
+        return Ok(q("#[allow(deprecated)] const _: () = { __A0 };", &[out]));
+    }
     Ok(out)
 }
 
@@ -103,7 +132,7 @@ fn unsupported<T>(arg: &Arg) -> Result<T, Error> {
     err(
         arg.span,
         format!(
-            "FromJson: #[serde({})] changes how serde reads in a way FromJson does not follow; derive Deserialize alone for this type (as a field it is then read by serde_json)",
+            "FromJson: #[serde({})] changes how serde reads in a way FromJson does not follow; derive Deserialize alone for this type (as a field it is then read by serde_json, and an empty `impl corten::FromJson for T {{}}` makes it a FromJson read by serde_json)",
             arg.key
         ),
     )
@@ -152,6 +181,9 @@ impl Container {
                 "default" if !is_enum => c.default = Some(default(&arg)?),
                 "deny_unknown_fields" => c.deny_unknown_fields = true,
                 "transparent" if !is_enum => c.transparent = true,
+                "rename_all_fields" if !is_enum => {
+                    return err(arg.span, "FromJson: #[serde(rename_all_fields)] can only be used on enums")
+                }
                 // Writing only, the type's own name, serde's path, or its error text and bounds:
                 // none changes what a successful read makes.
                 "rename" | "rename_all_fields" | "into" | "crate" | "expecting" | "bound" => {}

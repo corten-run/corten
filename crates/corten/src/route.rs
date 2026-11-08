@@ -3687,9 +3687,10 @@ pub mod __private {
         }
     }
 
-    /// The derive's probe for a parameter's type, `(&&Probe::<T>::new()).__schema()`: its JSON
+    /// The derive's probe for a parameter's type, `(&&&&Probe::<T>::new()).__schema()`: its JSON
     /// Schema when it has one, found before the fallback that records a miss, which takes `Probe`
-    /// itself; and
+    /// itself (the levels, first found first: an optional `UrlValue`'s words, a `UrlValue`'s words
+    /// or an `Option`'s value's schema, the type's own schema, the miss); and
     /// `(&&Probe::<T>::new()).__required()`, false for an `Option` or a list, which a request
     /// may leave out.
     pub struct Probe<T: ?Sized>(std::marker::PhantomData<fn() -> T>);
@@ -3743,8 +3744,8 @@ pub mod __private {
         }
     }
 
-    /// A `UrlValue` enum's parameter is one of its words: a level above `SchemaOwn`, so an enum
-    /// that also derives `FromJson` is described as a URL writes it.
+    /// A `UrlValue` enum's parameter is one of its words: a level above `SchemaOwn`, so the enum,
+    /// which the derive also makes a `FromJson`, is described as a URL writes it.
     pub trait SchemaWords {
         fn __schema(&self) -> Schema;
     }
@@ -3757,6 +3758,7 @@ pub mod __private {
         }
     }
 
+    // Above `SchemaInner`: an optional `UrlValue`, which is a `FromJson` too, is its words.
     #[cfg(feature = "types")]
     impl<T: UrlWords> SchemaWords for &&&Probe<Option<T>> {
         #[inline]
@@ -3766,7 +3768,7 @@ pub mod __private {
     }
 
     /// An `Option`'s parameter is its value's, since leaving it out is the `None`: one level above
-    /// `SchemaOwn`, called as `(&&&Probe::<T>::new()).__schema()`.
+    /// `SchemaOwn`.
     pub trait SchemaInner {
         fn __schema(&self) -> Schema;
     }
