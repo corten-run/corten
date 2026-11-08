@@ -2716,11 +2716,12 @@ fn no_assets(path: &'static str) -> crate::assets::AssetUrl<'static> {
 
 /// `res` with the headers of the failed response it replaces, `kept`, except the ones that
 /// described its body or that Corten sets for the answer it sends (`Cache-Control`, its own
-/// `corten-` headers); a header `res` has already wins, but for `Vary`, whose values are added to
-/// its own (each one it does not list already), since what the failed answer varied on still
-/// decides this one. A `Cache-Control` that names `no-store` (`NoStore`, or one written by hand, on any of its lines, however a reader could find it) makes
-/// `res` `no-store` too: whoever set it said nothing may keep the answer, a failure included. Its
-/// other directives described the failed answer, so they are not carried.
+/// `corten-` headers); a header `res` has already wins, but for `Vary`, whose names are added to
+/// its own (each one it does not name already, in any case), since what the failed answer varied
+/// on still decides this one. A `Cache-Control` that names `no-store` (`NoStore`, or one written
+/// by hand, on any of its lines, however a reader could find it) makes `res` `no-store` too:
+/// whoever set it said nothing may keep the answer, a failure included. Its other directives
+/// described the failed answer, so they are not carried.
 fn carried(kept: HeaderMap, mut res: Response) -> Response {
     if kept.is_empty() {
         return res;
@@ -2760,9 +2761,18 @@ fn carried(kept: HeaderMap, mut res: Response) -> Response {
             entry.append(value);
         }
     }
+    // Each name once: a name the answer varies on already, on any of its lines, is not added again.
+    let names = |value: &HeaderValue| -> Vec<String> {
+        value.to_str().unwrap_or_default().split(',').map(str::trim).filter(|name| !name.is_empty()).map(String::from).collect()
+    };
     for value in vary {
-        if !res.headers().get_all(header::VARY).iter().any(|own| *own == value) {
-            res.headers_mut().append(header::VARY, value);
+        let own: Vec<String> = res.headers().get_all(header::VARY).iter().flat_map(names).collect();
+        let new: Vec<String> =
+            names(&value).into_iter().filter(|name| !own.iter().any(|own| own.eq_ignore_ascii_case(name))).collect();
+        if !new.is_empty() {
+            if let Ok(value) = HeaderValue::from_str(&new.join(", ")) {
+                res.headers_mut().append(header::VARY, value);
+            }
         }
     }
     res
@@ -3175,4 +3185,23 @@ pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<Heade
         headers.insert(kind, HeaderValue::from_static("1"));
     }
     res
+}
+
+#[cfg(test)]
+mod carried_tests {
+    use super::*;
+
+    /// The failed answer's `Vary` names are added to the error page's, each name once whatever its
+    /// case or the line it is on.
+    #[test]
+    fn a_kept_vary_name_is_added_once() {
+        let mut kept = HeaderMap::new();
+        kept.append(header::VARY, HeaderValue::from_static("Corten, Origin"));
+        kept.append(header::VARY, HeaderValue::from_static("cookie"));
+        let mut res = Response::new(Body::empty());
+        res.headers_mut().append(header::VARY, HeaderValue::from_static("corten, accept"));
+        let res = carried(kept, res);
+        let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(|v| v.to_str().unwrap()).collect();
+        assert_eq!(vary, ["corten, accept", "Origin", "cookie"]);
+    }
 }
