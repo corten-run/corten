@@ -5567,6 +5567,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ETag is now compared as `If-None-Match` is, weakly and in a list or as `*`, so a proxy that
     marks it weak gets a 304 where it got the whole file
     ([#1056 Nothing answers /favicon.ico, so each browser request for it is the app's 404 page with its layout reads](https://github.com/corten-run/corten/issues/1056)).
+194. `bench/fullstack`'s Laravel app starts with items in memory: it decoded the whole 27.7 MB
+    fixture at boot, past PHP's default 128 MB `memory_limit`, so its in-memory tests failed in
+    every round and `check-app.mjs laravel` could not pass. It now reads the fixture one item at a
+    time and keeps the default, and refuses a damaged fixture at boot
+    ([#981 bench: Laravel cannot start with items in memory, so check-app.mjs laravel fails: decoding the 27.7 MB fixture passes PHP's 128 MB memory_limit](https://github.com/corten-run/corten/issues/981)).
 195. A debug build's two layout-read checks, a page that draws `later::<X>()` from a route whose
     answer type says it is not a page (`Answer::PAGE`) and a route that says `gives(X)` whose
     page did not give it, kept their message off the error page outside `corten dev` and wrote
