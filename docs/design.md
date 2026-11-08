@@ -1283,7 +1283,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     stream is a handler's return type (`LiveResponse`, `FeedResponse`), and a feed's `rows`
     does not say whether a route streams, since its snapshot route has them too; and
     `serve_wrapped` behind a proxy that re-encrypts to the app is right with live streams, so the
-    guide says it. HTTP/2 in Corten (hyper's
+    guide says it. The same proxy serves native apps: `URLSession` too caps HTTP/1.1
+    connections to a host (6) and shares one over HTTP/2, while OkHttp's cap counts calls whatever
+    the protocol ([Surfaces](architecture.md#native-apps-next-not-built)). HTTP/2 in Corten (hyper's
     `http2`, chosen by ALPN in `serve_wrapped`) was weighed and left out: it adds a second
     answer to each per-connection rule (a concurrent-streams limit beside
     `App::max_connections`, a `GOAWAY` drain at shutdown, `App::header_timeout` per stream, and
@@ -1291,8 +1293,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     and eight crates to the template's build (`h2`, `tokio-util`, `indexmap` and five smaller).
     HTTP/3 (QUIC over UDP with TLS in the process, `quinn` and `h3`, `Alt-Svc` and a TCP
     fallback where UDP is blocked) gains last-mile latency and loss recovery, which an edge near
-    the user gives better than an origin. Either reopens for an app that must serve browsers with
-    no proxy at all and has live streams; HTTP/3 also waits for a stable `h3`.
+    the user gives better than an origin. Either reopens for an app that must serve browsers or
+    native apps' platform clients with no proxy at all and has live streams; HTTP/3 also waits
+    for a stable `h3`.
 15. <a id="limit-script-comments"></a>A component script's comments are removed by a scan that knows strings, template literals
     and regular expressions but is not a JavaScript parser. Where only a parser could tell a
     division from a regular expression (a `/` after a statement-level `}`, after `++` or `--`, or
