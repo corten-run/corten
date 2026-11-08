@@ -2615,9 +2615,9 @@ Corten is pre-1.0, so any minor version may change the API.
     `components.css` 60,857 bytes where it was 60,608 (gzip 10,067 against 10,039, brotli 8,866
     against 8,841, Node's zlib at gzip level 9 and brotli's default). The ui-gallery's smoke test
     checks a tab, a segmented choice, a `SegmentedLinks` link and a `SegmentedRadio` at the kit's
-    values and at a theme's, and the checked `SegmentedRadio` under the pointer. Asked for by the
-    Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen choice in `--primary`
-    at 600
+    values and at a theme's, and the checked `SegmentedRadio` and current link under the pointer.
+    Asked for by the Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen
+    choice in `--primary` at 600
     ([#1123 Kit Segmented and Tabs draw the chosen choice in --foreground at weight 500 as literals, so a theme whose chosen tab is its primary color edits both copies](https://github.com/corten-run/corten/issues/1123)).
 
 ### Removed
