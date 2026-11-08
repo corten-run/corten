@@ -76,9 +76,9 @@ import { DeckPreviewChanged } from "corten/events";
  */
 
 /**
- * Cards being moved: where from, which, where they are over now, and, for a keyboard move, the
- * grip to give focus back to.
- * @typedef {{ from: "cards" | "deck", ids: string[], over: "cards" | "deck", back: HTMLButtonElement | null, reordered?: boolean }} Moving
+ * Cards being moved: where from, which (one deck line, or collection cards), where they are over
+ * now, and, for a keyboard move, the grip to give focus back to.
+ * @typedef {({ from: "cards", ids: string[] } | { from: "deck", ids: [string] }) & { over: "cards" | "deck", back: HTMLButtonElement | null, reordered?: boolean }} Moving
  */
 
 /**
@@ -745,7 +745,8 @@ function reorderBy(s, parts, id, direction) {
   const from = order.indexOf(id);
   const to = from + direction;
   if (from < 0 || to < 0 || to >= order.length) return false;
-  [order[from], order[to]] = [order[to], order[from]];
+  order.splice(from, 1);
+  order.splice(to, 0, id);
   s.order = order;
   draw(s, parts, new Map(s.drawn));
   return true;
@@ -854,7 +855,8 @@ function cardName(parts, id) {
 
 /** What is moving, in words: one card's name, or how many. @param {Parts} parts @param {Carry} carry @param {string[]} ids */
 function whatMoves(parts, carry, ids) {
-  return ids.length === 1 ? cardName(parts, ids[0]) : carry.several({ count: parts.number(ids.length) });
+  const [one] = ids;
+  return one !== undefined && ids.length === 1 ? cardName(parts, one) : carry.several({ count: parts.number(ids.length) });
 }
 
 // The collection: filter, sort and selection, all in the page.
@@ -965,7 +967,7 @@ function sort(event, link, cards, by, first) {
   const dir = order === "ascending" ? 1 : -1;
   const keyed = Array.from(rows(cards, CollectionRow), (row) => ({ el: row.el, n: by(row), name: row.name }));
   // Names go the other way only when they are the order; under a number they stay A to Z.
-  const named = keyed.every((row) => row.n === keyed[0].n) ? dir : 1;
+  const named = keyed.every((row) => row.n === keyed[0]?.n) ? dir : 1;
   keyed.sort((a, b) => dir * (a.n - b.n) || named * names.compare(a.name, b.name));
   cards.append(...keyed.map((row) => row.el));
 }

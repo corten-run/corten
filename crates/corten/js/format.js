@@ -45,27 +45,27 @@ export function formatter(spec) {
   }
   const p = spec.p;
   return (n) => {
-    const m = /^([-+]?)(\d*)(?:\.(\d+))?$/.exec(typeof n === "number" ? plain(n) : n);
-    if (!m || !(m[2] || m[3])) return String(n);
-    if (p === undefined) return number(spec, m[1] === "-" ? 1 : 0, m[2].replace(/^0+(?=\d)/, "") || "0", m[3] ?? "");
+    const [, sign, int = "", frac = ""] = /^([-+]?)(\d*)(?:\.(\d+))?$/.exec(typeof n === "number" ? plain(n) : n) ?? [];
+    if (!(int || frac)) return String(n);
+    if (p === undefined) return number(spec, sign === "-" ? 1 : 0, int.replace(/^0+(?=\d)/, "") || "0", frac);
     // A percentage: the ratio Ã— 100, moving the point in the text (0.029 * 100 is
     // 2.9000000000000004), then at most `p` fraction digits, rounded half away from zero.
-    let f = (m[3] ?? "").padEnd(2, "0");
-    let i = m[2] + f.slice(0, 2);
+    let f = frac.padEnd(2, "0");
+    let i = int + f.slice(0, 2);
     f = f.slice(2);
     const change = spec.t?.length === 3;
     // A change has at most 38 digits in all, as the server's Decimal: the whole part's, then the
     // fraction's.
     const q = change ? Math.max(0, Math.min(p, 38 - (i.replace(/^0+(?=\d)/, "") || "0").length)) : p;
     if (f.length > q) {
-      const s = String(BigInt(i + f.slice(0, q)) + BigInt(f[q] > "4")).padStart(q + 1, "0");
+      const s = String(BigInt(i + f.slice(0, q)) + BigInt(f.charAt(q) > "4")).padStart(q + 1, "0");
       [i, f] = [s.slice(0, s.length - q), s.slice(s.length - q)];
     }
     i = i.replace(/^0+(?=\d)/, "");
-    if (!change) return number(spec, m[1] === "-" ? 1 : 0, i, f.replace(/0+$/, ""));
+    if (!change) return number(spec, sign === "-" ? 1 : 0, i, f.replace(/0+$/, ""));
     // A change: exactly its digits, and a sign unless it rounds to zero.
     f = f.padEnd(q, "0");
-    return number(spec, /[1-9]/.test(i + f) ? (m[1] === "-" ? 1 : 2) : 0, i, f);
+    return number(spec, /[1-9]/.test(i + f) ? (sign === "-" ? 1 : 2) : 0, i, f);
   };
 }
 
@@ -78,7 +78,7 @@ function plain(n) {
   const s = String(n);
   const e = s.indexOf("e");
   if (e < 0) return s;
-  const [, sign, int, frac = ""] = /** @type {RegExpExecArray} */ (/^(-?)(\d+)(?:\.(\d+))?$/.exec(s.slice(0, e)));
+  const [, sign, int = "", frac = ""] = /** @type {RegExpExecArray} */ (/^(-?)(\d+)(?:\.(\d+))?$/.exec(s.slice(0, e)));
   const all = int + frac;
   const point = int.length + Number(s.slice(e + 1));
   if (point <= 0) return `${sign}0.${"0".repeat(-point)}${all}`;
@@ -105,7 +105,8 @@ function number(spec, at, int, frac) {
   }
   body = digits(spec.z, body);
   if (frac) body += decimal + digits(spec.z, frac);
-  return /** @type {NonNullable<Spec["t"]>} */ (spec.t)[at].replace("\u0001", () => body);
+  const t = /** @type {NonNullable<Spec["t"]>} */ (spec.t);
+  return (t[at] ?? t[0]).replace("\u0001", () => body);
 }
 
 /**
@@ -118,18 +119,15 @@ function number(spec, at, int, frac) {
 function plural(spec, table, forms) {
   const write = formatter({ z: spec.z, s: spec.s, t: spec.t });
   return (args) => {
-    const n = Number(args.count);
-    const whole = typeof args.count === "number" ? Number.isInteger(n) : /^-?\d+$/.test(args.count);
+    // No count is not a number, as Number(undefined) is: the `other` form.
+    const count = args.count ?? NaN;
+    const n = Number(count);
+    const whole = typeof count === "number" ? Number.isInteger(n) : /^-?\d+$/.test(count);
     // Exactly, past 2^53 too: a large count's category depends on its last digits.
-    const a = whole ? BigInt(args.count) * (String(args.count).startsWith("-") ? -1n : 1n) : 0n;
+    const a = whole ? BigInt(count) * (String(count).startsWith("-") ? -1n : 1n) : 0n;
     const at = whole ? Number(table[a < 200n ? Number(a) : a % 1_000_000n === 0n ? 200 : 100 + Number(a % 100n)]) : 5;
     const parts = forms[at] ?? /** @type {string[]} */ (forms[5]);
-    let text = parts[0];
-    for (let i = 1; i < parts.length; i += 2) {
-      const name = parts[i];
-      text += (name === "count" && Number.isFinite(n) && typeof args.count === "number" ? write(n) : String(args[name])) + parts[i + 1];
-    }
-    return text;
+    return parts.map((name, i) => (i % 2 ? (name === "count" && Number.isFinite(n) && typeof count === "number" ? write(n) : String(args[name])) : name)).join("");
   };
 }
 
@@ -175,6 +173,6 @@ function zone(spec, offset, n) {
   if (!offset) return /** @type {string} */ (spec.u);
   const east = Math.abs(offset);
   const minutes = Math.floor((east % 3600) / 60);
-  const template = /** @type {string[]} */ (spec.g)[(minutes ? 2 : 0) + (offset < 0 ? 1 : 0)];
+  const template = /** @type {string[]} */ (spec.g)[(minutes ? 2 : 0) + (offset < 0 ? 1 : 0)] ?? "";
   return template.replace("\u0001", () => n(Math.floor(east / 3600))).replace("\u0003", () => n(minutes, 1));
 }

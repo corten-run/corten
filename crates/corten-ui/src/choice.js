@@ -30,7 +30,8 @@ export function connect(radios, group, values, signal) {
   const at = radios.findIndex((radio) => radio.getAttribute("aria-checked") === "true");
   radios.forEach((radio, i) => (radio.tabIndex = i === Math.max(at, 0) ? 0 : -1));
   groups.set(group, (groups.get(group) ?? 0) + 1);
-  if (at >= 0) show(group, values[at]);
+  const value = values[at];
+  if (value !== undefined) show(group, value);
   signal.addEventListener("abort", () => {
     const left = groups.get(group) - 1;
     if (left > 0) return groups.set(group, left);
@@ -57,9 +58,10 @@ export function step(event, radio, radios, group, values) {
     : event.key === "End" ? radios.length - 1
     : event.key === " " ? at
     : -1;
-  if (to < 0) return;
+  const next = radios[to];
+  if (!next) return;
   event.preventDefault();
-  radios[to].focus();
+  next.focus();
   select(to, radios, group, values);
 }
 
@@ -78,7 +80,8 @@ function select(at, radios, group, values) {
     const to = address(radio, radios);
     if (to !== location.href) history.replaceState(history.state, "", to);
   }
-  show(group, values[at]);
+  const value = values[at];
+  if (value !== undefined) show(group, value);
 }
 
 /**

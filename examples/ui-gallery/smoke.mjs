@@ -377,6 +377,44 @@ async function run(browser) {
   await color.fill("near mint");
   await page.keyboard.press("Tab");
   check("typing a label exactly picks it", (await page.locator("[data-scope=ui-combo-box] select").inputValue()) === "nm");
+  // A combobox with no options (a list the app has nothing in yet): Arrow Down opens it on none,
+  // and Enter closes it without an error.
+  {
+    const bare = await page.context().newPage();
+    /** @type {string[]} */
+    const bareErrors = [];
+    bare.on("pageerror", (e) => bareErrors.push(e.message));
+    await bare.route(
+      (url) => url.href === `${base}/`,
+      async (route) => {
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        let body = await res.text();
+        // Every option but the select's empty first one.
+        const select = body.indexOf("<select", body.indexOf("ui-combo-box"));
+        const first = body.indexOf("</option>", select) + "</option>".length;
+        body = body.slice(0, first) + body.slice(body.indexOf("</select>", first));
+        await route.fulfill({ status: res.status(), headers, body });
+      },
+    );
+    await bare.goto(`${base}/`);
+    const none = bare.getByLabel("Condition");
+    await bare.waitForFunction(() => document.querySelector('[data-scope=ui-combo-box] [role="combobox"]:not([hidden])') !== null);
+    const options = await bare.locator('[data-scope=ui-combo-box] [role="option"]').count();
+    await none.focus();
+    await bare.keyboard.press("ArrowDown");
+    const opened = await none.getAttribute("aria-expanded");
+    await bare.keyboard.press("Enter");
+    const closed = await none.getAttribute("aria-expanded");
+    check(
+      "with no options, Arrow Down opens the list and Enter closes it, without an error",
+      options === 0 && opened === "true" && closed === "false" && bareErrors.length === 0,
+      JSON.stringify({ options, opened, closed, bareErrors }),
+    );
+    await bare.close();
+  }
 
   await qty.fill("3");
   await page.getByRole("button", { name: "List for sale" }).click();

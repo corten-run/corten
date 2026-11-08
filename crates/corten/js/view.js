@@ -119,7 +119,7 @@ export function view(host, View, template) {
  * @template {{ el: Element }} V
  * @typedef {{
  *   readonly length: number,
- *   at(i: number): V,
+ *   at(i: number): V | undefined,
  *   get(key: string): V | undefined,
  *   of(target: EventTarget | null): V | undefined,
  *   indexOf(view: V): number,
@@ -220,10 +220,13 @@ export function rows(parent, View, template) {
     View.fill(el, data);
     return el;
   };
+  // The loops over rows read only indexes their own bounds keep in range, and say so with a
+  // cast: rows are a client operation's hot path, and they stay the loops they were rather than
+  // take a check per pass the timing could not show to be free (docs/design.md#choice-script-checks).
   /** @param {readonly D[]} items @param {Element[]} out @param {number} from @param {Node | null} before */
   const add = (items, out, from, before) => {
     const frag = document.createDocumentFragment();
-    for (let i = 0; i < items.length; i += 1) frag.appendChild((out[from + i] = make(items[i])));
+    for (let i = 0; i < items.length; i += 1) frag.appendChild((out[from + i] = make(/** @type {D} */ (items[i]))));
     parent.insertBefore(frag, before);
   };
   /** @type {Rows<D, V>} */
@@ -234,7 +237,8 @@ export function rows(parent, View, template) {
     },
     at(i) {
       sync();
-      return new View(els[i]);
+      const el = els.at(i);
+      return el && new View(el);
     },
     get(key) {
       sync();
@@ -266,9 +270,10 @@ export function rows(parent, View, template) {
       const from = els.length;
       add(items, els, from, null);
       if (byKey) for (let i = from; i < els.length; i += 1) {
-        const k = View.key(els[i]);
+        const el = /** @type {Element} */ (els[i]);
+        const k = View.key(el);
         if (byKey.has(k)) twice = true;
-        byKey.set(k, els[i]);
+        byKey.set(k, el);
       }
       done();
     },
@@ -317,13 +322,13 @@ export function rows(parent, View, template) {
       const where = new Map();
       const keyOf = View.keyOf;
       if (!keyOf) throw new Error(SERVER_MADE, { cause: parent });
-      for (let j = 0; j < els.length; j += 1) where.set(View.key(els[j]), j);
+      for (let j = 0; j < els.length; j += 1) where.set(View.key(/** @type {Element} */ (els[j])), j);
       // Each new item's old element, or -1.
       const from = new Int32Array(n).fill(-1);
       let kept = 0;
       // With no rows to keep (a first fill, or after clear()), no key is looked up.
       if (where.size) for (let i = 0; i < n; i += 1) {
-        const k = keyOf(items[i]);
+        const k = keyOf(/** @type {D} */ (items[i]));
         const j = where.get(k);
         if (j !== undefined) {
           from[i] = j;
@@ -338,21 +343,22 @@ export function rows(parent, View, template) {
         parent.textContent = "";
         add(items, next, 0, null);
       } else {
-        for (const j of where.values()) els[j].remove();
+        for (const j of where.values()) els[j]?.remove();
         // Elements on the longest run already in order stay; the rest move or are made.
         const stay = lis(from);
         let s = stay.length - 1;
         /** @type {Node | null} */
         let before = null;
         for (let i = n - 1; i >= 0; i -= 1) {
-          const j = from[i];
+          const j = /** @type {number} */ (from[i]);
+          const item = /** @type {D} */ (items[i]);
           let el;
           if (j < 0) {
-            el = make(items[i]);
+            el = make(item);
             parent.insertBefore(el, before);
           } else {
-            el = els[j];
-            View.fill(el, items[i]);
+            el = /** @type {Element} */ (els[j]);
+            View.fill(el, item);
             if (s >= 0 && stay[s] === i) s -= 1;
             else parent.insertBefore(el, before);
           }
@@ -378,19 +384,19 @@ function lis(a) {
   const tails = [];
   const prev = new Int32Array(a.length);
   for (let i = 0; i < a.length; i += 1) {
-    const v = a[i];
+    const v = /** @type {number} */ (a[i]);
     if (v < 0) continue;
     let lo = 0;
     let hi = tails.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (a[tails[mid]] < v) lo = mid + 1;
+      if (/** @type {number} */ (a[/** @type {number} */ (tails[mid])]) < v) lo = mid + 1;
       else hi = mid;
     }
-    prev[i] = lo > 0 ? tails[lo - 1] : -1;
+    prev[i] = lo > 0 ? /** @type {number} */ (tails[lo - 1]) : -1;
     tails[lo] = i;
   }
   const run = new Array(tails.length);
-  for (let i = tails.length - 1, k = tails[tails.length - 1]; i >= 0; i -= 1, k = prev[k]) run[i] = k;
+  for (let i = tails.length - 1, k = /** @type {number} */ (tails[i]); i >= 0; i -= 1, k = /** @type {number} */ (prev[k])) run[i] = k;
   return run;
 }

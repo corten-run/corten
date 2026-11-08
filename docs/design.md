@@ -1094,6 +1094,50 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
+32. <a id="choice-script-checks"></a>**Scripts are type-checked with `strict`, `noUncheckedIndexedAccess` and
+    `noFallthroughCasesInSwitch`, not `exactOptionalPropertyTypes`.** `strict` is not every
+    check `tsc` has, and the ones it leaves out were tried on the runtime, the kit, the
+    examples, the template and the typing fixture before any was turned on.
+    `noUncheckedIndexedAccess` makes an element read from an array, or a value from a record, by
+    index `T | undefined` until the code checks it: it found 76 such reads, two of them bugs (the
+    kit's `ComboBox` with no options threw on Enter after Arrow Down, and `rows(..).at(i)` past
+    the end gave a view of no row, now `undefined` as an array's `at()` is). The other 74 were
+    reads a loop's bound or a length check already kept in range; they were rewritten to loops
+    that need no index (`for .. of`, `map`, destructuring) or given a check, except the loops
+    over rows in `view.js`, a client operation's hot path, which keep the shape they had and
+    cast what they read (below: the rewrite was slower), so their minified code is what it was.
+    The runtime's minified build (gzip, level 9): `corten.js` 14,836 to 14,820 bytes,
+    `format.js` 1,494 to 1,493, and `view.js` 2,149 to 2,162, the 13 bytes `at()`'s check
+    of the ends. `noFallthroughCasesInSwitch` found
+    nothing and costs nothing; a case that runs into the next one is a mistake the compiler can
+    see. An app and the repository are checked the same way: `corten check` writes the app's
+    config with the options of the repository's `jsconfig.json`, and a test fails when they
+    differ.
+    Not chosen: `exactOptionalPropertyTypes` (5 errors, none a bug: each was a property set to
+    `undefined`, which a DOM option object such as `addEventListener`'s `{ signal }` takes as
+    left out, as Web IDL says, and which JSON leaves out, so the check refuses code that works);
+    `noPropertyAccessFromIndexSignature` (48 errors, all `el.dataset.value` to be written
+    `el.dataset["value"]`, a style that catches nothing a record's `T | undefined` does not);
+    `noImplicitReturns` (3, all functions meant to give `undefined` on one path, which
+    `strict` already makes each caller handle); `noImplicitOverride` (no class overrides
+    anything).
+
+    Stands on: measured (`tsc` 5.9.3 with each option alone over `jsconfig.json`'s files on
+    `c65c10ec`, the counts above, and the minified sizes before and after); measured
+    (Chromium through Playwright 1.64.1 on a busy Windows workstation, rows() with 1,000 and 4,000 rows, paired medians of 41 samples taking turns with main's view.js: with its loops rewritten not to index (`forEach`, `reduceRight`), keeping some rows and making the rest was 4.3% to 13.7% slower at 1,000 rows in seven of seven runs, where main against itself was -3.0% to 4.7%); platform (Web IDL converts a dictionary member that is `undefined` as one that
+    is not present, and `JSON.stringify` leaves out a property whose value is `undefined`);
+    reasoned (a read past the end the checker cannot see is a `TypeError` far from the read, as
+    the `ComboBox`'s was); value (Mistakes fail at compile time, Values 4, after the user's
+    speed, Values 1, which is why `view.js` casts instead).
+
+    Revisit when: lib.dom's option dictionaries accept `undefined` under
+    `exactOptionalPropertyTypes` (the reason against it would be gone), a TypeScript release adds a
+    check that `strict` leaves out, or a timing on a quiet host shows `view.js`'s loops
+    rewritten not to index cost nothing (its casts could then go).
+
+    Last checked: 2026-11-08, TypeScript 5.9.3 on `c65c10ec` and the change, and the timings in
+    Chromium (Playwright 1.64.1).
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

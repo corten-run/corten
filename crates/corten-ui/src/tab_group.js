@@ -27,10 +27,11 @@ export function step(event, tab, tabs, panels) {
     : event.key === "Home" ? 0
     : event.key === "End" ? tabs.length - 1
     : -1;
-  if (to < 0) return;
+  const next = tabs[to];
+  if (!next) return;
   event.preventDefault();
-  tabs[to].focus();
-  select(tabs[to], tabs, panels);
+  next.focus();
+  select(next, tabs, panels);
 }
 
 /**

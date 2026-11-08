@@ -4075,6 +4075,17 @@ Corten is pre-1.0, so any minor version may change the API.
     again (a `chunk()` inside a `timeout` or `select!`) no longer starts the idle time again, so a
     client that went quiet is given up on after the idle time however the handler reads
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
+170. Scripts are type-checked with `noUncheckedIndexedAccess` and `noFallthroughCasesInSwitch`
+    as well as `strict`, by `corten check` and by Corten's own `npm run check`, and a test fails
+    when the two settings differ: an array's element or a record's value read by index is
+    `T | undefined` until the script checks it, and a `switch` case that runs into the next one
+    is an error. An app's script that reads by index without a check fails `corten check` until
+    it does (`for (const x of xs)`, `const [first] = xs`, or a check of what it read).
+    `rows(..).at(i)` is `V | undefined`: none past either end, and a negative `i` counts back
+    from the last, as an array's `at()`, where it gave a view of no row before. The kit's
+    `ComboBox` with no options threw on Enter after Arrow Down; it closes now.
+    `exactOptionalPropertyTypes` is not used (design Choice 32)
+    ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)).
 
 ### Fixed
 - The fixed favicon keeps its weak content tag when background compression finishes, so a

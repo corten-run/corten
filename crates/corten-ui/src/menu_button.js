@@ -126,7 +126,7 @@ function typeahead(items, at, key) {
   const letter = key.toLocaleLowerCase();
   for (let i = 1; i <= items.length; i++) {
     const n = (at + i) % items.length;
-    if (items[n].textContent?.trim().toLocaleLowerCase().startsWith(letter)) return n;
+    if (items[n]?.textContent?.trim().toLocaleLowerCase().startsWith(letter)) return n;
   }
   return at;
 }
