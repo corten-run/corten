@@ -2481,6 +2481,13 @@ Corten is pre-1.0, so any minor version may change the API.
     kit's `Button` draws the state: a ring after its label in the text's color, turning unless
     the user asks for less motion, kept under forced colors, with a `progress` cursor
     ([#1063 A data-patch form's busy state lands only on the form, so a submit button outside it (form=) and the kit's Button show nothing while a server-drawn sheet loads](https://github.com/corten-run/corten/issues/1063)).
+272. The kit's `pagination` has `PreviousNext`, Previous and Next alone in `Pagination`'s look,
+    for a list that knows only the page before and the page after (a cursor, or the previous and
+    next links an API answers with): `previous` and `next` are each an `Option<&dyn Href>`, a
+    link with `rel="prev"` or `rel="next"`, and a `None` one a disabled step. It shares
+    `pagination.css`, so a copied `pagination.rs` takes it from `corten ui diff`. The
+    ui-gallery's payouts card pages by it
+    ([#1073 Kit Pagination needs every page's link, so a list paged by previous and next links (a cursor, or the API's own) cannot use it](https://github.com/corten-run/corten/issues/1073)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
