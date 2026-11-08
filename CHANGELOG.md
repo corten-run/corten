@@ -2552,7 +2552,7 @@ Corten is pre-1.0, so any minor version may change the API.
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
 
-278. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
+279. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
     tokens, `choice-gap` and `choice-legend-gap` (.75rem each, the values the two stylesheets
     printed and kept equal by hand), so a theme with tighter choice lists sets them once and the
     copies stay the kit's. Not a change for an app that sets nothing, but a theme an older kit wrote
