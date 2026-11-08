@@ -8044,7 +8044,7 @@ async fn a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit() {
             let mut held = Vec::new();
             for n in 1..=BURST {
                 let connected = tokio::time::timeout(Duration::from_millis(900), tokio::net::TcpStream::connect(addr)).await;
-                held.push(connected.unwrap_or_else(|_| panic!("{addr}: connection {n} waited for its SYN to be resent")).unwrap());
+                held.push(connected.unwrap_or_else(|_| panic!("{addr}: connection {n} waited for a resent SYN")).unwrap());
             }
         }
     }
