@@ -1394,8 +1394,8 @@ fn push_float(value: f64, out: &mut String) {
 
 /// An attribute value. `true` prints the bare name and `false` nothing; `None` leaves the
 /// attribute out; text, numbers and `#[derive(UrlValue)]` enums print ` name="value"`, escaped.
-/// Types that implement only `Display` work too, but not inside an `Option` (`Option<T>` needs
-/// `T: AttrValue`): write `.map(|v| v.to_string())` for one.
+/// Types that implement only `Display` work in an `html!` attribute too, but not inside an
+/// `Option` (`Option<T>` needs `T: AttrValue`): write `.map(|v| v.to_string())` for one.
 pub trait AttrValue {
     /// Writes ` name="value"` (`name` already has its leading space), or nothing.
     fn write_attr(&self, name: &str, out: &mut String);

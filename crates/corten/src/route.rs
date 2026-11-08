@@ -230,10 +230,10 @@ use std::fmt;
 pub use corten_macros::Route;
 
 /// Derives `Display`, `AsRef<str>` and [`AttrValue`](crate::view::AttrValue) for an enum of unit
-/// variants as the words serde reads for
-/// them, so a route field of that type (a tab, a sort, a filter, what a redirect says happened)
-/// writes the word its handler reads back, and the words are written once, in
-/// `#[serde(rename_all)]` and `#[serde(rename)]`. A form field of that type works the same way:
+/// variants as the words serde reads for them, so a route field of that type (a tab, a sort, a
+/// filter, what a redirect says happened) writes the word its handler reads back, and the words are
+/// written once, in `#[serde(rename_all)]` and `#[serde(rename)]`. A form field of that type
+/// works the same way:
 /// an `<option value={Condition::NearMint}>` (or corten-ui's `Choice`) posts the word its
 /// handler's `condition: Condition` reads, and a form with any other word is refused (422), as one
 /// with a value of the wrong kind is.
