@@ -996,11 +996,20 @@ async function run(browser) {
     };
     // A handler on the form given the element the event came from (`^ref`), which it finds by
     // reading the form's own scope.
+    // From the ref, it is found; from another element of the form, the runtime reads the form
+    // on the way and finds none, so the handler is skipped and nothing is reported.
     const closest = () => {
       const note = /** @type {HTMLElement} */ (document.querySelector("#smoke-1-watch-form [role=alert]"));
+      const heading = /** @type {HTMLElement} */ (document.querySelector("#smoke-1-watch-form h2"));
+      let reported = 0;
+      const report = () => (reported += 1);
+      window.addEventListener("error", report);
       note.hidden = true;
+      heading.dispatchEvent(new CustomEvent("smoke-closest-1", { bubbles: true }));
+      const skipped = note.hidden && reported === 0;
       note.dispatchEvent(new CustomEvent("smoke-closest-1", { bubbles: true }));
-      return !note.hidden;
+      window.removeEventListener("error", report);
+      return skipped && !note.hidden && reported === 0;
     };
     try {
       return {
