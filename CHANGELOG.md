@@ -3754,9 +3754,9 @@ Corten is pre-1.0, so any minor version may change the API.
     the template's README and AGENTS.md, SECURITY.md's advisory link, CONTRIBUTING.md's trusted
     publisher (with a step to re-point crates published before the move), the README, the guides
     and design notes, the benchmark README, the benchmark rounds' `raw.txt` notes and `corten-ui`'s
-    doc link name it. The crates have no
-    `homepage` until `https://corten.run` serves the landing page (it repeated `repository`, which
-    Cargo advises against). The published 0.1.0 crates keep the old URLs until the next version
+    doc link name it. The crates have no `homepage` until `https://corten.run` serves the landing
+    page (it repeated `repository`, which Cargo advises against). The published 0.1.0 crates keep
+    the old URLs until the next version
     ([#836 After the move to corten-run, the crates, docs, template and automations still name todd-skelton/corten](https://github.com/corten-run/corten/issues/836)).
 143. A bench/fullstack round can run each load phase three or five times (`droplet.mjs --passes 3`,
     `BENCH_PASSES`; one pass unless set), the apps taking turns between passes, and records the
