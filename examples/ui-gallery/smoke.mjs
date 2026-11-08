@@ -109,6 +109,41 @@ const besideText = (el) => {
 };
 /** @param {{ gap: number, rem: number, off: number }} b */
 const spacedLikeButton = (b) => Math.abs(b.gap - b.rem) <= 0.5 && Math.abs(b.off) <= 1;
+// Kit Tabs and Segmented: each choice's weight and the chosen one's color are the theme's
+// tab-font-weight and tab-selected-color (500 and --foreground), so a theme whose chosen tab is its
+// primary color, or whose choices are semibold, sets two tokens (#1123). For each [chosen, other]
+// selector pair: "chosen's weight, other's weight, chosen's color", with the kit's theme and with one
+// that sets both, read with transitions off so the color is the end value, not a frame of its fade.
+const tabType = (/** @type {string[][]} */ pairs) => {
+  const probe = (/** @type {string} */ value) => {
+    const el = document.createElement("span");
+    el.style.color = value;
+    document.body.append(el);
+    const color = getComputedStyle(el).color;
+    el.remove();
+    return color;
+  };
+  const read = () =>
+    pairs.map(([chosen, other]) => {
+      const [c, o] = [document.querySelector(chosen), document.querySelector(other)];
+      return c && o ? `${getComputedStyle(c).fontWeight} ${getComputedStyle(o).fontWeight} ${getComputedStyle(c).color}` : `missing ${c ? other : chosen}`;
+    });
+  const still = new CSSStyleSheet();
+  still.replaceSync("* { transition: none !important; }");
+  const theme = new CSSStyleSheet();
+  theme.replaceSync(":root { --tab-font-weight: 600; --tab-selected-color: var(--primary); }");
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, still];
+  const kit = read();
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme];
+  const themed = read();
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
+  read();
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== still);
+  return { kit, themed, foreground: probe("var(--foreground)"), primary: probe("var(--primary)") };
+};
+/** @param {{ kit: string[], themed: string[], foreground: string, primary: string }} t */
+const tabTypeIsTheThemes = (t) =>
+  t.primary !== t.foreground && t.kit.every((s) => s === `500 500 ${t.foreground}`) && t.themed.every((s) => s === `600 600 ${t.primary}`);
 
 for (engine of names) {
   const browser = steady(await engines[engine].launch({ headless: true }));
@@ -1225,6 +1260,11 @@ async function run(browser) {
     choiceSpacing.kit.every((s) => s === "0.75 0.75") && choiceSpacing.themed.every((s) => s === "0.5 0.25"),
     JSON.stringify(choiceSpacing),
   );
+  const tabsType = await page.evaluate(tabType, [
+    ['[role="tab"][aria-selected="true"]', '[role="tab"][aria-selected="false"]'],
+    ['[role="radio"][aria-checked="true"]', '[role="radio"][aria-checked="false"]'],
+  ]);
+  check("Tabs and Segmented: each choice's weight and the chosen one's color are the theme's tab-font-weight and tab-selected-color", tabTypeIsTheThemes(tabsType), JSON.stringify(tabsType));
   await period("Week").click();
   check("a click chooses in place, and every part of the group follows", (await period("Week").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $12.10 this week.|Sold 3 this week.", await showing());
   check("the address follows the choice", new URL(page.url()).searchParams.get("period") === "week", page.url());
@@ -2745,6 +2785,11 @@ async function run(browser) {
     links.current === "Newest" && links.fits && links.fills[0] !== clear && links.fills[0] !== links.track && links.fills.slice(1).every((c) => c === clear),
     JSON.stringify(links),
   );
+  const linksType = await orders.evaluate(tabType, [
+    ["nav[class*='segmented__links'] > a[aria-current='page']", "nav[class*='segmented__links'] > a:not([aria-current])"],
+    ["[class*='segmented__track'] > label:has(> input:checked)", "[class*='segmented__track'] > label:not(:has(> input:checked))"],
+  ]);
+  check("SegmentedLinks and SegmentedRadios: each choice's weight and the chosen one's color are the theme's", tabTypeIsTheThemes(linksType), JSON.stringify(linksType));
   // StackStart: a column whose children keep their own width, a link as wide as its words and a
   // badge, each at most the column's; at 320px a word wider than the column breaks inside its link,
   // and a picture wider than the column narrows in its shape (#1119).
