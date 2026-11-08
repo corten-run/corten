@@ -2745,7 +2745,12 @@ mod tests {
         let theme = std::fs::read_to_string(dir.join("tokens/ui.tokens.json")).unwrap();
         let old: String = theme
             .lines()
-            .filter(|l| !l.contains("\"control-") && !l.contains("-font-size\"") && !l.contains("\"card-padding\"") && !l.contains("\"stat-"))
+            .filter(|l| {
+                !l.contains("\"control-")
+                    && !l.contains("-font-size\"")
+                    && !l.contains("\"card-padding\"")
+                    && !l.contains("\"stat-")
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let old = format!("{}\n}}\n", old.trim_end().trim_end_matches('}').trim_end().trim_end_matches(','));
@@ -2777,7 +2782,10 @@ mod tests {
             ],
             "{stats:?}"
         );
-        assert!(stats.contains(&r#""stat-value-font-weight": { "$type": "fontWeight", "$value": 600 }"#.to_string()), "{stats:?}");
+        assert!(
+            stats.contains(&r#""stat-value-font-weight": { "$type": "fontWeight", "$value": 600 }"#.to_string()),
+            "{stats:?}"
+        );
         // One a stylesheet under static/ declares is declared, as the app's startup check counts it.
         std::fs::create_dir_all(dir.join("static/css")).unwrap();
         let css =
