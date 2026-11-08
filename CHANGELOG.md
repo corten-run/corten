@@ -5694,6 +5694,21 @@ Corten is pre-1.0, so any minor version may change the API.
     fetch draws the error page rather than its plain text, and an error page keeps the `Vary` of
     the failure it replaces beside its own
     ([#1034 A page fetched whole after a write that redirects to a place loses its #id: the fetch sends no corten header, so the redirect is a 303 that fetch follows without the fragment](https://github.com/corten-run/corten/issues/1034)).
+198. A `<dialog>` or `[popover]` written as a direct child of a kit `Stack` or `Cluster` (beside the
+    button that opens it) lost the browser's `margin: auto` to the kit's margin reset, so a modal
+    opened pinned to the top of a phone's screen and a popover without an anchor at its start; one
+    in a `StackStart` column also lost the browser's width, as the column's `max-width: 100%` cap
+    reached it, so a dialog with a long line touched the screen's edges. Both rules now leave a
+    dialog or popover child alone, still with no specificity; every other child is as before. The
+    ui-gallery's smoke test opens one of each in a `StackStart` column at 320px and checks both are
+    centered, the dialog clear of the edges, and that a paragraph beside them still drops its
+    margin; against the earlier stylesheet it fails in Chromium with the dialog at the top, touching
+    both edges, and the popover at the top. No request or render cost: the two selectors make the
+    ui-gallery's served `components.css` 60,531 bytes where it was 60,471 (gzip 10,017 against 10,012,
+    brotli 8,819 against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier size is
+    the served file with the old selectors put back). Found by the Chase Sets pilot, which set `margin: auto` on its reviews
+    page's dialog
+    ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
 
 ### Documentation
 
