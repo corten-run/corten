@@ -4067,11 +4067,11 @@ async function run(browser) {
     };
   });
   check("StatusDot and Stack: the dot is not read, and a stack's gap is its only space", spacing.dot && spacing.gap === 1.5 && spacing.paragraph === 1 && spacing.margins === 0, JSON.stringify(spacing));
-  // LiveDot: it pulses, and is still for a user who asks for less motion and under forced colors;
+  // LiveDot: it pulses, and is still for a user who asks for less motion and under dotForced colors;
   // inside a <corten-live> it pulses only while the stream is live. The element is made, read and
   // removed in one task, so its stream is closed before it is fetched (a 204 if it is).
   await orders.route("**/live-dot-check", (route) => route.fulfill({ status: 204 }));
-  const pulse = () =>
+  const dotPulse = () =>
     orders.evaluate(() => {
       const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='status-dot__live']"));
       const name = () => getComputedStyle(dot).animationName;
@@ -4090,18 +4090,20 @@ async function run(browser) {
       live.replaceWith(badge);
       return { alone, by, words: (badge.textContent ?? "").trim() };
     });
-  const moving = await pulse();
-  await orders.emulateMedia({ reducedMotion: "reduce" });
-  const reduced = await pulse();
+  // Asked for, since the default follows the machine's own setting.
   await orders.emulateMedia({ reducedMotion: "no-preference" });
-  const forced = engine === "webkit" ? null : (await orders.emulateMedia({ forcedColors: "active" }), await pulse());
-  if (forced) await orders.emulateMedia({ forcedColors: "none" });
-  const still = (/** @type {{ alone: string, by: Record<string, string> }} */ p) => p.alone === "none" && Object.values(p.by).every((n) => n === "none");
+  const dotMoving = await dotPulse();
+  await orders.emulateMedia({ reducedMotion: "reduce" });
+  const dotReduced = await dotPulse();
+  await orders.emulateMedia({ reducedMotion: "no-preference" });
+  const dotForced = engine === "webkit" ? null : (await orders.emulateMedia({ forcedColors: "active" }), await dotPulse());
+  await orders.emulateMedia({ reducedMotion: null, forcedColors: engine === "webkit" ? undefined : "none" });
+  const dotStill = (/** @type {{ alone: string, by: Record<string, string> }} */ p) => p.alone === "none" && Object.values(p.by).every((n) => n === "none");
   check(
     "LiveDot: it pulses, only while its stream is live, and is still under reduced motion and forced colors",
-    moving.words === "Live" && moving.alone === "status-dot-live" && moving.by.live === "status-dot-live" &&
-      ["connecting", "reconnecting", "closed", "ended"].every((s) => moving.by[s] === "none") && still(reduced) && (forced === null || still(forced)),
-    JSON.stringify({ moving, reduced, forced }),
+    dotMoving.words === "Live" && dotMoving.alone === "status-dot-live" && dotMoving.by.live === "status-dot-live" &&
+      ["connecting", "reconnecting", "closed", "ended"].every((s) => dotMoving.by[s] === "none") && dotStill(dotReduced) && (dotForced === null || dotStill(dotForced)),
+    JSON.stringify({ moving: dotMoving, reduced: dotReduced, forced: dotForced }),
   );
   // Gap::App: the payout row is a cluster with no gap class of the kit's, so the page's .75rem is its gap.
   const appGap = await orders.evaluate(() => {

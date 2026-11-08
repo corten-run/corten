@@ -2558,7 +2558,9 @@ Corten is pre-1.0, so any minor version may change the API.
     while it connects, reconnects or has closed or ended; outside one it always pulses. It is
     still under `prefers-reduced-motion: reduce` and forced colors, and the words beside it name
     the state. `StatusDot` is unchanged, and its doc test no longer names a class that a live form
-    could have. MEASUREMENT The ui-gallery's orders page has a Live badge
+    could have. The ui-gallery's served `components.css` is 60,738 bytes where it was 60,471
+    (gzip 10,067 against 10,012, brotli 8,866 against 8,814; the earlier size is the served file
+    without the new rules). The ui-gallery's orders page has a Live badge
     ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
 
 ### Removed
