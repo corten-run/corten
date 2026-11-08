@@ -2496,6 +2496,34 @@ Corten is pre-1.0, so any minor version may change the API.
     `pagination.css`, so a copied `pagination.rs` takes it from `corten ui diff`. The
     ui-gallery's payouts card pages by it
     ([#1073 Kit Pagination needs every page's link, so a list paged by previous and next links (a cursor, or the API's own) cannot use it](https://github.com/corten-run/corten/issues/1073)).
+273. The kit's `Progress` takes a tone beside its size,
+    `Progress { size, tone: ProgressTone::Success }` (`Primary`, `Info`, `Success`, `Warning`,
+    `Destructive`), each 3:1 against the track in both themes (the kit's test), so a task that
+    finished or failed is drawn in the theme's success or destructive color without an app's page
+    rule, which tied with the kit's `::-webkit-progress-value` rule and won only by stylesheet
+    order. `Primary` is the bar it was; `Info` is one under way on a screen whose primary color
+    marks its actions. The tone is the fill and the band of a bar with no value; under forced
+    colors every tone is the system's highlight, as the meter's states are, so the label or the
+    words beside the bar say how the task ended. Measured on the kit file as the Dialog's entry
+    was: `progress.css` 1,617 to 1,794 bytes (gzip 516 to 567, brotli 412 to 465). Breaking: a
+    `Progress { size }` does not compile until it names its tone, which the compiler names;
+    `corten ui add progress --merge` updates a copy. The ui-gallery's label run shows a finished
+    one
+    ([#1059 Kit Progress has no tone, so a finished or failed task's bar cannot be drawn in the theme's success or destructive color](https://github.com/corten-run/corten/issues/1059)).
+274. The kit's segmented control takes a width on each of its three forms,
+    `<Segmented width={SegmentedWidth::Fill}>`, `SegmentedLinks { width }` and
+    `<SegmentedRadios width={..}>`: `Fit`, as wide as its choices (the look it had), or `Fill`, the
+    width of its box with the choices in equal parts, as a phone's bar of a few choices (a side, a
+    period) is drawn so each is a wide target, the fieldset of `SegmentedRadios` filling its box as
+    a flex or grid item too. A filled choice is at least a control's height and its label wraps in
+    its part, a word wider than the part breaking inside it, so a narrow screen does not scroll
+    sideways. The fill rules are one
+    class more specific than the track's, so they win wherever the stylesheets are linked; an app's
+    page rule for a full-width bar tied with the kit's and won only by stylesheet order. Measured as
+    the Dialog's entry was: `segmented.css` 1,858 to 2,371 bytes (gzip 726 to 856, brotli 577 to
+    693). Breaking: each form names its width, which the compiler names; `corten ui add segmented
+    --merge` updates a copy. The ui-gallery's label size radios fill the form's column
+    ([#1060 Kit Segmented draws only as wide as its choices, so a phone's full-width choice bar (equal parts across the row) keeps its own segmented rules](https://github.com/corten-run/corten/issues/1060)).
 275. A kit `Stats` figure's type is the theme's: `--stat-label-font-size`, `--stat-label-font-weight`,
     `--stat-value-font-size`, `--stat-value-font-size-narrow` (a phone's), `--stat-value-font-weight`,
     and `--stat-label-tracking` and `--stat-value-tracking` (`number` tokens in ems), with
@@ -5642,6 +5670,18 @@ Corten is pre-1.0, so any minor version may change the API.
     of its own in place of such a route's still gets a plain 500, logged and named on stderr
     outside `corten dev`). A release build still draws nothing in the place and logs it once
     ([#1035 A debug build's layout-read errors (later::<X>() on an answer that is not a page, a gives(..) the page does not give) answer a bare 500 that names nothing outside corten dev](https://github.com/corten-run/corten/issues/1035)).
+193. A page the runtime fetched whole after a write, whose handler sent the browser on to a place
+    (`req.redirect(&route.at(id))`), landed at the path without its `#id`: the fetch said
+    nothing, so the server answered a 303, and `fetch` follows one without its fragment. The
+    runtime now asks for that page with `corten: page`, which the server answers as the whole
+    document, as before, and to which a redirect to a place or to another site is named in
+    `corten-location`, as to a navigation; one to another site no longer costs a refused fetch
+    and a reload. Every redirect now varies on `corten`, and the answer to the runtime's fetch is
+    kept by the browser alone, so a cache that keys on the URL cannot hand a full load's 303 to the
+    runtime, or the runtime's `corten-location` to a full load. An extractor's refusal of that
+    fetch draws the error page rather than its plain text, and an error page keeps the `Vary` of
+    the failure it replaces beside its own
+    ([#1034 A page fetched whole after a write that redirects to a place loses its #id: the fetch sends no corten header, so the redirect is a 303 that fetch follows without the fragment](https://github.com/corten-run/corten/issues/1034)).
 
 ### Documentation
 

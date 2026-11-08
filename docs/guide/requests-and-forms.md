@@ -42,6 +42,7 @@ server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-a
 |---|---|---|---|
 | `GET`, no `corten` header | first load, reload, no JavaScript | `req.page(doc)`: the app's layout with the page in it | renders HTML |
 | `GET` with `corten: nav` | runtime, same-origin link or back/forward | the same call: `<title>`, head tags and the page only | swaps `<main>` |
+| `GET` with `corten: page` | runtime, the page a write sends the browser to | the same call: the whole document, as a first load gets it (`req.mode` is `Mode::Document`) | swaps the page and draws its layout again |
 | `POST` with `corten: action` | runtime, `<form data-patch>` | `req.patch_or(view, page)`, or `req.patch(view)` | replaces each element by `id`; `view::Remove(id)` removes one, `view::Append(id, rows)` adds rows at its end (ids are `#[derive(Id)]` types) |
 | `POST`, no header | a form without JavaScript | `req.page(..)` or `req.redirect(&route)` | renders the page |
 | any, `Accept: application/json` | native screen, agent, test | `req.screen(&data, doc)` (`data` a `ToJson`): `{"title", "data"}`, the title from the document's `<title>` | renders natively, or reasons over it |
@@ -1453,10 +1454,14 @@ The browser scrolls to a route's place after a full load and after the runtime's
 alike; the runtime fetches the page again even when only the `#id` differs from the address,
 since the write may have changed it.
 A client navigation the server sends to a place gets `corten-location` instead of a 303,
-because `fetch` follows a redirect but drops its fragment. So does one sent to another site
+because `fetch` follows a redirect but drops its fragment, and so does the whole page the
+runtime fetches after a write (`corten: page`), so a page a write leads to that sends the browser
+on to a place lands there. So does one sent to another site
 (a `corten::http::Uri` such as `https://pay.example/..`), which `fetch` may not read (the CSP's
 `connect-src`, else CORS): the browser goes there itself, in one request to the app. The same
-holds for `req.moved`.
+holds for `req.moved`. Each of these answers varies on `corten`, and one to the runtime's fetch
+is kept by the browser alone, so a cache never hands a full load's 303 to the runtime or its
+`corten-location` to a full load.
 
 A place on a page outside the app (another site, another app of the same product) has an id
 that page's markup owns, so it is text: `Elsewhere::at(&uri, "fee-calculator")` is

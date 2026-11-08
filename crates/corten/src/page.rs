@@ -29,7 +29,8 @@ use crate::{
     Error, Result,
 };
 
-/// Request header the runtime sets: `nav` for navigations, `action` for form submits.
+/// Request header the runtime sets: `nav` for navigations, `action` for form submits, `page` for
+/// the whole page it fetches after a write.
 pub const MODE_HEADER: HeaderName = HeaderName::from_static("corten");
 pub(crate) const PAGE_HEADER: HeaderName = HeaderName::from_static("corten-page");
 pub(crate) const PATCH_HEADER: HeaderName = HeaderName::from_static("corten-patch");
@@ -57,7 +58,8 @@ const VARY_LANGUAGE: &str = "corten, accept, accept-language";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     /// A normal browser request: first load, reload, or any request without JavaScript; also the
-    /// runtime's fetch of the page a write redirects to, whose layout it draws again.
+    /// runtime's fetch of the page a write redirects to, whose layout it draws again (`corten:
+    /// page`).
     Document,
     /// The runtime is navigating to a page and will swap it into `<main>`.
     Navigation,
@@ -95,11 +97,19 @@ impl Mode {
     /// the handler has its `Req`, an extractor or a [`crate::Middleware`] that starts a read only
     /// a full load needs (see [`crate::Ahead`]). A handler reads `req.mode`.
     pub fn of(headers: &HeaderMap) -> Mode {
+        Mode::asked(headers).0
+    }
+
+    /// The mode, and whether the runtime sent the request (`corten` is `nav`, `action` or
+    /// `page`), in one lookup: a redirect to a place or another site is then named in
+    /// `corten-location`, as `fetch` cannot follow one, and the answer is not shared (#1034).
+    pub(crate) fn asked(headers: &HeaderMap) -> (Mode, bool) {
         match headers.get(MODE_HEADER).map(HeaderValue::as_bytes) {
-            Some(b"nav") => Mode::Navigation,
-            Some(b"action") => Mode::Action,
-            _ if accepts_json(headers) => Mode::Data,
-            _ => Mode::Document,
+            Some(b"nav") => (Mode::Navigation, true),
+            Some(b"action") => (Mode::Action, true),
+            Some(b"page") => (Mode::Document, true),
+            _ if accepts_json(headers) => (Mode::Data, false),
+            _ => (Mode::Document, false),
         }
     }
 }
@@ -724,6 +734,8 @@ impl Credentials {
 pub(crate) struct Asked {
     uri: Uri,
     mode: Mode,
+    /// The runtime sent it ([`Mode::asked`]), which the error page's request says again.
+    fetched: bool,
     accept_language: Option<HeaderValue>,
     nonce: Option<NonceSlot>,
     signal: crate::Signal,
@@ -737,13 +749,14 @@ pub(crate) struct Asked {
 impl Asked {
     /// What the error page's request needs, and no more: the error page's own `Req` reads the
     /// notice and the rest, so a request that answers without one builds no `Req` here.
-    pub(crate) fn new(req: &Request, shared: &Shared, credentials: Credentials, mode: Mode) -> Self {
+    pub(crate) fn new(req: &Request, shared: &Shared, credentials: Credentials, (mode, fetched): (Mode, bool)) -> Self {
         let head = req.method() == axum::http::Method::HEAD;
         let here =
             if shared.layout_reads.is_empty() { None } else { req.extensions().get::<crate::layout::StartHere>().cloned() };
         Asked {
             uri: req.uri().clone(),
             mode,
+            fetched,
             accept_language: req.headers().get(header::ACCEPT_LANGUAGE).cloned(),
             nonce: req.extensions().get::<NonceSlot>().cloned(),
             signal: req.extensions().get::<crate::Signal>().cloned().unwrap_or_default(),
@@ -759,8 +772,17 @@ impl Asked {
 
     /// The request again, for the error page's extractors.
     pub(crate) fn parts(self) -> Parts {
-        let Asked { uri, mode, accept_language, nonce, signal, credentials: Credentials { cookie, authorization }, head, here } =
-            self;
+        let Asked {
+            uri,
+            mode,
+            fetched,
+            accept_language,
+            nonce,
+            signal,
+            credentials: Credentials { cookie, authorization },
+            head,
+            here,
+        } = self;
         let (mut parts, ()) = Request::new(()).into_parts();
         parts.uri = uri;
         if head {
@@ -769,6 +791,7 @@ impl Asked {
         let mode = match mode {
             Mode::Navigation => Some(HeaderValue::from_static("nav")),
             Mode::Action => Some(HeaderValue::from_static("action")),
+            Mode::Document if fetched => Some(HeaderValue::from_static("page")),
             Mode::Document | Mode::Data => None,
         };
         let kept = [
@@ -922,6 +945,9 @@ pub struct Req {
     plain_write: bool,
     /// The request is a write (not `GET` or `HEAD`), which [`Req::resend_to`] needs.
     write: bool,
+    /// The runtime sent it ([`Mode::asked`]): a redirect to a place or another site is then
+    /// named in `corten-location`, as `fetch` cannot follow one (#1034).
+    fetched: bool,
     /// Corten fills the page's places for layout reads ([`crate::later`]): a whole document in an
     /// app with some. Otherwise they are removed as the page is rendered.
     fills: bool,
@@ -1132,8 +1158,9 @@ impl Req {
     ) -> Self {
         let signal: crate::Signal = extensions.get::<crate::Signal>().cloned().unwrap_or_default();
         let write = !matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
+        let (mode, fetched) = Mode::asked(headers);
         Req {
-            mode: Mode::of(headers),
+            mode,
             nonce: extensions.get::<NonceSlot>().cloned(),
             uri: uri.clone(),
             accept_language: headers.get(header::ACCEPT_LANGUAGE).cloned(),
@@ -1144,6 +1171,7 @@ impl Req {
             },
             plain_write: write && shared.plain_notice && plain_origin(headers),
             write,
+            fetched,
             fills: !shared.layout_reads.is_empty() && extensions.get::<crate::layout::StartHere>().is_some(),
             shared,
             signal,
@@ -2165,7 +2193,7 @@ impl Req {
     /// JavaScript.
     pub fn redirect<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
         let value = crate::route::header_value(to).map_err(Error::new)?;
-        Ok(HtmlResponse::new(redirect(self.mode, value)))
+        Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)))
     }
 
     /// Send the same form to `to`, whose handler answers it: `307 Temporary Redirect`, which the
@@ -2323,7 +2351,7 @@ impl Req {
             crate::security::cookie::SetCookie::new(NOTICE_COOKIE, &cookie)
         };
         let cookie = cookie.max_age(60);
-        Ok(HtmlResponse::new(redirect(self.mode, value)).with_cookie(cookie))
+        Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)).with_cookie(cookie))
     }
 
     /// The notice the write that redirected here left for this page ([`Req::redirect_with_notice`]),
@@ -2387,10 +2415,14 @@ impl Req {
     /// (`#[route(prefix = ..)]` for ones named by data), so only the ones it knows move with it.
     pub fn moved<For>(&self, to: &(impl crate::route::Href + ?Sized)) -> crate::Result<HtmlResponse<For>> {
         let value = crate::route::header_value(to).map_err(Error::new)?;
-        if self.mode == Mode::Action || (self.mode == Mode::Navigation && (has_fragment(&value) || elsewhere(&value))) {
-            return Ok(HtmlResponse::new(redirect(self.mode, value)));
+        if self.mode == Mode::Action || (self.fetched && (has_fragment(&value) || elsewhere(&value))) {
+            return Ok(HtmlResponse::new(redirect(self.mode, self.fetched, value)));
         }
-        let headers = [(header::LOCATION, value), (header::CACHE_CONTROL, HeaderValue::from_static(MOVED_CACHE))];
+        let headers = [
+            (header::LOCATION, value),
+            (header::CACHE_CONTROL, HeaderValue::from_static(MOVED_CACHE)),
+            (header::VARY, HeaderValue::from_static(MODE_VARY)),
+        ];
         Ok(HtmlResponse::new((StatusCode::MOVED_PERMANENTLY, headers).into_response()))
     }
 }
@@ -2469,19 +2501,26 @@ fn outside_form_action(check: &crate::security::FormCheck, to: &HeaderValue) -> 
 /// How long the browser keeps a [`Req::moved`] redirect: a day, its own copy only.
 const MOVED_CACHE: &str = "private, max-age=86400";
 
+/// What a redirect varies on: its answer is `corten-location` or a redirect by the `corten`
+/// header, so a cache (the browser's too, which `fetch` reads) keeps one for each value.
+const MODE_VARY: &str = "corten";
+
 /// A redirect in `mode`: `corten-location` for a form patch (the runtime navigates), a 303
-/// otherwise. A client navigation sent to a place on a page (`#id`) or to another site gets
-/// `corten-location` too: `fetch` follows a 303 but drops its fragment, so the runtime would not
-/// know where to scroll, and may not read another origin's answer.
-pub(crate) fn redirect(mode: Mode, to: HeaderValue) -> Response {
+/// otherwise. Any other request the runtime `fetched` (a navigation, the whole page after a write)
+/// that is sent to a place on a page (`#id`) or to another site gets `corten-location` too:
+/// `fetch` follows a 303 but drops its fragment, so the runtime would not know where to scroll,
+/// and may not read another origin's answer.
+pub(crate) fn redirect(mode: Mode, fetched: bool, to: HeaderValue) -> Response {
+    let vary = (header::VARY, HeaderValue::from_static(MODE_VARY));
     match mode {
-        Mode::Action => (StatusCode::NO_CONTENT, [(LOCATION_HEADER, to)]).into_response(),
+        Mode::Action => (StatusCode::NO_CONTENT, [(LOCATION_HEADER, to), vary]).into_response(),
         // `fetch` follows a redirect but drops its `#id`, and one to another origin is refused
-        // (the CSP's `connect-src`, else CORS): the runtime navigates there itself.
-        Mode::Navigation if has_fragment(&to) || elsewhere(&to) => {
-            (StatusCode::NO_CONTENT, [(LOCATION_HEADER, to)]).into_response()
+        // (the CSP's `connect-src`, else CORS): the runtime navigates there itself. So for any
+        // fetch of the runtime's, a navigation or the whole page after a write (#1034).
+        _ if fetched && (has_fragment(&to) || elsewhere(&to)) => {
+            (StatusCode::NO_CONTENT, [(LOCATION_HEADER, to), vary]).into_response()
         }
-        _ => (StatusCode::SEE_OTHER, [(header::LOCATION, to)]).into_response(),
+        _ => (StatusCode::SEE_OTHER, [(header::LOCATION, to), vary]).into_response(),
     }
 }
 
@@ -2535,14 +2574,14 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
     api: Option<&crate::api::Mount>,
-    mode: Mode,
+    (mode, fetched): (Mode, bool),
 ) -> Response {
     if api.is_some() || mode == Mode::Data {
         let shape = api.and_then(|mount| mount.errors.as_ref());
         return crate::api::json_failure(run(req, next, deadline, signal).await, shared.dev, shape).await;
     }
     if shared.layout_reads.is_empty() || mode.swaps() {
-        return page_or_error(shared, req, next, deadline, signal, mode).await;
+        return page_or_error(shared, req, next, deadline, signal, (mode, fetched)).await;
     }
     // A whole document: a page route starts the layout's reads as it is called, and they are
     // polled with the handler on this task, then drawn into whichever page answers: the
@@ -2555,7 +2594,7 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
     let here = crate::layout::StartHere::new(shared.clone(), until);
     req.extensions_mut().insert(here.clone());
     let filled: std::pin::Pin<Box<dyn Future<Output = Response> + Send + '_>> = Box::pin(async move {
-        let res = here.beside(page_or_error(shared, req, next, deadline, signal, mode)).await;
+        let res = here.beside(page_or_error(shared, req, next, deadline, signal, (mode, fetched))).await;
         here.fill(res).await
     });
     filled.await
@@ -2568,15 +2607,15 @@ async fn page_or_error<S: crate::app::Steps>(
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
-    mode: Mode,
+    (mode, fetched): (Mode, bool),
 ) -> Response {
     use axum::body::HttpBody;
     let offline = req.method() == axum::http::Method::GET && shared.offline.as_deref() == Some(req.uri().path());
-    // A browser: the runtime, or a document request that asks for HTML (a health probe or a
-    // webhook sender does not).
-    let browser = matches!(mode, Mode::Navigation | Mode::Action) || (mode == Mode::Document && accepts_html(req.headers()));
+    // A browser: the runtime (whose whole-page fetch asks for `*/*`), or a document request that
+    // asks for HTML (a health probe or a webhook sender does not).
+    let browser = fetched || (mode == Mode::Document && accepts_html(req.headers()));
     // Taken now, while the request (its nonce, its credentials) is here; it allocates nothing.
-    let asked = Asked::new(&req, shared, Credentials::of(req.headers()), mode);
+    let asked = Asked::new(&req, shared, Credentials::of(req.headers()), (mode, fetched));
     #[cfg(debug_assertions)]
     let mut req = req;
     #[cfg(debug_assertions)]
@@ -2610,7 +2649,7 @@ async fn page_or_error<S: crate::app::Steps>(
                 let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
                 return carried(kept, error_page(shared, asked, failure).await);
             }
-            return carried(kept, redirect(mode, to));
+            return carried(kept, redirect(mode, asked.fetched, to));
         };
         tracing::error!("corten: {message}");
         let failure = Failure::Failed { status: StatusCode::INTERNAL_SERVER_ERROR, detail: Some(Arc::from(message)) };
@@ -2680,10 +2719,12 @@ fn no_assets(path: &'static str) -> crate::assets::AssetUrl<'static> {
 
 /// `res` with the headers of the failed response it replaces, `kept`, except the ones that
 /// described its body or that Corten sets for the answer it sends (`Cache-Control`, its own
-/// `corten-` headers); a header `res` has already wins. A `Cache-Control` that names `no-store`
-/// (`NoStore`, or one written by hand, on any of its lines, however a reader could find it) makes
-/// `res` `no-store` too: whoever set it said nothing may keep the answer, a failure included. Its
-/// other directives described the failed answer, so they are not carried.
+/// `corten-` headers); a header `res` has already wins, but for `Vary`, whose names are added to
+/// its own (each one it does not name already, in any case), since what the failed answer varied
+/// on still decides this one. A `Cache-Control` that names `no-store` (`NoStore`, or one written
+/// by hand, on any of its lines, however a reader could find it) makes `res` `no-store` too:
+/// whoever set it said nothing may keep the answer, a failure included. Its other directives
+/// described the failed answer, so they are not carried.
 fn carried(kept: HeaderMap, mut res: Response) -> Response {
     if kept.is_empty() {
         return res;
@@ -2693,6 +2734,8 @@ fn carried(kept: HeaderMap, mut res: Response) -> Response {
     if kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes())) {
         headers.insert(header::CACHE_CONTROL, crate::cache::NO_STORE);
     }
+    // Allocates only for a failure that varied on something.
+    let vary: Vec<HeaderValue> = kept.get_all(header::VARY).iter().cloned().collect();
     let mut kept_name = None;
     // A name comes with its first value only; the values after it have `None`.
     for (key, value) in kept {
@@ -2710,6 +2753,7 @@ fn carried(kept: HeaderMap, mut res: Response) -> Response {
                     | header::ETAG
                     | header::LAST_MODIFIED
                     | header::CACHE_CONTROL
+                    | header::VARY
             ) || key.as_str().starts_with("corten-");
             if !replaced {
                 if let Entry::Vacant(entry) = headers.entry(key) {
@@ -2718,6 +2762,33 @@ fn carried(kept: HeaderMap, mut res: Response) -> Response {
             }
         } else if let Some(entry) = &mut kept_name {
             entry.append(value);
+        }
+    }
+    // Each name once: a name the answer varies on already, on any of its lines, or earlier on the
+    // same line, is not added again. A value that is not text is kept as it came: a cache is safer
+    // varying on too much than too little.
+    for value in vary {
+        let Ok(text) = value.to_str() else {
+            res.headers_mut().append(header::VARY, value);
+            continue;
+        };
+        let mut new: Vec<&str> = Vec::new();
+        for name in text.split(',').map(str::trim).filter(|name| !name.is_empty()) {
+            let had = res
+                .headers()
+                .get_all(header::VARY)
+                .iter()
+                .filter_map(|own| own.to_str().ok())
+                .flat_map(|own| own.split(','))
+                .any(|own| own.trim().eq_ignore_ascii_case(name));
+            if !had && !new.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
+                new.push(name);
+            }
+        }
+        if !new.is_empty() {
+            if let Ok(value) = HeaderValue::from_str(&new.join(", ")) {
+                res.headers_mut().append(header::VARY, value);
+            }
         }
     }
     res
@@ -3130,4 +3201,24 @@ pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<Heade
         headers.insert(kind, HeaderValue::from_static("1"));
     }
     res
+}
+
+#[cfg(test)]
+mod carried_tests {
+    use super::*;
+
+    /// The failed answer's `Vary` names are added to the error page's, each name once whatever its
+    /// case or the line it is on, and a value that is not text as it came.
+    #[test]
+    fn a_kept_vary_name_is_added_once() {
+        let mut kept = HeaderMap::new();
+        kept.append(header::VARY, HeaderValue::from_static("Corten, Origin, origin"));
+        kept.append(header::VARY, HeaderValue::from_static("cookie"));
+        kept.append(header::VARY, HeaderValue::from_bytes(b"caf\xe9").unwrap());
+        let mut res = Response::new(Body::empty());
+        res.headers_mut().append(header::VARY, HeaderValue::from_static("corten, accept"));
+        let res = carried(kept, res);
+        let vary: Vec<_> = res.headers().get_all(header::VARY).iter().map(HeaderValue::as_bytes).collect();
+        assert_eq!(vary, [&b"corten, accept"[..], b"Origin", b"cookie", b"caf\xe9"]);
+    }
 }
