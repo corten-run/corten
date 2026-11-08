@@ -401,6 +401,21 @@ async function run(browser) {
     return result;
   });
   check("Checkbox: drawn as a checkbox, but not an input whose role is switch", drawnBox.box === "none" && drawnBox.asSwitch === "auto", JSON.stringify(drawnBox));
+  // A script that sets checked sends no change, so the group keeps its answer until the script
+  // dispatches one from a box, as the CheckboxGroup doc says.
+  const scripted = await page.evaluate(() => {
+    const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
+    const was = boxes.map((b) => b.checked);
+    const valid = () => boxes.every((b) => b.checkValidity());
+    for (const b of boxes) b.checked = false;
+    const silent = valid();
+    boxes[0].dispatchEvent(new Event("change", { bubbles: true }));
+    const told = valid();
+    boxes.forEach((b, i) => (b.checked = was[i]));
+    boxes[0].dispatchEvent(new Event("change", { bubbles: true }));
+    return { silent, told, back: valid() };
+  });
+  check("CheckboxGroup: boxes a script unchecks keep the old answer until it dispatches a change, then the group is refused", scripted.silent && !scripted.told && scripted.back, JSON.stringify(scripted));
   await us.uncheck();
   const shipMessage = await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
   await page.getByRole("button", { name: "List for sale" }).click();

@@ -6195,6 +6195,12 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+76. `corten-ui`'s `CheckboxGroup` doc and the UI guide's row say the group checks again on a box's
+    `change`, which the browser does not send when a script sets `checked`, so a "Select all" or
+    "Clear" button dispatches one after setting the boxes; without it a form with none checked is
+    sent and only the handler refuses it. The ui-gallery's smoke test checks both halves in each
+    engine
+    ([#1098 CheckboxGroup docs do not say a script that sets checked must dispatch change, so the group keeps its old validity](https://github.com/corten-run/corten/issues/1098)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
