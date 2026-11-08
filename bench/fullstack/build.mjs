@@ -31,6 +31,10 @@
 // 9. For Corten's card-market: cargo's per-crate timings of the clean build, and rustc's passes
 //    and macro expansion statistics for the app's crate alone (-Ztime-passes and -Zmacro-stats,
 //    nightly-only flags allowed on stable with RUSTC_BOOTSTRAP=1, for this diagnosis only).
+// 10. After the app's results are saved: docker-rebuild.mjs (its own `docker build` after the edit
+//    with BuildKit's cache warm) for the apps in BENCH_DOCKER_REBUILD_APPS (default corten and
+//    axum-maud), and rust-analyzer.mjs (the language server's own latency) for the Rust apps, each
+//    writing a file of its own in the round's folder.
 // Each step runs in a container of its own, so its CPU time and memory are its own: wall time,
 // CPU-seconds (the container's cgroup counter: the work, whatever the core count) and the peak of
 // its processes' memory (sampled five times a second, without the page cache).
@@ -64,6 +68,7 @@ const cpusLabel = `cores ${cores}`;
 const storage = spawnSync("docker", ["info", "--format", "{{.Driver}}"], { encoding: "utf8" }).stdout.trim() || "unknown";
 const scaleCores = (process.env.BENCH_BUILD_SCALE ?? "").split(",").map((c) => c.trim()).filter(Boolean);
 const scaleApps = (process.env.BENCH_BUILD_SCALE_APPS ?? "corten,axum-maud").split(",");
+const dockerRebuildApps = (process.env.BENCH_DOCKER_REBUILD_APPS ?? "corten,axum-maud").split(",");
 const hour = 3_600_000;
 const docker = (/** @type {string[]} */ args, /** @type {{ input?: string, timeout?: number }=} */ options = {}) =>
   spawnSync("docker", args, { encoding: "utf8", maxBuffer: 256 * 2 ** 20, timeout: options.timeout ?? hour, input: options.input });
@@ -292,6 +297,12 @@ for (const name of appsArg.split(",")) {
     for (const what of images) docker(["rmi", "-f", tag(what)]);
   }
   save();
+  // The Docker and editor loops, scripts of their own run after this app's results are saved, so
+  // a failure there costs none of them: its own `docker build` with BuildKit's cache warm, for the
+  // apps in BENCH_DOCKER_REBUILD_APPS (default the anchors, corten and axum-maud), and
+  // rust-analyzer's latency for the Rust apps.
+  if (dockerRebuildApps.includes(name)) spawnSync(process.execPath, [join(here, "docker-rebuild.mjs"), round, name, String(runs)], { stdio: "inherit" });
+  if (r.ra) spawnSync(process.execPath, [join(here, "rust-analyzer.mjs"), round, name], { stdio: "inherit" });
 }
 rmSync(scratch, { recursive: true, force: true });
 const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;

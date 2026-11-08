@@ -23,7 +23,7 @@ const pct = (xs, p) => {
 };
 // The tier the round ran (BENCH_TIER), so a matched round's numbers are never read as the defaults'.
 // Whether a matched round reached its apps through the edge, so one run with BENCH_EDGE=off is never read as the tier's.
-const summary = { tier, ...(tier === "matched" ? { edge: edgeOf(raw) ? "on" : "off" } : {}), ssr: {}, build: read(join(dir, "build.json")), coldStart: read(join(dir, "cold-start.json")), bytes: read(join(dir, "bytes.json")), instructions: {}, browser: {} };
+const summary = { tier, ...(tier === "matched" ? { edge: edgeOf(raw) ? "on" : "off" } : {}), ssr: {}, build: read(join(dir, "build.json")), dockerRebuild: read(join(dir, "docker-rebuild.json")), rustAnalyzer: read(join(dir, "rust-analyzer.json")), coldStart: read(join(dir, "cold-start.json")), bytes: read(join(dir, "bytes.json")), instructions: {}, browser: {} };
 // Steps droplet.mjs skipped after the droplet hung ("<time> step <name> skipped: <why>"): their
 // results are partly or wholly missing. Only rounds with one get the key.
 const skippedFile = join(dir, "skipped.txt");
@@ -164,6 +164,34 @@ if (summary.build) {
       ...Object.entries(b.scale ?? {}).map(([on, r]) => `cores ${on}: ${s(r.ms)}, ${r.cpuS} CPU-s`),
       b.mold ? `mold: dev ${s(b.mold.clean.ms)}, after the edit ${s(b.mold.rebuild.ms)} (the default build's linker: ${b.linkers?.dev ?? "?"})` : "",
       b.scaleFailed ? `FAILED: ${b.scaleFailed.split("\n")[0]}` : "",
+    ].filter(Boolean)));
+  }
+}
+if (summary.dockerRebuild) {
+  const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
+  const crates = (/** @type {{ runs: { compiled?: string[] }[] }} */ r) => (r.runs[0]?.compiled ? ` [${r.runs[0].compiled.length} crates]` : "");
+  console.log("\nThe app's own docker build after the edit, BuildKit's cache warm (wall, CPU-seconds; the median)");
+  for (const [name, d] of Object.entries(summary.dockerRebuild)) {
+    console.log(line([
+      name,
+      d.cold ? `cold ${s(d.cold.ms)}, ${d.cold.cpuS} CPU-s` : "",
+      d.kept ? `builder kept ${s(d.kept.ms)}, ${d.kept.cpuS} CPU-s${crates(d.kept)}` : "",
+      d.imported ? `layer cache imported ${s(d.imported.ms)}, ${d.imported.cpuS} CPU-s${crates(d.imported)}` : "",
+      d.error ? `FAILED: ${String(d.error).split("\n")[0]}` : d.complete === false ? "stopped before it finished" : "",
+    ].filter(Boolean)));
+  }
+}
+if (summary.rustAnalyzer) {
+  console.log("\nrust-analyzer (ready cold and warm; after the edit, the median of a completion and of the errors asked for)");
+  for (const [name, a] of Object.entries(summary.rustAnalyzer)) {
+    const p = a.probes;
+    console.log(line([
+      name,
+      a.readyCold ? `ready ${(a.readyCold.ms / 1000).toFixed(1)} s cold, ${(a.readyWarm?.ms / 1000).toFixed(1)} s warm` : "",
+      p ? `completion ${p.completionMs} ms (offered in ${p.offered} of ${p.runs.length})` : "",
+      p ? `errors ${p.errorMs} ms (shown in ${p.errorShown} of ${p.runs.length}), cleared ${p.clearedMs} ms` : "",
+      a.peakMiB ? `${a.peakMiB} MiB peak` : "",
+      a.error ? `FAILED: ${String(a.error).split("\n")[0]}` : a.complete === false ? "stopped before it finished" : "",
     ].filter(Boolean)));
   }
 }

@@ -1,0 +1,302 @@
+{
+ "corten": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "measuredAt": "2026-11-08T09:21:08.047Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 39794,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 18617,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 110,
+   "errorMs": 93,
+   "clearedMs": 80,
+   "offered": 5,
+   "errorShown": 5,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 1404,
+     "items": 11,
+     "offered": true,
+     "errorMs": 107,
+     "errorShown": true,
+     "clearedMs": 120,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 111,
+     "items": 11,
+     "offered": true,
+     "errorMs": 93,
+     "errorShown": true,
+     "clearedMs": 80,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 94,
+     "items": 11,
+     "offered": true,
+     "errorMs": 98,
+     "errorShown": true,
+     "clearedMs": 75,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 92,
+     "items": 11,
+     "offered": true,
+     "errorMs": 71,
+     "errorShown": true,
+     "clearedMs": 103,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 110,
+     "items": 11,
+     "offered": true,
+     "errorMs": 83,
+     "errorShown": true,
+     "clearedMs": 80,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 2498
+ },
+ "leptos": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "measuredAt": "2026-11-08T09:22:24.977Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 49297,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 27383,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 12041,
+   "errorMs": 12086,
+   "clearedMs": 11773,
+   "offered": 5,
+   "errorShown": 5,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 15489,
+     "items": 25,
+     "offered": true,
+     "errorMs": 12086,
+     "errorShown": true,
+     "clearedMs": 11145,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 12041,
+     "items": 25,
+     "offered": true,
+     "errorMs": 10760,
+     "errorShown": true,
+     "clearedMs": 12528,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 13514,
+     "items": 25,
+     "offered": true,
+     "errorMs": 12576,
+     "errorShown": true,
+     "clearedMs": 11833,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 10852,
+     "items": 25,
+     "offered": true,
+     "errorMs": 11604,
+     "errorShown": true,
+     "clearedMs": 11608,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 11957,
+     "items": 25,
+     "offered": true,
+     "errorMs": 13783,
+     "errorShown": true,
+     "clearedMs": 11773,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 3531
+ },
+ "topcoat": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "measuredAt": "2026-11-08T09:27:06.935Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 29569,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 9053,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 6953,
+   "errorMs": 7461,
+   "clearedMs": 6685,
+   "offered": 5,
+   "errorShown": 5,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 7215,
+     "items": 22,
+     "offered": true,
+     "errorMs": 7556,
+     "errorShown": true,
+     "clearedMs": 10027,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 10011,
+     "items": 22,
+     "offered": true,
+     "errorMs": 7560,
+     "errorShown": true,
+     "clearedMs": 6714,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 6600,
+     "items": 22,
+     "offered": true,
+     "errorMs": 7461,
+     "errorShown": true,
+     "clearedMs": 6685,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 6953,
+     "items": 22,
+     "offered": true,
+     "errorMs": 5815,
+     "errorShown": true,
+     "clearedMs": 6017,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 6219,
+     "items": 22,
+     "offered": true,
+     "errorMs": 5526,
+     "errorShown": true,
+     "clearedMs": 6365,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 2018
+ },
+ "axum-maud": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "measuredAt": "2026-11-08T09:29:55.424Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 19416,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 7401,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 112,
+   "errorMs": 101,
+   "clearedMs": 91,
+   "offered": 5,
+   "errorShown": 5,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 857,
+     "items": 25,
+     "offered": true,
+     "errorMs": 111,
+     "errorShown": true,
+     "clearedMs": 91,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 100,
+     "items": 25,
+     "offered": true,
+     "errorMs": 84,
+     "errorShown": true,
+     "clearedMs": 88,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 112,
+     "items": 25,
+     "offered": true,
+     "errorMs": 101,
+     "errorShown": true,
+     "clearedMs": 101,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 128,
+     "items": 25,
+     "offered": true,
+     "errorMs": 89,
+     "errorShown": true,
+     "clearedMs": 122,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 104,
+     "items": 25,
+     "offered": true,
+     "errorMs": 109,
+     "errorShown": true,
+     "clearedMs": 87,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 1370
+ }
+}

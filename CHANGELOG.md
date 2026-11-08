@@ -2551,6 +2551,17 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
+    after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
+    apps: how long it takes to be ready, cold and warm, and after an edit how long a completion
+    inside the item page's markup and the errors for an unknown field there take. On a desktop,
+    both took about 0.1 s inside Corten's `html!` and Maud's, against 7 to 12 s inside Topcoat's
+    and Leptos's `view!`. `docker-rebuild.mjs` times each anchor app's own `docker build` after
+    the edit with BuildKit's cache warm, both on the builder that built it and on a new builder
+    given only the exported layer cache. That second case is what a hosted CI runner restoring a
+    cache gets, and it rebuilds a Rust app about as if from clean, since BuildKit exports no cache
+    mount. The results are in `results/dev-loop`, and `summarize.mjs` prints both
+    ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
