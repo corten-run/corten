@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from .catalog import CatalogRecord, source as catalog_source
 from .items import ItemView, alert_message, fetch_item, shelf
-from .marketplace import LABELS, MarketplaceFormat, source as marketplace_source
+from .marketplace import LABELS, MarketplaceFormat, MarketplaceRecord, source as marketplace_source
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -91,10 +91,10 @@ async def marketplace(request: Request, locale: str, record_id: str):
     prefix = query.get("seller", "")
     order = "desc" if query.get("sort") == "desc" else "asc"
     show_all = query.get("offers") == "all"
-    listings = [row for row in record["listings"] if row["seller"].startswith(prefix)]
-    listings.sort(key=lambda row: (row["price_minor"] is None, (row["price_minor"] or 0) * (-1 if order == "desc" else 1)))
+    listings = [row for row in record.listings if row.seller.startswith(prefix)]
+    listings.sort(key=lambda row: (row.price_minor is None, (row.price_minor or 0) * (-1 if order == "desc" else 1)))
     path = marketplace_path(locale, record_id)
-    summary = record["summary"]
+    summary = record.summary
     form = await request.form() if request.method == "POST" else {}
     email, target = str(form.get("email", "")), str(form.get("target_price", ""))
     return templates.TemplateResponse(request, "marketplace.html", {
@@ -102,20 +102,20 @@ async def marketplace(request: Request, locale: str, record_id: str):
         "show_all": show_all, "path": path, "item_path": lambda item_id: marketplace_path(locale, item_id),
         "more": path + "?" + urlencode({"seller": prefix, "sort": order, "offers": "all"}),
         "summary": None if summary is None else {
-            "lowest": fmt.money(summary["lowest_minor"]), "count": fmt.count(summary["count"]), "quantity": fmt.number(summary["quantity"])},
-        "listings": [{**row, "rating": None if row["rating_hundredths"] is None else fmt.rating(row["rating_hundredths"]),
-            "quantity_text": fmt.number(row["quantity"]), "price": fmt.money(row["price_minor"]), "reviews_text": fmt.number(row["reviews"])} for row in listings],
-        "offers": [{**row, "quantity_text": fmt.number(row["quantity"]), "price": fmt.money(row["price_minor"])}
-            for row in (record["offers"] if show_all else record["offers"][:5])],
-        "contents": [{**row, "quantity_text": fmt.number(row["quantity"])} for row in record["contents"]],
-        "included": [{**row, "quantity_text": fmt.number(row["quantity"])} for row in record["included_in"]],
+            "lowest": fmt.money(summary.lowest_minor), "count": fmt.count(summary.count), "quantity": fmt.number(summary.quantity)},
+        "listings": [{**dict(row), "rating": None if row.rating_hundredths is None else fmt.rating(row.rating_hundredths),
+            "quantity_text": fmt.number(row.quantity), "price": fmt.money(row.price_minor), "reviews_text": fmt.number(row.reviews)} for row in listings],
+        "offers": [{**dict(row), "quantity_text": fmt.number(row.quantity), "price": fmt.money(row.price_minor)}
+            for row in (record.offers if show_all else record.offers[:5])],
+        "contents": [{**dict(row), "quantity_text": fmt.number(row.quantity)} for row in record.contents],
+        "included": [{**dict(row), "quantity_text": fmt.number(row.quantity)} for row in record.included_in],
         "email": email, "target": target,
-        "message": fmt.alert(email, target, record["title"]) if request.method == "POST" else "",
+        "message": fmt.alert(email, target, record.title) if request.method == "POST" else "",
     })
 
 
 @app.get("/api/marketplace/{record_id}")
-async def marketplace_json(record_id: str):
+async def marketplace_json(record_id: str) -> MarketplaceRecord:
     record = await marketplace_source.get(record_id)
     if record is None:
         raise HTTPException(status_code=404)

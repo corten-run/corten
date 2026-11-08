@@ -1266,7 +1266,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
     - Build: the Dockerfile's build step on that tree. Clean is the two together: the Rust apps
       compile every crate in the build step, Phoenix, Rails and Drogon compile theirs in the
       dependency step, and npm, pip and Maven packages mostly arrive built, so only the two
-      together compare like for like, and that includes the downloads.
+      together compare like for like, and that includes the downloads. FastAPI and Express have
+      no build step, so their clean time is the dependency step alone and they have no rebuild.
     - Rebuild: the build step again after one edit, a `title` on the price-alert form's submit
       button in the file holding the item page's markup (touched in the container, so its time
       is newer than the build's by the container's clock), on the tree the clean build left, so
@@ -1579,15 +1580,18 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    cannot serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked
    failed. Each could be tuned further (caching, streaming, more workers). None of the apps cache
    rendered pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at
-   their default level. Drogon runs one IO thread per core, as its docs advise, and counts its
+   their default level and FastAPI does (`fastapi run` keeps uvicorn's access log). Drogon runs one IO thread per core, as its docs advise, and counts its
    cores from its CPU affinity capped by the container's CPU quota, since its own count (`0`)
    sees every core of the host. FastAPI runs `fastapi run`, one uvicorn process: its container
    guide gives one process a container where the container is given its CPUs, and the live stream
    needs every client in one process. Express runs one Node process with `NODE_ENV=production`, as
-   its production guide says. Two settings differ from a library's default so that the item
+   its production guide says, which caches compiled views; FastAPI's templates are Starlette's
+   `Jinja2Templates` as created, which checks each template file's time on every render (Jinja's
+   default, which FastAPI's docs do not change). Three settings differ from a library's default so that the item
    API source does the same work in every app: Gin keeps as many idle connections to the item API
    as its transport allows (Go's default keeps two per host; reqwest, .NET and Node have no
-   per-host cap), and Drogon keeps one `HttpClient` (one connection) per request in flight on
+   per-host cap), FastAPI's httpx clients have no connection cap (httpx's default keeps 20 idle
+   and allows 100 in all), and Drogon keeps one `HttpClient` (one connection) per request in flight on
    each thread. Drogon also hands the fixture parser's freed memory back to the system after
    loading (`malloc_trim`), so its memory with items in memory is the items' rather than the
    parser's peak, which the Rust apps avoid by parsing one item at a time. Drogon's JSON is

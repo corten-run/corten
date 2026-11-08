@@ -32,7 +32,8 @@ class CatalogRecord(BaseModel):
 
 class CatalogSource:
     def __init__(self):
-        self.client = httpx.AsyncClient(base_url=os.environ.get("API_BASE", "http://localhost:8080").rstrip("/"), timeout=10)
+        limits = httpx.Limits(max_connections=None, max_keepalive_connections=None)
+        self.client = httpx.AsyncClient(base_url=os.environ.get("API_BASE", "http://localhost:8080").rstrip("/"), timeout=10, limits=limits)
         self.fixture = None
         if os.environ.get("CATALOG_SOURCE") == "fixture":
             with open(os.environ.get("CATALOG_FIXTURE_PATH", "/fixtures/catalog.json"), encoding="utf-8") as file:

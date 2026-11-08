@@ -4,25 +4,96 @@ import json
 import os
 from pathlib import Path
 import re
+from typing import Annotated
 from urllib.parse import quote
 
 from babel import Locale
 from babel.numbers import format_currency, format_decimal, get_decimal_symbol, get_group_symbol, parse_decimal, NumberFormatError
 import httpx
+from pydantic import BaseModel, ConfigDict, Field
 
 
 LABELS = json.loads((Path(__file__).resolve().parent / "marketplace_labels.json").read_text(encoding="utf-8"))
 LOCALES = {name: Locale.parse(name, sep="-") for name in LABELS}
 
 
+Count = Annotated[int, Field(ge=0)]
+
+
+class Record(BaseModel):
+    """A part of a record: exactly its keys, each of its JSON type, as the Express adapter checks."""
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class Category(Record):
+    name: str
+    slug: str
+
+
+class Detail(Record):
+    name: str
+    value: str
+
+
+class Summary(Record):
+    lowest_minor: int | None
+    count: Count
+    quantity: Count
+
+
+class Listing(Record):
+    id: str
+    seller: str
+    rating_hundredths: Annotated[int, Field(ge=0, le=500)] | None
+    reviews: Count
+    condition: str
+    ships_from: str
+    quantity: Count
+    price_minor: int | None
+
+
+class Offer(Record):
+    id: str
+    buyer: str
+    condition: str
+    quantity: Count
+    price_minor: int | None
+
+
+class Line(Record):
+    id: str
+    item_id: str
+    title: str
+    quantity: Count
+
+
+class MarketplaceRecord(Record):
+    id: str
+    title: str
+    subtitle: str | None
+    description: str
+    categories: list[Category]
+    badges: list[str]
+    tags: list[str]
+    images: list[str]
+    fields: list[Detail]
+    summary: Summary | None
+    listings: list[Listing]
+    offers: list[Offer]
+    contents: list[Line]
+    included_in: list[Line]
+
+
 class MarketplaceSource:
     def __init__(self):
         base = os.environ.get("API_BASE", "http://localhost:8080").rstrip("/")
-        self.client = httpx.AsyncClient(base_url=base, timeout=10, follow_redirects=False)
+        # No cap on connections to the item API, as every app's client (bench/fullstack/README.md).
+        limits = httpx.Limits(max_connections=None, max_keepalive_connections=None)
+        self.client = httpx.AsyncClient(base_url=base, timeout=10, follow_redirects=False, limits=limits)
         self.fixture = None
         if os.environ.get("MARKETPLACE_SOURCE") == "fixture":
             with open(os.environ.get("MARKETPLACE_FIXTURE_PATH", "/fixtures/marketplace.json"), encoding="utf-8") as file:
-                self.fixture = json.load(file)
+                self.fixture = {key: MarketplaceRecord.model_validate(value) for key, value in json.load(file).items()}
 
     async def get(self, record_id):
         if self.fixture is not None:
@@ -32,7 +103,7 @@ class MarketplaceSource:
             return None
         if not response.is_success:
             raise httpx.HTTPStatusError("Marketplace API returned a non-success status", request=response.request, response=response)
-        return response.json()
+        return MarketplaceRecord.model_validate_json(response.content)
 
 
 class MarketplaceFormat:

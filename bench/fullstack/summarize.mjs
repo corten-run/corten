@@ -155,7 +155,7 @@ if (summary.build) {
       b.test ? `tests compiled ${s(b.test.clean.ms)}${b.test.rebuild ? `, after the edit ${s(b.test.rebuild.ms)}${crates(b.test.rebuild)}` : stopped("test")}` : "",
       ...Object.entries(b.edits ?? {}).map(([kind, e]) => `dev after a ${kind} edit ${s(e.ms)} (${e.runs.length} run${e.runs.length === 1 ? "" : "s"})${crates(e)}`),
       ...Object.entries(failed).map(([group, why]) => `${group} FAILED: ${String(why).split("\n")[0]}`),
-      b.disk ? `disk: deps ${mb(b.disk.depsBytes)}, build ${mb(b.disk.buildBytes)}, dev ${mb(b.disk.devBytes)}` : "",
+      b.disk ? `disk: deps ${mb(b.disk.depsBytes)}, build ${b.build ? mb(b.disk.buildBytes) : "none"}, dev ${mb(b.disk.devBytes)}` : "",
     ].filter(Boolean)));
   }
   const scaled = Object.entries(summary.build).filter(([, b]) => b.scale || b.mold || b.scaleFailed);

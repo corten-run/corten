@@ -98,7 +98,9 @@ app.get("/live/prices", (req, res) => {
   req.on("close", () => streams.delete(res));
 });
 app.post("/live/publish", express.text({ type: () => true }), (req, res) => {
-  const event = `data: ${typeof req.body === "string" ? req.body : ""}\n\n`;
+  // One data line per line of the body, as an event stream requires.
+  const body = typeof req.body === "string" ? req.body : "";
+  const event = `${body.split(/\r\n|\r|\n/).map((line) => `data: ${line}`).join("\n")}\n\n`;
   for (const stream of streams) stream.write(event);
   res.sendStatus(204);
 });

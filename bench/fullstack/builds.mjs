@@ -427,7 +427,7 @@ export const median = (/** @type {number[]} */ xs) => [...xs].sort((a, b) => a -
 
 /**
  * One app's row of the table `build.mjs` prints after a run, from its `build.json` entry. An app
- * with no build step (`build` null in its recipe) has no build or rebuild to time.
+ * with no build step (no `build` in its recipe) has no build or rebuild to time.
  * @param {string} name @param {any} e
  */
 export function buildRow(name, e) {

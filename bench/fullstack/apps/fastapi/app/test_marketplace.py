@@ -13,7 +13,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from . import main
-from .marketplace import LABELS, MarketplaceFormat, MarketplaceSource
+from .marketplace import LABELS, MarketplaceFormat, MarketplaceRecord, MarketplaceSource
 
 RECORD = {
     "id": "item_1", "title": '<script>&"{price}', "subtitle": "", "description": "<b>Data</b>",
@@ -67,7 +67,7 @@ class PageTests(unittest.TestCase):
         patcher = patch.object(main, "marketplace_source", AsyncMock())
         self.source = patcher.start()
         self.addCleanup(patcher.stop)
-        self.source.get.side_effect = lambda record_id: self.records.get(record_id)
+        self.source.get.side_effect = lambda record_id: None if record_id not in self.records else MarketplaceRecord.model_validate(self.records[record_id])
         self.client = TestClient(main.app)
 
     def test_pages_are_escaped_localized_and_complete(self):
@@ -136,6 +136,18 @@ class PageTests(unittest.TestCase):
         for path in ["/marketplace/en-US/item_1", "/api/marketplace/item_1"]:
             self.assertEqual(self.client.get(path).status_code, 502)
 
+    def test_a_record_that_is_not_one_is_a_502(self):
+        bad = [{**RECORD, "extra": 1}, {k: v for k, v in RECORD.items() if k != "offers"}, {**RECORD, "summary": {**RECORD["summary"], "count": "1"}},
+            {**RECORD, "listings": [{**RECORD["listings"][0], "rating_hundredths": 501}]}]
+        for record in bad:
+            source = MarketplaceSource()
+            source.fixture = None
+            source.client = httpx.AsyncClient(base_url="http://upstream.test", transport=httpx.MockTransport(lambda request: httpx.Response(200, json=record)))
+            with patch.object(main, "marketplace_source", source):
+                for path in ["/marketplace/en-US/item_1", "/api/marketplace/item_1"]:
+                    self.assertEqual(self.client.get(path).status_code, 502, (path, record.keys()))
+            asyncio.run(source.client.aclose())
+
 
 class SourceTests(unittest.IsolatedAsyncioTestCase):
     async def test_fixture_is_read_once_at_startup(self):
@@ -145,7 +157,7 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
             with patch.dict(os.environ, MARKETPLACE_SOURCE="fixture", MARKETPLACE_FIXTURE_PATH=str(path)):
                 source = MarketplaceSource()
             path.unlink()
-            self.assertEqual(await source.get("item_1"), RECORD)
+            self.assertEqual((await source.get("item_1")).model_dump(), RECORD)
             self.assertIsNone(await source.get("missing"))
 
     async def test_api_is_fetched_per_request_without_redirects(self):
@@ -162,8 +174,8 @@ class SourceTests(unittest.IsolatedAsyncioTestCase):
             os.environ.pop("MARKETPLACE_SOURCE", None)
             source = MarketplaceSource()
         source.client = httpx.AsyncClient(base_url="http://upstream.test", transport=httpx.MockTransport(answer), follow_redirects=False)
-        self.assertEqual((await source.get("item/1"))["title"], "1")
-        self.assertEqual((await source.get("item/1"))["title"], "2")
+        self.assertEqual((await source.get("item/1")).title, "1")
+        self.assertEqual((await source.get("item/1")).title, "2")
         self.assertEqual(requests, ["/marketplace/records/item%2F1"] * 2)
         status["code"] = 404
         self.assertIsNone(await source.get("item_1"))
