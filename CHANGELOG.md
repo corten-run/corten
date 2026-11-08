@@ -2559,7 +2559,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `Progress`'s sweep moves, and the guide says the words beside it must follow the stream too.
     Not breaking: `StatusDot` is unchanged (its doc test no longer names a class a live form
     could have), and `corten ui add status_dot --merge` takes `LiveDot`. The ui-gallery's served
-    `components.css` is 60,662 bytes where it was 60,471 (gzip 10,047 against 10,012, brotli 8,849
+    `components.css` is 60,666 bytes where it was 60,471 (gzip 10,056 against 10,012, brotli 8,856
     against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier size is the
     served file without the new rules), on every page that draws a `StatusDot`, as the two share
     a stylesheet. The ui-gallery's orders page has a Live feed badge, which the smoke test puts
