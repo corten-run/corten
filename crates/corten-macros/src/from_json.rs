@@ -32,15 +32,17 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
 
 /// What `#[derive(Fields)]` and `#[derive(UrlValue)]` add, since they write the type's
 /// `Deserialize` already: its `FromJson` (with corten's feature `json`) and schema (with
-/// `types`), so the type is read from JSON with no derive beside theirs. Nothing for a generic
-/// type, whose bounds serde infers in ways `FromJson`'s do not follow, one whose `Deserialize`
-/// borrows from its input (a `FromJson` is read into owned values), or one `FromJson` cannot
-/// read (an attribute it does not follow, such as a `UrlValue`'s `#[serde(other)]`).
+/// `types`), so the type is read from JSON with no derive beside theirs. A generic type's
+/// `FromJson` is the trait's own body, which hands the text to serde_json, under the bounds that
+/// make the type `DeserializeOwned`: the ones serde infers (`T: Default` for a defaulted `T`,
+/// a bound on `T::Assoc`) are not one per parameter, and a reader written against them would
+/// need each of them. Nothing for one whose `Deserialize` borrows from its input (a `FromJson`
+/// is read into owned values), or one `FromJson` cannot read (an attribute it does not follow).
 pub fn beside_deserialize(item: &Item) -> TokenStream {
-    if !item.impl_generics.is_empty() || crate::deserialize::struct_lends(item) {
+    if crate::deserialize::struct_lends(item) {
         return TokenStream::new();
     }
-    match impls(item) {
+    match impls_with(item, !item.impl_generics.is_empty()) {
         Ok(code) => q("::corten::__if_json! { __A0 }", &[code]),
         Err(_) => TokenStream::new(),
     }
@@ -48,12 +50,25 @@ pub fn beside_deserialize(item: &Item) -> TokenStream {
 
 /// The `FromJson` impl and its schema (feature `types`).
 fn impls(item: &Item) -> Result<TokenStream, Error> {
+    impls_with(item, false)
+}
+
+/// [`impls`]; with `by_serde`, the `FromJson` impl is the trait's own body (serde_json reads the
+/// text) and its bounds are only the type's own. A generic type's impl also asks for
+/// `Self: DeserializeOwned`, the trait's supertrait, since the bounds serde infers for its
+/// `Deserialize` need not follow from the ones here.
+fn impls_with(item: &Item, by_serde: bool) -> Result<TokenStream, Error> {
     let container = Container::read(&item.attrs, item.is_enum)?;
     let schema;
     let body = if item.is_enum {
         let Some(body) = &item.body else { return err(item.name.span(), "FromJson: expected the enum's variants") };
-        let (code, variants) = enumeration(&container, body)?;
-        schema = Schema::Enum { tagging: crate::schema::Tagging::External, variants };
+        let (code, variants, other) = enumeration(&container, body)?;
+        // With `#[serde(other)]`, any word is one of the enum's.
+        schema = if other {
+            Schema::Value(q("::std::string::String", &[]))
+        } else {
+            Schema::Enum { tagging: crate::schema::Tagging::External, variants }
+        };
         code
     } else if let Some(fields) = &item.tuple {
         let fields = parse_fields(fields, false)?;
@@ -88,7 +103,23 @@ fn impls(item: &Item) -> Result<TokenStream, Error> {
     };
 
     // Each type parameter must be FromJson itself (and describe itself, for the schema).
-    let where_clause = bounded(&item.impl_generics, &item.where_clause, "::corten::json::FromJson");
+    let mut where_clause = if by_serde {
+        item.where_clause.clone()
+    } else {
+        bounded(&item.impl_generics, &item.where_clause, "::corten::json::FromJson")
+    };
+    if !item.impl_generics.is_empty() {
+        let last = where_clause.clone().into_iter().last();
+        where_clause.extend(q(
+            match last {
+                None => "where",
+                Some(TokenTree::Punct(p)) if p.as_char() == ',' => "",
+                Some(_) => ",",
+            },
+            &[],
+        ));
+        where_clause.extend(q("Self: ::corten::__private::serde::de::DeserializeOwned", &[]));
+    }
     let schema_where = bounded(&item.impl_generics, &item.where_clause, "::corten::json::schema::FromJsonSchema");
     let schema = crate::schema::expand(
         crate::schema::Side::Read,
@@ -107,7 +138,10 @@ fn impls(item: &Item) -> Result<TokenStream, Error> {
     out.extend(where_clause);
     out.extend([TokenTree::Group(Group::new(
         Delimiter::Brace,
-        q(
+        if by_serde {
+            TokenStream::new()
+        } else {
+            q(
             "#[allow(unused_mut, unused_variables, unused_imports, clippy::all)]
             fn __read(__r: &mut ::corten::json::__read::Reader<'_>)
                 -> ::core::result::Result<Self, ::corten::json::__read::Fallback> {
@@ -115,7 +149,8 @@ fn impls(item: &Item) -> Result<TokenStream, Error> {
                 __A0
             }",
             &[body],
-        ),
+        )
+        },
     ))]);
     out.extend(schema);
     // Naming a deprecated item warns no more than the item itself does, as serde_derive's.
@@ -491,11 +526,13 @@ fn transparent(fields: &[Field], span: Span) -> Result<TokenStream, Error> {
     Ok(q("::core::result::Result::Ok(Self { __A0 })", &[build]))
 }
 
-/// An enum of unit variants, from its name as a string.
-fn enumeration(container: &Container, body: &Group) -> Result<(TokenStream, Vec<SchemaVariant>), Error> {
+/// An enum of unit variants, from its name as a string, and whether one is `#[serde(other)]` (a
+/// `UrlValue`'s: any other word gives up, and serde's `Deserialize` reads it as that variant).
+fn enumeration(container: &Container, body: &Group) -> Result<(TokenStream, Vec<SchemaVariant>, bool), Error> {
     let mut arms = TokenStream::new();
     let mut variants = Vec::new();
-    for tokens in split(body.stream(), ',') {
+    let mut other = false;
+    for tokens in crate::component::variants(body.stream()) {
         let mut j = 0;
         let mut attrs = Vec::new();
         while is_punct(tokens.get(j), '#') {
@@ -518,6 +555,7 @@ fn enumeration(container: &Container, body: &Group) -> Result<(TokenStream, Vec<
                 "alias" => aliases.push(string(&arg)?),
                 "skip" | "skip_deserializing" => skip = true,
                 "skip_serializing" | "serialize_with" | "bound" => {}
+                "other" => other = true,
                 _ => return unsupported(&arg),
             }
         }
@@ -546,5 +584,6 @@ fn enumeration(container: &Container, body: &Group) -> Result<(TokenStream, Vec<
             &[arms],
         ),
         variants,
+        other,
     ))
 }

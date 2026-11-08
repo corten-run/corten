@@ -968,6 +968,101 @@ fn fields_and_url_value_are_read_from_json_as_they_are() {
     read_alone::<fallback::ours::Fallback, fallback::theirs::Fallback>(r#"{"page":2}"#);
 }
 
+twin! { shifted, corten::UrlValue,
+    #[derive(Clone, Copy)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Shifted {
+        Read = 1 << 0,
+        Write = 1 << 1,
+        Admin = size_of::<std::collections::HashMap<u8, u16>>() as isize,
+    }
+}
+
+twin! { shifted_json, corten::FromJson,
+    pub enum ShiftedJson {
+        Read = 1 << 0,
+        Write = 1 << 1,
+    }
+}
+
+twin! { wording, corten::UrlValue,
+    #[serde(rename_all = "snake_case")]
+    pub enum Wording {
+        Plain,
+        Bold,
+        #[serde(other)]
+        Other,
+    }
+}
+
+#[test]
+fn a_generic_form_a_shifted_discriminant_and_another_word_read_as_serde_s() {
+    for text in [r#"{"value":1,"list":[2,3]}"#, r#"{"value":1}"#, r#"{"value":"x"}"#, r#"{"value":1,"x":2}"#, "null"] {
+        same_read::<generic::ours::Generic<u32>, generic::theirs::Generic<u32>>(text);
+    }
+    // A generic one is the trait's own body: serde_json reads it, alone and inside another value.
+    assert!(corten::json::__read::alone::<generic::ours::Generic<u32>>(r#"{"value":1,"list":[2,3]}"#).is_none());
+    same_read::<Vec<generic::ours::Generic<u32>>, Vec<generic::theirs::Generic<u32>>>(r#"[{"value":1,"list":[2,3]},{"value":4}]"#);
+    // Its bounds are the ones serde infers (`T: Default` here), not `FromJson` on each parameter.
+    same_read::<defaults::ours::Defaults<u8, NotRead, NotRead>, defaults::theirs::Defaults<u8, NotRead, NotRead>>(r#"{"kind":null}"#);
+    same_read::<associated::ours::Associated<NoDefault>, associated::theirs::Associated<NoDefault>>(r#"{"value":3}"#);
+    for text in ["\"read\"", "\"write\"", "\"admin\"", "\"Write\"", "1"] {
+        same_read::<shifted::ours::Shifted, shifted::theirs::Shifted>(text);
+    }
+    read_alone::<shifted::ours::Shifted, shifted::theirs::Shifted>("\"admin\"");
+    for text in ["\"Read\"", "\"Write\"", "\"write\""] {
+        same_read::<shifted_json::ours::ShiftedJson, shifted_json::theirs::ShiftedJson>(text);
+    }
+    for text in ["\"plain\"", "\"bold\"", "\"italic\"", "\"other\"", "1"] {
+        same_read::<wording::ours::Wording, wording::theirs::Wording>(text);
+    }
+    read_alone::<wording::ours::Wording, wording::theirs::Wording>("\"bold\"");
+    assert_eq!(names::<wording::ours::Wording>(), names::<wording::theirs::Wording>());
+}
+
+/// The schema `Fields` and `UrlValue` write is the one `FromJson` derived on the same body writes.
+#[cfg(feature = "types")]
+#[test]
+fn fields_and_url_value_describe_what_they_read_as_from_json_does() {
+    use corten::json::schema::Generator;
+    mod derived {
+        #[derive(corten::FromJson)]
+        #[serde(rename_all = "snake_case")]
+        pub enum Shipping {
+            Standard,
+            #[serde(alias = "express")]
+            NextDay,
+        }
+        #[derive(corten::FromJson)]
+        #[serde(rename_all = "camelCase")]
+        pub struct Order {
+            pub email: String,
+            #[serde(default)]
+            pub gift_note: Option<String>,
+            pub shipping: crate::shipping::ours::Shipping,
+        }
+        #[derive(corten::FromJson)]
+        #[serde(deny_unknown_fields, expecting = "a filter")]
+        pub struct Generic<T> {
+            pub value: T,
+            #[serde(default)]
+            pub list: Vec<T>,
+        }
+    }
+    let named = |schema: serde_json::Value| schema.to_string().replace("derived::", "").replace("ours::", "");
+    assert_eq!(
+        named(Generator::root_for_read::<shipping::ours::Shipping>()),
+        named(Generator::root_for_read::<derived::Shipping>())
+    );
+    assert_eq!(named(Generator::root_for_read::<order::ours::Order>()), named(Generator::root_for_read::<derived::Order>()));
+    assert_eq!(
+        named(Generator::root_for_read::<generic::ours::Generic<u32>>()),
+        named(Generator::root_for_read::<derived::Generic<u32>>())
+    );
+    // Another word is one of the enum's.
+    assert_eq!(Generator::root_for_read::<wording::ours::Wording>()["type"], "string");
+}
+
 #[test]
 fn from_json_passes_the_deserializer_serde_s_names() {
     type Ours = listing::ours::Listing<seller::ours::Seller>;

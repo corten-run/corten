@@ -185,28 +185,24 @@
 //! enum Shipping { Standard, NextDay }
 //! ```
 //!
-//! A generic type, or a `UrlValue` enum with `#[serde(other)]` (which the reader does not
-//! follow), gets no `FromJson` from them; an empty `impl corten::FromJson for T {}` makes it one,
-//! read by serde_json through the `Deserialize` they wrote. A form input whose fields borrow from
-//! the input gets none and cannot take one, since a `FromJson` reads owned values.
+//! A generic one is a `FromJson` wherever the `Deserialize` they wrote applies (with the bounds
+//! serde infers, such as `T: Default` for a defaulted `T`), read by serde_json rather than
+//! Corten's reader, and a `UrlValue` enum with `#[serde(other)]` reads any other word as that
+//! variant (Corten's reader gives up on it and
+//! the `Deserialize` they wrote reads it). A form input whose fields borrow from the input gets
+//! none and cannot take one, since a `FromJson` reads owned values.
 //!
 //! ```
 //! #[derive(Debug, PartialEq, corten::UrlValue)]
 //! #[serde(rename_all = "snake_case")]
 //! enum Shown { All, Mine, #[serde(other)] Other }
-//! impl corten::FromJson for Shown {}
 //!
-//! assert_eq!(corten::json::from_str::<Shown>(r#""mine""#).unwrap(), Shown::Mine);
+//! #[derive(Debug, PartialEq, corten::Fields)]
+//! struct Offer<T> { shown: Shown, amount: T }
+//!
 //! assert_eq!(corten::json::from_str::<Shown>(r#""lost""#).unwrap(), Shown::Other);
-//! ```
-//!
-//! Without its empty impl, that enum is not read from JSON:
-//!
-//! ```compile_fail,E0277
-//! #[derive(corten::UrlValue)]
-//! enum Shown { All, #[serde(other)] Other }
-//!
-//! let _: Shown = corten::json::from_str(r#""All""#).unwrap();
+//! let offer: Offer<u32> = corten::json::from_str(r#"{"shown":"mine","amount":3}"#).unwrap();
+//! assert_eq!(offer, Offer { shown: Shown::Mine, amount: 3 });
 //! ```
 //!
 //! A form input that borrows cannot take one:

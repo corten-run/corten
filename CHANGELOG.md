@@ -4076,29 +4076,31 @@ Corten is pre-1.0, so any minor version may change the API.
     client that went quiet is given up on after the idle time however the handler reads
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
 172. `#[derive(FromJson)]` writes the type's serde `Deserialize` too, from the same `#[serde(..)]`
-    its reader reads, so a type read from JSON derives one thing. The impl is serde_derive's for
-    the shapes and attributes `FromJson` reads (named, tuple, newtype and unit structs,
-    `transparent`, enums of unit variants; names, aliases, defaults, `skip`,
-    `deny_unknown_fields`, `expecting`, `bound`): `tests/derived_deserialize.rs` reads each shape
-    with it and with serde's derive and compares values, errors and the names passed to the
-    deserializer, and through Corten's reader too. A type whose `Deserialize` is written by hand,
-    or derived by serde for an attribute `FromJson` refuses (`flatten`), becomes a `FromJson`
-    with an empty `impl corten::FromJson for T {}`, read by serde_json: alone, in serde_json's one
-    pass; inside a derived type or a `Vec`, from its own text, which the reader finds first.
-    `#[derive(Fields)]` and `#[derive(UrlValue)]`, which write the type's `Deserialize` already,
-    now write its `FromJson` (feature `json`) and schema (`types`) too, so a form's input is read from JSON,
-    and is an agent tool's input, as it is, and a query's list of a `UrlValue` is described by its
-    words. A generic type, or a `UrlValue` enum with `#[serde(other)]` (which Corten's reader does
-    not follow), gets none and takes an empty impl, with a `FromJsonSchema` written by hand where
-    it needs a schema; a form input whose fields borrow from the input cannot be a `FromJson`,
-    which reads owned values. A type that needs `FromJson` and lacks it is told these ways in the
-    compiler's note. **Migration:** take `Deserialize` out
-    of a derive list that has `FromJson`, and `FromJson` out of one that has `Fields` or
-    `UrlValue`: each is now a second impl (E0119). Reading the benchmark's 500 item API
-    responses costs the same: 265,550,044 instructions through `FromJson` and 438,766,522
-    through serde_json alone, before and after (callgrind, release build, `read_cost` in
-    `examples/card-market`, two runs each)
-    ([#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
+    its reader reads, so a type read from JSON derives one thing. The impl is serde_derive's for the
+    shapes and attributes `FromJson` reads (named, tuple, newtype and unit structs, `transparent`,
+    enums of unit variants; names, aliases, defaults, `skip`, `deny_unknown_fields`, `expecting`,
+    `bound`): `tests/derived_deserialize.rs` reads each shape with it and with serde's derive and
+    compares values, errors and the names passed to the deserializer, and through Corten's reader
+    too. A type whose `Deserialize` is written by hand, or derived by serde for an attribute
+    `FromJson` refuses (`flatten`), becomes a `FromJson` with an empty `impl corten::FromJson for T
+    {}`, read by serde_json: alone, in serde_json's one pass; inside a derived type or a `Vec`, from
+    its own text, which the reader finds first. `#[derive(Fields)]` and `#[derive(UrlValue)]`, which
+    write the type's `Deserialize` already, now write its `FromJson` (feature `json`) and schema
+    (`types`) too, so a form's input is read from JSON, and is an agent tool's input, as it is, and
+    a query's list of a `UrlValue` is described by its words. A generic one is a `FromJson` wherever
+    its `Deserialize` applies, read by serde_json rather than Corten's reader, and a `UrlValue` enum
+    with `#[serde(other)]` reads any other word as that variant and is described as any string; a
+    form input whose fields borrow from the input cannot be a `FromJson`, which reads owned values.
+    A type that needs `FromJson` and lacks it is told the ways to get one in the compiler's note. An
+    enum with a shift in a discriminant (`B = 1 << 1`) is read whole by `UrlValue` and `FromJson`
+    (and `ToJson` splits its variants the same way): the shift hid the variants after it.
+    **Migration:** take `Deserialize` out of a derive list that has `FromJson`, and `FromJson` out
+    of one that has `Fields` or `UrlValue`, and remove a hand-written `impl FromJson` or `impl
+    FromJsonSchema` for a `Fields` or `UrlValue` type: each is now a second impl (E0119). Reading
+    the benchmark's 500 item API responses costs the same: 265,550,044 instructions through
+    `FromJson` and 438,766,522 through serde_json alone, before and after (callgrind, release build,
+    `read_cost` in `examples/card-market`, two runs each) ([#1042 Let FromJson generate its required
+    Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
 173. An agent tool's output (`Tools::tool`, `idempotent_tool`, `read_tool`) is a `ToJson` and
     is written by it, so it derives `ToJson` alone, as every other JSON answer does, where it
     needed serde's `Serialize` beside it. The answer is the same JSON (card-market's agent test

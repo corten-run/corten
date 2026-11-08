@@ -40,7 +40,7 @@ use serde_json::{Number, Value};
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not read from JSON: it is not a `FromJson`",
-    note = "derive FromJson on it; a #[derive(Fields)] or #[derive(UrlValue)] type is one already (deriving FromJson beside them is E0119) unless it is generic or a UrlValue enum with #[serde(other)], which take an empty `impl corten::FromJson for T {{}}`; a type whose Deserialize borrows from the input cannot be one"
+    note = "derive FromJson on it; a #[derive(Fields)] or #[derive(UrlValue)] type is one already (deriving FromJson beside them is E0119); a type whose Deserialize borrows from the input cannot be one"
 )]
 pub trait FromJson: DeserializeOwned {
     /// Reads the value at the reader's position. Not a public API.

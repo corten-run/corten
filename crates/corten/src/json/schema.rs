@@ -58,7 +58,7 @@ pub trait ToJsonSchema {
 /// The schema of the JSON a type reads: what `#[derive(FromJson)]` implements (feature `types`).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no JSON Schema for what it reads",
-    note = "derive FromJson on it; a Fields or UrlValue type has it already unless it is generic or a UrlValue enum with #[serde(other)], which implement FromJsonSchema by hand (deriving FromJson beside them is E0119); for another crate's type, implement FromJsonSchema for a #[serde(transparent)] newtype around it"
+    note = "derive FromJson on it; a Fields or UrlValue type has it already (deriving FromJson beside them is E0119); for another crate's type, implement FromJsonSchema for a #[serde(transparent)] newtype around it"
 )]
 pub trait FromJsonSchema {
     /// The schema, or a `$ref` to it after adding it to `generator`'s definitions.
@@ -138,7 +138,7 @@ impl Generator {
             why.push_str(&format!(" written {written} (needs ToJson derived or ToJsonSchema implemented)"));
         }
         if !read.is_empty() {
-            why.push_str(&format!(" read {read} (needs FromJson derived, which a Fields or UrlValue type already is unless generic or a UrlValue enum with #[serde(other)], or FromJsonSchema implemented)"));
+            why.push_str(&format!(" read {read} (needs FromJson derived, which a Fields or UrlValue type already is, or FromJsonSchema implemented)"));
         }
         why.push_str(
             ". Each type named, or one inside it (`Foreign` in `Option<Foreign>`), lacks it: for another \

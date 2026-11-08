@@ -898,7 +898,7 @@ pub fn for_from_json(item: &Item) -> Result<TokenStream, Error> {
     if item.is_enum {
         let Some(body) = &item.body else { return err(item.name.span(), "FromJson: expected the enum's variants") };
         let mut variants = Vec::new();
-        for tokens in split(body.stream(), ',') {
+        for tokens in crate::component::variants(body.stream()) {
             let mut j = 0;
             let mut attrs = Vec::new();
             while matches!(tokens.get(j), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
