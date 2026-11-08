@@ -496,6 +496,9 @@ impl Pieces {
 /// for the client the idle time, plus a second for each `MIN_BODY_RATE` bytes that came, in all.
 /// So a client that sends a byte now and then, which resets an idle time alone, is given up on
 /// once it falls that far behind the rate; time the handler spends between reads is not counted.
+/// A read dropped while it waits (inside a `timeout`) counts what it waited, and the idle time
+/// runs on from when the client went quiet, so reads begun again do not hold a silent client
+/// longer than one read would.
 pub(crate) struct Idle {
     time: Option<Duration>,
     timer: Option<Pin<Box<Sleep>>>,
@@ -504,6 +507,10 @@ pub(crate) struct Idle {
     waited: u64,
     /// Nanoseconds of waiting the pieces that came have earned: [`WAIT_PER_BYTE`] each byte.
     earned: u64,
+    /// When the client went quiet: when a read began to wait with none set, cleared when a piece
+    /// comes. The idle time runs from here, so reads begun again (inside a `timeout`) do not
+    /// start it again; the handler's time between them counts only while no piece came.
+    quiet: Option<tokio::time::Instant>,
 }
 
 /// The slowest a body is read at, past its idle time: Kestrel's `MinRequestBodyDataRate`, 240
@@ -515,7 +522,7 @@ const WAIT_PER_BYTE: u64 = 1_000_000_000 / MIN_BODY_RATE;
 
 impl Idle {
     pub(crate) const fn new(time: Option<Duration>) -> Self {
-        Idle { time, timer: None, waited: 0, earned: 0 }
+        Idle { time, timer: None, waited: 0, earned: 0, quiet: None }
     }
 
     /// Sets the idle time, keeping what the body has waited and earned so far. The timer, set for
@@ -547,6 +554,7 @@ pub(crate) struct NextPiece<'a> {
 
 impl NextPiece<'_> {
     /// Adds what this read has waited to the body's waits.
+    #[inline]
     fn stop_waiting(&mut self) {
         if let Some(at) = self.since.take() {
             let waited = tokio::time::Instant::now().saturating_duration_since(at);
@@ -558,10 +566,12 @@ impl NextPiece<'_> {
 impl Future for NextPiece<'_> {
     type Output = Option<Option<Result<Bytes, axum::Error>>>;
 
+    #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         let read = &mut *self;
         if let Poll::Ready(item) = read.stream.poll_next_unpin(cx) {
             read.stop_waiting();
+            read.idle.quiet = None;
             if let (Some(_), Some(Ok(piece))) = (read.idle.time, &item) {
                 read.idle.earned = read.idle.earned.saturating_add((piece.len() as u64).saturating_mul(WAIT_PER_BYTE));
             }
@@ -571,9 +581,15 @@ impl Future for NextPiece<'_> {
         if read.since.is_none() {
             let now = tokio::time::Instant::now();
             read.since = Some(now);
-            // The idle time, less what the body has waited past what its bytes earned.
+            // The idle time from when the client went quiet, or the idle time less what the body
+            // has waited past what its bytes earned, whichever comes first. Neither is earlier
+            // than the last read's, so the timer is never late for this one.
+            let quiet = *read.idle.quiet.get_or_insert(now);
             let behind = Duration::from_nanos(read.idle.waited.saturating_sub(read.idle.earned));
-            read.due = now.checked_add(time.saturating_sub(behind));
+            read.due = match (quiet.checked_add(time), now.checked_add(time.saturating_sub(behind))) {
+                (Some(idle), Some(rate)) => Some(idle.min(rate)),
+                (idle, rate) => idle.or(rate),
+            };
         }
         let Some(due) = read.due else { return Poll::Pending };
         let timer = read.idle.timer.get_or_insert_with(|| Box::pin(tokio::time::sleep_until(due)));
@@ -591,6 +607,7 @@ impl Future for NextPiece<'_> {
 }
 
 impl Drop for NextPiece<'_> {
+    #[inline]
     fn drop(&mut self) {
         self.stop_waiting();
     }
@@ -1038,19 +1055,45 @@ mod tests {
     }
 
     /// An idle time set after a read waited is the one the next wait keeps to: a body that sends
-    /// a second's worth at 1 s and then nothing, read with `idle(5 s)` after that, is a 408 at 6 s.
+    /// more than a second's worth at 1 s and then nothing, read with `idle(5 s)` after that, is a
+    /// 408 at 6 s.
     #[tokio::test(start_paused = true)]
     async fn an_idle_time_set_after_a_wait_is_kept_to() {
         let started = tokio::time::Instant::now();
         let first = stream::iter([()]).then(|()| async {
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-            Ok::<_, std::io::Error>(Bytes::from(vec![b'x'; 240]))
+            Ok::<_, std::io::Error>(Bytes::from(vec![b'x'; 241]))
         });
         let mut pieces = pieces_up_to(Body::from_stream(first.chain(stream::pending())), usize::MAX);
-        assert_eq!(pieces.chunk().await.unwrap().map(|piece| piece.len()), Some(240));
+        assert_eq!(pieces.chunk().await.unwrap().map(|piece| piece.len()), Some(241));
         let mut pieces = pieces.idle(std::time::Duration::from_secs(5));
         assert!(matches!(pieces.chunk().await, Err(BodyError::Stalled)));
         assert_eq!(started.elapsed(), std::time::Duration::from_secs(6));
+    }
+
+    /// Reads begun again inside a `timeout` do not start the idle time again: 64 KiB at once and
+    /// then nothing, read with a 900 ms `timeout` tried again at once, is a 408 at 60 s, as it is
+    /// read plainly, not once those bytes' allowance (273 s more) is spent.
+    #[tokio::test(start_paused = true)]
+    async fn reads_begun_again_do_not_start_the_idle_time_again() {
+        for retried in [false, true] {
+            let started = tokio::time::Instant::now();
+            let at_once = stream::iter([Ok::<_, std::io::Error>(Bytes::from(vec![b'x'; 64 << 10]))]);
+            let mut pieces = pieces_up_to(Body::from_stream(at_once.chain(stream::pending())), usize::MAX);
+            assert_eq!(pieces.chunk().await.unwrap().map(|piece| piece.len()), Some(64 << 10));
+            let failed = loop {
+                if !retried {
+                    break pieces.chunk().await.err();
+                }
+                match tokio::time::timeout(std::time::Duration::from_millis(900), pieces.chunk()).await {
+                    Err(_) => continue,
+                    Ok(read) => break read.err(),
+                }
+            };
+            assert!(matches!(failed, Some(BodyError::Stalled)), "retried {retried}: {failed:?}");
+            let took = started.elapsed().as_millis();
+            assert!((59_999..=60_001).contains(&took), "retried {retried}: {took} ms");
+        }
     }
 
     /// Time the handler spends between reads (passing each piece on to a slow store) is not the

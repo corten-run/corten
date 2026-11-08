@@ -1257,9 +1257,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     waits, in all, pass that idle time plus a second for every 240 bytes that came (Kestrel's
     minimum body rate, the idle time being how far behind it a client may fall), counting only the
     time spent waiting for the client, since one byte resets an idle time alone and a long upload's
+    route has a long deadline or none. That reader is Corten's own and already notes when a wait
     begins, so the rate costs it a count for each piece, another and a clock read for each piece it
     waited for; a request that reads no body makes no reader, so it pays nothing. Counted with
-    callgrind against fed087d8 (release, 50 and 250 reads, one run each, which callgrind repeats
+    callgrind against `fed087d8` (release, 50 and 250 reads, one run each, which callgrind repeats
     to within 0.1%): a piece `Pieces` waited for, one byte each, went from 2,038 to 2,188
     instructions (+150, 7.4%); an upload of one-byte pieces from 2,027,784 to 2,088,732 (+3.0%)
     when they came at once and from 5,353,909 to 5,697,147 (+6.4%) when it waited for each; a body
@@ -1267,7 +1268,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     handler that spends a fixed time on each piece lets a client that sends one in that time go
     on unbounded, as Kestrel's does. A body read whole (`bytes_up_to`, `Form`, `Json`) is bounded
     by the route's deadline alone, which a route that removes it keeps for those; how many may be
-    open is `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from a proxy
+    open is `App::max_connections`, unbounded unless set. HTTP/2 and HTTP/3 to browsers come from
+    a proxy or CDN in front of `corten::serve`. An app with live streams needs one: over HTTP/1.1 a
     browser opens about six connections to a host, each open stream holds one, and requests queue
     behind them once a page with a few `<corten-live>` elements or feeds is open in a few tabs.
     That holds for `serve_wrapped` too, which ends TLS but still speaks HTTP/1.1, so an app with
