@@ -8026,17 +8026,20 @@ fn has_ipv6_loopback() -> bool {
 }
 
 /// A burst of clients larger than the standard library's backlog of 128 all finish connecting
-/// before the server accepts one: none waits for its SYN to be sent again. Linux drops a SYN
-/// when the queue is full, so the 129th connection would time out here.
+/// before the server accepts one: none waits for its SYN to be sent again. Linux admits one more
+/// than the backlog and drops the next SYN, so with 128 the 130th connection would wait a second.
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit() {
+    const BURST: usize = 300;
+    let somaxconn: usize = std::fs::read_to_string("/proc/sys/net/core/somaxconn").unwrap().trim().parse().unwrap();
+    assert!(somaxconn > BURST, "net.core.somaxconn is {somaxconn}, which caps the backlog below this test's burst");
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
     let mut held = Vec::new();
-    for n in 0..300 {
-        let connected = tokio::time::timeout(Duration::from_millis(500), tokio::net::TcpStream::connect(addr)).await;
-        held.push(connected.unwrap_or_else(|_| panic!("connection {n} waited")).unwrap());
+    for n in 1..=BURST {
+        let connected = tokio::time::timeout(Duration::from_millis(900), tokio::net::TcpStream::connect(addr)).await;
+        held.push(connected.unwrap_or_else(|_| panic!("connection {n} waited for its SYN to be resent")).unwrap());
     }
     drop(listeners);
 }

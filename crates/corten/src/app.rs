@@ -1495,13 +1495,17 @@ pub(crate) async fn bind(host: Option<&str>, port: u16) -> std::io::Result<Vec<t
     }
 }
 
-/// How many connections the kernel holds finished (handshake done) for the server to accept. The
-/// standard library's 128, which `TcpListener::bind` uses, overflows when clients connect faster
-/// than the server accepts them: with 1,024 k6 clients starting at once against a page on one
-/// CPU, 75 and 454 connections (two runs) waited a second or more for their SYN to be sent again,
-/// and none with this. The system caps it (Linux at `net.core.somaxconn`, 4096 by default); a
-/// queued connection costs kernel memory only while it waits.
-const BACKLOG: u32 = 4096;
+/// How many connections the kernel holds finished (handshake done) for the server to accept.
+/// `TcpListener::bind` asks for 128 (mio's, the standard library's number), which overflows when
+/// clients connect faster than the server accepts them: with 1,024 k6 clients starting at once
+/// against a page on one CPU, the kernel counted 142 and 485 listen-queue overflows (two runs) and
+/// the slowest connect took 1.27 and 2.08 s, a resent SYN; with 511, none and 0.28 and 0.24 s (4096
+/// overflowed none either). 511 is nginx's and Node's. The system caps it: Linux at
+/// `net.core.somaxconn` (4096 since 5.4, 128 before), macOS at `kern.ipc.somaxconn` (128 by
+/// default). Past [`App::max_connections`] connections wait in this queue for as long as the cap
+/// holds, each with what it has sent so far in kernel memory, so the queue is kept no deeper than
+/// the burst needs.
+const BACKLOG: u32 = 511;
 
 /// A listener on `addr` with [`BACKLOG`], otherwise as `TcpListener::bind` makes it
 /// (`SO_REUSEADDR` on Unix, so a restarted server binds a port its last connections still hold
