@@ -4067,28 +4067,31 @@ async function run(browser) {
     };
   });
   check("StatusDot and Stack: the dot is not read, and a stack's gap is its only space", spacing.dot && spacing.gap === 1.5 && spacing.paragraph === 1 && spacing.margins === 0, JSON.stringify(spacing));
-  // LiveDot: it pulses, and is still for a user who asks for less motion and under dotForced colors;
-  // inside a <corten-live> it pulses only while the stream is live. The element is made, read and
+  // LiveDot: inside a <corten-live> whose stream is live it pulses (an opacity animation that
+  // runs), and is still while the stream is not live, outside one, for a user who asks for less
+  // motion; under forced colors it pulses as Progress's sweep moves. The element is made, read and
   // removed in one task, so its stream is closed before it is fetched (a 204 if it is).
-  await orders.route("**/live-dot-check", (route) => route.fulfill({ status: 204 }));
+  await orders.route("**/live-dot-check", (route) => route.fulfill({ status: 204 }).catch(() => {}));
   const dotPulse = () =>
     orders.evaluate(() => {
       const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='status-dot__live']"));
-      const name = () => getComputedStyle(dot).animationName;
-      const alone = name();
+      const running = () => dot.getAnimations().filter((a) => a instanceof CSSAnimation && a.animationName === "status-dot-live" && a.playState === "running").length;
+      const alone = running();
       const badge = /** @type {HTMLElement} */ (dot.parentElement);
       const live = document.createElement("corten-live");
       live.setAttribute("src", "/live-dot-check");
       badge.replaceWith(live);
       live.append(badge);
-      /** @type {Record<string, string>} */
+      /** @type {Record<string, number>} */
       const by = {};
       for (const status of ["connecting", "live", "reconnecting", "closed", "ended"]) {
         live.setAttribute("status", status);
-        by[status] = name();
+        by[status] = running();
       }
       live.replaceWith(badge);
-      return { alone, by, words: (badge.textContent ?? "").trim() };
+      const frames = [...document.styleSheets].flatMap((s) => [...s.cssRules]).flatMap((r) => (r instanceof CSSMediaRule ? [...r.cssRules] : [r]));
+      const keyframes = frames.find((r) => r instanceof CSSKeyframesRule && r.name === "status-dot-live");
+      return { alone, by, opacity: /opacity/.test(keyframes?.cssText ?? "") };
     });
   // Asked for, since the default follows the machine's own setting.
   await orders.emulateMedia({ reducedMotion: "no-preference" });
@@ -4098,11 +4101,11 @@ async function run(browser) {
   await orders.emulateMedia({ reducedMotion: "no-preference" });
   const dotForced = engine === "webkit" ? null : (await orders.emulateMedia({ forcedColors: "active" }), await dotPulse());
   await orders.emulateMedia({ reducedMotion: null, forcedColors: engine === "webkit" ? undefined : "none" });
-  const dotStill = (/** @type {{ alone: string, by: Record<string, string> }} */ p) => p.alone === "none" && Object.values(p.by).every((n) => n === "none");
+  const onlyLive = (/** @type {{ alone: number, by: Record<string, number> }} */ p) =>
+    p.alone === 0 && p.by.live === 1 && ["connecting", "reconnecting", "closed", "ended"].every((s) => p.by[s] === 0);
   check(
-    "LiveDot: it pulses, only while its stream is live, and is still under reduced motion and forced colors",
-    dotMoving.words === "Live" && dotMoving.alone === "status-dot-live" && dotMoving.by.live === "status-dot-live" &&
-      ["connecting", "reconnecting", "closed", "ended"].every((s) => dotMoving.by[s] === "none") && dotStill(dotReduced) && (dotForced === null || dotStill(dotForced)),
+    "LiveDot: it pulses only inside a live stream, not for reduced motion, and under forced colors as Progress does",
+    dotMoving.opacity && onlyLive(dotMoving) && dotReduced.alone === 0 && Object.values(dotReduced.by).every((n) => n === 0) && (dotForced === null || onlyLive(dotForced)),
     JSON.stringify({ moving: dotMoving, reduced: dotReduced, forced: dotForced }),
   );
   // Gap::App: the payout row is a cluster with no gap class of the kit's, so the page's .75rem is its gap.

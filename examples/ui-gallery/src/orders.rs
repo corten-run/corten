@@ -301,7 +301,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                 </span>
                 <span class={Badge { tone: BadgeTone::Info, emphasis: BadgeEmphasis::Soft }}>
                     <LiveDot tone={StatusTone::Info} />
-                    "Live"
+                    "Live feed"
                 </span>
             </div>
             <Alert variant={AlertVariant::Warning} emphasis={AlertEmphasis::Soft}>

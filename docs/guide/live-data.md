@@ -165,7 +165,9 @@ corten-live[status="closed"] .reload { display: inline; }
 ```
 
 The UI kit's `LiveDot` reads the same attribute: a badge's dot inside the element pulses only while
-it is `live` ([kit](kit.md)).
+it is `live` ([kit](kit.md)). Its words follow the attribute the same way, since the pulse is not
+the only sign of the state (the dot is not read, and it is still for a user who asks for less
+motion): `corten-live:not([status="live"]) .when-live { display: none; }`.
 
 Each change of `status` also dispatches a bubbling `corten-status` event on the element, for a
 script that writes text CSS cannot ("Stale since 10:42", in the user's time zone). A handler

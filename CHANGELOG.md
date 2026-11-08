@@ -2551,16 +2551,19 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
-
 277. The kit's `status_dot` has `LiveDot { tone }`, the dot of a live view's badge: its opacity
-    pulses while the stream is live, so a glance tells a live view from a frozen one. Inside a
-    `<corten-live>` it follows the element's `status`, pulsing only while it is `live` and still
-    while it connects, reconnects or has closed or ended; outside one it always pulses. It is
-    still under `prefers-reduced-motion: reduce` and forced colors, and the words beside it name
-    the state. `StatusDot` is unchanged, and its doc test no longer names a class that a live form
-    could have. The ui-gallery's served `components.css` is 60,738 bytes where it was 60,471
-    (gzip 10,067 against 10,012, brotli 8,866 against 8,814; the earlier size is the served file
-    without the new rules). The ui-gallery's orders page has a Live badge
+    pulses while the `<corten-live>` around it is live, so a glance tells a live view from a frozen
+    one, and is still while it connects, reconnects or has closed or ended, before the runtime
+    runs, without JavaScript and outside a `<corten-live>`. It is still under
+    `prefers-reduced-motion: reduce`, pulses in the system's text color under forced colors as
+    `Progress`'s sweep moves, and the guide says the words beside it must follow the stream too.
+    Not breaking: `StatusDot` is unchanged (its doc test no longer names a class a live form
+    could have), and `corten ui add status_dot --merge` takes `LiveDot`. The ui-gallery's served
+    `components.css` is 60,662 bytes where it was 60,471 (gzip 10,047 against 10,012, brotli 8,849
+    against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier size is the
+    served file without the new rules), on every page that draws a `StatusDot`, as the two share
+    a stylesheet. The ui-gallery's orders page has a Live feed badge, which the smoke test puts
+    inside a `<corten-live>`
     ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
 
 ### Removed
