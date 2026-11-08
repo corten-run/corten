@@ -5605,6 +5605,19 @@ Corten is pre-1.0, so any minor version may change the API.
     every round and `check-app.mjs laravel` could not pass. It now reads the fixture one item at a
     time and keeps the default, and refuses a damaged fixture at boot
     ([#981 bench: Laravel cannot start with items in memory, so check-app.mjs laravel fails: decoding the 27.7 MB fixture passes PHP's 128 MB memory_limit](https://github.com/corten-run/corten/issues/981)).
+196. A form with a control named `hasAttribute` or `getAttribute` never ran its `data-on`
+    handlers (`on:submit`, `on:corten:error`, `on:corten:progress`): the control shadows the
+    form's method of that name, so the runtime's dispatch threw `node.hasAttribute is not a
+    function` and skipped them, for an event that bubbles, one that does not, and a form put in
+    after load; and a `data-patch` form with one could not be drawn again by its own answer, so
+    the write looked failed. The runtime now reads the attributes of an element it dispatches to,
+    binds, finds refs in, patches or draws again through Element's own `getAttribute` and
+    `hasAttribute`, as its submit path already did, and a patched element's id from its attribute
+    (a form's `id` is its control named `id`). Its other members are not covered yet
+    ([#1105 Form controls named after other Element members (closest, querySelectorAll, isConnected, remove, contains) still shadow what the runtime calls on a form](https://github.com/corten-run/corten/issues/1105)).
+    The runtime is 312 B smaller and 27 B larger gzipped (41,292 to 40,980 B, 14,839 to 14,866 B
+    gzip)
+    ([#1049 A form with a control named hasAttribute never runs its data-on handlers: the runtime's dispatch calls the form's own methods](https://github.com/corten-run/corten/issues/1049)).
 
 ### Documentation
 
