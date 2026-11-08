@@ -308,6 +308,8 @@ pub struct App<M = ()> {
     /// The app's route patterns and whether each has a `GET` handler ([`crate::Req::serves`]);
     /// the areas' are added in `router`.
     pages: Vec<(&'static str, bool)>,
+    /// The routes that say `stages = bare`: served outside every stage.
+    bare: crate::route::Unstaged,
     error_page: Option<Box<page::ErrorPage>>,
     policy: Policy,
     /// The static directory `embed!` compiled in (`App::assets`): where it was read, and its files.
@@ -443,6 +445,7 @@ impl App {
         App {
             routes: routes.0,
             pages: routes.1,
+            bare: routes.2,
             error_page: None,
             policy: Policy::new(),
             static_files: None,
@@ -481,6 +484,7 @@ impl App {
         App {
             routes: self.routes,
             pages: self.pages,
+            bare: self.bare,
             error_page: self.error_page,
             policy: self.policy,
             static_files: self.static_files,
@@ -1075,6 +1079,27 @@ impl<M: Middleware> App<M> {
                 panic!("corten: the area {:?} is under App::api({:?}), whose routes answer only JSON", area.prefix, mount.prefix);
             }
         }
+        // A route with `stages = bare` meets no stage, so it is not where an area's or API's
+        // settings and middleware cover every request, nor can its parameter or catch-all reach
+        // there (`/{*rest}` beside `/api`): a staged route that does is turned away per request,
+        // which a bare one never meets.
+        for &path in &self.bare.paths {
+            if let Some((mount, ..)) =
+                self.apis.iter().find(|(mount, ..)| mount.contains(path) || crate::api::reaches(path, &mount.prefix))
+            {
+                panic!("corten: the route {path:?} says stages = bare and is under App::api({:?}), whose settings answer every request there; give it a path outside the API", mount.prefix);
+            }
+            if let Some(area) =
+                self.areas.iter().find(|area| crate::api::under(area.prefix, path) || crate::api::reaches(path, area.prefix))
+            {
+                panic!("corten: the route {path:?} says stages = bare and is under the area {:?}, whose deadline, policy and middleware cover every request there; give it a path outside the area", area.prefix);
+            }
+            // Nor where Corten's own paths are, which a bare `/{*rest}` would answer when unknown,
+            // with every unknown URL the app's 404 would.
+            if crate::api::under("/corten", path) || crate::api::reaches(path, "/corten") {
+                panic!("corten: the route {path:?} says stages = bare and can answer under /corten, whose paths are Corten's own; give it a first segment of its own text");
+            }
+        }
         // An area's stylesheet is a section of the asset pipeline.
         let sections: Vec<(&str, &[crate::Component])> = self
             .areas
@@ -1311,8 +1336,12 @@ impl<M: Middleware> App<M> {
                 })))
             };
         }
-        let mut router =
+        let router =
             if plain { wrap!(Plain(self.middleware)) } else { wrap!(Scoped { app: self.middleware, areas: area_middleware }) };
+        // The routes that say `stages = bare`, beside the others and outside every stage. They
+        // are merged into, not onto: of two default fallbacks a merge keeps the one merged in, so
+        // an unknown URL is still the app's 404 inside its stages.
+        let mut router = self.bare.router.merge(router);
         for wrap in self.layers {
             router = wrap(router);
         }

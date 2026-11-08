@@ -1696,6 +1696,37 @@ impl Anonymous for corten_feed::Since {}
 #[doc(hidden)]
 pub trait AllAnonymous {}
 
+/// An input read from the request's URL or body, which a route with `stages = bare` may take: no
+/// stage runs there, so nothing gives the request its signal, its nonce or who is asking, and an
+/// extractor that reads one of those (`Req`, `Signal`, `Nonce`, `Caller`, `ClientIp`) does not
+/// compile. Nor does one that reads the headers (`HeaderMap`, the whole `Request`): they carry the
+/// visitor's cookies and credentials, and no stage keeps a shared cache from storing what a bare
+/// handler made of them. Implement it for an extractor of the app's own that reads neither.
+#[diagnostic::on_unimplemented(
+    message = "a route with `stages = bare` runs no stage, so its handler cannot take `{Self}`",
+    label = "`{Self}` reads what a stage gives the request, or its headers",
+    note = "take the request's URL or body (Params, Form, Json, Upload, Method, Uri, Bytes, String), or leave stages = bare out so the route gets every stage; an extractor of the app's own that reads neither headers nor what a stage gives implements `corten::answer::Bare`"
+)]
+pub trait Bare {}
+
+impl<T> Bare for axum::extract::Path<T> {}
+impl<R: crate::route::FromUrl + ?Sized> Bare for crate::route::Params<R> {}
+impl<T> Bare for crate::Form<T> {}
+impl<T> Bare for crate::form::Upload<T> {}
+impl<T> Bare for State<T> {}
+impl<T: Bare> Bare for Option<T> {}
+impl Bare for Method {}
+impl Bare for Uri {}
+impl Bare for bytes::Bytes {}
+impl Bare for String {}
+#[cfg(feature = "json")]
+impl<T> Bare for crate::Json<T> {}
+
+/// Every argument is [`Bare`].
+#[doc(hidden)]
+pub trait AllBare {}
+impl AllBare for () {}
+
 /// Whether an answer's [`Answer::Inputs`] allows the handler's arguments.
 #[doc(hidden)]
 pub trait Accepts<Args> {
@@ -1749,6 +1780,7 @@ macro_rules! arities {
         }
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {}
+        impl<$($ty: Bare,)*> AllBare for ($($ty,)*) {}
 
         holds!([] [$($ty)*] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]);
     };

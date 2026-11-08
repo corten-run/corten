@@ -134,7 +134,8 @@ document, so the layout is never stale.
 An app answers a request only when its `Host` is `localhost` (or a name under it, such as
 `app.localhost`), an IP address, missing (HTTP/1.0, a test's `app().test()`), or a name the app lists.
 Any other name gets `421 Misdirected Request` before routing: no handler, middleware, caller
-lookup or error page runs. Otherwise a page on a name someone else controls could point that
+lookup or error page runs (except a route that says `stages = bare`, which has no check;
+[below](#a-route-outside-the-stages)). Otherwise a page on a name someone else controls could point that
 name at this machine (DNS rebinding) and then use every route as its own origin, writes
 included, since the browser treats the rebound page as same-origin. On loopback, where only this
 machine can reach the app, that is the access model it would break, so the check is the default
@@ -774,7 +775,8 @@ were not profiled; the cross-site post among them never reaches a route.
 ## Your own middleware
 
 Every request goes through the same stages in the same order, outside in, each needing the one
-before it:
+before it (a route that says `stages = bare` goes through none;
+[below](#a-route-outside-the-stages)):
 
 1. Compression is negotiated (`Accept-Encoding`); it is applied last.
 2. A write another site sent is refused (`Failure::CrossSite`). A browser's gets the error page,
@@ -888,6 +890,72 @@ A tower layer still goes around the whole app (`.layer(l)`), outside every stage
 see the raw request first: a cap on body size.
 There is no layer for one route: what a route needs is in its handler's arguments (an
 extractor) and its return type.
+
+### A route outside the stages
+
+A route whose answer must cost as little as the server allows and that anyone may read (a public
+figure behind a CDN, a beacon, a body taken in at a high rate) says `stages = bare` in its routes
+module; the probes a load balancer sends are Corten's own `/health/live` and `/health/ready`.
+It meets none of the stages above: no host or same-origin check, no signal,
+deadline or panic catch, no middleware, no error page, security headers, `Cache-Control`, tag or
+compression. Its handler's answer is sent as it made it, a raw `Response` too, and every other
+route keeps every stage, so the fast route and a page that needs all of them sit side by side:
+
+```rust
+use corten::{axum::response::Response, prelude::*};
+
+#[corten::routes]
+mod url {
+    #[route("/ping", get = ping, stages = bare)]
+    pub struct Ping;
+
+    #[route("/", get = home)]
+    pub struct Home;
+}
+
+async fn ping() -> Response {
+    Response::new("pong".into())
+}
+
+async fn home(req: Req) -> HtmlResult {
+    req.page(html! { <html><head><title>"Home"</title><Corten /></head><body><main></main></body></html> })
+}
+
+let app = App::new(url::router());
+# let _ = app.router();
+```
+
+The route says it where it is declared, so a reader of the routes module sees which routes skip
+the stages. What the compiler can check, it does:
+
+1. The handler takes only the request's URL and body (`Params`, `Form`, `Json`, `Upload`,
+   `Method`, `Uri`, `Bytes`, `String`): `Req`, `Signal`, `Nonce`, `Caller` and `ClientIp` read
+   what a stage gives, and `HeaderMap` and the whole `Request` read the visitor's cookies and
+   credentials, which no stage would keep a shared cache from storing; none compiles there
+   (`corten::answer::Bare`).
+2. A routes module with `caller = ..` cannot have one, since every route there takes the caller.
+   Nor can an area's or API's module, whose deadline, policy and middleware cover every request
+   at its prefix. When it starts, the app refuses a bare route under an area's or API's prefix
+   or under `/corten`, or whose parameter or catch-all could stand there (`/{section}/ping`
+   beside `App::api("/api")`, `/{*rest}` at the root).
+3. `no_store`, `rows` and `gives(..)` are applied by stages, so a bare route does not say them; a
+   bare handler that must not be kept returns `NoStore<..>` itself.
+4. It is not a page: `Req::serves` does not send a visitor there after sign-in.
+
+What it gives up is the app's to weigh: a bare route answers a DNS-rebound page and another
+site's write, and it can be framed or sniffed, so it is for answers anyone may read. A handler
+that panics drops the connection rather than answering 500, and nothing ends it at a deadline.
+Its answer has no `Cache-Control` unless the handler sets one, and an upload it reads with
+`Upload::idle(None)` has no time limit at all.
+A tower layer the app puts around the whole app (`.layer(l)`) still goes around it, and so does
+`serve`'s handling of connections: the head's size and time, connection limits, and shutdown,
+which lets a bare route's request run for the longer of the shutdown grace and the app's longest
+deadline, since it records none of its own.
+
+What it saves, measured with callgrind on a release build answering the same JSON in process:
+7,400 instructions a request bare against 21,307 through the stages with jemalloc (a plain axum
+router: 7,640), and 8,392 against 23,848 with glibc's allocator. The routes beside it cost what
+they did before.
 
 ## Static files
 
@@ -2139,7 +2207,7 @@ their own shell key:
 .area(|area| settings::url::area(area).policy(|p| p.script_src("https://connect-js.stripe.com").allow_cross_origin_opener()))
 ```
 
-Every answer is sent with `Referrer-Policy: strict-origin-when-cross-origin`: other sites get the
+Every answer but a bare route's is sent with `Referrer-Policy: strict-origin-when-cross-origin`: other sites get the
 origin only. A page whose address carries a secret (an OAuth consent's `?token=`, a password reset,
 an invitation, a magic link) should not send it even to the app's own logs with the stylesheet and
 font requests it makes, so its area makes the policy stricter with `referrer(Referrer::StrictOrigin)`

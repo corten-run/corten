@@ -936,7 +936,12 @@ rules something out.
     axum `Router` or method router does not fit any of them, so no route given to the `App` is
     unchecked (what an app adds to the `Router` that `App::router()` hands out for serving it
     another way, or answers in a `.layer(l)` around it, is its own). A WebSocket (`Upgrade`)
-    and another server's answer passed on (`Relay`) are such routes too. Not chosen: guards and
+    and another server's answer passed on (`Relay`) are such routes too. A route that says
+    `stages = bare` ([Choice 28](#choice-fixed-stages)) is in `Routes` too, but meets no stage, so
+    its answer type is not checked; its handler is checked instead to take only the request's URL
+    and body (`corten::answer::Bare`): no `Caller` and no headers, which carry the cookies and
+    credentials, so what it answers cannot depend on who is asking, and a module with
+    `caller = T` cannot hold one. Not chosen: guards and
     a context object checked per request (`App::guard`, `Area::guard`, `App<C>`), which Corten
     had and removed in
     [#81 A route's handler says what it answers, who may call it and how it caches, checked for every route](https://github.com/corten-run/corten/pull/81).
@@ -948,7 +953,8 @@ rules something out.
     Stands on: reasoned (a handler's arguments and return type are checked where the routes module
     is compiled, so a module's `caller = T`, `Public` and `no_store` hold every handler in it,
     and `Routes` and `Methods` are the only types `App::new`, `Area::route` and `Api::route`
-    take, so no route given to the `App` skips them); bet (most of an app's access rules are
+    take, so no route given to the `App` skips them, a bare route's arguments standing in for
+    its answer's); bet (most of an app's access rules are
     about who is asking, which a type can name, and the rest depend on the record, which the
     handler reads anyway); value (mistakes fail at compile time, Value 4).
 
@@ -961,13 +967,26 @@ rules something out.
     `bcd31ffe`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
-    `Middleware` tuple at one place in it.** The stages are `corten::middleware`'s; the app's
-    steps are resolved at compile time. An area's or an API's own steps (`Area::middleware`,
-    `Api::middleware`) run right after the app's, for the requests at its prefix; they are boxed,
-    since which run depends on the path, and an app with none pays nothing for them. Not chosen:
-    hooks at several stages (before routing, after the caller, around the error page), each a
+    `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
+    `corten::middleware`'s; the app's steps are resolved at compile time. An area's or an API's
+    own steps (`Area::middleware`, `Api::middleware`) run right after the app's, for the requests
+    at its prefix; they are boxed, since which run depends on the path, and an app with none pays
+    nothing for them. A route that says `stages = bare` where it is declared is routed beside the
+    stages, not inside them: its handler's answer is sent as it made it, a raw `Response` too, and
+    every other route keeps every stage. It is all or nothing, so the order a reader checks is
+    still one. It is for an answer that must cost what the router alone costs and that anyone may
+    read (a public JSON figure a CDN fronts, a beacon, a body taken in at a high rate), beside
+    pages that need every stage; the stages add about twice what its handler and the router cost
+    together (below). Not chosen: an app's own tower layer that answers the route's path before
+    the stages (`.layer(l)`), which works today but is outside the routes module: its path is a
+    string, not a typed route, its handler is checked for nothing, and a reader of the routes does
+    not see it; hooks at several stages (before routing, after the caller, around the error page), each a
     place an app's step could run and a reader of the app would have to check; what must see the
     raw request first is a tower layer around the whole app ([Limit 12](#limit-fixed-stages)).
+    Nor presets that keep some stages and drop others (`stages = fast`), each another order to
+    read and test, with no app yet needing one; nor the stages rewritten as combinators, measured
+    on a branch not merged: about 200 to 360 instructions fewer a request with glibc's allocator,
+    but about 200 to 263 more with jemalloc, which the images preload.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -975,12 +994,22 @@ rules something out.
     outside that area 19,909 to 19,913 against 19,706; an app whose areas and APIs have none runs
     Corten's own code within 18 instructions of before, while its whole request rose from 19,696
     to 19,976 to 19,988 in the allocator with the same allocations, so the same layout effect may
-    be in the request outside the area); reasoned (one place for the app's steps is one
-    order to read, and a tuple resolved at compile time costs no box); value (one way to do each
-    thing, Value 5, and good defaults with easy overrides, Value 7).
+    be in the request outside the area); measured (callgrind, release, the same request a JSON
+    answer, five runs each alternating with main `c65c10ec`, medians: with jemalloc a bare route
+    7,400 instructions, the same route through the stages 21,307, and a plain axum router 7,640;
+    the routes without it within 3 of main, and a staged route beside a bare one 21,324; with
+    glibc's allocator a bare route 8,392 against 23,848 staged, the page and 404 within main's
+    spread, and an API request 17,900 to 18,430 against 17,559 to 17,799, where the profile
+    finds the difference in glibc's `_int_malloc` and no function of Corten's 30 apart, and with
+    jemalloc the two within 4); reasoned (one place for the app's steps is one order to read, a tuple
+    resolved at compile time costs no box, and a route that needs none of it says so where it is
+    declared); value (one way to do each thing, Value 5, and good defaults with easy overrides,
+    Value 7).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
-    layer around the app cannot serve it; or a request outside every area costs more than twice
+    layer around the app cannot serve it; or a route needs some stages and not others, which
+    `stages = bare` cannot give; or a bare route costs more than about 10% over a plain axum
+    router's; or a request outside every area costs more than twice
     the about 200 instructions measured here over the build before area middleware (the lookup
     and any layout effect together; layout alone moved a whole request by about 280). Area
     middleware has no switch, so the next check builds current main with the prefix lookup taken
@@ -989,7 +1018,8 @@ rules something out.
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
-    own).
+    own); 2026-11-08, the `stages = bare` runs against `c65c10ec` (the bench binary was not
+    committed).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
@@ -1243,7 +1273,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
 12. <a id="limit-fixed-stages"></a>The app's own steps run at one place in Corten's fixed order of stages
     ([Choice 28](#choice-fixed-stages)), not as hooks at several: a step that must see the raw
     request before every stage is a tower layer around the whole app (`.layer(l)`), and there is
-    no step for one route, whose needs are its handler's arguments and return type.
+    no step for one route, whose needs are its handler's arguments and return type. A route
+    takes every stage or, with `stages = bare`, none: no host or same-origin check, deadline,
+    panic catch, security headers or cache rule, which its handler gives itself if it needs them.
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the

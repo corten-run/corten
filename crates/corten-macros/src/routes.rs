@@ -34,6 +34,8 @@ struct Routed {
     doc: String,
     /// `gives(CartCount)`: the layout reads its `GET` page gives itself, as written.
     gives: Vec<TokenStream>,
+    /// `stages = bare`: served outside every stage, where it is written.
+    bare: Option<Span>,
 }
 
 /// Which of a route's handlers answer as `NoStore` would make them: none, every one (`no_store`),
@@ -76,6 +78,8 @@ struct Serves {
     gives: Vec<TokenStream>,
     /// Where `gives(..)` is.
     gives_at: Option<Span>,
+    /// `stages = bare`: no stage runs for it; where it is written.
+    bare: Option<Span>,
 }
 
 /// What `#[corten::routes(..)]` says: what the handlers share (`state = Db`), the area the
@@ -264,6 +268,24 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
     // Each handler is checked against the module's state, named for every call, so one that wants
     // another state is an error at its name rather than a mismatch between routers.
     let state_ty = state.clone().unwrap_or_else(|| q("()", &[]));
+    // A bare route meets no stage: not an area's or API's, whose settings cover every request at
+    // their prefix, and no caller lookup, which a module's `caller = ..` holds every route to.
+    if let Some(route) = routed.iter().find(|r| r.bare.is_some()) {
+        let at = route.bare.unwrap_or(route.span);
+        if let Some((kind, _)) = &within {
+            let what = if *kind == Kind::Area { "an area's" } else { "an API's" };
+            return err(
+                at,
+                format!("{} says stages = bare, and {what} routes go through its deadline, policy and middleware: put it in the app's own routes module, at a path outside the {}", route.name, if *kind == Kind::Area { "area" } else { "API" }),
+            );
+        }
+        if caller.is_some() {
+            return err(
+                at,
+                format!("{} says stages = bare, which reads no caller, and this module's caller = .. holds every route to taking one: put it in a routes module without caller", route.name),
+            );
+        }
+    }
     // Each handler of a module with `caller = Viewer` takes `Caller<Viewer>`, checked at its name.
     let required = match &caller {
         Some(caller) => q("::corten::Caller<__A0>", std::slice::from_ref(caller)),
@@ -299,18 +321,32 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             // `no_store`: the method's no-store form, which checks the handler as one that
             // answers `NoStore<..>` and wraps its answer so, so the handler keeps its own result
             // type and its `?`.
-            let function = if route.no_store.covers(method) {
+            let function = if route.bare.is_some() {
+                Ident::new(&format!("bare_{method}"), method.span())
+            } else if route.no_store.covers(method) {
                 Ident::new(&format!("no_store_{method}"), method.span())
             } else {
                 method.clone()
             };
-            let call = respan(
-                q(
-                    "::corten::route::__private::__A0::<_, _, __A1, __A2, _, __A3, _, __A4>",
-                    &[TokenTree::Ident(function).into(), state_ty.clone(), required.clone(), params.clone(), rows.clone()],
-                ),
-                at,
-            );
+            // A bare route's checks take no caller and no rows: it is in no `caller = ..` module
+            // and names none.
+            let call = if route.bare.is_some() {
+                respan(
+                    q(
+                        "::corten::route::__private::__A0::<_, _, __A1, __A2, _>",
+                        &[TokenTree::Ident(function).into(), state_ty.clone(), params.clone()],
+                    ),
+                    at,
+                )
+            } else {
+                respan(
+                    q(
+                        "::corten::route::__private::__A0::<_, _, __A1, __A2, _, __A3, _, __A4>",
+                        &[TokenTree::Ident(function).into(), state_ty.clone(), required.clone(), params.clone(), rows.clone()],
+                    ),
+                    at,
+                )
+            };
             if let (Some(_), Some(args)) = (&document, &route.args) {
                 // The operation, described by the handler's argument and answer types: one the
                 // document cannot describe is an error at the handler's name, as `call` is.
@@ -371,6 +407,8 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
         }
         let template = if within.is_some() {
             ".route::<__A0::__A1>(::corten::Methods::with_state(__A2, state.clone()))"
+        } else if route.bare.is_some() {
+            ".__bare_route::<__A0::__A1>(::corten::Methods::with_state(__A2, state.clone()))"
         } else {
             ".__route::<__A0::__A1>(::corten::Methods::with_state(__A2, state.clone()))"
         };
@@ -792,6 +830,25 @@ fn scan(
                     if serves.no_store.said() && serves.handlers.is_empty() {
                         return err(span, format!("no_store says what {name}'s handlers answer, and it has none: #[route(\"{path}\", get = .., no_store)]"));
                     }
+                    if let Some(at) = serves.bare {
+                        if serves.handlers.is_empty() {
+                            return err(at, format!("stages = bare says how {name}'s handlers are served, and it has none: #[route(\"{path}\", get = .., stages = bare)]"));
+                        }
+                        // Each of these is done by a stage, which a bare route does not have.
+                        let said = if serves.no_store.said() {
+                            Some("no_store")
+                        } else if serves.rows.is_some() {
+                            Some("rows")
+                        } else if serves.gives_at.is_some() {
+                            Some("gives(..)")
+                        } else {
+                            None
+                        };
+                        if let Some(said) = said {
+                            let hint = if said == "no_store" { " (a bare handler that must not be kept returns NoStore<..> itself)" } else { "" };
+                            return err(at, format!("stages = bare sends {name}'s answer as its handler made it, with no stage to apply {said}: leave one of them out{hint}"));
+                        }
+                    }
                     if serves.handlers.is_empty()
                         && prefix != Some(name.to_string().as_str())
                         && document != Some(name.to_string().as_str())
@@ -843,6 +900,7 @@ fn scan(
                             no_store: NoStore::Not,
                             doc: std::mem::take(&mut docs),
                             gives: Vec::new(),
+                            bare: None,
                         });
                         start = None;
                         docs.clear();
@@ -884,6 +942,7 @@ fn scan(
                         no_store: serves.no_store,
                         doc: std::mem::take(&mut docs),
                         gives: serves.gives,
+                        bare: serves.bare,
                     });
                 }
             }
@@ -1011,6 +1070,21 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.rows = Some(stream(rows.iter().cloned()));
             }
+            // `stages = bare`: the route is served outside every stage of the app's.
+            [TokenTree::Ident(key), TokenTree::Punct(eq), value @ ..] if eq.as_char() == '=' && key.to_string() == "stages" => {
+                if serves.bare.is_some() {
+                    return err(key.span(), "stages is named twice");
+                }
+                match value {
+                    [TokenTree::Ident(word)] if word.to_string() == "bare" => serves.bare = Some(key.span()),
+                    _ => {
+                        return err(
+                            value.first().map_or(key.span(), TokenTree::span),
+                            format!("stages takes bare, a route served outside every stage: #[route(\"{path}\", get = ping, stages = bare)]; a route without it goes through every stage"),
+                        );
+                    }
+                }
+            }
             [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "gives" => {
                 return err(
                     key.span(),
@@ -1086,7 +1160,7 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             _ => {
                 return err(
                     part[0].span(),
-                    "expected a handler (get = show), rows = .., prefetch = .., no_store, no_store(post) or gives(CartCount)",
+                    "expected a handler (get = show), rows = .., prefetch = .., no_store, no_store(post), gives(CartCount) or stages = bare",
                 )
             }
         }

@@ -4969,6 +4969,210 @@ async fn leading_rest(rest: crate::Params<leading_url::Rest<'_>>) -> String {
     rest.rest.clone()
 }
 
+/// A route served outside every stage beside one served through all of them.
+#[crate::routes]
+mod bare_url {
+    #[route("/ping", get = bare_ping, stages = bare)]
+    pub struct Ping;
+
+    #[route("/raw/{id}", get = bare_raw, post = bare_raw_post, stages = bare)]
+    pub struct Raw {
+        pub id: u32,
+    }
+
+    #[route("/page", get = bare_page)]
+    pub struct Page;
+
+    #[route("/serves", get = bare_serves)]
+    pub struct Serves;
+}
+
+async fn bare_ping() -> &'static str {
+    "pong"
+}
+
+/// The raw request in and a raw response out, its headers the handler's alone.
+async fn bare_raw(at: crate::Params<bare_url::Raw>, method: axum::http::Method) -> axum::response::Response {
+    axum::response::Response::builder()
+        .status(StatusCode::IM_A_TEAPOT)
+        .header("x-raw", format!("{method} {}", at.id))
+        .body(Body::from("raw"))
+        .unwrap()
+}
+
+async fn bare_raw_post(_: crate::Params<bare_url::Raw>, body: axum::body::Bytes) -> String {
+    format!("took {}", body.len())
+}
+
+async fn bare_page(req: Req) -> HtmlResult {
+    req.test_page("Page", html! { <p>"page"</p> })
+}
+
+/// Whether `?next=` may send the visitor to the bare route and to the page.
+async fn bare_serves(req: Req) -> String {
+    let serves = |path: &str| req.serves(&crate::Local::parse(path).unwrap());
+    format!("{} {}", serves("/ping"), serves("/page"))
+}
+
+/// `stages = bare` sends the handler's answer as it made it: no host check, no same-origin check,
+/// no security headers, `Cache-Control`, error page or tag. The route beside it, and an unknown
+/// URL, still go through every stage.
+#[tokio::test]
+async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
+    let router = App::new(bare_url::router()).error_page(test_error_page, ()).router();
+    let (status, headers, body) = call_with(router.clone(), "GET", "/ping", None, Some("text/html")).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
+    for name in ["content-security-policy", "x-content-type-options", "cache-control", "etag", "referrer-policy"] {
+        assert!(!headers.contains_key(name), "a bare route has no {name}: {headers:?}");
+    }
+    // A `get` answers `HEAD` too, with no body, as axum's own routes do.
+    let (status, _, body) = call_with_any(router.clone(), "HEAD", "/ping", &[]).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, ""));
+    let (status, headers, body) = call_with(router.clone(), "GET", "/raw/7", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::IM_A_TEAPOT, "raw"), "a 4xx is sent as it is, not as the error page");
+    assert_eq!(headers.get("x-raw").unwrap(), "GET 7");
+    assert!(!headers.contains_key("cache-control"));
+    // Another site's write and another host's request reach it: it has no stage to refuse them.
+    let (status, _, body) = call_with_any(
+        router.clone(),
+        "POST",
+        "/raw/7",
+        &[("origin", "https://attacker.example"), ("sec-fetch-site", "cross-site")],
+    )
+    .await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "took 0"));
+    let (status, body) = for_host(&router, "/ping", "rebound.attacker.example:3917", &[]).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
+    // A path that does not parse is the extractor's own rejection, not the error page.
+    let (status, headers, _) = call_with(router.clone(), "GET", "/raw/seven", None, Some("text/html")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(!headers.contains_key("content-security-policy"));
+
+    let (status, headers, _) = call_with(router.clone(), "GET", "/page", None, Some("text/html")).await;
+    assert_eq!(status, StatusCode::OK);
+    for name in ["content-security-policy", "x-content-type-options", "cache-control"] {
+        assert!(headers.contains_key(name), "the page beside it has {name}: {headers:?}");
+    }
+    let (status, body) = for_host(&router, "/page", "rebound.attacker.example:3917", &[]).await;
+    assert_eq!((status, body.as_str()), (StatusCode::MISDIRECTED_REQUEST, "Misdirected request."));
+    // A bare route is not a page: no stage gives its answer the app's layout.
+    let (_, _, body) = call_with(router.clone(), "GET", "/serves", None, None).await;
+    assert_eq!(body, "false true");
+    let (status, headers, body) = call_with(router, "GET", "/missing", None, Some("text/html")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(headers.contains_key("content-security-policy"), "an unknown URL is still answered inside the stages");
+    assert!(body.contains("<html"), "with the error page: {body}");
+}
+
+/// A tower layer around the whole app still goes around a bare route.
+#[tokio::test]
+async fn a_layer_around_the_app_goes_around_a_bare_route() {
+    let router = App::new(bare_url::router())
+        .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
+            let mut res = next.run(req).await;
+            res.headers_mut().insert("x-outer", axum::http::HeaderValue::from_static("1"));
+            res
+        }))
+        .router();
+    let (status, headers, _) = call_with_any(router, "GET", "/ping", &[]).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers.get("x-outer").unwrap(), "1");
+}
+
+async fn call_with_any(
+    router: Router,
+    method: &str,
+    uri: &str,
+    headers: &[(&str, &str)],
+) -> (StatusCode, axum::http::HeaderMap, String) {
+    let mut req = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        req = req.header(*name, *value);
+    }
+    let (parts, body) = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap().into_parts();
+    (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+}
+
+/// A bare route under an area's prefix would skip what the area says covers every request there.
+#[test]
+#[should_panic(expected = "says stages = bare and is under the area \"/docs\"")]
+fn a_bare_route_under_an_area_is_refused_at_startup() {
+    #[crate::routes]
+    mod under_area {
+        #[route("/docs/ping", get = bare_ping, stages = bare)]
+        pub struct DocsPing;
+    }
+    let _ = App::new(under_area::router()).area(docs_url::area).router();
+}
+
+/// Nor under an API's prefix, whose settings answer every request there.
+#[test]
+#[should_panic(expected = "says stages = bare and is under App::api(\"/api\")")]
+fn a_bare_route_under_an_api_is_refused_at_startup() {
+    #[crate::routes]
+    mod under_api {
+        #[route("/api/ping", get = bare_ping, stages = bare)]
+        pub struct ApiPing;
+    }
+    let _ = App::new(under_api::router())
+        .api::<ApiRoot>(|api| api.route::<ApiRates>(crate::Methods::reads(get(|| async { "rates" }))))
+        .router();
+}
+
+/// Nor at a path of Corten's own, which the router already holds: the router's own refusal, as
+/// for a staged route there.
+#[test]
+#[should_panic(expected = "Overlapping method route")]
+fn a_bare_route_at_a_path_of_corten_s_own_is_refused_at_startup() {
+    #[crate::routes]
+    mod at_health {
+        #[route("/health/live", get = bare_ping, stages = bare)]
+        pub struct Live;
+    }
+    let _ = App::new(at_health::router()).router();
+}
+
+/// A bare route's parameter that can stand where an API's prefix is would answer its unknown
+/// URLs outside the API's settings: refused, as one under the prefix is.
+#[test]
+#[should_panic(expected = "says stages = bare and is under App::api(\"/api\")")]
+fn a_bare_parameter_that_reaches_an_api_is_refused_at_startup() {
+    let _ = App::new(bare_reaching_url::router())
+        .api::<ApiRoot>(|api| api.route::<ApiRates>(crate::Methods::reads(get(|| async { "rates" }))))
+        .router();
+}
+
+/// A bare catch-all at the root would answer Corten's unknown paths and every unknown URL.
+#[test]
+#[should_panic(expected = "says stages = bare and can answer under /corten")]
+fn a_bare_catch_all_at_the_root_is_refused_at_startup() {
+    let _ = App::new(bare_everywhere_url::router()).router();
+}
+
+#[crate::routes]
+mod bare_reaching_url {
+    #[route("/{section}/ping", get = bare_section_ping, stages = bare)]
+    pub struct SectionPing<'a> {
+        pub section: &'a str,
+    }
+}
+
+#[crate::routes]
+mod bare_everywhere_url {
+    #[route("/{*rest}", get = bare_rest_ping, stages = bare)]
+    pub struct Rest<'a> {
+        pub rest: &'a str,
+    }
+}
+
+async fn bare_section_ping(_: crate::Params<bare_reaching_url::SectionPing<'_>>) -> &'static str {
+    "pong"
+}
+
+async fn bare_rest_ping(_: crate::Params<bare_everywhere_url::Rest<'_>>) -> &'static str {
+    "pong"
+}
+
 #[derive(crate::Route)]
 #[route("/{user}/posts")]
 struct UserPosts<'a> {
@@ -11018,7 +11222,7 @@ mod layout_reads {
                 get(|req: Req| async move { req.page::<ForOne>(Layout { req: &req, children: later::<CartCount>() }) }),
             );
         let typed = shop_url::router();
-        App::new(Routes(typed.0.merge(routes), typed.1))
+        App::new(Routes(typed.0.merge(routes), typed.1, typed.2))
             .error_page(
                 |failure: Failure, req: Req| async move {
                     req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
@@ -12097,7 +12301,7 @@ mod layout_reads {
                         .map(|page| page.give::<CartCount>(7))
                 }),
             );
-        App::new(Routes(typed.0.merge(routes), typed.1))
+        App::new(Routes(typed.0.merge(routes), typed.1, typed.2))
             .error_page(
                 |failure: Failure, req: Req| async move {
                     req.page::<ForOne>(Layout { req: &req, children: html! { <p>{failure.status().as_u16()}</p> } })
