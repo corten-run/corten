@@ -94,6 +94,10 @@ export function filterPrefixes(record) {
   const prefix = name.slice(0, Math.max(1, Math.floor(name.length / 2)));
   return [...new Set(["", prefix, prefix.toUpperCase(), prefix.toLowerCase(), ` ${prefix}`, `${prefix} `, '<&"\' +', "__catalog_no_such_field__"])];
 }
+export function expectedPageChecks(catalog) {
+  // Eight profiles, with two style visits and a fresh page for the form in each.
+  return (representativeIds(catalog).length + filterPrefixes(catalog.record_1).length + 3) * 8;
+}
 export function parseArgs(args, available) {
   const [round, ...rest] = args;
   if (!/^c[1-9]\d*$/.test(round ?? "")) throw new Error("round must be cN (for example c1), never rN or mN");

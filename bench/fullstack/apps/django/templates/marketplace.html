@@ -1,0 +1,33 @@
+{% extends "base.html" %}{% load static %}
+{% block lang %}{{ locale }}{% endblock %}
+{% block title %}{{ record.title }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'marketplace.css' %}">{% endblock %}
+{% block main %}
+<article class="marketplace" hx-boost="false">
+<nav class="marketplace__categories">{% for category in record.categories %}<a href="{% url 'marketplace' locale 'item_1' %}">{{ category.name }}</a>{% endfor %}</nav>
+<h1>{{ record.title }}</h1>
+{% if record.subtitle is not None %}<p class="marketplace__subtitle">{{ record.subtitle }}</p>{% endif %}
+<ul class="marketplace__badges">{% for badge in record.badges %}<li>{{ badge }}</li>{% endfor %}</ul>
+<div class="marketplace__images">{% for image in record.images %}<div class="marketplace__image" role="img" aria-label="{{ record.title }} {{ forloop.counter }}" data-src="{{ image }}"></div>{% endfor %}</div>
+<section class="marketplace__summary">{% if summary is not None %}<span><strong>{{ summary.lowest }}</strong> {{ labels.lowest }}</span><span>{{ summary.count }}</span><span>{{ summary.quantity }} {{ labels.available }}</span>{% else %}<span>{{ labels.no_listings }}</span>{% endif %}</section>
+<section class="marketplace__listings">
+<h2>{{ labels.listings }}</h2>
+<form method="get" action="{{ path }}">
+<label>{{ labels.filter }}<input type="text" name="seller" value="{{ prefix }}"></label>
+<label>{{ labels.sort }}<select name="sort"><option value="asc"{% if order == 'asc' %} selected{% endif %}>{{ labels.asc }}</option><option value="desc"{% if order == 'desc' %} selected{% endif %}>{{ labels.desc }}</option></select></label>
+{% if show_all %}<input type="hidden" name="offers" value="all">{% endif %}
+<button type="submit">{{ labels.apply }}</button></form>
+<table><thead><tr><th>{{ labels.seller }}</th><th>{{ labels.condition }}</th><th>{{ labels.ships_from }}</th><th>{{ labels.qty }}</th><th>{{ labels.price }}</th><th>{{ labels.reviews }}</th></tr></thead>
+<tbody>{% for row in listings %}<tr data-listing-id="{{ row.id }}"><td>{{ row.seller }}{% if row.rating is not None %} · {{ row.rating }} ★{% endif %}</td><td>{{ row.condition }}</td><td>{{ row.ships_from }}</td><td>{{ row.quantity_text }}</td><td>{{ row.price }}</td><td>{{ row.reviews_text }}</td></tr>{% endfor %}</tbody></table>
+</section>
+<section class="marketplace__offers"><h2>{{ labels.offers }}</h2>
+<table><thead><tr><th>{{ labels.buyer }}</th><th>{{ labels.condition }}</th><th>{{ labels.qty }}</th><th>{{ labels.price }}</th></tr></thead><tbody>{% for row in offers %}<tr data-offer-id="{{ row.id }}"><td>{{ row.buyer }}</td><td>{{ row.condition }}</td><td>{{ row.quantity_text }}</td><td>{{ row.price }}</td></tr>{% endfor %}</tbody></table>
+{% if not show_all and record.offers|length > 5 %}<a class="marketplace__more" href="{{ more }}">{{ labels.show_all }}</a>{% endif %}</section>
+<section class="marketplace__alert"><h2>{{ labels.alert }}</h2>
+<form method="post" action="{{ path }}">{% csrf_token %}<label>{{ labels.email }}<input type="email" name="email" value="{{ email }}"></label><label>{{ labels.target }}<input type="text" inputmode="decimal" name="target_price" value="{{ target }}"></label><button type="submit">{{ labels.submit }}</button></form>
+<p class="marketplace__message">{{ message }}</p></section>
+<section class="marketplace__details"><h2>{{ labels.details }}</h2><p>{{ record.description }}</p><dl>{% for field in record.fields %}<dt>{{ field.name }}</dt><dd>{{ field.value }}</dd>{% endfor %}</dl><ul>{% for tag in record.tags %}<li>{{ tag }}</li>{% endfor %}</ul></section>
+<section class="marketplace__contents"><h2>{{ labels.contents }}</h2><ul>{% for row in contents %}<li><a href="{% url 'marketplace' locale row.item_id %}">{{ row.title }}</a> × {{ row.quantity_text }}</li>{% endfor %}</ul></section>
+<section class="marketplace__included"><h2>{{ labels.included }}</h2><ul>{% for row in included %}<li><a href="{% url 'marketplace' locale row.item_id %}">{{ row.title }}</a> × {{ row.quantity_text }}</li>{% endfor %}</ul></section>
+</article>
+{% endblock %}

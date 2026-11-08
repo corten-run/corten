@@ -6,6 +6,13 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
+  money, ratings and counts during each request in English, French and German. An independent
+  pre-load gate checks full pages, native forms, layout, escaping, JSON and uncached upstream
+  reads in both data sources. Its repeated-pass runner and read-only report preserve provenance,
+  variability, CPU and memory evidence and measurement limits. Catalog also gains a read-only
+  report. No historical results, running catalog job or nightly benchmark behavior changes.
+
 - A separate locale-neutral catalog benchmark in `bench/catalog`: the same strings-only
   record-detail page, JSON, GET filter and related links in eighteen framework apps.
   Correctness checks precede load tests; catalog rounds have their own baseline rather than

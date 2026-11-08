@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" xmlns:th="http://www.thymeleaf.org" th:fragment="page(title, main)">
+<html lang="en" th:lang="${marketplacePage == true ? locale : 'en'}" xmlns:th="http://www.thymeleaf.org" th:fragment="page(title, main)">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,10 +7,11 @@
 <link rel="stylesheet" th:href="@{/style.css}">
 <link rel="stylesheet" th:href="@{/components.css}">
 <link rel="stylesheet" th:if="${catalogPage == true}" th:href="@{/catalog.css}">
+<link rel="stylesheet" th:if="${marketplacePage == true}" th:href="@{/marketplace.css}">
 <script th:src="@{/htmx.min.js}" defer></script>
 <script th:src="@{/item.js}" defer></script>
 </head>
-<body hx-boost="true">
+<body hx-boost="true" th:attr="hx-boost=${marketplacePage == true ? 'false' : 'true'}">
 <header class="site-header__bar"><a href="/">Card Market</a></header>
 <main th:replace="${main}"></main>
 </body>

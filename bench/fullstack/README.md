@@ -4,6 +4,9 @@ This is the historical, localized marketplace workload. The separate
 [locale-neutral catalog benchmark](../catalog/README.md) gives every framework the same
 strings-only page work without currency or number localization. Its results start a new
 baseline; they do not replace or form a before/after comparison with the tables here.
+[Marketplace v2](../marketplace/README.md) implements equivalent request-time locale formatting
+in eighteen adapters, with a whole-page conformance gate and its own repeated-pass runner.
+It starts a separate baseline and does not change these historical results or the nightly runner.
 
 The same item detail page (title, images, sorted listings table, offers with "show all", a
 price-alert form that posts and patches a message), and the same item as JSON, built in:

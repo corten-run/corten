@@ -10,6 +10,7 @@ defmodule ItemPage.Application do
     # The fixture (ITEM_SOURCE=fixture) is loaded before the endpoint takes requests.
     :ok = ItemPage.Items.load_fixture()
     :ok = ItemPage.Catalog.load_fixture()
+    :ok = ItemPage.Marketplace.load_fixture()
 
     children = [
       ItemPageWeb.Telemetry,

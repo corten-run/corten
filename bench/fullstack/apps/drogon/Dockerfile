@@ -4,7 +4,7 @@ FROM debian:trixie-20261027 AS tools
 # Drogon's build dependencies, as its install guide lists them for Debian.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates g++ cmake make git \
-        libjsoncpp-dev uuid-dev zlib1g-dev libssl-dev \
+        libjsoncpp-dev uuid-dev zlib1g-dev libssl-dev libicu-dev \
     && rm -rf /var/lib/apt/lists/*
 
 FROM tools AS build
@@ -25,7 +25,7 @@ RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j"$(n
 
 FROM debian:trixie-20261027-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libjsoncpp26 libssl3t64 libuuid1 zlib1g \
+    && apt-get install -y --no-install-recommends libjsoncpp26 libssl3t64 libuuid1 zlib1g libicu76 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 # The server serves static/ from its working directory.

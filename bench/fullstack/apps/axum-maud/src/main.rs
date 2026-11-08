@@ -6,6 +6,8 @@
 mod catalog;
 mod catalog_page;
 mod items;
+mod marketplace;
+mod marketplace_page;
 mod model;
 mod pages;
 
@@ -47,6 +49,7 @@ type AppState = State<Arc<App>>;
 async fn main() {
     // Load the fixture (if any) before listening, like the other apps.
     catalog::source::init();
+    marketplace::source::init();
     let app = Arc::new(App { items: Items::from_env(), prices: broadcast::channel(1024).0 });
     let profile = std::env::var("PROFILE").as_deref() == Ok("matched");
     let routes = Router::new()
@@ -55,6 +58,8 @@ async fn main() {
         .route("/api/items/{id}", get(item_json))
         .route("/catalog/{id}", get(catalog_page))
         .route("/api/catalog/{id}", get(catalog_json))
+        .route("/marketplace/{locale}/{id}", get(marketplace_page::get).post(marketplace_page::post))
+        .route("/api/marketplace/{id}", get(marketplace_page::json))
         .route("/live/prices", get(live_prices))
         .route("/live/publish", post(live_publish))
         .fallback(async || not_found());
