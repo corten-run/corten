@@ -4067,6 +4067,24 @@ async function run(browser) {
     };
   });
   check("StatusDot and Stack: the dot is not read, and a stack's gap is its only space", spacing.dot && spacing.gap === 1.5 && spacing.paragraph === 1 && spacing.margins === 0, JSON.stringify(spacing));
+  // StatusTone::Text: a dot in a badge is the badge's text color, in a soft badge and a solid one,
+  // where a dot in the badge's own tone would be the color of the fill.
+  const dotInBadge = await orders.evaluate(() => {
+    const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='status-dot__text']"));
+    const badge = /** @type {HTMLElement} */ (dot.parentElement);
+    const drawn = () => ({ dot: getComputedStyle(dot).backgroundColor, text: getComputedStyle(badge).color, fill: getComputedStyle(badge).backgroundColor });
+    const soft = drawn();
+    const was = badge.className;
+    badge.className = was.replace(/badge__soft/, "badge__solid");
+    const solid = drawn();
+    badge.className = was;
+    return { soft, solid, swapped: was.includes("badge__soft") };
+  });
+  check(
+    "StatusDot: StatusTone::Text draws the dot in its badge's text color, so it shows on a solid badge's fill",
+    dotInBadge.swapped && dotInBadge.soft.dot === dotInBadge.soft.text && dotInBadge.solid.dot === dotInBadge.solid.text && dotInBadge.solid.dot !== dotInBadge.solid.fill,
+    JSON.stringify(dotInBadge),
+  );
   // LiveDot: inside a <corten-live> whose stream is live it pulses (an opacity animation that
   // runs), and is still while the stream is not live, outside one, for a user who asks for less
   // motion; under forced colors it pulses as Progress's sweep moves. The element is made, read and

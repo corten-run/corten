@@ -296,11 +296,11 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
             <div class={Cluster { gap: Gap::Sm }}>
                 <h1>"Orders"</h1>
                 <span class={Badge { tone: BadgeTone::Success, emphasis: BadgeEmphasis::Soft }}>
-                    <StatusDot tone={StatusTone::Success} />
+                    <StatusDot tone={StatusTone::Text} />
                     "Taking orders"
                 </span>
                 <span class={Badge { tone: BadgeTone::Info, emphasis: BadgeEmphasis::Soft }}>
-                    <LiveDot tone={StatusTone::Info} />
+                    <LiveDot tone={StatusTone::Text} />
                     <span class={WhenLive}>"Live"</span>
                     <span class={WhenNot}>"Not live"</span>
                 </span>
