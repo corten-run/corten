@@ -1019,7 +1019,7 @@ mod tests {
 
     use crate::{http::StatusCode, App, Error, Json, JsonResult, Params, Routes};
 
-    #[derive(serde::Deserialize, crate::json::FromJson)]
+    #[derive(crate::json::FromJson)]
     struct NewAlert {
         below: u32,
         note: Option<String>,

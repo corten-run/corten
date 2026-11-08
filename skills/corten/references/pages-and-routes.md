@@ -374,14 +374,15 @@ by hand.
 
 A page built from another service's JSON reads the response into structs holding only the
 fields the page reads, not a `serde_json::Value`, with `corten::json::from_slice` on a type that
-derives `FromJson` next to `Deserialize`. The other fields are skipped without building them;
+derives `FromJson`, which writes its serde `Deserialize` too (do not derive both). The other
+fields are skipped without building them;
 for the example item page's 55 KB response that is a quarter of the work of a `Value`, and a
 fifth less than serde_json into the same structs. `#[serde(default)]` keeps a missing field
 from failing the page; a field that may be null is an `Option`, and one the service sends as
 either a string or a number can stay a `Value`:
 
 ```rust
-#[derive(Deserialize, FromJson, Default)]
+#[derive(FromJson, Default)]
 #[serde(default)]
 struct ApiListing { listing_id: String, price_amount: serde_json::Value }
 

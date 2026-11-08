@@ -93,6 +93,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         ),
     ))]);
     out.extend(schema);
+    // serde's `Deserialize`, the fallback, from the same attributes: the type needs no
+    // `#[derive(Deserialize)]` beside this one.
+    out.extend(crate::deserialize::for_from_json(&item)?);
     Ok(out)
 }
 

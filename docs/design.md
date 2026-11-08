@@ -892,24 +892,34 @@ rules something out.
     `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-06, axum 0.8.9's event stream
     encoder at `62eb57f7`.
 
-26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
-    `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
-    `#[serde(..)]` attributes to name a form's keys or a URL's words, so with serde's derive beside
-    it the attributes had two readers and a form type derived two things for one meaning. The impl
-    follows serde_derive's for the attributes these types use (names, aliases, defaults, `skip`,
-    `other`, `deny_unknown_fields`, `borrow`, `bound`, `expecting`, and the bounds serde infers)
-    and refuses at compile time one that reads the type another way (`flatten`, `with`, `from`,
-    `tag` and the like), whose field takes a type of its own. Not chosen: depending on serde_derive
-    from `corten-macros`, which builds on `proc_macro` alone, or keeping the second derive, which a
-    derive cannot add to the item it reads
-    ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
+26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
+    write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
+    type's `#[serde(..)]` attributes to name a form's keys, a URL's words or a JSON reply's
+    fields, so with serde's derive beside it the attributes had two readers and a type derived two
+    things for one meaning. The impl follows serde_derive's for the attributes these types use
+    (names, aliases, defaults, `skip`, `other`, `deny_unknown_fields`, `borrow`, `bound`,
+    `expecting`, `transparent`, and the bounds serde infers) and the shapes `FromJson` reads
+    (named, tuple, newtype and unit structs, enums of unit variants), and refuses at compile time
+    one that reads the type another way (`flatten`, `with`, `from`, `tag` and the like), whose
+    field takes a type of its own. For `FromJson` this also means its reader and the
+    `Deserialize` it falls back to come from one reading of the attributes. A type whose
+    `Deserialize` is written by hand, or by serde for an attribute `FromJson` refuses, is made a
+    `FromJson` with an empty impl, which serde_json reads through that `Deserialize`: the derive
+    never guesses at another impl, and serde's derive beside it is a second impl (E0119). Not
+    chosen: depending on serde_derive from `corten-macros`, which builds on `proc_macro` alone, or
+    keeping the second derive, which a derive cannot add to the item it reads
+    ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763),
+    [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
 
     Stands on: platform (serde_derive 1.0.229's impl and bound inference, which
     `crates/corten/tests/derived_deserialize.rs` holds this one to by reading each of its types
     twice, with this derive and with serde's, and comparing values, errors and the names passed to
     the deserializer); measured (reading a seven-field form costs 9,241 instructions before, on
     `62eb57f7`, and after, on `8cd5934e`: callgrind, release build, 1,200 reads less 200 over
-    1,000, three runs each, `form::de::tests::what_reading_a_form_costs`); reasoned (`corten-macros` keeps no
+    1,000, three runs each, `form::de::tests::what_reading_a_form_costs`; reading the item
+    benchmark's 500 API responses costs 265,550,044 instructions through `FromJson` and
+    438,766,522 through serde_json alone, before, on `c65c10ec`, and after: callgrind, release
+    build, `read_cost` in `examples/card-market`, two runs each); reasoned (`corten-macros` keeps no
     dependencies); value (one way to do each thing and a small surface, Values 5 and 6).
 
     Revisit when: a serde release changes what its derive writes for these attributes, which the
@@ -917,7 +927,7 @@ rules something out.
     their own is the second way.
 
     Last checked: 2026-11-06, serde_derive 1.0.229 at `8cd5934e`; 2026-11-06, the form read at
-    `8cd5934e`.
+    `8cd5934e`; 2026-11-08, serde_derive 1.0.229 and the JSON read for `FromJson`.
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or

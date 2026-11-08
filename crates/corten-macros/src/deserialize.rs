@@ -13,7 +13,7 @@ use crate::{
     component::split,
     derive::{named_fields, Item},
     schema::DefaultValue,
-    to_json::{field_rule, serde_args_for, type_params, Arg, Value, RULES},
+    to_json::{field_rule, serde_args_for, type_params, variant_rule, Arg, Value, RULES},
     tokens::{err, q, string_value, Error},
 };
 
@@ -119,13 +119,25 @@ struct Container {
     expecting: Option<String>,
     /// `bound`: the impl's where predicates in place of the inferred ones.
     bound: Option<TokenStream>,
+    /// `transparent` (`FromJson` only): read as its one field.
+    transparent: bool,
 }
 
 impl Container {
-    fn read(derive: &str, attrs: &[Group], is_enum: bool, unsupported: &dyn Fn(&Arg) -> Error) -> Result<Self, Error> {
+    /// `json`: `FromJson`'s attributes, `transparent` and `rename_all_fields` (which an enum of
+    /// unit variants has no fields for) among them.
+    fn read(
+        derive: &str,
+        attrs: &[Group],
+        is_enum: bool,
+        json: bool,
+        unsupported: &dyn Fn(&Arg) -> Error,
+    ) -> Result<Self, Error> {
         let mut c = Container::default();
         for arg in serde_args_for(attrs, derive)? {
             match arg.key.as_str() {
+                "transparent" if json && !is_enum => c.transparent = true,
+                "rename_all_fields" if json => {}
                 "rename_all" => c.rename_all = Some(rule_arg(derive, &arg)?),
                 "default" if !is_enum => c.default = Some(default_arg(derive, &arg)?),
                 "deny_unknown_fields" => c.deny_unknown_fields = true,
@@ -498,7 +510,8 @@ fn names_const(name: &str, entries: &[BTreeSet<String>]) -> String {
 }
 
 struct Field {
-    member: Ident,
+    /// How the code names it: `r#type` as written, or `0` in a tuple.
+    member: String,
     ty: TokenStream,
     /// Its own name, which errors give.
     primary: String,
@@ -517,7 +530,6 @@ struct Field {
 
 /// `Deserialize` for a struct with named fields, as `#[derive(Fields)]` reads it.
 pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
-    const DERIVE: &str = "Fields";
     let unsupported = |arg: &Arg| {
         (
             arg.span,
@@ -527,17 +539,42 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
             ),
         )
     };
-    let container = Container::read(DERIVE, &item.attrs, false, &unsupported)?;
+    let container = Container::read("Fields", &item.attrs, false, false, &unsupported)?;
     let Some(body) = &item.body else {
         return err(item.name.span(), "Fields can only be derived for a struct with named fields");
     };
+    let members = named_fields(body)?
+        .into_iter()
+        .map(|f| Member { member: f.ident.to_string(), name: f.name, attrs: f.attrs, ty: f.ty.into_iter().collect() })
+        .collect();
+    let fields = read_fields("Fields", item, &container, members, &unsupported)?;
+    Ok(named(item, &container, fields))
+}
+
+/// A field as written: how the code names it (`r#type`, or `0` in a tuple), its name, its
+/// attributes and its type.
+struct Member {
+    member: String,
+    name: String,
+    attrs: Vec<Group>,
+    ty: TokenStream,
+}
+
+/// Each field's `#[serde(..)]`, as serde_derive reads it for deserializing.
+fn read_fields(
+    derive: &str,
+    item: &Item,
+    container: &Container,
+    members: Vec<Member>,
+    unsupported: &dyn Fn(&Arg) -> Error,
+) -> Result<Vec<Field>, Error> {
     let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
     this.extend(item.type_generics.clone());
     let mut fields = Vec::new();
-    for field in named_fields(body)? {
+    for field in members {
         let mut f = Field {
-            member: field.ident.clone(),
-            ty: without_self(field.ty.iter().cloned().collect(), &this),
+            member: field.member,
+            ty: without_self(field.ty, &this),
             primary: String::new(),
             names: BTreeSet::new(),
             default: None,
@@ -549,11 +586,11 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
         let mut borrows = false;
         let mut rename = None;
         let mut aliases = Vec::new();
-        for arg in serde_args_for(&field.attrs, DERIVE)? {
+        for arg in serde_args_for(&field.attrs, derive)? {
             match arg.key.as_str() {
-                "rename" => rename = Some(string_arg(DERIVE, &arg)?),
-                "alias" => aliases.push(string_arg(DERIVE, &arg)?),
-                "default" => f.default = Some(default_arg(DERIVE, &arg)?),
+                "rename" => rename = Some(string_arg(derive, &arg)?),
+                "alias" => aliases.push(string_arg(derive, &arg)?),
+                "default" => f.default = Some(default_arg(derive, &arg)?),
                 "skip" | "skip_deserializing" => f.skip = true,
                 "borrow" => {
                     borrows = true;
@@ -567,29 +604,29 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
                                 if !named {
                                     return err(
                                         arg.span,
-                                        format!("{DERIVE}: borrow takes lifetimes, as in borrow = \"'a + 'b\""),
+                                        format!("{derive}: borrow takes lifetimes, as in borrow = \"'a + 'b\""),
                                     );
                                 }
                                 if !in_type.contains(lifetime) {
                                     return err(
                                         arg.span,
-                                        format!("{DERIVE}: field {} does not have lifetime {lifetime}", field.name),
+                                        format!("{derive}: field {} does not have lifetime {lifetime}", field.name),
                                     );
                                 }
                                 if !f.lent.insert(lifetime.to_string()) {
-                                    return err(arg.span, format!("{DERIVE}: duplicate borrowed lifetime {lifetime}"));
+                                    return err(arg.span, format!("{derive}: duplicate borrowed lifetime {lifetime}"));
                                 }
                             }
                         }
                         Value::Group(_) => {
-                            return err(arg.span, format!("{DERIVE}: use #[serde(borrow)] or #[serde(borrow = \"'a\")]"))
+                            return err(arg.span, format!("{derive}: use #[serde(borrow)] or #[serde(borrow = \"'a\")]"))
                         }
                     }
                     if f.lent.is_empty() {
-                        return err(arg.span, format!("{DERIVE}: field {} has no lifetimes to borrow", field.name));
+                        return err(arg.span, format!("{derive}: field {} has no lifetimes to borrow", field.name));
                     }
                 }
-                "bound" => f.bound = bound_arg(DERIVE, &arg)?,
+                "bound" => f.bound = bound_arg(derive, &arg)?,
                 // Writing only.
                 "skip_serializing" | "skip_serializing_if" | "serialize_with" | "getter" => {}
                 _ => return Err(unsupported(&arg)),
@@ -606,8 +643,15 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
         }
         fields.push(f);
     }
+    Ok(fields)
+}
+
+/// The `Deserialize` impl of a struct with named fields.
+fn named(item: &Item, container: &Container, fields: Vec<Field>) -> TokenStream {
+    let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
+    this.extend(item.type_generics.clone());
     let lent: BTreeSet<String> = fields.iter().filter(|f| !f.skip).flat_map(|f| f.lent.iter().cloned()).collect();
-    let g = generics(item, &lent, where_clause(item, &container, &fields, &this));
+    let g = generics(item, &lent, where_clause(item, container, &fields, &this));
     let read: Vec<&Field> = fields.iter().filter(|f| !f.skip).collect();
     let entries: Vec<BTreeSet<String>> = read.iter().map(|f| f.names.clone()).collect();
     // As written (`r#type` stays raw) for the code and serde's messages, as serde_derive writes
@@ -741,7 +785,7 @@ pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
         "_serde::Deserializer::deserialize_struct(__deserializer, {}, FIELDS, __Visitor {{ marker: ::core::marker::PhantomData, lifetime: ::core::marker::PhantomData }})",
         lit(&deserialize_name)
     ));
-    Ok(wrap(item, &g, code.tokens()))
+    wrap(item, &g, code.tokens())
 }
 
 /// A unit variant as `#[derive(UrlValue)]` reads it: its names, and whether it is `#[serde(other)]`.
@@ -757,10 +801,15 @@ pub fn for_unit_enum(item: &Item, variants: &[Variant]) -> Result<TokenStream, E
     let unsupported = |arg: &Arg| {
         (arg.span, format!("UrlValue: #[serde({})] changes the words serde reads in a way UrlValue does not follow", arg.key))
     };
-    let container = Container::read("UrlValue", &item.attrs, true, &unsupported)?;
+    let container = Container::read("UrlValue", &item.attrs, true, false, &unsupported)?;
+    Ok(unit_enum(item, &container, variants))
+}
+
+/// The `Deserialize` impl of an enum of unit variants, each read by its names.
+fn unit_enum(item: &Item, container: &Container, variants: &[Variant]) -> TokenStream {
     let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
     this.extend(item.type_generics.clone());
-    let g = generics(item, &BTreeSet::new(), where_clause(item, &container, &[], &this));
+    let g = generics(item, &BTreeSet::new(), where_clause(item, container, &[], &this));
     let path = item.name.to_string();
     let type_name = path.strip_prefix("r#").unwrap_or(&path).to_string();
     let expecting = container.expecting.clone().unwrap_or_else(|| format!("enum {path}"));
@@ -784,5 +833,257 @@ pub fn for_unit_enum(item: &Item, variants: &[Variant]) -> Result<TokenStream, E
         "_serde::Deserializer::deserialize_enum(__deserializer, {}, VARIANTS, __Visitor {{ marker: ::core::marker::PhantomData, lifetime: ::core::marker::PhantomData }})",
         lit(&deserialize_name)
     ));
+    wrap(item, &g, code.tokens())
+}
+
+/// `Deserialize` for a type `#[derive(FromJson)]` reads, as serde_derive writes it from the same
+/// `#[serde(..)]`: a struct with named fields, a tuple or unit struct, a `transparent` one, or an
+/// enum of unit variants. `FromJson` has refused each attribute it does not follow before this
+/// runs.
+pub fn for_from_json(item: &Item) -> Result<TokenStream, Error> {
+    const DERIVE: &str = "FromJson";
+    let unsupported = |arg: &Arg| {
+        (
+            arg.span,
+            format!(
+                "FromJson: #[serde({})] changes how serde reads in a way FromJson does not follow; derive Deserialize alone for this type (as a field it is then read by serde_json)",
+                arg.key
+            ),
+        )
+    };
+    let container = Container::read(DERIVE, &item.attrs, item.is_enum, true, &unsupported)?;
+    if item.is_enum {
+        let Some(body) = &item.body else { return err(item.name.span(), "FromJson: expected the enum's variants") };
+        let mut variants = Vec::new();
+        for tokens in split(body.stream(), ',') {
+            let mut j = 0;
+            let mut attrs = Vec::new();
+            while matches!(tokens.get(j), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
+                if let Some(TokenTree::Group(g)) = tokens.get(j + 1) {
+                    attrs.push(g.clone());
+                }
+                j += 2;
+            }
+            let Some(TokenTree::Ident(ident)) = tokens.get(j) else {
+                return err(body.span(), "FromJson: expected a variant");
+            };
+            let (mut rename, mut names, mut skip) = (None, BTreeSet::new(), false);
+            for arg in serde_args_for(&attrs, DERIVE)? {
+                match arg.key.as_str() {
+                    "rename" => rename = Some(string_arg(DERIVE, &arg)?),
+                    "alias" => {
+                        names.insert(string_arg(DERIVE, &arg)?);
+                    }
+                    "skip" | "skip_deserializing" => skip = true,
+                    "skip_serializing" | "serialize_with" | "bound" => {}
+                    _ => return Err(unsupported(&arg)),
+                }
+            }
+            // A skipped variant is not read, nor named to the deserializer, as serde_derive's.
+            if skip {
+                continue;
+            }
+            let text = ident.to_string();
+            let text = text.strip_prefix("r#").unwrap_or(&text);
+            names
+                .insert(rename.unwrap_or_else(|| {
+                    container.rename_all.as_deref().map_or(text.to_string(), |rule| variant_rule(text, rule))
+                }));
+            variants.push(Variant { ident: ident.clone(), names, other: false });
+        }
+        return Ok(unit_enum(item, &container, &variants));
+    }
+    let members = if let Some(tuple) = &item.tuple {
+        tuple_members(tuple)
+    } else if let Some(body) = &item.body {
+        named_fields(body)?
+            .into_iter()
+            .map(|f| Member { member: f.ident.to_string(), name: f.name, attrs: f.attrs, ty: f.ty.into_iter().collect() })
+            .collect()
+    } else {
+        if container.transparent {
+            return err(item.name.span(), "#[serde(transparent)] is not allowed on a unit struct");
+        }
+        if container.default.is_some() {
+            return err(item.name.span(), "#[serde(default)] can only be used on structs that have fields");
+        }
+        return Ok(unit(item, &container));
+    };
+    let fields = read_fields(DERIVE, item, &container, members, &unsupported)?;
+    if container.transparent {
+        transparent(item, &container, fields)
+    } else if item.tuple.is_some() {
+        Ok(tuple(item, &container, fields))
+    } else {
+        Ok(named(item, &container, fields))
+    }
+}
+
+/// A tuple struct's fields: each one's attributes and type, named by its position.
+fn tuple_members(group: &Group) -> Vec<Member> {
+    let mut members = Vec::new();
+    for tokens in split(group.stream(), ',') {
+        let mut j = 0;
+        let mut attrs = Vec::new();
+        while matches!(tokens.get(j), Some(TokenTree::Punct(p)) if p.as_char() == '#') {
+            if let Some(TokenTree::Group(g)) = tokens.get(j + 1) {
+                attrs.push(g.clone());
+            }
+            j += 2;
+        }
+        if matches!(tokens.get(j), Some(TokenTree::Ident(id)) if id.to_string() == "pub") {
+            j += 1;
+            if matches!(tokens.get(j), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis) {
+                j += 1;
+            }
+        }
+        if j >= tokens.len() {
+            continue;
+        }
+        let index = members.len().to_string();
+        members.push(Member { member: index.clone(), name: index, attrs, ty: tokens[j..].iter().cloned().collect() });
+    }
+    members
+}
+
+/// Whether `ty`'s last path segment is `PhantomData`, which a `transparent` struct does not read.
+fn is_phantom(ty: &TokenStream) -> bool {
+    let tokens: Vec<TokenTree> = ungroup(ty).into_iter().collect();
+    let head = tokens.iter().position(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == '<')).unwrap_or(tokens.len());
+    matches!(tokens[..head].iter().rev().find(|t| matches!(t, TokenTree::Ident(_))), Some(TokenTree::Ident(id)) if id.to_string() == "PhantomData")
+}
+
+/// The name serde gives the deserializer (`rename`, else the type's, without `r#`), and the
+/// path the code builds the value by (as written).
+fn names_of(item: &Item, container: &Container) -> (String, String) {
+    let path = item.name.to_string();
+    let type_name = path.strip_prefix("r#").unwrap_or(&path).to_string();
+    (container.rename.clone().unwrap_or(type_name), path)
+}
+
+const VISITOR: &str = "__Visitor { marker: ::core::marker::PhantomData, lifetime: ::core::marker::PhantomData }";
+
+/// `struct Unit;`: read from a unit, `null` in JSON.
+fn unit(item: &Item, container: &Container) -> TokenStream {
+    let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
+    this.extend(item.type_generics.clone());
+    let g = generics(item, &BTreeSet::new(), where_clause(item, container, &[], &this));
+    let (name, path) = names_of(item, container);
+    let expecting = container.expecting.clone().unwrap_or_else(|| format!("unit struct {path}"));
+    let mut code = Code::default();
+    visitor_head(&mut code, item, &g, &expecting);
+    code.push(&format!(
+        "#[inline] fn visit_unit<__E: _serde::de::Error>(self) -> ::core::result::Result<Self::Value, __E> {{ ::core::result::Result::Ok({path}) }} }}"
+    ));
+    code.push(&format!("_serde::Deserializer::deserialize_unit_struct(__deserializer, {}, {VISITOR})", lit(&name)));
+    wrap(item, &g, code.tokens())
+}
+
+/// A tuple struct: one field is a newtype (its value, or a list of one), more are a list of that
+/// many, as serde_derive reads them. `FromJson` has refused `skip` and `default` on its fields;
+/// a container `default` fills a short list.
+fn tuple(item: &Item, container: &Container, fields: Vec<Field>) -> TokenStream {
+    let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
+    this.extend(item.type_generics.clone());
+    let lent: BTreeSet<String> = fields.iter().flat_map(|f| f.lent.iter().cloned()).collect();
+    let g = generics(item, &lent, where_clause(item, container, &fields, &this));
+    let (name, path) = names_of(item, container);
+    let expecting = container.expecting.clone().unwrap_or_else(|| format!("tuple struct {path}"));
+    let read = fields.len();
+    let seq_expecting = match (&container.expecting, read) {
+        (Some(own), _) => own.clone(),
+        (None, 1) => format!("{expecting} with 1 element"),
+        (None, n) => format!("{expecting} with {n} elements"),
+    };
+    let mut code = Code::default();
+    visitor_head(&mut code, item, &g, &expecting);
+    let vars: Vec<String> = (0..fields.len()).map(|i| format!("__field{i}")).collect();
+    if let [only] = fields.as_slice() {
+        code.push("#[inline] fn visit_newtype_struct<__E: _serde::Deserializer<'de>>(self, __e: __E) -> ::core::result::Result<Self::Value, __E::Error> { let __field0:");
+        code.hole(only.ty.clone());
+        code.push("= <");
+        code.hole(only.ty.clone());
+        code.push(&format!(" as _serde::Deserialize>::deserialize(__e)?; ::core::result::Result::Ok({path}(__field0)) }}"));
+    }
+    let seq = if read == 0 { "_" } else { "mut __seq" };
+    code.push(&format!(
+        "#[inline] fn visit_seq<__A: _serde::de::SeqAccess<'de>>(self, {seq}: __A) -> ::core::result::Result<Self::Value, __A::Error> {{"
+    ));
+    match &container.default {
+        Some(DefaultValue::Trait) => code.push("let __default: Self::Value = ::core::default::Default::default();"),
+        Some(DefaultValue::Path(p)) => {
+            code.push("let __default: Self::Value =");
+            code.hole(p.clone());
+            code.push("();");
+        }
+        None => {}
+    }
+    for (index, (var, f)) in vars.iter().zip(&fields).enumerate() {
+        code.push(&format!("let {var} = match _serde::de::SeqAccess::next_element::<"));
+        code.hole(f.ty.clone());
+        code.push(">(&mut __seq)? { ::core::option::Option::Some(__value) => __value, ::core::option::Option::None =>");
+        if container.default.is_some() {
+            // The container's value for it.
+            code.push(&format!("__default.{}", f.member));
+        } else {
+            code.push(&format!(
+                "return ::core::result::Result::Err(_serde::de::Error::invalid_length({index}usize, &{}))",
+                lit(&seq_expecting)
+            ));
+        }
+        code.push("};");
+    }
+    code.push(&format!("::core::result::Result::Ok({path}({})) }} }}", vars.join(", ")));
+    if fields.len() == 1 {
+        code.push(&format!("_serde::Deserializer::deserialize_newtype_struct(__deserializer, {}, {VISITOR})", lit(&name)));
+    } else {
+        code.push(&format!(
+            "_serde::Deserializer::deserialize_tuple_struct(__deserializer, {}, {read}usize, {VISITOR})",
+            lit(&name)
+        ));
+    }
+    wrap(item, &g, code.tokens())
+}
+
+/// `#[serde(transparent)]`: read as its one field that is neither skipped, defaulted nor a
+/// `PhantomData`; each other field is its default, or a `PhantomData`, as serde_derive makes it.
+fn transparent(item: &Item, container: &Container, fields: Vec<Field>) -> Result<TokenStream, Error> {
+    let mut read = fields.iter().filter(|f| !f.skip && f.default.is_none() && !is_phantom(&f.ty));
+    let Some(one) = read.next() else {
+        return err(
+            item.name.span(),
+            "#[serde(transparent)] requires at least one field that is neither skipped nor has a default",
+        );
+    };
+    if read.next().is_some() {
+        return err(item.name.span(), "#[serde(transparent)] requires struct to have at most one transparent field");
+    }
+    let mut this: TokenStream = TokenTree::Ident(item.name.clone()).into();
+    this.extend(item.type_generics.clone());
+    let g = generics(item, &one.lent, where_clause(item, container, &fields, &this));
+    let (_, path) = names_of(item, container);
+    let mut code = Code::default();
+    code.push("::core::result::Result::map(<");
+    code.hole(one.ty.clone());
+    code.push(&format!(" as _serde::Deserialize>::deserialize(__deserializer), |__transparent| {path} {{"));
+    for f in &fields {
+        code.push(&format!("{}:", f.member));
+        if std::ptr::eq(f, one) {
+            code.push("__transparent");
+        } else {
+            // serde_derive gives a skipped field `Default` unless the container has a default,
+            // which a transparent struct does not read: then the field is a `PhantomData`.
+            match (&f.default, f.skip && container.default.is_none()) {
+                (Some(DefaultValue::Path(p)), _) => {
+                    code.hole(p.clone());
+                    code.push("()");
+                }
+                (Some(DefaultValue::Trait), _) | (None, true) => code.push("::core::default::Default::default()"),
+                (None, false) => code.push("::core::marker::PhantomData"),
+            }
+        }
+        code.push(",");
+    }
+    code.push("})");
     Ok(wrap(item, &g, code.tokens()))
 }

@@ -77,18 +77,20 @@
 //!
 //! # Reading
 //!
-//! [`from_slice`] and [`from_str`] read a [`FromJson`] type, which `#[derive(FromJson)]` implements next to
-//! serde's `Deserialize`: another service's response, read into structs of only the fields a page
-//! uses. Corten's reader matches each key against the fields, makes each value straight from the
-//! text and skips (validating) the rest; where it meets anything it does not follow (an escaped
+//! [`from_slice`] and [`from_str`] read a [`FromJson`] type: another service's response, read into
+//! structs of only the fields a page uses. `#[derive(FromJson)]` writes Corten's reader for the
+//! type and serde's `Deserialize` for it, both from the same `#[serde(..)]`, so the type needs no
+//! second derive. The reader matches each key against the fields, makes each value straight from
+//! the text and skips (validating) the rest; where it meets anything it does not follow (an escaped
 //! key, a missing or duplicate field, a number it does not parse itself) serde_json reads the text
-//! instead, so the value, and every error, is `serde_json::from_slice`'s. The item page's 55 KB API
+//! instead, through that `Deserialize`, so the value, and every error, is
+//! `serde_json::from_slice`'s. The item page's 55 KB API
 //! response takes a fifth fewer instructions than through serde_json (see the changelog).
 //!
 //! ```
 //! use corten::FromJson;
 //!
-//! #[derive(serde::Deserialize, FromJson, Debug, PartialEq)]
+//! #[derive(FromJson, Debug, PartialEq)]
 //! #[serde(rename_all = "camelCase")]
 //! struct Listing { listing_id: String, price: Option<f64> }
 //!
@@ -102,10 +104,11 @@
 //! `Vec`, `Box`, maps with `String` keys, `serde_json::Value` and derived types) or else any
 //! `Deserialize` type, which serde_json reads from that field's text. An attribute that changes how
 //! serde reads in a way the derive does not follow, or an enum with data, does not compile; derive
-//! `Deserialize` alone for that type and it is still read, by serde_json, as a field:
+//! `Deserialize` alone for that type and it is still read, by serde_json, as a field (an empty
+//! `impl FromJson` makes it one too, read by serde_json: see [`FromJson`]):
 //!
 //! ```compile_fail
-//! #[derive(serde::Deserialize, corten::FromJson)]
+//! #[derive(corten::FromJson)]
 //! struct Page {
 //!     #[serde(flatten)]
 //!     extra: std::collections::HashMap<String, String>,
@@ -113,14 +116,15 @@
 //! ```
 //!
 //! ```compile_fail
-//! #[derive(serde::Deserialize, corten::FromJson)]
+//! #[derive(corten::FromJson)]
 //! enum Event { Sold { price: f64 } }
 //! ```
 //!
-//! A type that only derives `FromJson` does not compile either: serde's `Deserialize` is the fallback.
+//! Since the derive writes the type's `Deserialize`, serde's derive beside it is a second one and
+//! does not compile (E0119); take it out of the list:
 //!
-//! ```compile_fail
-//! #[derive(corten::FromJson)]
+//! ```compile_fail,E0119
+//! #[derive(serde::Deserialize, corten::FromJson)]
 //! struct Price { amount: f64 }
 //! ```
 
@@ -1230,7 +1234,7 @@ mod tests {
         assert_eq!(<Arc<Id>>::__json_size().map(|s| s as *const _), Id::__json_size().map(|s| s as *const _));
     }
 
-    #[derive(Debug, PartialEq, serde::Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, FromJson)]
     struct Alert {
         email: String,
         target: Option<u32>,

@@ -271,7 +271,7 @@ mod api {
     use super::*;
     use serde_json::Value;
 
-    #[derive(Deserialize, FromJson, Default)]
+    #[derive(FromJson, Default)]
     #[serde(default)]
     pub struct ApiItem {
         catalog_item_id: Value,
@@ -290,20 +290,20 @@ mod api {
         included_in: Option<Vec<ApiLine>>,
     }
 
-    #[derive(Deserialize, FromJson, Default)]
+    #[derive(FromJson, Default)]
     #[serde(default)]
     struct ApiBadge {
         label: Value,
     }
 
-    #[derive(Deserialize, FromJson, Default)]
+    #[derive(FromJson, Default)]
     #[serde(default)]
     struct ApiCategory {
         name: Value,
         slug: Value,
     }
 
-    #[derive(Deserialize, FromJson, Default)]
+    #[derive(FromJson, Default)]
     #[serde(default, rename_all = "camelCase")]
     struct ApiField {
         field_id: Value,
@@ -311,7 +311,7 @@ mod api {
         value: Value,
     }
 
-    #[derive(Deserialize, FromJson, Default)]
+    #[derive(FromJson, Default)]
     #[serde(default)]
     struct ApiSummary {
         lowest_price_amount: Value,
@@ -320,7 +320,7 @@ mod api {
         total_visible_quantity: Value,
     }
 
-    #[derive(Deserialize, FromJson, Default)]
+    #[derive(FromJson, Default)]
     #[serde(default)]
     struct ApiListing {
         listing_id: Value,
@@ -334,7 +334,7 @@ mod api {
         price_currency_code: Value,
     }
 
-    #[derive(Deserialize, FromJson, Default)]
+    #[derive(FromJson, Default)]
     #[serde(default)]
     struct ApiOffer {
         offer_id: Value,
@@ -345,7 +345,7 @@ mod api {
         price_currency_code: Value,
     }
 
-    #[derive(Deserialize, FromJson, Default)]
+    #[derive(FromJson, Default)]
     #[serde(default)]
     struct ApiLine {
         line_id: Value,
@@ -356,7 +356,7 @@ mod api {
         quantity: Value,
     }
 
-    #[derive(Deserialize, FromJson, Default)]
+    #[derive(FromJson, Default)]
     #[serde(default)]
     struct ApiLineItem {
         title: Value,

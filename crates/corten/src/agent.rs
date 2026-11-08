@@ -17,11 +17,11 @@
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
 //!
-//! The same input deriving `FromJson` too does:
+//! The same input deriving `FromJson` instead does:
 //!
 //! ```
 //! use corten::agent::Tools;
-//! #[derive(serde::Deserialize, corten::FromJson)]
+//! #[derive(corten::FromJson)]
 //! struct Adjust { id: String }
 //! #[derive(serde::Serialize, corten::ToJson)]
 //! struct Done { ok: bool }
@@ -785,7 +785,7 @@ mod tests {
     use tower::ServiceExt;
 
     /// Change an item's quantity.
-    #[derive(serde::Deserialize, crate::json::FromJson)]
+    #[derive(crate::json::FromJson)]
     struct Adjust {
         id: String,
         /// Added to the quantity; negative to remove.
@@ -800,7 +800,7 @@ mod tests {
         quantity: i64,
     }
 
-    #[derive(serde::Deserialize, crate::json::FromJson)]
+    #[derive(crate::json::FromJson)]
     struct Nothing {}
 
     #[test]
@@ -1248,14 +1248,14 @@ mod tests {
     }
 
     /// A write an agent may retry.
-    #[derive(serde::Deserialize, crate::json::FromJson)]
+    #[derive(crate::json::FromJson)]
     struct Order {
         sku: String,
         submit: crate::SubmitKey,
     }
 
     /// A write whose key may be left out (a form that data clients post without one).
-    #[derive(serde::Deserialize, crate::json::FromJson)]
+    #[derive(crate::json::FromJson)]
     struct MaybeKeyed {
         sku: String,
         submit: Option<crate::SubmitKey>,

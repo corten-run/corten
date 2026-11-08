@@ -19,12 +19,37 @@ use serde::de::DeserializeOwned;
 use serde_json::{Number, Value};
 
 /// A type read from JSON by the reader, with serde_json as the fallback: what
-/// `#[derive(FromJson)]` implements, next to serde's `Deserialize`. Read one with [`from_str`] or
-/// [`from_slice`].
+/// `#[derive(FromJson)]` implements, with the type's serde `Deserialize`. Read one with
+/// [`from_str`] or [`from_slice`].
+///
+/// A type whose `Deserialize` is written by hand, or derived by serde for an attribute
+/// `#[derive(FromJson)]` does not follow, says so with an empty impl, and serde_json reads it
+/// through that `Deserialize`: the whole text, or the value's own text inside a derived type.
+///
+/// ```
+/// #[derive(serde::Deserialize, Debug, PartialEq)]
+/// struct Page {
+///     id: u32,
+///     #[serde(flatten)]
+///     extra: std::collections::BTreeMap<String, u32>,
+/// }
+/// impl corten::FromJson for Page {}
+///
+/// let page: Page = corten::json::from_str(r#"{"id":1,"views":9}"#).unwrap();
+/// assert_eq!(page.extra["views"], 9);
+/// ```
 pub trait FromJson: DeserializeOwned {
     /// Reads the value at the reader's position. Not a public API.
     #[doc(hidden)]
-    fn __read(r: &mut Reader<'_>) -> Result<Self, Fallback>;
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> Result<Self, Fallback> {
+        // Alone (or in an `Option` or `Box`), the whole text is this value: give up, and
+        // serde_json reads it once. Inside an array or object, serde_json reads its own text.
+        if r.depth == 0 {
+            return Err(Fallback);
+        }
+        serde_json::from_str(r.span()?).map_err(|_| Fallback)
+    }
 }
 
 /// `s` as a `T`: the same value, or the same error, as `serde_json::from_str`.
@@ -841,7 +866,7 @@ mod tests {
         took
     }
 
-    #[derive(Debug, PartialEq, Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, FromJson)]
     struct Line {
         id: String,
         #[serde(rename = "qty", alias = "quantity")]
@@ -862,7 +887,7 @@ mod tests {
         7
     }
 
-    #[derive(Debug, PartialEq, Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, FromJson)]
     #[serde(rename_all = "kebab-case")]
     enum Kind {
         Card,
@@ -872,7 +897,7 @@ mod tests {
         Other,
     }
 
-    #[derive(Debug, PartialEq, Default, Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, Default, FromJson)]
     #[serde(default, rename_all = "camelCase")]
     struct Page {
         item_count: i32,
@@ -891,7 +916,7 @@ mod tests {
 
     /// A container default from a path, read over: a field's own default wins where the object
     /// leaves it out, and a skipped field keeps the container's value unless it has its own.
-    #[derive(Debug, PartialEq, Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, FromJson)]
     #[serde(default = "shelf")]
     struct Shelf {
         name: String,
@@ -909,13 +934,13 @@ mod tests {
         Shelf { name: "shelf".into(), size: 3, kept: 9, own: 4, tags: vec!["t".into()] }
     }
 
-    #[derive(Debug, PartialEq, Default, Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, Default, FromJson)]
     struct Pair(i8, String);
 
-    #[derive(Debug, PartialEq, Default, Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, Default, FromJson)]
     struct Id(u64);
 
-    #[derive(Debug, PartialEq, Default, Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, Default, FromJson)]
     struct Unit;
 
     /// A type that only implements Deserialize: read by serde_json from its own text.
@@ -925,7 +950,37 @@ mod tests {
         m: u8,
     }
 
-    #[derive(Debug, PartialEq, Deserialize, FromJson)]
+    /// A `Deserialize` serde writes for an attribute the derive does not follow, made `FromJson`
+    /// by an empty impl: read by serde_json, alone or as a field.
+    #[derive(Debug, PartialEq, Deserialize)]
+    struct Flat {
+        id: u8,
+        #[serde(flatten)]
+        rest: BTreeMap<String, u8>,
+    }
+
+    impl FromJson for Flat {}
+
+    #[derive(Debug, PartialEq, FromJson)]
+    struct Holds {
+        flat: Flat,
+        list: Vec<Flat>,
+    }
+
+    #[test]
+    fn an_empty_impl_is_read_by_serde_json() {
+        // Alone the reader gives up at once, so serde_json reads the text a single time.
+        assert!(!same::<Flat>(r#"{"id":1,"a":2}"#));
+        assert!(!same::<Flat>(r#"{"id":"x"}"#));
+        assert!(!same::<Option<Flat>>(r#"{"id":1}"#));
+        // Inside an array or a derived type the reader goes on, and serde_json reads its text.
+        assert!(same::<Vec<Flat>>(r#"[{"id":1,"a":2},{"id":3}]"#));
+        assert!(same::<Holds>(r#"{"flat":{"id":1,"b":2},"list":[{"id":4}]}"#));
+        assert!(!same::<Holds>(r#"{"flat":{"id":300},"list":[]}"#));
+        assert!(!same::<Vec<Flat>>(r#"[{"a":2}]"#));
+    }
+
+    #[derive(Debug, PartialEq, FromJson)]
     #[serde(deny_unknown_fields)]
     struct Strict {
         a: u8,
@@ -933,7 +988,7 @@ mod tests {
         b: u8,
     }
 
-    #[derive(Debug, PartialEq, Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, FromJson)]
     #[serde(transparent)]
     struct Wrapper {
         inner: Vec<i64>,
@@ -941,7 +996,7 @@ mod tests {
         seen: bool,
     }
 
-    #[derive(Debug, PartialEq, Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, FromJson)]
     struct Generic<T> {
         value: T,
         list: Vec<T>,

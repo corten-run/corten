@@ -4075,6 +4075,21 @@ Corten is pre-1.0, so any minor version may change the API.
     again (a `chunk()` inside a `timeout` or `select!`) no longer starts the idle time again, so a
     client that went quiet is given up on after the idle time however the handler reads
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
+172. `#[derive(FromJson)]` writes the type's serde `Deserialize` too, from the same `#[serde(..)]`
+    its reader reads, so a type read from JSON derives one thing. The impl is serde_derive's for
+    the shapes and attributes `FromJson` reads (named, tuple, newtype and unit structs,
+    `transparent`, enums of unit variants; names, aliases, defaults, `skip`,
+    `deny_unknown_fields`, `expecting`, `bound`): `tests/derived_deserialize.rs` reads each shape
+    with it and with serde's derive and compares values, errors and the names passed to the
+    deserializer, and through Corten's reader too. A type whose `Deserialize` is written by hand,
+    or derived by serde for an attribute `FromJson` refuses (`flatten`), becomes a `FromJson`
+    with an empty `impl corten::FromJson for T {}`, read by serde_json: alone in one pass, inside
+    a derived type from its own text. **Migration:** take `Deserialize` out of a derive list that
+    has `FromJson`, which is now a second impl (E0119). Reading the benchmark's 500 item API
+    responses costs the same: 265,550,044 instructions through `FromJson` and 438,766,522
+    through serde_json alone, before and after (callgrind, release build, `read_cost` in
+    `examples/card-market`, two runs each)
+    ([#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
 
 ### Fixed
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
