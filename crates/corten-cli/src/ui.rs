@@ -3377,23 +3377,63 @@ mod tests {
         }
     }
 
-    /// A progress bar is drawn in the meter's colors in every engine: its track in the border color
-    /// and its fill in the primary color, which the meter's test holds to 3:1 in both themes; with no
-    /// value, the band is the element's own background, the engines' parts cleared, and it moves only
-    /// when the reader has not asked for less motion.
+    /// A progress bar is drawn in every engine with its track in the border color and its fill in its
+    /// tone's color (primary, info, success, warning or destructive), each 3:1 against the track in
+    /// both themes, as a meter's fill is; with no value, the band is the element's own background,
+    /// the engines' parts cleared, and it moves only when the reader has not asked for less motion.
     #[test]
     fn a_progress_bar_is_drawn_in_the_meters_colors() {
         let css = include_str!("../kit/progress.css");
         let rule =
             |start: &str| css.lines().find(|l| l.starts_with(start)).unwrap_or_else(|| panic!("progress.css has no {start}"));
         let block = &css[css.find(".progress {").unwrap()..];
-        assert!(block[..block.find('}').unwrap()].contains("background: var(--border);"), "the track");
+        let block = &block[..block.find('}').unwrap()];
+        assert!(block.contains("background: var(--border);"), "the track");
+        assert!(block.contains("--kit-tone: var(--primary);"), "a bar's tone is primary unless it names another");
+        // Each tone's rule comes after the bar's, so it wins at the same specificity, and its color
+        // stands out from the track by 3:1 in both themes, as a meter's fill does.
+        let tones = ["info", "success", "warning", "destructive"];
+        for tone in tones {
+            let at = css.find(&format!(".{tone} {{ --kit-tone: var(--{tone}); }}")).unwrap_or_else(|| panic!("no {tone} tone"));
+            assert!(at > css.find(".progress {").unwrap(), "the {tone} tone comes after .progress");
+        }
+        assert_eq!(css.matches("--kit-tone: var(--").count(), tones.len() + 1, "a rule for each tone and the default");
+        let tokens = |path: &str| INIT.iter().find(|(p, _)| *p == path).unwrap().1;
+        for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
+            let text = tokens(file);
+            let luminance = |name: &str| {
+                let line = text.lines().find(|l| l.starts_with(&format!("  \"{name}\": "))).unwrap();
+                let at = line.find("\"hex\": \"#").unwrap() + "\"hex\": \"#".len();
+                let rgb = u32::from_str_radix(&line[at..at + 6], 16).unwrap();
+                let channel = |c: u32| {
+                    let c = f64::from(c & 255) / 255.0;
+                    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+                };
+                0.2126 * channel(rgb >> 16) + 0.7152 * channel(rgb >> 8) + 0.0722 * channel(rgb)
+            };
+            for fill in std::iter::once("primary").chain(tones) {
+                let (x, y) = (luminance(fill), luminance("border"));
+                let r = (x.max(y) + 0.05) / (x.min(y) + 0.05);
+                assert!(r >= 3.0, "{file}: a {fill} progress bar on its track is {r:.2}:1, under 3:1");
+            }
+        }
         assert!(rule(".progress::-webkit-progress-bar {").ends_with("background: var(--border); }"));
-        assert!(rule(".progress::-webkit-progress-value {").ends_with("background: var(--primary); }"));
-        assert!(rule(".progress::-moz-progress-bar {").ends_with("background: var(--primary); }"));
+        assert!(rule(".progress::-webkit-progress-value {").ends_with("background: var(--kit-tone); }"));
+        assert!(rule(".progress::-moz-progress-bar {").ends_with("background: var(--kit-tone); }"));
+        assert_eq!(css.matches("var(--primary)").count(), 1, "every fill and band is the tone's, primary only its default");
         assert!(rule(".progress:indeterminate::-webkit-progress-bar {").ends_with("background: transparent; }"));
         assert!(rule(".progress:indeterminate::-moz-progress-bar {").ends_with("background: transparent; }"));
-        assert!(rule(".progress:indeterminate {").contains("repeating-linear-gradient"), "stripes with no motion");
+        assert!(
+            rule(".progress:indeterminate {")
+                .contains("repeating-linear-gradient(-45deg, var(--kit-tone) 0 .25rem, var(--border) .25rem .5rem)"),
+            "stripes with no motion, in the tone on the track"
+        );
+        assert!(
+            css.contains(
+                "background: linear-gradient(var(--kit-tone), var(--kit-tone)) no-repeat 0 0 / 30% 100%, var(--border);"
+            ),
+            "the moving band, in the tone on the track"
+        );
         let motion = &css[css.find("@media (prefers-reduced-motion: no-preference) {").expect("the band moves only here")..];
         assert!(motion[..motion.find("}\n}").unwrap()].contains("animation: progress-sweep"));
         assert_eq!(css.matches("animation:").count(), 1, "no animation outside the media query");

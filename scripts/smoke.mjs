@@ -11,6 +11,12 @@ import { browserBug } from "./browser-bugs.mjs";
 
 const base = process.argv[2] ?? "http://localhost:18480";
 const engines = { chromium, firefox, webkit };
+/**
+ * The runtime swaps this request's answer into the page (`corten: nav` or `action`); the page it
+ * fetches whole after a write asks with `corten: page` and is drawn as a full load's.
+ * @param {import("@playwright/test").Request} r
+ */
+const swapped = (r) => ["nav", "action"].includes(r.headers()["corten"] ?? "");
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
 // The markup this test writes into pages goes through a policy of its own, which the watchlist
 // allows only when run with SMOKE_TRUSTED_TYPES=1 (CONTRIBUTING): without it, say so here rather
@@ -1611,7 +1617,7 @@ async function run(browser) {
       const probed = [];
       page.on("request", (r) => r.url().endsWith("?swap-preload") && probed.push(r.url()));
       await page.route(news, async (route) => {
-        const nav = route.request().headers()["corten"];
+        const nav = swapped(route.request());
         if (route.request().method() !== "GET" || nav) return route.fallback();
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
@@ -1755,7 +1761,7 @@ async function run(browser) {
       // is, with what the user typed, and one whose layout changed draws it (#690).
       {
         /** @param {import("@playwright/test").Request} r */
-        const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !r.headers()["corten"];
+        const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !swapped(r);
         let reads = 0;
         /** The notice each read again sent back. @type {(string | undefined)[]} */
         const sentBack = [];
@@ -1814,10 +1820,10 @@ async function run(browser) {
       {
         /** @type {string[]} */
         const asked = [];
-        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/" && asked.push(r.headers()["corten"] ?? "whole");
+        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/" && asked.push(swapped(r) ? r.headers()["corten"] : "whole");
         slow = true;
         await page.evaluate(() => scrollTo(0, 0));
-        const held = page.waitForRequest((r) => news(new URL(r.url())) && !r.headers()["corten"], { timeout: 5000 });
+        const held = page.waitForRequest((r) => news(new URL(r.url())) && !swapped(r), { timeout: 5000 });
         await thank();
         await held;
         page.on("request", onStocks);
@@ -2596,6 +2602,43 @@ async function run(browser) {
     skip("a link the server redirects shows only the redirect's address, in one history entry", why);
     skip("a link the server sends to a place shows only the place's address, in one history entry", why);
   }
+  // After a write, the page it sends the browser to is fetched whole; when that page's handler
+  // sends it on to a place, the server names the place (`corten-location`, for the runtime's
+  // `corten: page`), so it keeps its `#id` rather than `fetch` following a 303 without it
+  // (#1034). The stand-in answers as the server does: `corten-location` to the runtime's
+  // fetches, a 303 to any other.
+  const wholePlaceName = "a page fetched whole after a write that sends the browser to a place lands on the place";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(wholePlaceName, "without the Navigation API a write's page is a full load");
+  else {
+    const whole = await (await browser.newContext()).newPage();
+    /** @type {string[]} */
+    const asked = [];
+    await whole.route(
+      (url) => url.pathname === "/whole-write",
+      (route) => route.fulfill({ status: 204, headers: { "corten-location": "/whole-next" } }),
+    );
+    await whole.route(
+      (url) => url.pathname === "/whole-next",
+      (route) => {
+        const mode = route.request().headers().corten;
+        asked.push(mode ?? "-");
+        return mode
+          ? route.fulfill({ status: 204, headers: { "corten-location": "/news#briefing" } })
+          : route.fulfill({ status: 303, headers: { location: "/news#briefing" } });
+      },
+    );
+    await whole.goto(`${base}/alerts`);
+    await whole.evaluate(() =>
+      document
+        .querySelector("main")
+        ?.insertAdjacentHTML("afterbegin", __html('<form id="whole-write" method="post" action="/whole-write" data-patch><button id="whole-go">Save</button></form>')),
+    );
+    await whole.click("#whole-go");
+    await whole.waitForFunction(() => document.title === "News | Watchlist" && !document.querySelector("[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const landed = await whole.evaluate(() => ({ path: location.pathname, hash: location.hash }));
+    check(wholePlaceName, landed.path === "/news" && landed.hash === "#briefing" && asked.join() === "page", JSON.stringify({ landed, asked }));
+    await whole.context().close();
+  }
   // The watchlist's live prices take the money format: reached from the news page, it loads the
   // module before its markup joins, and the script writes prices with it.
   const firstPrices = await prices();
@@ -2648,7 +2691,7 @@ async function run(browser) {
         (/** @type {any} */ (window)).__marker = 5;
         (/** @type {any} */ (document.querySelector("header"))).__same = 1;
       });
-      const page_ = page.waitForResponse((r) => new URL(r.url()).pathname === "/news" && r.request().method() === "GET" && !r.request().headers()["corten"], { timeout: 5000 });
+      const page_ = page.waitForResponse((r) => new URL(r.url()).pathname === "/news" && r.request().method() === "GET" && !swapped(r.request()), { timeout: 5000 });
       await page.evaluate(() => {
         /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
         /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
@@ -3285,7 +3328,7 @@ async function run(browser) {
       await redrawPage.route(
         (url) => url.pathname === "/news",
         async (route) => {
-          if (route.request().method() !== "GET" || route.request().headers()["corten"]) return route.fallback();
+          if (route.request().method() !== "GET" || swapped(route.request())) return route.fallback();
           // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
           const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
           const headers = res.headers();

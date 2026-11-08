@@ -2496,6 +2496,20 @@ Corten is pre-1.0, so any minor version may change the API.
     `pagination.css`, so a copied `pagination.rs` takes it from `corten ui diff`. The
     ui-gallery's payouts card pages by it
     ([#1073 Kit Pagination needs every page's link, so a list paged by previous and next links (a cursor, or the API's own) cannot use it](https://github.com/corten-run/corten/issues/1073)).
+273. The kit's `Progress` takes a tone beside its size,
+    `Progress { size, tone: ProgressTone::Success }` (`Primary`, `Info`, `Success`, `Warning`,
+    `Destructive`), each 3:1 against the track in both themes (the kit's test), so a task that
+    finished or failed is drawn in the theme's success or destructive color without an app's page
+    rule, which tied with the kit's `::-webkit-progress-value` rule and won only by stylesheet
+    order. `Primary` is the bar it was; `Info` is one under way on a screen whose primary color
+    marks its actions. The tone is the fill and the band of a bar with no value; under forced
+    colors every tone is the system's highlight, as the meter's states are, so the label or the
+    words beside the bar say how the task ended. Measured on the kit file as the Dialog's entry
+    was: `progress.css` 1,617 to 1,794 bytes (gzip 516 to 567, brotli 412 to 465). Breaking: a
+    `Progress { size }` does not compile until it names its tone, which the compiler names;
+    `corten ui add progress --merge` updates a copy. The ui-gallery's label run shows a finished
+    one
+    ([#1059 Kit Progress has no tone, so a finished or failed task's bar cannot be drawn in the theme's success or destructive color](https://github.com/corten-run/corten/issues/1059)).
 276. The kit's `stack` has `StackStart`, a look written beside a `Stack`
     (`class={(Stack { gap: Gap::Xs }, StackStart {})}`): the column's children keep their own
     width at its start (its end on a right-to-left page), each at most the stack's, a word wider than
@@ -2503,9 +2517,8 @@ Corten is pre-1.0, so any minor version may change the API.
     their words, badges, or a button under a line of text. Its rule names both classes, so it wins
     over `.stack`'s wherever an app links its stylesheets and does nothing beside a `Cluster` or
     alone; an app's own `align-items` on the stack tied with the kit's and won only by stylesheet
-    order.
-    Not breaking: every `Stack { gap }` is as it was, and a copied `stack.rs` and `stack.css` take
-    it from `corten ui diff`. Measured as the Dialog's entry was: `stack.css` 237 to 395 bytes
+    order. Not breaking: every `Stack { gap }` is as it was, and a copied `stack.rs` and
+    `stack.css` take it from `corten ui diff`. Measured as the Dialog's entry was: `stack.css` 237 to 395 bytes
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
@@ -5640,6 +5653,18 @@ Corten is pre-1.0, so any minor version may change the API.
     of its own in place of such a route's still gets a plain 500, logged and named on stderr
     outside `corten dev`). A release build still draws nothing in the place and logs it once
     ([#1035 A debug build's layout-read errors (later::<X>() on an answer that is not a page, a gives(..) the page does not give) answer a bare 500 that names nothing outside corten dev](https://github.com/corten-run/corten/issues/1035)).
+193. A page the runtime fetched whole after a write, whose handler sent the browser on to a place
+    (`req.redirect(&route.at(id))`), landed at the path without its `#id`: the fetch said
+    nothing, so the server answered a 303, and `fetch` follows one without its fragment. The
+    runtime now asks for that page with `corten: page`, which the server answers as the whole
+    document, as before, and to which a redirect to a place or to another site is named in
+    `corten-location`, as to a navigation; one to another site no longer costs a refused fetch
+    and a reload. Every redirect now varies on `corten`, and the answer to the runtime's fetch is
+    kept by the browser alone, so a cache that keys on the URL cannot hand a full load's 303 to the
+    runtime, or the runtime's `corten-location` to a full load. An extractor's refusal of that
+    fetch draws the error page rather than its plain text, and an error page keeps the `Vary` of
+    the failure it replaces beside its own
+    ([#1034 A page fetched whole after a write that redirects to a place loses its #id: the fetch sends no corten header, so the redirect is a 303 that fetch follows without the fragment](https://github.com/corten-run/corten/issues/1034)).
 
 ### Documentation
 

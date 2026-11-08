@@ -403,15 +403,45 @@ pub(crate) mod tests {
         struct Progress {
             done: u32,
         }
-        use super::progress::{Progress as KitProgress, ProgressSize};
+        use super::progress::{Progress as KitProgress, ProgressSize, ProgressTone};
         use corten::view::Render;
-        let html =
-            corten::html! { <progress class={KitProgress { size: ProgressSize::Sm }} max="4" value="1"></progress> }.to_html();
+        let html = corten::html! {
+            <progress class={KitProgress { size: ProgressSize::Sm, tone: ProgressTone::Primary }} max="4" value="1"></progress>
+        }
+        .to_html();
         assert_eq!(html, r#"<progress class="progress__progress progress__sm" max="4" value="1"></progress>"#);
         // Or by its module's path, with no import of the name.
-        let by_path =
-            corten::html! { <progress class={super::progress::Progress { size: ProgressSize::Sm }}></progress> }.to_html();
+        let by_path = corten::html! {
+            <progress class={super::progress::Progress { size: ProgressSize::Sm, tone: ProgressTone::Primary }}></progress>
+        }
+        .to_html();
         assert_eq!(by_path, r#"<progress class="progress__progress progress__sm"></progress>"#);
+    }
+
+    /// A progress bar's tone is a class beside its size, and the primary one, a task under way, is
+    /// none: the bar's own rule fills it.
+    #[test]
+    fn a_progress_tone_is_a_class() {
+        use super::progress::{Progress, ProgressSize, ProgressTone};
+        use corten::view::Render;
+        let bar = |size, tone| corten::html! { <progress class={Progress { size, tone }}></progress> }.to_html();
+        assert_eq!(bar(ProgressSize::Md, ProgressTone::Primary), r#"<progress class="progress__progress"></progress>"#);
+        assert_eq!(
+            bar(ProgressSize::Md, ProgressTone::Info),
+            r#"<progress class="progress__progress progress__info"></progress>"#
+        );
+        assert_eq!(
+            bar(ProgressSize::Md, ProgressTone::Success),
+            r#"<progress class="progress__progress progress__success"></progress>"#
+        );
+        assert_eq!(
+            bar(ProgressSize::Sm, ProgressTone::Warning),
+            r#"<progress class="progress__progress progress__sm progress__warning"></progress>"#
+        );
+        assert_eq!(
+            bar(ProgressSize::Md, ProgressTone::Destructive),
+            r#"<progress class="progress__progress progress__destructive"></progress>"#
+        );
     }
 
     /// The column a table sorted in place sorts by: a Rust type the script's parameter is declared

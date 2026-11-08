@@ -22,7 +22,7 @@ use crate::ui::{
     meter::Meter,
     pagination::{Pagination, PreviousNext},
     popover::Popover,
-    progress::{Progress, ProgressSize},
+    progress::{Progress, ProgressSize, ProgressTone},
     segmented::{Legend, SegmentedLinks, SegmentedRadio, SegmentedRadios},
     select::Select,
     separator::{Orientation, Separator},
@@ -187,11 +187,14 @@ struct PayoutTitle;
 #[derive(Id)]
 struct LimitId;
 
-/// The label run's bars: the run's labels, and the current label's pages, not known yet.
+/// The label run's bars: the run's labels, the current label's pages, not known yet, and the
+/// morning's run, finished.
 #[derive(Id)]
 struct LabelsId;
 #[derive(Id)]
 struct LabelPagesId;
+#[derive(Id)]
+struct MorningLabelsId;
 
 /// The most a seller may sell in a month, in cents, until they have 50 sales.
 const LIMIT_CENTS: u64 = 15_000;
@@ -535,15 +538,37 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                     <section class={Card {}}>
                         <header class={CardHeader {}}><h2>"Printing labels"</h2></header>
                         <div class={CardContent {}}>
-                            // Progress: how far the run is, and, nested under it, a step whose size is not known yet.
+                            // Progress: how far the run is, and, nested under it, a step whose size is not known yet;
+                            // then a run that finished, in the success tone, its words saying so.
                             <div class={Stack { gap: Gap::Md }}>
                                 <Field id={LabelsId} label="Labels printed" hint="" error="">
-                                    <progress class={Progress { size: ProgressSize::Md }} id={LabelsId} max="12" value="5">
+                                    <progress
+                                        class={Progress { size: ProgressSize::Md, tone: ProgressTone::Primary }}
+                                        id={LabelsId}
+                                        max="12"
+                                        value="5"
+                                    >
                                         "5 of 12"
                                     </progress>
                                 </Field>
                                 <Field id={LabelPagesId} label="Sending the next label" hint="" error="">
-                                    <progress class={Progress { size: ProgressSize::Sm }} id={LabelPagesId}>"Starting"</progress>
+                                    <progress
+                                        class={Progress { size: ProgressSize::Sm, tone: ProgressTone::Primary }}
+                                        id={LabelPagesId}
+                                    >
+                                        "Starting"
+                                    </progress>
+                                </Field>
+                                <Field id={MorningLabelsId} label="Morning labels" hint="All 8 printed" error="">
+                                    <progress
+                                        class={Progress { size: ProgressSize::Md, tone: ProgressTone::Success }}
+                                        id={MorningLabelsId}
+                                        max="8"
+                                        value="8"
+                                        aria-describedby={HintId(&MorningLabelsId)}
+                                    >
+                                        "8 of 8"
+                                    </progress>
                                 </Field>
                             </div>
                         </div>
