@@ -2767,16 +2767,14 @@ mod tests {
             "{old}"
         );
         assert!(undeclared(&dir, &app_now, &[piece("button")]).sizes.iter().any(|l| l.starts_with("\"control-height-sm\": ")));
-        // The two choice lists read the same two sizes, each named once.
-        let choices = undeclared(&dir, &app_now, &[piece("checkboxes"), piece("radio_group")]).sizes;
-        assert_eq!(
-            choices,
-            [
-                r#""choice-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#,
-                r#""choice-legend-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#
-            ],
-            "{choices:?}"
-        );
+        // The two choice lists each read the same two sizes, named once for both.
+        let both = [
+            r#""choice-list-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#,
+            r#""choice-list-legend-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#,
+        ];
+        for pieces in [&[piece("checkboxes")][..], &[piece("radio_group")], &[piece("checkboxes"), piece("radio_group")]] {
+            assert_eq!(undeclared(&dir, &app_now, pieces).sizes, both, "{}", pieces.len());
+        }
         // A figure's weights and tracking are named with its sizes; its face and its label's case,
         // which the stylesheet reads with a fallback, are the app's to declare or not.
         let stats = undeclared(&dir, &app_now, &[piece("stats")]).sizes;

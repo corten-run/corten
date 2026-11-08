@@ -1154,25 +1154,25 @@ async function run(browser) {
     JSON.stringify(kitLooks),
   );
   // Checkboxes and RadioGroup space their choices and their legend from two theme tokens
-  // (choice-gap, choice-legend-gap; .75rem each), so a theme that sets them moves both groups.
+  // (choice-list-gap, choice-list-legend-gap; .75rem each), so a theme that sets them moves both groups.
   const choiceSpacing = await page.evaluate(() => {
     const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
     const measure = () =>
-      ["[class*='checkboxes__checkboxes'] > fieldset", "fieldset[class*='radio_group__group']"].map((sel) => {
+      ["[class*='checkboxes__checkboxes'] > fieldset", "fieldset[class*='radio-group__group']"].map((sel) => {
         const set = /** @type {HTMLElement} */ (document.querySelector(sel));
         const legend = /** @type {HTMLElement} */ (set.querySelector(":scope > legend"));
         return [getComputedStyle(set).rowGap, getComputedStyle(legend).marginBottom].map((v) => parseFloat(v) / rem).join(" ");
       });
     const kit = measure();
     const theme = new CSSStyleSheet();
-    theme.replaceSync(":root { --choice-gap: .5rem; --choice-legend-gap: .25rem; }");
+    theme.replaceSync(":root { --choice-list-gap: .5rem; --choice-list-legend-gap: .25rem; }");
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme];
     const themed = measure();
     document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
     return { kit, themed };
   });
   check(
-    "Checkboxes and RadioGroup: the gap between choices and under the legend are the theme's choice-gap and choice-legend-gap",
+    "Checkboxes and RadioGroup: the gap between choices and under the legend are the theme's choice-list-gap and choice-list-legend-gap",
     choiceSpacing.kit.every((s) => s === "0.75 0.75") && choiceSpacing.themed.every((s) => s === "0.5 0.25"),
     JSON.stringify(choiceSpacing),
   );

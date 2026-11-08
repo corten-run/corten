@@ -68,7 +68,7 @@ button and a default or large button, not a small one's, which stays .8125rem; .
 `--control-width-sm`, `--control-width-md` and `--control-width-lg` (`ControlWidth`'s widths; 8, 16
 and 24rem), `--card-padding` (a card's
 padding and the gap between its parts; 1.5rem), `--card-heading-font-size` (a card's heading; 1rem),
-`--choice-gap` and `--choice-legend-gap` (the space between a `Checkboxes` or `RadioGroup`'s
+`--choice-list-gap` and `--choice-list-legend-gap` (the space between a `Checkboxes` or `RadioGroup`'s
 choices and under its legend, in both groups at once; .75rem each),
 a `Stats` figure's type (below) and `--toasts-inset-bottom` (how far `Toasts` sits above the bottom of the window; 1rem, plus the
 home indicator's inset on a page whose viewport meta has `viewport-fit=cover`). A layout with a
@@ -79,7 +79,7 @@ stylesheet, so the same selector there loses. The value depends on the layout, n
 it is a token as every size the kit reads is, so the theme says what the kit expects.
 A 44 px touch target for buttons, fields, selects, menu buttons, page links and tabs is
 `control-height`, `control-height-sm` and `control-height-lg` at 2.75rem (`"control-height": { "$type": "dimension",
-"$value": { "value": 2.75, "unit": "rem" } }`). The tokens do not reach a menu item, a combobox
+"$value": { "value": 2.75, "unit": "rem" } }`). The tokens do not reach a `Segmented` control's choices or its `SegmentedRadios` legend, a menu item, a combobox
 option, a checkbox, radio or switch label, a slider, a meter's bar or a Stats figure's padding (its
 own, not `--card-padding`), which keep their own sizes, nor the labels and items whose text
 stays .875rem; a compact density is a modifier context of the app's that
