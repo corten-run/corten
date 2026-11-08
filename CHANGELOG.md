@@ -2506,7 +2506,10 @@ Corten is pre-1.0, so any minor version may change the API.
     stylesheet reads with a fallback. As for every look, a page's rule for `dt` or `dd` (a case,
     letter spacing or face the label or value took from it before) no longer reaches them. An app
     set up by an older kit adds the seven tokens `corten ui add stats --merge` names (or `--force`,
-    for a copy without edits) before it starts. MEASUREMENT
+    for a copy without edits) before it starts. The ui-gallery's served `components.css` (every kit component, the kit's
+    theme) is 59,274 bytes where it was 58,753 (gzip 9,864 against 9,717, brotli 8,657 against
+    8,567), the theme's seven tokens on every page of an app on the kit's theme included; the
+    earlier size is the served file with the old rules put back
     ([#1054 Kit Stats writes its label and figure type as literals, so a theme with a display face or uppercase labels (Chase Sets' design system) edits the copied stats.css](https://github.com/corten-run/corten/issues/1054)).
 
 ### Removed
