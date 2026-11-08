@@ -907,11 +907,13 @@ rules something out.
     `FromJson` with an empty impl, which serde_json reads through that `Deserialize`: the derive
     never guesses at another impl, and serde's derive beside it is a second impl (E0119). Since
     `Fields` and `UrlValue` write the `Deserialize` `FromJson` would, they write its `FromJson`
-    and schema too (feature `json`), so a form's input is read from JSON and is an agent tool's
-    input with no derive beside theirs, and `FromJson` beside them is a second impl as well; a
-    generic type (whose bounds serde infers in ways `FromJson`'s do not follow), or one `FromJson`
-    cannot read (a field that borrows, an attribute it does not follow), gets none and takes an
-    empty impl, with a `FromJsonSchema` written by hand where it needs a schema. Not chosen: depending on serde_derive from `corten-macros`, which builds on `proc_macro` alone, or
+    and schema too (features `json` and `types`), so a form's input is read from JSON and is an
+    agent tool's input with no derive beside theirs, and `FromJson` beside them is a second impl
+    as well. A generic type (whose bounds serde infers in ways `FromJson`'s do not follow), or an
+    enum with `#[serde(other)]` (which the reader does not follow), gets none and takes an empty
+    impl, with a `FromJsonSchema` written by hand where it needs a schema; one whose
+    `Deserialize` borrows from its input cannot be a `FromJson`, which reads owned values. Not
+    chosen: depending on serde_derive from `corten-macros`, which builds on `proc_macro` alone, or
     keeping the second derive, which a derive cannot add to the item it reads
     ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763),
     [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
@@ -933,7 +935,8 @@ rules something out.
     their own is the second way.
 
     Last checked: 2026-11-06, serde_derive 1.0.229 at `8cd5934e`; 2026-11-06, the form read at
-    `8cd5934e`; 2026-11-08, serde_derive 1.0.229 and the JSON read for `FromJson` at `a791d9ba`.
+    `8cd5934e`; 2026-11-08, the JSON read for `FromJson` at `a791d9ba`; 2026-11-08,
+    serde_derive 1.0.229 at `62611fed`.
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or

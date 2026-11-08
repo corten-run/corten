@@ -1373,9 +1373,13 @@ Under the prefix:
    (`flatten`, `deserialize_with`); a field of a type with only `Deserialize` is read by
    `serde_json`, and an empty `impl corten::FromJson for T {}` lets such a type be read alone.
    A `#[derive(Fields)]` form input or a `#[derive(UrlValue)]` enum is a `FromJson` already
-   (with feature `json`), so `FromJson` beside either does not compile either. One that is
-   generic, or has a field that borrows, is not; it takes an empty `impl FromJson`, and a
-   `FromJsonSchema` written by hand where it needs a schema.
+   (with feature `json`, and has its schema with `types`), so `FromJson` beside either does not
+   compile either. Two are not, and take an empty `impl FromJson` (with a `FromJsonSchema`
+   written by hand where they need a schema): a generic one
+   (`impl<T: serde::de::DeserializeOwned> corten::FromJson for Form<T> {}`), and a `UrlValue`
+   enum with a `#[serde(other)]` variant, which Corten's reader does not follow. A form input
+   whose fields borrow from the input (`&'a str`, `#[serde(borrow)]`) cannot be a `FromJson`,
+   which reads owned values; give it owned fields (`String`) to read it from JSON.
 
 Each route is a `#[derive(Route)]` struct, and the API's prefix is one too (`ApiRoot` above), so
 the router and the links name the same URL, and a route outside the prefix (`/apis/items`

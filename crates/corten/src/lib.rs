@@ -206,10 +206,11 @@ pub use client::{ClientIp, ClientZone};
 /// The derive also reads the form: it implements serde's `Deserialize` as serde's derive would
 /// from the same `#[serde(..)]`, so the names posted and the names read are one list and the
 /// struct derives nothing else for [`Form`]. With the `json` feature it is a
-/// [`FromJson`](json::FromJson) too, with its schema, so the same struct is a JSON body or an
-/// agent tool's input, and `FromJson` beside it is a second impl (E0119); a generic struct, or
-/// one with a field that borrows, is not, and takes an empty `impl FromJson` (and a
-/// `FromJsonSchema` by hand where a schema is needed):
+/// [`FromJson`](json::FromJson) too, and with `types` it has its schema, so the same struct is
+/// a JSON body or an agent tool's input, and `FromJson` beside it is a second impl (E0119). A
+/// generic struct is not: it takes an empty `impl<T: DeserializeOwned> FromJson for Offer<T> {}`,
+/// and a `FromJsonSchema` by hand where a schema is needed. One whose fields borrow from the
+/// input (a `&'a str`, a `#[serde(borrow)]`) cannot be one, since `FromJson` reads owned values.
 ///
 /// ```
 /// use corten::prelude::*;
