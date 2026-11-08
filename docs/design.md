@@ -244,10 +244,7 @@ rules something out.
    arrives finished, and answers what only it can: a write, and data the page does not have. What
    the page can do with what it already has (sorting, filtering, selecting, a total, showing and
    hiding) is a handler, since no render is faster than no round trip; a view makes even 1,000
-   rows fast to change ([performance](performance.md#client-heavy-screens)). A sort click is measured:
-   in place it is faster than a swap of the server-sorted table in Chromium, Firefox and WebKit at
-   every size from 50 to 2,000 rows, before any network time
-   ([UI guide](guide/ui.md)). Rust renders on the server
+   rows fast to change ([performance](performance.md#client-heavy-screens)). Rust renders on the server
    because it is the fastest renderer there, and plain JavaScript runs in the browser because no
    framework or WASM layer is faster than the platform's own DOM calls. The scripts guide has the
    table for choosing ([Server or browser](guide/scripts.md#server-or-browser)).
@@ -1119,11 +1116,12 @@ rules something out.
    the life of the page that read the clock again when it comes back; and `rows::sort` writes the
    order it drew into the address and into the part the runtime reads again around its table (its
    `ReadAgain::from` tag, which no ref can name, and where that part's forms post), found as the
-   runtime finds a part. That search is closed: a form or link anywhere else whose route reads the
-   order names the tables from its own markup (`ordered::send`, `ordered::link`, with their
-   `#[derive(Id)]` ids, as `CopyButton` is given the element it copies) and reads the order from
-   the address, so a new kind of reader is one of those calls, not a wider search. A table sorts
-   in place even when other routes read its order, as measured in the [UI guide](guide/ui.md).)
+   runtime finds a part, and only into its forms that post. That search is closed: any other form
+   or link whose route reads the order, inside the part or not, names the tables from its own
+   markup (`ordered::send`, `ordered::link`, each table as `sorted(&Id)` of its `#[derive(Id)]`,
+   as `CopyButton` is given the element it copies) and reads the order from the address, so a new
+   kind of reader is one of those calls, not a wider search. Which tables sort in place, also when
+   other routes read their order, is measured in the [UI guide](guide/ui.md).)
 4. <a id="rule-user-facing-text"></a>User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a

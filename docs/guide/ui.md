@@ -226,27 +226,47 @@ for the reader's language (`12,5`) needs `data-sort`. List `corten_ui::COMPONENT
 <td class={TableNumeric {}} data-sort={sale.cents}>{t.money(Minor(sale.cents), USD)}</td>
 ```
 
-It stays the way to sort such a table when other routes read its order too (a part read again, a
-form whose answer is the page, a link that carries the order): a sort in place is faster at the
-user's end than a navigation to the page the server sorts, in every engine and at every size, so
-those routes get the order from the address (above) instead. Measured with
-`bench/browser/sort-cost.mjs` (a six-column table; from the click to the frame after it, median of
-20 clicks; the swap is a lower bound: a server writing strings and a template swap without the
-runtime's own work), on 2026-11-06 on a busy Windows workstation (so compare columns, not
-absolute times):
+`rows::sort` stays the way to sort such a table when other routes read its order too (a part read
+again, a form whose answer is the page, a link that carries the order), rather than a header that
+navigates to the page the server sorts. That navigation would be correct by construction, since
+the server draws the order every reader gets, but each sort would cost a round trip and a render.
+Measured with `bench/browser/sort-cost.mjs` (a six-column table; from the click to the frame
+after it; median and range of 20 clicks on a text column; the swap is a lower bound, a server
+writing strings and a template swap without the runtime's own work) on 2026-11-08, Chromium 156,
+Firefox 157 and WebKit 27.2, on a loaded Windows workstation, so compare within a row:
 
-| Rows | Chromium in place | swap | swap, 40 ms latency | Firefox in place | swap | WebKit in place | swap |
-|---|---|---|---|---|---|---|---|
-| 50 | 14 ms | 27 ms | 73 ms | 27 ms | 30 ms | 42 ms | 57 ms |
-| 200 | 46 ms | 65 ms | 106 ms | 59 ms | 73 ms | 87 ms | 104 ms |
-| 500 | 96 ms | 139 ms | 157 ms | 107 ms | 155 ms | 181 ms | 245 ms |
-| 1,000 | 174 ms | 289 ms | 295 ms | 205 ms | 295 ms | 348 ms | 441 ms |
-| 2,000 | 365 ms | 572 ms | 556 ms | 400 ms | 635 ms | 688 ms | 888 ms |
+| Rows | Chromium in place | swap | swap, answer fetched ahead | 40 ms latency: in place | swap | swap, fetched ahead |
+|---|---|---|---|---|---|---|
+| 50 | 14 ms (10-28) | 17 ms (13-30) | 11 ms (8-27) | 15 ms (11-19) | 77 ms (72-80) | 11 ms (9-12) |
+| 200 | 43 ms (26-52) | 40 ms (25-58) | 36 ms (20-49) | 44 ms (32-50) | 103 ms (82-109) | 31 ms (22-39) |
+| 500 | 74 ms (56-103) | 88 ms (57-100) | 78 ms (60-85) | 84 ms (69-105) | 147 ms (118-168) | 77 ms (62-109) |
+| 1,000 | 166 ms (127-194) | 168 ms (129-203) | 129 ms (82-171) | 161 ms (97-209) | 206 ms (169-246) | 143 ms (112-191) |
+| 2,000 | 333 ms (197-422) | 313 ms (217-363) | 276 ms (215-354) | 306 ms (235-374) | 295 ms (219-373) | 220 ms (160-311) |
 
-A real server adds its render to the swap (a 50-row page of the tcgplayer port's took 19 to 67 ms
-in a debug build) and a real network its round trip, which is most of the swap at the sizes a page
-of rows has. A reader elsewhere on the page is one `ordered::send` or `ordered::link` call
-(above); none is found by searching the page ([Rule 3](../design.md#rule-handler-arguments)).
+| Rows | Firefox in place | swap | fetched ahead | WebKit in place | swap | fetched ahead |
+|---|---|---|---|---|---|---|
+| 50 | 29 ms (16-39) | 28 ms (24-50) | 23 ms (19-29) | 28 ms (25-43) | 51 ms (27-60) | 32 ms (30-48) |
+| 200 | 43 ms (27-66) | 57 ms (38-97) | 47 ms (29-61) | 74 ms (70-85) | 87 ms (58-104) | 63 ms (46-91) |
+| 500 | 95 ms (72-170) | 97 ms (62-188) | 87 ms (59-107) | 144 ms (92-224) | 175 ms (136-201) | 170 ms (152-231) |
+| 1,000 | 178 ms (107-230) | 180 ms (131-207) | 168 ms (110-219) | 307 ms (197-431) | 307 ms (198-415) | 292 ms (187-359) |
+| 2,000 | 341 ms (235-414) | 318 ms (261-437) | 266 ms (191-362) | 550 ms (370-642) | 527 ms (354-915) | 543 ms (327-699) |
+
+With no network between them, the three cost the same within the runs' spread, in every engine at
+every size: moving the rows dominates. With 40 ms of latency, sorting in place is faster by about
+the round trip up to 500 rows (77 ms against 15 at 50 rows), and within the spread at 1,000 and
+2,000. A swap whose answer was fetched before the click is as fast as in place, but only for a
+header a pointer rested on: a key press, a tap or a quick click has no prefetch, and prefetching
+each header would cost the server a page render for every header hovered, which is why the
+`<thead>` is `data-no-prefetch`. A real server also adds its render to every swap. So in place is
+never slower beyond the spread and is faster by the round trip on a real network.
+
+The cost of keeping the order on the page is that its readers must take it. The order is in the
+address, the part read again around the table and that part's forms that post take it, and any
+other form or link whose route reads it names the table with `ordered::send` or `ordered::link`
+(above); none is found by searching the page ([Rule 3](../design.md#rule-handler-arguments)). A
+reader that does not name the table sends the order the page was drawn with, and no build catches
+that, so a form or link added beside a sorted table is checked for whether its route reads the
+order.
 
 It sorts the rows the page has, so it is for a table that shows all of its rows; on a table that
 shows a page of them it would sort that page alone. Such a table (the kit's `Pagination` under

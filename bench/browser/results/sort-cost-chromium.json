@@ -1,172 +1,478 @@
-[
-  {
-    "engine": "chromium",
-    "latency": 0,
-    "rows": 50,
-    "place": {
-      "text": 13.800000011920929,
-      "number": 14.099999994039536
+{
+  "engine": "chromium",
+  "version": "156.0.8078.4",
+  "date": "2026-11-08",
+  "platform": "win32",
+  "results": [
+    {
+      "engine": "chromium",
+      "latency": 0,
+      "rows": 50,
+      "place": {
+        "text": {
+          "median": 13.6,
+          "min": 9.7,
+          "max": 27.8,
+          "clicks": 20
+        },
+        "number": {
+          "median": 13.9,
+          "min": 11.6,
+          "max": 23.9,
+          "clicks": 20
+        }
+      },
+      "swap": {
+        "text": {
+          "median": 16.9,
+          "min": 13.2,
+          "max": 30.1,
+          "clicks": 20
+        },
+        "number": {
+          "median": 15.1,
+          "min": 11.4,
+          "max": 45.2,
+          "clicks": 20
+        }
+      },
+      "ahead": {
+        "text": {
+          "median": 11.3,
+          "min": 8.1,
+          "max": 27.2,
+          "clicks": 20
+        },
+        "number": {
+          "median": 12.1,
+          "min": 10.2,
+          "max": 24.8,
+          "clicks": 20
+        }
+      }
     },
-    "swap": {
-      "text": 15.199999988079071,
-      "number": 15.149999976158142
+    {
+      "engine": "chromium",
+      "latency": 0,
+      "rows": 200,
+      "place": {
+        "text": {
+          "median": 42.9,
+          "min": 25.8,
+          "max": 51.6,
+          "clicks": 20
+        },
+        "number": {
+          "median": 44.4,
+          "min": 28.4,
+          "max": 68,
+          "clicks": 20
+        }
+      },
+      "swap": {
+        "text": {
+          "median": 39.7,
+          "min": 24.9,
+          "max": 58.3,
+          "clicks": 20
+        },
+        "number": {
+          "median": 38.9,
+          "min": 27.4,
+          "max": 53.7,
+          "clicks": 20
+        }
+      },
+      "ahead": {
+        "text": {
+          "median": 35.7,
+          "min": 20,
+          "max": 48.5,
+          "clicks": 20
+        },
+        "number": {
+          "median": 36.8,
+          "min": 25.6,
+          "max": 44.9,
+          "clicks": 20
+        }
+      }
     },
-    "ahead": {
-      "text": 11.899999976158142,
-      "number": 11.649999976158142
+    {
+      "engine": "chromium",
+      "latency": 0,
+      "rows": 500,
+      "place": {
+        "text": {
+          "median": 74.3,
+          "min": 55.6,
+          "max": 102.5,
+          "clicks": 20
+        },
+        "number": {
+          "median": 80.6,
+          "min": 52.9,
+          "max": 113.8,
+          "clicks": 20
+        }
+      },
+      "swap": {
+        "text": {
+          "median": 87.6,
+          "min": 57.3,
+          "max": 99.8,
+          "clicks": 20
+        },
+        "number": {
+          "median": 79.3,
+          "min": 53.9,
+          "max": 103.6,
+          "clicks": 20
+        }
+      },
+      "ahead": {
+        "text": {
+          "median": 77.8,
+          "min": 59.7,
+          "max": 85.4,
+          "clicks": 20
+        },
+        "number": {
+          "median": 77.9,
+          "min": 66.2,
+          "max": 91,
+          "clicks": 20
+        }
+      }
+    },
+    {
+      "engine": "chromium",
+      "latency": 0,
+      "rows": 1000,
+      "place": {
+        "text": {
+          "median": 166.4,
+          "min": 126.6,
+          "max": 194.2,
+          "clicks": 20
+        },
+        "number": {
+          "median": 164.4,
+          "min": 137.6,
+          "max": 214.2,
+          "clicks": 20
+        }
+      },
+      "swap": {
+        "text": {
+          "median": 167.5,
+          "min": 129.1,
+          "max": 203.1,
+          "clicks": 20
+        },
+        "number": {
+          "median": 163.1,
+          "min": 121.4,
+          "max": 197,
+          "clicks": 20
+        }
+      },
+      "ahead": {
+        "text": {
+          "median": 128.9,
+          "min": 82.2,
+          "max": 170.6,
+          "clicks": 20
+        },
+        "number": {
+          "median": 125.5,
+          "min": 85,
+          "max": 177.6,
+          "clicks": 20
+        }
+      }
+    },
+    {
+      "engine": "chromium",
+      "latency": 0,
+      "rows": 2000,
+      "place": {
+        "text": {
+          "median": 333,
+          "min": 196.7,
+          "max": 421.9,
+          "clicks": 20
+        },
+        "number": {
+          "median": 326.2,
+          "min": 208.9,
+          "max": 414.2,
+          "clicks": 20
+        }
+      },
+      "swap": {
+        "text": {
+          "median": 312.6,
+          "min": 217.1,
+          "max": 363.2,
+          "clicks": 20
+        },
+        "number": {
+          "median": 304.4,
+          "min": 193.4,
+          "max": 421.6,
+          "clicks": 20
+        }
+      },
+      "ahead": {
+        "text": {
+          "median": 275.6,
+          "min": 214.9,
+          "max": 354.1,
+          "clicks": 20
+        },
+        "number": {
+          "median": 290.7,
+          "min": 199.9,
+          "max": 377.2,
+          "clicks": 20
+        }
+      }
+    },
+    {
+      "engine": "chromium",
+      "latency": 40,
+      "rows": 50,
+      "place": {
+        "text": {
+          "median": 15.4,
+          "min": 10.5,
+          "max": 19,
+          "clicks": 20
+        },
+        "number": {
+          "median": 14,
+          "min": 10.5,
+          "max": 18.8,
+          "clicks": 20
+        }
+      },
+      "swap": {
+        "text": {
+          "median": 76.5,
+          "min": 71.7,
+          "max": 80.4,
+          "clicks": 20
+        },
+        "number": {
+          "median": 74.7,
+          "min": 71.5,
+          "max": 77.9,
+          "clicks": 20
+        }
+      },
+      "ahead": {
+        "text": {
+          "median": 10.8,
+          "min": 9.1,
+          "max": 12.4,
+          "clicks": 20
+        },
+        "number": {
+          "median": 11,
+          "min": 8.5,
+          "max": 12.1,
+          "clicks": 20
+        }
+      }
+    },
+    {
+      "engine": "chromium",
+      "latency": 40,
+      "rows": 200,
+      "place": {
+        "text": {
+          "median": 43.9,
+          "min": 31.5,
+          "max": 49.9,
+          "clicks": 20
+        },
+        "number": {
+          "median": 46.1,
+          "min": 21.9,
+          "max": 51.7,
+          "clicks": 20
+        }
+      },
+      "swap": {
+        "text": {
+          "median": 103.4,
+          "min": 82.4,
+          "max": 108.8,
+          "clicks": 20
+        },
+        "number": {
+          "median": 107.4,
+          "min": 92.9,
+          "max": 111.6,
+          "clicks": 20
+        }
+      },
+      "ahead": {
+        "text": {
+          "median": 31,
+          "min": 21.6,
+          "max": 39.1,
+          "clicks": 20
+        },
+        "number": {
+          "median": 34.4,
+          "min": 20.7,
+          "max": 41.3,
+          "clicks": 20
+        }
+      }
+    },
+    {
+      "engine": "chromium",
+      "latency": 40,
+      "rows": 500,
+      "place": {
+        "text": {
+          "median": 83.5,
+          "min": 69.3,
+          "max": 105.1,
+          "clicks": 20
+        },
+        "number": {
+          "median": 81.9,
+          "min": 61.7,
+          "max": 109.8,
+          "clicks": 20
+        }
+      },
+      "swap": {
+        "text": {
+          "median": 146.6,
+          "min": 118.1,
+          "max": 167.6,
+          "clicks": 20
+        },
+        "number": {
+          "median": 148,
+          "min": 127.9,
+          "max": 161,
+          "clicks": 20
+        }
+      },
+      "ahead": {
+        "text": {
+          "median": 76.8,
+          "min": 62.1,
+          "max": 108.9,
+          "clicks": 20
+        },
+        "number": {
+          "median": 76.6,
+          "min": 67,
+          "max": 92,
+          "clicks": 20
+        }
+      }
+    },
+    {
+      "engine": "chromium",
+      "latency": 40,
+      "rows": 1000,
+      "place": {
+        "text": {
+          "median": 161.4,
+          "min": 97.2,
+          "max": 208.6,
+          "clicks": 20
+        },
+        "number": {
+          "median": 170.4,
+          "min": 95.6,
+          "max": 221.2,
+          "clicks": 20
+        }
+      },
+      "swap": {
+        "text": {
+          "median": 206,
+          "min": 169.2,
+          "max": 245.9,
+          "clicks": 20
+        },
+        "number": {
+          "median": 192,
+          "min": 165.8,
+          "max": 241.5,
+          "clicks": 20
+        }
+      },
+      "ahead": {
+        "text": {
+          "median": 143.2,
+          "min": 111.8,
+          "max": 191.1,
+          "clicks": 20
+        },
+        "number": {
+          "median": 144,
+          "min": 114,
+          "max": 157.7,
+          "clicks": 20
+        }
+      }
+    },
+    {
+      "engine": "chromium",
+      "latency": 40,
+      "rows": 2000,
+      "place": {
+        "text": {
+          "median": 306.3,
+          "min": 234.6,
+          "max": 374.2,
+          "clicks": 20
+        },
+        "number": {
+          "median": 288.6,
+          "min": 214.2,
+          "max": 412.6,
+          "clicks": 20
+        }
+      },
+      "swap": {
+        "text": {
+          "median": 295.4,
+          "min": 219.1,
+          "max": 373.4,
+          "clicks": 20
+        },
+        "number": {
+          "median": 281.6,
+          "min": 227.7,
+          "max": 354.9,
+          "clicks": 20
+        }
+      },
+      "ahead": {
+        "text": {
+          "median": 219.5,
+          "min": 159.6,
+          "max": 310.5,
+          "clicks": 20
+        },
+        "number": {
+          "median": 208.2,
+          "min": 172.5,
+          "max": 361.9,
+          "clicks": 20
+        }
+      }
     }
-  },
-  {
-    "engine": "chromium",
-    "latency": 0,
-    "rows": 200,
-    "place": {
-      "text": 45.89999997615814,
-      "number": 47.74999997019768
-    },
-    "swap": {
-      "text": 46.80000001192093,
-      "number": 46.80000001192093
-    },
-    "ahead": {
-      "text": 42.55000001192093,
-      "number": 42.29999998211861
-    }
-  },
-  {
-    "engine": "chromium",
-    "latency": 0,
-    "rows": 500,
-    "place": {
-      "text": 91.80000001192093,
-      "number": 86.44999998807907
-    },
-    "swap": {
-      "text": 93.65000000596046,
-      "number": 89.5
-    },
-    "ahead": {
-      "text": 86.7999999821186,
-      "number": 84
-    }
-  },
-  {
-    "engine": "chromium",
-    "latency": 0,
-    "rows": 1000,
-    "place": {
-      "text": 169.55000001192093,
-      "number": 164.09999999403954
-    },
-    "swap": {
-      "text": 174.59999999403954,
-      "number": 166.74999997019768
-    },
-    "ahead": {
-      "text": 158.69999998807907,
-      "number": 158.60000002384186
-    }
-  },
-  {
-    "engine": "chromium",
-    "latency": 0,
-    "rows": 2000,
-    "place": {
-      "text": 340.19999998807907,
-      "number": 335.15000000596046
-    },
-    "swap": {
-      "text": 332.69999998807907,
-      "number": 321
-    },
-    "ahead": {
-      "text": 309.4500000178814,
-      "number": 307.05000001192093
-    }
-  },
-  {
-    "engine": "chromium",
-    "latency": 40,
-    "rows": 50,
-    "place": {
-      "text": 14.549999982118607,
-      "number": 13.800000011920929
-    },
-    "swap": {
-      "text": 74.7000000178814,
-      "number": 75.15000000596046
-    },
-    "ahead": {
-      "text": 10.950000017881393,
-      "number": 10.850000023841858
-    }
-  },
-  {
-    "engine": "chromium",
-    "latency": 40,
-    "rows": 200,
-    "place": {
-      "text": 46.79999998211861,
-      "number": 46.29999998211861
-    },
-    "swap": {
-      "text": 104,
-      "number": 108.10000002384186
-    },
-    "ahead": {
-      "text": 38.150000005960464,
-      "number": 40.44999998807907
-    }
-  },
-  {
-    "engine": "chromium",
-    "latency": 40,
-    "rows": 500,
-    "place": {
-      "text": 88.49999997019768,
-      "number": 86.34999999403954
-    },
-    "swap": {
-      "text": 149.85000002384186,
-      "number": 151.25
-    },
-    "ahead": {
-      "text": 86.40000000596046,
-      "number": 84.2000000178814
-    }
-  },
-  {
-    "engine": "chromium",
-    "latency": 40,
-    "rows": 1000,
-    "place": {
-      "text": 171.2000000178814,
-      "number": 166.59999999403954
-    },
-    "swap": {
-      "text": 227.65000000596046,
-      "number": 228.59999999403954
-    },
-    "ahead": {
-      "text": 158.89999997615814,
-      "number": 158.8499999642372
-    }
-  },
-  {
-    "engine": "chromium",
-    "latency": 40,
-    "rows": 2000,
-    "place": {
-      "text": 343.30000001192093,
-      "number": 349.5499999821186
-    },
-    "swap": {
-      "text": 388.9500000178814,
-      "number": 380.25
-    },
-    "ahead": {
-      "text": 318.25,
-      "number": 314.7000000178814
-    }
-  }
-]
+  ]
+}

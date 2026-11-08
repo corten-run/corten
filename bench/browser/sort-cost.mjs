@@ -3,9 +3,10 @@
 // lower bound for that path: the server writes strings, and the swap is a template parse and
 // replaceChildren, without the runtime's own work), and that swap with its answer fetched before
 // the click (as the runtime's prefetch on hover would have it). Six columns, sizes 50 to 2,000
-// rows, with no added latency and with 40 ms (Chromium only); median of 10 clicks on a text column
-// and of 10 on a number column, each from the click to the frame after it. Two rounds, the modes
-// in alternating order. Prints a line per case and writes results/sort-cost-<engine>.json.
+// rows, with no added latency and with 40 ms (Chromium only); 20 clicks on text columns and 20 on
+// number columns over two rounds (the modes in alternating order, the first click of each kind in a
+// page dropped), each from the click to the frame after it, with their median and range. Prints a
+// line per case and writes results/sort-cost-<engine>.json with the engine's version and the date.
 // node sort-cost.mjs [engine, default chromium] [rows.js]
 import http from "node:http";
 import fs from "node:fs";
@@ -18,7 +19,6 @@ const playwright = require("@playwright/test");
 const engine = process.argv[2] || "chromium";
 const ROWS_JS = process.argv[3] || join(here, "..", "..", "crates", "corten-ui", "src", "rows.js");
 const SIZES = [50, 200, 500, 1000, 2000];
-const RUNS = 21;
 const words = ["Ada", "Grace", "Linus", "Margaret", "Ken", "Barbara", "Dennis", "Frances", "Alan", "Radia", "Edsger", "Hedy"];
 const rowsOf = (n) => Array.from({ length: n }, (_, i) => ({
   name: words[(i * 7) % words.length] + " " + words[(i * 5 + 3) % words.length] + " " + i,
@@ -63,6 +63,9 @@ await new Promise((r) => server.listen(0, r));
 const base = "http://127.0.0.1:" + server.address().port;
 const browser = await playwright[engine].launch();
 const median = (xs) => { const s = xs.slice().sort((a, b) => a - b); return s.length % 2 ? s[s.length >> 1] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
+const round1 = (x) => Math.round(x * 10) / 10;
+/** @param {number[]} xs */
+const summary = (xs) => ({ median: round1(median(xs)), min: round1(Math.min(...xs)), max: round1(Math.max(...xs)), clicks: xs.length });
 const MODES = ["place", "swap", "ahead"];
 /** Each case's clicks, by case key, over both rounds. @type {Map<string, {text: number[], number: number[]}>} */
 const clicks = new Map();
@@ -107,14 +110,15 @@ for (const latency of latencies) {
     const row = { engine, latency, rows: n };
     for (const mode of MODES) {
       const got = clicks.get(latency + "/" + n + "/" + mode);
-      row[mode] = { text: median(got.text), number: median(got.number) };
+      row[mode] = { text: summary(got.text), number: summary(got.number) };
     }
     results.push(row);
-    const f = (m) => row[m].text.toFixed(1) + "/" + row[m].number.toFixed(1);
+    const f = (m) => row[m].text.median + " (" + row[m].text.min + "-" + row[m].text.max + ")/" + row[m].number.median + " (" + row[m].number.min + "-" + row[m].number.max + ")";
     console.log(engine + " latency " + latency + "ms rows " + n + " (text/number ms): in place " + f("place") + ", swap " + f("swap") + ", swap fetched ahead " + f("ahead"));
   }
 }
 fs.mkdirSync(join(here, "results"), { recursive: true });
-fs.writeFileSync(join(here, "results", "sort-cost-" + engine + ".json"), JSON.stringify(results, null, 2) + "\n");
+const about = { engine, version: browser.version(), date: new Date().toISOString().slice(0, 10), platform: process.platform };
+fs.writeFileSync(join(here, "results", "sort-cost-" + engine + ".json"), JSON.stringify({ ...about, results }, null, 2) + "\n");
 await browser.close();
 server.close();

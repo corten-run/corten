@@ -6196,13 +6196,16 @@ Corten is pre-1.0, so any minor version may change the API.
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
 78. Which tables sort in place is decided and measured: every table whose page has all its rows,
-    also when other routes read its order. `bench/browser/sort-cost.mjs` measures a sort click
-    with `rows::sort` against a swap of the server-sorted table, and in place is faster in
-    Chromium, Firefox and WebKit at every size from 50 to 2,000 rows (50 rows in Chromium: 14 ms
-    against 27 ms, 73 ms with 40 ms of latency); the UI guide has the table. Design Rule 3's
-    `rows::sort` exception says its search of the page is closed: a reader outside the part read
-    again names the table (`ordered::send`, `ordered::link`), and design Choice 9 cites the
-    measurement
+    also when other routes read its order. `bench/browser/sort-cost.mjs` times a sort click with
+    `rows::sort` against a swap of the server-sorted table, fetched at the click or before it, and
+    writes each case's median and range with the engine's version. With no network the three
+    cost the same within the runs' spread in Chromium, Firefox and WebKit from 50 to 2,000 rows;
+    with 40 ms of latency in place is faster by about the round trip up to 500 rows (15 ms
+    against 77 at 50 rows in Chromium), and a swap fetched ahead matches it only for a header a
+    pointer rested on. The UI guide has the tables and says a reader that does not name the table
+    sends the order the page was drawn with, which no build catches. Design Rule 3's `rows::sort`
+    exception says its search of the page is closed and that any other reader, inside the part or
+    not, names the table with `sorted(&Id)`
     ([#960 Design Rule 3's rows::sort exception grows with each kind of form or link that reads the order: decide which tables sort in place and which ask the server](https://github.com/corten-run/corten/issues/960)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
