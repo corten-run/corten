@@ -1279,14 +1279,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `examples/watchlist` (two streams a page) in Chromium: over HTTP/1.1 through nginx, a fourth
     tab got no answer in 15 seconds and nginx logged three documents; through the configuration
     in [Deploying](guide/deploy.md#nginx) with `http2 on`, all eight tabs loaded over `h2`, the
-    first in 1.0 s and the other seven in 212 to 471 ms. The same proxy serves native apps:
-    `URLSession` too caps HTTP/1.1 connections to a host (6) and shares one over HTTP/2, while
-    OkHttp's cap counts calls whatever the protocol
-    ([Surfaces](architecture.md#native-apps-next-not-built)). Corten cannot check this at startup: a
+    first in 1.0 s and the other seven in 212 to 471 ms. Corten cannot check this at startup: a
     stream is a handler's return type (`LiveResponse`, `FeedResponse`), and a feed's `rows`
     does not say whether a route streams, since its snapshot route has them too; and
     `serve_wrapped` behind a proxy that re-encrypts to the app is right with live streams, so the
-    guide says it. HTTP/2 in Corten (hyper's
+    guide says it. The same proxy serves native apps: `URLSession` too caps HTTP/1.1
+    connections to a host (6) and shares one over HTTP/2, while OkHttp's cap counts calls whatever
+    the protocol ([Surfaces](architecture.md#native-apps-next-not-built)). HTTP/2 in Corten (hyper's
     `http2`, chosen by ALPN in `serve_wrapped`) was weighed and left out: it adds a second
     answer to each per-connection rule (a concurrent-streams limit beside
     `App::max_connections`, a `GOAWAY` drain at shutdown, `App::header_timeout` per stream, and

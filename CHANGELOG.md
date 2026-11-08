@@ -6098,7 +6098,7 @@ Corten is pre-1.0, so any minor version may change the API.
 75. The native plan in `docs/architecture.md` names the per-host caps of the platforms' own
     clients (`URLSession` 6 HTTP/1.1 connections, which HTTP/2 lifts; OkHttp 5 asynchronous calls
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
-    Limit 14 and the deploy guide's proxy serve native apps HTTP/2 or HTTP/3 too
+    Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
