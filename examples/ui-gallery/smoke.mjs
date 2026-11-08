@@ -407,15 +407,24 @@ async function run(browser) {
     const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
     const was = boxes.map((b) => b.checked);
     const valid = () => boxes.every((b) => b.checkValidity());
+    const told = () => boxes[0].dispatchEvent(new Event("change", { bubbles: true }));
     for (const b of boxes) b.checked = false;
-    const silent = valid();
-    boxes[0].dispatchEvent(new Event("change", { bubbles: true }));
-    const told = valid();
-    boxes.forEach((b, i) => (b.checked = was[i]));
-    boxes[0].dispatchEvent(new Event("change", { bubbles: true }));
-    return { silent, told, back: valid() };
+    const cleared = valid();
+    told();
+    const clearedTold = valid();
+    for (const b of boxes) b.checked = true;
+    const filled = valid();
+    told();
+    const filledTold = valid();
+    for (const [i, b] of boxes.entries()) b.checked = was[i];
+    told();
+    return { cleared, clearedTold, filled, filledTold, back: valid() };
   });
-  check("CheckboxGroup: boxes a script unchecks keep the old answer until it dispatches a change, then the group is refused", scripted.silent && !scripted.told && scripted.back, JSON.stringify(scripted));
+  check(
+    "CheckboxGroup: boxes a script sets keep the group's old answer until it dispatches a change (cleared: valid, then refused; filled: refused, then valid)",
+    scripted.cleared && !scripted.clearedTold && !scripted.filled && scripted.filledTold && scripted.back,
+    JSON.stringify(scripted),
+  );
   await us.uncheck();
   const shipMessage = await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
   await page.getByRole("button", { name: "List for sale" }).click();

@@ -14,8 +14,10 @@ use corten::prelude::*;
 ///
 /// The group checks again on `change`, which the browser sends when the user checks a box but not
 /// when a script sets `checked` (a "Select all" or "Clear" button). Such a script dispatches one
-/// after setting the boxes, or the group keeps its old answer and a form with none checked is sent:
-/// `box.dispatchEvent(new Event("change", { bubbles: true }))` on any box of the group.
+/// after setting the boxes, `box.dispatchEvent(new Event("change", { bubbles: true }))` on any box
+/// of the group, or the group keeps its old answer: a group the script cleared is sent and only the
+/// handler refuses it, and one it filled after the user cleared it is still refused by the browser
+/// with `missing`.
 ///
 /// Parts: the `fieldset`, its `legend`, and the app's boxes.
 ///
