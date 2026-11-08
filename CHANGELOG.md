@@ -6,6 +6,15 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
+  money, ratings and counts during each request in English, French and German. An independent
+  pre-load gate checks full pages, native forms, layout, escaping, JSON and uncached upstream
+  reads in both data sources. Its repeated-pass runner and read-only report preserve provenance,
+  variability, CPU and memory evidence and measurement limits. Catalog also gains a read-only
+  report. Historical result files and the pinned catalog run are untouched; nightly execution
+  is not switched to v2. Leptos's existing build-cost recipe also uses cargo-leptos's supported
+  lockfile flag, matching its image build.
+
 - A separate locale-neutral catalog benchmark in `bench/catalog`: the same strings-only
   record-detail page, JSON, GET filter and related links in eighteen framework apps.
   Correctness checks precede load tests; catalog rounds have their own baseline rather than
@@ -2481,6 +2490,13 @@ Corten is pre-1.0, so any minor version may change the API.
     kit's `Button` draws the state: a ring after its label in the text's color, turning unless
     the user asks for less motion, kept under forced colors, with a `progress` cursor
     ([#1063 A data-patch form's busy state lands only on the form, so a submit button outside it (form=) and the kit's Button show nothing while a server-drawn sheet loads](https://github.com/corten-run/corten/issues/1063)).
+272. The kit's `pagination` has `PreviousNext`, Previous and Next alone in `Pagination`'s look,
+    for a list that knows only the page before and the page after (a cursor, or the previous and
+    next links an API answers with): `previous` and `next` are each an `Option<&dyn Href>`, a
+    link with `rel="prev"` or `rel="next"`, and a `None` one a disabled step. It shares
+    `pagination.css`, so a copied `pagination.rs` takes it from `corten ui diff`. The
+    ui-gallery's payouts card pages by it
+    ([#1073 Kit Pagination needs every page's link, so a list paged by previous and next links (a cursor, or the API's own) cannot use it](https://github.com/corten-run/corten/issues/1073)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4000,6 +4016,8 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
 
 ### Fixed
+- The fixed favicon keeps its weak content tag when background compression finishes, so a
+  conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
 
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It
@@ -5576,6 +5594,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ETag is now compared as `If-None-Match` is, weakly and in a list or as `*`, so a proxy that
     marks it weak gets a 304 where it got the whole file
     ([#1056 Nothing answers /favicon.ico, so each browser request for it is the app's 404 page with its layout reads](https://github.com/corten-run/corten/issues/1056)).
+194. `bench/fullstack`'s Laravel app starts with items in memory: it decoded the whole 27.7 MB
+    fixture at boot, past PHP's default 128 MB `memory_limit`, so its in-memory tests failed in
+    every round and `check-app.mjs laravel` could not pass. It now reads the fixture one item at a
+    time and keeps the default, and refuses a damaged fixture at boot
+    ([#981 bench: Laravel cannot start with items in memory, so check-app.mjs laravel fails: decoding the 27.7 MB fixture passes PHP's 128 MB memory_limit](https://github.com/corten-run/corten/issues/981)).
 
 ### Documentation
 

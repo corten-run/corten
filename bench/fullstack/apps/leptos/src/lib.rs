@@ -2,6 +2,8 @@
 pub mod app;
 pub mod catalog;
 pub mod catalog_page;
+pub mod marketplace;
+pub mod marketplace_page;
 pub mod model;
 
 #[cfg(feature = "hydrate")]

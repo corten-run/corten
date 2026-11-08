@@ -1,0 +1,35 @@
+<!doctype html>
+<html xmlns:th="http://www.thymeleaf.org" th:replace="~{layout :: page(${pageTitle}, ~{::main})}">
+<main><article class="marketplace">
+<nav class="marketplace__categories"><a th:each="category : ${record.categories}" th:href="@{/marketplace/{locale}/item_1(locale=${locale})}" th:text="${category.name}"></a></nav>
+<h1 th:text="${record.title}"></h1>
+<p class="marketplace__subtitle" th:if="${record.subtitle != null}" th:text="${record.subtitle}"></p>
+<ul class="marketplace__badges"><li th:each="badge : ${record.badges}" th:text="${badge}"></li></ul>
+<div class="marketplace__images"><div th:each="image, status : ${record.images}" class="marketplace__image" role="img" th:attr="aria-label=${record.title + ' ' + status.count},data-src=${image}"></div></div>
+<section class="marketplace__summary">
+<th:block th:if="${record.summary != null}" th:with="s=${record.summary}"><span><strong th:text="${f.money(s.lowestMinor)}"></strong> <th:block th:text="${t.lowest}"></th:block></span><span th:text="${f.listings(s.count)}"></span><span th:text="${f.count(s.quantity) + ' ' + t.available}"></span></th:block>
+<span th:if="${record.summary == null}" th:text="${t.no_listings}"></span>
+</section>
+<section class="marketplace__listings"><h2 th:text="${t.listings}"></h2>
+<form method="get" th:action="@{/marketplace/{locale}/{id}(locale=${locale},id=${record.id})}">
+<label><th:block th:text="${t.filter}"></th:block> <input name="seller" th:value="${prefix}"></label>
+<label><th:block th:text="${t.sort}"></th:block> <select name="sort"><option value="asc" th:selected="${sort == 'asc'}" th:text="${t.asc}"></option><option value="desc" th:selected="${sort == 'desc'}" th:text="${t.desc}"></option></select></label>
+<input th:if="${allOffers}" type="hidden" name="offers" value="all"><button type="submit" th:text="${t.apply}"></button></form>
+<table><thead><tr><th th:text="${t.seller}"></th><th th:text="${t.condition}"></th><th th:text="${t.ships_from}"></th><th th:text="${t.qty}"></th><th th:text="${t.price}"></th><th th:text="${t.reviews}"></th></tr></thead>
+<tbody><tr th:each="row : ${listings}" th:attr="data-listing-id=${row.id}"><td><th:block th:text="${row.seller}"></th:block><th:block th:if="${row.ratingHundredths != null}" th:text="${' · ' + f.rating(row.ratingHundredths) + ' ★'}"></th:block></td><td th:text="${row.condition}"></td><td th:text="${row.shipsFrom}"></td><td th:text="${f.count(row.quantity)}"></td><td th:text="${f.money(row.priceMinor)}"></td><td th:text="${f.count(row.reviews)}"></td></tr></tbody></table>
+</section>
+<section class="marketplace__offers"><h2 th:text="${t.offers}"></h2>
+<table><thead><tr><th th:text="${t.buyer}"></th><th th:text="${t.condition}"></th><th th:text="${t.qty}"></th><th th:text="${t.price}"></th></tr></thead>
+<tbody><tr th:each="row : ${offers}" th:attr="data-offer-id=${row.id}"><td th:text="${row.buyer}"></td><td th:text="${row.condition}"></td><td th:text="${f.count(row.quantity)}"></td><td th:text="${f.money(row.priceMinor)}"></td></tr></tbody></table>
+<a class="marketplace__more" th:if="${!allOffers and record.offers.size() > 5}" th:href="@{/marketplace/{locale}/{id}(locale=${locale},id=${record.id},seller=${prefix},sort=${sort},offers='all')}" th:text="${t.show_all}"></a>
+</section>
+<section class="marketplace__alert"><h2 th:text="${t.alert}"></h2>
+<form method="post" th:action="@{/marketplace/{locale}/{id}(locale=${locale},id=${record.id},seller=${prefix},sort=${sort},offers=${allOffers ? 'all' : null})}">
+<label><th:block th:text="${t.email}"></th:block> <input name="email" type="email"></label><label><th:block th:text="${t.target}"></th:block> <input name="target_price" type="text" inputmode="decimal"></label><button type="submit" th:text="${t.submit}"></button>
+</form><p class="marketplace__message" th:text="${message}"></p></section>
+<section class="marketplace__details"><h2 th:text="${t.details}"></h2><p th:text="${record.description}"></p>
+<dl><th:block th:each="field : ${record.fields}"><dt th:text="${field.name}"></dt><dd th:text="${field.value}"></dd></th:block></dl><ul><li th:each="tag : ${record.tags}" th:text="${tag}"></li></ul></section>
+<section class="marketplace__contents"><h2 th:text="${t.contents}"></h2><ul><li th:each="line : ${record.contents}"><a th:href="@{/marketplace/{locale}/{id}(locale=${locale},id=${line.itemId})}" th:text="${line.title}"></a><th:block th:text="${' × ' + f.count(line.quantity)}"></th:block></li></ul></section>
+<section class="marketplace__included"><h2 th:text="${t.included}"></h2><ul><li th:each="line : ${record.includedIn}"><a th:href="@{/marketplace/{locale}/{id}(locale=${locale},id=${line.itemId})}" th:text="${line.title}"></a><th:block th:text="${' × ' + f.count(line.quantity)}"></th:block></li></ul></section>
+</article></main>
+</html>

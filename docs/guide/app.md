@@ -936,6 +936,8 @@ when the app starts. A page or API route of the app's that matches `/favicon.ico
 instead, whatever its methods: one written as that path, or one with a parameter or a catch-all
 (`/{*rest}`) that the router would pick for it. Every static file's ETag is compared as
 `If-None-Match` is (weakly, a list or `*`), so a proxy that marks it weak still gets a 304.
+The fixed icon uses a weak content tag that stays the same when its background-compressed
+forms become ready; versioned files retain their encoding-specific tags.
 
 ## Caching
 

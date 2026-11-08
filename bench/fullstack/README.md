@@ -4,6 +4,10 @@ This is the historical, localized marketplace workload. The separate
 [locale-neutral catalog benchmark](../catalog/README.md) gives every framework the same
 strings-only page work without currency or number localization. Its results start a new
 baseline; they do not replace or form a before/after comparison with the tables here.
+[Marketplace v2](../marketplace/README.md) implements equivalent request-time locale formatting
+in eighteen adapters, with a whole-page conformance gate and its own repeated-pass runner.
+It starts a separate baseline; it does not replace these historical results or switch nightly
+execution to v2.
 
 The same item detail page (title, images, sorted listings table, offers with "show all", a
 price-alert form that posts and patches a message), and the same item as JSON, built in:
@@ -1575,7 +1579,17 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r16. (r2's main run had raised it
    to 512 MB and measured Laravel again with the default afterwards; `laravel-rerun.log` in r2's raw
-   output ([results/r2/raw.txt](results/r2/raw.txt)).)
+   output ([results/r2/raw.txt](results/r2/raw.txt)).) Through r16 its in-memory tests failed under
+   that limit: every worker decoded the whole 27.7 MB fixture at boot and ran out of memory before it
+   answered. From
+   [#981 bench: Laravel cannot start with items in memory, so check-app.mjs laravel fails: decoding the 27.7 MB fixture passes PHP's 128 MB memory_limit](https://github.com/corten-run/corten/issues/981)
+   it reads the fixture one item at a time, as the Rust apps do, keeping only each item's view, and
+   starts with the same default. It checks the whole file with `json_validate` first, so with a
+   damaged fixture the server logs why and exits at startup instead of serving part of the items
+   (`tests/items.php`, run in the image with `php tests/items.php`). Measured locally with one CPU on a loaded machine: the old
+   image never answered in 60 s; the new one answered its first item page 5.5 to 7.1 s after
+   `docker run` in four runs, at 132 to 144 MiB for the container, and `check-app.mjs laravel`
+   passes. So a round from then on has Laravel's in-memory numbers, which no earlier round has.
 8. r4's droplet had a slower CPU than r3's (Platinum 8168 against 8280). Django and Nuxt, which
    passed r3's in-memory page test near their limit, failed it on r4's; their settings did not
    change. r3's numbers stay in `results/r3/`. In r5, on the same CPU model as r4, Django passed

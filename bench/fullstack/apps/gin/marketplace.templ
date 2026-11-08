@@ -1,0 +1,126 @@
+package main
+
+import "strconv"
+
+templ marketplacePage(v *marketplaceView) {
+<!doctype html>
+<html lang={ v.Locale }>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{ v.Record.Title } | Card Market</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/components.css">
+<link rel="stylesheet" href="/marketplace.css">
+<script src="/htmx.min.js" defer></script>
+<script src="/item.js" defer></script>
+</head>
+<body hx-boost="false">
+<header class="site-header__bar"><a href="/">Card Market</a></header>
+<main>
+<article class="marketplace">
+<nav class="marketplace__categories">
+for _, category := range v.Record.Categories {
+<a href={ templ.URL(marketplaceURL(v.Locale, "item_1")) }>{ category.Name }</a>
+}
+</nav>
+<h1>{ v.Record.Title }</h1>
+if v.Record.Subtitle != nil {
+<p class="marketplace__subtitle">{ *v.Record.Subtitle }</p>
+}
+<ul class="marketplace__badges">
+for _, badge := range v.Record.Badges {
+<li>{ badge }</li>
+}
+</ul>
+<div class="marketplace__images">
+for i, src := range v.Record.Images {
+<div class="marketplace__image" role="img" aria-label={ v.Record.Title + " " + strconv.Itoa(i+1) } data-src={ src }></div>
+}
+</div>
+<section class="marketplace__summary">
+if v.Record.Summary != nil {
+<span><strong>{ v.Format.Money(v.Record.Summary.LowestMinor) }</strong> { v.Words["lowest"] }</span>
+<span>{ v.Format.Listings(v.Record.Summary.Count) }</span>
+<span>{ v.Format.Count(v.Record.Summary.Quantity) } { v.Words["available"] }</span>
+} else {
+<span>{ v.Words["no_listings"] }</span>
+}
+</section>
+<section class="marketplace__listings">
+<h2>{ v.Words["listings"] }</h2>
+<form method="get" action={ templ.URL(v.Path) }>
+<label>{ v.Words["filter"] } <input type="text" name="seller" value={ v.Seller }/></label>
+<label>{ v.Words["sort"] } <select name="sort"><option value="asc" selected?={ v.Sort == "asc" }>{ v.Words["asc"] }</option><option value="desc" selected?={ v.Sort == "desc" }>{ v.Words["desc"] }</option></select></label>
+<button type="submit">{ v.Words["apply"] }</button>
+</form>
+<table>
+<thead><tr>
+for _, key := range []string{"seller", "condition", "ships_from", "qty", "price", "reviews"} {
+<th scope="col">{ v.Words[key] }</th>
+}
+</tr></thead>
+<tbody>
+for _, row := range v.Listings {
+<tr data-listing-id={ row.ID }>
+<td>{ row.Seller }
+if row.RatingHundredths != nil {
+{ " · " + v.Format.Rating(*row.RatingHundredths) + " ★" }
+}
+</td><td>{ row.Condition }</td><td>{ row.ShipsFrom }</td><td>{ v.Format.Count(row.Quantity) }</td><td>{ v.Format.Money(row.PriceMinor) }</td><td>{ v.Format.Count(row.Reviews) }</td></tr>
+}
+</tbody>
+</table>
+</section>
+<section class="marketplace__offers">
+<h2>{ v.Words["offers"] }</h2>
+<table><thead><tr>
+for _, key := range []string{"buyer", "condition", "qty", "price"} {
+<th scope="col">{ v.Words[key] }</th>
+}
+</tr></thead><tbody>
+for _, row := range v.Offers {
+<tr data-offer-id={ row.ID }><td>{ row.Buyer }</td><td>{ row.Condition }</td><td>{ v.Format.Count(row.Quantity) }</td><td>{ v.Format.Money(row.PriceMinor) }</td></tr>
+}
+</tbody></table>
+if v.More != "" {
+<a class="marketplace__more" href={ templ.URL(v.More) }>{ v.Words["show_all"] }</a>
+}
+</section>
+<section class="marketplace__alert">
+<h2>{ v.Words["alert"] }</h2>
+<form method="post" action={ templ.URL(v.Path) }>
+<label>{ v.Words["email"] } <input type="email" name="email"/></label>
+<label>{ v.Words["target"] } <input type="text" inputmode="decimal" name="target_price"/></label>
+<button type="submit">{ v.Words["submit"] }</button>
+</form>
+<p class="marketplace__message">{ v.Message }</p>
+</section>
+<section class="marketplace__details">
+<h2>{ v.Words["details"] }</h2><p>{ v.Record.Description }</p>
+<dl>
+for _, field := range v.Record.Fields {
+<dt>{ field.Name }</dt><dd>{ field.Value }</dd>
+}
+</dl>
+<ul>
+for _, tag := range v.Record.Tags {
+<li>{ tag }</li>
+}
+</ul>
+</section>
+<section class="marketplace__contents"><h2>{ v.Words["contents"] }</h2><ul>
+for _, row := range v.Record.Contents {
+<li><a href={ templ.URL(marketplaceURL(v.Locale, row.ItemID)) }>{ row.Title }</a> × { v.Format.Count(row.Quantity) }</li>
+}
+</ul></section>
+<section class="marketplace__included"><h2>{ v.Words["included"] }</h2><ul>
+for _, row := range v.Record.IncludedIn {
+<li><a href={ templ.URL(marketplaceURL(v.Locale, row.ItemID)) }>{ row.Title }</a> × { v.Format.Count(row.Quantity) }</li>
+}
+</ul></section>
+</article>
+</main>
+</body>
+</html>
+}

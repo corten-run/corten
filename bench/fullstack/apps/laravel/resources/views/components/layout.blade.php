@@ -1,6 +1,6 @@
-@props(['title' => 'Card Market'])
+@props(['title' => 'Card Market', 'lang' => 'en'])
 <!doctype html>
-<html lang="en">
+<html lang="{{ $lang }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">

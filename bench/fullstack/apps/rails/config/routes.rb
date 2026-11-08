@@ -1,4 +1,7 @@
 Rails.application.routes.draw do
+  get "marketplace/:locale/:id", to: "marketplace#show", as: :marketplace
+  post "marketplace/:locale/:id", to: "marketplace#show"
+  get "api/marketplace/:id", to: "api/marketplace#show"
   root "items#home"
   get "items/:id", to: "items#show", as: :item
   post "items/:id", to: "items#alert"

@@ -115,7 +115,7 @@ export const recipes = {
     context: "",
     workdir: "/src",
     deps: `cargo fetch ${hostTarget} --target wasm32-unknown-unknown`,
-    build: "cargo leptos build --release",
+    build: "cargo leptos build --release --cargo-locked",
     dev: "cargo leptos build",
     // The server's code, as Leptos's documentation has rust-analyzer check it.
     check: "cargo check --features ssr --all-targets",

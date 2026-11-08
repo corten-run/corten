@@ -5,6 +5,8 @@
 mod catalog;
 mod catalog_view;
 mod items;
+mod marketplace;
+mod marketplace_view;
 mod model;
 
 use std::sync::{Arc, LazyLock};
@@ -40,6 +42,7 @@ async fn main() {
     // Load the fixture (if any) and read API_BASE before listening, like the other apps.
     items::init();
     catalog::source::init();
+    marketplace::source::init();
     topcoat::start(router()).await.unwrap();
 }
 
@@ -48,9 +51,11 @@ fn router() -> Router {
         .page(home)
         .page(item_page)
         .page(catalog_view::catalog_page)
+        .page(marketplace_view::marketplace_page)
         .page(not_found)
         .route(item_json)
         .route(catalog_view::catalog_json)
+        .route(marketplace_view::marketplace_json)
         .route(listings)
         .route(offers)
         .route(create_alert)

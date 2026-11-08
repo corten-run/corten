@@ -3,6 +3,7 @@
 // the item as JSON, and the live benchmark's server-sent events.
 #include "items.h"
 #include "catalog.h"
+#include "marketplace.h"
 #include "live.h"
 #include "model.h"
 
@@ -51,6 +52,8 @@ int main()
     // Load the fixture (if any) before listening, like the other apps.
     items::load();
     catalog::load();
+    marketplace::load();
+    marketplace::routes();
     const char *port = std::getenv("PORT");
 
     // Corten's 404 page, for a missing item and for any address no handler serves.
