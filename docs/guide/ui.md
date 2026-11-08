@@ -226,15 +226,15 @@ for the reader's language (`12,5`) needs `data-sort`. List `corten_ui::COMPONENT
 <td class={TableNumeric {}} data-sort={sale.cents}>{t.money(Minor(sale.cents), USD)}</td>
 ```
 
-`rows::sort` stays the way to sort such a table when other routes read its order too (a part read
-again, a form whose answer is the page, a link that carries the order), rather than a header that
-navigates to the page the server sorts. That navigation would be correct by construction, since
-the server draws the order every reader gets, but each sort would cost a round trip and a render.
-Measured with `bench/browser/sort-cost.mjs` (a six-column table; from the click to the frame
-after it; median and range of 20 clicks on a text column; the swap is a lower bound, a server
-writing strings and a template swap without the runtime's own work) on 2026-11-08, Chromium 156,
+`rows::sort` stays the way to sort a table that shows all of its rows when other routes read its
+order too (a part read again, a form whose answer is the page, a link that carries the order),
+rather than a header that navigates to the page the server sorts. That navigation would be correct
+by construction, since the server draws the order every reader gets, but each sort would wait for
+a round trip and a render. Measured with `bench/browser/sort-cost.mjs` (a six-column table; from
+the click to the frame after it; median and range of 20 clicks on the two text columns, and the
+number columns agree; the swap is a lower bound, a server writing strings and a template swap
+without the runtime's own work; latency added in Chromium only) on 2026-11-08, Chromium 156,
 Firefox 157 and WebKit 27.2, on a loaded Windows workstation, so compare within a row:
-
 | Rows | Chromium in place | swap | swap, answer fetched ahead | 40 ms latency: in place | swap | swap, fetched ahead |
 |---|---|---|---|---|---|---|
 | 50 | 14 ms (10-28) | 17 ms (13-30) | 11 ms (8-27) | 15 ms (11-19) | 77 ms (72-80) | 11 ms (9-12) |
@@ -251,22 +251,26 @@ Firefox 157 and WebKit 27.2, on a loaded Windows workstation, so compare within 
 | 1,000 | 178 ms (107-230) | 180 ms (131-207) | 168 ms (110-219) | 307 ms (197-431) | 307 ms (198-415) | 292 ms (187-359) |
 | 2,000 | 341 ms (235-414) | 318 ms (261-437) | 266 ms (191-362) | 550 ms (370-642) | 527 ms (354-915) | 543 ms (327-699) |
 
-With no network between them, the three cost the same within the runs' spread, in every engine at
-every size: moving the rows dominates. With 40 ms of latency, sorting in place is faster by about
-the round trip up to 500 rows (77 ms against 15 at 50 rows), and within the spread at 1,000 and
-2,000. A swap whose answer was fetched before the click is as fast as in place, but only for a
-header a pointer rested on: a key press, a tap or a quick click has no prefetch, and prefetching
-each header would cost the server a page render for every header hovered, which is why the
-`<thead>` is `data-no-prefetch`. A real server also adds its render to every swap. So in place is
-never slower beyond the spread and is faster by the round trip on a real network.
+With no network, the three are within one another's range at every size, but not always alike: a
+swap whose answer was fetched before the click is the fastest from 1,000 rows in Chromium and at
+2,000 in Firefox (129 ms against 166 for in place at 1,000 rows in Chromium), and WebKit's swap is
+the slowest at 50 and 500 rows. With 40 ms of latency, sorting in place is faster by 59 to 63 ms
+from 50 to 500 rows (15 ms against 77 at 50 rows), its ranges apart from the swap's; at 1,000 and
+2,000 rows the difference is inside this host's spread, though the round trip adds to every swap.
+A swap fetched ahead stays as fast as in place or faster there, but only when the answer is in
+before the click: a pointer that rests on the header for its 65 ms dwell, or a tap, whose
+prefetch starts at `touchstart` (not measured here), while a key press or a quick click gets none.
+So in place is not slower beyond the spread at any size, is faster by the round trip on a network
+for the sizes a page of rows has, and asks the server for nothing.
 
-The cost of keeping the order on the page is that its readers must take it. The order is in the
-address, the part read again around the table and that part's forms that post take it, and any
-other form or link whose route reads it names the table with `ordered::send` or `ordered::link`
-(above); none is found by searching the page ([Rule 3](../design.md#rule-handler-arguments)). A
-reader that does not name the table sends the order the page was drawn with, and no build catches
-that, so a form or link added beside a sorted table is checked for whether its route reads the
-order.
+Sorting in place leaves the order on the page, and its readers must take it. `rows::sort` writes
+it into the address, into the part read again around the table and into that part's forms that
+post. Any other form or link whose route reads it, a `GET` form in the part or anything outside
+it, names the table with `ordered::send` or `ordered::link` (above); none is found by searching the
+page ([Rule 3](../design.md#rule-handler-arguments)). One that does not sends the order the page
+was drawn with, unless it sends to the page's own address, and no build or check notices
+([Limit 24](../design.md#limit-sort-readers)), so where a sorted table's order is read, each such
+form and link takes one of those calls.
 
 It sorts the rows the page has, so it is for a table that shows all of its rows; on a table that
 shows a page of them it would sort that page alone. Such a table (the kit's `Pagination` under

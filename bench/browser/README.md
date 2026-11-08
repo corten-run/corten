@@ -38,7 +38,7 @@ node list-check.mjs     # list() against 3,000 random edits in a real DOM
 node view-check.mjs     # rows() (corten/views) against 3,000 random edits, some made without it
 node rows-cost.mjs      # what rows() costs: removing rows by key, push then get, replace
 node patch-cost.mjs     # what a patch of rows with a menu, or a form, on each costs
-node sort-cost.mjs [engine]  # a sort click: corten-ui's rows::sort in place against a swap of the server-sorted table
+node sort-cost.mjs [engine] [rows.js]   # a sort click: rows::sort in place against a swap of the server-sorted table, fetched at the click or before
 node run.mjs            # client operations, memory and load (two rounds, in alternating order)
 node ssr.mjs            # 1,000 server-rendered rows: take over, then interact
 node dashboard.mjs      # 200 cards on one shared store

@@ -1114,14 +1114,15 @@ rules something out.
    not reach outside a component; `RelativeTime` keeps the page's relative times in its
    module, so one timer serves them all, with a `visibilitychange` and a `pageshow` listener for
    the life of the page that read the clock again when it comes back; and `rows::sort` writes the
-   order it drew into the address and into the part the runtime reads again around its table (its
-   `ReadAgain::from` tag, which no ref can name, and where that part's forms post), found as the
-   runtime finds a part, and only into its forms that post. That search is closed: any other form
-   or link whose route reads the order, inside the part or not, names the tables from its own
-   markup (`ordered::send`, `ordered::link`, each table as `sorted(&Id)` of its `#[derive(Id)]`,
-   as `CopyButton` is given the element it copies) and reads the order from the address, so a new
-   kind of reader is one of those calls, not a wider search. Which tables sort in place, also when
-   other routes read their order, is measured in the [UI guide](guide/ui.md).)
+   order it drew into the address and into the part the runtime reads again around its table,
+   found as the runtime finds a part: its `ReadAgain::from` tag, which no ref can name, and where
+   its forms that post send (a `GET` form's fields are its query, so it is not rewritten). That
+   search is closed: any other form or link whose route reads the order, inside the part or not,
+   names the tables from its own markup (`ordered::send`, `ordered::link`, with `sorted(&Id)` of
+   each table's `#[derive(Id)]`, or of an element around them, as `CopyButton` is given the
+   element it copies) and reads the order from the address, so a new kind of reader is one of those
+   calls, not a wider search ([Limit 24](#limit-sort-readers)). Which tables sort in place, also
+   when other routes read their order, is measured in the [UI guide](guide/ui.md).)
 4. <a id="rule-user-facing-text"></a>User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a
@@ -1403,3 +1404,12 @@ by design; where it is known, a limit says what would lift it or why it is so.
     endpoint, and a trial of one directive beside the enforced policy is not built in: the
     enforced policy's reports show what a change must allow, and `report_only` tries the whole
     policy.
+24. <a id="limit-sort-readers"></a>A form or link whose route reads a table's order that `rows::sort` drew, and that
+    neither sends to the page's own address nor is a form in the part read again around the table
+    that posts, takes the order only by naming the table (`ordered::send`, `ordered::link`,
+    [Rule 3](#rule-handler-arguments)). One that does not sends the order the page was drawn with,
+    and nothing notices: the compiler cannot see which routes read the order, and the runtime
+    cannot tell a form that should carry it from one that should not. A navigating sort header
+    would close this at the cost of a round trip on every sort ([UI guide](guide/ui.md)). It lifts
+    when a route's type says it reads a table's order, so markup that sends to it beside that
+    table without the call does not build.
