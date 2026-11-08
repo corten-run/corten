@@ -969,31 +969,39 @@ async function run(browser) {
   const told = await page.waitForSelector("#watch-form [role=alert]", { state: "visible", timeout: 5000 }).then(() => true, () => false);
   check("a form's on:corten:error handler runs for a submit the network fails", told);
   // A form with controls named hasAttribute and getAttribute still runs its handlers, as the
-  // runtime reads its attributes through Element's own methods: the form the page loaded with, hearing an event that bubbles,
-  // and copies put in after load, one hearing an event that bubbles and one an event that does not.
+  // runtime reads its attributes through Element's own methods: the form the page loaded with,
+  // hearing an event that bubbles, and copies put in after load, bound to an event no element
+  // listened for until they joined (so only the runtime's scan of them can hear it), one hearing
+  // it bubble and one not.
   const shadowed = await page.evaluate(async () => {
     const names = ["hasAttribute", "getAttribute"];
     const inputs = names.map((name) => `<input type="hidden" name="${name}" value="x">`).join("");
     const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
     const markup = form.outerHTML.replace(/^<form[^>]*>/, (open) => open + inputs);
     for (const n of [1, 2]) {
-      const copy = markup.replace(/ id="([^"]+)"/g, (_, id) => ` id="smoke-${n}-${id}"`);
+      const copy = markup.replace(/ id="([^"]+)"/g, (_, id) => ` id="smoke-${n}-${id}"`).replace('data-on="corten:error:', `data-on="smoke-shadowed-${n}:`);
       document.querySelector("main")?.insertAdjacentHTML("beforeend", /** @type {any} */ (window).__html(copy));
     }
     form.insertAdjacentHTML("afterbegin", /** @type {any} */ (window).__html(inputs));
     // The copies' handlers are bound as they join the page, once the runtime hears they did.
     await new Promise((r) => setTimeout(r, 100));
-    const heard = (/** @type {string} */ id, /** @type {boolean} */ bubbles) => {
+    const heard = (/** @type {string} */ id, /** @type {string} */ type, /** @type {boolean} */ bubbles) => {
       const at = /** @type {Element} */ (document.getElementById(id));
       const note = /** @type {HTMLElement} */ (document.querySelector(`#${id} [role=alert]`));
       note.hidden = true;
-      Element.prototype.dispatchEvent.call(at, new CustomEvent("corten:error", { bubbles, cancelable: true, detail: { status: 0 } }));
+      Element.prototype.dispatchEvent.call(at, new CustomEvent(type, { bubbles, cancelable: true, detail: { status: 0 } }));
       return !note.hidden;
     };
-    const seen = { loaded: heard("watch-form", true), added: heard("smoke-1-watch-form", true), notBubbling: heard("smoke-2-watch-form", false) };
-    for (const n of [1, 2]) document.getElementById(`smoke-${n}-watch-form`)?.remove();
-    for (const name of names) document.querySelector(`#watch-form > input[name="${name}"]`)?.remove();
-    return seen;
+    try {
+      return {
+        loaded: heard("watch-form", "corten:error", true),
+        added: heard("smoke-1-watch-form", "smoke-shadowed-1", true),
+        notBubbling: heard("smoke-2-watch-form", "smoke-shadowed-2", false),
+      };
+    } finally {
+      for (const n of [1, 2]) document.getElementById(`smoke-${n}-watch-form`)?.remove();
+      for (const name of names) document.querySelector(`#watch-form > input[name="${name}"]`)?.remove();
+    }
   });
   check(
     "a form with controls named hasAttribute and getAttribute runs its handlers, loaded with the page or added after, for events that bubble or not",
@@ -1174,6 +1182,15 @@ async function run(browser) {
     !new URL(r.url()).pathname.startsWith("/feed/") &&
     shadowedPosts.push(`${r.method()} ${new URL(r.url()).pathname} ${new URLSearchParams(r.postData() ?? "").get("id")}`);
   page.on("request", onShadowed);
+  // The answer draws the watch form again: one with controls named hasAttribute and getAttribute
+  // is replaced as any other, and no corten:error says the write failed.
+  await page.evaluate(() => {
+    document
+      .getElementById("watch-form")
+      ?.insertAdjacentHTML("afterbegin", __html('<input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x">'));
+    /** @type {any} */ (window).__shadowedErrors = 0;
+    document.addEventListener("corten:error", () => (/** @type {any} */ (window).__shadowedErrors += 1));
+  });
   await page.click("#shadowed button");
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Globex"), null, { timeout: 4000 }).catch(() => {});
   page.off("request", onShadowed);
@@ -1182,6 +1199,11 @@ async function run(browser) {
     ((await page.textContent("#watch-message")) ?? "").startsWith("Watching Globex") && shadowedPosts.join() === "POST /watch GLBX",
     `${shadowedPosts.join()}; ${await page.textContent("#watch-message")}`,
   );
+  const redrawn = await page.evaluate(() => ({
+    replaced: !document.querySelector("#watch-form > input[name=hasAttribute]"),
+    errors: /** @type {any} */ (window).__shadowedErrors,
+  }));
+  check("a patch draws again a form with controls named hasAttribute and getAttribute, and says no write failed", redrawn.replaced && redrawn.errors === 0, JSON.stringify(redrawn));
   await page.evaluate(() => document.getElementById("shadowed")?.remove());
 
   // The latest submit wins, but a pending write is not abandoned (the server may have applied

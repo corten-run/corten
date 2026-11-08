@@ -163,8 +163,9 @@ function load(name) {
 /**
  * Element's own `getAttribute` and `hasAttribute`, for an element that may be a form: a form
  * control's `name` shadows the form's member of that name (`<input name="hasAttribute">` makes
- * `form.hasAttribute` the input), so the runtime reads every attribute it dispatches, binds and
- * finds refs by through these (see formProperty).
+ * `form.hasAttribute` the input), so the runtime reads the attributes of an element it dispatches
+ * to, binds, finds refs in, patches or draws again through these. They are formCall's rule for
+ * the two members read on every event and every element a patch puts in, without its lookup.
  */
 const { getAttribute, hasAttribute } = Element.prototype;
 /** @param {Element} el @param {string} name */
@@ -321,11 +322,11 @@ const SKIP = Symbol("skip");
  */
 function closestRef(el, owner, name, event) {
   const scope = scopeOf(el, owner);
-  const own = scope.getAttribute("data-scope");
+  const own = attrOf(scope, "data-scope");
   const qualified = `${own}/${name}`;
   for (const node of event.composedPath()) {
     if (!(node instanceof Element)) continue;
-    const ref = node.getAttribute("data-ref");
+    const ref = attrOf(node, "data-ref");
     if (ref === name ? node.closest("[data-scope]") === scope : ref === qualified && node.closest(`[data-scope="${own}"]`) === scope) return node;
     if (node === scope) break;
   }
@@ -849,7 +850,7 @@ function setVars(root) {
     // A template's markup gets its values too, so they move with it when a script puts its content
     // in the page (`rows.append(rest.content)`).
     if (el instanceof HTMLTemplateElement) setVars(el.content);
-    const vars = el.getAttribute("data-vars");
+    const vars = attrOf(el, "data-vars");
     if (!vars || !(el instanceof HTMLElement || el instanceof SVGElement)) continue;
     for (const one of vars.split(";")) {
       const at = one.indexOf(":");
@@ -915,8 +916,8 @@ async function apply(html, signal, sent, took, own = true, asked) {
   for (const el of Array.from(content.children)) {
     const id = idOf(el);
     const target = id ? document.getElementById(id) : null;
-    if (el.hasAttribute("data-corten-read-again")) again = el;
-    else if (el instanceof HTMLTemplateElement && el.hasAttribute("data-remove")) {
+    if (hasAttr(el, "data-corten-read-again")) again = el;
+    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-remove")) {
       // Focus in it goes to the nearest element around it that can take focus.
       const up = target?.contains(document.activeElement) && target.parentElement;
       navs ||= !!target && holdsNav(target);
@@ -925,7 +926,7 @@ async function apply(html, signal, sent, took, own = true, asked) {
       if (up) focusNear(up);
     }
     else if (!target) console.error(`corten: patch element <${el.localName}> needs an id that exists on the page`, el);
-    else if (el instanceof HTMLTemplateElement && el.hasAttribute("data-append")) {
+    else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-append")) {
       put.push(...Array.from(el.content.children));
       serve(el.content);
       changedIn(target, ["a", target.id, Array.from(el.content.childNodes)]);
@@ -1110,7 +1111,7 @@ function counterpart(root, fresh, el, exact, ids) {
   let anchor = /** @type {Element} */ (el.parentElement);
   while (anchor !== root && !idOf(anchor)) anchor = /** @type {Element} */ (anchor.parentElement);
   const home = anchor === root ? fresh : counterpart(root, fresh, anchor, false, ids);
-  const name = el.getAttribute("name");
+  const name = attrOf(el, "name");
   if (!home) return null;
   if (name) {
     const selector = named(el, name);
@@ -1175,7 +1176,7 @@ function opened(root, fresh, ids) {
   for (const el of [root, ...Array.from(root.querySelectorAll("details, dialog, [popover]"))]) {
     const dialog = el instanceof HTMLDialogElement;
     const toggles = dialog || el instanceof HTMLDetailsElement;
-    const popover = el.hasAttribute("popover");
+    const popover = hasAttr(el, "popover");
     const shown = popover && el.matches(":popover-open");
     const now = toggles && /** @type {HTMLDialogElement} */ (el).open;
     // Left as the server sent it, and not a shown popover: the fresh markup says, so its
@@ -1184,7 +1185,7 @@ function opened(root, fresh, ids) {
     // A dialog or popover only by id: by place, another row's could open over the page.
     const to = counterpart(root, fresh, el, dialog || popover, ids);
     if (!to || to.localName !== el.localName) continue;
-    if (shown && to.hasAttribute("popover")) later.push(() => /** @type {HTMLElement} */ (to).showPopover());
+    if (shown && hasAttr(to, "popover")) later.push(() => /** @type {HTMLElement} */ (to).showPopover());
     if (!toggles) continue;
     // Unchanged since the server sent it (or unknown, markup a script added): the fresh markup
     // says. Changed by the user: theirs, which is also what a server that changed it now says.
@@ -1235,9 +1236,9 @@ function replaceKeeping(root, fresh, sent, took, focus = true) {
   for (const f of [root, ...Array.from(root.querySelectorAll("input, textarea, select"))]) {
     // A submit key stays the form's own: renewed in place once an answer took the write, and kept
     // as sent after a 5xx (which may hide a write that applied), whatever key the answer drew.
-    if (f instanceof HTMLInputElement && f.hasAttribute("data-submit")) {
+    if (f instanceof HTMLInputElement && hasAttr(f, "data-submit")) {
       const to = counterpart(root, fresh, f, true, ids);
-      if (to instanceof HTMLInputElement && to.hasAttribute("data-submit")) to.value = f.value;
+      if (to instanceof HTMLInputElement && hasAttr(to, "data-submit")) to.value = f.value;
       continue;
     }
     const now = stateOf(f);
@@ -1283,7 +1284,7 @@ function focusNear(el, root, fresh) {
   while (el && el !== document.body) {
     const to = fresh ? counterpart(/** @type {Element} */ (root), fresh, el) : el;
     if (to instanceof HTMLElement) {
-      const made = !to.hasAttribute("tabindex");
+      const made = !hasAttr(to, "tabindex");
       if (made) to.tabIndex = -1;
       to.focus({ preventScroll: true });
       if (document.activeElement === to) {
@@ -1336,7 +1337,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
   const parts = [];
   if (html.includes(" data-corten-page")) {
     for (const part of Array.from(content.children)) {
-      if (!part.hasAttribute("data-corten-page")) continue;
+      if (!hasAttr(part, "data-corten-page")) continue;
       const old = part.id ? document.getElementById(part.id) : null;
       if (!old || main.contains(old)) {
         reload(notice);
@@ -1578,7 +1579,7 @@ function layoutChanges(doc, notice) {
         // The server's markup of each page's part in it, before drawing adds what the user had
         // (a <details> they opened) or a focus move's tabindex.
         const parts = [el, ...Array.from(el.querySelectorAll("[data-corten-page]"))]
-          .filter((part) => part.hasAttribute("data-corten-page"))
+          .filter((part) => hasAttr(part, "data-corten-page"))
           .map((part) => /** @type {const} */ ([part, part === el ? markup : markupOf(part)]));
         const as = was === undefined ? null : drawnAs(was);
         drawLayout(old, el, as === null ? null : parse(as).firstElementChild, said);
@@ -1616,17 +1617,17 @@ function drawLayout(old, fresh, before, said, inside = false) {
   if (old.localName !== fresh.localName || !(inside || old.matches(LIVE) || old.querySelector(LIVE))) return replaceKeeping(old, fresh, null);
   // Changed in place: a page's part that is or holds it is drawn by the next navigation.
   partSent.delete(/** @type {Element} */ (old.closest("[data-corten-page]")));
-  const wiring = () => ["data-on", "data-ref", "data-scope"].map((a) => old.getAttribute(a)).join("\n");
+  const wiring = () => ["data-on", "data-ref", "data-scope"].map((a) => attrOf(old, a)).join("\n");
   const was = wiring();
   // The ref it had too, whose holders look again.
   const names = new Set();
   refName(old, names);
   // What the user opened or closed stays as they left it, as a patch keeps it ({@link opened}).
   const toggles = old instanceof HTMLDetailsElement || old instanceof HTMLDialogElement;
-  for (const a of Array.from(old.attributes)) if (!fresh.hasAttribute(a.name) && !(toggles && a.name === "open")) old.removeAttribute(a.name);
-  for (const a of Array.from(fresh.attributes)) if (old.getAttribute(a.name) !== a.value && !(toggles && a.name === "open")) old.setAttribute(a.name, a.value);
+  for (const a of Array.from(old.attributes)) if (!hasAttr(fresh, a.name) && !(toggles && a.name === "open")) old.removeAttribute(a.name);
+  for (const a of Array.from(fresh.attributes)) if (attrOf(old, a.name) !== a.value && !(toggles && a.name === "open")) old.setAttribute(a.name, a.value);
   if (toggles) {
-    const [now, want] = [old.open, fresh.hasAttribute("open")];
+    const [now, want] = [old.open, hasAttr(fresh, "open")];
     // Left as the server sent it: the server's state now. A modal one closes by `close()`, which
     // also ends the rest of the page being inert; taking away its `open` would not.
     if ((!served.has(old) || served.get(old) === now) && now !== want) {
@@ -2515,7 +2516,7 @@ for (const type of ["input", "change"])
 function unkept(f) {
   const field = /** @type {HTMLInputElement} */ (f);
   const form = field.form;
-  const auto = f.getAttribute("autocomplete")?.trim() || (form && formCall(form, "getAttribute", "autocomplete")?.trim());
+  const auto = f.getAttribute("autocomplete")?.trim() || (form && attrOf(form, "autocomplete")?.trim());
   return /^(password|file)$/.test(field.type) || f.hasAttribute("data-submit") || auto?.toLowerCase() === "off";
 }
 
@@ -2698,7 +2699,7 @@ addEventListener("submit", patchSubmit);
 /** Sends a `data-patch` form's submit as a patch, unless a handler cancelled it. @param {Event} event */
 function patchSubmit(event) {
   const form = event.target;
-  if (event.defaultPrevented || !(form instanceof HTMLFormElement) || !formCall(form, "hasAttribute", "data-patch")) return;
+  if (event.defaultPrevented || !(form instanceof HTMLFormElement) || !hasAttr(form, "data-patch")) return;
   const submitter = /** @type {SubmitEvent} */ (event).submitter;
   const sends = sendsAs(form, submitter);
   // A dialog's form closes the dialog and sends nothing: the browser's to do.
@@ -2766,7 +2767,7 @@ async function send(form, submitter, sends) {
     // A multipart write whose form has an `on:corten:progress` handler goes by XMLHttpRequest, which
     // reports how much of the body is sent; fetch does not. Any other submit is a fetch.
     const progress =
-      init.body instanceof FormData && url.origin === location.origin && !!formCall(form, "hasAttribute", "data-on") && bindings(form).some((b) => b.type === PROGRESS);
+      init.body instanceof FormData && url.origin === location.origin && hasAttr(form, "data-on") && bindings(form).some((b) => b.type === PROGRESS);
     const upload = progress && (await load(UPLOAD), /** @type {typeof import("./upload.js") | undefined} */ (modules.get(UPLOAD)))?.upload;
     // Left while the module loaded (a navigation; a newer submit of a write waits for this one):
     // nothing is sent.
@@ -2861,7 +2862,7 @@ async function send(form, submitter, sends) {
 function sendAgain(form, submitter) {
   const id = idOf(form);
   const now = formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
-  if (!(now instanceof HTMLFormElement) || !formCall(now, "hasAttribute", "data-patch")) return;
+  if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
   const all = /** @type {HTMLElement[]} */ (Array.from(/** @type {HTMLFormControlsCollection} */ (formProperty(now, "elements"))));
   const by =
     !submitter || all.includes(submitter)
