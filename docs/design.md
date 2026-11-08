@@ -1122,7 +1122,7 @@ rules something out.
     Revisit when: rows often need a key made from more than one field, which a mark on one field
     cannot say.
 
-    Last checked: 2026-11-08, the derive and the rows of the four example apps and `corten-cluster`'s tests at the commit that adds it.
+    Last checked: 2026-11-08, the derive and the rows of the four example apps and `corten-cluster`'s tests at `60e81795`.
 
 ## Rules
 
