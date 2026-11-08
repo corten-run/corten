@@ -1,4 +1,4 @@
-#Full-stack comparison: one marketplace item page in eighteen apps
+# Full-stack comparison: one marketplace item page in eighteen apps
 
 This is the historical marketplace workload with **non-equivalent localization work**:
 Corten formats values per request while the other implementations use stored strings
@@ -1023,18 +1023,18 @@ Round to round a build moves by about 3 microseconds (median) and up to 9 in eit
 whose range crosses zero says no cost that can be seen. Each round ran the build as it is first and
 the others after it in one order, so a drift within a round reads as a cost on every row: for a
 browser's page at 64 users the build as it is was the slowest of the nine in two rounds of three,
-and every default there shows a cost. `ab.mjs` now starts each round one image later, which would remove a cost on the first slot alone (when no image runs first in half the rounds or more) but not a drift across the round,
-which needs the build as it is beside each variant; this data shows neither clearly. k6 had the
-round's four load CPUs (`BENCH_LOAD_CPUS`), not the six a round gives an app serving from memory
-(`BENCH_FIXTURE_LOAD_CPUS`, which `ab.mjs` uses now). The images and results carry no record of the
-source they were built from; `cost-under-load.sh` now labels the images and writes `source.txt`
-beside the results. The page's 37.5 microseconds on `identity` are about a fifth below the r16
-round's 47 (21,195 a CPU-second), from the same cgroup counter and CPU model. r16's image preloaded
-no jemalloc (it came to card-market's Dockerfile after r16's commit), and
-[Choice 23](../../docs/design.md#choice-jemalloc-image) counts
-about 83,000 instructions a page with it against 87,000 without; the droplet, the commit, the
-round's settings and k6's phase and cores differ too, and which of them accounts for the gap was not
-measured.
+and every default there shows a cost. `ab.mjs` now starts each round one image later, which would
+remove a cost on the first slot alone (when no image runs first in half the rounds or more) but not
+a drift across the round, which needs the build as it is beside each variant; this data shows
+neither clearly. k6 had the round's four load CPUs (`BENCH_LOAD_CPUS`), not the six a round gives an
+app serving from memory (`BENCH_FIXTURE_LOAD_CPUS`, which `ab.mjs` uses now). The images and results
+carry no record of the source they were built from; `cost-under-load.sh` now labels the images and
+writes `source.txt` beside the results. The page's 37.5 microseconds on `identity` are about a fifth
+below the r16 round's 47 (21,195 a CPU-second), from the same cgroup counter and CPU model. r16's
+image preloaded no jemalloc (it came to card-market's Dockerfile after r16's commit), and [Choice
+23](../../docs/design.md#choice-jemalloc-image) counts about 83,000 instructions a page with it
+against 87,000 without; the droplet, the commit, the round's settings and k6's phase and cores
+differ too, and which of them accounts for the gap was not measured.
 
 At 64 users, CPU microseconds a request (the app's CPU was 86-101% busy: k6, on its four CPUs,
 did not keep it saturated, so these are CPU a request, not the most it can serve):
