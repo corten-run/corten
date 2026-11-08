@@ -2553,14 +2553,16 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
 277. `bench/fullstack` measures what each production default costs in CPU a request under load:
     `cost-under-load.sh` builds card-market's round image as it is and with each `ablate/` patch,
-    and `ab.mjs` serves the page and the JSON at a fixed 300 a second and with 64 users, alternating,
+    and `ab.mjs` loads the page and the JSON at a fixed 300 a second and with 64 users, alternating,
     on a droplet's pinned CPU; `cost-under-load.mjs` gives each default's microseconds a request.
     Three rounds on a c-8 (the README's "What each production default costs under load"): for a
     browser, compression is 45 of the page's 85 microseconds at 64 users (53%) and 25 of the JSON's
-    57 (44%), and the page's `ETag` 6 (7%); every other default, and every default on `identity`,
-    is within a few microseconds of zero. `ab.mjs` now starts each round one image later, stops on
-    a failed k6 run and never reads an earlier run's file; `cost-under-load.sh` reuses a `cbd-*`
-    image only when its label says it was built from the same source
+    57 (44%); no other default is separated from the run's order and noise (the page's `ETag`, 7.7%
+    of its instructions under callgrind, measures 6 microseconds there, about what defaults callgrind gives almost no instructions measure). `ab.mjs`
+    now starts each round one image later, gives k6 an app serving from memory's load CPUs
+    (`BENCH_FIXTURE_LOAD_CPUS`), never reads an earlier run's file, and on a failed k6 run stops,
+    removing the app and writing the rows so far; `cost-under-load.sh` reuses a `cbd-*` image only
+    when its label says it was built from the same source, and writes `source.txt` beside the results
     ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
 
 ### Removed

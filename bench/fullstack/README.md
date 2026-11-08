@@ -950,8 +950,9 @@ User instructions only (callgrind does not see the kernel's), on glibc's allocat
 crate bundles, where the rounds' image preloads jemalloc and links Debian's libzstd
 ([design Choice 23](../../docs/design.md#choice-jemalloc-image) puts this page at about 83,000
 under jemalloc against 87,000), so these are the rounds' request shape, not their configuration.
-Requests per CPU-second under load are [below](#what-each-production-default-costs-under-load-c-8-droplet-2026-11-08) ([cost-by-default.sh](cost-by-default.sh), split by [cost-by-default.mjs](cost-by-default.mjs);
-results and each build's answer headers in [results/defaults1](results/defaults1/)). The headers
+These counts are [cost-by-default.sh](cost-by-default.sh)'s, split by [cost-by-default.mjs](cost-by-default.mjs)
+(results and each build's answer headers in [results/defaults1](results/defaults1/)); requests per
+CPU-second under load are [below](#what-each-production-default-costs-under-load-c-8-droplet-2026-11-08). The headers
 show what four patches remove: the security headers patch seven headers on the page and five on
 the JSON, the `Cache-Control` patch that header, the `ETag` patch the page's tag for a browser
 (nothing else is tagged), and the compression patch `Vary: accept-encoding`, with
@@ -1018,13 +1019,18 @@ and 64 users, with `Accept-Encoding: identity` and with a browser's. CPU is the 
 no request failed. A default's cost is the CPU a request takes in the build as it is less in the
 build without it, round by round, median (range) of the three
 ([cost-under-load.sh](cost-under-load.sh), split by [cost-under-load.mjs](cost-under-load.mjs);
-[results/cost-under-load](results/cost-under-load/)). Round to round a build moves by a few
-microseconds at 64 users and up to about 8 at the fixed rate, so a row whose range crosses zero
-says no cost that can be seen. Each round ran the build as it is first and the others after it in
-one order (`ab.mjs` has rotated the order each round since), so a drift within a round reads as a
-cost; a row of a few microseconds, the page's `ETag` among them, may be partly that. The images
-carried no stamp of the source they were built from (`cost-under-load.sh` labels them now); they
-were built for this run on a fresh droplet.
+[results/cost-under-load](results/cost-under-load/)). Round to round a build moves by about 3
+microseconds (median) and up to 9 in either phase, so a row whose range crosses zero says no cost
+that can be seen. Each round ran the build as it is first and the others after it in one order, so
+a drift within a round reads as a cost on every row: for a browser's page at 64 users the build as
+it is was the slowest of the nine in two rounds of three, and every default there shows a cost.
+`ab.mjs` now starts each round one image later, which moves the first slot but does not put the
+build as it is beside each variant, so it lessens this rather than removing it. k6 had the
+round's four load CPUs (`BENCH_LOAD_CPUS`), not the six a round gives an app serving from memory
+(`BENCH_FIXTURE_LOAD_CPUS`, which `ab.mjs` uses now). The images and results carry no record of
+the source they were built from; `cost-under-load.sh` now labels the images and writes
+`source.txt` beside the results. These numbers are on a different host and counter (the app's
+cgroup) than the r16 rounds' 47 microseconds a page (`docker stats`), so the two are not compared.
 
 At 64 users, CPU microseconds a request (the app's CPU was 86-101% busy: k6, on its four CPUs,
 did not keep it saturated, so these are CPU a request, not the most it can serve):
@@ -1033,12 +1039,12 @@ did not keep it saturated, so these are CPU a request, not the most it can serve
 |---|---|---|---|---|
 | None: requests per CPU-second | 26,656 (25,385-26,693) | 11,722 (11,715-12,754) | 31,813 (29,817-32,015) | 17,604 (16,925-17,823) |
 | None: CPU microseconds a request | 37.5 | 85.3 | 31.4 | 56.8 |
-| Security headers and the CSP | 0.8 (-1.6 to 2.4) | 9.5 (-0.9 to 11.1) | 1.4 (0.0 to 3.8) | 2.8 (2.1-3.4) |
+| Security headers and the CSP | 0.8 (-1.6 to 2.4) | 9.5 (-0.9 to 11.1) | 1.4 (-0.0 to 3.8) | 2.8 (2.1-3.4) |
 | The host check and the same-origin write check | 0.6 (-0.1 to 2.5) | 1.8 (-1.5 to 5.5) | 0.1 (-0.4 to 2.1) | -3.2 (-7.2 to 3.8) |
 | The deadline and the panic catch | -1.3 (-1.6 to -0.7) | 3.5 (-1.0 to 6.7) | -0.4 (-1.6 to 0.8) | -1.8 (-3.8 to -0.8) |
 | Compression | 1.8 (1.7-4.0) | 45.1 (36.5-45.3) | 0.7 (-1.9 to 2.2) | 25.2 (24.6-27.2) |
 | The `ETag` | 1.8 (-1.9 to 2.4) | 6.1 (4.3-6.5) | -0.5 (-0.9 to 1.2) | -3.9 (-4.0 to -0.1) |
-| Setting `Cache-Control` | 0.5 (-0.2 to 2.4) | 4.9 (-0.3 to 9.4) | 0.9 (-2.2 to 2.8) | -1.0 (-1.8 to 0.0) |
+| Setting `Cache-Control` | 0.5 (-0.2 to 2.4) | 4.9 (-0.3 to 9.4) | 0.9 (-2.2 to 2.8) | -1.0 (-1.8 to -0.0) |
 | Error pages and problem+json (on a success) | 0.1 (-0.9 to 2.3) | 0.4 (-2.6 to 1.4) | -0.2 (-1.5 to 1.4) | -1.6 (-4.4 to 3.7) |
 | The header and send timeouts' connection watch | -0.2 (-3.0 to 0.7) | 5.6 (-4.2 to 8.0) | -1.0 (-3.7 to 2.3) | 0.5 (-0.4 to 2.1) |
 
@@ -1058,19 +1064,19 @@ serving it, so these are what a lightly loaded server spends a request):
 | Error pages and problem+json (on a success) | 1.5 (-3.2 to 2.6) | 1.1 (-5.1 to 8.2) | -3.4 (-3.6 to -1.1) | 1.2 (-5.4 to 1.3) |
 | The header and send timeouts' connection watch | -0.9 (-4.1 to 2.5) | 1.0 (-7.7 to 7.7) | 0.3 (0.2-1.4) | 2.7 (-3.0 to 2.8) |
 
-Compression is the one default whose cost under load stands clear of the noise: for a browser it
-is 45 of the page's 85 microseconds at 64 users (53%, so the page serves 11,700 requests a
-CPU-second compressed against 24,900 without) and 25 of the JSON's 57 (44%), less than the share
-callgrind counts above (two thirds and three quarters of user instructions), since these include
-the kernel's part of a request, which compression does not change. The page's `ETag` for a
-browser is the other: 6.1 (4.3-6.5) microseconds at 64 users, 7% of the request's CPU, close to
-the 7.7% of user instructions callgrind gives it. Every other default, and every default on
-`identity`, is within a few microseconds of zero in both phases. Of those 58 cells, 13 have a range
-clear of zero, and 6 of the 13 are below it, a saving that removing work cannot make, so a range
-clear of zero by a microsecond or two is within these runs' drift. The instruction counts fit:
-callgrind gives the security headers 5.5% of an `identity` page and compression 3.2%, about 2 and
-1.2 of its 37.5 microseconds, at the edge of what these runs resolve. On the rounds' `identity`
-requests no single default costs more than a few microseconds of CPU. What
+Compression is the one default whose cost under load is larger than the run's noise and its order:
+for a browser it is 45 of the page's 85 microseconds at 64 users (53%, so the page serves 11,700
+requests a CPU-second compressed against 24,900 without) and 25 of the JSON's 57 (44%), less than
+the share callgrind counts above (68% and 72% of user instructions), since these include the
+kernel's part of a request, which callgrind does not count. The page's `ETag` for a browser
+measures 6.1 (4.3-6.5) microseconds at 64 users, but every default in that column measures 0.4 to
+9.5, so this run does not separate it from the order; callgrind's 7.7% of the page's instructions
+is the evidence for it. Every other cell is under 10 microseconds. Of the 58, 14 have a range clear
+of zero, 6 of them below it, a saving that removing work cannot make, so a range clear of zero by a
+few microseconds is within these runs' drift. The instruction counts fit: callgrind gives the
+security headers 5.5% of an `identity` page and compression 3.2%, about 2 and 1.2 of its 37.5
+microseconds, at the edge of what these runs resolve. On the rounds' `identity` requests no default
+is seen to cost more than a few microseconds of CPU. What
 the bytes compression saves are worth to a client is outside this measure; an app short of CPU
 behind a proxy that compresses can build without the `compress` feature
 ([the defaults](../../docs/guide/app.md)).
@@ -1817,7 +1823,7 @@ docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
 # The same builds' requests per CPU-second under load (a round's image of each, ab.mjs on the
-# pinned cores; BENCH_APP_CPUS, BENCH_LOAD_CPUS and AB_ROUNDS as a round sets them), then each cost:
+# pinned cores; BENCH_APP_CPUS, BENCH_FIXTURE_LOAD_CPUS and AB_ROUNDS as a round sets them), then each cost:
 bash bench/fullstack/cost-under-load.sh
 node bench/fullstack/cost-under-load.mjs bench/fullstack/results/cost-under-load/summary.json
 # One app before and after, alternating (identity, a browser's encodings, brotli alone; AB_ROUNDS=3,
