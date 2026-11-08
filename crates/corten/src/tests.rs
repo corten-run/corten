@@ -191,7 +191,11 @@ async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
             req = req.header("corten", mode);
         }
         let res = router.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
-        assert_eq!((res.status(), &res.headers()[header::LOCATION]), (StatusCode::SEE_OTHER, &"/sign-in".parse().unwrap()), "{mode:?}");
+        assert_eq!(
+            (res.status(), &res.headers()[header::LOCATION]),
+            (StatusCode::SEE_OTHER, &"/sign-in".parse().unwrap()),
+            "{mode:?}"
+        );
         assert_eq!(res.headers()["x-request-id"], "r-1", "{mode:?}");
         let vary: Vec<_> = res.headers().get_all(header::VARY).iter().flat_map(|v| v.to_str().unwrap().split(", ")).collect();
         assert_eq!(vary.iter().filter(|v| **v == "origin").count(), 1, "{mode:?}: {vary:?}");
