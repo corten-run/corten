@@ -407,17 +407,17 @@ async function run(browser) {
     const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
     const was = boxes.map((b) => b.checked);
     const valid = () => boxes.every((b) => b.checkValidity());
-    const told = () => boxes[0].dispatchEvent(new Event("change", { bubbles: true }));
+    const tell = () => boxes[0].dispatchEvent(new Event("change", { bubbles: true }));
     for (const b of boxes) b.checked = false;
     const cleared = valid();
-    told();
+    tell();
     const clearedTold = valid();
     for (const b of boxes) b.checked = true;
     const filled = valid();
-    told();
+    tell();
     const filledTold = valid();
     for (const [i, b] of boxes.entries()) b.checked = was[i];
-    told();
+    tell();
     return { cleared, clearedTold, filled, filledTold, back: valid() };
   });
   check(
