@@ -1,14 +1,18 @@
-// CPU time and minor page faults a request, by image and Accept-Encoding (design Choice 23):
-//   node alloc-faults.mjs <image> [image ...]
+// CPU time and minor page faults a request, by image and Accept-Encoding (docs/design.md#choice-jemalloc-image):
+//   node alloc-faults.mjs <out-dir> <image> [image ...]
 // Each image runs alone (--cpus 1 --memory 1g, items in memory from fixtures/items.json) on the bench
 // network. A probe container sends 500 item pages to warm it, then REQUESTS (3,000 unless set) more
 // from 8 connections, for each of identity, a browser's encodings and brotli alone (ENCODINGS,
 // comma-separated names, for some); the server's /proc/1/stat is read before and after, so a
 // request's minor faults (minflt) and CPU time (utime + stime, in the kernel's 10 ms ticks) are
-// the difference over the requests. Faults are counted exactly; CPU time is coarse and moves with
-// whatever else the machine runs. ROUNDS (3 unless set) repeats every image and encoding in turn.
+// the difference over the requests (ticks assumed 100 a second, Linux's USER_HZ). A figure is an
+// average over everything the server did in that window, so it repeats to about 0.1 a request;
+// CPU time is coarse and moves with whatever else the machine runs. ROUNDS (3 unless set) repeats
+// every image and encoding in turn. Writes <out-dir>/summary.json (each image's id and allocator
+// environment, and every row) after each row; a request that is not answered 200 stops it.
 // Inside the probe it is run as: node alloc-faults.mjs --load <base> <encoding> <requests>
 import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { network } from "./apps.mjs";
@@ -29,12 +33,23 @@ if (process.argv[2] === "--load") {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
-const images = process.argv.slice(2);
-if (images.length === 0) throw new Error("usage: node alloc-faults.mjs <image> [image ...]");
-const requests = Number(process.env.REQUESTS ?? 3000), rounds = Number(process.env.ROUNDS ?? 3);
+const [out, ...images] = process.argv.slice(2);
+if (!out || images.length === 0) throw new Error("usage: node alloc-faults.mjs <out-dir> <image> [image ...]");
+const whole = (/** @type {string} */ name, /** @type {number} */ fallback) => {
+  const n = Number(process.env[name] ?? fallback);
+  if (!Number.isInteger(n) || n < 1) throw new Error(`${name} is a whole number above zero`);
+  return n;
+};
+const requests = whole("REQUESTS", 3000), rounds = whole("ROUNDS", 3);
 /** @type {Record<string, string>} */
 const encodings = { identity: "identity", browser: "gzip, deflate, br, zstd", br: "br" };
-if (process.env.ENCODINGS) for (const name of Object.keys(encodings)) if (!process.env.ENCODINGS.split(",").includes(name)) delete encodings[name];
+if (process.env.ENCODINGS) {
+  const wanted = process.env.ENCODINGS.split(",");
+  for (const name of Object.keys(encodings)) if (!wanted.includes(name)) delete encodings[name];
+  if (Object.keys(encodings).length !== wanted.length) throw new Error("ENCODINGS names one of identity, browser, br");
+}
+const dir = join(here, out);
+mkdirSync(dir, { recursive: true });
 const docker = (/** @type {string[]} */ ...args) => spawnSync("docker", args, { encoding: "utf8" });
 const sleep = (/** @type {number} */ ms) => new Promise((done) => setTimeout(done, ms));
 const app = "faults-app";
@@ -52,8 +67,17 @@ const load = (/** @type {string} */ encoding, /** @type {number} */ n) => {
   return Number(r.stdout);
 };
 
+/** Each image's id and the allocator settings in its environment. */
+const described = Object.fromEntries(images.map((image) => {
+  const r = docker("image", "inspect", "--format", "{{json .}}", image);
+  if (r.status !== 0) throw new Error("image: " + r.stderr);
+  const info = JSON.parse(r.stdout);
+  const env = /** @type {string[]} */ (info.Config.Env ?? []).filter((e) => /^(LD_PRELOAD|MALLOC_CONF|GLIBC_TUNABLES)=/.test(e));
+  return [image, { id: info.Id, env }];
+}));
 /** @type {{ round: number, image: string, enc: string, faults: number, cpuMicros: number, failed: number }[]} */
 const rows = [];
+const save = () => writeFileSync(join(dir, "summary.json"), JSON.stringify({ requests, rounds, images: described, rows }, null, 1));
 try {
   for (let round = 1; round <= rounds; round++) {
     for (const image of images) {
@@ -68,7 +92,9 @@ try {
         const after = stat();
         const row = { round, image, enc, faults: +((after.minflt - before.minflt) / requests).toFixed(1), cpuMicros: Math.round(((after.ticks - before.ticks) * 10000) / requests), failed };
         rows.push(row);
+        save();
         console.log(JSON.stringify(row));
+        if (failed > 0) throw new Error(`${image} ${enc}: ${failed} requests not answered 200`);
       }
     }
   }

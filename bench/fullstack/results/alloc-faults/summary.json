@@ -1,226 +1,243 @@
 {
-  "images": {
-    "cm-p1011-glibc": "card-market at 81f1f8ef, LD_PRELOAD empty (glibc)",
-    "cm-p1011-je": "card-market at 81f1f8ef, MALLOC_CONF unset (jemalloc 5.3 defaults)",
-    "corten-card-market-p1011b": "card-market at this branch, MALLOC_CONF=background_thread:true,tcache_max:65536"
+ "requests": 2000,
+ "rounds": 3,
+ "images": {
+  "cm-p1011-je": {
+   "id": "sha256:8c7d22f00dd50bb6fefdd2b646e95edf87e7dd8a59b7dcb60c260389a9dbbd79",
+   "env": [
+    "LD_PRELOAD=libjemalloc.so.2"
+   ]
   },
-  "requests": 2000,
-  "rows": [
-    {
-      "round": 1,
-      "image": "cm-p1011-je",
-      "enc": "identity",
-      "faults": 0,
-      "cpuMicros": 115,
-      "failed": 0
-    },
-    {
-      "round": 1,
-      "image": "cm-p1011-je",
-      "enc": "browser",
-      "faults": 0,
-      "cpuMicros": 240,
-      "failed": 0
-    },
-    {
-      "round": 1,
-      "image": "cm-p1011-je",
-      "enc": "br",
-      "faults": 19.4,
-      "cpuMicros": 450,
-      "failed": 0
-    },
-    {
-      "round": 1,
-      "image": "corten-card-market-p1011b",
-      "enc": "identity",
-      "faults": 0,
-      "cpuMicros": 120,
-      "failed": 0
-    },
-    {
-      "round": 1,
-      "image": "corten-card-market-p1011b",
-      "enc": "browser",
-      "faults": 0,
-      "cpuMicros": 265,
-      "failed": 0
-    },
-    {
-      "round": 1,
-      "image": "corten-card-market-p1011b",
-      "enc": "br",
-      "faults": 0,
-      "cpuMicros": 325,
-      "failed": 0
-    },
-    {
-      "round": 1,
-      "image": "cm-p1011-glibc",
-      "enc": "identity",
-      "faults": 0,
-      "cpuMicros": 155,
-      "failed": 0
-    },
-    {
-      "round": 1,
-      "image": "cm-p1011-glibc",
-      "enc": "browser",
-      "faults": 0,
-      "cpuMicros": 295,
-      "failed": 0
-    },
-    {
-      "round": 1,
-      "image": "cm-p1011-glibc",
-      "enc": "br",
-      "faults": 0,
-      "cpuMicros": 265,
-      "failed": 0
-    },
-    {
-      "round": 2,
-      "image": "cm-p1011-je",
-      "enc": "identity",
-      "faults": 0,
-      "cpuMicros": 140,
-      "failed": 0
-    },
-    {
-      "round": 2,
-      "image": "cm-p1011-je",
-      "enc": "browser",
-      "faults": 0,
-      "cpuMicros": 290,
-      "failed": 0
-    },
-    {
-      "round": 2,
-      "image": "cm-p1011-je",
-      "enc": "br",
-      "faults": 19.3,
-      "cpuMicros": 525,
-      "failed": 0
-    },
-    {
-      "round": 2,
-      "image": "corten-card-market-p1011b",
-      "enc": "identity",
-      "faults": 0,
-      "cpuMicros": 205,
-      "failed": 0
-    },
-    {
-      "round": 2,
-      "image": "corten-card-market-p1011b",
-      "enc": "browser",
-      "faults": 0,
-      "cpuMicros": 270,
-      "failed": 0
-    },
-    {
-      "round": 2,
-      "image": "corten-card-market-p1011b",
-      "enc": "br",
-      "faults": 0,
-      "cpuMicros": 365,
-      "failed": 0
-    },
-    {
-      "round": 2,
-      "image": "cm-p1011-glibc",
-      "enc": "identity",
-      "faults": 0,
-      "cpuMicros": 155,
-      "failed": 0
-    },
-    {
-      "round": 2,
-      "image": "cm-p1011-glibc",
-      "enc": "browser",
-      "faults": 0,
-      "cpuMicros": 265,
-      "failed": 0
-    },
-    {
-      "round": 2,
-      "image": "cm-p1011-glibc",
-      "enc": "br",
-      "faults": 0,
-      "cpuMicros": 335,
-      "failed": 0
-    },
-    {
-      "round": 3,
-      "image": "cm-p1011-je",
-      "enc": "identity",
-      "faults": 0,
-      "cpuMicros": 165,
-      "failed": 0
-    },
-    {
-      "round": 3,
-      "image": "cm-p1011-je",
-      "enc": "browser",
-      "faults": 0,
-      "cpuMicros": 330,
-      "failed": 0
-    },
-    {
-      "round": 3,
-      "image": "cm-p1011-je",
-      "enc": "br",
-      "faults": 19.3,
-      "cpuMicros": 700,
-      "failed": 0
-    },
-    {
-      "round": 3,
-      "image": "corten-card-market-p1011b",
-      "enc": "identity",
-      "faults": 0,
-      "cpuMicros": 270,
-      "failed": 0
-    },
-    {
-      "round": 3,
-      "image": "corten-card-market-p1011b",
-      "enc": "browser",
-      "faults": 0,
-      "cpuMicros": 375,
-      "failed": 0
-    },
-    {
-      "round": 3,
-      "image": "corten-card-market-p1011b",
-      "enc": "br",
-      "faults": 0,
-      "cpuMicros": 370,
-      "failed": 0
-    },
-    {
-      "round": 3,
-      "image": "cm-p1011-glibc",
-      "enc": "identity",
-      "faults": 0,
-      "cpuMicros": 140,
-      "failed": 0
-    },
-    {
-      "round": 3,
-      "image": "cm-p1011-glibc",
-      "enc": "browser",
-      "faults": 0,
-      "cpuMicros": 365,
-      "failed": 0
-    },
-    {
-      "round": 3,
-      "image": "cm-p1011-glibc",
-      "enc": "br",
-      "faults": 0,
-      "cpuMicros": 520,
-      "failed": 0
-    }
-  ]
+  "corten-card-market-p1011b": {
+   "id": "sha256:038aeddfe6e5372e0822d2fd5afc9b4ac741a8701c4a2004d14195739f9f5507",
+   "env": [
+    "LD_PRELOAD=libjemalloc.so.2",
+    "MALLOC_CONF=background_thread:true,tcache_max:65536"
+   ]
+  },
+  "cm-p1011-glibc": {
+   "id": "sha256:dab6d7b3925ec92de07abea741d8ba77945b5990e5b5b4c431dea9f6488462ea",
+   "env": [
+    "LD_PRELOAD="
+   ]
+  }
+ },
+ "rows": [
+  {
+   "round": 1,
+   "image": "cm-p1011-je",
+   "enc": "identity",
+   "faults": 0,
+   "cpuMicros": 185,
+   "failed": 0
+  },
+  {
+   "round": 1,
+   "image": "cm-p1011-je",
+   "enc": "browser",
+   "faults": 0,
+   "cpuMicros": 345,
+   "failed": 0
+  },
+  {
+   "round": 1,
+   "image": "cm-p1011-je",
+   "enc": "br",
+   "faults": 19.3,
+   "cpuMicros": 435,
+   "failed": 0
+  },
+  {
+   "round": 1,
+   "image": "corten-card-market-p1011b",
+   "enc": "identity",
+   "faults": 0,
+   "cpuMicros": 160,
+   "failed": 0
+  },
+  {
+   "round": 1,
+   "image": "corten-card-market-p1011b",
+   "enc": "browser",
+   "faults": 0,
+   "cpuMicros": 340,
+   "failed": 0
+  },
+  {
+   "round": 1,
+   "image": "corten-card-market-p1011b",
+   "enc": "br",
+   "faults": 0,
+   "cpuMicros": 430,
+   "failed": 0
+  },
+  {
+   "round": 1,
+   "image": "cm-p1011-glibc",
+   "enc": "identity",
+   "faults": 0,
+   "cpuMicros": 180,
+   "failed": 0
+  },
+  {
+   "round": 1,
+   "image": "cm-p1011-glibc",
+   "enc": "browser",
+   "faults": 0,
+   "cpuMicros": 240,
+   "failed": 0
+  },
+  {
+   "round": 1,
+   "image": "cm-p1011-glibc",
+   "enc": "br",
+   "faults": 0,
+   "cpuMicros": 385,
+   "failed": 0
+  },
+  {
+   "round": 2,
+   "image": "cm-p1011-je",
+   "enc": "identity",
+   "faults": 0,
+   "cpuMicros": 160,
+   "failed": 0
+  },
+  {
+   "round": 2,
+   "image": "cm-p1011-je",
+   "enc": "browser",
+   "faults": 0,
+   "cpuMicros": 290,
+   "failed": 0
+  },
+  {
+   "round": 2,
+   "image": "cm-p1011-je",
+   "enc": "br",
+   "faults": 19.3,
+   "cpuMicros": 430,
+   "failed": 0
+  },
+  {
+   "round": 2,
+   "image": "corten-card-market-p1011b",
+   "enc": "identity",
+   "faults": 0,
+   "cpuMicros": 160,
+   "failed": 0
+  },
+  {
+   "round": 2,
+   "image": "corten-card-market-p1011b",
+   "enc": "browser",
+   "faults": 0,
+   "cpuMicros": 270,
+   "failed": 0
+  },
+  {
+   "round": 2,
+   "image": "corten-card-market-p1011b",
+   "enc": "br",
+   "faults": 0,
+   "cpuMicros": 340,
+   "failed": 0
+  },
+  {
+   "round": 2,
+   "image": "cm-p1011-glibc",
+   "enc": "identity",
+   "faults": 0,
+   "cpuMicros": 140,
+   "failed": 0
+  },
+  {
+   "round": 2,
+   "image": "cm-p1011-glibc",
+   "enc": "browser",
+   "faults": 0,
+   "cpuMicros": 330,
+   "failed": 0
+  },
+  {
+   "round": 2,
+   "image": "cm-p1011-glibc",
+   "enc": "br",
+   "faults": 0,
+   "cpuMicros": 345,
+   "failed": 0
+  },
+  {
+   "round": 3,
+   "image": "cm-p1011-je",
+   "enc": "identity",
+   "faults": 0,
+   "cpuMicros": 175,
+   "failed": 0
+  },
+  {
+   "round": 3,
+   "image": "cm-p1011-je",
+   "enc": "browser",
+   "faults": 0,
+   "cpuMicros": 350,
+   "failed": 0
+  },
+  {
+   "round": 3,
+   "image": "cm-p1011-je",
+   "enc": "br",
+   "faults": 19.4,
+   "cpuMicros": 580,
+   "failed": 0
+  },
+  {
+   "round": 3,
+   "image": "corten-card-market-p1011b",
+   "enc": "identity",
+   "faults": 0,
+   "cpuMicros": 275,
+   "failed": 0
+  },
+  {
+   "round": 3,
+   "image": "corten-card-market-p1011b",
+   "enc": "browser",
+   "faults": 0,
+   "cpuMicros": 475,
+   "failed": 0
+  },
+  {
+   "round": 3,
+   "image": "corten-card-market-p1011b",
+   "enc": "br",
+   "faults": 0,
+   "cpuMicros": 530,
+   "failed": 0
+  },
+  {
+   "round": 3,
+   "image": "cm-p1011-glibc",
+   "enc": "identity",
+   "faults": 0,
+   "cpuMicros": 265,
+   "failed": 0
+  },
+  {
+   "round": 3,
+   "image": "cm-p1011-glibc",
+   "enc": "browser",
+   "faults": 0,
+   "cpuMicros": 465,
+   "failed": 0
+  },
+  {
+   "round": 3,
+   "image": "cm-p1011-glibc",
+   "enc": "br",
+   "faults": 0,
+   "cpuMicros": 465,
+   "failed": 0
+  }
+ ]
 }

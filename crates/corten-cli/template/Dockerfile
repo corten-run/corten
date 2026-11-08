@@ -17,8 +17,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim
 # jemalloc, preloaded, gives back memory a burst of connections took: eight floods of unfinished
-# request heads left about 440 MiB with glibc's allocator and 5 to 9 MiB with these settings (three
-# runs each). Its background thread returns memory while the app is idle; a 64 KiB thread cache
+# request heads left 406 to 455 MiB with glibc's allocator and 13 to 16 MiB with these settings
+# (three runs each). Its background thread returns memory while the app is idle; a 64 KiB thread cache
 # keeps a compressor's buffers, which otherwise fault in new pages on every brotli response
 # (https://github.com/corten-run/corten/blob/main/docs/design.md#choice-jemalloc-image). Remove
 # these three lines to run on glibc's allocator.

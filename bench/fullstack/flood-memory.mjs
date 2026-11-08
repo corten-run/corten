@@ -1,19 +1,20 @@
-// Memory floods of unfinished request heads leave behind, by allocator (design Choice 23):
+// Memory floods of unfinished request heads leave behind, by allocator (docs/design.md#choice-jemalloc-image):
 //   node flood-memory.mjs <out-dir> <image> [runs] [floods]
 // The image is an app built with the template's jemalloc lines (card-market's Dockerfile has them).
 // Each variant runs that one image with only the allocator changed by its environment: jemalloc
-// with no settings, jemalloc with its background thread (MALLOC_CONF), that and a 64 KiB thread cache limit,
-// glibc's allocator (LD_PRELOAD empty), glibc's with fewer arenas and a lower trim threshold (two
-// arenas, one arena), and with a lower mmap threshold too; FLOOD_VARIANTS (names, comma-separated)
-// runs only those. For each variant
-// and run (3 unless given) the app starts on its own (--cpus 1 --memory 1g), takes a few requests, and
+// with no settings, with its background thread (MALLOC_CONF), and with that and a 64 KiB thread
+// cache (the template's); glibc's allocator (LD_PRELOAD empty); glibc's with two arenas or one and
+// its trim threshold held at its default (glibc otherwise raises it); and two arenas with a 16 KiB
+// mmap threshold. FLOOD_VARIANTS (names, comma-separated) runs only those. For each variant and run
+// (3 unless given) the app starts on its own (--cpus 1 --memory 1g), takes a few requests, and
 // then `floods` times (8 unless given) 4,000 connections each send a 30 KiB request head without
 // its blank line, hold it 12 s and close; a probe container on the same network sends them. Memory
 // is the app's cgroup: memory.current and memory.stat's anon, read at rest before the first flood,
 // a second before the end of each hold, 5 s after each close, and 35 s after the last. Nothing
 // else asks the app anything between floods, so an allocator that returns memory only while it is
 // used (jemalloc without its background thread) is seen at its worst.
-// Writes <out-dir>/flood-memory.json (every sample) and prints a line per run and a summary.
+// Writes <out-dir>/flood-memory.json (every sample) after each run, and prints a line per run and
+// a summary.
 // Inside the probe it is run as: node flood-memory.mjs --flood <host> <port> <count> <bytes> <holdMs>
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -83,60 +84,77 @@ const memory = () => {
   return { current: mib(current), anon: mib(stat.anon), file: mib(stat.file) };
 };
 
-/** One flood from the probe: its result, with the app's memory a second before the hold ends. */
+/**
+ * One flood from the probe: its result, with the app's memory sampled once, a second before the
+ * hold ends (so a peak is that sample, not the highest the memory reached).
+ */
 const flood = (/** @type {number} */ holdMs) => new Promise((done, fail) => {
   const child = spawn("docker", ["exec", probe, "node", "/b/flood-memory.mjs", "--flood", app, "8080", "4000", "30720", String(holdMs)]);
   let text = "";
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
   /** @type {object | null} */
   let held = null;
+  /** @type {unknown} */
+  let sampleError = null;
   child.stdout.on("data", (c) => {
     text += c;
-    if (held === null && text.includes("opened\n")) { held = {}; setTimeout(() => { held = memory(); }, holdMs - 1000); }
+    if (timer === undefined && text.includes("opened\n")) {
+      timer = setTimeout(() => { try { held = memory(); } catch (e) { sampleError = e; } }, holdMs - 1000);
+    }
   });
   child.on("exit", (code) => {
+    clearTimeout(timer);
     if (code !== 0) return fail(new Error("flood exited " + code));
+    if (sampleError) return fail(sampleError);
+    if (held === null) return fail(new Error("the flood ended before its memory was sampled"));
     done({ ...JSON.parse(text.split("\n").filter(Boolean).at(-1) ?? "{}"), held });
   });
 });
 
+const image_id = docker("image", "inspect", "--format", "{{.Id}}", image).stdout.trim();
+/** @type {{ variant: string, run: number, rest: any, floods: any[], end: any }[]} */
+const results = [];
+/** Writes what has been measured so far, so a run that fails later keeps the earlier ones. */
+const save = () => writeFileSync(join(dir, "flood-memory.json"), JSON.stringify({ image, image_id, runs, floods, variants, results }, null, 1));
+
 docker("network", "create", net);
 docker("rm", "-f", probe);
-const started = docker("run", "-d", "--name", probe, "--network", net, "--ulimit", "nofile=65536:65536", "-v", here + ":/b:ro", "node:24-alpine", "sleep", "infinity");
-if (started.status !== 0) throw new Error("probe: " + started.stderr);
-
-/** @type {{ variant: string, run: number, rest: object, floods: object[], end: object }[]} */
-const results = [];
-for (let run = 1; run <= runs; run++) {
-  for (const [variant, env] of Object.entries(variants)) {
-    docker("rm", "-f", app);
-    const r = docker("run", "-d", "--name", app, "--network", net, "--cpus", "1", "--memory", "1g", "-v", fixtures + ":/fixtures:ro", "-e", "ITEM_SOURCE=fixture", "-e", "FIXTURE_PATH=/fixtures/smoke.json", "-e", "PORT=8080", "-e", `HOSTS=${app}`, ...env, image);
-    if (r.status !== 0) throw new Error("app: " + r.stderr);
-    await sleep(3000);
-    for (let i = 0; i < 20; i++) docker("exec", probe, "wget", "-q", "-O", "/dev/null", "--header", "host: localhost", `http://${app}:8080/api/items/item_5`);
-    await sleep(2000);
-    const rest = memory();
-    const each = [];
-    for (let f = 1; f <= floods; f++) {
-      const result = /** @type {{ held: object }} */ (await flood(12000));
-      await sleep(5000);
-      each.push({ flood: f, ...result, after: memory() });
+try {
+  const started = docker("run", "-d", "--name", probe, "--network", net, "--ulimit", "nofile=65536:65536", "-v", here + ":/b:ro", "node:24-alpine", "sleep", "infinity");
+  if (started.status !== 0) throw new Error("probe: " + started.stderr);
+  for (let run = 1; run <= runs; run++) {
+    for (const [variant, env] of Object.entries(variants)) {
+      docker("rm", "-f", app);
+      const r = docker("run", "-d", "--name", app, "--network", net, "--cpus", "1", "--memory", "1g", "-v", fixtures + ":/fixtures:ro", "-e", "ITEM_SOURCE=fixture", "-e", "FIXTURE_PATH=/fixtures/smoke.json", "-e", "PORT=8080", "-e", `HOSTS=${app}`, ...env, image);
+      if (r.status !== 0) throw new Error("app: " + r.stderr);
+      await sleep(3000);
+      for (let i = 0; i < 20; i++) docker("exec", probe, "wget", "-q", "-O", "/dev/null", "--header", "host: localhost", `http://${app}:8080/api/items/item_5`);
+      await sleep(2000);
+      const rest = memory();
+      const each = [];
+      for (let f = 1; f <= floods; f++) {
+        const result = /** @type {{ held: object }} */ (await flood(12000));
+        await sleep(5000);
+        each.push({ flood: f, ...result, after: memory() });
+      }
+      await sleep(30000);
+      const end = memory();
+      results.push({ variant, run, rest, floods: each, end });
+      save();
+      console.log(JSON.stringify({ variant, run, rest: rest.current, held: each.map((e) => e.held.current), after: each.map((e) => e.after.current), end: end.current, endAnon: end.anon, opened: each.map((e) => e.opened) }));
     }
-    await sleep(30000);
-    const end = memory();
-    const row = { variant, run, rest, floods: each, end };
-    results.push(row);
-    console.log(JSON.stringify({ variant, run, rest: rest.anon, held: each.map((e) => e.held.anon), after: each.map((e) => e.after.anon), end: end.anon, opened: each.map((e) => e.opened) }));
   }
+} finally {
+  docker("rm", "-f", app, probe);
+  docker("network", "rm", net);
 }
-docker("rm", "-f", app, probe);
-docker("network", "rm", net);
 
-const image_id = docker("image", "inspect", "--format", "{{.Id}}", image).stdout.trim();
-writeFileSync(join(dir, "flood-memory.json"), JSON.stringify({ image, image_id, runs, floods, variants, results }, null, 1));
 const median = (/** @type {number[]} */ xs) => { const s = [...xs].sort((a, b) => a - b); return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2; };
+const range = (/** @type {number[]} */ xs) => `${median(xs)} (${Math.min(...xs)} to ${Math.max(...xs)})`;
 for (const variant of Object.keys(variants)) {
   const mine = results.filter((x) => x.variant === variant);
-  const end = mine.map((x) => x.end.anon), peak = mine.map((x) => Math.max(.../** @type {any[]} */ (x.floods).map((e) => e.held.anon)));
-  const lastAfter = mine.map((x) => /** @type {any[]} */ (x.floods).at(-1).after.anon);
-  console.log(`${variant}: anon 35 s after the last flood median ${median(end)} MiB (${Math.min(...end)} to ${Math.max(...end)}), 5 s after the last ${median(lastAfter)} (${Math.min(...lastAfter)} to ${Math.max(...lastAfter)}), peak held ${median(peak)} (${Math.min(...peak)} to ${Math.max(...peak)})`);
+  const end = (/** @type {"current" | "anon"} */ k) => mine.map((x) => x.end[k]);
+  const peak = (/** @type {"current" | "anon"} */ k) => mine.map((x) => Math.max(...x.floods.map((e) => e.held[k])));
+  console.log(`${variant}, MiB, median (range): 35 s after the last flood memory.current ${range(end("current"))}, anon ${range(end("anon"))}; sampled 1 s before a hold ended, highest ${range(peak("current"))}, anon ${range(peak("anon"))}`);
 }

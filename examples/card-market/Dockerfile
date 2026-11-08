@@ -18,9 +18,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim
 # jemalloc, preloaded, with its background thread and a 64 KiB thread cache, gives back memory a
-# burst took (eight floods of unfinished heads: about 440 MiB left on glibc's allocator, 5 to 9 MiB
-# here) and keeps brotli's buffers between responses (docs/design.md#choice-jemalloc-image). Remove
-# these three lines to run on glibc's.
+# burst took (eight floods of unfinished heads: 406 to 455 MiB left on glibc's allocator, 13 to 16
+# MiB here) and keeps brotli's buffers between responses (docs/design.md#choice-jemalloc-image).
+# Remove these three lines to run on glibc's.
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
 ENV MALLOC_CONF=background_thread:true,tcache_max:65536

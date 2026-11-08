@@ -19,8 +19,13 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 /** @type {Record<string, string>} */
 const encodings = { identity: "identity", browser: "gzip, deflate, br, zstd", br: "br" };
 // AB_ENCODINGS (names, comma-separated) runs only those.
-if (process.env.AB_ENCODINGS) for (const name of Object.keys(encodings)) if (!process.env.AB_ENCODINGS.split(",").includes(name)) delete encodings[name];
+if (process.env.AB_ENCODINGS) {
+  const wanted = process.env.AB_ENCODINGS.split(",");
+  for (const name of Object.keys(encodings)) if (!wanted.includes(name)) delete encodings[name];
+  if (Object.keys(encodings).length !== wanted.length) throw new Error("AB_ENCODINGS names one of identity, browser, br");
+}
 const rounds = Number(process.env.AB_ROUNDS ?? 3);
+if (!Number.isInteger(rounds) || rounds < 1) throw new Error("AB_ROUNDS is a whole number above zero");
 const rows = [];
 
 for (let round = 1; round <= rounds; round++) {

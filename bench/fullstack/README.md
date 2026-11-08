@@ -1031,6 +1031,25 @@ instead of tower-http's defaults (brotli 4 here), the runtime and assets compres
 in `render_cost`), and the island scan looking for dashes instead of every tag (21 µs to 2.4 µs
 on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 
+### The image's allocator (Docker Desktop, 2026-11-08)
+
+The evidence behind [design Choice 23](../../docs/design.md#choice-jemalloc-image), card-market built
+at `81f1f8ef` with only its allocator's environment changed (each folder's JSON records every
+image's id and settings):
+
+| Folder | What | Images |
+|---|---|---|
+| `results/flood-memory`, `-mmap`, `-tuned` | `flood-memory.mjs`: eight floods of 4,000 unfinished heads, three runs each | jemalloc unset, `background_thread:true`, and that with `tcache_max:65536`; glibc, with two arenas or one, and with a 16 KiB mmap threshold |
+| `results/alloc-faults` | `alloc-faults.mjs`: page faults and CPU a request, three encodings, three rounds | jemalloc unset (`cm-p1011-je`), the tuned image as committed (`corten-card-market-p1011b`), glibc (`cm-p1011-glibc`) |
+| `results/alloc-faults-br` | the same, brotli only | jemalloc unset, `background_thread:true` (`jebg`), no decay (`jenodecay`), `thp:never`, `retain:false`, `tcache_max` 64 KiB and 8 MiB, the tuned image, glibc |
+| `results/ab-jemalloc` | `ab.mjs`, three encodings, three rounds | jemalloc unset (`je`), `background_thread:true` (`jebg`), glibc |
+| `results/ab-jemalloc-br` | `ab.mjs`, brotli only | jemalloc unset, `oversize_threshold` 0 (`jeos0`) and 64 MiB (`jeos64`), glibc |
+| `results/ab-jemalloc-tuned` | `ab.mjs`, three encodings, three rounds | jemalloc unset, `background_thread:true,tcache_max:65536` (`jecand`), glibc |
+
+All ran on a desktop with other containers running, so the `ab.mjs` rounds moved by up to 2.7
+times between rounds of one image; the fault counts repeat to 0.1 a request. A quiet host has not
+run them.
+
 ### Build cost on a desktop (round local-2, 2026-11-03)
 
 `build.mjs local-2 all 1` on Docker Desktop (WSL2, 8 CPUs, 9.7 GiB), each step pinned to cores
@@ -1734,7 +1753,7 @@ node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repe
 # (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some):
 node bench/fullstack/ab.mjs results/ab-x cb-corten cb-corten-next
 node bench/fullstack/flood-memory.mjs results/flood-x cb-corten [runs=3] [floods=8]
-node bench/fullstack/alloc-faults.mjs cb-corten cb-corten-next   # page faults and CPU a request
+node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next   # page faults and CPU a request
 ```
 
 ## What the repository keeps
