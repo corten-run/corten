@@ -743,24 +743,24 @@ rules something out.
    Last checked: 2026-11-06, CloudFront's guide to the cache key and Cloudflare's Cache Rules, whose
    Vary setting normalizes `Accept-Language` only when a rule turns it on, read at `62eb57f7`.
 
-23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image package, not a crate,
-   with its background thread and a 64 KiB thread cache.** glibc's allocator keeps memory a burst
-   of connections freed, and each burst grows what it keeps. Eight floods of 4,000 unfinished
-   30 KiB request heads (`bench/fullstack/flood-memory.mjs`, card-market at `81f1f8ef`, `--cpus 1
-   --memory 1g`, three runs each, the cgroup's `memory.current` 35 seconds after the last flood,
-   its anonymous memory in brackets) left 406 to 455 MiB (398 to 446) on glibc's allocator, climbing
-   31 to 38 MiB a flood. Its own settings did not stop that: two arenas or one left 382 to 452 MiB
-   (376 to 439), and two with a 16 KiB mmap threshold 177 to 184 (172 to 177), still climbing 20 MiB
-   a flood. jemalloc as Debian builds it left 118 to 139 MiB (114 to 128), since it returns memory
-   only while the app allocates, and with `background_thread:true` 7 to 11 (4 to 8), and 13 to 16
-   (4 to 9) with the thread cache below too, with no climb. Sampled a second before each hold ended,
-   the highest was 187 to 197 MiB with the background thread, 217 to 227 without it and 418 to 466
-   on glibc. The thread costs nothing seen at rest: an app never flooded took 87 to 112 ms of CPU
-   a minute with the tuned settings and 83 to 91 without them (`alloc-faults.mjs` with
-   `IDLE_SECONDS=60`, cgroup `usage_usec`, three rounds, `results/alloc-idle`), with three more
-   threads; capping them at one (`max_background_threads:1`) left one more thread and 79 to 113 ms,
-   so the image leaves jemalloc's default. A flooded app's idle time, while the thread returns the
-   flood's memory, was not measured
+23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image
+   package, not a crate, with its background thread and a 64 KiB thread cache.** glibc's allocator
+   keeps memory a burst of connections freed, and each burst grows what it keeps. Eight floods of
+   4,000 unfinished 30 KiB request heads (`bench/fullstack/flood-memory.mjs`, card-market at
+   `81f1f8ef`, `--cpus 1 --memory 1g`, three runs each, the cgroup's `memory.current` 35 seconds
+   after the last flood, its anonymous memory in brackets) left 406 to 455 MiB (398 to 446) on
+   glibc's allocator, climbing 31 to 38 MiB a flood. Its own settings did not stop that: two arenas
+   or one left 382 to 452 MiB (376 to 439), and two with a 16 KiB mmap threshold 177 to 184 (172 to
+   177), still climbing 20 MiB a flood. jemalloc as Debian builds it left 118 to 139 MiB (114 to
+   128), since it returns memory only while the app allocates, and with `background_thread:true` 7
+   to 11 (4 to 8), and 13 to 16 (4 to 9) with the thread cache below too, with no climb. Sampled a
+   second before each hold ended, the highest was 187 to 197 MiB with the background thread, 217 to
+   227 without it and 418 to 466 on glibc. The thread costs nothing seen at rest: an app that had
+   served no request took 87 to 112 ms of CPU a minute with the tuned settings and 83 to 91 without
+   them (`alloc-faults.mjs` with `IDLE_SECONDS=60`, cgroup `usage_usec`, three rounds,
+   `results/alloc-idle`), with three more threads; capping them at one (`max_background_threads:1`)
+   left one more thread and 79 to 113 ms, so the image leaves jemalloc's default. A flooded app's
+   idle time, while the thread returns the flood's memory, was not measured
    ([the app guide](guide/app.md),
    [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852),
    [#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
@@ -773,26 +773,26 @@ rules something out.
    jemalloc's defaults, the tuned image and glibc took none (`results/alloc-faults`). That probe's
    coarse CPU time put a brotli page at 355 to 595 microseconds with those faults and 285 to 350
    without in one set, but 430 to 580 against 340 to 530 (tuned) and 345 to 465 (glibc) in the
-   other, so it agrees in direction only. On the benchmark item page
-   (`bench/fullstack/ab.mjs`, jemalloc as it comes, tuned, and glibc alternating, three rounds, 300
-   requests a second for 40 seconds, then 64 users, `results/ab-jemalloc-tuned`) the tuned image
-   used 12.4% of its core at 300 brotli pages a second (12.0 to 14.4) against 16.8% (15.8 to 18.4)
-   and 17.0% on glibc (16.3 to 17.5), and served 3,486 a second at 64 users (2,298 to 3,829) against
-   2,132 (1,303 to 2,210) and 2,357 (1,908 to 2,470); with `identity` and with a browser's
-   encodings (zstd) their ranges overlapped, except a browser's at 64 users, where glibc's 2,139 to
-   3,392 sat below both (and above them in `results/ab-jemalloc`, 4,425 to 5,050). No image with
-   glibc's tunables went through `ab.mjs`, since none kept a flood's memory down. An earlier set without the thread cache
+   other, so it agrees in direction only. On the benchmark item page (`bench/fullstack/ab.mjs`,
+   jemalloc as it comes, tuned, and glibc alternating, three rounds, 300 requests a second for 40
+   seconds, then 64 users, `results/ab-jemalloc-tuned`) the tuned image used 12.4% of its core at
+   300 brotli pages a second (12.0 to 14.4) against 16.8% (15.8 to 18.4) and 17.0% on glibc (16.3
+   to 17.5), and served 3,486 a second at 64 users (2,298 to 3,829) against 2,132 (1,303 to 2,210)
+   and 2,357 (1,908 to 2,470); with `identity` and with a browser's encodings (zstd) their ranges
+   overlapped, except a browser's at 64 users, where glibc's 2,139 to 3,392 sat below both (and
+   above them in `results/ab-jemalloc`, 4,425 to 5,050). No image with glibc's tunables went
+   through `ab.mjs`, since none gave a flood's memory back. An earlier set without the thread cache
    (`results/ab-jemalloc`) had glibc at 3,554 brotli pages a second against 1,720 for jemalloc and
    1,905 with its background thread. Those rounds ran on Docker Desktop with other work running,
    where rounds of one image moved by up to 2.4 times at 64 users (glibc with `identity`, 3,490 to
    8,467) and CPU time at 300 a second by up to 1.9 times (7.8 to 14.5% in `results/ab-jemalloc`),
    so they show no cost they could see, and a brotli gain that the fault counts explain but whose
-   size they do not settle. Under
-   callgrind the item page took about 83,000 instructions per request with jemalloc and 87,000 with
-   glibc (five runs each, at `547b54ae`). The image grows by 1.8 MB (84.1 against 82.3). A
-   `#[global_allocator]` crate in the app would do the same in the program, but it compiles C into
-   every build and binds the app to it outside Docker too; the image's three lines are the app's,
-   which it removes to run on glibc's, and card-market's image has them too
+   size they do not settle. Under callgrind the item page took about 83,000 instructions per
+   request with jemalloc and 87,000 with glibc (five runs each, at `547b54ae`). The image grows by
+   1.8 MB (84.1 against 82.3). A `#[global_allocator]` crate in the app would do the same in the
+   program, but it compiles C into every build and binds the app to it outside Docker too; the
+   image's three lines are the app's, which it removes to run on glibc's, and card-market's image
+   has them too
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
    Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page

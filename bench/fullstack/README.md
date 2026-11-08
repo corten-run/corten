@@ -1033,9 +1033,9 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 
 ### The image's allocator (Docker Desktop, 2026-11-08)
 
-The evidence behind [design Choice 23](../../docs/design.md#choice-jemalloc-image), card-market built
-at `81f1f8ef` with only its allocator's environment changed (the flood and fault folders' JSON records every image's id and settings; the table gives the
-`ab.mjs` folders'):
+The evidence behind [design Choice 23](../../docs/design.md#choice-jemalloc-image), card-market
+built at `81f1f8ef` with only its allocator's environment changed (the flood and fault folders'
+JSON records every image's id and settings; the table gives the `ab.mjs` folders'):
 
 | Folder | What | Images |
 |---|---|---|
