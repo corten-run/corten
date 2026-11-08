@@ -229,7 +229,8 @@ use std::fmt;
 /// Derives [`Route`](trait@Route) for a struct: `#[derive(Route)] #[route("/items/{id}")]`.
 pub use corten_macros::Route;
 
-/// Derives `Display`, `AsRef<str>` and [`AttrValue`](crate::view::AttrValue) for an enum of unit variants as the words serde reads for
+/// Derives `Display`, `AsRef<str>` and [`AttrValue`](crate::view::AttrValue) for an enum of unit
+/// variants as the words serde reads for
 /// them, so a route field of that type (a tab, a sort, a filter, what a redirect says happened)
 /// writes the word its handler reads back, and the words are written once, in
 /// `#[serde(rename_all)]` and `#[serde(rename)]`. A form field of that type works the same way:

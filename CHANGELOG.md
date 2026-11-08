@@ -5694,15 +5694,16 @@ Corten is pre-1.0, so any minor version may change the API.
     fetch draws the error page rather than its plain text, and an error page keeps the `Vary` of
     the failure it replaces beside its own
     ([#1034 A page fetched whole after a write that redirects to a place loses its #id: the fetch sends no corten header, so the redirect is a 303 that fetch follows without the fragment](https://github.com/corten-run/corten/issues/1034)).
-197. A `#[derive(UrlValue)]` enum is an attribute's value (`AttrValue`), so `data-finish={Some(finish)}`
-    writes its word and `None` leaves the attribute out, as an `Option<&str>` does; before, the
-    enum was written alone through `Display` and an `Option` of it did not compile. The word is
-    escaped as before. A type that implements only `Display` still needs `.map(|v| v.to_string())`
-    in an `Option` (Rust's rules keep an `Option` of every `Display` type from being one), and the
-    compiler's message for it now says so. Writing the word directly is also cheaper: measured in a
-    release build, rendering `<i data-finish={f}></i>` to a new `String` took 23.3 to 27.2 ns where
-    the `Display` path took 50.5 to 56.5 ns (three rounds of two million each, same build). Breaking only for an app that implemented `AttrValue` on
-    its own `UrlValue` enum, which now conflicts with the derive's
+197. A `#[derive(UrlValue)]` enum is an attribute's value (`AttrValue`), so
+    `data-finish={Some(finish)}` writes its word and `None` leaves the attribute out, as an
+    `Option<&str>` does; before, the enum was written alone through `Display` and an `Option` of
+    it did not compile. The word is escaped as before. An `Option` of a type that implements only
+    `Display` still needs `.map(|v| v.to_string())` (`Option<T>` is an `AttrValue` when `T`
+    is), which the `AttrValue` doc now says, and the compiler's message for it says what an
+    `Option` takes there (tested by building an app). Breaking for an app that implemented
+    `AttrValue` on its own `UrlValue` enum, or that implements a trait of its own for every
+    `AttrValue` and again for such an enum: both now conflict with the derive's impl.
+    **Migration:** delete the hand-written impl; the derive's writes the same word
     ([#1111 Optional UrlValue enum attributes fail where direct enum attributes compile](https://github.com/corten-run/corten/issues/1111)).
 
 ### Documentation

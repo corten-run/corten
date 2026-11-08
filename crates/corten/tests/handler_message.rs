@@ -4,6 +4,8 @@
 //!    name in `#[route(..)]` and names the argument: before, the error was that axum's `Handler`
 //!    is not implemented, with a hint to use `#[axum::debug_handler]`, and named no argument (#761).
 //! 2. A value that is not a link where an `Href` is expected says what a link is (#974).
+//! 3. An `Option` of a type that is only `Display` in an attribute says what an `Option` takes
+//!    there (#1111).
 //!
 //! Each app is built with `cargo`, offline, from the workspace's lock, in the target directory
 //! `link_clash` builds in, so they share the dependencies' builds.
@@ -77,4 +79,38 @@ fn a_value_that_is_not_a_link_says_what_a_link_is() {
     assert!(stderr.contains("`Local::parse(text)`"), "the way from text to a link: {stderr}");
     let (ok, stderr) = build_main("href-message", &app("(Box::new(PullSheet) as Box<dyn Href>)"));
     assert!(ok, "the same link boxed as Box<dyn Href>: {stderr}");
+}
+
+/// An `Option` of a type that is only `Display` cannot be an attribute's value (`Option<T>` needs
+/// `T: AttrValue`), and the error says what it takes; an `Option` of a `UrlValue` enum compiles.
+#[test]
+fn an_option_in_an_attribute_says_what_it_takes() {
+    let app = |value: &str| {
+        format!("use corten::prelude::*;
+
+struct Shown;
+
+impl std::fmt::Display for Shown {{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{
+        f.write_str(\"shown\")
+    }}
+}}
+
+#[derive(Clone, Copy, UrlValue)]
+enum Finish {{
+    Weathered,
+}}
+
+fn main() {{
+    let _ = (Shown, Finish::Weathered);
+    let _ = html! {{ <div data-a={{{value}}}></div> }}.to_html();
+}}
+")
+    };
+    let (ok, stderr) = build_main("attr-message", &app("Some(Shown)"));
+    assert!(!ok, "an Option of a Display type compiled as an attribute");
+    assert!(stderr.contains("this value cannot be written in an attribute"), "Corten's message: {stderr}");
+    assert!(stderr.contains("if the value is an `Option`"), "the note on an Option: {stderr}");
+    let (ok, stderr) = build_main("attr-message", &app("Some(Finish::Weathered)"));
+    assert!(ok, "an Option of a UrlValue enum: {stderr}");
 }

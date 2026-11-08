@@ -1393,8 +1393,9 @@ fn push_float(value: f64, out: &mut String) {
 }
 
 /// An attribute value. `true` prints the bare name and `false` nothing; `None` leaves the
-/// attribute out; text and numbers print ` name="value"`, escaped. Types that implement only
-/// `Display` work too.
+/// attribute out; text, numbers and `#[derive(UrlValue)]` enums print ` name="value"`, escaped.
+/// Types that implement only `Display` work too, but not inside an `Option` (`Option<T>` needs
+/// `T: AttrValue`): write `.map(|v| v.to_string())` for one.
 pub trait AttrValue {
     /// Writes ` name="value"` (`name` already has its leading space), or nothing.
     fn write_attr(&self, name: &str, out: &mut String);
@@ -1967,7 +1968,7 @@ pub mod __private {
         message = "this value cannot be written in an attribute",
         label = "not text, a link, an id or an attribute value",
         note = "an attribute takes text (a type that implements `Display`), a link (a typed route, `&dyn Href` or `Box<dyn Href>`), a `#[derive(Id)]` id, or a type that implements `AttrValue`",
-        note = "an `Option` leaves the attribute out when it is `None`, and takes text (`&str`, `String`, a number), a `#[derive(UrlValue)]` enum or another `AttrValue`; for other `Display` text write `.map(|v| v.to_string())`"
+        note = "if the value is an `Option`: it leaves the attribute out when `None`, and its `Some` takes text (`&str`, `String`, a number), a `#[derive(UrlValue)]` enum or another `AttrValue`, so an `Option` of other `Display` text is written `.map(|v| v.to_string())`"
     )]
     pub trait AttrText {
         fn __text(&self, name: &str, out: &mut String);
