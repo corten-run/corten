@@ -17,20 +17,31 @@
 //! reconnects or has closed or ended, before the runtime runs and without JavaScript. Outside a
 //! `<corten-live>` it is still. It pulses only for a user who has not asked for less motion, and
 //! the motion is never the only sign: the words beside it must follow the stream too, as the
-//! element's `status` attribute does (the live-data guide shows them by `corten-live[status=..]`
-//! or writes them from a `corten-status` handler). Inside two nested streams it pulses while either
-//! is live.
+//! element's `status` attribute does. Inside nested streams the dot pulses while any of them is
+//! live, and so do words shown by the rules below.
 //!
 //! ```rust,ignore
-//! <corten-live src={url::LotFeed { id }} class={LotFeed}>
+//! <corten-live src={url::LotFeed { id }}>
 //!     <span class={Badge { tone: BadgeTone::Info, emphasis: BadgeEmphasis::Soft }}>
 //!         <LiveDot tone={StatusTone::Info} />
 //!         <span class={WhenLive}>"Live"</span>
-//!         <span class={WhenNot}>"Reconnecting"</span>
+//!         <span class={WhenNot}>"Not live"</span>
 //!     </span>
 //!     ..
 //! </corten-live>
 //! ```
+//!
+//! with these rules in the stylesheet of the component that draws the badge, so the words are
+//! "Not live" before the runtime runs and without JavaScript, as the dot is still:
+//!
+//! ```css
+//! .when-live { display: none; }
+//! :where(corten-live[status="live"]) .when-live { display: inline; }
+//! :where(corten-live[status="live"]) .when-not { display: none; }
+//! ```
+//!
+//! A word for each state (`connecting`, `reconnecting`, `closed`, `ended`) is the same rule
+//! with that `status`, or text a `corten-status` handler writes (the live-data guide).
 //!
 //! It is a component of its own rather than a variant of `StatusDot`: where it is placed decides
 //! what it draws, and every still dot stays `StatusDot { tone }`.

@@ -4076,22 +4076,28 @@ async function run(browser) {
     orders.evaluate(() => {
       const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='status-dot__live']"));
       const running = () => dot.getAnimations().filter((a) => a instanceof CSSAnimation && a.animationName === "status-dot-live" && a.playState === "running").length;
-      const alone = running();
       const badge = /** @type {HTMLElement} */ (dot.parentElement);
+      const said = () => badge.innerText.trim();
+      const alone = running();
+      const aloneSaid = said();
       const live = document.createElement("corten-live");
       live.setAttribute("src", "/live-dot-check");
       badge.replaceWith(live);
       live.append(badge);
       /** @type {Record<string, number>} */
       const by = {};
+      /** @type {Record<string, string>} */
+      const words = {};
+      let opacity = false;
       for (const status of ["connecting", "live", "reconnecting", "closed", "ended"]) {
         live.setAttribute("status", status);
         by[status] = running();
+        words[status] = said();
+        const pulse = dot.getAnimations().find((a) => a instanceof CSSAnimation && a.animationName === "status-dot-live");
+        opacity ||= !!pulse?.effect && /** @type {KeyframeEffect} */ (pulse.effect).getKeyframes().some((k) => "opacity" in k);
       }
       live.replaceWith(badge);
-      const frames = [...document.styleSheets].flatMap((s) => [...s.cssRules]).flatMap((r) => (r instanceof CSSMediaRule ? [...r.cssRules] : [r]));
-      const keyframes = frames.find((r) => r instanceof CSSKeyframesRule && r.name === "status-dot-live");
-      return { alone, by, opacity: /opacity/.test(keyframes?.cssText ?? "") };
+      return { alone, by, opacity, aloneSaid, words };
     });
   // Asked for, since the default follows the machine's own setting.
   await orders.emulateMedia({ reducedMotion: "no-preference" });
@@ -4103,6 +4109,11 @@ async function run(browser) {
   await orders.emulateMedia({ reducedMotion: null, forcedColors: engine === "webkit" ? undefined : "none" });
   const onlyLive = (/** @type {{ alone: number, by: Record<string, number> }} */ p) =>
     p.alone === 0 && p.by.live === 1 && ["connecting", "reconnecting", "closed", "ended"].every((s) => p.by[s] === 0);
+  check(
+    "LiveDot: the badge's words say Live only inside a live stream, and Not live outside one and in every other state",
+    dotMoving.aloneSaid === "Not live" && Object.entries(dotMoving.words).every(([s, w]) => w === (s === "live" ? "Live" : "Not live")),
+    JSON.stringify({ alone: dotMoving.aloneSaid, words: dotMoving.words }),
+  );
   check(
     "LiveDot: it pulses only inside a live stream, not for reduced motion, and under forced colors as Progress does",
     dotMoving.opacity && onlyLive(dotMoving) && dotReduced.alone === 0 && Object.values(dotReduced.by).every((n) => n === 0) && (dotForced === null || onlyLive(dotForced)),
