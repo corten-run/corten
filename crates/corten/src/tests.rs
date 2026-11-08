@@ -11052,6 +11052,17 @@ mod layout_reads {
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
         if cfg!(debug_assertions) {
             assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+            // Named where a router test, with no logger and outside `corten dev`, sees it: on the
+            // default error page, which draws the failure's detail, behind the app's middleware.
+            let router = App::new(shop_url::router())
+                .layout_read(CartCount::default())
+                .layout_read(SignedIn)
+                .middleware(AsViewer(Some("ada")))
+                .dev(false)
+                .router();
+            let (status, _, body) = call_with(router, "GET", "/forgot", None, None).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+            assert!(body.contains("layout_reads::CartCount) off the route") && body.contains("did not give it"), "{body}");
         } else {
             assert_eq!(status, StatusCode::OK);
             assert!(body.contains("<header>Cart </header>") && body.contains("<p>forgot</p>"), "{body}");
@@ -11866,9 +11877,11 @@ mod layout_reads {
     #[tokio::test]
     async fn a_page_whose_answer_type_is_not_a_page_is_an_error() {
         let count = CartCount::default();
-        let router = App::new(wrapped_url::router()).layout_read(count.clone()).router();
+        let router = App::new(wrapped_url::router()).layout_read(count.clone()).layout_read(SignedIn).dev(false).router();
         let (status, _, body) = call_with(router, "GET", "/wrapped", None, None).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        // Named where a router test, with no logger and outside `corten dev`, sees it.
+        assert!(body.contains("layout_reads::CartCount&gt;()") && body.contains("(Answer::PAGE)"), "{body}");
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
     }
 
