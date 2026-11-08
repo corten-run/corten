@@ -2524,6 +2524,21 @@ Corten is pre-1.0, so any minor version may change the API.
     693). Breaking: each form names its width, which the compiler names; `corten ui add segmented
     --merge` updates a copy. The ui-gallery's label size radios fill the form's column
     ([#1060 Kit Segmented draws only as wide as its choices, so a phone's full-width choice bar (equal parts across the row) keeps its own segmented rules](https://github.com/corten-run/corten/issues/1060)).
+275. A kit `Stats` figure's type is the theme's: `--stat-label-font-size`, `--stat-label-font-weight`,
+    `--stat-value-font-size`, `--stat-value-font-size-narrow` (a phone's), `--stat-value-font-weight`,
+    and `--stat-label-tracking` and `--stat-value-tracking` (`number` tokens in ems), with
+    today's values in the kit's theme, so a design system that draws its figures differently sets
+    them in one place and the copy stays the kit's. The value is in the page's face and the label
+    as written unless the app declares `--stat-value-font-family` (a `fontFamily` token) or
+    `--stat-label-text-transform` (in `static/style.css`, as DTCG has no type for it), which the
+    stylesheet reads with a fallback. A page's rule for `dt` or `dd` no longer gives the label
+    its case or letter spacing, or the value its face, as it could before. An app set up by an
+    older kit adds the seven tokens `corten ui add stats --merge` names (or `--force`, for a copy
+    without edits) before it starts. The ui-gallery's served `components.css` (every kit
+    component, the kit's theme) is 59,274 bytes where it was 58,753 (gzip 9,864 against 9,717,
+    brotli 8,657 against 8,567), the theme's seven tokens (210 bytes, on every page of an app on
+    the kit's theme) included; the earlier size is the served file with the old rules put back
+    ([#1054 Kit Stats writes its label and figure type as literals, so a theme with a display face or uppercase labels (Chase Sets' design system) edits the copied stats.css](https://github.com/corten-run/corten/issues/1054)).
 276. The kit's `stack` has `StackStart`, a look written beside a `Stack`
     (`class={(Stack { gap: Gap::Xs }, StackStart {})}`): the column's children keep their own
     width at its start (its end on a right-to-left page), each at most the stack's, a word wider than

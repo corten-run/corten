@@ -51,7 +51,8 @@ check, not a compile error, because a component's stylesheet compiles without se
 which may be another crate's. A property a script sets (`el.style.setProperty`) takes a fallback,
 `var(--progress, 0)`.
 
-`static/style.css` holds what belongs to no component: element defaults, fonts and the layout.
+`static/style.css` holds what belongs to no component: element defaults, fonts (with type a theme
+cannot write as a token, such as the kit's `--stat-label-text-transform`) and the layout.
 Link it before `<Corten />` in the layout, which links the components' stylesheet, so component
 rules win ties. The components' stylesheet starts with `[hidden] { display: none !important }`:
 a part hidden with the attribute (`hidden={..}` in markup, `el.hidden = true` from a script)
