@@ -2555,7 +2555,8 @@ Corten is pre-1.0, so any minor version may change the API.
     after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
     apps: how long it takes to be ready, cold and warm, and after an edit how long a completion
     inside the item page's markup and the errors for an unknown field there take. On a desktop,
-    both took under 0.1 s inside Corten's `html!` and Maud's, against medians of 5 to 10 s inside
+    with rust-analyzer's experimental diagnostics on (off by default, when only `cargo check` on
+    save shows the error), both took under 0.1 s inside Corten's `html!` and Maud's, against medians of 5 to 10 s inside
     Topcoat's and Leptos's `view!`. `docker-rebuild.mjs` times each anchor app's own
     `docker build` after the edit with BuildKit's cache warm, both on the builder that built it
     and on a new builder given only the exported layer cache. That second case is what a hosted CI

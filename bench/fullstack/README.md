@@ -1121,8 +1121,8 @@ so the ratio is only a rough guide), and Corten's three kept-builder builds rang
 303 s and 175 to 366 CPU-seconds. Read the gaps between apps, not each figure.
 
 rust-analyzer 1.99.1, check on save off and its experimental diagnostics on, five edits each
-(median, range in brackets; after each edit a completion inside the item page's markup, then the
-file's errors asked for at once):
+(median, with the completion's range in parentheses; after each edit a completion inside the item
+page's markup, then the file's errors asked for at once):
 
 | App | Ready, cold | Ready, warm | Completion after an edit | Unknown field shown | Cleared | Peak memory |
 |---|---|---|---|---|---|---|
@@ -1402,10 +1402,10 @@ three runs:
       to its answer, with whether it offers the field there; then the field's name made unknown and
       the time the server takes to answer the editor's request for the file's errors
       (`textDocument/diagnostic`; this server pushes only syntax errors and gives type errors when
-      asked, and an unknown field is one of its experimental diagnostics, which an editor turns on
-      and this does), with whether the error is in it, and the same once the text is back; and the
-      server's peak memory. Corten's server loads the whole workspace (the crates and every
-      example), more than an app of one crate gives it.
+      asked, and an unknown field is one of its experimental diagnostics, off by default, which an
+      editor can turn on and this does unless `RA_EXPERIMENTAL=off`), with whether the error is in
+      it, and the same once the text is back; and the server's peak memory. Corten's server loads
+      the whole workspace (the crates and every example), more than an app of one crate gives it.
 
     Each step runs in a container of its own and reports its wall time, its CPU-seconds (the
     container's cgroup counter, the work done whatever the core count) and the peak of its

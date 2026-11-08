@@ -95,13 +95,16 @@ const call = (/** @type {number} */ limit, /** @type {string[]} */ args) => /** 
 // build.mjs's steps (and the images they commit, several GB for a Rust app) and docker-rebuild.mjs's builders, cold start's, the item API, and k6's and cpu-time.mjs's by image. Then the item API starts again
 // on its cores.
 const reset = () => {
+  // docker-rebuild.mjs's builders first, with their state volumes: their containers match bb- too,
+  // and a builder whose container is gone leaves its volume behind.
+  for (const builder of docker("buildx", "ls", "--format", "{{.Name}}").stdout?.split("\n").filter((n) => n.startsWith("bb-dr-")) ?? []) docker("buildx", "rm", "-f", builder);
+  const states = docker("volume", "ls", "-q", "--filter", "name=buildx_buildkit_bb-dr-").stdout?.split("\n").filter(Boolean) ?? [];
+  if (states.length) docker("volume", "rm", "-f", ...states);
   const ids = [["name=fsw-", "name=bb-", "name=cs-", "name=item-api"], ["ancestor=grafana/k6:latest", "ancestor=alpine"]]
     .flatMap((filters) => docker("ps", "-aq", ...filters.flatMap((f) => ["--filter", f])).stdout?.split("\n").filter(Boolean) ?? []);
   if (ids.length) docker("rm", "-f", ...new Set(ids));
   const images = docker("images", "-q", "--filter", "reference=bb-*").stdout?.split("\n").filter(Boolean) ?? [];
   if (images.length) docker("rmi", "-f", ...new Set(images));
-  // docker-rebuild.mjs's builders, with their state volumes.
-  for (const builder of docker("buildx", "ls", "--format", "{{.Name}}").stdout?.split("\n").filter((n) => n.startsWith("bb-dr-")) ?? []) docker("buildx", "rm", "-f", builder);
   if (apiContainer !== "item-api") return;
   const r = docker("run", "-d", "--name", "item-api", "--network", network, "--cpuset-cpus", "2-3", "-v", `${here}:/b:ro`,
     "node:24-bookworm-slim", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");
