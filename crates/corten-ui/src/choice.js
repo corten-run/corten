@@ -80,6 +80,8 @@ function select(at, radios, group, values) {
     const to = address(radio, radios);
     if (to !== location.href) history.replaceState(history.state, "", to);
   }
+  // The values come from the same options as the radios; a radio a script added without one
+  // leaves the parts as they were.
   const value = values[at];
   if (value !== undefined) show(group, value);
 }

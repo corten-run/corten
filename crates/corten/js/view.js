@@ -270,10 +270,9 @@ export function rows(parent, View, template) {
       const from = els.length;
       add(items, els, from, null);
       if (byKey) for (let i = from; i < els.length; i += 1) {
-        const el = /** @type {Element} */ (els[i]);
-        const k = View.key(el);
+        const k = View.key(/** @type {Element} */ (els[i]));
         if (byKey.has(k)) twice = true;
-        byKey.set(k, el);
+        byKey.set(k, /** @type {Element} */ (els[i]));
       }
       done();
     },
@@ -351,14 +350,13 @@ export function rows(parent, View, template) {
         let before = null;
         for (let i = n - 1; i >= 0; i -= 1) {
           const j = /** @type {number} */ (from[i]);
-          const item = /** @type {D} */ (items[i]);
           let el;
           if (j < 0) {
-            el = make(item);
+            el = make(/** @type {D} */ (items[i]));
             parent.insertBefore(el, before);
           } else {
             el = /** @type {Element} */ (els[j]);
-            View.fill(el, item);
+            View.fill(el, /** @type {D} */ (items[i]));
             if (s >= 0 && stay[s] === i) s -= 1;
             else parent.insertBefore(el, before);
           }

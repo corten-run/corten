@@ -1,4 +1,4 @@
-// Two builds of rows() (crates/corten/js/view.js) in one Chromium page, taking turns sample by
+// Two copies of rows()'s source (crates/corten/js/view.js, not its dist/ build) in one Chromium page, taking turns sample by
 // sample, so load that drifts on a busy machine falls on both: a push then a get by key (a
 // quarter of the rows, five times), replace() with new values for every row (20 times), with the
 // rows in a shuffled order and back (10 times: the longest run kept, the rest moved), and with
@@ -20,7 +20,7 @@ const out = await page.evaluate(async ([srcs, reps]) => {
   const mods = await Promise.all(srcs.map((s) => import(URL.createObjectURL(new Blob([s], { type: "text/javascript" })))));
   const res = {};
   let seed = 11;
-  const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x80000000);
   for (const n of [1000, 4000]) {
     const items = Array.from({ length: n }, (_, i) => ({ id: i, name: "Row " + i }));
     const kept = items.filter((x) => x.id % 2 === 0);
