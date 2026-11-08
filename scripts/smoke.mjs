@@ -11,6 +11,12 @@ import { browserBug } from "./browser-bugs.mjs";
 
 const base = process.argv[2] ?? "http://localhost:18480";
 const engines = { chromium, firefox, webkit };
+/**
+ * The runtime swaps this request's answer into the page (`corten: nav` or `action`); the page it
+ * fetches whole after a write asks with `corten: page` and is drawn as a full load's.
+ * @param {import("@playwright/test").Request} r
+ */
+const swapped = (r) => ["nav", "action"].includes(r.headers()["corten"] ?? "");
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
 // The markup this test writes into pages goes through a policy of its own, which the watchlist
 // allows only when run with SMOKE_TRUSTED_TYPES=1 (CONTRIBUTING): without it, say so here rather
@@ -968,6 +974,66 @@ async function run(browser) {
   // The form's on:corten:error runs (the runtime's event, on the form): it says the change failed.
   const told = await page.waitForSelector("#watch-form [role=alert]", { state: "visible", timeout: 5000 }).then(() => true, () => false);
   check("a form's on:corten:error handler runs for a submit the network fails", told);
+  // A form with controls named hasAttribute and getAttribute still runs its handlers, as the
+  // runtime reads its attributes through Element's own methods: the form the page loaded with,
+  // hearing an event that bubbles, and copies put in after load, bound to an event no element
+  // listened for until they joined (so only the runtime's scan of them can hear it), one hearing
+  // it bubble and one not.
+  const shadowed = await page.evaluate(async () => {
+    const names = ["hasAttribute", "getAttribute"];
+    const inputs = names.map((name) => `<input type="hidden" name="${name}" value="x">`).join("");
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
+    const markup = form.outerHTML.replace(/^<form[^>]*>/, (open) => open + inputs);
+    for (const n of [1, 2]) {
+      const copy = markup
+        .replace(/ id="([^"]+)"/g, (_, id) => ` id="smoke-${n}-${id}"`)
+        .replace(/data-on="corten:error:([\w.]+)\(@(\w+)\)"/, (_, f, ref) => `data-on="smoke-shadowed-${n}:${f}(@${ref}) smoke-closest-${n}:${f}(^${ref})"`);
+      document.querySelector("main")?.insertAdjacentHTML("beforeend", /** @type {any} */ (window).__html(copy));
+    }
+    form.insertAdjacentHTML("afterbegin", /** @type {any} */ (window).__html(inputs));
+    // The copies' handlers are bound as they join the page, once the runtime hears they did.
+    await new Promise((r) => setTimeout(r, 100));
+    const heard = (/** @type {string} */ id, /** @type {string} */ type, /** @type {boolean} */ bubbles) => {
+      const at = /** @type {Element} */ (document.getElementById(id));
+      const note = /** @type {HTMLElement} */ (document.querySelector(`#${id} [role=alert]`));
+      note.hidden = true;
+      Element.prototype.dispatchEvent.call(at, new CustomEvent(type, { bubbles, cancelable: true, detail: { status: 0 } }));
+      return !note.hidden;
+    };
+    // A handler on the form given the element the event came from (`^ref`), which it finds by
+    // reading the form's own scope.
+    // From the ref, it is found; from another element of the form, the runtime reads the form
+    // on the way and finds none, so the handler is skipped and nothing is reported.
+    const closest = () => {
+      const note = /** @type {HTMLElement} */ (document.querySelector("#smoke-1-watch-form [role=alert]"));
+      const heading = /** @type {HTMLElement} */ (document.querySelector("#smoke-1-watch-form h2"));
+      let reported = 0;
+      const report = () => (reported += 1);
+      window.addEventListener("error", report);
+      note.hidden = true;
+      heading.dispatchEvent(new CustomEvent("smoke-closest-1", { bubbles: true }));
+      const skipped = note.hidden && reported === 0;
+      note.dispatchEvent(new CustomEvent("smoke-closest-1", { bubbles: true }));
+      window.removeEventListener("error", report);
+      return skipped && !note.hidden && reported === 0;
+    };
+    try {
+      return {
+        loaded: heard("watch-form", "corten:error", true),
+        added: heard("smoke-1-watch-form", "smoke-shadowed-1", true),
+        notBubbling: heard("smoke-2-watch-form", "smoke-shadowed-2", false),
+        closest: closest(),
+      };
+    } finally {
+      for (const n of [1, 2]) document.getElementById(`smoke-${n}-watch-form`)?.remove();
+      for (const name of names) document.querySelector(`#watch-form > input[name="${name}"]`)?.remove();
+    }
+  });
+  check(
+    "a form with controls named hasAttribute and getAttribute runs its handlers, loaded with the page or added after, for events that bubble or not",
+    shadowed.loaded && shadowed.added && shadowed.notBubbling && shadowed.closest,
+    JSON.stringify(shadowed),
+  );
   // A newer submit that waited for a write the network failed is not sent: it would fail the
   // same way, and the user sends it again.
   let afterFailure = 0;
@@ -1131,7 +1197,7 @@ async function run(browser) {
   await page.evaluate(() =>
     document.querySelector("main")?.insertAdjacentHTML(
       "beforeend",
-      __html('<form id="shadowed" method="post" action="/watch" data-patch><input type="hidden" name="id" value="GLBX"><input type="hidden" name="method" value="x"><input type="hidden" name="enctype" value="x"><input type="hidden" name="elements" value="x"><input type="hidden" name="setAttribute" value="x"><button name="action" value="go">Watch</button></form>'),
+      __html('<form id="shadowed" method="post" action="/watch" data-patch><input type="hidden" name="id" value="GLBX"><input type="hidden" name="method" value="x"><input type="hidden" name="enctype" value="x"><input type="hidden" name="elements" value="x"><input type="hidden" name="setAttribute" value="x"><input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x"><button name="action" value="go">Watch</button></form>'),
     ),
   );
   const shadowedPosts = /** @type {string[]} */ ([]);
@@ -1142,13 +1208,52 @@ async function run(browser) {
     !new URL(r.url()).pathname.startsWith("/feed/") &&
     shadowedPosts.push(`${r.method()} ${new URL(r.url()).pathname} ${new URLSearchParams(r.postData() ?? "").get("id")}`);
   page.on("request", onShadowed);
-  await page.click("#shadowed button");
+  // The answer draws the watch form again: one with controls named hasAttribute and getAttribute
+  // is replaced as any other, and no corten:error says the write failed.
+  await page.evaluate(() => {
+    document
+      .getElementById("watch-form")
+      ?.insertAdjacentHTML("afterbegin", __html('<input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x">'));
+    /** @type {any} */ (window).__shadowedErrors = 0;
+    document.addEventListener("corten:error", () => (/** @type {any} */ (window).__shadowedErrors += 1));
+  });
+  // Clicked from the page: Playwright's own click reads the form's getAttribute, which the
+  // control named getAttribute shadows.
+  await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#shadowed button")).click());
   await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Globex"), null, { timeout: 4000 }).catch(() => {});
   page.off("request", onShadowed);
   check(
     "controls named action, method, id and the like do not change the post",
     ((await page.textContent("#watch-message")) ?? "").startsWith("Watching Globex") && shadowedPosts.join() === "POST /watch GLBX",
     `${shadowedPosts.join()}; ${await page.textContent("#watch-message")}`,
+  );
+  const redrawn = await page.evaluate(() => ({
+    replaced: !document.querySelector("#watch-form > input[name=hasAttribute]"),
+    errors: /** @type {any} */ (window).__shadowedErrors,
+  }));
+  // And an answer that carries such controls itself, as the server's would for a form that has
+  // them: drawn as any other, its reads of the new form go through Element's own methods too.
+  const carried = await page.evaluate(async () => {
+    const { patch } = await import("corten");
+    const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
+    const inputs = '<input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x">';
+    const fresh = form.outerHTML.replace(/^<form[^>]*>/, (open) => open + inputs);
+    /** @type {unknown} */
+    let failed = null;
+    try {
+      await patch(__html(fresh));
+    } catch (error) {
+      failed = String(error);
+    }
+    const now = document.getElementById("watch-form");
+    const drawn = now !== form && !!now?.querySelector("input[name=hasAttribute]");
+    for (const input of Array.from(now?.querySelectorAll("input[name=hasAttribute], input[name=getAttribute]") ?? [])) input.remove();
+    return { drawn, failed };
+  });
+  check(
+    "a patch draws again a form with controls named hasAttribute and getAttribute, and says no write failed",
+    redrawn.replaced && redrawn.errors === 0 && carried.drawn && carried.failed === null,
+    JSON.stringify({ ...redrawn, ...carried }),
   );
   await page.evaluate(() => document.getElementById("shadowed")?.remove());
 
@@ -1512,7 +1617,7 @@ async function run(browser) {
       const probed = [];
       page.on("request", (r) => r.url().endsWith("?swap-preload") && probed.push(r.url()));
       await page.route(news, async (route) => {
-        const nav = route.request().headers()["corten"];
+        const nav = swapped(route.request());
         if (route.request().method() !== "GET" || nav) return route.fallback();
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
@@ -1656,7 +1761,7 @@ async function run(browser) {
       // is, with what the user typed, and one whose layout changed draws it (#690).
       {
         /** @param {import("@playwright/test").Request} r */
-        const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !r.headers()["corten"];
+        const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !swapped(r);
         let reads = 0;
         /** The notice each read again sent back. @type {(string | undefined)[]} */
         const sentBack = [];
@@ -1715,10 +1820,10 @@ async function run(browser) {
       {
         /** @type {string[]} */
         const asked = [];
-        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/" && asked.push(r.headers()["corten"] ?? "whole");
+        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/" && asked.push(swapped(r) ? r.headers()["corten"] : "whole");
         slow = true;
         await page.evaluate(() => scrollTo(0, 0));
-        const held = page.waitForRequest((r) => news(new URL(r.url())) && !r.headers()["corten"], { timeout: 5000 });
+        const held = page.waitForRequest((r) => news(new URL(r.url())) && !swapped(r), { timeout: 5000 });
         await thank();
         await held;
         page.on("request", onStocks);
@@ -2497,6 +2602,43 @@ async function run(browser) {
     skip("a link the server redirects shows only the redirect's address, in one history entry", why);
     skip("a link the server sends to a place shows only the place's address, in one history entry", why);
   }
+  // After a write, the page it sends the browser to is fetched whole; when that page's handler
+  // sends it on to a place, the server names the place (`corten-location`, for the runtime's
+  // `corten: page`), so it keeps its `#id` rather than `fetch` following a 303 without it
+  // (#1034). The stand-in answers as the server does: `corten-location` to the runtime's
+  // fetches, a 303 to any other.
+  const wholePlaceName = "a page fetched whole after a write that sends the browser to a place lands on the place";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(wholePlaceName, "without the Navigation API a write's page is a full load");
+  else {
+    const whole = await (await browser.newContext()).newPage();
+    /** @type {string[]} */
+    const asked = [];
+    await whole.route(
+      (url) => url.pathname === "/whole-write",
+      (route) => route.fulfill({ status: 204, headers: { "corten-location": "/whole-next" } }),
+    );
+    await whole.route(
+      (url) => url.pathname === "/whole-next",
+      (route) => {
+        const mode = route.request().headers().corten;
+        asked.push(mode ?? "-");
+        return mode
+          ? route.fulfill({ status: 204, headers: { "corten-location": "/news#briefing" } })
+          : route.fulfill({ status: 303, headers: { location: "/news#briefing" } });
+      },
+    );
+    await whole.goto(`${base}/alerts`);
+    await whole.evaluate(() =>
+      document
+        .querySelector("main")
+        ?.insertAdjacentHTML("afterbegin", __html('<form id="whole-write" method="post" action="/whole-write" data-patch><button id="whole-go">Save</button></form>')),
+    );
+    await whole.click("#whole-go");
+    await whole.waitForFunction(() => document.title === "News | Watchlist" && !document.querySelector("[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const landed = await whole.evaluate(() => ({ path: location.pathname, hash: location.hash }));
+    check(wholePlaceName, landed.path === "/news" && landed.hash === "#briefing" && asked.join() === "page", JSON.stringify({ landed, asked }));
+    await whole.context().close();
+  }
   // The watchlist's live prices take the money format: reached from the news page, it loads the
   // module before its markup joins, and the script writes prices with it.
   const firstPrices = await prices();
@@ -2549,7 +2691,7 @@ async function run(browser) {
         (/** @type {any} */ (window)).__marker = 5;
         (/** @type {any} */ (document.querySelector("header"))).__same = 1;
       });
-      const page_ = page.waitForResponse((r) => new URL(r.url()).pathname === "/news" && r.request().method() === "GET" && !r.request().headers()["corten"], { timeout: 5000 });
+      const page_ = page.waitForResponse((r) => new URL(r.url()).pathname === "/news" && r.request().method() === "GET" && !swapped(r.request()), { timeout: 5000 });
       await page.evaluate(() => {
         /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
         /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
@@ -3186,7 +3328,7 @@ async function run(browser) {
       await redrawPage.route(
         (url) => url.pathname === "/news",
         async (route) => {
-          if (route.request().method() !== "GET" || route.request().headers()["corten"]) return route.fallback();
+          if (route.request().method() !== "GET" || swapped(route.request())) return route.fallback();
           // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
           const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
           const headers = res.headers();

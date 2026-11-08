@@ -447,15 +447,45 @@ pub(crate) mod tests {
         struct Progress {
             done: u32,
         }
-        use super::progress::{Progress as KitProgress, ProgressSize};
+        use super::progress::{Progress as KitProgress, ProgressSize, ProgressTone};
         use corten::view::Render;
-        let html =
-            corten::html! { <progress class={KitProgress { size: ProgressSize::Sm }} max="4" value="1"></progress> }.to_html();
+        let html = corten::html! {
+            <progress class={KitProgress { size: ProgressSize::Sm, tone: ProgressTone::Primary }} max="4" value="1"></progress>
+        }
+        .to_html();
         assert_eq!(html, r#"<progress class="progress__progress progress__sm" max="4" value="1"></progress>"#);
         // Or by its module's path, with no import of the name.
-        let by_path =
-            corten::html! { <progress class={super::progress::Progress { size: ProgressSize::Sm }}></progress> }.to_html();
+        let by_path = corten::html! {
+            <progress class={super::progress::Progress { size: ProgressSize::Sm, tone: ProgressTone::Primary }}></progress>
+        }
+        .to_html();
         assert_eq!(by_path, r#"<progress class="progress__progress progress__sm"></progress>"#);
+    }
+
+    /// A progress bar's tone is a class beside its size, and the primary one, a task under way, is
+    /// none: the bar's own rule fills it.
+    #[test]
+    fn a_progress_tone_is_a_class() {
+        use super::progress::{Progress, ProgressSize, ProgressTone};
+        use corten::view::Render;
+        let bar = |size, tone| corten::html! { <progress class={Progress { size, tone }}></progress> }.to_html();
+        assert_eq!(bar(ProgressSize::Md, ProgressTone::Primary), r#"<progress class="progress__progress"></progress>"#);
+        assert_eq!(
+            bar(ProgressSize::Md, ProgressTone::Info),
+            r#"<progress class="progress__progress progress__info"></progress>"#
+        );
+        assert_eq!(
+            bar(ProgressSize::Md, ProgressTone::Success),
+            r#"<progress class="progress__progress progress__success"></progress>"#
+        );
+        assert_eq!(
+            bar(ProgressSize::Sm, ProgressTone::Warning),
+            r#"<progress class="progress__progress progress__sm progress__warning"></progress>"#
+        );
+        assert_eq!(
+            bar(ProgressSize::Md, ProgressTone::Destructive),
+            r#"<progress class="progress__progress progress__destructive"></progress>"#
+        );
     }
 
     /// The column a table sorted in place sorts by: a Rust type the script's parameter is declared
@@ -540,14 +570,31 @@ pub(crate) mod tests {
     /// keeps it from being drawn; a shown one has none.
     #[test]
     fn a_segmented_radios_legend_is_shown_or_hidden() {
-        use super::segmented::{Legend, SegmentedRadios};
+        use super::segmented::{Legend, SegmentedRadios, SegmentedWidth};
         use corten::view::Render;
-        let hidden = SegmentedRadios { legend: Legend::Hidden("View"), children: "" }.to_html();
+        let hidden = SegmentedRadios { legend: Legend::Hidden("View"), width: SegmentedWidth::Fit, children: "" }.to_html();
         assert!(
             hidden.starts_with(r#"<fieldset class="segmented__radios"><legend class="segmented__hidden">View</legend>"#),
             "{hidden}"
         );
-        let shown = SegmentedRadios { legend: Legend::Shown("View"), children: "" }.to_html();
+        let shown = SegmentedRadios { legend: Legend::Shown("View"), width: SegmentedWidth::Fit, children: "" }.to_html();
         assert!(shown.starts_with(r#"<fieldset class="segmented__radios"><legend>View</legend>"#), "{shown}");
+    }
+
+    /// Each form of the segmented control takes a width: `Fit` writes no class, `Fill` the one that
+    /// shares the row among the choices.
+    #[test]
+    fn a_segmented_control_fits_its_choices_or_fills_its_box() {
+        use super::segmented::{Legend, Segmented, SegmentedLinks, SegmentedRadios, SegmentedWidth};
+        use corten::view::Render;
+        let links = |width| corten::html! { <nav class={SegmentedLinks { width }}></nav> }.to_html();
+        assert_eq!(links(SegmentedWidth::Fit), r#"<nav class="segmented__links"></nav>"#);
+        assert_eq!(links(SegmentedWidth::Fill), r#"<nav class="segmented__links segmented__fill"></nav>"#);
+        let around = Segmented { width: SegmentedWidth::Fill, children: "" }.to_html();
+        assert_eq!(around, r#"<div class="segmented__segmented segmented__fill"></div>"#);
+        let fit = Segmented { width: SegmentedWidth::Fit, children: "" }.to_html();
+        assert_eq!(fit, r#"<div class="segmented__segmented"></div>"#);
+        let radios = SegmentedRadios { legend: Legend::Shown("View"), width: SegmentedWidth::Fill, children: "" }.to_html();
+        assert!(radios.starts_with(r#"<fieldset class="segmented__radios segmented__fill"><legend>"#), "{radios}");
     }
 }

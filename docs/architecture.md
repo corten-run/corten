@@ -44,11 +44,22 @@ backend.
 1. Web-like screens run in a native shell around the server-rendered pages (Hotwire Native or
    similar). Open decision: Hotwire Native drives pages through Turbo's JavaScript adapter.
    Either the mobile shell pages load Turbo Drive, or `corten.js` implements that adapter.
-   Prototype both before choosing; it changes only the runtime, not apps.
+   Prototype both before choosing; it changes only the runtime, not apps. A shell's web view is
+   a browser, so it holds live streams as [design Limit 14](design.md#limit-http1) says.
 2. Native screens (camera scanning, offline seller work) read `req.screen` JSON, post the same
    actions, and follow feeds with `Replica`. A `corten-native` crate would wrap `Replica`, an
    HTTP/SSE client and an offline outbox (SQLite on the device, an idempotency key per write)
-   behind UniFFI, giving Swift and Kotlin one tested core.
+   behind UniFFI, giving Swift and Kotlin one tested core. A screen may follow several feeds at
+   once, and the platforms' own clients cap what goes to one host. `URLSession` opens at most
+   `httpMaximumConnectionsPerHost` HTTP/1.1 connections to a host per session (6 by default,
+   sometimes lower, depending on the network); HTTP/2 shares one connection and ignores it, so
+   behind the proxy or CDN the browser already needs
+   ([Deploying](guide/deploy.md#what-the-proxy-must-do), item 3) it does not bind. OkHttp's
+   `Dispatcher.maxRequestsPerHost` (5 by default) counts calls started with `enqueue` until
+   their callback returns, whatever the protocol, and okhttp-sse's `EventSource` reads its
+   stream inside that callback, so five open feeds through one `OkHttpClient` leave every other
+   queued call to that host waiting unless the app raises it (synchronous calls and WebSockets
+   are not counted). Which client `corten-native` uses is an open decision (below).
 3. Design tokens come from one source and generate CSS, Swift and Kotlin. Only the components
    native screens use are mirrored.
 
@@ -200,3 +211,8 @@ revisit it ([design](design.md#choices)). Measured against a production marketpl
 2. Auth across surfaces: session cookies for web and native shells, tokens for native screens
    and agents. Whatever is chosen, the app turns it into a caller type (`Identify`) that
    handlers take as `Caller<T>`, one type per kind of caller.
+3. Native screens' HTTP client: a Rust HTTP/SSE client in `corten-native`, carrying every feed
+   over one HTTP/2 connection and outside both platforms' caps, against `URLSession` and OkHttp
+   (above), which need no `h2`, TLS stack or trust roots on the device and on iOS keep VPN On
+   Demand and background sessions, which a client on its own sockets loses (Happy Eyeballs it must
+   bring itself, as hyper-util's connector does), but leave OkHttp's cap for the app to raise.

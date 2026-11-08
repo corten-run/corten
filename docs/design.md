@@ -294,8 +294,12 @@ rules something out.
    tell a navigation from a `fetch` but not a navigation from an action, a script cannot set
    them, and data clients do not send them. With a header of its own, its absence is the safe
    answer: a browser request without it (and not asking for JSON) gets the whole document, as a
-   browser without JavaScript needs. The mode would move to a standard header that says "part of
-   a page" and that a script may set.
+   browser without JavaScript needs. The page the runtime fetches whole after a write asks with
+   `corten: page`: it is the whole document too, but a redirect to a place or to another site is
+   named to it in `corten-location`, as to a navigation, since `fetch` follows a 303 without its
+   `#id` and cannot read another origin's answer. So a redirect varies on `corten`, and an
+   answer to that fetch is the browser's alone, as a navigation's is. The mode would move to a
+   standard header that says "part of a page" and that a script may set.
 
    Stands on: platform (no registered media type tells a navigation from an action; a script cannot
    set `Sec-Fetch-*`, and data clients send none); reasoned (a media type parameter would mix the
@@ -1283,7 +1287,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     stream is a handler's return type (`LiveResponse`, `FeedResponse`), and a feed's `rows`
     does not say whether a route streams, since its snapshot route has them too; and
     `serve_wrapped` behind a proxy that re-encrypts to the app is right with live streams, so the
-    guide says it. HTTP/2 in Corten (hyper's
+    guide says it. The same proxy serves native apps: `URLSession` too caps HTTP/1.1
+    connections to a host (6) and shares one over HTTP/2, while OkHttp's cap counts calls whatever
+    the protocol ([Surfaces](architecture.md#native-apps-next-not-built)). HTTP/2 in Corten (hyper's
     `http2`, chosen by ALPN in `serve_wrapped`) was weighed and left out: it adds a second
     answer to each per-connection rule (a concurrent-streams limit beside
     `App::max_connections`, a `GOAWAY` drain at shutdown, `App::header_timeout` per stream, and
@@ -1291,8 +1297,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     and eight crates to the template's build (`h2`, `tokio-util`, `indexmap` and five smaller).
     HTTP/3 (QUIC over UDP with TLS in the process, `quinn` and `h3`, `Alt-Svc` and a TCP
     fallback where UDP is blocked) gains last-mile latency and loss recovery, which an edge near
-    the user gives better than an origin. Either reopens for an app that must serve browsers with
-    no proxy at all and has live streams; HTTP/3 also waits for a stable `h3`.
+    the user gives better than an origin. Either reopens for an app that must serve browsers or
+    native apps' platform clients with no proxy at all and has live streams; HTTP/3 also waits
+    for a stable `h3`.
 15. <a id="limit-script-comments"></a>A component script's comments are removed by a scan that knows strings, template literals
     and regular expressions but is not a JavaScript parser. Where only a parser could tell a
     division from a regular expression (a `/` after a statement-level `}`, after `++` or `--`, or
