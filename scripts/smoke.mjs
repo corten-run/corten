@@ -11,6 +11,12 @@ import { browserBug } from "./browser-bugs.mjs";
 
 const base = process.argv[2] ?? "http://localhost:18480";
 const engines = { chromium, firefox, webkit };
+/**
+ * The runtime swaps this request's answer into the page (`corten: nav` or `action`); the page it
+ * fetches whole after a write asks with `corten: page` and is drawn as a full load's.
+ * @param {import("@playwright/test").Request} r
+ */
+const swapped = (r) => ["nav", "action"].includes(r.headers()["corten"] ?? "");
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
 // The markup this test writes into pages goes through a policy of its own, which the watchlist
 // allows only when run with SMOKE_TRUSTED_TYPES=1 (CONTRIBUTING): without it, say so here rather
@@ -1426,7 +1432,7 @@ async function run(browser) {
       const probed = [];
       page.on("request", (r) => r.url().endsWith("?swap-preload") && probed.push(r.url()));
       await page.route(news, async (route) => {
-        const nav = route.request().headers()["corten"];
+        const nav = swapped(route.request());
         if (route.request().method() !== "GET" || nav) return route.fallback();
         // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
         const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
@@ -1570,7 +1576,7 @@ async function run(browser) {
       // is, with what the user typed, and one whose layout changed draws it (#690).
       {
         /** @param {import("@playwright/test").Request} r */
-        const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !r.headers()["corten"];
+        const wholeRead = (r) => news(new URL(r.url())) && r.method() === "GET" && !swapped(r);
         let reads = 0;
         /** The notice each read again sent back. @type {(string | undefined)[]} */
         const sentBack = [];
@@ -1629,10 +1635,10 @@ async function run(browser) {
       {
         /** @type {string[]} */
         const asked = [];
-        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/" && asked.push(r.headers()["corten"] ?? "whole");
+        const onStocks = (/** @type {import("@playwright/test").Request} */ r) => r.method() === "GET" && new URL(r.url()).pathname === "/" && asked.push(swapped(r) ? r.headers()["corten"] : "whole");
         slow = true;
         await page.evaluate(() => scrollTo(0, 0));
-        const held = page.waitForRequest((r) => news(new URL(r.url())) && !r.headers()["corten"], { timeout: 5000 });
+        const held = page.waitForRequest((r) => news(new URL(r.url())) && !swapped(r), { timeout: 5000 });
         await thank();
         await held;
         page.on("request", onStocks);
@@ -2485,7 +2491,7 @@ async function run(browser) {
         (/** @type {any} */ (window)).__marker = 5;
         (/** @type {any} */ (document.querySelector("header"))).__same = 1;
       });
-      const page_ = page.waitForResponse((r) => new URL(r.url()).pathname === "/news" && r.request().method() === "GET" && !r.request().headers()["corten"], { timeout: 5000 });
+      const page_ = page.waitForResponse((r) => new URL(r.url()).pathname === "/news" && r.request().method() === "GET" && !swapped(r.request()), { timeout: 5000 });
       await page.evaluate(() => {
         /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
         /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
@@ -3122,7 +3128,7 @@ async function run(browser) {
       await redrawPage.route(
         (url) => url.pathname === "/news",
         async (route) => {
-          if (route.request().method() !== "GET" || route.request().headers()["corten"]) return route.fallback();
+          if (route.request().method() !== "GET" || swapped(route.request())) return route.fallback();
           // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
           const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
           const headers = res.headers();

@@ -9,6 +9,12 @@ import { networkInterfaces } from "node:os";
 
 const base = process.argv[2] ?? "http://localhost:18482";
 const engines = { chromium, firefox, webkit };
+/**
+ * The runtime swaps this request's answer into the page (`corten: nav` or `action`); the page it
+ * fetches whole after a write asks with `corten: page` and is drawn as a full load's.
+ * @param {import("@playwright/test").Request} r
+ */
+const swapped = (r) => ["nav", "action"].includes(r.headers()["corten"] ?? "");
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
 const failures = [];
 let engine = "";
@@ -1535,7 +1541,7 @@ async function run(browser) {
     // the runtime loads it in full, and the notice, whose cookie that answer removed, goes with it.
     await page.route("**/*", async (route) => {
       const req = route.request();
-      if (req.method() !== "GET" || req.resourceType() !== "fetch" || req.headers()["corten"]) return route.fallback();
+      if (req.method() !== "GET" || req.resourceType() !== "fetch" || swapped(req)) return route.fallback();
       const res = await route.fetch();
       await page.context().clearCookies({ name: "__Host-corten-notice" });
       const body = (await res.text()).replace("<html ", '<html data-frame="changed" ');
@@ -1556,7 +1562,7 @@ async function run(browser) {
   if (engine !== "webkit") {
     const nest = async (/** @type {import("@playwright/test").Route} */ route) => {
       const req = route.request();
-      const whole = req.resourceType() === "document" || (req.resourceType() === "fetch" && !req.headers()["corten"]);
+      const whole = req.resourceType() === "document" || (req.resourceType() === "fetch" && !swapped(req));
       if (req.method() !== "GET" || !whole || new URL(req.url()).pathname !== "/") return route.fallback();
       // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
       const res = await route.fetch({ headers: { ...req.headers(), "accept-encoding": "identity" } });
