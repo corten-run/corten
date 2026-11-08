@@ -2574,7 +2574,9 @@ Corten is pre-1.0, so any minor version may change the API.
     `Solid` badge's fill too, where a dot in the badge's own tone was the fill's color and could not
     be seen; the kit doc and guide say a dot in a badge takes it. `LiveDot` takes it as well. Not
     breaking: the other tones are unchanged, and `corten ui add status_dot --merge` takes `Text`.
-    The ui-gallery's badges use it, and its smoke test checks the dot is the badge's text color in a
+    The rule adds 42 bytes to the stylesheet (measured on the ui-gallery's served `components.css`:
+    60,875 bytes against 60,833, gzip 10,091 against 10,081, brotli 8,888 against 8,876, with the
+    rule taken out for the earlier size). The ui-gallery's badges use it, and its smoke test checks the dot is the badge's text color in a
     soft badge and a solid one
     ([#1092 Kit StatusDot and Badge take separate tone enums, so a badge with a computed tone writes it twice and a mismatched pair compiles](https://github.com/corten-run/corten/issues/1092)).
 
