@@ -5578,7 +5578,8 @@ Corten is pre-1.0, so any minor version may change the API.
     it nowhere a router test sees, as the served-component check did before Fixed 183. Each is
     now the error page's `Failure::detail` in every debug build, and printed to stderr outside
     `corten dev`, as the other checks about the app's code are (a middleware that answers a page
-    of its own in place of such a route's still gets a plain 500, named on stderr). A release
+    of its own in place of such a route's still gets a plain 500, logged and named on stderr
+    outside `corten dev`). A release
     build still draws nothing in the place and logs it once
     ([#1035 A debug build's layout-read errors (later::<X>() on an answer that is not a page, a gives(..) the page does not give) answer a bare 500 that names nothing outside corten dev](https://github.com/corten-run/corten/issues/1035)).
 

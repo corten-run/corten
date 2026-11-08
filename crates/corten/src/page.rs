@@ -448,8 +448,8 @@ impl Failure {
     /// production. A debug build's error about the app's own code that the page's answer raises (a
     /// component the page draws that the app does not serve, a `Refresh` header, a write
     /// redirected outside `form-action`, a layout read the route says it gives and the page did
-    /// not, a page whose answer type is not a page) keeps it outside `corten dev` too, so an app's router
-    /// test names it; when the error page fails as well, its plain text keeps it.
+    /// not, a page whose answer type is not a page) keeps it outside `corten dev` too, so an app's
+    /// router test names it; when the error page fails as well, its plain text keeps it.
     pub fn detail(&self) -> Option<&str> {
         match self {
             Failure::Rejected { detail, .. }
