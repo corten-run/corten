@@ -1110,52 +1110,68 @@ passes, a separate diagnostic build of card-market's crate run after it:
 
 ### The editor's server and the Docker build after an edit (Docker Desktop, 2026-11-08)
 
-`rust-analyzer.mjs dev-loop` and `docker-rebuild.mjs dev-loop corten,axum-maud 3`
-(`results/dev-loop`), at `c65c10ec`, on Docker Desktop (WSL2, 8 CPUs, 11.7 GiB) with other work
+`rust-analyzer.mjs` (`results/dev-loop`, at `9da8fb8d`; `results/dev-loop-default` with
+`RA_EXPERIMENTAL=off`) and `docker-rebuild.mjs dev-loop corten,axum-maud 3` (at `c65c10ec`, with
+only this folder's scripts changed), on Docker Desktop (WSL2, 8 CPUs, 11.7 GiB) with other work
 running, each pinned to cores 0-3 with a 9.7 GiB cap, one app at a time: once, kept for the
 record until a droplet round runs them (both run in a round's build step from now on, Method,
-item 10). The same machine measured axum + Maud's rebuild at about three times r16's droplet
-(38.7 s against 11.3), and one Corten build moved 2.4 times between runs, so read the gaps, not
-the second figure.
+item 10). This machine is slow and noisy for builds: axum + Maud's kept-builder Docker build
+took 38.7 s where r16's in-container rebuild on the droplet took 11.3 (not the same measurement,
+so the ratio is only a rough guide), and Corten's three kept-builder builds ranged from 125 to
+303 s and 175 to 366 CPU-seconds. Read the gaps between apps, not each figure.
 
 rust-analyzer 1.99.1, check on save off and its experimental diagnostics on, five edits each
-(median; a completion inside the item page's markup and the file's errors asked for at once):
+(median, range in brackets; after each edit a completion inside the item page's markup, then the
+file's errors asked for at once):
 
 | App | Ready, cold | Ready, warm | Completion after an edit | Unknown field shown | Cleared | Peak memory |
 |---|---|---|---|---|---|---|
-| axum-maud | 19.4 s | 7.4 s | 112 ms | 101 ms (5 of 5) | 91 ms | 1,370 MiB |
-| **corten** | 39.8 s | 18.6 s | 110 ms | 93 ms (5 of 5) | 80 ms | 2,498 MiB |
-| topcoat | 29.6 s | 9.1 s | 6,953 ms | 7,461 ms (5 of 5) | 6,685 ms | 2,018 MiB |
-| leptos | 49.3 s | 27.4 s | 12,041 ms | 12,086 ms (5 of 5) | 11,773 ms | 3,531 MiB |
+| axum-maud | 17.1 s | 8.5 s | 89 ms (77 to 842) | 72 ms (5 of 5) | 71 ms | 1,447 MiB |
+| **corten** | 42.3 s | 19.7 s | 87 ms (68 to 986) | 65 ms (5 of 5) | 59 ms | 2,568 MiB |
+| topcoat | 28.4 s | 8.6 s | 5,537 ms (4,914 to 6,934) | 5,298 ms (5 of 5) | 5,598 ms | 2,139 MiB |
+| leptos | 46.1 s | 27.8 s | 10,268 ms (8,186 to 15,105) | 9,721 ms (5 of 5) | 9,005 ms | 3,698 MiB |
 
-1. Inside `html!` the server answers as fast as inside Maud's `html!`: a completion in about a
-   tenth of a second after an edit (the first, 1.4 s, likely includes the file's first analysis)
-   and an unknown field in the markup reported as an error in the same time, gone as fast once
-   fixed. Leptos's `view!` and Topcoat's take 7 to 12 seconds for each, every time.
+1. Inside `html!` the server answers as fast as inside Maud's `html!`: a completion in under a
+   tenth of a second after an edit (the first after the file is opened takes about a second) and
+   an unknown field in the markup reported as an error in the same time, gone as fast once fixed.
+   Inside Topcoat's and Leptos's `view!` each took 5 to 10 seconds (medians; 4.8 to 15.1 s over
+   every edit). The files differ: the one edited is Corten's `views/alert.rs` (60 lines, two
+   `html!`), Maud's `pages.rs` (249, six), Topcoat's `main.rs` (440, nine `view!`) and Leptos's
+   `app.rs` (401, thirty-three); asking for a file's errors analyses all of it, so those columns
+   partly measure the file.
 2. Corten's server loads the whole workspace (its crates and every example app), against axum +
    Maud's one crate; how much of its longer ready time and larger memory that accounts for, and
-   what an app with Corten from crates.io would take, is not measured here.
-3. Without its experimental diagnostics (rust-analyzer's default), in a first run not kept, the
-   server reported the unknown field in none of the four, Maud's included, before a save:
+   what an app with Corten from crates.io would take, is not measured here. Peak memory is the
+   server's processes' peaks summed (the server and the proc-macro server that expands the
+   markup).
+3. With the experimental diagnostics off, as rust-analyzer ships (`results/dev-loop-default`),
+   the server reported the unknown field in none of the four, Maud's included, in any of the
+   five edits:
    `cargo check` on save (Build) is what shows it then.
 
-The app's own `docker build`, seconds of wall time (CPU-seconds), medians of three:
+The app's own `docker build`, seconds of wall time (CPU-seconds), each the median of its own
+three runs:
 
 | App | Cold | After the edit, builder kept | After the edit, layer cache imported |
 |---|---|---|---|
 | axum-maud | 147.7 (339.0) | 38.7 (74.7), its crate alone | 141.2 (299.8), 130 crates |
 | **corten** | 268.7 (440.2) | 149.1 (196.2), 3 crates | 228.2 (361.3), 106 crates |
 
-1. A hosted CI runner that restores BuildKit's layer cache rebuilds a Rust app as if from clean:
-   the edit changes the source the build step copies, so that step runs again, and its `target/`
-   cache mount is not in the exported cache. Only a builder kept between builds (a runner of
-   one's own, a developer's machine) gets the incremental build.
+1. A hosted CI runner that restores BuildKit's layer cache rebuilds an app whose Dockerfile copies
+   its source before building, as both of these do, about as if from clean: the edit changes what
+   the build step copies, so that step runs again, and its `target/` cache mount is not in the
+   exported cache. A Dockerfile that builds the dependencies in a layer of their own first keeps
+   them (not measured here). Only a builder kept between builds (a runner of one's own, a
+   developer's machine) gets the incremental build with these Dockerfiles.
 2. With the builder kept, card-market's build compiles Corten's own crates (`corten-run` and
    `corten-macros`, path dependencies in this repository) as well as the app: its Dockerfile
    touches every file it copies, since cargo goes by file times. An app with Corten from
    crates.io compiles its own crate alone, as axum + Maud's does, so Corten's 149 s is an upper
    bound, not a like-for-like row (Build's "After the edit", which edits in place, compiles
    card-market alone).
+3. The cold build's time includes exporting the layer cache; every build resolves the
+   Dockerfile's syntax image and base tags over the network, and an imported build's new
+   builder may pull the base images again.
 
 ## Method
 
@@ -1322,11 +1338,12 @@ The app's own `docker build`, seconds of wall time (CPU-seconds), medians of thr
     - Development build, for the apps whose development loop compiles the whole program after a
       save (Rust, Go, C++; `corten dev` runs `cargo build`): the debug build clean and after the
       same edit. The other apps' development servers compile what a request needs as it comes,
-      which this does not time. The time from a save to the open page showing it, under
-      `corten dev` and each stack's own development server, is not measured yet
-      ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)). Topcoat's is taken as `cargo build` alone. Drogon's starts with
+      which this does not time. Topcoat's is taken as `cargo build` alone. Drogon's starts with
       Drogon itself installed (a Release build, from the dependency step), so its clean debug
-      build compiles only the app, while the Rust and Go ones compile every dependency.
+      build compiles only the app, while the Rust and Go ones compile every dependency. The time
+      from a save to the open page showing it, under `corten dev` and each stack's own development
+      server, is not measured yet
+      ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
     - Editor and tests, for the Rust apps: `cargo check --all-targets` clean and again after the
       same edit, which is what rust-analyzer runs for its diagnostics when a file is saved (with
       the features Leptos's documentation has an editor set, `ssr`; Corten's checks card-market
@@ -1402,9 +1419,9 @@ The app's own `docker build`, seconds of wall time (CPU-seconds), medians of thr
     afresh at each start as the unit's hours are (r16's step took 39.2 minutes, and its longest
     call, Leptos's, 12.1; the Docker build and rust-analyzer add about 25 and 3 minutes to Corten's
     call and 12 and 2 to axum + Maud's, and a few minutes to Leptos's and Topcoat's, estimated from
-    a desktop run, which builds about three times slower); a stopped or crashed build skips its app
-    alone, a droplet restart in the step goes on with the next app, and past the budget the apps
-    not built are named in `skipped.txt`.
+    a desktop run, which built about three times slower, roughly); a stopped or crashed build skips
+    its app alone, a droplet restart in the step goes on with the next app, and past the budget the
+    apps not built are named in `skipped.txt`.
 
 ### The matched tier
 
