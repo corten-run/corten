@@ -1111,6 +1111,7 @@ mod tests {
         pub struct Quotes {
             pub order: Option<super::Order>,
             pub also: Vec<super::Order>,
+            pub by: super::Order,
         }
 
         #[route("/api/socket", get = socket)]
@@ -1236,7 +1237,9 @@ mod tests {
                     "name": "also",
                     "in": "query",
                     "schema": { "type": "array", "items": { "type": "string", "enum": ["lowest", "newest"] } }
-                }
+                },
+                // One alone, required, is its words too, not the enum's JSON schema.
+                { "name": "by", "in": "query", "required": true, "schema": { "type": "string", "enum": ["lowest", "newest"] } }
             ])
         );
         assert_eq!(quotes["get"]["responses"]["default"], json!({ "$ref": "#/components/responses/FailureOrJson" }));

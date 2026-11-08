@@ -38,6 +38,10 @@ use serde_json::{Number, Value};
 /// let page: Page = corten::json::from_str(r#"{"id":1,"views":9}"#).unwrap();
 /// assert_eq!(page.extra["views"], 9);
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not read from JSON: it is not a `FromJson`",
+    note = "derive FromJson on it; a #[derive(Fields)] or #[derive(UrlValue)] type is one already (deriving FromJson beside them is E0119) unless it is generic or a UrlValue enum with #[serde(other)], which take an empty `impl corten::FromJson for T {{}}`; a type whose Deserialize borrows from the input cannot be one"
+)]
 pub trait FromJson: DeserializeOwned {
     /// Reads the value at the reader's position. Not a public API.
     #[doc(hidden)]

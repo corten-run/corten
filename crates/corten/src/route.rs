@@ -236,7 +236,9 @@ pub use corten_macros::Route;
 /// an `<option value={Condition::NearMint}>` (or corten-ui's `Choice`) posts the word its
 /// handler's `condition: Condition` reads, and a form with any other word is refused (422), as one
 /// with a value of the wrong kind is. It implements the enum's `Deserialize`, and with the `json`
-/// feature its `FromJson` and schema, so `FromJson` beside it is a second impl (E0119).
+/// feature its `FromJson` (and with `types` its schema), so `FromJson` beside it is a second impl
+/// (E0119). An enum with a `#[serde(other)]` variant, which Corten's JSON reader does not follow,
+/// gets no `FromJson`, and takes an empty `impl corten::FromJson for Shown {}`.
 ///
 /// ```
 /// use corten::prelude::*;
@@ -3690,8 +3692,9 @@ pub mod __private {
 
     /// The derive's probe for a parameter's type, `(&&&&Probe::<T>::new()).__schema()`: its JSON
     /// Schema when it has one, found before the fallback that records a miss, which takes `Probe`
-    /// itself (the levels, first found first: an optional `UrlValue`'s words, a `UrlValue`'s words
-    /// or an `Option`'s value's schema, the type's own schema, the miss); and
+    /// itself (the levels, first found first: an optional `UrlValue`'s words or a list of a
+    /// `UrlValue`'s, a `UrlValue`'s words or an `Option`'s value's schema, the type's own schema,
+    /// the miss; an `Option` of a list of a `UrlValue` takes the list's JSON schema); and
     /// `(&&Probe::<T>::new()).__required()`, false for an `Option` or a list, which a request
     /// may leave out.
     pub struct Probe<T: ?Sized>(std::marker::PhantomData<fn() -> T>);

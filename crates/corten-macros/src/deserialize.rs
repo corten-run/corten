@@ -541,6 +541,27 @@ struct Field {
     bound: Option<TokenStream>,
 }
 
+/// Whether the `Deserialize` `for_struct` writes borrows from its input, as serde_derive's
+/// would: a field it reads whose type holds a `&'a`, or one marked `#[serde(borrow)]`. A skipped
+/// field is not read, and a `Cow<'static, str>` read without `borrow` is owned. Attributes that
+/// do not parse count as borrowing: the derive reports them itself.
+pub fn struct_lends(item: &Item) -> bool {
+    if item.is_enum {
+        return false;
+    }
+    let unsupported = |arg: &Arg| (arg.span, String::new());
+    let Some(body) = &item.body else { return false };
+    let read = || -> Result<Vec<Field>, Error> {
+        let container = Container::read("Fields", &item.attrs, false, false, &unsupported)?;
+        let members = named_fields(body)?
+            .into_iter()
+            .map(|f| Member { member: f.ident.to_string(), name: f.name, attrs: f.attrs, ty: f.ty.into_iter().collect() })
+            .collect();
+        read_fields("Fields", item, &container, members, &unsupported)
+    };
+    read().map_or(true, |fields| fields.iter().any(|f| !f.skip && (f.borrow || !f.lent.is_empty())))
+}
+
 /// `Deserialize` for a struct with named fields, as `#[derive(Fields)]` reads it.
 pub fn for_struct(item: &Item) -> Result<TokenStream, Error> {
     let unsupported = |arg: &Arg| {

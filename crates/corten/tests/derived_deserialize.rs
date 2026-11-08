@@ -932,11 +932,24 @@ twin! { note, corten::Fields,
     }
 }
 
+// Owned too: a `Cow` by its full path, a field named `borrow`, and a reference in a skipped
+// field, which is never read.
+twin! { kept, corten::Fields,
+    pub struct Kept {
+        pub text: std::borrow::Cow<'static, str>,
+        pub borrow: String,
+        #[serde(skip)]
+        pub cache: Option<&'static str>,
+    }
+}
+
 #[test]
 fn fields_and_url_value_are_read_from_json_as_they_are() {
     // A `Cow<'static, str>` read without `borrow` is owned, so the struct is a `FromJson`.
     same_read::<note::ours::Note, note::theirs::Note>(r#"{"text":"hi"}"#);
     read_alone::<note::ours::Note, note::theirs::Note>(r#"{"text":"hi"}"#);
+    same_read::<kept::ours::Kept, kept::theirs::Kept>(r#"{"text":"hi","borrow":"b"}"#);
+    read_alone::<kept::ours::Kept, kept::theirs::Kept>(r#"{"text":"hi","borrow":"b"}"#);
     // The twins' `shipping` is the same type on both sides, so serde's reads it by ours.
     for text in [
         r#"{"email":"a@b.c","shipping":"next_day"}"#,

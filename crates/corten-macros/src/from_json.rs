@@ -31,23 +31,13 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
 }
 
 /// What `#[derive(Fields)]` and `#[derive(UrlValue)]` add, since they write the type's
-/// `Deserialize` already: its `FromJson` and schema (with corten's feature `json`), so the type
-/// is read from JSON with no derive beside theirs. Nothing for a generic type, whose bounds
-/// serde infers in ways `FromJson`'s do not follow, or one `FromJson` cannot read (an attribute
-/// it does not follow, or a field that borrows).
+/// `Deserialize` already: its `FromJson` (with corten's feature `json`) and schema (with
+/// `types`), so the type is read from JSON with no derive beside theirs. Nothing for a generic
+/// type, whose bounds serde infers in ways `FromJson`'s do not follow, one whose `Deserialize`
+/// borrows from its input (a `FromJson` is read into owned values), or one `FromJson` cannot
+/// read (an attribute it does not follow, such as a `UrlValue`'s `#[serde(other)]`).
 pub fn beside_deserialize(item: &Item) -> TokenStream {
-    // A reference, or a `#[serde(borrow)]`: the `Deserialize` then borrows from its input, and a
-    // `FromJson` reads owned values. A `Cow<'static, str>` read without `borrow` is owned.
-    fn borrows(tokens: TokenStream) -> bool {
-        tokens.into_iter().any(|t| match t {
-            TokenTree::Punct(p) => p.as_char() == '&',
-            TokenTree::Ident(id) => id.to_string() == "borrow",
-            TokenTree::Group(g) => borrows(g.stream()),
-            TokenTree::Literal(_) => false,
-        })
-    }
-    let fields = item.body.iter().chain(&item.tuple).any(|g| borrows(g.stream()));
-    if !item.impl_generics.is_empty() || fields {
+    if !item.impl_generics.is_empty() || crate::deserialize::struct_lends(item) {
         return TokenStream::new();
     }
     match impls(item) {

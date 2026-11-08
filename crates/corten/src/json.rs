@@ -141,6 +141,14 @@
 //! struct Price { amount: f64 }
 //! ```
 //!
+//! Nor does a `transparent` struct whose one field has a default, which leaves nothing to read:
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! struct Cents { #[serde(default)] amount: u64 }
+//! ```
+//!
 //! Since the derive writes the type's `Deserialize`, serde's derive beside it is a second one and
 //! does not compile (E0119); take it out of the list:
 //!
@@ -172,9 +180,42 @@
 //! struct Order { email: String }
 //! ```
 //!
-//! A generic type, or one `FromJson` cannot read (a field that borrows, an attribute it does not
+//! ```compile_fail,E0119
+//! #[derive(corten::UrlValue, corten::FromJson)]
+//! enum Shipping { Standard, NextDay }
+//! ```
+//!
+//! A generic type, or a `UrlValue` enum with `#[serde(other)]` (which the reader does not
 //! follow), gets no `FromJson` from them; an empty `impl corten::FromJson for T {}` makes it one,
-//! read by serde_json through the `Deserialize` they wrote.
+//! read by serde_json through the `Deserialize` they wrote. A form input whose fields borrow from
+//! the input gets none and cannot take one, since a `FromJson` reads owned values.
+//!
+//! ```
+//! #[derive(Debug, PartialEq, corten::UrlValue)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Shown { All, Mine, #[serde(other)] Other }
+//! impl corten::FromJson for Shown {}
+//!
+//! assert_eq!(corten::json::from_str::<Shown>(r#""mine""#).unwrap(), Shown::Mine);
+//! assert_eq!(corten::json::from_str::<Shown>(r#""lost""#).unwrap(), Shown::Other);
+//! ```
+//!
+//! Without its empty impl, that enum is not read from JSON:
+//!
+//! ```compile_fail,E0277
+//! #[derive(corten::UrlValue)]
+//! enum Shown { All, #[serde(other)] Other }
+//!
+//! let _: Shown = corten::json::from_str(r#""All""#).unwrap();
+//! ```
+//!
+//! A form input that borrows cannot take one:
+//!
+//! ```compile_fail,E0277
+//! #[derive(corten::Fields)]
+//! struct Note<'a> { text: &'a str }
+//! impl corten::FromJson for Note<'static> {}
+//! ```
 
 use std::{
     borrow::Cow,

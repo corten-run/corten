@@ -74,7 +74,9 @@ carries its `default`. The schemas are compiled only with feature `types` (which
 A derived type compiles with a field of any type serde writes or reads, since many are never
 described. Describing one whose field, at any depth, has a type with no schema panics naming
 that type: in the test that calls `Types::sync`, or at startup for a tool. Derive `ToJson` (or
-`FromJson`) on the type, or, for another crate's type, implement the trait for a
+`FromJson`) on the type (a `Fields` or `UrlValue` type has its read schema already, unless it is
+generic or a `UrlValue` enum with `#[serde(other)]`, which implement `FromJsonSchema` by hand),
+or, for another crate's type, implement the trait for a
 `#[serde(transparent)]` newtype around it. In a generic type, a field type that has a schema
 only under a bound the type does not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same
 way: add the bound to the type's where clause. A type a root names directly (`Types::add`, a
