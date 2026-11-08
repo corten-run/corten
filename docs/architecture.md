@@ -49,15 +49,17 @@ backend.
 2. Native screens (camera scanning, offline seller work) read `req.screen` JSON, post the same
    actions, and follow feeds with `Replica`. A `corten-native` crate would wrap `Replica`, an
    HTTP/SSE client and an offline outbox (SQLite on the device, an idempotency key per write)
-   behind UniFFI, giving Swift and Kotlin one tested core. Its HTTP/SSE client would be Corten's
-   own Rust code, carrying every feed a screen follows over one HTTP/2 connection to the proxy or
-   CDN the browser already needs ([Deploying](guide/deploy.md#what-the-proxy-must-do), item 3), so
-   neither platform's cap per host applies. An app that follows feeds with its platform's client
-   instead meets that cap: `URLSession` opens at most `httpMaximumConnectionsPerHost` HTTP/1.1
-   connections to a host per session (6 by default; HTTP/2 shares one and ignores it), and OkHttp's
-   `Dispatcher.maxRequestsPerHost` (5 by default) counts asynchronous calls in flight to a host
-   whatever the protocol, so five open feeds through one `OkHttpClient` leave every other call to
-   that host waiting unless the app raises it.
+   behind UniFFI, giving Swift and Kotlin one tested core. A screen follows several feeds at
+   once, and the platforms' own clients cap what goes to one host. `URLSession` opens at most
+   `httpMaximumConnectionsPerHost` HTTP/1.1 connections to a host per session (6 by default,
+   sometimes lower on a poor network); HTTP/2 shares one connection and ignores it, so behind the
+   proxy or CDN the browser already needs ([Deploying](guide/deploy.md#what-the-proxy-must-do),
+   item 3) it does not bind. OkHttp's `Dispatcher.maxRequestsPerHost` (5 by default) counts calls
+   started with `enqueue` until their callback returns, whatever the protocol, and okhttp-sse's
+   `EventSource` reads its stream inside that callback, so five open feeds through one
+   `OkHttpClient` leave every other queued call to that host waiting unless the app raises it
+   (synchronous calls and WebSockets are not counted). Which client `corten-native` uses is an
+   open decision (below).
 3. Design tokens come from one source and generate CSS, Swift and Kotlin. Only the components
    native screens use are mirrored.
 
@@ -209,3 +211,7 @@ revisit it ([design](design.md#choices)). Measured against a production marketpl
 2. Auth across surfaces: session cookies for web and native shells, tokens for native screens
    and agents. Whatever is chosen, the app turns it into a caller type (`Identify`) that
    handlers take as `Caller<T>`, one type per kind of caller.
+3. Native screens' HTTP client: a Rust HTTP/SSE client in `corten-native`, carrying every feed
+   over one HTTP/2 connection and outside both platforms' caps, against `URLSession` and OkHttp
+   (above), which need no `h2`, TLS stack or trust roots on the device but leave OkHttp's cap for
+   the app to raise.
