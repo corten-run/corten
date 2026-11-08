@@ -232,9 +232,10 @@ writes draws nothing and is no error, and the page does not wait for its read. I
 `later` for a read the app does not start, one inside `<main>` (which a navigation would not fill),
 one in a patch, one rendered as text or whose `to_html()` string is placed twice, or one on a page
 whose answer type does not say it is a page, is an error naming it, on the error page's
-`Failure::detail` (so a router test sees it) and on stderr outside `corten dev`; one in a live
-fragment is logged. A release build checks less, so test the page in a debug build: a read it does not start, a
-page whose answer type is not a page, and a place in a patch or a live fragment draw nothing and are
+`Failure::detail` (so a router test sees it) and on stderr outside `corten dev`. A middleware that
+answers a page of its own in place of such a route's draws the error as a plain 500, named on
+stderr only. One in a live fragment is logged. A release build checks less, so test the page in a
+debug build: a read it does not start, a page whose answer type is not a page, and a place in a patch or a live fragment draw nothing and are
 logged once; a place inside `<main>` draws the value on a full load and nothing on a navigation, and
 one in `<head>` (its `<title>` included) draws nothing, both unlogged; one rendered as text stays as
 that text (logged once); and a string placed twice is filled once. A `HEAD` starts no read, so its
