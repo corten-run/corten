@@ -4000,6 +4000,8 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1065 Kit Stack and Cluster always print a literal gap, so an app on its own token spacing scale cannot use them with its gap utility](https://github.com/corten-run/corten/issues/1065)).
 
 ### Fixed
+- The fixed favicon keeps its weak content tag when background compression finishes, so a
+  conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
 
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

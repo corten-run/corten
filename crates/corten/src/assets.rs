@@ -224,7 +224,7 @@ pub(crate) fn favicon<S: Clone + Send + Sync + 'static>(assets: Option<&Arc<Asse
             let icon = icon.clone();
             async move {
                 match icon {
-                    Some((assets, path)) => assets.serve(path, &headers, FAVICON_CACHE),
+                    Some((assets, path)) => assets.serve(path, &headers, FAVICON_CACHE, true),
                     None => {
                         let mut res = (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, NO_FAVICON_CACHE)]).into_response();
                         res.extensions_mut().insert(crate::page::AsIs);
@@ -790,23 +790,34 @@ impl Assets {
                 let assets = assets.clone();
                 async move {
                     let cache = if version == assets.version { IMMUTABLE } else { HeaderValue::from_static("no-cache") };
-                    assets.serve(&path, &headers, cache)
+                    assets.serve(&path, &headers, cache, false)
                 }
             }),
         )
     }
 
-    fn serve(&self, path: &str, headers: &HeaderMap, cache: HeaderValue) -> Response {
+    fn serve(&self, path: &str, headers: &HeaderMap, cache: HeaderValue, fixed: bool) -> Response {
         let Some(file) = self.files.get(path) else {
             return StatusCode::NOT_FOUND.into_response();
         };
-        // Each coding of the file is a different representation, so it has its own tag.
         #[cfg(feature = "compress")]
         let (body, coding) = file.body.pick(headers);
-        #[cfg(feature = "compress")]
-        let etag = etag(file.hash, coding.map(|c| c.tag()));
         #[cfg(not(feature = "compress"))]
-        let (body, etag) = (file.body.clone(), etag(file.hash, None));
+        let body = file.body.clone();
+        let etag = if fixed {
+            // Its URL is revalidated: keep the same weak content tag while background
+            // compression changes the encoded bytes. Versioned files keep per-coding tags.
+            HeaderValue::try_from(format!("W/\"{:016x}\"", file.hash)).expect("hex tag")
+        } else {
+            #[cfg(feature = "compress")]
+            {
+                etag(file.hash, coding.map(|c| c.tag()))
+            }
+            #[cfg(not(feature = "compress"))]
+            {
+                etag(file.hash, None)
+            }
+        };
         // Compared weakly, as RFC 9110 has `If-None-Match` compared: a proxy that marks the tag
         // weak (`W/`), a list of tags or `*` still gets the 304.
         if headers.get_all(header::IF_NONE_MATCH).iter().any(|line| crate::cache::names(line.as_bytes(), etag.as_bytes())) {
@@ -1130,6 +1141,40 @@ mod tests {
         assert_eq!(get(traversal).await.unwrap().status(), StatusCode::NOT_FOUND, "only loaded files are served");
         let dotfile = format!("/assets/{}/.env", assets.version());
         assert_eq!(get(dotfile).await.unwrap().status(), StatusCode::NOT_FOUND, "dotfiles are skipped");
+    }
+
+    /// The fixed icon's content is unchanged when its background-compressed form becomes ready.
+    #[cfg(feature = "compress")]
+    #[tokio::test]
+    async fn the_favicon_tag_survives_background_compression() {
+        let svg = format!("<svg>{}</svg>", "<path d=\"M0 0h1v1\"/>".repeat(200));
+        let root = dir("favicon-compression", &[("favicon.svg", &svg)]);
+        let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let app: Router = crate::compress::apply(favicon(Some(&assets)));
+        let request = |tag: Option<HeaderValue>| {
+            let mut req = Request::get(FAVICON_PATH).header(header::ACCEPT_ENCODING, "gzip, deflate");
+            if let Some(tag) = tag {
+                req = req.header(header::IF_NONE_MATCH, tag);
+            }
+            app.clone().oneshot(req.body(Body::empty()).unwrap())
+        };
+        let cold = request(None).await.unwrap();
+        assert_eq!(cold.status(), StatusCode::OK);
+        assert_eq!(cold.headers()[header::CONTENT_ENCODING], "gzip");
+        let tag = cold.headers()[header::ETAG].clone();
+        assert!(tag.to_str().unwrap().starts_with("W/\""));
+        assets.files["favicon.svg"].body.wait();
+        let again = request(Some(tag.clone())).await.unwrap();
+        assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(again.headers()[header::ETAG], tag);
+        assert_eq!(again.headers()[header::VARY], "accept-encoding");
+        assert!(axum::body::to_bytes(again.into_body(), usize::MAX).await.unwrap().is_empty());
+        let warm = request(None).await.unwrap();
+        assert_eq!(warm.status(), StatusCode::OK);
+        assert_eq!(warm.headers()[header::CONTENT_ENCODING], "gzip");
+        assert_eq!(warm.headers()[header::ETAG], tag);
+        let changed = request(Some(HeaderValue::from_static("W/\"another-icon\""))).await.unwrap();
+        assert_eq!(changed.status(), StatusCode::OK);
     }
 
     const SCRIPT: Component = Component {
