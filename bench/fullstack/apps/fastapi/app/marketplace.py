@@ -87,7 +87,7 @@ class MarketplaceRecord(Record):
 class MarketplaceSource:
     def __init__(self):
         base = os.environ.get("API_BASE", "http://localhost:8080").rstrip("/")
-        # No cap on connections to the item API, as every app's client (bench/fullstack/README.md).
+        # No cap on connections to the item API, as bench/fullstack/README.md's item API rule asks.
         limits = httpx.Limits(max_connections=None, max_keepalive_connections=None)
         self.client = httpx.AsyncClient(base_url=base, timeout=10, follow_redirects=False, limits=limits)
         self.fixture = None

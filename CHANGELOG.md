@@ -2555,10 +2555,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
     apps are: the item page, the catalog page, the localized marketplace page and the live price
     stream. Each app's own tests (`python -m unittest`, `node --test`) cover the marketplace page
-    (formatting, rows, links, the cross-site check, both sources); the catalog and item pages and
-    the live stream are covered by the shared gates. FastAPI's records are Pydantic models, so a
-    record that is not one is a 502, and its item API clients have no connection cap, as no app's
-    has. Neither framework has
+    (formatting, rows, links, the cross-site check, both sources); the catalog and item pages are
+    covered by the shared gates, and the live stream only by the live benchmark. FastAPI's records are Pydantic models, so a
+    record that is not one is a 502, and its item API clients have no connection cap, as the
+    README's item API rule asks. Neither framework has
     CSRF protection of its own, so each refuses a cross-site post by its `Sec-Fetch-Site` or
     `Origin`, as the Gin and Drogon apps do. Both join the catalog and marketplace gates, CI's matrix
     and official rounds, which now need all twenty apps, so no marketplace round is compared with

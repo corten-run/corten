@@ -148,7 +148,7 @@ if os.environ.get("ITEM_SOURCE") == "fixture":
         _fixture = {k: to_item_view(v) for k, v in json.load(f).items()}
 
 # One client for the process, so connections to the item API are kept and reused.
-# No cap on connections to the item API, as every app's client (bench/fullstack/README.md).
+# No cap on connections to the item API, as bench/fullstack/README.md's item API rule asks.
 client = httpx.AsyncClient(base_url=BASE, timeout=10, limits=httpx.Limits(max_connections=None, max_keepalive_connections=None))
 
 

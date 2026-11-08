@@ -1575,28 +1575,29 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    transitive versions can drift between builds; the other apps have lockfiles.
 4. The page is small. Apps with large client-side state (a seller grid of live rows) are a
    different test; see [bench/live](../live/README.md) for pushing updates.
-5. Each framework runs its production defaults with the worker count its docs give for one CPU,
-   in one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or
-   cannot serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked
-   failed. Each could be tuned further (caching, streaming, more workers). None of the apps cache
-   rendered pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at
-   their default level and FastAPI does (`fastapi run` keeps uvicorn's access log). Drogon runs one IO thread per core, as its docs advise, and counts its
-   cores from its CPU affinity capped by the container's CPU quota, since its own count (`0`)
-   sees every core of the host. FastAPI runs `fastapi run`, one uvicorn process: its container
-   guide gives one process a container where the container is given its CPUs, and the live stream
-   needs every client in one process. Express runs one Node process with `NODE_ENV=production`, as
-   its production guide says, which caches compiled views; FastAPI's templates are Starlette's
-   `Jinja2Templates` as created, which checks each template file's time on every render (Jinja's
-   default, which FastAPI's docs do not change). Three settings differ from a library's default so that the item
-   API source does the same work in every app: Gin keeps as many idle connections to the item API
-   as its transport allows (Go's default keeps two per host; reqwest, .NET and Node have no
-   per-host cap), FastAPI's httpx clients have no connection cap (httpx's default keeps 20 idle
-   and allows 100 in all), and Drogon keeps one `HttpClient` (one connection) per request in flight on
-   each thread. Drogon also hands the fixture parser's freed memory back to the system after
-   loading (`malloc_trim`), so its memory with items in memory is the items' rather than the
-   parser's peak, which the Rust apps avoid by parsing one item at a time. Drogon's JSON is
-   JsonCpp's, Drogon's default, which writes 17 significant digits (`0.79000000000000004`), so
-   its item JSON is about 3% longer than the others' for the same values.
+5. Each framework runs its production defaults with the worker count its docs give for one CPU, in
+   one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or cannot
+   serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked failed.
+   Each could be tuned further (caching, streaming, more workers). None of the apps cache rendered
+   pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at their
+   default level and FastAPI does (`fastapi run` keeps uvicorn's access log). Drogon runs one IO
+   thread per core, as its docs advise, and counts its cores from its CPU affinity capped by the
+   container's CPU quota, since its own count (`0`) sees every core of the host. FastAPI runs
+   `fastapi run`, one uvicorn process: its container guide gives one process a container where the
+   container is given its CPUs, and the live stream needs every client in one process. Express runs
+   one Node process with `NODE_ENV=production`, as its production guide says, which caches compiled
+   views; FastAPI's templates are Starlette's `Jinja2Templates` as created, which checks each
+   template file's time on every render (Jinja's default, which FastAPI's docs do not change). Three
+   settings differ from a library's default so that the item API source does the same work in every
+   app: Gin keeps as many idle connections to the item API as its transport allows (Go's default
+   keeps two per host; reqwest, .NET and Node have no per-host cap), FastAPI's httpx clients have no
+   connection cap (httpx's default keeps 20 idle and allows 100 in all), and Drogon keeps one
+   `HttpClient` (one connection) per request in flight on each thread. Drogon also hands the fixture
+   parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
+   in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one
+   item at a time. Drogon's JSON is JsonCpp's, Drogon's default, which writes 17 significant digits
+   (`0.79000000000000004`), so its item JSON is about 3% longer than the others' for the same
+   values.
 6. The images include the live benchmark's routes (`/live/...`), which the item page does not
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r16. (r2's main run had raised it
