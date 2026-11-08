@@ -1153,10 +1153,11 @@ rules something out.
     release build, card-market's `tool_cost`: an agent's `items.get` call through `/mcp`, 1,200
     calls less 200 over 1,000, two runs each, costs 265,961 and 268,013 instructions on
     `a791d9ba` with `tool_cost` added and 211,736 and 210,459 on `6e118a77`, outputs written
-    by `ToJson`); tested (card-market's agent test checks a tool answer's bytes equal serde's).
+    by `ToJson`); reasoned (one impl writes the schema and the bytes; card-market's agent test
+    checks a tool answer's bytes equal serde's).
 
     Revisit when: a response type other than a feed row needs two impls kept in step that one
-    derive cannot write, as `FromJson` and `Deserialize` were before Choice 26 covered it.
+    derive cannot write, as `FromJson` and `Deserialize` were before [Choice 26](#choice-derived-deserialize) covered it.
 
     Last checked: 2026-11-08, the derives and the agent endpoint's bounds, against `6e118a77`.
 
