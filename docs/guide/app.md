@@ -83,16 +83,24 @@ from flood to flood, which is how it was told from a leak (no allocation count w
 mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
 left 167 MiB, still rising about 18 MiB a flood
 ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+The same floods driven by `bench/fullstack/flood-memory.mjs` (three runs each, the app's cgroup
+memory) left 398 to 446 MiB on glibc's allocator, and its tunables did not give it back: two arenas
+or one with a 128 KiB trim threshold left 376 to 439 MiB, and adding a 16 KiB mmap threshold 172 to
+177 MiB, still climbing. jemalloc as it comes left 114 to 128 MiB 35 seconds after the last flood,
+since it returns memory only while the app allocates; with its background thread
+(`MALLOC_CONF=background_thread:true`) the same app idle went back to 4 to 9 MiB
+([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
-room to spare, sized from the peak repeated floods reach rather than the first. The Dockerfile
-`corten new` writes preloads jemalloc in the image's last stage, which gives the memory back
-between floods at no measured cost per request ([design Choice 23](../design.md#choice-jemalloc-image)).
-An image of the app's own adds the same two lines, before any `USER` line; removing them runs
-the app on glibc's allocator:
+room to spare, sized from the peak repeated floods reach rather than the first (about 170 MiB a
+flood of 4,000 here). The Dockerfile `corten new` writes preloads jemalloc in the image's last
+stage with that background thread and a 64 KiB thread cache, which keeps brotli's buffers between
+responses ([design Choice 23](../design.md#choice-jemalloc-image)). An image of the app's own adds
+the same three lines, before any `USER` line; removing them runs the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
+ENV MALLOC_CONF=background_thread:true,tcache_max:65536
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of

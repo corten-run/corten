@@ -707,10 +707,13 @@ before its writes blocked. Where it falls short:
 
 1. A body sent a byte a second is closed by the request deadline (card-market's 10 s, with a 503;
    30 s by default), not by a rate: Kestrel closed it within 5.4 to 6.8 s, by its minimum request
-   rate as far as can be told (above). A route whose deadline is removed (`deadline(None)`, for a
-   long upload) has nothing that closes it until `Upload::idle`'s minute of silence, which a byte
-   a second never reaches (from the guide, not measured here):
-   [#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074).
+   rate as far as can be told (above). On a route whose deadline is removed (`deadline(None)`, for
+   a long upload), a body read as it arrives (`pieces_up_to`, `Upload`) is given up on with a 408
+   once it falls `Upload::idle`'s minute behind 240 bytes a second, Kestrel's minimum rate, which
+   a byte a second does after about 60 s (from the guide, not measured here; before
+   [#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074),
+   at `73e1c453`, nothing closed it). That is still about ten times Kestrel's time, by design: the
+   idle time is the allowance, so an upload that pauses is not cut off.
 2. A client that stops reading is closed by `App::send_timeout`'s 60 s (63 s from its connect,
    with the time the server took to fill the socket's buffers), nginx's send timeout, which Corten
    chose over Kestrel's minimum response rate ([Limit 14](../../docs/design.md#limit-http1)):
@@ -1726,6 +1729,11 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
+# One app before and after, alternating (identity, a browser's encodings, brotli alone; AB_ROUNDS=3,
+# AB_ENCODINGS=br for some), and the memory floods of unfinished heads leave, by allocator setting
+# (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some):
+node bench/fullstack/ab.mjs results/ab-x cb-corten cb-corten-next
+node bench/fullstack/flood-memory.mjs results/flood-x cb-corten [runs=3] [floods=8]
 ```
 
 ## What the repository keeps

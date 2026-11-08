@@ -17,11 +17,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo build --release -p card-market && mkdir -p /out && cp target/release/card-market /out/server
 
 FROM debian:bookworm-slim
-# jemalloc, preloaded, gives back memory a burst took: after eight floods of unfinished request
-# heads, glibc's allocator kept 419 MiB and jemalloc 45 MiB (one run each), with no measured cost
-# per request (docs/design.md#choice-jemalloc-image). Remove these two lines to run on glibc's.
+# jemalloc, preloaded, with its background thread and a 64 KiB thread cache, gives back memory a
+# burst took (eight floods of unfinished heads: about 440 MiB left on glibc's allocator, 5 to 9 MiB
+# here) and keeps brotli's buffers between responses (docs/design.md#choice-jemalloc-image). Remove
+# these three lines to run on glibc's.
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
+ENV MALLOC_CONF=background_thread:true,tcache_max:65536
 WORKDIR /app
 COPY --from=build /out/server /app/server
 ENV HOST=0.0.0.0 PORT=8080

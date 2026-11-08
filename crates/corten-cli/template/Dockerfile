@@ -16,13 +16,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo build --release && cp target/release/{{name}} /server
 
 FROM debian:bookworm-slim
-# jemalloc, preloaded, gives back memory a burst of connections took: after eight floods of
-# unfinished request heads, glibc's allocator kept 419 MiB and jemalloc 45 MiB (one run each),
-# with no measured cost per request
-# (https://github.com/corten-run/corten/blob/main/docs/guide/app.md). Remove these two lines to
-# run on glibc's allocator.
+# jemalloc, preloaded, gives back memory a burst of connections took: eight floods of unfinished
+# request heads left about 440 MiB with glibc's allocator and 5 to 9 MiB with these settings (three
+# runs each). Its background thread returns memory while the app is idle; a 64 KiB thread cache
+# keeps a compressor's buffers, which otherwise fault in new pages on every brotli response
+# (https://github.com/corten-run/corten/blob/main/docs/design.md#choice-jemalloc-image). Remove
+# these three lines to run on glibc's allocator.
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
+ENV MALLOC_CONF=background_thread:true,tcache_max:65536
 WORKDIR /app
 COPY --from=build /server /app/server
 # Behind a domain, add the names the app is served under (HOSTS=shop.example): any other Host
