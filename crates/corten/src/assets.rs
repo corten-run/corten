@@ -820,7 +820,8 @@ impl Assets {
         };
         // Compared weakly, as RFC 9110 has `If-None-Match` compared: a proxy that marks the tag
         // weak (`W/`), a list of tags or `*` still gets the 304.
-        if headers.get_all(header::IF_NONE_MATCH).iter().any(|line| crate::cache::names(line.as_bytes(), etag.as_bytes())) {
+        let opaque = etag.as_bytes().strip_prefix(b"W/").unwrap_or(etag.as_bytes());
+        if headers.get_all(header::IF_NONE_MATCH).iter().any(|line| crate::cache::names(line.as_bytes(), opaque)) {
             #[allow(unused_mut)]
             let mut res = (StatusCode::NOT_MODIFIED, [(header::ETAG, etag), (header::CACHE_CONTROL, cache)]).into_response();
             #[cfg(feature = "compress")]
