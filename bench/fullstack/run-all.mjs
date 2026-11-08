@@ -92,17 +92,20 @@ const call = (/** @type {number} */ limit, /** @type {string[]} */ args) => /** 
 // Unattended only: a clean slate after a stopped call, a build that exited with an error, or a
 // restart. The benchmark's containers go
 // (a stopped k6 client leaves its container running; a restart leaves them all stopped): the apps,
-// build.mjs's steps (and the images they commit, several GB for a Rust app) and docker-rebuild.mjs's builders, cold start's, the item API, and k6's and cpu-time.mjs's by image. Then the item API starts again
+// build.mjs's steps (and the images they commit, several GB for a Rust app), docker-rebuild.mjs's
+// builders, cold start's, the item API, and k6's and cpu-time.mjs's by image. Then the item API starts again
 // on its cores.
 const reset = () => {
   // docker-rebuild.mjs's builders first, with their state volumes: their containers match bb- too,
-  // and a builder whose container is gone leaves its volume behind.
+  // and buildx rm on a builder whose container is gone leaves its volume.
   for (const builder of docker("buildx", "ls", "--format", "{{.Name}}").stdout?.split("\n").filter((n) => n.startsWith("bb-dr-")) ?? []) docker("buildx", "rm", "-f", builder);
-  const states = docker("volume", "ls", "-q", "--filter", "name=buildx_buildkit_bb-dr-").stdout?.split("\n").filter(Boolean) ?? [];
-  if (states.length) docker("volume", "rm", "-f", ...states);
   const ids = [["name=fsw-", "name=bb-", "name=cs-", "name=item-api"], ["ancestor=grafana/k6:latest", "ancestor=alpine"]]
     .flatMap((filters) => docker("ps", "-aq", ...filters.flatMap((f) => ["--filter", f])).stdout?.split("\n").filter(Boolean) ?? []);
   if (ids.length) docker("rm", "-f", ...new Set(ids));
+  // A state volume buildx rm left (its builder's container already gone), now no container uses
+  // it.
+  const states = docker("volume", "ls", "-q", "--filter", "name=buildx_buildkit_bb-dr-").stdout?.split("\n").filter(Boolean) ?? [];
+  if (states.length) docker("volume", "rm", "-f", ...states);
   const images = docker("images", "-q", "--filter", "reference=bb-*").stdout?.split("\n").filter(Boolean) ?? [];
   if (images.length) docker("rmi", "-f", ...new Set(images));
   if (apiContainer !== "item-api") return;

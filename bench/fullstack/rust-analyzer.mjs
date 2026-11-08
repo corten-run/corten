@@ -9,8 +9,9 @@
 // 1. Ready, cold: from `initialize` until the server is first quiescent
 //    (`experimental/serverStatus`): the workspace loaded, build scripts and proc macros built
 //    (`cargo check` of them, so the dependencies compile), and its caches primed (on axum-maud the
-//    priming's progress ended just before it; not checked on the others). Then ready again from a new server in the same container,
-//    with those builds kept (warm). A server not ready in 30 minutes fails the app.
+//    priming's progress ended just before it; not checked on the others). Then ready again from
+//    a new server in the same container, with those builds kept (warm). A server not ready in 30
+//    minutes fails the app.
 // 2. On the warm server, with the file the page's edit is in open, `runs` times: the item
 //    page's edit made (the button's title, numbered by run), then a completion asked for at once
 //    at the recipe's point inside the markup (`ra` in builds.mjs), timed to its answer, and
