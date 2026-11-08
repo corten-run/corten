@@ -52,9 +52,9 @@ backend.
    behind UniFFI, giving Swift and Kotlin one tested core. A screen may follow several feeds at
    once, and the platforms' own clients cap what goes to one host. `URLSession` opens at most
    `httpMaximumConnectionsPerHost` HTTP/1.1 connections to a host per session (6 by default,
-   sometimes lower, depending on the network); HTTP/2 shares one connection and ignores it, so behind the
-   proxy or CDN the browser already needs ([Deploying](guide/deploy.md#what-the-proxy-must-do),
-   item 3) it does not bind. OkHttp's `Dispatcher.maxRequestsPerHost` (5 by default) counts calls
+   sometimes lower, depending on the network); HTTP/2 shares one connection and ignores it, so
+   behind the proxy or CDN the browser already needs
+   ([Deploying](guide/deploy.md#what-the-proxy-must-do), item 3) it does not bind. OkHttp's `Dispatcher.maxRequestsPerHost` (5 by default) counts calls
    started with `enqueue` until their callback returns, whatever the protocol, and okhttp-sse's
    `EventSource` reads its stream inside that callback, so five open feeds through one
    `OkHttpClient` leave every other queued call to that host waiting unless the app raises it
@@ -214,5 +214,5 @@ revisit it ([design](design.md#choices)). Measured against a production marketpl
 3. Native screens' HTTP client: a Rust HTTP/SSE client in `corten-native`, carrying every feed
    over one HTTP/2 connection and outside both platforms' caps, against `URLSession` and OkHttp
    (above), which need no `h2`, TLS stack or trust roots on the device and on iOS keep VPN On
-   Demand, Happy Eyeballs and background sessions, which a client on its own sockets loses, but
-   leave OkHttp's cap for the app to raise.
+   Demand and background sessions, which a client on its own sockets loses (Happy Eyeballs it must
+   bring itself, as hyper-util's connector does), but leave OkHttp's cap for the app to raise.
