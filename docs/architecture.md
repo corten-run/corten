@@ -54,12 +54,12 @@ backend.
    `httpMaximumConnectionsPerHost` HTTP/1.1 connections to a host per session (6 by default,
    sometimes lower, depending on the network); HTTP/2 shares one connection and ignores it, so
    behind the proxy or CDN the browser already needs
-   ([Deploying](guide/deploy.md#what-the-proxy-must-do), item 3) it does not bind. OkHttp's `Dispatcher.maxRequestsPerHost` (5 by default) counts calls
-   started with `enqueue` until their callback returns, whatever the protocol, and okhttp-sse's
-   `EventSource` reads its stream inside that callback, so five open feeds through one
-   `OkHttpClient` leave every other queued call to that host waiting unless the app raises it
-   (synchronous calls and WebSockets are not counted). Which client `corten-native` uses is an
-   open decision (below).
+   ([Deploying](guide/deploy.md#what-the-proxy-must-do), item 3) it does not bind. OkHttp's
+   `Dispatcher.maxRequestsPerHost` (5 by default) counts calls started with `enqueue` until
+   their callback returns, whatever the protocol, and okhttp-sse's `EventSource` reads its
+   stream inside that callback, so five open feeds through one `OkHttpClient` leave every other
+   queued call to that host waiting unless the app raises it (synchronous calls and WebSockets
+   are not counted). Which client `corten-native` uses is an open decision (below).
 3. Design tokens come from one source and generate CSS, Swift and Kotlin. Only the components
    native screens use are mirrored.
 
