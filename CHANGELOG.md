@@ -11,7 +11,9 @@ Corten is pre-1.0, so any minor version may change the API.
   pre-load gate checks full pages, native forms, layout, escaping, JSON and uncached upstream
   reads in both data sources. Its repeated-pass runner and read-only report preserve provenance,
   variability, CPU and memory evidence and measurement limits. Catalog also gains a read-only
-  report. No historical results, running catalog job or nightly benchmark behavior changes.
+  report. Historical result files and the pinned catalog run are untouched; nightly execution
+  is not switched to v2. Leptos's existing build-cost recipe also uses cargo-leptos's supported
+  lockfile flag, matching its image build.
 
 - A separate locale-neutral catalog benchmark in `bench/catalog`: the same strings-only
   record-detail page, JSON, GET filter and related links in eighteen framework apps.
