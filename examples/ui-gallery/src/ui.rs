@@ -220,6 +220,78 @@ pub const COMPONENTS: &[Component] = &[
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// A page that only links the components' stylesheet: no component of its own, so the app
+    /// lists only the kit's.
+    async fn bare(req: corten::Req) -> corten::HtmlResult {
+        use corten::{Corten, html};
+        req.page(html! {
+            <!DOCTYPE html>
+            <html lang="en"><head><title>"Kit"</title><Corten /></head><body><main></main></body></html>
+        })
+    }
+
+    #[corten::routes]
+    mod bare_url {
+        #[route("/", get = bare)]
+        pub struct Bare;
+    }
+
+    /// What `docs/guide/kit.md`'s Size says an app with every component and the theme's tokens
+    /// serves, its `components.css` as the server sends it: as it is, and as its own brotli (level
+    /// 11) and gzip (level 9), compressed once on a first request. Each within 3 percent, so a
+    /// component's small change does not fail it and the kit's growth does: it prints the numbers
+    /// to put in the guide.
+    #[tokio::test]
+    async fn the_kit_guide_states_what_every_component_costs() {
+        use corten::{App, http::header, testing::Client};
+        const SAYS: &str = "every component and the theme's tokens, nothing of its own, serves ";
+        let guide = include_str!("../../../docs/guide/kit.md");
+        let stated = guide.split_once(SAYS).expect("the guide's Size says what the kit costs").1;
+        // "59,299 bytes, 8,615 with brotli at level 11 and 9,774 with gzip at level 9"
+        let numbers: Vec<usize> = stated
+            .split(['.', ':'])
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .filter_map(|word| word.trim_end_matches(',').replace(',', "").parse().ok())
+            .filter(|&n: &usize| n > 100)
+            .collect();
+        let [raw, brotli, gzip] = numbers[..] else { panic!("three sizes after the guide's \"{SAYS}\": {numbers:?}") };
+
+        let app: Client = App::new(bare_url::router()).components(super::COMPONENTS).test();
+        let page = app.get(&bare_url::Bare).await;
+        let href = page.text().split_once(r#"<link rel="stylesheet" href=""#).expect("the stylesheet is linked").1;
+        let href = corten::Local::parse(href.split_once('"').unwrap().0).unwrap();
+        let first = app.get(&href).header(header::ACCEPT_ENCODING, "identity").await;
+        let plain_tag = first.headers()[header::ETAG].clone();
+        let sent = |coding: &'static str, tag: &'static str| {
+            let (app, href) = (app.clone(), href.clone());
+            // The stored form's tag is the file's with its coding's (`"0123..ef-br"`).
+            let stored_tag = format!("{}-{tag}\"", plain_tag.to_str().unwrap().trim_end_matches('"'));
+            async move {
+                // Until the stored forms are made (once, at the highest levels, started by the first
+                // request that accepts one), each answer is compressed per request at the fastest
+                // level, under the weak form of the file's tag (`W/"0123..ef"`).
+                for _ in 0..1200 {
+                    let res = app.get(&href).header(header::ACCEPT_ENCODING, coding).await;
+                    let got = res.headers().get(header::CONTENT_ENCODING).map(|v| v.to_str().unwrap().to_owned());
+                    if got.as_deref() == Some(coding) && res.headers()[header::ETAG] == stored_tag.as_str() {
+                        return res.bytes().len();
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                panic!("the stored {coding} form was never sent");
+            }
+        };
+        let (now_raw, now_brotli, now_gzip) = (first.bytes().len(), sent("br", "br").await, sent("gzip", "gz").await);
+        let near = |stated: usize, now: usize| stated.abs_diff(now) * 100 <= now * 3;
+        assert!(
+            near(raw, now_raw) && near(brotli, now_brotli) && near(gzip, now_gzip),
+            "docs/guide/kit.md's Size says {raw}, {brotli} with brotli and {gzip} with gzip; the kit's components.css is now \
+             {now_raw} bytes, {now_brotli} with brotli at level 11 and {now_gzip} with gzip at level 9: put these in the guide"
+        );
+    }
+
     /// Every component the kit has is here, so the browser test covers it.
     #[test]
     fn the_gallery_has_every_kit_component() {
