@@ -236,9 +236,10 @@ whose answer type does not say it is a page, is an error naming it, on the error
 answers a page of its own in place of such a route's draws the error as a plain 500, logged
 (and on stderr outside `corten dev`). One in a live fragment is logged. A release build checks
 less, so test the page in a debug build: a read it does not start, a page whose answer type is
-not a page, and a place in a patch or a live fragment draw nothing and are logged once; a place inside `<main>` draws the value on a full load and nothing on a navigation, and
-one in `<head>` (its `<title>` included) draws nothing, both unlogged; one rendered as text stays as
-that text (logged once); and a string placed twice is filled once. A `HEAD` starts no read, so its
+not a page, and a place in a patch or a live fragment draw nothing and are logged once; a place
+inside `<main>` draws the value on a full load and nothing on a navigation, and one in `<head>`
+(its `<title>` included) draws nothing, both unlogged; one rendered as text stays as that text
+(logged once); and a string placed twice is filled once. A `HEAD` starts no read, so its
 `Content-Length` and `ETag` are those of the page drawn without its values.
 
 The read looks the caller up with `Caller::find`, which shares the request's one lookup with the
