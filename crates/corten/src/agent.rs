@@ -625,7 +625,8 @@ impl<A: Send + 'static> Tools<A> {
             }
             ToolError::Upstream(message) => (StatusCode::SERVICE_UNAVAILABLE, format!("cannot check the token now: {message}")),
             ToolError::Internal(error) => {
-                tracing::error!(%error, "corten: the MCP endpoint's auth check failed");
+                let error: &(dyn std::error::Error + 'static) = &*error;
+                tracing::error!(error, "corten: the MCP endpoint's auth check failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
             }
         };
@@ -738,7 +739,8 @@ impl<A: Send + 'static> Tools<A> {
             ToolError::Forbidden(message) => format!("not allowed: {message}"),
             ToolError::Unauthorized | ToolError::InsufficientScope(_) => unreachable!("answered with a 401 or 403"),
             ToolError::Internal(error) => {
-                tracing::error!(tool = name, %error, "corten: agent tool failed");
+                let error: &(dyn std::error::Error + 'static) = &*error;
+                tracing::error!(tool = name, error, "corten: agent tool failed");
                 "internal error".into()
             }
         };

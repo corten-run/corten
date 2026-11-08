@@ -2335,7 +2335,9 @@ go on the answer as a header (which the error page keeps), but the page's body c
 When the lookup itself fails, an optional caller is `None` there, so the page is drawn signed
 out rather than not at all. Keeping the credentials for it is measured below.
 
-`failure.detail()` is what went wrong, under `corten dev` only; in production it is logged. A
+`failure.detail()` is what went wrong, under `corten dev` only; in production it is logged, with
+each error under it as `error.sources` (a reset connection under a client's "error sending
+request"), so the log names the cause the message wraps. A
 debug build's error about the app's own code (a component it does not serve, a `Refresh`
 header, a write redirected outside `form-action`) is the exception: it is set in every debug
 build, so a router test's error page names it.
