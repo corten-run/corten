@@ -246,7 +246,7 @@ absolute times):
 A real server adds its render to the swap (a 50-row page of the tcgplayer port's took 19 to 67 ms
 in a debug build) and a real network its round trip, which is most of the swap at the sizes a page
 of rows has. A reader elsewhere on the page is one `ordered::send` or `ordered::link` call
-(above); none is found by searching the page (design, Rule 3).
+(above); none is found by searching the page ([Rule 3](../design.md#rule-handler-arguments)).
 
 It sorts the rows the page has, so it is for a table that shows all of its rows; on a table that
 shows a page of them it would sort that page alone. Such a table (the kit's `Pagination` under
