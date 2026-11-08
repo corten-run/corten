@@ -203,9 +203,9 @@ or `PreviousNext` as `on:link`, which puts it on each link it draws:
 
 A pager's steps are links. A step that writes (a Next that fetches and saves a provider's next
 page) is a POST form the app draws, sending the order with `ordered::send` as above, beside a
-`PreviousNext` whose `next` is `None` or in its place. `ordered::link` on an element that is
-not a link (an `<a>` or `<area>`), which the compiler does not refuse since a pager's handler
-takes any element, is reported in the console and does nothing.
+`PreviousNext` whose `next` is `None` or in its place. `ordered::link` on an element other than
+an `<a>` or `<area>` compiles, since it takes any element so a pager's `on:link` can pass it
+on; it reports the element in the console and does nothing.
 
 A form or link that carries the order of several sorted tables (one route's query set holding each
 table's keys) names each (`[sorted(&SupplyId), sorted(&ListingsId)]`), and each table's keys are

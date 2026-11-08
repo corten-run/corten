@@ -52,7 +52,7 @@ export function send(event, el, tables) {
  */
 export function link(a, tables, signal) {
   if (!(a instanceof HTMLAnchorElement || a instanceof HTMLAreaElement)) {
-    console.error("corten_ui::ordered: link keeps the order in a link's href; this element is not a link", a);
+    console.error("corten-ui: ordered::link keeps the order in a link's href; this element is not a link", a);
     return;
   }
   const keep = () => {

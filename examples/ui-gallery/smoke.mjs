@@ -989,7 +989,7 @@ async function run(browser) {
     check(
       // Once each time the element joins the page, and this page is loaded several times.
       "ordered::link on an element that is not a link says so in the console",
-      outsideErrors.some((text) => text.includes("ordered: link keeps the order in a link's href; this element is not a link")),
+      outsideErrors.some((text) => text.includes("corten-ui: ordered::link keeps the order in a link's href; this element is not a link")),
       JSON.stringify(outsideErrors),
     );
     await outside.close();
