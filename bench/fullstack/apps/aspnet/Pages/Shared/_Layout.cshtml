@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="@(ViewData["Locale"] ?? "en")">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -7,10 +7,11 @@
 <link rel="stylesheet" href="~/style.css" asp-append-version="true">
 <link rel="stylesheet" href="~/components.css" asp-append-version="true">
 @if (ViewData["Catalog"] is true) {<link rel="stylesheet" href="~/catalog.css" asp-append-version="true">}
+@if (ViewData["Marketplace"] is true) {<link rel="stylesheet" href="~/marketplace.css" asp-append-version="true">}
 <script src="~/htmx.min.js" asp-append-version="true" defer></script>
 <script src="~/item.js" asp-append-version="true" defer></script>
 </head>
-<body hx-boost="true">
+<body hx-boost="@(ViewData["Marketplace"] is true ? "false" : "true")">
 <header class="site-header__bar"><a href="/">Card Market</a></header>
 <main>@RenderBody()</main>
 </body>

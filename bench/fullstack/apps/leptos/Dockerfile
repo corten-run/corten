@@ -13,7 +13,7 @@ COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target,sharing=locked \
     find . -name target -prune -o -type f -exec touch {} + \
-    && cargo leptos build --release && mkdir -p /out && cp target/release/item-page-leptos /out/server && cp -r target/site /out/site
+    && cargo leptos build --release --cargo-locked && mkdir -p /out && cp target/release/item-page-leptos /out/server && cp -r target/site /out/site
 
 FROM debian:bookworm-slim
 WORKDIR /app

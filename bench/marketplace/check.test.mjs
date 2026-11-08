@@ -1,0 +1,94 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { readFileSync } from "node:fs";
+import { chromium } from "@playwright/test";
+import { records } from "./fixtures.mjs";
+import { expectedPage, labels } from "./records.mjs";
+import { alignNumberSpaces, comparePage, compareStyles, navigationFinished, numericFields, numericText, snapshotPage, styleSnapshot, verifyNumberSpaces } from "./check.mjs";
+import { referenceHtml } from "./reference.mjs";
+test("navigation waits for intercepted DOM work after URL commitment", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.route("http://localhost/**", (route) => route.fulfill({ contentType: "text/html", body: '<a href="?filtered=1">Filter</a><p>old</p>' }));
+    await page.goto("http://localhost/marketplace/en-US/item_1");
+    await page.evaluate(() => {
+      navigation.addEventListener("navigate", (event) => event.intercept({ handler: async () => {
+        await new Promise((resolve) => { globalThis.finishMarketplaceNavigation = resolve; });
+        document.querySelector("p").textContent = "filtered";
+      } }));
+    });
+    await Promise.all([page.waitForURL((url) => url.searchParams.get("filtered") === "1"), page.locator("a").click()]);
+    assert.equal(await page.locator("p").textContent(), "old");
+    await page.evaluate(() => { setTimeout(() => globalThis.finishMarketplaceNavigation(), 50); });
+    await navigationFinished(page);
+    assert.equal(await page.locator("p").textContent(), "filtered");
+  } finally { await browser.close(); }
+});
+test("browser oracle rejects hidden work, missing sections, wrong control semantics and executed fixture HTML", { timeout: 60000 }, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage(); const r = records().item_17;
+  try {
+    // A URL gives native form.action and location the same origin/path.
+    await page.route("http://localhost/**", (route) => route.fulfill({ contentType: "text/html", body: referenceHtml(r, "fr-FR") }));
+    await page.goto(`http://localhost/marketplace/fr-FR/${r.id}`);
+    comparePage(await page.evaluate(snapshotPage), r, "fr-FR");
+    for (const mutate of [
+      () => { document.querySelector("tbody tr").hidden = true; },
+      () => { document.querySelector(".marketplace__details").remove(); },
+      () => { document.querySelector('[name="target_price"]').inputMode = "text"; },
+      () => { document.querySelector(".marketplace__listings form").method = "post"; },
+      () => { document.querySelector(".marketplace__offers tbody tr").cloneNode(true) && document.querySelector(".marketplace__offers tbody").append(document.querySelector(".marketplace__offers tbody tr").cloneNode(true)); },
+      () => { globalThis.marketplaceInjected = true; },
+    ]) {
+      await page.reload(); await page.evaluate(mutate);
+      await assert.rejects(async () => comparePage(await page.evaluate(snapshotPage), r, "fr-FR"));
+    }
+  } finally { await browser.close(); }
+});
+test("geometry permits only verified numeric spaces, not different content, markup or CSS", { timeout: 60000 }, async () => {
+  const browser = await chromium.launch({ headless: true });
+  const r = records().item_1, fields = numericFields(r, "fr-FR");
+  const css = ["../fullstack/apps/axum-maud/static/style.css", "../fullstack/apps/axum-maud/static/components.css", "./marketplace.css"].map((p) => readFileSync(new URL(p, import.meta.url), "utf8")).join("\n");
+  const html = referenceHtml(r, "fr-FR").replace("</head>", `<style>${css}</style></head>`);
+  try {
+    for (const width of [1440, 390]) {
+      const context = await browser.newContext({ viewport: { width, height: 1000 } });
+      const page = await context.newPage(), reference = await context.newPage();
+      try {
+        const reset = async () => {
+          await page.setContent(html); await reference.setContent(html);
+          await page.evaluate((fields) => {
+            for (const { selector } of fields) {
+              const walker = document.createTreeWalker(document.querySelector(selector), NodeFilter.SHOW_TEXT);
+              let node;
+              while ((node = walker.nextNode())) node.data = node.data.replace(/[\u00a0\u202f]/g, " ");
+            }
+          }, fields);
+        };
+        const check = async () => {
+          const numbers = verifyNumberSpaces(fields, await page.evaluate(numericText, fields));
+          await reference.evaluate(alignNumberSpaces, { fields, numbers });
+          compareStyles(await page.evaluate(styleSnapshot), await reference.evaluate(styleSnapshot));
+        };
+        await reset(); await check();
+        await page.evaluate(() => {
+          for (const el of document.querySelectorAll(".marketplace__contents li, .marketplace__included li")) {
+            for (const node of el.childNodes) if (node.nodeType === Node.TEXT_NODE) node.data = node.data.replace(" × ", "\n  ×\n  ");
+          }
+        });
+        await reference.setContent(html); await check();
+        for (const mutate of [
+          () => { document.querySelector(".marketplace__summary strong").textContent = "9,99 $US"; },
+          () => { document.querySelector(".marketplace__summary strong").textContent = document.querySelector(".marketplace__summary strong").textContent.replace(" ", "  "); },
+          () => { const el = document.querySelector(".marketplace__summary strong"); el.replaceWith(el.textContent); },
+          () => { document.querySelector(".marketplace__listings td").style.padding = "20px"; },
+          () => { document.querySelector(".marketplace__listings table").style.width = "2000px"; },
+          () => { document.querySelector(".marketplace__listings table").style.fontSize = "20px"; },
+        ]) {
+          await reset(); await page.evaluate(mutate); await assert.rejects(check);
+        }
+      } finally { await context.close(); }
+    }
+  } finally { await browser.close(); }
+});

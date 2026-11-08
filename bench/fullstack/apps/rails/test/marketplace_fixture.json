@@ -1,0 +1,203 @@
+{
+  "item_1": {
+    "id": "item_1",
+    "title": "<script>\"Dragon\"</script>",
+    "subtitle": "",
+    "description": "A & B <card>",
+    "categories": [
+      {
+        "name": "Cards <all>",
+        "slug": "cards"
+      }
+    ],
+    "badges": [
+      "<Rare>"
+    ],
+    "tags": [
+      "<foil>"
+    ],
+    "images": [
+      "/card.webp",
+      "https://example.test/second"
+    ],
+    "fields": [
+      {
+        "name": "Set",
+        "value": "<North>"
+      }
+    ],
+    "summary": {
+      "lowest_minor": -123450,
+      "count": 1000000,
+      "quantity": 1000
+    },
+    "listings": [
+      {
+        "id": "listing_0",
+        "seller": "Alice",
+        "rating_hundredths": 0,
+        "reviews": 1234,
+        "condition": "Near <Mint>",
+        "ships_from": "US",
+        "quantity": 1000,
+        "price_minor": 0
+      },
+      {
+        "id": "listing_1",
+        "seller": "Alice",
+        "rating_hundredths": 400,
+        "reviews": 1234,
+        "condition": "Near <Mint>",
+        "ships_from": "US",
+        "quantity": 1000,
+        "price_minor": 1
+      },
+      {
+        "id": "listing_2",
+        "seller": "Alice",
+        "rating_hundredths": 425,
+        "reviews": 1234,
+        "condition": "Near <Mint>",
+        "ships_from": "US",
+        "quantity": 1000,
+        "price_minor": 10
+      },
+      {
+        "id": "listing_3",
+        "seller": "Alice",
+        "rating_hundredths": 475,
+        "reviews": 1234,
+        "condition": "Near <Mint>",
+        "ships_from": "US",
+        "quantity": 1000,
+        "price_minor": 125
+      },
+      {
+        "id": "listing_4",
+        "seller": "Alice",
+        "rating_hundredths": 499,
+        "reviews": 1234,
+        "condition": "Near <Mint>",
+        "ships_from": "US",
+        "quantity": 1000,
+        "price_minor": 123450
+      },
+      {
+        "id": "listing_5",
+        "seller": "Alice",
+        "rating_hundredths": null,
+        "reviews": 1234,
+        "condition": "Near <Mint>",
+        "ships_from": "US",
+        "quantity": 1000,
+        "price_minor": 123456789
+      },
+      {
+        "id": "listing_6",
+        "seller": "Alice",
+        "rating_hundredths": 425,
+        "reviews": 1234,
+        "condition": "Near <Mint>",
+        "ships_from": "US",
+        "quantity": 1000,
+        "price_minor": -123450
+      },
+      {
+        "id": "listing_7",
+        "seller": "Alice",
+        "rating_hundredths": 0,
+        "reviews": 1234,
+        "condition": "Near <Mint>",
+        "ships_from": "US",
+        "quantity": 1000,
+        "price_minor": null
+      },
+      {
+        "id": "listing_8",
+        "seller": " Alice",
+        "rating_hundredths": 400,
+        "reviews": 1234,
+        "condition": "Near <Mint>",
+        "ships_from": "US",
+        "quantity": 1000,
+        "price_minor": 125
+      }
+    ],
+    "offers": [
+      {
+        "id": "offer_0",
+        "buyer": "Bob 0",
+        "condition": "Mint",
+        "quantity": 2,
+        "price_minor": null
+      },
+      {
+        "id": "offer_1",
+        "buyer": "Bob 1",
+        "condition": "Mint",
+        "quantity": 2,
+        "price_minor": 125
+      },
+      {
+        "id": "offer_2",
+        "buyer": "Bob 2",
+        "condition": "Mint",
+        "quantity": 2,
+        "price_minor": 125
+      },
+      {
+        "id": "offer_3",
+        "buyer": "Bob 3",
+        "condition": "Mint",
+        "quantity": 2,
+        "price_minor": 125
+      },
+      {
+        "id": "offer_4",
+        "buyer": "Bob 4",
+        "condition": "Mint",
+        "quantity": 2,
+        "price_minor": 125
+      },
+      {
+        "id": "offer_5",
+        "buyer": "Bob 5",
+        "condition": "Mint",
+        "quantity": 2,
+        "price_minor": 125
+      },
+      {
+        "id": "offer_6",
+        "buyer": "Bob 6",
+        "condition": "Mint",
+        "quantity": 2,
+        "price_minor": 125
+      }
+    ],
+    "contents": [
+      {
+        "id": "line_1",
+        "item_id": "item_2",
+        "title": "Other <card>",
+        "quantity": 1000
+      }
+    ],
+    "included_in": []
+  },
+  "item_2": {
+    "id": "item_2",
+    "title": "<script>\"Dragon\"</script>",
+    "subtitle": null,
+    "description": "A & B <card>",
+    "categories": [],
+    "badges": [],
+    "tags": [],
+    "images": [],
+    "fields": [],
+    "summary": null,
+    "listings": [],
+    "offers": [],
+    "contents": [],
+    "included_in": []
+  }
+}

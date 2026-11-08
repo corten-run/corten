@@ -1,0 +1,24 @@
+<% content_for :title, @record.fetch("title") %>
+<% content_for :lang, @locale %>
+<% content_for :head do %><%= stylesheet_link_tag "marketplace", "data-turbo-track": "reload" %><% end %>
+<article class="marketplace" data-turbo="false">
+<nav class="marketplace__categories"><% @record.fetch("categories").each do |category| %><%= link_to category.fetch("name"), marketplace_path(locale: @locale, id: "item_1") %><% end %></nav>
+<h1><%= @record.fetch("title") %></h1>
+<% unless @record["subtitle"].nil? %><p class="marketplace__subtitle"><%= @record["subtitle"] %></p><% end %>
+<ul class="marketplace__badges"><% @record.fetch("badges").each do |badge| %><li><%= badge %></li><% end %></ul>
+<div class="marketplace__images"><% @record.fetch("images").each_with_index do |image, index| %><div class="marketplace__image" role="img" aria-label="<%= @record.fetch("title") %> <%= index + 1 %>" data-src="<%= image %>"></div><% end %></div>
+<section class="marketplace__summary"><% if (summary = @record["summary"]) %><span><strong><%= @format.money(summary["lowest_minor"]) %></strong> <%= @labels.fetch("lowest") %></span><span><%= @format.count(summary.fetch("count")) %></span><span><%= @format.number(summary.fetch("quantity")) %> <%= @labels.fetch("available") %></span><% else %><span><%= @labels.fetch("no_listings") %></span><% end %></section>
+<section class="marketplace__listings"><h2><%= @labels.fetch("listings") %></h2>
+<%= form_with url: marketplace_path(locale: @locale, id: @record.fetch("id")), method: :get, local: true do %>
+<label><%= @labels.fetch("filter") %><%= text_field_tag :seller, @prefix %></label>
+<label><%= @labels.fetch("sort") %><%= select_tag :sort, options_for_select([[@labels.fetch("asc"), "asc"], [@labels.fetch("desc"), "desc"]], @order) %></label>
+<% if @show_all %><%= hidden_field_tag :offers, "all" %><% end %><button type="submit"><%= @labels.fetch("apply") %></button><% end %>
+<table><thead><tr><% %w[seller condition ships_from qty price reviews].each do |key| %><th><%= @labels.fetch(key) %></th><% end %></tr></thead><tbody><% @listings.each do |row| %><tr data-listing-id="<%= row.fetch("id") %>"><td><%= row.fetch("seller") %><% unless row["rating_hundredths"].nil? %> · <%= @format.rating(row["rating_hundredths"]) %> ★<% end %></td><td><%= row.fetch("condition") %></td><td><%= row.fetch("ships_from") %></td><td><%= @format.number(row.fetch("quantity")) %></td><td><%= @format.money(row["price_minor"]) %></td><td><%= @format.number(row.fetch("reviews")) %></td></tr><% end %></tbody></table></section>
+<section class="marketplace__offers"><h2><%= @labels.fetch("offers") %></h2>
+<table><thead><tr><% %w[buyer condition qty price].each do |key| %><th><%= @labels.fetch(key) %></th><% end %></tr></thead><tbody><% @offers.each do |row| %><tr data-offer-id="<%= row.fetch("id") %>"><td><%= row.fetch("buyer") %></td><td><%= row.fetch("condition") %></td><td><%= @format.number(row.fetch("quantity")) %></td><td><%= @format.money(row["price_minor"]) %></td></tr><% end %></tbody></table>
+<% if !@show_all && @record.fetch("offers").length > 5 %><%= link_to @labels.fetch("show_all"), marketplace_path(locale: @locale, id: @record.fetch("id"), seller: @prefix, sort: @order, offers: "all"), class: "marketplace__more" %><% end %></section>
+<section class="marketplace__alert"><h2><%= @labels.fetch("alert") %></h2>
+<%= form_with url: marketplace_path(locale: @locale, id: @record.fetch("id")), method: :post, local: true do %><label><%= @labels.fetch("email") %><%= email_field_tag :email, params[:email] %></label><label><%= @labels.fetch("target") %><%= text_field_tag :target_price, params[:target_price], inputmode: "decimal" %></label><button type="submit"><%= @labels.fetch("submit") %></button><% end %><p class="marketplace__message"><%= @message %></p></section>
+<section class="marketplace__details"><h2><%= @labels.fetch("details") %></h2><p><%= @record.fetch("description") %></p><dl><% @record.fetch("fields").each do |field| %><dt><%= field.fetch("name") %></dt><dd><%= field.fetch("value") %></dd><% end %></dl><ul><% @record.fetch("tags").each do |tag| %><li><%= tag %></li><% end %></ul></section>
+<% [["contents", "contents"], ["included_in", "included"]].each do |key, section| %><section class="marketplace__<%= section %>"><h2><%= @labels.fetch(section) %></h2><ul><% @record.fetch(key).each do |row| %><li><%= link_to row.fetch("title"), marketplace_path(locale: @locale, id: row.fetch("item_id")) %> × <%= @format.number(row.fetch("quantity")) %></li><% end %></ul></section><% end %>
+</article>

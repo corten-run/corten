@@ -14,10 +14,16 @@ defmodule ItemPageWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :marketplace_api do
+    plug :accepts, ["json", "html"]
+  end
+
   scope "/", ItemPageWeb do
     pipe_through :browser
 
     get "/catalog/:id", CatalogController, :show
+    get "/marketplace/:locale/:id", MarketplaceController, :show
+    post "/marketplace/:locale/:id", MarketplaceController, :show
 
     live_session :default do
       live "/", HomeLive
@@ -30,6 +36,11 @@ defmodule ItemPageWeb.Router do
     pipe_through :api
     get "/items/:id", ItemJSONController, :show
     get "/catalog/:id", CatalogController, :json_record
+  end
+
+  scope "/api", ItemPageWeb do
+    pipe_through :marketplace_api
+    get "/marketplace/:id", MarketplaceController, :json_record
   end
 
   # The live benchmark's publisher: the JSON body goes to every "prices" subscriber.

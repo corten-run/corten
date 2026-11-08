@@ -9665,9 +9665,11 @@ async fn the_favicon_path_is_the_static_directory_s_icon() {
         let etag = res.headers()[header::ETAG].clone();
         assert_eq!(&res.into_body().collect().await.unwrap().to_bytes()[..], bytes, "{kind}");
         // Compared weakly: the tag as sent, marked weak by a proxy, in a list, or `*`.
-        let weak = format!("W/{}", etag.to_str().unwrap());
+        let tag = etag.to_str().unwrap();
+        let strong = tag.strip_prefix("W/").unwrap_or(tag);
+        let weak = format!("W/{strong}");
         let listed = format!(r#""other", {}"#, etag.to_str().unwrap());
-        for tag in [etag.to_str().unwrap(), &weak, &listed, "*"] {
+        for tag in [tag, strong, &weak, &listed, "*"] {
             let again = Request::get("/favicon.ico").header(header::IF_NONE_MATCH, tag).body(Body::empty()).unwrap();
             assert_eq!(router.clone().oneshot(again).await.unwrap().status(), StatusCode::NOT_MODIFIED, "{kind}: {tag}");
         }

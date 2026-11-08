@@ -6,6 +6,15 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
+  money, ratings and counts during each request in English, French and German. An independent
+  pre-load gate checks full pages, native forms, layout, escaping, JSON and uncached upstream
+  reads in both data sources. Its repeated-pass runner and read-only report preserve provenance,
+  variability, CPU and memory evidence and measurement limits. Catalog also gains a read-only
+  report. Historical result files and the pinned catalog run are untouched; nightly execution
+  is not switched to v2. Leptos's existing build-cost recipe also uses cargo-leptos's supported
+  lockfile flag, matching its image build.
+
 - A separate locale-neutral catalog benchmark in `bench/catalog`: the same strings-only
   record-detail page, JSON, GET filter and related links in eighteen framework apps.
   Correctness checks precede load tests; catalog rounds have their own baseline rather than
@@ -3998,6 +4007,8 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1065 Kit Stack and Cluster always print a literal gap, so an app on its own token spacing scale cannot use them with its gap utility](https://github.com/corten-run/corten/issues/1065)).
 
 ### Fixed
+- The fixed favicon keeps its weak content tag when background compression finishes, so a
+  conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
 
 1. Hover prefetch kept every page a user hovered and never opened until the next form post. It

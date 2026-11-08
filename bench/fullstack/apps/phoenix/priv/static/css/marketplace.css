@@ -1,0 +1,15 @@
+.marketplace { max-width: 70rem; margin: 0 auto; padding: 1rem; }
+.marketplace nav, .marketplace__summary { display: flex; flex-wrap: wrap; gap: 1rem; }
+.marketplace__badges, .marketplace__details > ul { display: flex; flex-wrap: wrap; gap: 1rem; list-style: none; padding: 0; }
+.marketplace__images { display: flex; gap: 1rem; }
+.marketplace__image { width: 8rem; height: 11rem; border: 1px solid currentColor; border-radius: .5rem; }
+.marketplace section { margin-block: 1.5rem; padding: 1rem; border: 1px solid currentColor; border-radius: .5rem; overflow-x: auto; }
+.marketplace table { border-collapse: collapse; width: 100%; }
+.marketplace th, .marketplace td { text-align: start; padding: .4rem; border-bottom: 1px solid currentColor; }
+.marketplace form { display: flex; flex-wrap: wrap; align-items: end; gap: 1rem; margin-block: 1rem; }
+.marketplace label { display: grid; gap: .25rem; }
+article.marketplace input, article.marketplace select, article.marketplace button { font: inherit; padding: .35rem; }
+.marketplace__message { min-height: 1.5em; }
+.marketplace dl { display: grid; grid-template-columns: minmax(6rem, 1fr) 3fr; gap: .5rem; }
+.marketplace dd { margin: 0; }
+@media (max-width: 40rem) { .marketplace { padding: .5rem; } .marketplace section { padding: .5rem; } }

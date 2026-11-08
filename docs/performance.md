@@ -5,6 +5,34 @@
 Speed at the user's end is Corten's first value, so every claim about it has a measured number.
 This page gathers the comparisons; how each number is taken is in the benchmark READMEs it links.
 
+## Reading the comparisons
+
+No single table establishes overall framework speed. The historical marketplace measures a
+richer application, with the work differences stated below. The separate catalog measures a
+strings-only page and JSON. [Marketplace v2](../bench/marketplace/README.md) adds a separate
+rich-page workload with request-time localization in all eighteen adapters, a whole-page
+conformance gate and a repeated-pass runner. It starts its own baseline; no v2 performance
+results replace the historical tables here.
+
+| Question | Evidence to read |
+|---|---|
+| How fast does it feel? | Phone interactivity, navigation and form-update latency, transferred bytes |
+| What does serving it cost? | CPU per request, CPU and loaded memory at the same fixed rate |
+| How much can it handle? | Throughput with a stated latency/error limit and app/upstream headroom |
+| What does development cost? | Clean and incremental build times, development rebuilds, CPU and peak memory |
+
+Read throughput alongside CPU utilization and requests per CPU-second: similar req/s can hide
+different costs, and an app whose CPU is not busy has not demonstrated its maximum capacity.
+A saturated upstream can bound the whole application. Compare repeated passes on one host;
+keep medians, ranges, failures and configuration differences visible. The catalog reporter
+flags these limits and labels incomplete data rather than treating missing passes as zeros.
+
+Features are a different question from speed. The [highlights](../README.md#highlights) link
+to Corten's behavior and examples. A future comparison must distinguish built-in support,
+support through a named library, and behavior not implemented or not evaluated in an example;
+a benchmark omission is not evidence a framework lacks a feature. Do not combine these into
+a single performance score.
+
 ## Summary
 
 - **Fast on the server.** 20,705 rendered pages a second on one CPU (uncompressed, untagged),

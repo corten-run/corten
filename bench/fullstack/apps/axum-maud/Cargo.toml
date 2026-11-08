@@ -19,6 +19,12 @@ futures-util = { version = "0.3", default-features = false }
 reqwest = { version = "0.13", default-features = false, features = ["json"] }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
+icu_decimal = "=2.4.0"
+icu_experimental = "=0.7.0"
+icu_locale = "=2.4.0"
+icu_plurals = "=2.4.0"
+icu_provider = { version = "=2.4.0", features = ["sync"] }
+url = "2.5"
 
 [profile.release]
 opt-level = 3
