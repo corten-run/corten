@@ -1,5 +1,6 @@
 //! The seller's orders: the kit's other components on a page an app would have, a list of orders
 //! with its pages, the shipping settings and the questions sellers ask.
+use corten::Href;
 use corten::form::HintId;
 use corten::i18n::Minor;
 use corten::prelude::*;
@@ -19,7 +20,7 @@ use crate::ui::{
     field::Field,
     icon::{self, Icon},
     meter::Meter,
-    pagination::Pagination,
+    pagination::{Pagination, PreviousNext},
     popover::Popover,
     progress::{Progress, ProgressSize},
     segmented::{Legend, SegmentedLinks, SegmentedRadio, SegmentedRadios},
@@ -195,10 +196,20 @@ struct LabelPagesId;
 /// The most a seller may sell in a month, in cents, until they have 50 sales.
 const LIMIT_CENTS: u64 = 15_000;
 
-/// The orders page: `page` counts from 1, `sort` is the table's order, and `photo` is the
-/// picture of a buyer who has one.
+/// The seller's payouts, newest first, by the day each was asked for. The card shows one, paged by
+/// the one before and the one after it, as a list an API pages by cursor is.
+pub const PAYOUTS: [&str; 3] = ["Mar 21", "Mar 14", "Mar 7"];
+
+/// The orders page: `page` counts from 1, `sort` is the table's order, `payout` is which of
+/// `PAYOUTS` the payouts card shows, and `photo` is the picture of a buyer who has one.
 #[component(css)]
-pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) -> impl Render {
+pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, photo: &'a str) -> impl Render {
+    // The payouts card knows only its neighbours: a newer one unless it shows the newest, an older
+    // one unless it shows the oldest. Each keeps the table's page and order, as the table's pages
+    // keep the payout.
+    let shown = Some(page).filter(|p| *p > 1);
+    let newer = (payout > 0).then(|| url::Orders { page: shown, sort, payout: Some(payout - 1).filter(|p| *p > 0) });
+    let older = (payout + 1 < PAYOUTS.len()).then(|| url::Orders { page: shown, sort, payout: Some(payout + 1) });
     let f = SettingsForm::FIELDS;
     let mut sorted: Vec<&Order> = ORDERS.iter().collect();
     match sort {
@@ -296,15 +307,17 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                         </Alert>
                         // Each order is a view the server renders: links, the current one marked.
                         <nav class={SegmentedLinks {}} aria-label="Order the orders by">
-                            <a href={url::Orders { page: None, sort: None }} aria-current={current(None)}>"Newest"</a>
+                            <a href={url::Orders { page: None, sort: None, payout: None }} aria-current={current(None)}>
+                                "Newest"
+                            </a>
                             <a
-                                href={url::Orders { page: None, sort: Some(OrderSort::TotalUp) }}
+                                href={url::Orders { page: None, sort: Some(OrderSort::TotalUp), payout: None }}
                                 aria-current={current(Some(OrderSort::TotalUp))}
                             >
                                 "Lowest total"
                             </a>
                             <a
-                                href={url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                                href={url::Orders { page: None, sort: Some(OrderSort::TotalDown), payout: None }}
                                 aria-current={current(Some(OrderSort::TotalDown))}
                             >
                                 "Highest total"
@@ -323,8 +336,8 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                         <SortHeader
                                             label="Total"
                                             sort={by_total}
-                                            ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp) }}
-                                            descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown) }}
+                                            ascending={&url::Orders { page: None, sort: Some(OrderSort::TotalUp), payout: None }}
+                                            descending={&url::Orders { page: None, sort: Some(OrderSort::TotalDown), payout: None }}
                                             first={Sort::Ascending}
                                             class={TableNumeric {}}
                                             on:sort={None::<Handler>}
@@ -365,7 +378,10 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                                         }}
                                                     >
                                                         <a role="menuitem" href={url::Help}>"Help with this order"</a>
-                                                        <a role="menuitem" href={url::Orders { page: None, sort: None }}>
+                                                        <a
+                                                            role="menuitem"
+                                                            href={url::Orders { page: None, sort: None, payout: None }}
+                                                        >
                                                             "Back to every order"
                                                         </a>
                                                     </MenuButton>
@@ -384,7 +400,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                             next_label="Next"
                             pages={PAGES}
                             current={page}
-                            link={|page| url::Orders { page: Some(page).filter(|p| *p > 1), sort }}
+                            link={|page| url::Orders { page: Some(page).filter(|p| *p > 1), sort, payout: Some(payout).filter(|p| *p > 0) }}
                         />
                     </footer>
                 </section>
@@ -435,7 +451,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                         </div>
                     </section>
                     <section class={Card {}}>
-                        <header class={CardHeader {}}><h2>"Last payout"</h2></header>
+                        <header class={CardHeader {}}><h2>"Payout of "{PAYOUTS[payout]}</h2></header>
                         <div class={CardContent {}}>
                             // What happened to the payout, in order: each step's time or reason
                             // shown at every width, and a refused step told from a blocked one.
@@ -464,6 +480,15 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, photo: &'a str) 
                                 ]}
                             />
                         </div>
+                        <footer class={CardFooter {}}>
+                            <PreviousNext
+                                label="Payouts"
+                                previous_label="Newer"
+                                next_label="Older"
+                                previous={newer.as_ref().map(|r| r as &dyn Href)}
+                                next={older.as_ref().map(|r| r as &dyn Href)}
+                            />
+                        </footer>
                     </section>
                     <section class={Card {}}>
                         <header class={CardHeader {}}><h2>"Printing labels"</h2></header>
