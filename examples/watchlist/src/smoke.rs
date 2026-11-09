@@ -1,4 +1,4 @@
-//! What only the browser test serves, with the app run as `SMOKE_TRUSTED_TYPES=1` (`app::policy`):
+//! What only the browser test serves, with the app run as `SMOKE_TRUSTED_TYPES=1` (`app::for_the_smoke`):
 //! a live stream whose one event is larger than a page's usual patch and is followed by nothing.
 use corten::{LiveResponse, prelude::*};
 use futures_util::{StreamExt, stream};

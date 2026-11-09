@@ -68,9 +68,11 @@ const GZIP_STREAM_LEVEL: u32 = 3;
 const STREAM_BUDGET: usize = 256 << 20;
 /// What one stream's context holds, measured with the settings in [`StreamCoder::new`].
 const ZSTD_STREAM_BYTES: usize = 480 << 10;
-/// flate2's deflate (miniz_oxide 0.9.1) at level 3 holds 352,232 bytes from its first event on,
-/// whatever the events' size (levels 1 and 3 alike): `tests/stream_memory.rs` counts it, with this
-/// value and `GZIP_STREAM_LEVEL` written out there.
+/// flate2's deflate (miniz_oxide 0.9.1) at level 3 holds 352,232 bytes from when it is made,
+/// whatever the events' size: `tests/stream_memory.rs` counts it, with this value and
+/// `GZIP_STREAM_LEVEL` written out there. That is the bytes asked of the allocator; jemalloc,
+/// which the template's image preloads, rounds them up to its size classes, which is not measured
+/// and may take a stream a little past this.
 const GZIP_STREAM_BYTES: usize = 360 << 10;
 static STREAM_BYTES: AtomicUsize = AtomicUsize::new(0);
 
@@ -394,12 +396,12 @@ fn stream(res: Response, coding: Option<Coding>) -> Response {
 /// `STREAM_BUDGET` until dropped. The gzip writer is taken out when the stream ends
 /// ([`StreamCoder::end`]), since only finishing it writes its trailer.
 ///
-/// No brotli: WebKit (Playwright's 27.2 build on Windows, measured) dispatches a flushed brotli event that
-/// decodes to more than 16 KiB only once more of the body arrives, so a stream's last event before
-/// a quiet spell waits for the next one or a keepalive, whatever the encoder (Node's own brotli,
-/// quality 4 or 11, did the same in the replay, though the issue once saw its 17 KB event on time)
-/// and whatever empty blocks follow it. Gzip, sync-flushed, arrived
-/// at once in all three of Playwright's engines at every size tried (to 200 KB), and zstd in
+/// No brotli: WebKit (Playwright's 27.2 build on Windows, measured) dispatches a flushed brotli
+/// event that decodes to more than 16 KiB only once more of the body arrives, so a stream's last
+/// event before a quiet spell waits for the next one or a keepalive, whatever the encoder (Node's
+/// own brotli, quality 4 or 11, did the same in the replay, though the issue once saw its 17 KB
+/// event on time) and whatever empty blocks follow it. Gzip, sync-flushed, arrived at once in all
+/// three of Playwright's engines at every size tried (to 200 KB), and zstd in
 /// Chromium and Firefox; that WebKit build does not accept zstd, so none that does was tried
 /// (`docs/design.md#choice-stream-coding`).
 pub(crate) enum StreamCoder {
@@ -1140,6 +1142,19 @@ mod tests {
         }
         let StreamCoder::Zstd(cx) = &coder else { unreachable!() };
         assert!(cx.sizeof() <= ZSTD_STREAM_BYTES, "{} bytes", cx.sizeof());
+        assert_eq!((coder.coding(), coder.cost()), (Coding::Zstd, ZSTD_STREAM_BYTES));
+        // A gzip stream reserves its own share, and its coder is the one `tests/stream_memory.rs`
+        // measures: the same bytes as flate2's at `GZIP_STREAM_LEVEL`, sync-flushed.
+        let mut coder = StreamCoder::new(Coding::Gzip).unwrap();
+        assert_eq!((coder.coding(), coder.cost()), (Coding::Gzip, GZIP_STREAM_BYTES));
+        let mut same = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(GZIP_STREAM_LEVEL));
+        for n in [3, 40] {
+            let event = redraw(n).repeat(n);
+            same.write_all(event.as_bytes()).unwrap();
+            same.flush().unwrap();
+            assert_eq!(coder.event(event.as_bytes()), std::mem::take(same.get_mut()), "{n}");
+        }
+        assert_eq!(coder.end(), same.finish().unwrap());
     }
 
     #[test]
