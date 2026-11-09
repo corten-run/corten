@@ -254,12 +254,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `render_cost` (median of 3) reads one in 304.8 µs through serde_json and 185.5 µs. Its
     `render_cost` checks the 500 responses read the same both ways.
 35. Live streams are compressed (feature `compress`). A `corten::live` or feed response to a client
-    that accepts zstd or brotli is one compressed stream per connection, flushed after every
-    event, with the context kept between events. On a 33-row list (6,126 B an event), measured:
-    the first event 425 B with zstd 1 and each redraw 16-23 B, where every event was 6,126 B;
-    brotli 4 gives 376 B, then 13-23 B. A stream holds about 470 KiB (zstd, 64 KiB window) or
-    800 KiB (brotli) while open, and all of them share a 256 MiB budget past which a new stream is
-    sent as it is. Gzip-only clients get streams as they are. Asked for by the Chase Sets pilot
+    that accepts zstd or gzip is one compressed stream per connection, flushed after every event,
+    with the context kept between events; never brotli
+    ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131),
+    under Fixed). On a 33-row list (6,126 B an event), measured: the first event 425 B with zstd 1
+    and each redraw 16-23 B, where every event was 6,126 B. A stream holds about 470 KiB (zstd,
+    64 KiB window) or 344 KiB (gzip) while open, and all of them share a 256 MiB budget past which
+    a new stream is sent as it is. Asked for by the Chase Sets pilot
     ([#24 corten::live responses are never compressed](https://github.com/todd-skelton/corten/issues/24)).
 36. `SubmitKey` (in the prelude): one submission of a form, so a write whose answer was lost and
     is sent again applies once. A form struct takes a `SubmitKey` field and draws it with
@@ -2308,7 +2309,7 @@ Corten is pre-1.0, so any minor version may change the API.
     app makes as it is sent (an export of every order, an archive), from a stream of
     `Result<Bytes, E>`. It is pulled only as fast as the client reads and dropped when the client
     leaves, it keeps `Media`'s file name, headers and caching, and a text type is compressed a
-    chunk at a time (zstd or brotli, as an event stream is), its frame ended when the stream ends;
+    chunk at a time (zstd or gzip, as an event stream is), its frame ended when the stream ends;
     an event stream that ends now ends its frame too, where a decoder that checks for the end
     took it as cut short. A failure after it began, or a stream that does not make the length it
     said, ends the connection without the body's end and is logged. auction-room's bid history is
@@ -2584,6 +2585,39 @@ Corten is pre-1.0, so any minor version may change the API.
     unknown in a copy with no `.git`, as a droplet gets), which now keep the droplet's script and
     CPU (`run.sh`, `host.txt`)
     ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
+278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
+    after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
+    apps: how long it takes to be ready, cold and warm, and after an edit how long a completion
+    inside the item page's markup and the errors for an unknown field there take. In one run on a
+    desktop, with rust-analyzer's experimental diagnostics on (off by default, when only `cargo
+    check` on save shows the error), both had medians under 0.1 s inside Corten's `html!` and
+    Maud's, against 5 to 10 s inside Topcoat's and Leptos's `view!`; Corten's macro call there
+    is about a fifth the size of the others', so this is not a like-for-like comparison with
+    Maud's, and the errors' times partly measure each file. `results/dev-loop-default` has the
+    same run with those diagnostics off. `docker-rebuild.mjs` times each
+    anchor app's own `docker build` after the edit with BuildKit's cache warm, both on the builder
+    that built it and on a new builder given only the exported layer cache. That second case is
+    what a hosted CI runner restoring a cache gets. Since BuildKit exports no cache mount, it
+    rebuilds an app whose Dockerfile copies its source before building, as both of these do, about
+    as if from clean. Only those two apps run by default, for time, and the README says what the
+    others' Dockerfiles do instead. The results are in `results/dev-loop`, and `summarize.mjs`
+    prints both.
+    The time from a save to the page showing it under each stack's development server is not
+    measured, and the bench README says why
+    ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
+279. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
+    tokens, `choice-list-gap` and `choice-list-legend-gap` (.75rem each, the values the two
+    stylesheets printed and kept equal by hand), so a theme with tighter choice lists sets them once
+    and the copies stay the kit's. Nothing changes for an app that keeps its copies. One set up by an
+    older kit that takes the new copies adds the two tokens `corten ui add checkboxes --merge` (or
+    `radio_group`, or `--force` for a copy without edits) names, as the kit's theme has them,
+    before it starts. The kit theme's two declarations and the two `var()`s in each stylesheet make
+    the ui-gallery's served `components.css` 60,608 bytes where it was 60,471 (gzip 10,039 against
+    10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier
+    size is the served file with the literals put back). The ui-gallery's smoke test checks both
+    groups at the kit's values and at a theme's. Asked for by the Chase Sets pilot, which edited
+    both copies to .5rem
+    ([#1082 Kit RadioGroup and Checkboxes print their fieldset's gap and legend margin as literals kept equal by hand, so a theme with tighter choice lists edits both copies](https://github.com/corten-run/corten/issues/1082)).
 280. The kit's `StatusTone` has `Text`, the color of the text around the dot: in a badge, the
     badge's, so `<span class={Badge { tone, .. }}><StatusDot tone={StatusTone::Text} />"Open"</span>`
     writes a computed tone once, on the badge, and a dot that takes it cannot disagree with it. It
@@ -2599,6 +2633,27 @@ Corten is pre-1.0, so any minor version may change the API.
     and its smoke test checks the dot is the badge's text color in a soft badge and a solid one, and
     that a `Success` dot beside plain text is the theme's success color
     ([#1092 Kit StatusDot and Badge take separate tone enums, so a badge with a computed tone writes it twice and a mismatched pair compiles](https://github.com/corten-run/corten/issues/1092)).
+281. The kit's `Tabs` and `Segmented` (with `SegmentedLinks` and `SegmentedRadios`) take every
+    choice's weight and the chosen one's text color from two theme tokens, `tab-font-weight` (500)
+    and `tab-selected-color` (a reference, `"{foreground}"`, in both theme files), so a design
+    system whose chosen tab is its brand color, or whose choices are semibold, sets them once and
+    the copies stay the kit's. Nothing changes for an app that keeps its copies, and the kit's look
+    is the same. One set up by an older kit that takes the new copies adds the two tokens
+    `corten ui add tabs --merge` (or `segmented`, or `--force` for a copy without edits) names, the
+    color in both theme files, before it starts. A checked `SegmentedRadio` under the pointer keeps the
+    chosen color: its hover rule weighed more than the checked one and drew it in `--foreground`,
+    which only showed once the two could differ. The kit's contrast test checks the chosen text on
+    `--background`, its raised surface, in both themes. The theme's declarations and the two
+    `var()`s in each stylesheet, with the hover rule's selector, make the ui-gallery's served
+    `components.css` 61,306 bytes where it was 61,057 (gzip 10,156 against 10,126, brotli 8,947
+    against 8,925, Node's zlib at gzip level 9 and brotli's default); the earlier size is the
+    served file just before this change, with the LiveDot and `StatusTone::Text` rules (277, 280).
+    The ui-gallery's smoke test checks a tab, a segmented choice, a `SegmentedLinks` link and a
+    `SegmentedRadio` at the kit's values and at a theme's, and each of the four chosen under the
+    pointer.
+    Asked for by the Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen
+    choice in `--primary` at 600
+    ([#1123 Kit Segmented and Tabs draw the chosen choice in --foreground at weight 500 as literals, so a theme whose chosen tab is its primary color edits both copies](https://github.com/corten-run/corten/issues/1123)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
     apps are: the item page, the catalog page, the localized marketplace page and the live price
@@ -4178,7 +4233,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `rows(..).at(i)` is `V | undefined`: none past either end, and a negative `i` counts back
     from the last, as an array's `at()`, where it gave a view of no row before. The kit's
     `ComboBox` with no options threw on Enter after Arrow Down; it closes now.
-    `exactOptionalPropertyTypes` is not used (design Choice 32)
+    `exactOptionalPropertyTypes` is not used (design Choice 33)
     ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)).
 171. `subscribe()` checks the envelope of what a feed sends: a snapshot's `epoch`, `seq` and
     `rows`, and a patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An
@@ -4191,10 +4246,33 @@ Corten is pre-1.0, so any minor version may change the API.
     `npm run check` fails on an explicit `any` or a `@ts-ignore` in them. card-market's push
     worker shows a message with no title as an empty title, where it showed "undefined", and opens
     `/` for a `url` that is not text. The runtime's gzip size grows by 215 bytes, 188 of them the
-    feed's checks (design Choice 33)
+    feed's checks (design Choice 34)
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
+- A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
+  gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
+  flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
+  more than 16 KiB only once more of the body arrived, so the last change before a quiet spell
+  showed one event late: in Playwright's WebKit 27.2 on Windows an event of 16,385 bytes showed
+  only when the next chunk came, with Corten's encoder and with Node's at quality 4 and 11, and
+  with empty blocks after it; gzip and identity were on time at every size tried, to 200 KB, in all
+  three engines. Safari was not tried. Gzip-only clients, sent streams uncompressed before, get
+  gzip too, and a client that accepts only brotli now gets streams uncompressed. The watchlist
+  smoke checks that an event of about 50 KB with nothing after it is dispatched in each engine
+  (from a route the app adds only with `SMOKE_TRUSTED_TYPES=1`; only Playwright's Windows WebKit
+  would be sent brotli, the others getting zstd and Linux's WebKit asking for gzip, not
+  brotli, so only there would it catch a brotli stream), and a streamed download to a client that
+  sends `gzip, deflate, br` is now tested to be gzip; a new test fills the stream budget and checks
+  that a stream's share comes back when it is dropped unread, read to its end or cut by an error. A
+  gzip stream reserves 360 KiB where a brotli one reserved 1,000 KiB. It sends more than brotli 4,
+  most for a large region: a redraw of one row of 40 (2.7 KB) is 60 to 69 bytes against 20 to 40,
+  of 250 (17 KB) 477 to 524 against 23 to 91, and of 640 (45 KB, past gzip's 32 KiB window, so
+  most of the event before is out of reach) about 6,210 bytes, where brotli's 64 KiB window still
+  reached it; and more CPU: an event of the 2.7 KB redraw, made and sent through the compression
+  layer, is about 286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470;
+  callgrind, three runs each, within 20 instructions)
+  ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
@@ -6327,6 +6405,18 @@ Corten is pre-1.0, so any minor version may change the API.
     the table with `sorted(&Id)`; new design Limit 24 says one that does not sends the order the
     page was drawn with, which nothing notices, and what would lift that
     ([#960 Design Rule 3's rows::sort exception grows with each kind of form or link that reads the order: decide which tables sort in place and which ask the server](https://github.com/corten-run/corten/issues/960)).
+79. `corten-ui`'s `CheckboxGroup` doc and the UI guide's row say the group checks again on a box's
+    `change`, which the browser does not send when a script sets `checked`, so a "Select all" or
+    "Clear" button dispatches `input` and `change` on each box it set, as the kit's own scripts do;
+    without them the group keeps its old answer, so a cleared group is sent and only the handler
+    refuses it, a group the script filled after the user cleared it is still refused by the browser,
+    and back/forward to a page the runtime swapped in brings a box the user has not changed back
+    as drawn. The requests and forms guide says the runtime puts back a value a script set when the
+    script dispatched one of those events. The ui-gallery's smoke test checks both directions in
+    each engine, the filled one from a box other than the first, and the back/forward case where
+    the browser has the Navigation API, and the watchlist's checks that a value set with them is
+    put back
+    ([#1098 CheckboxGroup docs do not say a script that sets checked must dispatch change, so the group keeps its old validity](https://github.com/corten-run/corten/issues/1098)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

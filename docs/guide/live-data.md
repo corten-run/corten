@@ -206,10 +206,16 @@ With feature `compress`, a live stream is compressed as one stream per connectio
 after every event, so each event arrives at once and the compressor remembers the ones before it.
 A fragment drawn again with one value changed costs about what changed: on a 6 KB list of 33
 rows, the first event is 425 bytes with zstd and each redraw 16 to 23. So drawing a whole region
-again is usually cheaper on the wire than it looks, and needs no script. The compression context is kept for
-events up to about 64 KB apart. Each open stream holds about 0.5 MB (zstd) or 1 MB (brotli) while it
-is open; past 256 MB for all of them, new streams go out uncompressed. Browsers that only accept
-gzip get streams as they are, since deflate repeats a fragment poorly.
+again is usually cheaper on the wire than it looks, and needs no script. A browser that accepts
+zstd (Chromium, Firefox) gets zstd, whose context is kept for events up to about 64 KB apart; any
+other that accepts gzip (Playwright's WebKit, which does not send zstd) gets gzip, whose window is
+32 KB, so a redraw of a larger region costs more there (each part of an event over 32 KB reaches
+back only 32 KB, so most of the one before is out of its reach). A stream is never brotli: WebKit
+(Playwright's build on Windows, measured; Safari was not tried) dispatches a flushed brotli event
+that decodes to more than 16 KiB only when more of the stream arrives, so the last change before a
+quiet spell would show late ([design Choice 32](../design.md#choice-stream-coding)). Each open
+stream holds about 0.5 MB (zstd) or 0.35 MB (gzip) while it is open; past 256 MB for all of them,
+new streams go out uncompressed.
 
 ## Rows: feeds
 
@@ -294,7 +300,7 @@ JSON) is a failed snapshot: logged and fetched
 again after a backoff. A patch that is not one has lost its write, so the stream is closed and the
 snapshot loaded again, after a backoff that doubles from 1 s while the patches after it are bad
 too; neither reaches the script. The rows themselves are not checked: each is the feed's `Row`,
-the server's own type, whose JSDoc the browser never sees ([design Choice 33](../design.md#choice-script-boundaries)).
+the server's own type, whose JSDoc the browser never sees ([design Choice 34](../design.md#choice-script-boundaries)).
 A page left open across a deploy that changes `Row` keeps the script it loaded, and the new
 server's snapshot gives that script rows of the new shape: if its `patch` throws on one, that
 write is lost until the next snapshot (the stream's `seq` has moved on), and if its `snapshot`

@@ -2529,9 +2529,10 @@ navigation?.addEventListener("currententrychange", () => {
 });
 
 /**
- * The fields the user typed or chose in (`input`, `change`) since `<main>` was drawn, and those
- * the runtime gave the user's state back to: the only ones `remember` reads, so leaving a page of
- * many fields costs nothing for those left as drawn. A value a script sets fires neither.
+ * The fields an `input` or `change` was seen on (the user's, or one a script dispatched) since
+ * `<main>` was drawn, and those the runtime gave the user's state back to: the only ones
+ * `remember` reads, so leaving a page of many fields costs nothing for those left as drawn. A
+ * value a script sets fires neither unless the script dispatches them.
  * @type {Set<Element>}
  */
 const typedFields = new Set();
