@@ -3701,7 +3701,7 @@ async function run(browser) {
     }
     const hoveredCount = navRequests.length;
     // A prefetch older than the runtime's 10 s is not reused, so a slow run is told apart from a
-    // cache that keeps too few.
+    // cache that keeps too few. The age runs from when the prefetch was seen, so it reads low.
     const p1Age = Date.now() - p1Prefetched;
     await page.click('header a.hovered[href="/news?p=1"]');
     await page.waitForFunction(() => location.search === "?p=1");
@@ -3719,30 +3719,38 @@ async function run(browser) {
     check(
       "prefetch keeps the 8 newest pages: the oldest kept and the newest are reused, the oldest is fetched again",
       hoveredCount === 10 && keptFetched.length === 0 && navRequests.length === 11,
-      `${hoveredCount}, ${keptFetched.length ? `fetched ${keptFetched.join(" ")}` : "both reused"} (p1 prefetched ${p1Age} ms before its click), ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
+      `${hoveredCount}, ${keptFetched.length ? `fetched ${keptFetched.join(" ")}` : "both reused"} (p1 prefetch seen about ${p1Age} ms before its click), ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
     );
 
     // The page a visit is fetching is not prefetched as well, by the dwell the click cut short or
     // by the pointer leaving its link and coming back: the address stays this page's until that
-    // page is in, so the prefetch would fetch it a second time (#1053). Its answer is held so both
-    // dwells end while it is fetched.
+    // page is in, so the prefetch would fetch it a second time (#1053). Its answer is held until
+    // both dwells have ended, however long the hover takes: once the address changes, a dwell
+    // finds its link is this page and fetches nothing, so the check would pass untested.
     await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?p=held">held</a>')));
     /** @param {URL} url */
     const heldPage = (url) => url.pathname === "/news" && url.searchParams.get("p") === "held";
+    /** @type {() => void} */
+    let release = () => {};
+    const released = new Promise((resolve) => (release = () => resolve(undefined)));
     await page.route(heldPage, async (route) => {
-      if (route.request().headers()["purpose"] !== "prefetch") await new Promise((resolve) => setTimeout(resolve, 600));
+      if (route.request().headers()["purpose"] !== "prefetch") await released;
       await route.continue().catch(() => {});
     });
     navRequests.length = 0;
     await page.click('header a.hovered[href="/news?p=held"]');
     await page.mouse.move(0, 0);
     await page.hover('header a.hovered[href="/news?p=held"]');
-    // The answer is held 600 ms, longer than the dwell, so waiting for the address waits for both.
+    // The page's own timer, set after the hover's dwell timer, ends after the dwell would have
+    // fetched; only then is the answer let through.
+    await page.evaluate(() => new Promise((done) => setTimeout(done, 300)));
+    const heldSearch = await page.evaluate(() => location.search);
+    release();
     await page.waitForFunction(() => location.search === "?p=held");
     check(
       "a link followed during its hover's dwell is fetched once, with no prefetch of its page",
-      navRequests.length === 1,
-      navRequests.map((u) => u.replace(base, "")).join(" ") || "none",
+      heldSearch !== "?p=held" && navRequests.length === 1,
+      `${heldSearch === "?p=held" ? "the address changed before the dwell ended: not tested; " : ""}${navRequests.map((u) => u.replace(base, "")).join(" ") || "none"}`,
     );
     await page.unroute(heldPage);
     await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));

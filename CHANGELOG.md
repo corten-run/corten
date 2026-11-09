@@ -5563,7 +5563,9 @@ Corten is pre-1.0, so any minor version may change the API.
     of the nine hovers waits for its prefetch, the oldest page's click for its fetch (or its
     hover's), and the `data-no-prefetch` control for its own prefetch. Only the opt-out still
     pauses, since the request it checks for must not come; its pause is the page's own timer, set
-    after the dwell; the held-page check's 150 ms wait, which its held answer outlasted, is gone.
+    after the dwell. The held-page check holds its answer until the same kind of timer has outlasted
+    the re-hover's dwell, instead of for 600 ms from the click, which a slow hover could outlast so
+    the check passed untested; it fails if the address changed first.
     The reuse of the oldest page kept and of the newest is read from the requests themselves (no
     visit asked for either), so a cache of fewer than 8 now fails the check, where one of 7 passed
     it, and its failure says how old the oldest kept prefetch was at its click, since one past the
