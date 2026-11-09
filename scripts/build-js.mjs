@@ -8,8 +8,8 @@
 //                   only apps whose scripts import it serve, preloaded with those scripts
 //   dist/view.js    rows() and the helpers of the generated view classes, which Corten puts at
 //                   the start of an app's corten/views module (one script: no extra request)
-// esbuild bundles each file and lowers it to ES2022; terser minifies it, about 3% smaller after
-// compression than esbuild's own minifier (docs/design.md#choice-runtime-terser).
+// esbuild bundles, lowers to ES2022 and minifies each file; terser minifies its output again,
+// about 3.5% smaller after compression and a little smaller before it (docs/design.md#choice-runtime-terser).
 // `node scripts/build-js.mjs --check` fails when a built file is not what its source builds to, or
 // when the runtime's size in README.md ("A(n) <size> KB (gzip) runtime") is not the built file's,
 // which a build writes there (scripts/readme-size.mjs).
@@ -23,7 +23,7 @@ import { gzipped, keep } from "./readme-size.mjs";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const js = join(root, "crates", "corten", "js");
 const check = process.argv.includes("--check");
-const common = { bundle: true, format: "esm", target: "es2022", legalComments: "none", write: false };
+const common = { bundle: true, format: "esm", minify: true, target: "es2022", legalComments: "none", write: false };
 /** terser's settings: an ES module, so its top-level names are mangled too. */
 const terse = { module: true, ecma: 2022, compress: { passes: 2 } };
 const outputs = [
