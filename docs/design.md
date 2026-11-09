@@ -1107,7 +1107,8 @@ rules something out.
     ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
     The watchlist smoke holds the fix: an event that decodes to 52,395 bytes with nothing after it
     must be dispatched within 5 s in each engine (Chromium and Firefox get zstd there, WebKit
-    gzip), and a build whose streams are brotli fails it in WebKit.
+    gzip), and a build whose streams are brotli fails it in Playwright's WebKit on Windows; CI's
+    Linux WebKit takes no brotli, so there the rule is held by the negotiation tests alone.
     So a client that accepts zstd gets zstd 1 as before, any other that accepts gzip gets gzip 3
     (sync-flushed, its window kept), and one that accepts only brotli gets the stream as it is. A
     streamed `Media` follows the same rule though a download ends, so its tail is never held for
@@ -1159,10 +1160,11 @@ rules something out.
     runs, all on time, 10 to 22 ms; the second, which reads the route's answer, saw 200 with zstd,
     zstd and gzip), and in WebKit again with the check's bounded fetch (`228dba80`, gzip, 32 ms),
     all on Windows; 2026-11-09, the smoke against `022c3282` with `c65c10ec`'s `compress.rs`
-    and `answer.rs`, whose streams are brotli, in WebKit on Windows (one run: the route answered 200 with `br`, and
-    no event came in 5 s), and the same build on `535b22f9` in Playwright 1.64.1's Linux image,
-    as CI runs it (one run: WebKit asked for no brotli, the route answered 200 uncompressed, and
-    the event came in 18 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
+    and `answer.rs`, whose streams are brotli, in WebKit on Windows (one run: the route
+    answered 200 with `br`, and no event came in 5 s), and the same build on `535b22f9` in
+    Playwright 1.64.1's Linux image, as CI runs it (one run: the route answered 200 uncompressed,
+    so that WebKit did not ask for brotli or zstd, its header not logged, and the event came in
+    18 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
     test's thread (352,232 bytes, the same).
 
 ## Rules

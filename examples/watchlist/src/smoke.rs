@@ -16,8 +16,8 @@ pub mod url {
 #[derive(Id)]
 struct LargeListId;
 
-/// The rows: more than 16 KiB decoded, the size past which WebKit held a flushed brotli event back
-/// until more of the stream came (#1131).
+/// The rows: more than 16 KiB decoded, the size past which Playwright's WebKit on Windows held a
+/// flushed brotli event back until more of the stream came (#1131).
 #[component]
 fn LargeList() -> impl Render {
     html! {
