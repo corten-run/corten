@@ -1413,8 +1413,9 @@ rules something out.
 
     Stands on: measured (each built file before and after on `c65c10ec`, one build each, the
     build being deterministic: the runtime 107 bytes less uncompressed, 529 with gzip and 478
-    with brotli; `view.js` 20, 75 and 60 less; `format.js`, `upload.js` and `keys.js` within
-    11 bytes either way, `keys.js` 1 byte more with gzip); measured (the browser smoke tests on
+    with brotli; `view.js` 20, 75 and 60 less; `format.js` 11, 8 and 18 less; `upload.js` and
+    `keys.js` within 11 bytes either way, `upload.js` 1 byte more uncompressed and `keys.js` 1
+    more with gzip); measured (the browser smoke tests on
     the built files of `10cd394d`, one run each, in the engines each runs: the watchlist, also
     under `corten dev`, card-market, ui-gallery, seller-desk, deck-builder and its preview,
     auction-room and listings-feed all passed; an earlier build, terser over the unminified
