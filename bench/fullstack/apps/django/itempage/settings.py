@@ -25,3 +25,37 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STORAGES = {"staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"}}
+
+# The matched tier's production profile (PROFILE=matched, bench/fullstack/README.md, "The matched
+# tier"), from Django's own middleware and settings: the names it answers to (localhost and the
+# deploy's HOSTS, as Corten's host check), a CSP (Django's own, `SECURE_CSP`), gzip when asked,
+# and an ETag with a 304 (`ConditionalGetMiddleware`). urls.py marks the pages and the JSON
+# private with `cache_control`. Its forms already take at most 2.5 MB (`DATA_UPLOAD_MAX_MEMORY_SIZE`)
+# and refuse a cross-site post (CSRF); SecurityMiddleware and XFrameOptionsMiddleware already send
+# the other security headers. Django has no setting for Permissions-Policy.
+PROFILE = os.environ.get("PROFILE") == "matched"
+if PROFILE:
+    from django.utils.csp import CSP
+
+    hosts = [h.strip() for h in os.environ.get("HOSTS", "").split(",") if h.strip()]
+    ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]", *hosts]
+    SECURE_CSP = {
+        "default-src": [CSP.SELF],
+        "script-src": [CSP.SELF],
+        "style-src": [CSP.SELF],
+        "img-src": [CSP.SELF, "data:", "https:"],
+        "object-src": [CSP.NONE],
+        "base-uri": [CSP.SELF],
+        "form-action": [CSP.SELF],
+        "frame-ancestors": [CSP.NONE],
+    }
+    MIDDLEWARE = [
+        "django.middleware.security.SecurityMiddleware",
+        "whitenoise.middleware.WhiteNoiseMiddleware",
+        "django.middleware.gzip.GZipMiddleware",
+        "django.middleware.http.ConditionalGetMiddleware",
+        "django.middleware.csp.ContentSecurityPolicyMiddleware",
+        "django.middleware.common.CommonMiddleware",
+        "django.middleware.csrf.CsrfViewMiddleware",
+        "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    ]
