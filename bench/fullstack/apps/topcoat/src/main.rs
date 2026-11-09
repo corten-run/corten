@@ -84,8 +84,9 @@ fn matched() -> bool {
 /// every request. The security headers, `Cache-Control: private, no-cache` on an answer that sets
 /// none (the assets keep their `public, immutable`), and a 503 past a 10 second deadline
 /// (card-market's). An answer a handler or Topcoat returns as an `Error` (a JSON 404, a 405, a
-/// failed read's 500, the 403 and 413 below) goes without them: `TowerLayer` passes the error
-/// through and the router makes its answer after every layer. Topcoat's defaults already refuse a
+/// failed read's 500, the 413 below) goes without them: `TowerLayer` passes the error through and
+/// the router makes its answer after every layer; the 403 below is refused before any layer runs.
+/// Topcoat's defaults already refuse a
 /// body over 2 MiB (413) and a cross-site form post (403, its origin policy), compress, and close a
 /// request head left unfinished at 30 s. Its runtime compiles the expressions it reads from the
 /// page's markup with `new Function`, so the CSP has `'unsafe-eval'`.
