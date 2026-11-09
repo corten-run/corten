@@ -2,7 +2,8 @@
 //!
 //! Pages, patches and JSON are generated per request, so they are compressed per request at the
 //! fastest level that still pays: zstd 1 for clients that accept it (current Chrome, Edge and
-//! Firefox; Playwright's WebKit does not send it), otherwise brotli 1, otherwise gzip 1. On
+//! Firefox, and Safari over HTTPS from 26.3 as caniuse lists it; Playwright's WebKit does not
+//! send it), otherwise brotli 1, otherwise gzip 1. On
 //! card-market's item page (8.8 KB on average; instructions by callgrind in process, bytes the
 //! average `render_cost` reports) zstd 1 adds about 230,000 user instructions to the request and
 //! sends 2,178 bytes; brotli 1 adds about 690,000 for 2,358 bytes. brotli's other fast levels cost
@@ -393,10 +394,11 @@ fn stream(res: Response, coding: Option<Coding>) -> Response {
 /// `STREAM_BUDGET` until dropped. The gzip writer is taken out when the stream ends
 /// ([`StreamCoder::end`]), since only finishing it writes its trailer.
 ///
-/// No brotli: WebKit (Playwright's 27.2 build, measured) dispatches a flushed brotli event that
+/// No brotli: WebKit (Playwright's 27.2 build on Windows, measured) dispatches a flushed brotli event that
 /// decodes to more than 16 KiB only once more of the body arrives, so a stream's last event before
 /// a quiet spell waits for the next one or a keepalive, whatever the encoder (Node's own brotli,
-/// quality 4 or 11, does the same) and whatever empty blocks follow it. Gzip, sync-flushed, arrived
+/// quality 4 or 11, did the same in the replay, though the issue once saw its 17 KB event on time)
+/// and whatever empty blocks follow it. Gzip, sync-flushed, arrived
 /// at once in all three of Playwright's engines at every size tried (to 200 KB), and zstd in
 /// Chromium and Firefox; that WebKit build does not accept zstd, so none that does was tried
 /// (`docs/design.md#choice-stream-coding`).

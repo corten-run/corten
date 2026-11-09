@@ -876,8 +876,8 @@ impl Media {
     ///
     /// Everything else is `Media`'s: its file name ([`Media::attachment`]), its headers, private
     /// unless [`Public`]. A text type is compressed a chunk at a time as it comes (zstd, else
-    /// gzip, as an event stream is, each ended when the stream ends; never brotli, which WebKit
-    /// holds back), so a chunk of some kilobytes (a few hundred rows) compresses far better than a
+    /// gzip, as an event stream is, each ended when the stream ends; never brotli, which
+    /// Playwright's WebKit on Windows holds back), so a chunk of some kilobytes (a few hundred rows) compresses far better than a
     /// row each. It goes out uncompressed in two cases: to a client that takes neither zstd nor
     /// gzip, and while the server's compressed streams already hold their memory budget. No
     /// `ETag` is made for it, since that would need the whole body.

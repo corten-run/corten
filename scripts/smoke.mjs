@@ -99,7 +99,8 @@ const liveEvent = (accept) =>
 {
   const zstd = await liveEvent("gzip, deflate, br, zstd");
   check("a live stream is zstd for a client that accepts it", zstd.coding === "zstd", String(zstd.coding));
-  // Never brotli, which WebKit holds back past 16 KiB of an event (#1131): Safari's Accept-Encoding.
+  // Never brotli, which Playwright's Windows WebKit holds back past 16 KiB of an event (#1131): a
+  // client without zstd, as that WebKit asks.
   const gzip = await liveEvent("gzip, deflate, br");
   check("a live stream's first event decodes before the stream ends (gzip, flushed per event, for a client without zstd)", gzip.coding === "gzip" && gzip.first.includes("Last trade"), `${gzip.coding}: ${gzip.first.slice(0, 60)}`);
   const plain = await liveEvent("br");

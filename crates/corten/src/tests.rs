@@ -6220,8 +6220,9 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
             Ok(out)
         };
         for coding in ["zstd", "gzip"] {
+            let accept = if coding == "gzip" { "gzip".to_owned() } else { format!("gzip, {coding}") };
             for path in ["/export", "/sized"] {
-                let (_, headers, body) = get_with(path, Some(&format!("gzip, {coding}"))).await;
+                let (_, headers, body) = get_with(path, Some(&accept)).await;
                 assert_eq!(headers[header::CONTENT_ENCODING], coding, "{path}");
                 assert_eq!(headers[header::VARY], "accept-encoding");
                 assert!(!headers.contains_key(header::CONTENT_LENGTH), "the length is the uncompressed one: {path}");

@@ -1127,8 +1127,11 @@ rules something out.
     redraw's saved bytes are why streams are compressed).
 
     Stands on: platform (Playwright's WebKit on Windows holds back a flushed brotli event of more
-    than 16 KiB and sends `deflate, gzip, br`, no zstd; Chromium and Firefox send zstd, which
-    arrives at once there; no WebKit that accepts zstd was tried, and Safari, whose network stack
+    than 16 KiB and sends `deflate, gzip, br`, no zstd; its Linux build, which CI's smoke runs,
+    takes no brotli at all, so the smoke there cannot see the holdback and the rule is held by
+    `compress.rs`'s and `tests.rs`'s tests; the 16 KiB edge matches libcurl's write size, the
+    Windows build's network stack, which suggests the holdback is that stack's, not measured;
+    Chromium and Firefox send zstd, which arrives at once there; no WebKit that accepts zstd was tried, and Safari, whose network stack
     is not Playwright's and which caniuse lists as sending zstd over HTTPS from 26.3, was not
     tried at all); measured (bytes a redraw by `what_a_redraw_sends`, one run, the counts fixed
     by the encoders; a gzip stream's memory by `tests/stream_memory.rs`; the large event on a
@@ -1136,11 +1139,13 @@ rules something out.
     `what_an_event_stream_costs` at 2,000 and 12,000 events, three runs each, within 20
     instructions); reasoned (a sync flush ends deflate's output on a byte boundary with everything
     sent so far decodable, so a decoder has the whole event); value (an event on time at the
-    user's end before the bytes brotli saves, Values 1).
+    user's end before the bytes brotli saves, Values 1, and the issue's own ask: decline the
+    coding for streams until a WebKit is shown to take it on time).
 
     Revisit when: a WebKit that Playwright runs dispatches a flushed brotli event of more than
     16 KiB at once, or sends zstd (then check a flushed zstd event there); Safari is tried and
-    shows a large event on time under brotli, or late under zstd or gzip; or apps send redraws
+    shows a large event on time under brotli (then the holdback is the Windows build's own, and
+    brotli can come back for a client without zstd), or late under zstd or gzip; or apps send redraws
     over 32 KB to clients without zstd often enough that gzip's bytes show in a round.
 
     Last checked: 2026-11-08, WebKit 27.2, Chromium 156 and Firefox 157: the late brotli event
@@ -1152,9 +1157,13 @@ rules something out.
     profile, printed with `--nocapture`, the same in two runs); 2026-11-09, the watchlist smoke's
     large event, against a server built from `0b9a134c`, in Chromium, Firefox and WebKit (two
     runs, all on time, 10 to 22 ms; the second, which reads the route's answer, saw 200 with zstd,
-    zstd and gzip), and against
-    `022c3282` with `c65c10ec`'s `compress.rs` and `answer.rs`, whose streams are brotli, in
-    WebKit (one run: the route answered 200 with `br`, and no event came in 5 s).
+    zstd and gzip), and in WebKit again with the check's bounded fetch (`228dba80`, gzip, 32 ms),
+    all on Windows; 2026-11-09, the smoke against `022c3282` with `c65c10ec`'s `compress.rs`
+    and `answer.rs`, whose streams are brotli, in WebKit on Windows (one run: the route answered 200 with `br`, and
+    no event came in 5 s), and the same build on `535b22f9` in Playwright 1.64.1's Linux image,
+    as CI runs it (one run: WebKit asked for no brotli, the route answered 200 uncompressed, and
+    the event came in 18 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
+    test's thread (352,232 bytes, the same).
 
 ## Rules
 
