@@ -1397,29 +1397,31 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
-32. <a id="choice-runtime-terser"></a>**The runtime and its modules are bundled by esbuild and minified by terser.** Every
-    page of every app loads the runtime, so its bytes are paid on each first visit. esbuild
-    bundles each file (the runtime takes in `on.js`) and lowers it to ES2022 as before; terser,
-    a development dependency of the repository's tooling that no app installs, then minifies
-    it, compressing in two passes and mangling the module's top-level names. Its output is
-    smaller after compression than esbuild's minifier makes it: the runtime on `c65c10ec` is
-    14,373 bytes with gzip (level 9) against 14,836, and 13,015 with brotli (level 11) against
-    13,424, 3.1% less with each. Not chosen: esbuild's minifier alone (above); terser mangling names
-    without compressing (177 bytes more with gzip, 190 with brotli); one pass (10 and 12 bytes
-    more); a third pass (the same bytes as two).
+32. <a id="choice-runtime-terser"></a>**The runtime and its modules are minified by esbuild and then by
+    terser.** Every page of every app loads the runtime, so its bytes are paid on each first
+    visit. esbuild bundles each file (the runtime takes in `on.js`), lowers it to ES2022 and
+    minifies it, as before; terser, a development dependency of the repository's tooling that no
+    app installs, minifies that output again, compressing in two passes and renaming the module's
+    top-level names. The runtime on `c65c10ec`, as built (banner included), is 40,884 bytes
+    against 40,991, 14,307 with gzip (level 9) against 14,836, and 12,946 with brotli (level 11)
+    against 13,424: 3.6% less compressed, as Corten serves it, and 0.3% less uncompressed. The
+    saving is terser's renaming: without it, 495 of the 529 bytes with gzip come back. Not
+    chosen: esbuild's minifier alone (above); terser on esbuild's unminified bundle instead
+    (14,373 bytes with gzip and 13,015 with brotli, and 41,468 uncompressed, 477 more than
+    before); terser renaming without compressing (43 bytes more with gzip, 35 with brotli); one
+    pass (12 and 6 bytes more); a third pass (the same bytes as two).
 
-    Stands on: measured (each built file compressed as served, before and after, on
-    `c65c10ec`: the runtime 463 bytes less with gzip and 409 with brotli; `view.js` 55 and 44
-    less; `format.js`, `upload.js` and `keys.js` within 12 bytes either way); reasoned (the
-    build's output is checked in and `npm run check` rebuilds it, so a minifier that changed
-    what the code does would fail the browser smoke tests that run on the built files); value
-    (fewer bytes on every page, Values 1, for a dependency of the tooling only, Values 6).
+    Stands on: measured (each built file before and after on `c65c10ec`, one build each, the
+    build being deterministic: the runtime 107 bytes less uncompressed, 529 with gzip and 478 with
+    brotli; `view.js` 20, 75 and 60 less; `format.js`, `upload.js` and `keys.js` within 11 bytes
+    either way, `keys.js` 1 byte more with gzip); measured (SMOKE_EVIDENCE); value (fewer bytes
+    on every page, Values 1, for a dependency of the tooling only, Values 6).
 
-    Revisit when: esbuild's minifier comes within 1% of terser's output after compression, so
-    one tool does both and terser goes; or terser output fails a smoke test in a supported
-    engine that esbuild's does not.
+    Revisit when: esbuild's minifier comes within 1% of the two after compression, so one tool
+    does it and terser goes; or terser's output fails a smoke test in a supported engine that
+    esbuild's alone passes.
 
-    Last checked: 2026-11-08, sizes on `c65c10ec` with esbuild 0.28.2 and terser 5.51.2.
+    Last checked: 2026-11-08, sizes on `c65c10ec` with esbuild 0.28.2 and terser 5.51.2; LAST_SMOKE.
 
 ## Rules
 
