@@ -2613,10 +2613,11 @@ Corten is pre-1.0, so any minor version may change the API.
     `--background`, its raised surface, in both themes. The theme's declarations and the two
     `var()`s in each stylesheet, with the hover rule's selector, make the ui-gallery's served
     `components.css` 61,306 bytes where it was 61,057 (gzip 10,156 against 10,126, brotli 8,947
-    against 8,925, Node's zlib at gzip level 9 and brotli's default), measured at its merge into
-    main against main. The ui-gallery's smoke test checks a tab, a segmented choice, a
-    `SegmentedLinks` link and a `SegmentedRadio` at the kit's values and at a theme's, and each of
-    the four chosen under the pointer.
+    against 8,925, Node's zlib at gzip level 9 and brotli's default); the earlier size is the
+    served file just before this change, with the LiveDot and `StatusTone::Text` rules (277, 280).
+    The ui-gallery's smoke test checks a tab, a segmented choice, a `SegmentedLinks` link and a
+    `SegmentedRadio` at the kit's values and at a theme's, and each of the four chosen under the
+    pointer.
     Asked for by the Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen
     choice in `--primary` at 600
     ([#1123 Kit Segmented and Tabs draw the chosen choice in --foreground at weight 500 as literals, so a theme whose chosen tab is its primary color edits both copies](https://github.com/corten-run/corten/issues/1123)).
