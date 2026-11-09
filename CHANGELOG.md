@@ -4077,10 +4077,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
 
 ### Fixed
-- A failed request, agent tool, MCP auth check, page with layout reads and cluster feed load,
-  relay or JetStream consumer is logged as the error itself, so Corten's log line adds each
-  source's message (`error.sources`): an HTTP client's "error sending request" now names the
-  reset or timeout beneath it.
+- A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
+  feed load, relay or JetStream consumer, is logged as the error itself, so Corten's log line
+  adds each source's message (`error.sources`): an HTTP client's "error sending request" now
+  names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
+  message.
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

@@ -1321,8 +1321,8 @@ mod tests {
     /// A tool's failure and the auth check's are logged as the error itself, so the log line
     /// names each error under the message (a reset connection under "error sending request"),
     /// while the agent is told "internal error" alone.
-    #[test]
-    fn a_tool_or_auth_failure_is_logged_with_each_cause_under_it() {
+    #[tokio::test]
+    async fn a_tool_or_auth_failure_is_logged_with_each_cause_under_it() {
         #[derive(Debug)]
         struct Failed(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
         impl std::fmt::Display for Failed {
@@ -1354,14 +1354,15 @@ mod tests {
         let lines = Lines(std::sync::Arc::default());
         let writer = lines.clone();
         let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
-        let (result, status) = tracing::subscriber::with_default(subscriber, || {
-            let result = tools.failed("stock.set", failure());
-            let status = tools.refused(json!(1), failure(), &HeaderMap::new()).status();
-            (result, status)
+        let (result, refused) = tracing::subscriber::with_default(subscriber, || {
+            (tools.failed("stock.set", failure()), tools.refused(json!(1), failure(), &HeaderMap::new()))
         });
         assert!(result.contains(r#""text":"internal error""#), "{result}");
         assert!(!result.contains("connection reset"), "the agent is not told the cause: {result}");
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(refused.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(refused.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8_lossy(&body);
+        assert!(!body.contains("connection reset") && !body.contains("error sending request"), "nor is the client: {body}");
         let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
         let logged: Vec<&str> = text.lines().collect();
         assert_eq!(logged.len(), 2, "{text}");
