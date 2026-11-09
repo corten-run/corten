@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { allApps } from "./apps.mjs";
 import { edgeBase, edgeBound, edgeCores, edgeOffset, nginxConf } from "./edge.mjs";
 
 const apps = /** @type {[string, { port: number }][]} */ ([["corten", { port: 18410 }], ["axum-maud", { port: 18427 }]]);
@@ -38,4 +40,10 @@ test("the edge's cores are counted from BENCH_EDGE_CPUS, and a phase that used 9
   assert.equal(edgeBound(359, 4), false);
   assert.equal(edgeBound(360, 4), true);
   assert.equal(edgeBound(null, 4), null, "a phase reached directly says nothing");
+});
+
+test("Next.js's matched build allows the origin a browser posts its server action from through the edge", () => {
+  // Next.js fixes serverActions.allowedOrigins when it builds, so its Dockerfile names the edge's host.
+  const dockerfile = readFileSync(new URL("apps/nextjs/Dockerfile", import.meta.url), "utf8");
+  assert.equal(/^ARG EDGE_HOST=(\S+)$/m.exec(dockerfile)?.[1], new URL(edgeBase(allApps.nextjs, "outside")).host);
 });

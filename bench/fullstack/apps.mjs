@@ -5,11 +5,10 @@ import { edgeBase } from "./edge.mjs";
 // app with `pages: false` serves only the item as JSON, so it takes part in the JSON steps alone.
 // `matched: true`: one of the matched tier's apps (README, "The matched tier"), set once the app
 // starts with the production profile under PROFILE=matched. The tier's membership (README, "The
-// matched tier") also names nextjs, aspnet (with aspnet-aot for the JSON) and spring; each joins
-// with its profile.
+// matched tier") also names aspnet (with aspnet-aot for the JSON); it joins with its profile.
 const catalog = {
   corten: { image: "cb-corten", port: 18410, label: "Corten 0.1 (Rust, axum, html! views)", matched: true },
-  nextjs: { image: "cb-nextjs", port: 18411, label: "Next.js 16.4 (App Router, RSC)" },
+  nextjs: { image: "cb-nextjs", port: 18411, label: "Next.js 16.4 (App Router, RSC)", matched: true },
   "tanstack-start": { image: "cb-tanstack-start", port: 18412, label: "TanStack Start 1.169 (React 19, Nitro)" },
   sveltekit: { image: "cb-sveltekit", port: 18413, label: "SvelteKit 3.1 (Svelte 5, adapter-node)" },
   "react-router": { image: "cb-react-router", port: 18414, label: "React Router 7.18 + Express" },
