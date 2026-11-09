@@ -817,7 +817,9 @@ impl Answer for Relay {
 /// which every `Media` gets: browsers do not guess another type
 /// (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script. A route that says
 /// `stages = bare` has no stages, and its answer gets `nosniff` and `Content-Security-Policy:
-/// sandbox` instead, whatever its type.
+/// sandbox` instead, whatever its type. A PDF sent [`Media::inline`] from a bare route still
+/// shows in Chrome's, Edge's and Firefox's viewers (Safari's was not checked); a PDF that must
+/// open in every browser is sent from a staged route or as an attachment.
 ///
 /// It is cached as anything the app answers is (`private, no-cache`), except on a bare route,
 /// which sends no `Cache-Control` unless the handler says one. At a URL that names its

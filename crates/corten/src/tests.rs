@@ -5104,9 +5104,10 @@ async fn bare_serves(req: Req) -> String {
     format!("{} {}", serves("/ping"), serves("/page"))
 }
 
-/// `stages = bare` sends the handler's answer as it made it, with `nosniff` added when it has
-/// none: no host check, no CSP or other security headers, `Cache-Control`, error page or tag. It
-/// answers reads only. The route beside it, and an unknown URL, still go through every stage.
+/// `stages = bare` sends the handler's answer as it made it, with `nosniff` and
+/// `Content-Security-Policy: sandbox` always added: no host check, no other security headers,
+/// `Cache-Control` (unless it sets a cookie), error page or tag. It answers reads only. The route
+/// beside it, and an unknown URL, still go through every stage.
 #[tokio::test]
 async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     let router = App::new(bare_url::router()).error_page(test_error_page, ()).router();

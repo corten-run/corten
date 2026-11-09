@@ -990,7 +990,8 @@ rules something out.
     added in its handler's own future, not by a stage: a browser takes it only as the type it
     says, a page of the app's cannot load it as a script (`script-src 'self'` trusts every URL of
     the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
-    client that reads it as its type sees nothing else change; one that sets a cookie is
+    client that reads it as data sees nothing else change, and a PDF the browser opens still shows
+    in Chrome's, Edge's and Firefox's viewers; an answer that sets a cookie is
     `private, no-cache` (`no-store` when it says one) with no CDN caching header, so no shared cache hands one
     visitor's cookie to another; a panic is logged and answered `500` in the same future. It gets
     no host check, so it is
@@ -1046,7 +1047,10 @@ rules something out.
     17,559 (17,559 to 17,839), and a 404 21,680 (21,650 to 21,919) against 21,640 (21,579 to
     22,332)); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
-    of it says so where it is declared); bet (apps have an answer anyone may read whose cost the
+    of it says so where it is declared); platform (a PDF sent with a sandbox shows in the viewers of
+    Chrome, Edge and Firefox as one sent without it, probed as Last checked says; Safari's is not
+    run, since the repository's WebKit has no PDF viewer, and WebKit's bug tracker records that it
+    showed nothing for one until a fix in December 2024, which was read, not run); bet (apps have an answer anyone may read whose cost the
     stages would make about 2.6 times as costly, beside pages that need them all; no example or template uses
     `stages = bare` yet); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
@@ -1054,7 +1058,9 @@ rules something out.
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
     layer around the app cannot serve it; or a route needs some stages and not others, which
-    `stages = bare` cannot give (the host check, a write or a body on a bare route among them); or no
+    `stages = bare` cannot give (the host check, a write or a body on a bare route among them); or a
+    browser the runtime supports shows a PDF sent with a sandbox differently from one sent without
+    it; or no
     app uses `stages = bare` by the next minor release; or a bare route costs more than about
     10% over a plain axum router's; or a request outside every area costs more than twice
     the about 200 instructions measured here over the build before area middleware (the lookup
@@ -1068,7 +1074,12 @@ rules something out.
     own); 2026-11-09, the `stages = bare` runs on this change against main `c65c10ec` (the bench
     binary was not committed, so the next check writes its own: the same JSON handler answered in
     process by an `App` with it bare, by the same `App` with it staged, and by a plain axum
-    `Router`).
+    `Router`); 2026-11-09, a PDF sent `inline` with `Content-Security-Policy: sandbox` shown by
+    the viewers of Chrome 156.0.8078.49, Edge 157.0.4341.42 and Firefox 157.0 (Playwright's, its
+    PDF viewer turned on) as one sent without it (Playwright's WebKit 27.2 has no PDF viewer and
+    downloads both, so Safari was not run), and
+    [WebKit bug 284594](https://bugs.webkit.org/show_bug.cgi?id=284594), fixed in December 2024,
+    was read.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports

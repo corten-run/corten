@@ -975,7 +975,12 @@ the handler says. Every bare answer gets `X-Content-Type-Options: nosniff`, whic
 from taking it as another type and a page of the app's from loading it as a script, and a
 `Content-Security-Policy: sandbox` header of its own beside any policy the handler set: a browser
 enforces every policy it is sent, so whatever type the answer says, a document it sends (an
-uploaded SVG a `Media` sends) runs no script on the app's origin. Neither reads the answer's type
+uploaded SVG a `Media` sends) runs no script on the app's origin. The sandbox leaves data alone,
+and a PDF the browser opens (a `Media::inline`, or one with no `Content-Disposition`) still shows
+in its viewer in Chrome, Edge and Firefox (checked in Chrome 156, Edge 157 and Firefox 157).
+Safari was not run: WebKit's bug tracker records that its viewer showed nothing for one until a
+fix in December 2024. A PDF that must open in every browser is sent from a staged route, or as a
+`Media::attachment`, which a download saves without making a document. Neither reads the answer's type
 or policy, so no type or policy a handler writes gets past them; an answer whose own script must
 run is a page, not a bare route's. Its answer has no `Cache-Control` unless the handler sets one,
 so a shared cache may keep it by its own rules ([Caching](#caching) describes the stages' rules,
