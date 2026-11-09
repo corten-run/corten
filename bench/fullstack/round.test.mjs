@@ -237,7 +237,7 @@ test("a matched-tier round is m<n>, and m<n> is the matched tier's alone, so the
 
 /** apps.mjs's exports under an environment, from a fresh process. @param {Record<string, string>} env */
 const appsUnder = (env) => {
-  const r = spawnSync(process.execPath, ["--input-type=module", "-e", 'const a = await import("./apps.mjs"); console.log(JSON.stringify({ apps: Object.keys(a.apps), tierApps: Object.keys(a.tierApps), tierEnv: a.tierEnv, run: a.runArgs("corten", a.allApps.corten, "api", "/f") }))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "BENCH_TIER" && k !== "BENCH_APPS")), ...env } });
+  const r = spawnSync(process.execPath, ["--input-type=module", "-e", 'const a = await import("./apps.mjs"); console.log(JSON.stringify({ apps: Object.keys(a.apps), tierApps: Object.keys(a.tierApps), tierEnv: a.tierEnv, run: a.runArgs("corten", a.allApps.corten, "api", "/f") }))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "BENCH_TIER" && k !== "BENCH_APPS" && k !== "BENCH_EDGE")), ...env } });
   return { status: r.status, stderr: r.stderr, ...(r.status === 0 ? JSON.parse(r.stdout) : {}) };
 };
 
@@ -253,6 +253,7 @@ test("the matched tier starts its apps with the profile and only its apps; the d
   const run = matched.run;
   assert.ok(run.indexOf("PROFILE=matched") > 0 && run.indexOf("PROFILE=matched") < run.indexOf("cb-corten"), "set before the image");
   assert.ok(run.includes("ORIGINS=https://localhost:19410") && run.indexOf("ORIGINS=https://localhost:19410") < run.indexOf("cb-corten"), "the edge's origin, before the image");
+  assert.ok(!appsUnder({ BENCH_TIER: "matched", BENCH_EDGE: "off" }).run.some((/** @type {string} */ a) => a.startsWith("ORIGINS=")), "no edge, no edge origin");
   for (const name of ["corten", "axum-maud"]) assert.ok(matched.tierApps.includes(name), name);
   assert.deepEqual(matched.apps, matched.tierApps);
   assert.ok(matched.tierApps.every((/** @type {string} */ n) => /** @type {{ matched?: boolean }} */ (apps[/** @type {keyof typeof apps} */ (n)]).matched), "only the tier's apps");

@@ -1464,23 +1464,24 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    `ConditionalGetMiddleware` for an ETag, and `cache_control(private=True, no_cache=True)` on the
    pages' and the JSON's views (`never_cache` adds `no-store`, for which `ConditionalGetMiddleware`
    writes no ETag); the static files keep WhiteNoise's headers. `apps.mjs` passes every app of the
-   tier `ORIGINS`, the edge's origin a browser reaches it at, as a deploy knows its own: the edge
-   sends the app its container name as Host, and Django's CSRF check refuses a form posted from any
-   origin it is not told of (a 403 for the price alert from `https://localhost:19416`, a 200 once it
-   is listed). Its defaults already send the other security headers, refuse a cross-site form post
-   (CSRF, 403) and a body over 2.5 MiB (400), and close an unfinished head at about 30 s. A hung
-   read is answered by gunicorn, not Django: its 30 s worker timeout kills the worker (one of the
-   three) and answers a 500 `text/html` without the profile's headers. The page's ETag never
-   repeats: each render masks its CSRF token afresh (two renders differ in that line alone), so a
-   second request with `If-None-Match` gets a 200; the JSON's gets a 304. htmx puts its indicator
-   styles in a `<style>` element, which `style-src 'self'` blocks (one violation in Chromium; htmx's
-   `includeIndicatorStyles` setting would stop it, but the page's markup is the same in both tiers);
-   the sort, "show all" and the price alert still work (checked in Chromium, directly and through the edge). Django has
-   no setting for Permissions-Policy, a liveness or readiness endpoint, or a connection cap
-   (gunicorn's three sync workers serve three connections at a time). The JSON's `HEAD` is a 405
-   from the view's `require_GET`: Django's `require_safe` would answer it, but the view is the app's
-   in both tiers, so the profile leaves it. Its other error answers (HTML for the JSON's 404 and
-   500, the CSRF 403 for a `DELETE` on the JSON) are Django's own.
+   tier `ORIGINS` when it runs behind the edge, the origin a browser reaches it at, as a deploy
+   knows its own: the edge sends the app its container name as Host, and Django's CSRF check refuses
+   a form posted from any origin it is not told of (a 403 for the price alert from
+   `https://localhost:19416`, a 200 once it is listed). Its defaults already send the other security
+   headers, refuse a cross-site form post (CSRF, 403) and a body over 2.5 MiB (400), and close an
+   unfinished head at about 30 s. A hung read is answered by gunicorn, not Django: its 30 s worker
+   timeout kills the worker (one of the three) and answers a 500 `text/html` without the profile's
+   headers. The page's ETag never repeats: each render masks its CSRF token afresh (two renders
+   differ in that line alone), so a second request with `If-None-Match` gets a 200; the JSON's gets
+   a 304. htmx puts its indicator styles in a `<style>` element, which `style-src 'self'` blocks
+   (one violation in Chromium; htmx's `includeIndicatorStyles` setting would stop it, but the page's
+   markup is the same in both tiers); the sort, "show all" and the price alert still work (checked
+   in Chromium, directly and through the edge). Django has no setting for Permissions-Policy, a
+   liveness or readiness endpoint, or a connection cap (gunicorn's three sync workers serve three
+   connections at a time). The JSON's `HEAD` is a 405 from the view's `require_GET`: Django's
+   `require_safe` would answer it, but the view is the app's in both tiers, so the profile leaves
+   it. Its other error answers (HTML for the JSON's 404 and 500, the CSRF 403 for a `DELETE` on the
+   JSON) are Django's own.
 6. `nextjs`, `aspnet` (and `aspnet-aot`) and `spring` are not in it yet: each joins with its
    profile.
 
