@@ -4,8 +4,7 @@ import { edgeBase } from "./edge.mjs";
 // The apps under test: one image each, same page, same data, same port inside the container. An
 // app with `pages: false` serves only the item as JSON, so it takes part in the JSON steps alone.
 // `matched: true`: one of the matched tier's apps (README, "The matched tier"), set once the app
-// starts with the production profile under PROFILE=matched. The tier's membership (README, "The
-// matched tier") also names aspnet (with aspnet-aot for the JSON); it joins with its profile.
+// starts with the production profile under PROFILE=matched.
 const catalog = {
   corten: { image: "cb-corten", port: 18410, label: "Corten 0.1 (Rust, axum, html! views)", matched: true },
   // Next.js fixes its config when it builds, so the matched tier runs an image of its own, built with
@@ -18,7 +17,7 @@ const catalog = {
   django: { image: "cb-django", port: 18416, label: "Django 6.1 (Python, gunicorn, htmx)", matched: true },
   rails: { image: "cb-rails", port: 18417, label: "Rails 8.1 (Ruby, Puma, YJIT, Turbo)" },
   laravel: { image: "cb-laravel", port: 18418, label: "Laravel 13 (PHP, Octane on FrankenPHP, Livewire)" },
-  aspnet: { image: "cb-aspnet", port: 18419, label: "ASP.NET Core 10 Razor Pages (C#, Kestrel, htmx)" },
+  aspnet: { image: "cb-aspnet", port: 18419, label: "ASP.NET Core 10 Razor Pages (C#, Kestrel, htmx)", matched: true },
   spring: { image: "cb-spring", port: 18420, label: "Spring Boot 4.1 (Java 25, Thymeleaf, htmx)", matched: true },
   phoenix: { image: "cb-phoenix", port: 18421, label: "Phoenix 1.8 LiveView (Elixir)" },
   astro: { image: "cb-astro", port: 18422, label: "Astro 7 (Node adapter, client router)" },
@@ -27,7 +26,7 @@ const catalog = {
   "axum-maud": { image: "cb-axum-maud", port: 18427, label: "axum 0.8 + Maud 0.27 (Rust, htmx)", matched: true },
   gin: { image: "cb-gin", port: 18425, label: "Gin 1.12 (Go, templ, htmx)" },
   drogon: { image: "cb-drogon", port: 18426, label: "Drogon 1.9 (C++, CSP views, htmx)" },
-  "aspnet-aot": { image: "cb-aspnet-aot", port: 18428, label: "ASP.NET Core 10 minimal API, native AOT (C#, JSON only)", pages: false },
+  "aspnet-aot": { image: "cb-aspnet-aot", port: 18428, label: "ASP.NET Core 10 minimal API, native AOT (C#, JSON only)", pages: false, matched: true },
 };
 
 /**

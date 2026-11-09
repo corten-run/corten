@@ -11,6 +11,10 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 // answers with what card-market's JSON route answers with (bench/fullstack/README.md, "aspnet-aot"):
 // each piece is ASP.NET Core's own middleware for it, as the webapiaot template would add it.
 var builder = WebApplication.CreateSlimBuilder(args);
+// The matched tier's connection cap (bench/fullstack/README.md, "The matched tier"); Kestrel closes a
+// connection past it. Its request head timeout is already 30 seconds, as Corten's header timeout.
+if (Environment.GetEnvironmentVariable("PROFILE") == "matched" && long.TryParse(Environment.GetEnvironmentVariable("MAX_CONNECTIONS"), out var cap))
+    builder.WebHost.ConfigureKestrel(o => o.Limits.MaxConcurrentConnections = cap);
 // Errors, warnings and startup, as apps/aspnet logs (its appsettings.json). HttpClient's request
 // lines are Information too (four for each item API call), and Corten logs none per request.
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);

@@ -2579,6 +2579,14 @@ Corten is pre-1.0, so any minor version may change the API.
     edge's host for server actions; the defaults tier's image is built from the same config as
     before. Its matched matrix meets 14 of 24 columns
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+282. ASP.NET Core joins `bench/fullstack`'s matched tier, as its Razor Pages app and aspnet-aot:
+    under `PROFILE=matched` the Razor Pages app adds a middleware for the security headers, ASP.NET
+    Core's host filter, response compression, problem details and an error page from its exception
+    handler, health checks, `HEAD` on the JSON, Kestrel's body limit and connection cap, and a 10 s
+    timeout on the item API's client; aspnet-aot, which already had the rest, adds the cap. Without
+    it both start as before. The Razor Pages app's matched matrix meets 22 of 24 columns, and
+    aspnet-aot's all 14 that are not about pages
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

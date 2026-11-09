@@ -1552,7 +1552,31 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    liveness or readiness, a deadline, or the Node server's header timeout (Node's `headersTimeout`
    is 60 s, and the standalone server sets only `keepAliveTimeout`) or connection cap
    (`server.maxConnections`, which it does not set), so those columns stay unmet.
-8. `aspnet` (and `aspnet-aot`) is not in it yet: it joins with its profile.
+8. `aspnet`: `PROFILE=matched` turns on the profile in `Program.cs`, each part ASP.NET Core's own
+   middleware or setting; without it the app starts as before, and its defaults-tier matrix is
+   unchanged (the same 18 columns unmet, measured). Kestrel takes `MAX_CONNECTIONS` as
+   `MaxConcurrentConnections` and a 2 MiB request body limit (`MaxRequestBodySize`; its default
+   is 30 MB), and its request head timeout is already 30 s. The host filter (`AddHostFiltering`)
+   lists localhost and `HOSTS` and answers others 400. A middleware adds axum-maud's security
+   headers as each answer starts, so the exception handler's reset of the headers keeps them, and
+   `Cache-Control: private, no-cache` to an answer that sets none (the pages' antiforgery token
+   already sets `no-cache, no-store`). The response compression middleware sends Brotli or gzip.
+   Under `/api` the exception handler and status code pages answer with problem details
+   (`AddProblemDetails`); elsewhere the exception handler runs the request again as the
+   template's error page (`Pages/Error.cshtml`), with `UseRouting` after it as the template
+   places it, since before it the request run again is routed to the page that failed. The health
+   checks middleware answers `/health/live` and `/health/ready`, and the JSON routes answer
+   `HEAD` as well as `GET`. The item API's clients give up after 10 s (`HttpClient.Timeout`),
+   card-market's deadline: ASP.NET Core's request timeout (`UseRequestTimeouts`) cancels only code
+   that reads the request's token, which the app's reads do not take, so the client's own timeout
+   is the framework setting that reaches them (the defaults tier keeps HttpClient's 100 s). Left
+   out: the ETag (ASP.NET Core writes one for static files, and has no setting for one on a
+   rendered page or the JSON) and a readiness that knows the item API (a health check of the
+   app's own, as Spring's). The image grows by 171 KB. `aspnet-aot` was written for round aot1
+   with its headers, deadline and health endpoints in both tiers; the profile adds only
+   `MAX_CONNECTIONS` as Kestrel's cap. The alert form (with its antiforgery token), the sort and
+   "show all" work in Chromium through the edge, with the same one htmx indicator `style-src`
+   violation as Django.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1582,6 +1606,11 @@ Next.js, from `cb-nextjs-matched` built at `eedbcc2a`
 compression (none), 405 and failed read (empty), the unknown Host (200), liveness and readiness,
 the item API's deadline and the unfinished head (each held 45 s), and the cap (served with 1,050
 held).
+ASP.NET Core's Razor Pages app, from `cb-aspnet` built at COMMIT807
+(`results/conform-matched-aspnet1/conformance.json`), met 22 and missed 2: the ETag, and
+readiness with the item API hung (200). aspnet-aot, from `cb-aspnet-aot` built at the same
+commit, met all 14 of its columns that are not about pages (its readiness 503 in 2.0 s, its
+deadline 503 in 10.0 s).
 No load phase has run in the tier yet.
 
 ### The hardening step
