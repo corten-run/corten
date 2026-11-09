@@ -897,11 +897,11 @@ extractor) and its return type.
 A route whose answer must cost as little as the server allows and that anyone may read (a public
 figure behind a CDN) says `stages = bare` in its routes
 module; the probes a load balancer sends are Corten's own `/health/live` and `/health/ready`.
-It meets none of the stages above: no host or same-origin check, no signal,
-deadline or panic catch, no middleware, no error page, security headers, `Cache-Control`, tag or
+It meets none of the stages above: no host or same-origin check, no signal or
+deadline, no middleware, no error page, security headers, `Cache-Control`, tag or
 compression. Its handler's answer is sent as it made it, a raw `Response` too, with
 `X-Content-Type-Options: nosniff` added when it has none (and `Content-Security-Policy: sandbox`
-on a document, below), and every other route keeps every stage, so the fast route and a page
+on a document, below) and a panic answered `500`, and every other route keeps every stage, so the fast route and a page
 that needs all of them sit side by side:
 
 ```rust
@@ -960,9 +960,11 @@ What it gives up is the app's to weigh: a bare route answers a DNS-rebound page 
 framed, so it is for answers anyone anywhere may read:
 not a figure only this machine or its network should see, which a page on another site can read
 through a name it points at this machine. A handler
-that panics drops the connection rather than answering 500, its panic goes to Rust's panic hook
-(standard error) rather than the app's log, and nothing ends it at a deadline; a 5xx it answers is
-logged only when it is a `corten::Error`, which logs itself.
+that panics is logged and answered a plain `500`, and nothing ends it at a deadline; a 5xx it
+answers is logged only when it is a `corten::Error`, which logs itself. A failure is sent as the
+handler made it: a `JsonResult`'s `Err` is the status's reason as plain text, not the Problem
+Details document a staged JSON route answers, and a path that does not parse is the extractor's
+plain-text rejection; a handler that owes its clients JSON failures returns them as its answer.
 No stage gives its answer a CSP or `frame-ancestors`; a document it builds from what the request
 says (HTML, SVG) would run script on the app's origin, where it can read every other page with
 the visitor's cookies, but for the sandbox below. A bare answer is data (text, JSON, a file) with its `Content-Type`
@@ -974,7 +976,8 @@ a list, of which a browser takes the last), gets a `Content-Security-Policy: san
 its own beside any policy the handler set, since a browser enforces every policy it is sent, so
 an uploaded picture a `Media` sends cannot run script there. A handler whose policy says
 `sandbox` itself gets none added: `sandbox allow-scripts` runs the document's script in an
-origin of its own, never the app's. Its
+origin of its own, never the app's. One that allows both `allow-scripts` and `allow-same-origin`
+runs it as the app's, so it gets the plain `sandbox` too. Its
 answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
 own rules ([Caching](#caching) describes the stages' rules, which it does not meet), except that
 one that sets a cookie and says nothing of caching gets `Cache-Control: private, no-cache`.
@@ -987,9 +990,9 @@ which lets a bare route's request run for the longer of the shutdown grace and t
 deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(median of five runs, range in parentheses): 8,132 (8,130-8,132) instructions a request bare
-against 21,314 (21,306-21,321) through the stages with jemalloc (a plain axum router: 7,640),
-and 9,125 (9,124-9,125) against 23,791 (23,762-23,853) with glibc's allocator (axum: 8,716).
+(median of five runs, range in parentheses): 8,304 (8,303-8,304) instructions a request bare
+against 21,318 (21,304-21,321) through the stages with jemalloc (a plain axum router: 7,640),
+and 9,294 (9,294-9,295) against 23,795 (23,773-23,854) with glibc's allocator (axum: 8,716).
 An app with no bare route costs what it did before.
 
 ## Static files

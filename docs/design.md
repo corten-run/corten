@@ -992,7 +992,8 @@ rules something out.
     the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
     client that reads it as its type sees nothing else change; one that sets a cookie and says
     nothing of caching gets `Cache-Control: private, no-cache`, so no shared cache hands one
-    visitor's cookie to another. It gets no host check, so it is
+    visitor's cookie to another; a panic is logged and answered `500` in the same future. It gets
+    no host check, so it is
     data anyone anywhere may read. It answers `get` alone and its handler reads no body: no
     same-origin check covers it, a form posted to it needs no preflight, so any site could make
     its visitors send one, and no deadline would end a slow body. A bare route
@@ -1030,16 +1031,16 @@ rules something out.
     be in the request outside the area); measured (callgrind, release, the same JSON handler
     answering `Media`, a request counted as the run of 1,200 less the run of 200 over 1,000, five
     runs each, this change's request path as committed, the staged variants alternating with main
-    `c65c10ec`, median and range: with jemalloc a bare route 8,132 (8,130 to 8,132) instructions
-    a request with its `nosniff`, type and cookie checks, 7,398 (7,397 to 7,400) before any, the
-    same handler through the stages 21,314 (21,306 to 21,321; main 21,308, 21,300 to 21,315), a
-    staged route beside a bare one 21,325 (21,320 to 21,328), and a plain axum router 7,640; an
-    API request 15,813 against main's 15,813 and a 404 20,000 against 19,997; with glibc's
-    allocator a bare route 9,125 (9,124 to 9,125), the same handler through the stages 23,791
-    (23,762 to 23,853; main 23,831, 23,729 to 23,910), beside a bare one 23,873 (23,827 to
-    23,966), a plain axum router 8,716 (8,720 in this build), an API request 17,654 (17,616 to
-    17,845) against main's 17,599 (17,599 to 17,839), and a 404 21,735 (21,678 to 21,907) against
-    21,685 (21,628 to 22,225)); reasoned (one place for the app's steps is
+    `c65c10ec`, median and range: with jemalloc a bare route 8,304 (8,303 to 8,304) instructions
+    a request with its headers and panic catch, 7,398 (7,397 to 7,400) before either, the same
+    handler through the stages 21,318 (21,304 to 21,321; main 21,310, 21,301 to 21,316), a
+    staged route beside a bare one 21,327 (21,321 to 21,337), and a plain axum router 7,640; an
+    API request 15,813 against main's 15,813 and a 404 19,986 against 19,985; with glibc's
+    allocator a bare route 9,294 (9,294 to 9,295), the same handler through the stages 23,795
+    (23,773 to 23,854; main 23,733, 23,719 to 23,811), beside a bare one 23,888 (23,828 to
+    23,999), a plain axum router 8,716, an API request 17,643 (17,604 to 17,873) against main's
+    17,559 (17,559 to 17,839), and a 404 21,680 (21,650 to 21,919) against 21,640 (21,579 to
+    22,332)); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
     of it says so where it is declared); bet (apps have an answer anyone may read whose cost the
     stages would make about 2.6 times as costly, beside pages that need them all; no example or template uses
@@ -1319,10 +1320,11 @@ by design; where it is known, a limit says what would lift it or why it is so.
     request before every stage is a tower layer around the whole app (`.layer(l)`), and there is
     no step for one route, whose needs are its handler's arguments and return type. A route
     takes every stage or, with `stages = bare`, none: no host or same-origin check, deadline,
-    panic catch, error page, security headers but `nosniff` (and `sandbox` on a document), or
-    cache rule, which its handler gives itself if it needs them; it answers reads only; a wrong
-    method or a missing suffix at its path is the router's plain 405 or 404, and a panic there
-    goes to Rust's panic hook, not the app's log.
+    error page, security headers but `nosniff` (and `sandbox` on a document), or cache rule
+    but `private` on a cookie, which its handler gives itself if it needs them; it answers reads
+    only; a wrong method or a missing suffix at its path is the router's plain 405 or 404, a
+    failure is sent as its handler made it (plain text, not Problem Details), and a panic is
+    logged and answered a plain 500.
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the

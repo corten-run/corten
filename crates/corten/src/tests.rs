@@ -5003,6 +5003,9 @@ mod bare_url {
     #[route("/listed", get = bare_listed, stages = bare)]
     pub struct Listed;
 
+    #[route("/boom", get = bare_boom, stages = bare)]
+    pub struct Boom;
+
     #[route("/feeds/{name}.xml", get = bare_feed, stages = bare)]
     pub struct Feed<'a> {
         pub name: &'a str,
@@ -5049,6 +5052,15 @@ async fn bare_cookie() -> axum::response::Response {
 /// A type a browser may read as the last of a list, HTML.
 async fn bare_listed() -> axum::response::Response {
     axum::response::Response::builder().header("content-type", "text/plain, text/html").body(Body::from("<p>listed</p>")).unwrap()
+}
+
+/// A handler that panics, which a bare route answers 500 rather than dropping the connection.
+async fn bare_boom() -> &'static str {
+    if true {
+        panic!("bare and broken")
+    } else {
+        "never"
+    }
 }
 
 /// A picture that can run script, as an uploaded SVG can.
@@ -5118,6 +5130,12 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(headers["content-security-policy"], "sandbox");
     // A link to it is not fetched ahead of a click.
     assert_eq!(html! { <a href={bare_url::Picture}>"P"</a> }.to_html(), r#"<a href="/picture" data-no-prefetch>P</a>"#);
+    // A panic is a plain 500, and the next request is served.
+    let (status, headers, body) = call_with(router.clone(), "GET", "/boom", None, Some("text/html")).await;
+    assert_eq!((status, body.as_str()), (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"));
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    let (status, _, _) = call_with(router.clone(), "GET", "/ping", None, None).await;
+    assert_eq!(status, StatusCode::OK);
     // A path that does not parse is the extractor's own rejection, not the error page.
     let (status, headers, _) = call_with(router.clone(), "GET", "/raw/seven", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -5182,9 +5200,41 @@ fn a_type_that_runs_script_is_known() {
     for policy in ["sandbox", "default-src 'none'; Sandbox allow-scripts", " sandbox ;"] {
         assert!(sandboxes(policy.as_bytes()), "{policy}");
     }
-    for policy in ["frame-ancestors 'none'", "default-src 'none'; sandboxed", "script-src 'self' sandbox"] {
+    for policy in [
+        "frame-ancestors 'none'",
+        "default-src 'none'; sandboxed",
+        "script-src 'self' sandbox",
+        "sandbox allow-same-origin allow-scripts",
+    ] {
         assert!(!sandboxes(policy.as_bytes()), "{policy}");
     }
+}
+
+/// A bare JSON route's failure is sent as its handler made it: plain text, not Problem Details,
+/// since no stage shapes it.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn a_bare_route_s_failure_is_plain_text() {
+    let router = App::new(bare_json_url::router()).router();
+    let (status, headers, body) = call_with(router, "GET", "/figure", None, Some("application/json")).await;
+    assert_eq!(
+        (status, body.as_str()),
+        (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"),
+        "the cause stays in the log"
+    );
+    assert!(headers["content-type"].to_str().unwrap().starts_with("text/plain"), "{headers:?}");
+}
+
+#[cfg(feature = "json")]
+#[crate::routes]
+mod bare_json_url {
+    #[route("/figure", get = bare_figure, stages = bare)]
+    pub struct Figure;
+}
+
+#[cfg(feature = "json")]
+async fn bare_figure() -> crate::JsonResult<u32> {
+    Err(Error::new("the store is down").into())
 }
 
 /// Whether a bare route can match a path of Corten's own exactly, as the startup check asks it.

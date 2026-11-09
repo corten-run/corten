@@ -680,12 +680,12 @@ pub use corten_macros::UrlValue;
 ///
 /// A route that must be as fast as the server can answer, for an answer anyone may read (a public
 /// figure a CDN fronts), says `stages = bare`: it meets none of the app's stages
-/// ([`crate::middleware`]), so no host or same-origin check, no signal, deadline or panic catch,
+/// ([`crate::middleware`]), so no host or same-origin check, no signal or deadline,
 /// no middleware, no error page, security headers, `Cache-Control`, tag or compression. Its
 /// handler's answer is sent as it made it, a raw [`axum::response::Response`] too, with
 /// `X-Content-Type-Options: nosniff` added when it has none and `Content-Security-Policy:
-/// sandbox` beside any policy of its own when it may be HTML, SVG or XML, and every other route beside
-/// it keeps every stage. It answers `get` only, and its handler takes only the request's URL
+/// sandbox` beside any policy of its own when it may be HTML, SVG or XML, a panic answered
+/// `500`, and every other route beside it keeps every stage. It answers `get` only, and its handler takes only the request's URL
 /// ([`crate::answer::Bare`]).
 ///
 /// ```
@@ -3875,7 +3875,7 @@ pub mod __private {
 
     // A route that says `stages = bare`: no stage runs, so the handler takes only what the request
     // itself carries (`crate::answer::Bare`), and what it answers is sent as it is, a raw
-    // `Response` too, with one header added when it has none: `nosniff` (`NoSniff`). Its route's
+    // `Response` too, with the few headers `BareHandler` adds and a panic answered 500. Its route's
     // `Params` (`P`) is still required, as on any route.
 
     /// A bare route's handlers: only `Routes::__bare_route` takes them, so a handler checked for
@@ -3897,24 +3897,58 @@ pub mod __private {
     /// `Content-Security-Policy: sandbox` of its own beside any policy the handler set, since a
     /// browser enforces each: a file it sends (an uploaded picture) runs no script on the app's
     /// origin. A handler whose policy has a `sandbox` already (`sandbox allow-scripts`) gets none
-    /// added. An answer that sets a cookie and says nothing of its caching
-    /// gets `Cache-Control: private, no-cache`, as the stages give one, so no shared cache hands
-    /// one visitor's cookie to another. It is the answer's handler, not a stage, so it adds no box
+    /// added, unless it also allows the same origin, which would run script as the app's. An
+    /// answer that sets a cookie and says nothing of its caching gets `Cache-Control: private,
+    /// no-cache`, as the stages give one, so no shared cache hands one visitor's cookie to
+    /// another. A handler that panics is logged and answered `500`, as a staged one is, rather
+    /// than dropping the connection. It is the answer's handler, not a stage, so it adds no box
     /// and no step a request goes through.
     #[derive(Clone)]
-    pub struct NoSniff<H>(H);
+    pub struct BareHandler<H>(H);
 
-    impl<H: Handler<T, S>, T, S> Handler<T, S> for NoSniff<H> {
-        type Future = futures_util::future::Map<H::Future, fn(axum::response::Response) -> axum::response::Response>;
+    impl<H: Handler<T, S>, T, S> Handler<T, S> for BareHandler<H>
+    where
+        H::Future: Unpin,
+    {
+        type Future = BareFuture<H::Future>;
 
         fn call(self, req: axum::extract::Request, state: S) -> Self::Future {
-            futures_util::FutureExt::map(self.0.call(req, state), nosniff as fn(_) -> _)
+            // For the log of a panic only: a URI clones without allocating.
+            let uri = req.uri().clone();
+            BareFuture { inner: self.0.call(req, state), uri }
+        }
+    }
+
+    /// A bare handler's future: its answer with [`bare_headers`], or a `500` when it panics.
+    pub struct BareFuture<F> {
+        inner: F,
+        uri: axum::http::Uri,
+    }
+
+    impl<F: std::future::Future<Output = axum::response::Response> + Unpin> std::future::Future for BareFuture<F> {
+        type Output = axum::response::Response;
+
+        fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+            use std::{panic::AssertUnwindSafe, pin::Pin, task::Poll};
+            let res = match std::panic::catch_unwind(AssertUnwindSafe(|| Pin::new(&mut self.inner).poll(cx))) {
+                Ok(Poll::Pending) => return Poll::Pending,
+                Ok(Poll::Ready(res)) => res,
+                Err(panic) => {
+                    let message = crate::task::panic_message(&*panic);
+                    tracing::error!("corten: {} (stages = bare) panicked: {message}", self.uri.path());
+                    axum::response::IntoResponse::into_response((
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal Server Error",
+                    ))
+                }
+            };
+            Poll::Ready(bare_headers(res))
         }
     }
 
     /// `res` with `nosniff`, `sandbox` when it may be a document, and `private` when it sets a
     /// cookie with no caching of its own, unless it says each itself.
-    fn nosniff(mut res: axum::response::Response) -> axum::response::Response {
+    fn bare_headers(mut res: axum::response::Response) -> axum::response::Response {
         use axum::http::{header, HeaderValue};
         let headers = res.headers_mut();
         if let header::Entry::Vacant(entry) = headers.entry(header::X_CONTENT_TYPE_OPTIONS) {
@@ -3935,11 +3969,20 @@ pub mod __private {
         res
     }
 
-    /// Whether a policy has a `sandbox` directive, of any flags.
+    /// Whether a policy has a `sandbox` directive that keeps script off the app's origin: any but
+    /// one that allows both script and the same origin.
     pub(crate) fn sandboxes(policy: &[u8]) -> bool {
         policy.split(|&b| b == b';').any(|directive| {
-            let name = directive.trim_ascii().split(|b| b.is_ascii_whitespace()).next().unwrap_or_default();
-            name.eq_ignore_ascii_case(b"sandbox")
+            let mut words = directive.split(|b| b.is_ascii_whitespace()).filter(|word| !word.is_empty());
+            if !words.next().is_some_and(|name| name.eq_ignore_ascii_case(b"sandbox")) {
+                return false;
+            }
+            let (mut scripts, mut same_origin) = (false, false);
+            for word in words {
+                scripts |= word.eq_ignore_ascii_case(b"allow-scripts");
+                same_origin |= word.eq_ignore_ascii_case(b"allow-same-origin");
+            }
+            !(scripts && same_origin)
         })
     }
 
@@ -3958,11 +4001,12 @@ pub mod __private {
     where
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
         <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
+        <<H as RouteHandler<T, S>>::Handler as Handler<T, S>>::Future: Unpin,
         <H as crate::answer::Signature<T>>::Args: crate::answer::AllBare + crate::answer::Holds<P, J>,
         T: 'static,
         S: Clone + Send + Sync + 'static,
     {
-        BareMethods(Methods(axum::routing::get(NoSniff(handler.into_handler())), false, None))
+        BareMethods(Methods(axum::routing::get(BareHandler(handler.into_handler())), false, None))
     }
 
     /// A handler's rows (`Self`, [`crate::answer::Answer::Rows`]) are the ones its route names

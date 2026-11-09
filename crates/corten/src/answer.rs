@@ -399,7 +399,8 @@ pub type JsonResult<T> = std::result::Result<crate::Json<T>, JsonError>;
 /// the client as written. A failure (`Err`) is answered as every failure of a JSON route is, a
 /// Problem Details document (`application/problem+json`, `{"title","status","detail"}`), except
 /// a refusal in the app's own shape, `Err(answer)?` ([`JsonError::Own`]), which is answered as
-/// written. A refusal (a 4xx or 5xx of the app's) is that `Err`; `Ok` is for the route's answers
+/// written, and any failure on a route that says `stages = bare`, which has no stage to shape it
+/// and sends the status's reason as plain text. A refusal (a 4xx or 5xx of the app's) is that `Err`; `Ok` is for the route's answers
 /// and another server's passed on.
 ///
 /// ```
@@ -815,8 +816,9 @@ impl Answer for Relay {
 /// first bytes. What keeps a file that holds HTML from running as a page is the app's headers,
 /// which every `Media` gets: browsers do not guess another type
 /// (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script. A route that says
-/// `stages = bare` has no stages, and its answer gets `nosniff` and, when its type is one a
-/// browser runs script in (HTML, SVG, any XML), `Content-Security-Policy: sandbox` instead.
+/// `stages = bare` has no stages, and its answer gets `nosniff` and, when it may be a document
+/// (HTML, SVG, any XML or XSL, no type or more than one), `Content-Security-Policy: sandbox`
+/// instead.
 ///
 /// It is cached as anything the app answers is (`private, no-cache`), except on a bare route,
 /// which sends no `Cache-Control` unless the handler says one. At a URL that names its
