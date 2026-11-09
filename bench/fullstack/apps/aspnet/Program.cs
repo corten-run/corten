@@ -40,10 +40,11 @@ if (matched)
         // timeout is already 30 seconds, as Corten's header timeout.
         if (long.TryParse(Environment.GetEnvironmentVariable("MAX_CONNECTIONS"), out var cap)) o.Limits.MaxConcurrentConnections = cap;
     });
-    // Names it answers to: localhost and the deploy's HOSTS (comma separated, ".example.com" for every
-    // subdomain), as Corten's host check; others get the host filter's 400.
+    // Names it answers to: localhost, the loopback addresses and the deploy's HOSTS (comma separated,
+    // ".example.com" for the domain and every subdomain); others get the host filter's 400, before
+    // any of the app's middleware. Corten also answers to any IP address.
     var hosts = (Environment.GetEnvironmentVariable("HOSTS") ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-    builder.Services.AddHostFiltering(o => o.AllowedHosts = ["localhost", "*.localhost", "127.0.0.1", "[::1]", .. hosts.Select(h => h.StartsWith('.') ? "*" + h : h)]);
+    builder.Services.AddHostFiltering(o => o.AllowedHosts = ["localhost", "*.localhost", "127.0.0.1", "[::1]", .. hosts.SelectMany(h => h.StartsWith('.') ? new[] { h[1..], "*" + h } : new[] { h })]);
     // The JSON's failures as application/problem+json (RFC 9457).
     builder.Services.AddProblemDetails();
     // Brotli and gzip at their fastest when the client asks.
@@ -58,21 +59,27 @@ app.Services.GetRequiredService<CatalogSource>();
 app.Services.GetRequiredService<MarketplaceSource>();
 if (matched)
 {
-    // The security headers on every answer, errors included (set as the answer starts, so the
-    // exception handler's reset of the headers does not drop them), and a private Cache-Control on
-    // one that sets none (the pages' antiforgery token sets no-store, the static files their own).
-    app.Use((context, next) =>
+    // The security headers on every answer, as ASP.NET Core's documentation sets a header ("Control
+    // headers in C# code": middleware that appends it, then calls the next). The exception handler
+    // clears the headers before it answers, so its answers go without them.
+    app.Use(async (context, next) =>
     {
-        context.Response.OnStarting(static state => { SecurityHeaders.Add(((HttpContext)state).Response.Headers); return Task.CompletedTask; }, context);
-        return next(context);
+        SecurityHeaders.Append(context.Response.Headers);
+        await next();
     });
     app.UseResponseCompression();
-    // The JSON's failures as problem+json (a missing item, a wrong method, a failed read), and a
-    // page's failed read as the template's error page.
-    app.UseWhen(c => c.Request.Path.StartsWithSegments("/api"), api => api.UseExceptionHandler().UseStatusCodePages());
+    // The JSON: a private Cache-Control the same way, and its failures as problem+json (a missing
+    // item, a wrong method, a failed read). Not on every answer: the static files append their own,
+    // and a page with a form gets its antiforgery token's no-cache, no-store. A page's failed read
+    // gets the template's error page.
+    app.UseWhen(c => c.Request.Path.StartsWithSegments("/api"), api => api.Use(async (context, next) =>
+    {
+        context.Response.Headers.Append("Cache-Control", "private, no-cache");
+        await next();
+    }).UseExceptionHandler().UseStatusCodePages());
     app.UseWhen(c => !c.Request.Path.StartsWithSegments("/api"), pages => pages.UseExceptionHandler("/Error"));
-    // Routing after the exception handler, as the template places it, so the error page's request
-    // is routed to /Error rather than to the page that failed.
+    // Routing after the exception handler, as the template places it: the handler clears the failed
+    // request's endpoint and runs it again as /Error, which routing before it would not match again.
     app.UseRouting();
     app.MapHealthChecks("/health/live");
     app.MapHealthChecks("/health/ready");
@@ -100,14 +107,13 @@ public partial class Program { }
 /// <summary>The profile's security headers, axum-maud's: a strict CSP (the page's scripts are files), and the rest Corten sends.</summary>
 static class SecurityHeaders
 {
-    public static void Add(IHeaderDictionary h)
+    public static void Append(IHeaderDictionary h)
     {
-        h.ContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
-        h.XContentTypeOptions = "nosniff";
-        h["Referrer-Policy"] = "strict-origin-when-cross-origin";
-        h.XFrameOptions = "DENY";
-        h["Cross-Origin-Opener-Policy"] = "same-origin";
-        h["Permissions-Policy"] = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()";
-        if (!h.ContainsKey("Cache-Control")) h.CacheControl = "private, no-cache";
+        h.Append("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+        h.Append("X-Content-Type-Options", "nosniff");
+        h.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+        h.Append("X-Frame-Options", "DENY");
+        h.Append("Cross-Origin-Opener-Policy", "same-origin");
+        h.Append("Permissions-Policy", "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()");
     }
 }
