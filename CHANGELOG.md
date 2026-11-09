@@ -2584,6 +2584,19 @@ Corten is pre-1.0, so any minor version may change the API.
     unknown in a copy with no `.git`, as a droplet gets), which now keep the droplet's script and
     CPU (`run.sh`, `host.txt`)
     ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
+279. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
+    tokens, `choice-list-gap` and `choice-list-legend-gap` (.75rem each, the values the two
+    stylesheets printed and kept equal by hand), so a theme with tighter choice lists sets them once
+    and the copies stay the kit's. Nothing changes for an app that keeps its copies. One set up by an
+    older kit that takes the new copies adds the two tokens `corten ui add checkboxes --merge` (or
+    `radio_group`, or `--force` for a copy without edits) names, as the kit's theme has them,
+    before it starts. The kit theme's two declarations and the two `var()`s in each stylesheet make
+    the ui-gallery's served `components.css` 60,608 bytes where it was 60,471 (gzip 10,039 against
+    10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier
+    size is the served file with the literals put back). The ui-gallery's smoke test checks both
+    groups at the kit's values and at a theme's. Asked for by the Chase Sets pilot, which edited
+    both copies to .5rem
+    ([#1082 Kit RadioGroup and Checkboxes print their fieldset's gap and legend margin as literals kept equal by hand, so a theme with tighter choice lists edits both copies](https://github.com/corten-run/corten/issues/1082)).
 280. The kit's `StatusTone` has `Text`, the color of the text around the dot: in a badge, the
     badge's, so `<span class={Badge { tone, .. }}><StatusDot tone={StatusTone::Text} />"Open"</span>`
     writes a computed tone once, on the badge, and a dot that takes it cannot disagree with it. It

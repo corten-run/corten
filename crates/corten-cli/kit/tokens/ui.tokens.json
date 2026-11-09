@@ -35,6 +35,8 @@
   "control-width-lg": { "$type": "dimension", "$value": { "value": 24, "unit": "rem" } },
   "card-padding": { "$type": "dimension", "$value": { "value": 1.5, "unit": "rem" } },
   "card-heading-font-size": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } },
+  "choice-list-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } },
+  "choice-list-legend-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } },
   "stat-label-font-size": { "$type": "dimension", "$value": { "value": 0.875, "unit": "rem" } },
   "stat-label-font-weight": { "$type": "fontWeight", "$value": 500 },
   "stat-label-tracking": { "$type": "number", "$value": 0 },
