@@ -63,7 +63,10 @@ division: end statements with `;` and keep a division on the line it continues.
    handler's parameter as a string literal union: a call to it does not compile (an export only
    other scripts import may use one).
 3. A wrong ref type, wrong event type, wrong value type or a handler the script does not export
-   is a compile error at the call. `tsc --checkJs` checks the function bodies.
+   is a compile error at the call. `tsc --checkJs` checks the function bodies, with `strict`,
+   `noUncheckedIndexedAccess` (an element or record value read by index is `T | undefined`: read
+   with `for .. of`, destructuring, `?.`, or a check), `noFallthroughCasesInSwitch`,
+   `allowUnreachableCode: false` and `noUncheckedSideEffectImports`.
 4. `on:connect={..}` runs when the element joins the page: first load, navigation, a patch.
 5. A component with refs, whose handlers take `scope`, or whose script imports `keep`, has one
    root element; refs resolve inside it and outside nested components. Any element can be the root, a `<tr>` included.

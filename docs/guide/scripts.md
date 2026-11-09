@@ -67,13 +67,17 @@ the tag, so passing a `<tbody>` ref where the handler takes a `<button>`, a `Mou
 it takes a `KeyboardEvent`, a number where it takes a `string`, or calling a handler the script
 does not export is a compile error that points at the call. Inside the script, `tsc --checkJs`
 checks the function bodies against the same JSDoc.
-It runs with `strict` and two checks `strict` leaves out, the same settings Corten checks its own
+It runs with `strict` and four checks `strict` leaves out, the same settings Corten checks its own
 runtime, kit and examples with (a test fails when they differ):
 `noUncheckedIndexedAccess`, under which an array's element or a record's value read by index is
 `T | undefined` until the script checks it (`for (const row of rows)`, `const [first] = rows`,
-`rows[i]?.focus()`, or `if (!row) return` after the read), and `noFallthroughCasesInSwitch`,
-under which a `case` that runs into the next one is an error. A script that read by index without
-a check fails `corten check` after the upgrade that added them until it checks.
+`rows[i]?.focus()`, or `if (!row) return` after the read); `noFallthroughCasesInSwitch`,
+under which a `case` that runs into the next one is an error; `allowUnreachableCode: false`, under
+which code that can never run (after a `return`) is an error; and `noUncheckedSideEffectImports`,
+under which `import "./file.js"`, run only for its effects, must name a module that exists. A
+script that read by index without a check fails `corten check` after the upgrade that added them
+until it checks. An app cannot turn one of them off: `corten check` writes the configuration it
+checks with each time, and `--no-script-types` leaves every script unchecked, not one option.
 `exactOptionalPropertyTypes` is not used: it refuses a property set to `undefined` where one is
 optional, and the DOM's option objects (`{ signal }` for `addEventListener`) take that as left out,
 as JSON does, so it rejects scripts that work ([design Choice 32](../design.md#choice-script-checks)).

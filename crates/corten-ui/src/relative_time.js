@@ -77,7 +77,7 @@ function speaks(format, locale) {
 /** The unit `ms` (from now; negative: before) is written in, and its size in milliseconds. @param {number} ms */
 function unitOf(ms) {
   const seconds = Math.floor(Math.abs(ms) / 1000);
-  const [unit, size] = UNITS.find(([, size]) => seconds >= size) ?? /** @type {(typeof UNITS)[number]} */ (UNITS.at(-1));
+  const [unit, size] = UNITS.find(([, size]) => seconds >= size) ?? UNITS[3];
   return { unit, step: size * 1000 };
 }
 

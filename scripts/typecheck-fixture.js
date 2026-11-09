@@ -7,6 +7,8 @@
 import { keep, subscribe } from "corten";
 import { shortcut } from "corten/keys";
 import { rows, view } from "corten/views";
+// @ts-expect-error noUncheckedSideEffectImports: an import run only for its effects names a module that exists.
+import "./no-such-module.js";
 // @ts-expect-error The unreleased prototype name is not a second public API.
 import { show } from "corten/views";
 // @ts-expect-error The runtime takes a module's exports from the line Corten appends; it exports no hook for it.
@@ -180,4 +182,6 @@ export function beyondStrict(names, counts, kind) {
       n += 2;
   }
   return n;
+  // @ts-expect-error allowUnreachableCode: code after a return never runs.
+  n += 3;
 }

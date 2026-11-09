@@ -1128,10 +1128,12 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
-32. <a id="choice-script-checks"></a>**Scripts are type-checked with `strict`, `noUncheckedIndexedAccess` and
-    `noFallthroughCasesInSwitch`, not `exactOptionalPropertyTypes`.** `strict` is not every
-    check `tsc` has, and the ones it leaves out were each tried alone on the runtime, the kit,
-    the examples, the template and the typing fixture before any was turned on.
+32. <a id="choice-script-checks"></a>**Scripts are type-checked with `strict`, `noUncheckedIndexedAccess`,
+    `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and
+    `noUncheckedSideEffectImports`, not `exactOptionalPropertyTypes`.** `strict` is not every
+    check `tsc` has. Each of the type-checking options it leaves out (below, chosen or not) was
+    tried alone on the runtime, the kit, the examples, the template and the typing fixture before
+    any was turned on.
     `noUncheckedIndexedAccess` makes an element read from an array, or a value from a record, by
     index `T | undefined` until the code checks it. It found 76 such reads, two of them bugs: the
     kit's `ComboBox` with no options threw on Enter after Arrow Down, and `rows(..).at(i)` past
@@ -1139,16 +1141,20 @@ rules something out.
     negative indexes counting back from the last as they do there). The other 74 were reads a
     loop's bound, a length check or the server's own data kept in range. Outside the runtime's
     hot loops they were rewritten to need no index (`for .. of`, destructuring) or given a
-    check; inside them (`view.js`'s loops over rows, `scan`'s over the refs a change adds, a
-    message's parts, the templates the server writes for a format) they keep the loop they had
-    and cast what they read, with a comment saying what keeps it in range, since `rows()` with
-    those loops rewritten timed slower (below) and a cast costs nothing once minified. The
+    check; inside them (`view.js`'s loops over rows, `scan`'s over the refs a change adds) they
+    keep the loop they had and cast what they read, with a comment saying what keeps it in range,
+    since `rows()` with those loops rewritten timed slower (below) and a cast costs nothing once
+    minified. A message's parts and the templates the server writes for a format are cast too,
+    for another reason: the server writes them in a shape it checks, so a read the cast covers
+    cannot miss (not timed). The
     runtime's minified build (gzip, level 9): `corten.js` 14,836 to 14,842 bytes, `format.js`
     1,494 to 1,498, and `view.js` 2,149 to 2,153, `at()`'s check of the ends.
-    `noFallthroughCasesInSwitch` found nothing and costs nothing; a case that runs into the next
-    one is a mistake the compiler can see. An app, the repository and the browser benchmark's
-    view apps are checked the same way: `corten check` writes the app's config with the options
-    of the repository's `jsconfig.json`, and a test fails when any of the three differ.
+    `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and
+    `noUncheckedSideEffectImports` each found nothing and cost nothing; a case that runs into the
+    next one, code after a `return` and a side-effect import of a module that is not there are
+    mistakes the compiler can see. An app, the repository and the browser benchmark's view apps
+    are checked the same way: `corten check` writes the app's config with a copy of the
+    repository's `jsconfig.json`'s options, and a test fails when any of the three differ.
     Not chosen: `exactOptionalPropertyTypes`, which tells a property left out from one set to
     `undefined` (5 errors, none a bug: two were `addEventListener`'s `{ signal }` with
     `signal` possibly `undefined`, which Web IDL reads as left out, and three were Corten's own
@@ -1158,10 +1164,14 @@ rules something out.
     `el.dataset.value` to be written `el.dataset["value"]`, a style that catches nothing a
     record's `T | undefined` does not); `noImplicitReturns` (3, all functions meant to give
     `undefined` on one path, which `strict` already makes each caller handle);
-    `noImplicitOverride` (no class overrides anything).
+    `noImplicitOverride` (no class overrides anything); and `noUnusedLocals` (0),
+    `noUnusedParameters` (1, a handler's `event` named for the reader) and
+    `allowUnusedLabels: false` (0), which are lint, not safety: an unused name or label runs as
+    written.
 
     Stands on: measured (`tsc` 5.9.3 with each option alone over `jsconfig.json`'s files on
-    `c65c10ec`, the counts above, and the minified sizes before and after); measured (Chromium
+    `c65c10ec`, the counts above, and on `900d7dc3` for `allowUnreachableCode`,
+    `noUncheckedSideEffectImports` and the three lint options, and the minified sizes before and after); measured (Chromium
     through Playwright 1.64.1 on a busy Windows workstation, `bench/browser/rows-ab.mjs` (run
     before it was committed), `rows()` with 1,000 rows, paired medians of 41 samples taking
     turns with `c65c10ec`'s `view.js`: with its loops rewritten not to index
