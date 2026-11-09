@@ -1437,8 +1437,19 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    Leptos's `ResponseOptions`; the page hydrates under it (checked in Chromium: the sort button
    works, no CSP violation, every inline script has the nonce). It misses what axum-maud misses,
    but its page for a failed read is its own 200 with the error in it, the app's code as before.
-4. `nextjs`, `django`, `aspnet` (and `aspnet-aot`), `spring` and `topcoat` are not in it
-   yet: each joins with its profile.
+4. `topcoat`: Topcoat runs tower middleware as one of its own layers (`TowerLayer`, its `tower`
+   feature), so it takes axum-maud's tower-http layers around every request: the security headers,
+   `Cache-Control: private, no-cache` on an answer that sets none (its assets keep their
+   `public, immutable`) and a 503 past 10 s. Its defaults already refuse a body over 2 MiB (413),
+   refuse a cross-site form post (403, its origin policy), compress, and close a request head left
+   unfinished at 30 s. Its runtime compiles the expressions it reads from the page's markup with
+   `new Function`, so the page CSP needs `'unsafe-eval'`: without it Chromium blocks the runtime
+   and the listings' sort does nothing (checked in Chromium, the CSP rewritten in the browser); with
+   it the sort works and no CSP violation is reported. Its error answers (a failed read as a 500
+   `text/plain`, a missing item as a 404 `text/plain`, an empty 405) are the app's and Topcoat's
+   own, which the profile does not change.
+5. `nextjs`, `django`, `aspnet` (and `aspnet-aot`) and `spring` are not in it yet: each joins
+   with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1453,6 +1464,10 @@ the ETag, the cross-site post, the two failed reads (502 `text/plain`), the 404 
 `cb-leptos` built at `07ee94b6` (`results/conform-matched-leptos1/conformance.json`), met the
 same 12 and missed the same 12, with two of those answered differently: its failed read's page
 (200 `text/html`) and the cross-site post to its server function (302 with no `serverfnerror`).
+Topcoat, probed the same way from `cb-topcoat` built at `1800c90d`
+(`results/conform-matched-topcoat1/conformance.json`), met 13 and missed 11: it meets the
+cross-site post (403) and the unfinished head (closed in 30.0 s) that axum-maud misses, and misses
+the page's script CSP (`'unsafe-eval'`) that axum-maud meets.
 No load phase has run in the tier yet.
 
 ### The hardening step
