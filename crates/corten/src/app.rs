@@ -1175,8 +1175,9 @@ impl<M: Middleware> App<M> {
             routes = routes.merge(crate::assets::favicon(assets.as_ref()));
         }
         // Nor where Corten's own paths are (`/corten/`, the assets, the health checks, the PWA's
-        // files, an API's or area's companions): a bare route that can match one of them would
-        // answer there, or join Corten's route there, outside its stages. A prefix is reached by
+        // files and offline page, an API's or area's companions): a bare route that can match one
+        // of them would answer there, or join Corten's route there, outside its stages (the
+        // service worker would show a bare answer as the offline page). A prefix is reached by
         // any parameter before it; an exact path only by a route that can match that path itself
         // (`/.well-known/{file}` cannot match `/.well-known/oauth-protected-resource/mcp`). The
         // routes macro refuses what the path alone shows (a first segment that is a parameter,
@@ -1184,8 +1185,11 @@ impl<M: Middleware> App<M> {
         for &path in &self.bare.paths {
             let reached = (own.prefixes.iter().map(|prefix| prefix.trim_end_matches('/')))
                 .find(|prefix| crate::api::under(prefix, path) || crate::api::reaches(path, prefix))
-                .or_else(|| own.exact.iter().copied().find(|exact| can_match(path, exact)))
-                .or_else(|| own.companions.iter().map(String::as_str).find(|companion| can_match(path, companion)));
+                .or_else(|| own.exact.iter().copied().find(|exact| crate::route::routes_path(path, exact)))
+                .or_else(|| {
+                    (own.companions.iter().map(String::as_str)).find(|companion| crate::route::routes_path(path, companion))
+                })
+                .or_else(|| offline.as_deref().filter(|offline| crate::route::routes_path(path, offline)));
             if let Some(corten_s) = reached {
                 panic!("corten: the route {path:?} says stages = bare and can answer at {corten_s:?}, which is Corten's own; give it a first segment of its own text");
             }
@@ -1763,30 +1767,6 @@ impl Own {
             || self.prefixes.iter().any(|prefix| path.starts_with(prefix.as_str()))
             || self.companions.iter().any(|companion| companion == path)
     }
-}
-
-/// Whether `route`, a path as written (`/feeds/{name}.xml`, `/files/{*rest}`), matches the
-/// literal `path`: segment by segment, a parameter standing for any one segment that has the
-/// text written around it, and a catch-all for the rest.
-pub(crate) fn can_match(route: &str, path: &str) -> bool {
-    let mut path_segments = path.trim_start_matches('/').split('/');
-    for written in route.trim_start_matches('/').split('/') {
-        if written.starts_with("{*") {
-            return path_segments.next().is_some_and(|segment| !segment.is_empty());
-        }
-        let Some(segment) = path_segments.next() else { return false };
-        let matched = match (written.find('{'), written.find('}')) {
-            (Some(open), Some(close)) => {
-                let (before, after) = (&written[..open], &written[close + 1..]);
-                segment.len() > before.len() + after.len() && segment.starts_with(before) && segment.ends_with(after)
-            }
-            _ => written == segment,
-        };
-        if !matched {
-            return false;
-        }
-    }
-    path_segments.next().is_none()
 }
 
 /// Whether the route axum matched (`matched`) is outside `mount`. Under `Router::nest` the

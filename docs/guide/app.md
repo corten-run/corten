@@ -947,28 +947,31 @@ the stages. What the compiler can check, it does:
    path shows: a first segment that is a parameter or a catch-all (`/{section}/ping`, `/{*rest}`,
    which can stand at `/corten/` and at any prefix), a path under `/corten`, or a parameter after
    `/health` (`/health/{check}`). When it starts, the app refuses the rest: a bare route under an
-   area's or API's prefix, or one whose parameter stands under a path the app adds (its assets,
-   an API's or area's companion routes).
+   area's or API's prefix, or one that can match a path the app adds (under its assets, the
+   PWA's files and offline page, an API's or area's companion routes).
 4. `no_store`, `rows` and `gives(..)` are applied by stages, so a bare route does not say them; a
    bare handler that must not be kept returns `NoStore<..>` itself.
 5. It is not a page: `Req::serves` does not send a visitor there after sign-in, and a link to it
-   is never prefetched (it does not say `prefetch = ..`).
+   is never prefetched (it does not say `prefetch = ..`). A link a visitor follows to it takes
+   `download` or `data-reload`, as one to a `Media` does: without them the runtime fetches it as a
+   page, finds it is not one, and loads it again, so the handler runs twice.
 
 What it gives up is the app's to weigh: a bare route answers a DNS-rebound page and can be
 framed, so it is for answers anyone anywhere may read:
 not a figure only this machine or its network should see, which a page on another site can read
 through a name it points at this machine. A handler
-that panics drops the connection rather than answering 500, its panic goes to Rust's panic hook
+that panics drops the connection (under HTTP/2, the stream) rather than answering 500, its panic goes to Rust's panic hook
 (standard error) rather than the app's log, and nothing ends it at a deadline; a 5xx it answers is
 logged only when it is a `corten::Error`, which logs itself.
-No stage gives its answer a CSP or `frame-ancestors`, so a document it builds from what the
-request says (HTML, SVG) runs as script on the app's origin, where it can read every other page
-with the visitor's cookies. A bare answer is data (text, JSON, a file) with its `Content-Type`
+No stage gives its answer a CSP or `frame-ancestors`; a document it builds from what the request
+says (HTML, SVG) would run script on the app's origin, where it can read every other page with
+the visitor's cookies, but for the sandbox below. A bare answer is data (text, JSON, a file) with its `Content-Type`
 set, as `&'static str` and `String` set it and a raw `Response` does not until the handler says;
 `nosniff` keeps a browser from taking it as another type, a page of the app's from loading it
 as a script, and one without a type from being read as HTML. An answer of a type that runs
-script (HTML, SVG, any XML) with no policy of its own gets `Content-Security-Policy: sandbox`, so
-an uploaded picture a `Media` sends cannot run there. A policy of the handler's own replaces the
+script (HTML, SVG, any XML), or with more than one type (two `Content-Type` headers, or a list,
+of which a browser takes the last), and no policy of its own gets `Content-Security-Policy:
+sandbox`, so an uploaded picture a `Media` sends cannot run there. A policy of the handler's own replaces the
 sandbox, any policy, even one that says nothing of script (`frame-ancestors 'none'`), so a
 handler that sets one on a document says in it what script may run. Its
 answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
@@ -983,9 +986,9 @@ which lets a bare route's request run for the longer of the shutdown grace and t
 deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(median of five runs, range in parentheses): 8,078 (8,078-8,080) instructions a request bare
-against 21,308 (21,303-21,317) through the stages with jemalloc (a plain axum router: 7,640),
-and 9,073 (9,072-9,073) against 23,796 (23,784-23,850) with glibc's allocator (axum: 8,716).
+(median of five runs, range in parentheses): 8,123 (8,123-8,125) instructions a request bare
+against 21,314 (21,306-21,321) through the stages with jemalloc (a plain axum router: 7,640),
+and 9,118 (9,117-9,118) against 23,791 (23,762-23,853) with glibc's allocator (axum: 8,716).
 An app with no bare route costs what it did before.
 
 ## Static files

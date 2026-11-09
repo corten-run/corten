@@ -5000,6 +5000,9 @@ mod bare_url {
     #[route("/cookie", get = bare_cookie, stages = bare)]
     pub struct Cookie;
 
+    #[route("/listed", get = bare_listed, stages = bare)]
+    pub struct Listed;
+
     #[route("/feeds/{name}.xml", get = bare_feed, stages = bare)]
     pub struct Feed<'a> {
         pub name: &'a str,
@@ -5041,6 +5044,11 @@ async fn bare_framed() -> axum::response::Response {
 /// A cookie set with nothing said of caching.
 async fn bare_cookie() -> axum::response::Response {
     axum::response::Response::builder().header("set-cookie", "seen=1").body(Body::from("seen")).unwrap()
+}
+
+/// A type a browser may read as the last of a list, HTML.
+async fn bare_listed() -> axum::response::Response {
+    axum::response::Response::builder().header("content-type", "text/plain, text/html").body(Body::from("<p>listed</p>")).unwrap()
 }
 
 /// A picture that can run script, as an uploaded SVG can.
@@ -5102,6 +5110,11 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(headers.get_all("x-content-type-options").iter().count(), 1);
     let (_, headers, _) = call_with(router.clone(), "GET", "/cookie", None, None).await;
     assert_eq!(headers["cache-control"], "private, no-cache");
+    // A type it cannot tell is one, a list a browser takes the last of, is sandboxed too.
+    let (_, headers, _) = call_with(router.clone(), "GET", "/listed", None, None).await;
+    assert_eq!(headers["content-security-policy"], "sandbox");
+    // A link to it is not fetched ahead of a click.
+    assert_eq!(html! { <a href={bare_url::Picture}>"P"</a> }.to_html(), r#"<a href="/picture" data-no-prefetch>P</a>"#);
     // A path that does not parse is the extractor's own rejection, not the error page.
     let (status, headers, _) = call_with(router.clone(), "GET", "/raw/seven", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -5162,10 +5175,10 @@ fn a_type_that_runs_script_is_known() {
     }
 }
 
-/// Whether a bare route can match a path of Corten's own exactly, segment by segment.
+/// Whether a bare route can match a path of Corten's own exactly, as the startup check asks it.
 #[test]
 fn a_route_matches_a_path_segment_by_segment() {
-    let can = crate::app::can_match;
+    let can = crate::route::routes_path;
     assert!(can("/.well-known/{a}/{b}", "/.well-known/oauth-protected-resource/mcp"));
     assert!(!can("/.well-known/{a}/{b}/{c}", "/.well-known/oauth-protected-resource/mcp"));
     assert!(can("/.well-known/{*rest}", "/.well-known/oauth-protected-resource/mcp"));
@@ -5284,6 +5297,19 @@ fn a_bare_route_at_a_path_of_corten_s_own_is_refused_at_startup() {
         pub struct Manifest;
     }
     let _ = App::new(at_manifest::router()).pwa(crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A"))).router();
+}
+
+/// Nor at the PWA's offline page, which the service worker would show for every navigation made
+/// offline.
+#[test]
+#[should_panic(expected = "says stages = bare and can answer at \"/offline\"")]
+fn a_bare_route_at_the_offline_page_is_refused_at_startup() {
+    #[crate::routes]
+    mod at_offline {
+        #[route("/offline", get = bare_ping, stages = bare)]
+        pub struct Offline;
+    }
+    let _ = App::new(at_offline::router()).pwa(crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A"))).router();
 }
 
 /// Nor one whose parameter stands under a prefix of Corten's the app adds when it starts (the

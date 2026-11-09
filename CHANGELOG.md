@@ -16,10 +16,10 @@ Corten is pre-1.0, so any minor version may change the API.
   API module, or with `no_store`, `rows` or `gives(..)`, does not compile, nor does one whose
   path can answer at a path of Corten's own (a first segment that is a parameter, `/corten/..`,
   `/health/live`, `/health/ready`, `/health/{..}`); one under an area's or API's prefix, that can
-  match another path Corten serves (the assets, the PWA's files, an API's or
+  match another path Corten serves (the assets, the PWA's files and offline page, an API's or
   area's companions), is refused at startup. Its answer gets no host check, so it is for data
-  anyone anywhere may read. Measured with callgrind: 8,078 (8,078-8,080) instructions a request
-  against 21,308 (21,303-21,317) through the stages (jemalloc; a plain axum router 7,640).
+  anyone anywhere may read. Measured with callgrind: 8,123 (8,123-8,125) instructions a request
+  against 21,314 (21,306-21,321) through the stages (jemalloc; a plain axum router 7,640).
 
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent

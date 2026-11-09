@@ -871,7 +871,7 @@ fn scan(
                             } else {
                                 ""
                             };
-                            return err(at, format!("stages = bare sends {name}'s answer as its handler made it, with no stage to apply {said}: leave one of them out{hint}"));
+                            return err(at, format!("stages = bare sends {name}'s answer as its handler made it, with no stage to apply {said}: say stages = bare or {said}, not both{hint}"));
                         }
                     }
                     if serves.handlers.is_empty()

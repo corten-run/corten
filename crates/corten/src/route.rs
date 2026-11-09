@@ -3887,18 +3887,14 @@ pub mod __private {
         pub fn with_state<S2>(self, state: S) -> BareMethods<S2> {
             BareMethods(self.0.with_state(state))
         }
-
-        /// The route's handlers for two sets of methods, as `Methods::__merge`.
-        pub fn __merge(self, other: BareMethods<S>) -> Self {
-            BareMethods(self.0.__merge(other.0))
-        }
     }
 
     /// A bare handler whose answer gets `X-Content-Type-Options: nosniff` when it has none, so a
     /// browser takes it only as the type it says: a page of the app's cannot load it as a script
     /// (`script-src 'self'` trusts every URL of the app's), nor a browser sniff it as HTML. One of
-    /// a type a browser runs script in (HTML, SVG, any XML) with no policy of its own gets
-    /// `Content-Security-Policy: sandbox`, so a file it sends (an uploaded picture) runs no
+    /// a type a browser runs script in (HTML, SVG, any XML), or with more than one type (several
+    /// `Content-Type`s, or a list, of which a browser takes the last), and no policy of its own
+    /// gets `Content-Security-Policy: sandbox`, so a file it sends (an uploaded picture) runs no
     /// script on the app's origin; a policy of the handler's own replaces the sandbox, so it says
     /// itself what script may run. An answer that sets a cookie and says nothing of its caching
     /// gets `Cache-Control: private, no-cache`, as the stages give one, so no shared cache hands
@@ -3915,15 +3911,20 @@ pub mod __private {
         }
     }
 
-    /// `res` with `nosniff`, `sandbox` when it is a document with no policy, and `private` when it
-    /// sets a cookie with no caching of its own, unless it says each itself.
+    /// `res` with `nosniff`, `sandbox` when it may be a document and has no policy, and `private`
+    /// when it sets a cookie with no caching of its own, unless it says each itself.
     fn nosniff(mut res: axum::response::Response) -> axum::response::Response {
         use axum::http::{header, HeaderValue};
         let headers = res.headers_mut();
         if let header::Entry::Vacant(entry) = headers.entry(header::X_CONTENT_TYPE_OPTIONS) {
             entry.insert(HeaderValue::from_static("nosniff"));
         }
-        let document = headers.get(header::CONTENT_TYPE).is_some_and(|t| runs_script(t.as_bytes()));
+        let mut types = headers.get_all(header::CONTENT_TYPE).iter();
+        let document = match (types.next(), types.next()) {
+            (None, _) => false,
+            (Some(one), None) => one.as_bytes().contains(&b',') || runs_script(one.as_bytes()),
+            (Some(_), Some(_)) => true,
+        };
         if document && !headers.contains_key(header::CONTENT_SECURITY_POLICY) {
             headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
         }
@@ -3942,26 +3943,18 @@ pub mod __private {
         is(b"text/html") || is(b"text/xml") || is(b"application/xml") || xml
     }
 
-    macro_rules! bare_methods {
-        ($($name:ident => $method:ident),*) => {
-            $(
-                #[inline]
-                pub fn $name<H, T, S, P, J>(handler: H) -> BareMethods<S>
-                where
-                    H: RouteHandler<T, S> + crate::answer::Signature<T>,
-                    <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
-                    <H as crate::answer::Signature<T>>::Args: crate::answer::AllBare + crate::answer::Holds<P, J>,
-                    T: 'static,
-                    S: Clone + Send + Sync + 'static,
-                {
-                    BareMethods(Methods(axum::routing::$method(NoSniff(handler.into_handler())), false, None))
-                }
-            )*
-        };
+    /// A bare route's `get`, its only method.
+    #[inline]
+    pub fn bare_get<H, T, S, P, J>(handler: H) -> BareMethods<S>
+    where
+        H: RouteHandler<T, S> + crate::answer::Signature<T>,
+        <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
+        <H as crate::answer::Signature<T>>::Args: crate::answer::AllBare + crate::answer::Holds<P, J>,
+        T: 'static,
+        S: Clone + Send + Sync + 'static,
+    {
+        BareMethods(Methods(axum::routing::get(NoSniff(handler.into_handler())), false, None))
     }
-    bare_methods!(
-        bare_get => get
-    );
 
     /// A handler's rows (`Self`, [`crate::answer::Answer::Rows`]) are the ones its route names
     /// (`D`).

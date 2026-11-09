@@ -969,9 +969,10 @@ rules something out.
 
     Last checked: 2026-11-06, the `compile_fail` doctests that hold `caller = T`
     (`crates/corten/src/route.rs`) and the caller's own (`crates/corten/src/caller.rs`) at
-    `bcd31ffe`; 2026-11-08, the `stages = bare` `compile_fail` doctests in
+    `bcd31ffe`; 2026-11-09, the `stages = bare` `compile_fail` doctests in
     `crates/corten/src/route.rs` (a stage's input, a header reader, a body reader, a
-    `caller = T`, area or API module, a path that reaches Corten's own), on top of `c65c10ec`.
+    `caller = T`, area or API module, a path that reaches Corten's own, a method other than
+    `get`, `prefetch`, `/health/live`, `/{*rest}`), at `78d3d2e4`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
@@ -1029,16 +1030,16 @@ rules something out.
     be in the request outside the area); measured (callgrind, release, the same JSON handler
     answering `Media`, a request counted as the run of 1,200 less the run of 200 over 1,000, five
     runs each, this change's request path as committed, the staged variants alternating with main
-    `c65c10ec`, median and range: with jemalloc a bare route 8,078 (8,078 to 8,080) instructions
-    a request with its `nosniff`, type and cookie checks, 7,992 before the cookie check and
-    7,398 (7,397 to 7,400) before any, the same handler through the stages 21,308 (21,303 to
-    21,317; main 21,309, 21,300 to 21,316), a staged route beside a bare one 21,321 (21,315 to
-    21,325), and a plain axum router 7,640; an API request 15,812 against main's 15,813 and a 404
-    19,982 against 19,985; with glibc's allocator a bare route 9,073 (9,072 to 9,073), the same
-    handler through the stages 23,796 (23,784 to 23,850; main 23,845, 23,742 to 23,882), beside a
-    bare one 23,933 (23,817 to 24,099), a plain axum router 8,716, an API request 17,642 (17,604
-    to 17,872) against main's 17,800 (17,599 to 17,839), and a 404 21,731 (21,675 to 21,742)
-    against 21,893 (21,693 to 22,332)); reasoned (one place for the app's steps is
+    `c65c10ec`, median and range: with jemalloc a bare route 8,123 (8,123 to 8,125) instructions
+    a request with its `nosniff`, type and cookie checks, 7,398 (7,397 to 7,400) before any, the
+    same handler through the stages 21,314 (21,306 to 21,321; main 21,308, 21,300 to 21,315), a
+    staged route beside a bare one 21,322 (21,319 to 21,333), and a plain axum router 7,640; an
+    API request 15,813 against main's 15,813 and a 404 20,000 against 19,997; with glibc's
+    allocator a bare route 9,118 (9,117 to 9,118), the same handler through the stages 23,791
+    (23,762 to 23,853; main 23,831, 23,729 to 23,910), beside a bare one 23,830 (23,792 to
+    23,903), a plain axum router 8,716 (8,720 in this build), an API request 17,654 (17,616 to
+    17,845) against main's 17,599 (17,599 to 17,839), and a 404 21,735 (21,678 to 21,907) against
+    21,685 (21,628 to 22,225)); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
     of it says so where it is declared); bet (apps have an answer anyone may read whose cost the
     stages would make about 2.6 times as costly, beside pages that need them all; no example or template uses
