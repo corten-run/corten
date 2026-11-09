@@ -1109,16 +1109,22 @@ rules something out.
     pass (12 and 6 bytes more); a third pass (the same bytes as two).
 
     Stands on: measured (each built file before and after on `c65c10ec`, one build each, the
-    build being deterministic: the runtime 107 bytes less uncompressed, 529 with gzip and 478 with
-    brotli; `view.js` 20, 75 and 60 less; `format.js`, `upload.js` and `keys.js` within 11 bytes
-    either way, `keys.js` 1 byte more with gzip); measured (SMOKE_EVIDENCE); value (fewer bytes
-    on every page, Values 1, for a dependency of the tooling only, Values 6).
+    build being deterministic: the runtime 107 bytes less uncompressed, 529 with gzip and 478
+    with brotli; `view.js` 20, 75 and 60 less; `format.js`, `upload.js` and `keys.js` within
+    11 bytes either way, `keys.js` 1 byte more with gzip); measured (the browser smoke tests on
+    the built files of `10cd394d`, one run each, in the engines each runs: the watchlist, also
+    under `corten dev`, card-market, ui-gallery, seller-desk, deck-builder and its preview,
+    auction-room and listings-feed all passed; an earlier build, terser over the unminified
+    bundle, failed one Firefox check that fails under load without it, the feed's reconnect
+    timing, [#1102 The watchlist smoke's Firefox feed backoff check fails under load: a 2 s wait measured over 6 s against a 3.5 s bound](https://github.com/corten-run/corten/issues/1102));
+    value (fewer bytes on every page, Values 1, for a dependency of the tooling only, Values 6).
 
     Revisit when: esbuild's minifier comes within 1% of the two after compression, so one tool
     does it and terser goes; or terser's output fails a smoke test in a supported engine that
     esbuild's alone passes.
 
-    Last checked: 2026-11-08, sizes on `c65c10ec` with esbuild 0.28.2 and terser 5.51.2; LAST_SMOKE.
+    Last checked: 2026-11-08, sizes on `c65c10ec` with esbuild 0.28.2 and terser 5.51.2, and the
+    smoke tests on `10cd394d`.
 
 ## Rules
 
