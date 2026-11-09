@@ -71,7 +71,7 @@ const spaces = (text) => text.replace(/[\u00a0\u202f]/g, " ");
 export function checkFormattingCapture(capture, input = cases()) {
   exact(capture, ["workload", "app", "source", "locale", "fixtureSha256", "prices", "ratings", "counts"], "capture");
   assert.equal(capture.workload, workload, "wrong workload");
-  assert.ok(apps.includes(capture.app), "capture must name one of the eighteen page apps");
+  assert.ok(apps.includes(capture.app), "capture must name one of the twenty page apps");
   assert.ok(["fixture", "api"].includes(capture.source), "source must be fixture or api");
   assert.equal(capture.fixtureSha256, fixtureSha256(input), "capture used a different numeric fixture");
   const wanted = expected(capture.locale, input);
