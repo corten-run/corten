@@ -67,7 +67,7 @@ const GZIP_STREAM_LEVEL: u32 = 3;
 const STREAM_BUDGET: usize = 256 << 20;
 /// What one stream's context holds, measured with the settings in [`StreamCoder::new`].
 const ZSTD_STREAM_BYTES: usize = 480 << 10;
-/// flate2's deflate (miniz_oxide 0.9.1) at level 3 holds 352,104 bytes from its first event on,
+/// flate2's deflate (miniz_oxide 0.9.1) at level 3 holds 352,232 bytes from its first event on,
 /// whatever the events' size (levels 1 and 3 alike): `tests/stream_memory.rs` counts it, with this
 /// value and `GZIP_STREAM_LEVEL` written out there.
 const GZIP_STREAM_BYTES: usize = 360 << 10;

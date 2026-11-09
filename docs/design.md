@@ -1110,7 +1110,7 @@ rules something out.
     of a list with one row changed): of 40 rows (2.7 KB) 60 to 69 bytes against 20 to 40, of 250 (17
     KB) 477 to 524 against 23 to 91, and an event over deflate's 32 KiB window repeats nothing (640
     rows, 45 KB: 6,203 to 6,214 against 44 to 2,029). Level 3, not 1: at 1 the redraws are 129 to
-    453 bytes, 2,188 to 2,684 and 7,238 to 7,330. A gzip stream holds 352,104 bytes and reserves 360
+    453 bytes, 2,188 to 2,684 and 7,238 to 7,330. A gzip stream holds 352,232 bytes and reserves 360
     KiB (`tests/stream_memory.rs`), where brotli reserved 1,000 KiB. It costs more CPU: an event of
     the 2.7 KB redraw, made and sent through the compression layer, is about 286,650 instructions
     against brotli's 213,720 (zstd 1: 100,470, unchanged).
@@ -1134,10 +1134,11 @@ rules something out.
 
     Last checked: 2026-11-08, WebKit 27.2, Chromium 156 and Firefox 157: the late brotli event
     against `c65c10ec`'s streams and Node's encoder, by replaying a stream's captured chunks one a
-    second from a Node server (the issue's Isolation), and
-    each engine's `Accept-Encoding`; 2026-11-08, the callgrind counts on `c65c10ec` (brotli 4,
-    zstd) and `541fc59b` (gzip 3, zstd); 2026-11-08, the bytes and the memory, miniz_oxide 0.9.1
-    and brotli 9.0.0, on `202f6427` with `what_a_redraw_sends`.
+    second from a Node server (the issue's Isolation), and each engine's `Accept-Encoding`;
+    2026-11-08, the callgrind counts on `c65c10ec` (brotli 4, zstd) and `541fc59b` (gzip 3, zstd);
+    2026-11-08, the bytes, miniz_oxide 0.9.1 and brotli 9.0.0, on `202f6427` with
+    `what_a_redraw_sends`; 2026-11-08, the memory on `a4958acb` with `tests/stream_memory.rs` (test
+    profile, printed with `--nocapture`, the same in two runs).
 
 ## Rules
 
