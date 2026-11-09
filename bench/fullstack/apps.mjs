@@ -4,8 +4,8 @@ import { maxConnections } from "./conformance.mjs";
 // app with `pages: false` serves only the item as JSON, so it takes part in the JSON steps alone.
 // `matched: true`: one of the matched tier's apps (README, "The matched tier"), set once the app
 // starts with the production profile under PROFILE=matched. The tier's membership (README, "The
-// matched tier") also names nextjs, django, aspnet (with aspnet-aot for the JSON), spring and
-// topcoat; each joins with its profile.
+// matched tier") also names nextjs, django, aspnet (with aspnet-aot for the JSON) and spring;
+// each joins with its profile.
 const catalog = {
   corten: { image: "cb-corten", port: 18410, label: "Corten 0.1 (Rust, axum, html! views)", matched: true },
   nextjs: { image: "cb-nextjs", port: 18411, label: "Next.js 16.4 (App Router, RSC)" },
@@ -21,7 +21,7 @@ const catalog = {
   phoenix: { image: "cb-phoenix", port: 18421, label: "Phoenix 1.8 LiveView (Elixir)" },
   astro: { image: "cb-astro", port: 18422, label: "Astro 7 (Node adapter, client router)" },
   nuxt: { image: "cb-nuxt", port: 18423, label: "Nuxt 4 (Vue 3, Nitro)" },
-  topcoat: { image: "cb-topcoat", port: 18424, label: "Topcoat 0.11 (Rust, view! components, shards)" },
+  topcoat: { image: "cb-topcoat", port: 18424, label: "Topcoat 0.11 (Rust, view! components, shards)", matched: true },
   "axum-maud": { image: "cb-axum-maud", port: 18427, label: "axum 0.8 + Maud 0.27 (Rust, htmx)", matched: true },
   gin: { image: "cb-gin", port: 18425, label: "Gin 1.12 (Go, templ, htmx)" },
   drogon: { image: "cb-drogon", port: 18426, label: "Drogon 1.9 (C++, CSP views, htmx)" },
