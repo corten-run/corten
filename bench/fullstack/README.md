@@ -1034,9 +1034,9 @@ app serving from memory (`BENCH_FIXTURE_LOAD_CPUS`, which `ab.mjs` uses now). Th
 carry no record of the source they were built from; `cost-under-load.sh` now labels the images and
 writes `source.txt` beside the results. The page's 37.5 microseconds on `identity` are about a fifth
 below the r16 round's 47 (21,195 a CPU-second), from the same cgroup counter and CPU model. r16's
-image preloaded no jemalloc (it came to card-market's Dockerfile after r16's commit), and [Choice
-23](../../docs/design.md#choice-jemalloc-image) counts about 83,000 instructions a page with it
-against 87,000 without; the droplet, the commit, the round's settings and k6's phase and cores
+image preloaded no jemalloc (it came to card-market's Dockerfile after r16's commit), and
+[Choice 23](../../docs/design.md#choice-jemalloc-image) counts about 83,000 instructions a page with
+it against 87,000 without; the droplet, the commit, the round's settings and k6's phase and cores
 differ too, and which of them accounts for the gap was not measured.
 
 At 64 users, CPU microseconds a request (the app's CPU was 86-101% busy: k6, on its four CPUs,
