@@ -191,13 +191,28 @@ draws it. Since it is read when the form is sent, a form a patch drew after the 
 too. A link (a "Previous page" whose route reads the order) calls `ordered::link(target,
 [sorted(&SupplyId)], signal)` on `on:connect`, and its `href` takes the order whenever it is about
 to be read: the pointer over it (so the page the runtime prefetches on a hover is the one the
-click opens), focus, a click, a middle click and its menu ("Copy link", "Open in new tab"). A form
-or link that carries the
-order of several sorted tables (one route's query set holding each table's keys) names each
-(`[sorted(&SupplyId), sorted(&ListingsId)]`), and each table's keys are taken from the address
-and the others' left; an id of an element around several sorted tables names them all. A GET
-form's address is its fields, so one that carries the page's query in hidden inputs
-(`corten::form::keep_query`) and calls it sends those keys as the address has them instead
+click opens), focus, a click, a middle click and its menu ("Copy link", "Open in new tab"). A
+pager under the table whose pages read the order passes the same call to the kit's `Pagination`
+or `PreviousNext` as `on:link`, which puts it on each link it draws:
+
+```rust,ignore
+<PreviousNext label="Pages" previous_label="Previous" next_label="Next"
+    previous={before.as_ref().map(|r| r as &dyn Href)} next={after.as_ref().map(|r| r as &dyn Href)}
+    on:link={ordered::link(target, [sorted(&SupplyId)], signal)} />
+```
+
+A pager's steps are links. A step that writes (a Next that fetches and saves a provider's next
+page) is a POST form the app draws, sending the order with `ordered::send` as above, in place
+of the `PreviousNext`: a `<nav>` of its own with the Previous link
+(`on:connect={ordered::link(..)}`) and the form's button, so the page shows one Next. `ordered::link` on an element other than
+an `<a>` or `<area>` compiles, since it takes any element so a pager's `on:link` can pass it
+on; it reports the element in the console and does nothing.
+
+A form or link that carries the order of several sorted tables (one route's query set holding each
+table's keys) names each (`[sorted(&SupplyId), sorted(&ListingsId)]`), and each table's keys are
+taken from the address and the others' left; an id of an element around several sorted tables
+names them all. A GET form's address is its fields, so one that carries the page's query in hidden
+inputs (`corten::form::keep_query`) and calls it sends those keys as the address has them instead
 (set in each list of its fields made while it is sent, the browser's and one another handler
 makes, so nothing is added to the page): replaced, added when the form had
 none, left out when the address has none (the default order). A key a control the user sees
@@ -291,8 +306,11 @@ pub struct Sales { pub sold: Option<SoldBy>, pub page: Option<usize> }
     descending={&url::Sales { sold: Some(SoldBy::PriceDown), page: None }} first={Sort::Ascending} class={TableNumeric {}}
     on:sort={None::<Handler>} />
 ..
-<Pagination .. link={|page| url::Sales { sold, page: Some(page).filter(|p| *p > 1) }} />
+<Pagination .. link={|page| url::Sales { sold, page: Some(page).filter(|p| *p > 1) }} on:link={None::<Handler>} />
 ```
+
+A pager under a page sorted on its own passes `ordered::link` as `on:link` instead (above), so the
+next page opens in the order on screen.
 
 A table whose rows a script also writes or filters keeps their data in a view and sorts that
 (`rows()`, [Scripts](scripts.md)), by the view's fields rather than by column.
