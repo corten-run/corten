@@ -1118,12 +1118,13 @@ rules something out.
    found as the runtime finds a part: its `ReadAgain::from` tag, which no ref can name, and where
    its forms that post send (a `GET` form's fields are its query, so it is not rewritten). That
    search is closed: any other form or link whose route reads the order, inside the part or not,
+   except a form that posts without an `action` (it sends to the address, which has the order),
    names the tables in its markup or in a kit pager's `on:link` (`ordered::send`,
    `ordered::link`, with `sorted(&Id)` of each table's `#[derive(Id)]`, or of an element around
    them, as `CopyButton` is given the element it copies) and reads the order from the address, so a
    new kind of reader is one of those calls, not a wider search ([Limit 24](#limit-sort-readers)).
-   Which tables sort in place, also when other routes read their order, is measured in the [UI
-   guide](guide/ui.md).)
+   Which tables sort in place, also when other routes read their order, is decided in the [UI
+   guide](guide/ui.md) from the measurements there.)
 4. <a id="rule-user-facing-text"></a>User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a

@@ -176,9 +176,10 @@ the table's order (a "Refresh" beside the table whose answer redirects back to t
 it was asked) calls `corten_ui::ordered::send` when it is sent, with the id of the table or an
 element around it, its `#[derive(Id)]` type given to `corten_ui::sorted` (an `ElementId`: a
 string does not compile there, so a renamed table's id cannot name nothing). That is the rule for
-every form but one kind: a form that posts inside the table's `ReadAgain` part is rewritten by
-the sort itself (above), and every other form whose route reads the order calls `send`: a GET
-form inside the part, and a form in a table that has no such part (a row's own post form) too:
+every form but two kinds: a form that posts inside the table's `ReadAgain` part is rewritten by
+the sort itself (above), and a form that posts without an `action` sends to the address the sort
+wrote; every other form whose route reads the order calls `send`: a GET form inside the part, and
+a form with an `action` in a table that has no such part (a row's own post form) too:
 
 ```rust,ignore
 <form method="post" action={&url::RefreshSupply { choice }}
@@ -269,16 +270,18 @@ workstation, so compare within a row:
 | 1,000 | 178 ms (107-230) | 180 ms (131-207) | 168 ms (110-219) | 307 ms (197-431) | 307 ms (198-415) | 292 ms (187-359) |
 | 2,000 | 341 ms (235-414) | 318 ms (261-437) | 266 ms (191-362) | 550 ms (370-642) | 527 ms (354-915) | 543 ms (327-699) |
 
-With no network, the three are within one another's range at every size in every engine, and which
-median is lowest changes from size to size and engine to engine, so on this host the runs vary more
-than the three differ. With 40 ms of latency, sorting in place is faster by 59 to 63 ms from 50 to
-500 rows (15 ms against 77 at 50 rows), its ranges apart from the swap's (more than the 40 ms set,
-for a cause not measured here); at 1,000 and 2,000 rows the difference is inside this host's spread,
-though the round trip adds to every swap. A swap fetched ahead stays as fast as in place or faster
-there, but only when the answer is in before the click: a pointer that rests on the header for its
-65 ms dwell and then the fetch, or a tap, whose prefetch starts at `touchstart` (not measured here),
-while a key press or a quick click gets none. So in place is not slower beyond the spread at any
-size, is faster by the round trip on a network up to 500 rows, and asks the server for nothing.
+With no network, the three cases' ranges overlap at every size in every engine, though a median is
+not always inside the other cases' ranges (in WebKit at 50 rows the swap's 51 ms is above both
+others'), and which median is lowest changes from size to size and engine to engine: the swap
+fetched ahead in 10 of the 15, in place in 4, the swap in 1. With 40 ms of latency, sorting in place
+is faster by 59 to 63 ms from 50 to 500 rows (15 ms against 77 at 50 rows), its ranges apart from
+the swap's (more than the 40 ms set, for a cause not measured here); at 1,000 and 2,000 rows their
+ranges overlap, though the round trip adds to every swap. A swap fetched ahead stays as fast as in
+place or faster there, but only when the answer is in before the click: a pointer that rests on the
+header for its 65 ms dwell and then the fetch, or a tap, whose prefetch starts at `touchstart` (not
+measured here), while a key press or a quick click gets none. So in place's range overlaps the
+fastest case's at every size, it is faster by the round trip on a network up to 500 rows, and it
+asks the server for nothing.
 
 Sorting in place leaves the order on the page, and its readers must take it. `rows::sort` writes it
 into the address, into the part read again around the table and into that part's forms that post.
