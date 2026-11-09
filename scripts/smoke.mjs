@@ -808,8 +808,7 @@ async function run(browser) {
   check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
   // As this browser asks for it, a live stream is zstd or gzip, never brotli, which
   // Playwright's WebKit on Windows holds back past 16 KiB of an event until more of the stream
-  // arrives (#1131); its first event decodes
-  // while the stream is open.
+  // arrives (#1131); its first event decodes while the stream is open.
   // Bounded: an event held back fails the check rather than the whole run.
   const streamed = await page.evaluate(async () => {
     const stop = new AbortController();

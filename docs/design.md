@@ -1132,9 +1132,9 @@ rules something out.
     takes no brotli at all, so the smoke there cannot see the holdback and the rule is held by
     `compress.rs`'s and `tests.rs`'s tests; the 16 KiB edge matches libcurl's write size, the
     Windows build's network stack, which suggests the holdback is that stack's, not measured;
-    Chromium and Firefox send zstd, which arrives at once there; no WebKit that accepts zstd was tried, and Safari, whose network stack
-    is not Playwright's and which caniuse lists as sending zstd over HTTPS from 26.3, was not
-    tried at all); measured (bytes a redraw by `what_a_redraw_sends`, one run, the counts fixed
+    Chromium and Firefox send zstd, which arrives at once there; no WebKit that accepts zstd was
+    tried, and Safari, whose network stack is not Playwright's and which caniuse lists as sending
+    zstd over HTTPS from 26.3, was not tried at all); measured (bytes a redraw by `what_a_redraw_sends`, one run, the counts fixed
     by the encoders; a gzip stream's memory by `tests/stream_memory.rs`; the large event on a
     quiet stream by the watchlist smoke; instructions an event by callgrind,
     `what_an_event_stream_costs` at 2,000 and 12,000 events, three runs each, within 20
