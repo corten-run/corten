@@ -1438,7 +1438,7 @@ async function run(browser) {
     `${whileA} | ${whileB} | ${busyAfter}`,
   );
   // A navigation abandons a read on its way, which drops its marks at once, not when its own code
-  // next runs (#1108). The page reads itself again, so the check stays on this page.
+  // next runs (#1108). The page navigates to its own address, so the check stays on this page.
   const abandonName = "a submit a navigation abandons drops its marks at once";
   if (!(await page.evaluate(() => "navigation" in window))) skip(abandonName, "without the Navigation API a navigation is a full load");
   else {
@@ -1456,8 +1456,11 @@ async function run(browser) {
     } finally {
       answerA();
     }
-    await page.waitForFunction(() => !document.getElementById("busy-said") && !document.querySelector("main")?.hasAttribute("aria-busy"), null, { timeout: 10000 }).catch(() => {});
-    check(abandonName, abandoned[0] === "true,true,-" && abandoned[1] === "-,-,-", abandoned.join(" -> "));
+    // The checks after this one draw into <main>, so this one fails if the page has not swapped.
+    const swapped = await page
+      .waitForFunction(() => !document.getElementById("busy-said") && !document.querySelector("main")?.hasAttribute("aria-busy"), null, { timeout: 10000 })
+      .then(() => true, () => false);
+    check(abandonName, swapped && abandoned[0] === "true,true,-" && abandoned[1] === "-,-,-", `${abandoned.join(" -> ")}${swapped ? "" : ", the page did not swap within 10 s"}`);
   }
   await page.unroute("**/busy-read*");
   await page.evaluate(() => ["busy-form", "busy-said", "busy-a", "busy-b"].forEach((id) => document.getElementById(id)?.remove()));
