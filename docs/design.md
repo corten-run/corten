@@ -1164,7 +1164,9 @@ rules something out.
     answered 200 with `br`, and no event came in 5 s), and the same build on `535b22f9` in
     Playwright 1.64.1's Linux image, as CI runs it (one run: the route answered 200 uncompressed,
     so that WebKit did not ask for brotli or zstd, its header not logged, and the event came in
-    18 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
+    18 ms); 2026-11-09, the whole smoke against a server built from `0b9a134c` in that Linux image
+    (one run, all passed; Chromium and Firefox got zstd, WebKit gzip, the large event in 7 to
+    17 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
     test's thread (352,232 bytes, the same).
 
 ## Rules
