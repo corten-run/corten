@@ -757,7 +757,8 @@ impl StartHere {
         let page = match axum::body::to_bytes(body, usize::MAX).await {
             Ok(page) => page,
             Err(error) => {
-                tracing::error!("corten: a page with layout reads could not be read to fill it: {error}");
+                let error: &(dyn std::error::Error + 'static) = &error;
+                tracing::error!(error, "corten: a page with layout reads could not be read to fill it");
                 return crate::Error::new("corten: the page could not be read").into_response();
             }
         };
