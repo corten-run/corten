@@ -4119,11 +4119,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `FromJson`, which already name each type's direction (design Choice 32). **Breaking:** an
     output that implements `Serialize` and `ToJsonSchema` by hand and not `ToJson`, or a derived
     generic output whose type argument is not `ToJson`, no longer compiles as one; implement
-    `ToJson` (or derive it). A field whose own `Serialize` fails (a map
-    with a key JSON cannot hold, inside another crate's type) now panics, as in any `ToJson`
-    answer: the request ends as a handler's panic does, logged and answered with the app's 500
-    (in an `Api`, its JSON failure), where the call answered an internal error as the tool's
-    result with the call's `id`
+    `ToJson` (or derive it). A field whose own `Serialize` fails (a map with a key JSON cannot
+    hold, inside another crate's type) now panics, as in any `ToJson` answer: the request ends as
+    a handler's panic does, logged and answered with the app's 500 (in an `Api`, its JSON
+    failure), where the call answered an internal error as the tool's result with the call's `id`
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 
 ### Fixed
