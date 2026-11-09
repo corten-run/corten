@@ -1056,7 +1056,7 @@ fn fields_and_url_value_describe_what_they_read_as_from_json_does() {
             pub gift_note: Option<String>,
             pub shipping: crate::shipping::ours::Shipping,
         }
-        #[derive(corten::FromJson)]
+        #[derive(Debug, corten::FromJson)]
         #[serde(deny_unknown_fields, expecting = "a filter")]
         pub struct Generic<T> {
             pub value: T,
