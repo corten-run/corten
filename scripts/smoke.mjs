@@ -2539,6 +2539,7 @@ async function run(browser) {
       "back to a page puts back a checkbox and a radio, and leaves a select whose options changed and a checkbox whose value changed as the server draws them",
       "back to a page puts back no file, the other fields before the page's elements connect",
       "back to a page puts back what the user chose and not a value a script set",
+      "back to a page puts back a value a script set and dispatched input and change for",
       "back to a page puts back what was typed in a form with a control named getAttribute",
       "back to a page puts back what was typed in more fields than are looked up one by one",
       "back to a page puts back what was typed there after a link the server sent elsewhere",
