@@ -875,11 +875,11 @@ impl Media {
     /// ```
     ///
     /// Everything else is `Media`'s: its file name ([`Media::attachment`]), its headers, private
-    /// unless [`Public`]. A text type is compressed a chunk at a time as it comes (zstd or brotli,
-    /// as an event stream is, each ended when the stream ends), so a chunk of some kilobytes (a
-    /// few hundred rows) compresses far better than a row each. It goes out uncompressed in two
-    /// cases: to a client that takes only gzip (a script whose HTTP library has neither brotli
-    /// nor zstd), and while the server's compressed streams already hold their memory budget. No
+    /// unless [`Public`]. A text type is compressed a chunk at a time as it comes (zstd, else
+    /// gzip, as an event stream is, each ended when the stream ends; never brotli, which WebKit
+    /// holds back), so a chunk of some kilobytes (a few hundred rows) compresses far better than a
+    /// row each. It goes out uncompressed in two cases: to a client that takes neither zstd nor
+    /// gzip, and while the server's compressed streams already hold their memory budget. No
     /// `ETag` is made for it, since that would need the whole body.
     ///
     /// What can fail before anything is sent (a query that does not run, a file that is not

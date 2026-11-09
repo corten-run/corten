@@ -808,18 +808,23 @@ async function run(browser) {
   // As this browser asks for it, a live stream is zstd or gzip, never brotli, which WebKit holds
   // back past 16 KiB of an event until more of the stream arrives (#1131); its first event decodes
   // while the stream is open.
+  // Bounded: an event held back fails the check rather than the whole run.
   const streamed = await page.evaluate(async () => {
     const stop = new AbortController();
-    const res = await fetch("/live/trades", { headers: { accept: "text/event-stream" }, signal: stop.signal });
+    const res = await fetch("/live/trades", { headers: { accept: "text/event-stream" }, signal: AbortSignal.any([stop.signal, AbortSignal.timeout(15_000)]) });
     const reader = /** @type {ReadableStream<Uint8Array>} */ (res.body).getReader();
     let text = "";
-    while (!text.includes("event: patch")) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      text += new TextDecoder().decode(value);
+    try {
+      while (!text.includes("event: patch")) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += new TextDecoder().decode(value);
+      }
+    } catch (error) {
+      text += ` (${String(error)})`;
     }
     stop.abort();
-    return { coding: res.headers.get("content-encoding"), patch: text.includes("event: patch") };
+    return { coding: res.headers.get("content-encoding"), patch: text.includes("event: patch"), seen: text.slice(-80) };
   });
   check("a live stream is zstd or gzip as the browser asks, and its first event decodes while it is open", ["zstd", "gzip"].includes(streamed.coding ?? "") && streamed.patch, JSON.stringify(streamed));
 

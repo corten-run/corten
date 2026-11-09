@@ -55,8 +55,9 @@ const ZSTD_LEVEL: i32 = 1;
 const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: u32 = 1;
 /// A stream's gzip level: deflate (miniz_oxide) at 1 finds few of an earlier event's matches, so a
-/// 2.7 KB redraw of one changed row costs 436 to 451 bytes a time; at 3 it costs 61 to 73, in
-/// about the time brotli 4 took (23 against 31 µs an event, one run on Windows, release).
+/// 2.7 KB redraw of one changed row costs 436 to 451 bytes a time; at 3 it costs 61 to 73. An event
+/// through `apply` then takes about 286,650 instructions, where brotli 4 took 213,720 and zstd 1
+/// takes 100,470 (callgrind, `what_an_event_stream_costs`, three runs each, release).
 const GZIP_STREAM_LEVEL: u32 = 3;
 
 /// Memory all compressed streams (event streams and streamed `Media`) may hold at once, in bytes.
@@ -393,8 +394,10 @@ fn stream(res: Response, coding: Option<Coding>) -> Response {
 /// No brotli: WebKit (Playwright's 27.2 build, measured) dispatches a flushed brotli event that
 /// decodes to more than 16 KiB only once more of the body arrives, so a stream's last event before
 /// a quiet spell waits for the next one or a keepalive, whatever the encoder (Node's own brotli,
-/// quality 4 or 11, does the same) and whatever empty blocks follow it. Gzip, sync-flushed, arrives
-/// at once in every engine at every size tried (to 200 KB), and so does zstd where it is accepted.
+/// quality 4 or 11, does the same) and whatever empty blocks follow it. Gzip, sync-flushed, arrived
+/// at once in all three of Playwright's engines at every size tried (to 200 KB), and zstd in
+/// Chromium and Firefox; that WebKit build does not accept zstd, so none that does was tried
+/// (`docs/design.md#choice-stream-coding`).
 pub(crate) enum StreamCoder {
     Zstd(zstd::zstd_safe::CCtx<'static>),
     Gzip(Option<Box<flate2::write::GzEncoder<Vec<u8>>>>),
@@ -421,7 +424,11 @@ impl StreamCoder {
                 }
                 StreamCoder::Zstd(cx)
             }
-            _ => StreamCoder::Gzip(Some(Box::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(GZIP_STREAM_LEVEL))))),
+            Coding::Gzip => StreamCoder::Gzip(Some(Box::new(flate2::write::GzEncoder::new(
+                Vec::new(),
+                flate2::Compression::new(GZIP_STREAM_LEVEL),
+            )))),
+            Coding::Brotli => unreachable!("a brotli stream returned above"),
         })
     }
 
@@ -453,8 +460,8 @@ impl StreamCoder {
         }
     }
 
-    /// What ends the stream's coding (zstd's frame end, gzip's last block and trailer), after which nothing
-    /// is written: without it a decoder that checks for the end takes the body as cut short.
+    /// What ends the stream's coding (zstd's frame end, gzip's last block and trailer), after which
+    /// nothing is written: without it a decoder that checks for the end takes the body as cut short.
     pub(crate) fn end(&mut self) -> Bytes {
         match self {
             StreamCoder::Zstd(cx) => zstd_stream(cx, &[], zstd::zstd_safe::zstd_sys::ZSTD_EndDirective::ZSTD_e_end),
@@ -855,6 +862,22 @@ mod tests {
         assert_eq!(at("ZSTD;Q=0.2, Br;q=0.2"), (Some(Coding::Zstd), Some(Coding::Brotli)));
         assert_eq!(at("x-gzip;q=bad, br;q=0"), (Some(Coding::Gzip), Some(Coding::Gzip)));
         assert_eq!(negotiate(&HeaderMap::new()), Accepts::default());
+    }
+
+    /// A stream takes zstd, else gzip, by the client's ranking as a page does, and never brotli,
+    /// however the client ranks it (`StreamCoder`).
+    #[test]
+    fn a_stream_is_zstd_or_gzip_by_the_clients_ranking_never_brotli() {
+        let streamed = |value: &str| negotiate(&accept(value)).streamed();
+        assert_eq!(streamed("gzip, deflate, br, zstd"), Some(Coding::Zstd));
+        assert_eq!(streamed("gzip, deflate, br"), Some(Coding::Gzip));
+        assert_eq!(streamed("br;q=1, gzip;q=0.1"), Some(Coding::Gzip));
+        assert_eq!(streamed("zstd;q=0.2, gzip;q=0.9"), Some(Coding::Gzip));
+        assert_eq!(streamed("zstd;q=0.9, gzip;q=0.2"), Some(Coding::Zstd));
+        assert_eq!(streamed("zstd;q=0, gzip"), Some(Coding::Gzip));
+        assert_eq!(streamed("br"), None);
+        assert_eq!(streamed("gzip;q=0, br"), None);
+        assert_eq!(streamed("identity"), None);
     }
 
     /// Per request, each coding gives back a large body that does not repeat (brotli's levels 0
