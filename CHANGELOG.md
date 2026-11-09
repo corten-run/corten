@@ -2567,6 +2567,21 @@ Corten is pre-1.0, so any minor version may change the API.
     measured, and the bench README says why
     ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
 
+283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
+    `apps/express`), each written its framework's usual way with htmx as the other server-rendered
+    apps are: the item page, the catalog page, the localized marketplace page and the live price
+    stream. Each app's own tests (`python -m unittest`, `node --test`) cover the marketplace page
+    (formatting, rows, links, the cross-site check, both sources); the catalog and item pages are
+    covered by the shared gates, and the live stream only by the live benchmark. FastAPI's records are Pydantic models, so a
+    record that is not one is a 502, and its item API clients have no connection cap, as the
+    README's item API rule asks. Neither framework has
+    CSRF protection of its own, so each refuses a cross-site post by its `Sec-Fetch-Site` or
+    `Origin`, as the Gin and Drogon apps do. Both join the catalog and marketplace gates, CI's matrix
+    and official rounds, which now need all twenty apps, so no marketplace round is compared with
+    one of eighteen. Neither has a build step, so build-cost rows say so.
+    They take Spring Boot's and Django's places among the matched tier's four most used frameworks
+    ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
+
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
    script renders its own root element, marked `data-scope`; `corten-ui`'s components are
@@ -3768,9 +3783,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `https://github.com/corten-run/corten` (and with it `corten-cli`'s binstall download URL), and
     the template's README and AGENTS.md, SECURITY.md's advisory link, CONTRIBUTING.md's trusted
     publisher (with a step to re-point crates published before the move), the README, the guides
-    and design notes, the benchmark README and `corten-ui`'s doc link name it. The crates have no
-    `homepage` until `https://corten.run` serves the landing page (it repeated `repository`, which
-    Cargo advises against). The published 0.1.0 crates keep the old URLs until the next version
+    and design notes, the benchmark README, the benchmark rounds' `raw.txt` notes and `corten-ui`'s
+    doc link name it. The crates have no `homepage` until `https://corten.run` serves the landing
+    page (it repeated `repository`, which Cargo advises against). The published 0.1.0 crates keep
+    the old URLs until the next version
     ([#836 After the move to corten-run, the crates, docs, template and automations still name todd-skelton/corten](https://github.com/corten-run/corten/issues/836)).
 143. A bench/fullstack round can run each load phase three or five times (`droplet.mjs --passes 3`,
     `BENCH_PASSES`; one pass unless set), the apps taking turns between passes, and records the
@@ -4090,6 +4106,31 @@ Corten is pre-1.0, so any minor version may change the API.
     again (a `chunk()` inside a `timeout` or `select!`) no longer starts the idle time again, so a
     client that went quiet is given up on after the idle time however the handler reads
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
+168. The kit's `Pagination` and `PreviousNext` take `on:link`, the handler each link they draw runs
+    as it joins the page (its `on:connect`), so a pager under a table sorted in place whose pages
+    read its order passes `corten_ui::ordered::link(target, [sorted(&SupplyId)], signal)` and
+    each link opens its page in the order on screen. Before, a pager's links could carry no
+    handler, so such a page drew its own pager. Breaking for a copy's callers: every
+    `<Pagination>` and `<PreviousNext>` writes `on:link`, `None::<Handler>` for none (take the
+    kit's file with `corten ui add pagination --merge`). `ordered::link` takes an `HTMLElement`,
+    as a prop's handler gets one, so the compiler no longer refuses another element; one that is
+    not an `<a>` or `<area>` is reported in the console and left. `ordered.js` as served (its
+    comments removed) grows from 3,182 to 3,384 bytes (gzip 1,188 to 1,269, brotli 1,003 to
+    1,074), loaded only by a page that calls it. A pager step that writes is a form the app draws
+    in place of the pager, which the guides now say
+    ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
+
+169. The image `corten new` writes (and card-market's) runs jemalloc with
+    `MALLOC_CONF=background_thread:true,tcache_max:65536`, a third line beside the two that preload
+    it. The background thread returns a flood's memory while the app is idle (eight floods of
+    unfinished heads left 13 to 16 MiB of `memory.current`, against 118 to 139 without it and 406 to
+    455 on glibc's allocator, three runs each). The larger thread cache keeps brotli's buffers:
+    brotli responses took 19.3 to 19.4 page faults each on average before, and none now. glibc's own
+    tunables were tried: fewer arenas changed nothing, and a lower mmap threshold left about 180
+    MiB, still growing. `bench/fullstack/flood-memory.mjs` drives the floods, `alloc-faults.mjs`
+    counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
+    every row and removes its app however the run ends
+    ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 
 ### Fixed
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
@@ -6210,6 +6251,20 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+78. Which tables sort in place is decided and measured: every table whose page has all its rows,
+    also when other routes read its order. `bench/browser/sort-cost.mjs` times a sort click with
+    `rows::sort` against a swap of the server-sorted table, fetched at the click or before it, and
+    writes each case's median and range with the engine's version. With no network the three cases'
+    ranges overlap in Chromium, Firefox and WebKit from 50 to 2,000 rows, the lowest median changing
+    with size and engine; with 40 ms of latency, in Chromium, in place is faster on the text columns
+    by 59 to 63 ms up to 500 rows (15 ms against 77 at 50 rows). A swap fetched ahead matches it
+    only when the answer is in before the click (a hover that rests through the fetch, or a tap, not
+    measured; not a key press or a quick click). The UI guide has the tables. Design Rule 3's
+    `rows::sort` exception says its search of the page is closed and that any other reader, a link
+    or a `GET` form in the part or anything outside it (a kit pager through its `on:link`), names
+    the table with `sorted(&Id)`; new design Limit 24 says one that does not sends the order the
+    page was drawn with, which nothing notices, and what would lift that
+    ([#960 Design Rule 3's rows::sort exception grows with each kind of form or link that reads the order: decide which tables sort in place and which ask the server](https://github.com/corten-run/corten/issues/960)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

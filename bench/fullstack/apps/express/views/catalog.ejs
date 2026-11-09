@@ -1,0 +1,18 @@
+<%- include("head", { title: record.title, sheet: "catalog.css" }) %>
+<article aria-label="Catalog record">
+  <h1><%= record.title %></h1>
+  <p><%= record.subtitle %></p>
+  <p><%= record.description %></p>
+  <ul aria-label="Tags"><% for (const tag of record.tags) { %><li><%= tag %></li><% } %></ul>
+  <form method="get" action="/catalog/<%= encodeURIComponent(record.id) %>">
+    <label>Field name <input name="field" value="<%= prefix %>"></label>
+    <button type="submit">Filter</button>
+  </form>
+  <table>
+    <caption>Record fields</caption>
+    <thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+    <tbody><% for (const f of fields) { %><tr><th scope="row"><%= f.name %></th><td><%= f.value %></td></tr><% } %></tbody>
+  </table>
+  <nav aria-label="Related records"><ul><% for (const row of record.related) { %><li><a href="/catalog/<%= encodeURIComponent(row.id) %>"><%= row.title %></a></li><% } %></ul></nav>
+</article>
+<%- include("foot") %>

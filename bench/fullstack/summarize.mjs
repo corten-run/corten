@@ -136,7 +136,9 @@ if (summary.build) {
     // Entries written before `complete` was recorded have none, and finished.
     if (b.failed || b.complete === false) { console.log(line([name, `FAILED: ${(b.failed ?? "stopped before it finished").split("\n")[0]}`])); continue; }
     const dev = b.dev ? `dev ${s(b.dev.clean.ms)}, after the edit ${s(b.dev.rebuild.ms)} (${b.dev.rebuild.cpuS} CPU-s)` : "";
-    console.log(line([name, `clean (deps + build) ${s(b.clean.ms)}, ${b.clean.cpuS} CPU-s`, `deps ${s(b.deps.ms)} (downloads)`, `build ${s(b.build.ms)}, ${b.build.cpuS} CPU-s, ${b.build.peakMiB} MiB`, `after the edit ${s(b.rebuild.ms)}, ${b.rebuild.cpuS} CPU-s, ${b.rebuild.peakMiB} MiB`, dev]));
+    // An app with no build step (builds.mjs) has none to time, and nothing to rebuild after the edit.
+    const built = b.build ? [`build ${s(b.build.ms)}, ${b.build.cpuS} CPU-s, ${b.build.peakMiB} MiB`, `after the edit ${s(b.rebuild.ms)}, ${b.rebuild.cpuS} CPU-s, ${b.rebuild.peakMiB} MiB`] : ["no build step", "after the edit: nothing to build"];
+    console.log(line([name, `clean (deps + build) ${s(b.clean.ms)}, ${b.clean.cpuS} CPU-s`, `deps ${s(b.deps.ms)} (downloads)`, ...built, dev]));
   }
   const mb = (/** @type {number | null} */ bytes) => (bytes == null ? "?" : `${Math.round(bytes / 1e6)} MB`);
   const loops = Object.entries(summary.build).filter(([, b]) => !b.failed && b.complete !== false && (b.check || b.test || b.edits || b.disk || b.loopsFailed));
@@ -153,7 +155,7 @@ if (summary.build) {
       b.test ? `tests compiled ${s(b.test.clean.ms)}${b.test.rebuild ? `, after the edit ${s(b.test.rebuild.ms)}${crates(b.test.rebuild)}` : stopped("test")}` : "",
       ...Object.entries(b.edits ?? {}).map(([kind, e]) => `dev after a ${kind} edit ${s(e.ms)} (${e.runs.length} run${e.runs.length === 1 ? "" : "s"})${crates(e)}`),
       ...Object.entries(failed).map(([group, why]) => `${group} FAILED: ${String(why).split("\n")[0]}`),
-      b.disk ? `disk: deps ${mb(b.disk.depsBytes)}, build ${mb(b.disk.buildBytes)}, dev ${mb(b.disk.devBytes)}` : "",
+      b.disk ? `disk: deps ${mb(b.disk.depsBytes)}, build ${b.build ? mb(b.disk.buildBytes) : "none"}, dev ${mb(b.disk.devBytes)}` : "",
     ].filter(Boolean)));
   }
   const scaled = Object.entries(summary.build).filter(([, b]) => b.scale || b.mold || b.scaleFailed);

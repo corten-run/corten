@@ -8,7 +8,7 @@ export const copies = [
     'nextjs/public', 'tanstack-start/public', 'sveltekit/static', 'react-router/public',
     'leptos/public', 'django/static', 'rails/app/assets/stylesheets', 'laravel/public',
     'aspnet/wwwroot', 'spring/src/main/resources/static', 'phoenix/priv/static/css',
-    'astro/public', 'nuxt/public', 'topcoat/static', 'axum-maud/static', 'gin/static', 'drogon/static',
+    'astro/public', 'nuxt/public', 'topcoat/static', 'axum-maud/static', 'gin/static', 'drogon/static', 'fastapi/static', 'express/static',
   ].map(path => `../fullstack/apps/${path}/catalog.css`),
 ];
 

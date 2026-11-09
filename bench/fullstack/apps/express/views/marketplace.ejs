@@ -1,0 +1,29 @@
+<%- include("head", { title: record.title, lang: locale, sheet: "marketplace.css" }) %>
+<article class="marketplace" hx-boost="false">
+<nav class="marketplace__categories"><% for (const category of record.categories) { %><a href="<%= itemPath("item_1") %>"><%= category.name %></a><% } %></nav>
+<h1><%= record.title %></h1>
+<% if (record.subtitle !== null) { %><p class="marketplace__subtitle"><%= record.subtitle %></p><% } %>
+<ul class="marketplace__badges"><% for (const badge of record.badges) { %><li><%= badge %></li><% } %></ul>
+<div class="marketplace__images"><% record.images.forEach((image, i) => { %><div class="marketplace__image" role="img" aria-label="<%= record.title %> <%= i + 1 %>" data-src="<%= image %>"></div><% }) %></div>
+<section class="marketplace__summary"><% if (summary) { %><span><strong><%= summary.lowest %></strong> <%= labels.lowest %></span><span><%= summary.count %></span><span><%= summary.quantity %> <%= labels.available %></span><% } else { %><span><%= labels.no_listings %></span><% } %></section>
+<section class="marketplace__listings">
+<h2><%= labels.listings %></h2>
+<form method="get" action="<%= path %>">
+<label><%= labels.filter %><input type="text" name="seller" value="<%= query.seller %>"></label>
+<label><%= labels.sort %><select name="sort"><option value="asc"<%= query.sort === "asc" ? " selected" : "" %>><%= labels.asc %></option><option value="desc"<%= query.sort === "desc" ? " selected" : "" %>><%= labels.desc %></option></select></label>
+<% if (query.allOffers) { %><input type="hidden" name="offers" value="all"><% } %>
+<button type="submit"><%= labels.apply %></button></form>
+<table><thead><tr><th><%= labels.seller %></th><th><%= labels.condition %></th><th><%= labels.ships_from %></th><th><%= labels.qty %></th><th><%= labels.price %></th><th><%= labels.reviews %></th></tr></thead>
+<tbody><% for (const row of listings) { %><tr data-listing-id="<%= row.id %>"><td><%= row.seller %><% if (row.rating !== null) { %> · <%= row.rating %> ★<% } %></td><td><%= row.condition %></td><td><%= row.ships_from %></td><td><%= row.quantityText %></td><td><%= row.price %></td><td><%= row.reviewsText %></td></tr><% } %></tbody></table>
+</section>
+<section class="marketplace__offers"><h2><%= labels.offers %></h2>
+<table><thead><tr><th><%= labels.buyer %></th><th><%= labels.condition %></th><th><%= labels.qty %></th><th><%= labels.price %></th></tr></thead><tbody><% for (const row of offers) { %><tr data-offer-id="<%= row.id %>"><td><%= row.buyer %></td><td><%= row.condition %></td><td><%= row.quantityText %></td><td><%= row.price %></td></tr><% } %></tbody></table>
+<% if (!query.allOffers && record.offers.length > 5) { %><a class="marketplace__more" href="<%= more %>"><%= labels.show_all %></a><% } %></section>
+<section class="marketplace__alert"><h2><%= labels.alert %></h2>
+<form method="post" action="<%= path %>"><label><%= labels.email %><input type="email" name="email" value="<%= email %>"></label><label><%= labels.target %><input type="text" inputmode="decimal" name="target_price" value="<%= target %>"></label><button type="submit"><%= labels.submit %></button></form>
+<p class="marketplace__message"><%= message %></p></section>
+<section class="marketplace__details"><h2><%= labels.details %></h2><p><%= record.description %></p><dl><% for (const f of record.fields) { %><dt><%= f.name %></dt><dd><%= f.value %></dd><% } %></dl><ul><% for (const tag of record.tags) { %><li><%= tag %></li><% } %></ul></section>
+<section class="marketplace__contents"><h2><%= labels.contents %></h2><ul><% for (const row of contents) { %><li><a href="<%= itemPath(row.item_id) %>"><%= row.title %></a> × <%= row.quantityText %></li><% } %></ul></section>
+<section class="marketplace__included"><h2><%= labels.included %></h2><ul><% for (const row of included) { %><li><a href="<%= itemPath(row.item_id) %>"><%= row.title %></a> × <%= row.quantityText %></li><% } %></ul></section>
+</article>
+<%- include("foot") %>

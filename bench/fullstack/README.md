@@ -1,4 +1,4 @@
-# Full-stack comparison: one marketplace item page in eighteen apps
+# Full-stack comparison: one marketplace item page in twenty apps
 
 This is the historical marketplace workload with **non-equivalent localization work**:
 Corten formats values per request while the other implementations use stored strings
@@ -8,7 +8,7 @@ not valid general framework speed rankings. The separate
 strings-only page work without currency or number localization. Its results start a new
 baseline; they do not replace or form a before/after comparison with the tables here.
 [Marketplace v2](../marketplace/README.md) implements equivalent request-time locale formatting
-in eighteen adapters, with a whole-page conformance gate and its own repeated-pass runner.
+in twenty adapters, with a whole-page conformance gate and its own repeated-pass runner.
 It starts a separate baseline and becomes the nightly workload at official r17. See the
 [nightly procedure](../marketplace/nightly.md). Compare only compatible v2 rounds, never an
 r16 or catalog c1 delta. Catalog remains an optional separate diagnostic, not a nightly duplicate.
@@ -36,6 +36,8 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 | gin | Gin 1.12.0, Go 1.27, templ 0.3, htmx | [apps/gin](apps/gin) | not yet |
 | drogon | Drogon 1.9.14 (C++), CSP views, JsonCpp, htmx | [apps/drogon](apps/drogon) | not yet |
 | django | Django 6.1.2, Python 3.14, gunicorn 26 (3 sync workers), htmx | [apps/django](apps/django) | not yet |
+| fastapi | FastAPI 0.162.2, Python 3.14, Jinja2, `fastapi run` (uvicorn, one process), htmx | [apps/fastapi](apps/fastapi) | not yet |
+| express | Express 5.3.0, Node 24, EJS 7, htmx | [apps/express](apps/express) | not yet |
 | rails | Rails 8.1.4, Ruby 3.4 with YJIT, Puma (3 threads), Turbo and Stimulus | [apps/rails](apps/rails) | not yet |
 | laravel | Laravel 13.38, PHP 8.4, Octane on FrankenPHP (2 workers), Livewire 4.4 | [apps/laravel](apps/laravel) | not yet |
 | phoenix | Phoenix 1.8.16, LiveView 1.2, Elixir 1.19 on OTP 28, Bandit | [apps/phoenix](apps/phoenix) | not yet |
@@ -65,12 +67,12 @@ answers `GET /api/items/{id}` with the same JSON. A round runs parity and `look.
 server tests, with every app fetching items from the item API, so the home page they compare is
 the list of item links; `check-app.mjs`, which every app passes before it joins a round, runs
 both with items in memory, where the home page is Corten's cards, and compares the JSON. The
-tables below are from r16, with all eighteen page apps plus JSON-only aspnet-aot, each page app rendering Corten's markup
+tables below are from r16, with all eighteen page apps then plus JSON-only aspnet-aot (FastAPI and Express joined after it and have no rows yet), each page app rendering Corten's markup
 and stylesheets (caveat 12). Each app
 has the same interactions: a sort (in the browser, except where the framework renders again on
 the server: Phoenix's LiveView and Topcoat's shard, each a round trip), a form action that
 updates part of the page, and client-side navigation from the home page, each done the
-framework's usual way (htmx for Razor Pages, Spring, Django, Gin, Drogon and axum + Maud; Turbo
+framework's usual way (htmx for Razor Pages, Spring, Django, FastAPI, Express, Gin, Drogon and axum + Maud; Turbo
 for Rails; Livewire for Laravel; LiveView for Phoenix; shards, signals and a procedure for
 Topcoat).
 The item page's first response carries its first five offers in every app, and "Show all N
@@ -639,7 +641,8 @@ the commit it ran at: the first four phases at `d456063e` with local changes, th
 before the commit that adds it, and the clients that stop reading and the oversized requests run
 again at `330ff623` with none, each keeping its first pass in `earlier`; the first pass's `taken`
 is the file's header from then, marked `fromHeader`, whose time is when it was last written): Corten,
-axum-maud and the six other apps the matched tier names, ASP.NET Core as both its Razor Pages app
+axum-maud and the six other apps the matched tier then named (Next.js, Leptos, Django, Spring,
+Topcoat and ASP.NET Core), ASP.NET Core as both its Razor Pages app
 and aspnet-aot. Corten is card-market, with its own 10 s request deadline and its write limit
 raised for the probe (Method, The hardening step). The images
 were `cb-corten` and `cb-axum-maud` built at `720c8a88`, `cb-aspnet-aot` at this step's first
@@ -707,10 +710,13 @@ before its writes blocked. Where it falls short:
 
 1. A body sent a byte a second is closed by the request deadline (card-market's 10 s, with a 503;
    30 s by default), not by a rate: Kestrel closed it within 5.4 to 6.8 s, by its minimum request
-   rate as far as can be told (above). A route whose deadline is removed (`deadline(None)`, for a
-   long upload) has nothing that closes it until `Upload::idle`'s minute of silence, which a byte
-   a second never reaches (from the guide, not measured here):
-   [#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074).
+   rate as far as can be told (above). On a route whose deadline is removed (`deadline(None)`, for
+   a long upload), a body read as it arrives (`pieces_up_to`, `Upload`) is given up on with a 408
+   once it falls `Upload::idle`'s minute behind 240 bytes a second, Kestrel's minimum rate, which
+   a byte a second does after about 60 s (from the guide, not measured here; before
+   [#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074),
+   at `73e1c453`, nothing closed it). That is still about ten times Kestrel's time, by design: the
+   idle time is the allowance, so an upload that pauses is not cut off.
 2. A client that stops reading is closed by `App::send_timeout`'s 60 s (63 s from its connect,
    with the time the server took to fill the socket's buffers), nginx's send timeout, which Corten
    chose over Kestrel's minimum response rate ([Limit 14](../../docs/design.md#limit-http1)):
@@ -1028,6 +1034,30 @@ instead of tower-http's defaults (brotli 4 here), the runtime and assets compres
 in `render_cost`), and the island scan looking for dashes instead of every tag (21 µs to 2.4 µs
 on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 
+### The image's allocator (Docker Desktop, 2026-11-08)
+
+The evidence behind [design Choice 23](../../docs/design.md#choice-jemalloc-image), card-market
+built at `81f1f8ef` with only its allocator's environment changed, except the tuned image in
+`results/alloc-faults` and `alloc-idle` (`corten-card-market-p1011b`), a build of this change whose
+commit was not recorded, which matched the environment-only `cm-p1011-tc65536` in
+`results/alloc-faults-br`. The fault folders' JSON records every image's id and settings, the flood
+folders' the image's id and each variant's settings added to it; the table gives the `ab.mjs`
+folders':
+
+| Folder | What | Images |
+|---|---|---|
+| `results/flood-memory`, `-mmap`, `-tuned` | `flood-memory.mjs`: eight floods of 4,000 unfinished heads, three runs each | jemalloc unset, `background_thread:true`, and that with `tcache_max:65536`; glibc, with two arenas or one, and with a 16 KiB mmap threshold |
+| `results/alloc-faults` | `alloc-faults.mjs`: page faults and CPU a request, three encodings, three rounds | jemalloc unset (`cm-p1011-je`), the tuned image as committed (`corten-card-market-p1011b`), glibc (`cm-p1011-glibc`) |
+| `results/alloc-idle` | `alloc-faults.mjs` with `IDLE_SECONDS=60`: CPU and threads of an untouched app, three rounds | jemalloc unset, the tuned image, and that with `max_background_threads:1` (`jecap1`) |
+| `results/alloc-faults-br` | the same, brotli only | jemalloc unset, `background_thread:true` (`jebg`), no decay (`jenodecay`), `thp:never`, `retain:false`, `tcache_max` 64 KiB and 8 MiB, the tuned image, glibc |
+| `results/ab-jemalloc` | `ab.mjs`, three encodings, three rounds | jemalloc unset (`je`), `background_thread:true` (`jebg`), glibc |
+| `results/ab-jemalloc-br` | `ab.mjs`, brotli only | jemalloc unset, `oversize_threshold` 0 (`jeos0`) and 64 MiB (`jeos64`), glibc |
+| `results/ab-jemalloc-tuned` | `ab.mjs`, three encodings, three rounds | jemalloc unset, `background_thread:true,tcache_max:65536` (`jecand`), glibc |
+
+All ran on a desktop with other containers running, so the `ab.mjs` rounds moved by up to 2.4
+times between rounds of one image; the fault counts repeat to 0.1 a request. A quiet host has not
+run them.
+
 ### Build cost on a desktop (round local-2, 2026-11-03)
 
 `build.mjs local-2 all 1` on Docker Desktop (WSL2, 8 CPUs, 9.7 GiB), each step pinned to cores
@@ -1328,7 +1358,8 @@ three runs:
     - Build: the Dockerfile's build step on that tree. Clean is the two together: the Rust apps
       compile every crate in the build step, Phoenix, Rails and Drogon compile theirs in the
       dependency step, and npm, pip and Maven packages mostly arrive built, so only the two
-      together compare like for like, and that includes the downloads.
+      together compare like for like, and that includes the downloads. FastAPI and Express have
+      no build step, so their clean time is the dependency step alone and they have no rebuild.
     - Rebuild: the build step again after one edit, a `title` on the price-alert form's submit
       button in the file holding the item page's markup (touched in the container, so its time
       is newer than the build's by the container's clock), on the tree the clean build left, so
@@ -1515,8 +1546,10 @@ companion its documentation points to for it (tower-http for axum); a part that 
 write its own handler, error mapper or server loop is left out, as the defaults tier leaves it. The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
 rule (Corten; axum-maud, the anchor every tier shares; the three best on the tier's own measure
 and the four most used in the Stack Overflow survey, on r13 and the 2026 survey ASP.NET Core,
-Topcoat and Leptos, and Next.js, ASP.NET Core, Spring and Django; ASP.NET Core as its Razor Pages
-app in the page phases and its native AOT app in the JSON ones), are eight. An app takes part
+Topcoat and Leptos, and Next.js, ASP.NET Core, FastAPI and Express; ASP.NET Core as its Razor Pages
+app in the page phases and its native AOT app in the JSON ones), are eight. Spring Boot and Django,
+fifth and seventh in that survey, left the four when FastAPI and Express joined the bench
+([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)); they stay in the defaults tier. An app takes part
 (`matched: true` in `apps.mjs`) once it starts with its profile:
 
 1. `corten`: card-market's defaults are the profile's first two parts; `MAX_CONNECTIONS` sets
@@ -1529,7 +1562,7 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    are the app's own code, which the profile does not change, as no framework's error pages are
    rewritten by hand; and `axum::serve` has no header timeout or head size setting (hyper's are
    reached by writing the accept loop on hyper-util). Those columns stay unmet.
-3. `nextjs`, `leptos`, `django`, `aspnet` (and `aspnet-aot`), `spring` and `topcoat` are not
+3. `nextjs`, `leptos`, `aspnet` (and `aspnet-aot`), `topcoat`, `fastapi` and `express` are not
    in it yet: each joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
@@ -1665,26 +1698,34 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
    Rust service with Postgres and Redis, not in this repository).
-3. JavaScript dependencies are pinned in each `package.json` without lockfiles, so transitive
-   versions can drift between builds; the other apps have lockfiles.
+3. JavaScript dependencies are pinned in each `package.json` without lockfiles, and the Python
+   apps' (Django, FastAPI) in `requirements.txt`, which pins only the packages it names, so
+   transitive versions can drift between builds; the other apps have lockfiles.
 4. The page is small. Apps with large client-side state (a seller grid of live rows) are a
    different test; see [bench/live](../live/README.md) for pushing updates.
-5. Each framework runs its production defaults with the worker count its docs give for one CPU,
-   in one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or
-   cannot serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked
-   failed. Each could be tuned further (caching, streaming, more workers). None of the apps cache
-   rendered pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at
-   their default level. Drogon runs one IO thread per core, as its docs advise, and counts its
-   cores from its CPU affinity capped by the container's CPU quota, since its own count (`0`)
-   sees every core of the host. Two settings differ from a library's default so that the item
-   API source does the same work in every app: Gin keeps as many idle connections to the item API
-   as its transport allows (Go's default keeps two per host; reqwest, .NET and Node have no
-   per-host cap), and Drogon keeps one `HttpClient` (one connection) per request in flight on
-   each thread. Drogon also hands the fixture parser's freed memory back to the system after
-   loading (`malloc_trim`), so its memory with items in memory is the items' rather than the
-   parser's peak, which the Rust apps avoid by parsing one item at a time. Drogon's JSON is
-   JsonCpp's, Drogon's default, which writes 17 significant digits (`0.79000000000000004`), so
-   its item JSON is about 3% longer than the others' for the same values.
+5. Each framework runs its production defaults with the worker count its docs give for one CPU, in
+   one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or cannot
+   serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked failed.
+   Each could be tuned further (caching, streaming, more workers). None of the apps cache rendered
+   pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at their
+   default level and FastAPI does (`fastapi run` keeps uvicorn's access log). Drogon runs one IO
+   thread per core, as its docs advise, and counts its cores from its CPU affinity capped by the
+   container's CPU quota, since its own count (`0`) sees every core of the host. FastAPI runs
+   `fastapi run`, one uvicorn process: its container guide gives one process a container where the
+   container is given its CPUs, and the live stream needs every client in one process. Express runs
+   one Node process with `NODE_ENV=production`, as its production guide says, which caches compiled
+   views; FastAPI's templates are Starlette's `Jinja2Templates` as created, which checks each
+   template file's time on every render (Jinja's default, which FastAPI's docs do not change). Three
+   settings differ from a library's default so that the item API source does the same work in every
+   app: Gin keeps as many idle connections to the item API as its transport allows (Go's default
+   keeps two per host; reqwest, .NET and Node have no per-host cap), FastAPI's httpx clients have no
+   connection cap (httpx's default keeps 20 idle and allows 100 in all), and Drogon keeps one
+   `HttpClient` (one connection) per request in flight on each thread. Drogon also hands the fixture
+   parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
+   in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one
+   item at a time. Drogon's JSON is JsonCpp's, Drogon's default, which writes 17 significant digits
+   (`0.79000000000000004`), so its item JSON is about 3% longer than the others' for the same
+   values.
 6. The images include the live benchmark's routes (`/live/...`), which the item page does not
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r16. (r2's main run had raised it
@@ -1829,6 +1870,13 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
+# One app before and after, alternating (identity, a browser's encodings, brotli alone; AB_ROUNDS=3,
+# AB_ENCODINGS=br for some), and the memory floods of unfinished heads leave, by allocator setting
+# (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some); the committed
+# fault folders ran REQUESTS=2000, results/alloc-faults-br with ENCODINGS=br too:
+node bench/fullstack/ab.mjs results/ab-x cb-corten cb-corten-next
+node bench/fullstack/flood-memory.mjs results/flood-x cb-corten [runs=3] [floods=8]
+node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next   # page faults and CPU a request
 ```
 
 ## What the repository keeps
