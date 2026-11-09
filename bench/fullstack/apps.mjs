@@ -64,8 +64,8 @@ const inMatched = (/** @type {{ image: string, matchedImage?: string }} */ app) 
 export const tierApps = tier === "matched" ? Object.fromEntries(Object.entries(catalog).filter(([, app]) => /** @type {{ matched?: boolean }} */ (app).matched).map(([name, app]) => [name, inMatched(app)])) : catalog;
 /** The `docker build` arguments for an app's image in a tier, from the repository root (droplet.mjs). */
 export const buildArgs = (/** @type {string} */ name, /** @type {string} */ forTier) => {
-  /** @type {{ image: string, matchedImage?: string }} */
   if (name === "corten") throw new Error("corten's image is examples/card-market's, not built by buildArgs");
+  /** @type {{ image: string, matchedImage?: string }} */
   const app = catalog[/** @type {keyof typeof catalog} */ (name)] ?? { image: `cb-${name}` };
   return forTier === "matched" && app.matchedImage
     ? ["build", "-q", "--build-arg", "PROFILE=matched", "-t", app.matchedImage, `bench/fullstack/apps/${name}`]
