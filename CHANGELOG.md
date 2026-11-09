@@ -5559,11 +5559,14 @@ Corten is pre-1.0, so any minor version may change the API.
     and Firefox). The prefetch check's one-off failure in Firefox (an extra request) matches this.
     The two Firefox checks that failed now and then say what they counted when they fail: each
     request with its purpose, and the timed requests and console errors of the module that is
-    imported again. Both prefetch checks read each count once the request it counts is seen, not
-    after a pause: each of the nine hovers waits for its prefetch, the oldest page's click for
-    its fetch (or its hover's), and the `data-no-prefetch` control for its own prefetch. The
-    newest page's reuse is read from the requests themselves (no visit asked for it), and the
-    opt-out's pause, which waits for a request that must not come, is the page's own timer
+    imported again. The prefetch checks read each count once the request it counts is seen: each
+    of the nine hovers waits for its prefetch, the oldest page's click for its fetch (or its
+    hover's), and the `data-no-prefetch` control for its own prefetch. Only the opt-out still
+    pauses, since the request it checks for must not come; its pause is the page's own timer, set
+    after the dwell. The reuse of the oldest page kept and of the newest is read from the requests
+    themselves (no visit asked for either), so a cache of fewer than 8 now fails the check, where
+    one of 7 passed it. The module check already waited for the event it counts; why its third
+    request once did not come is not known
     ([#1053 Two Firefox watchlist smoke checks (prefetch's newest 8, a script module imported again) each fail now and then on a branch that does not touch them](https://github.com/corten-run/corten/issues/1053)).
 186. A page upload whose client stopped sending was answered at the deadline as the server's
     timeout (503, `Failure::TimedOut`) and logged as a deadline, never as the stalled client it

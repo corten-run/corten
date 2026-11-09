@@ -3685,9 +3685,10 @@ async function run(browser) {
     await control;
     check("data-no-prefetch: hovering the link fetches nothing", afterOptOut === 0 && navRequests.length === 1, `${afterOptOut} then ${navRequests.join()}`);
 
-    // The prefetch cache keeps the 8 newest pages: after hovering 9 links, following the newest
-    // reuses its prefetch and following the oldest fetches it again. The links sit in the shell,
-    // which navigation keeps.
+    // The prefetch cache keeps the 8 newest pages: after hovering 9 links, following the oldest of
+    // the 8 kept and the newest reuses their prefetches, so a cache of fewer than 8 fails here, and
+    // following the oldest fetches it again, so one of more than 8 fails. The links sit in the
+    // shell, which navigation keeps.
     await page.evaluate(() =>
       document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html(Array.from({ length: 9 }, (_, i) => `<a class="hovered" href="/news?p=${i}">${i}</a>`).join(" "))),
     );
@@ -3697,6 +3698,8 @@ async function run(browser) {
       await prefetched;
     }
     const hoveredCount = navRequests.length;
+    await page.click('header a.hovered[href="/news?p=1"]');
+    await page.waitForFunction(() => location.search === "?p=1");
     await page.click('header a.hovered[href="/news?p=8"]');
     await page.waitForFunction(() => location.search === "?p=8");
     // The oldest is fetched again by its click, or by its hover's dwell when that ends first.
@@ -3705,12 +3708,13 @@ async function run(browser) {
     await page.waitForFunction(() => location.search === "?p=0");
     // Playwright can report the request after the address changes.
     await fetchedAgain;
-    // The newest was reused: no visit fetched it, however late its request was reported.
-    const newestFetched = navRequests.includes(new URL("/news?p=8", base).href);
+    // The oldest kept and the newest were reused: no visit fetched either, however late its
+    // request was reported.
+    const keptFetched = ["/news?p=1", "/news?p=8"].filter((path) => navRequests.includes(new URL(path, base).href));
     check(
-      "prefetch keeps the 8 newest pages: the newest is reused, the oldest is fetched again",
-      hoveredCount === 10 && !newestFetched && navRequests.length === 11,
-      `${hoveredCount}, ${newestFetched ? "newest fetched" : "newest reused"}, ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
+      "prefetch keeps the 8 newest pages: the oldest kept and the newest are reused, the oldest is fetched again",
+      hoveredCount === 10 && keptFetched.length === 0 && navRequests.length === 11,
+      `${hoveredCount}, ${keptFetched.length ? `fetched ${keptFetched.join(" ")}` : "both reused"}, ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
     );
 
     // The page a visit is fetching is not prefetched as well, by the dwell the click cut short or
