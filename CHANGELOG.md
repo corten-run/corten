@@ -2562,8 +2562,9 @@ Corten is pre-1.0, so any minor version may change the API.
     error go without the profile's headers. Its matched matrix meets 13 of 24 columns
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 279. Django joins `bench/fullstack`'s matched tier: under `PROFILE=matched` its settings add its
-    host list, its CSP middleware, gzip, an ETag and `cache_control` on the pages and the JSON,
-    and its matched matrix meets 15 of 24 columns
+    host list, the trusted origins its forms are posted from (`ORIGINS`, which the tier now passes
+    every app: the edge's origin), its CSP middleware, gzip and an ETag, its views take
+    `cache_control`, and its matched matrix meets 15 of 24 columns
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
