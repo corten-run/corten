@@ -939,6 +939,17 @@ instead, whatever its methods: one written as that path, or one with a parameter
 The fixed icon uses a weak content tag that stays the same when its background-compressed
 forms become ready; versioned files retain their encoding-specific tags.
 
+A file is sent with the type its extension names: scripts, styles, images, fonts, `wasm`, video
+(`mp4`, `webm`) and captions (`vtt`, `text/vtt`); any other is `application/octet-stream`. A
+file sent as it is stored (a video, a font or a raster image, which are never compressed, or any
+file to a client that takes no encoding) answers a `Range` request, so a `<video>` seeks without
+downloading what it skips: one range of bytes is a `206 Partial Content` with its
+`Content-Range`, a range that starts past the end is a `416` naming the file's length, and
+several ranges or another unit get the whole file, as RFC 9110 allows. `If-Range` keeps the range
+only while it names the file's own strong ETag. A file sent compressed is sent whole, since the
+compressed bytes' offsets are not the file's. No answer sends `Accept-Ranges`: browsers ask for a
+range without it, and the header would cost every file's answer.
+
 ## Caching
 
 Static files, component scripts, the components' stylesheet and the runtime have content-hashed

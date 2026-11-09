@@ -61,7 +61,10 @@
   },
   "home": {
     "title": "Articles populaires",
-    "item": "Article {n}"
+    "item": "Article {n}",
+    "grading": "Comment nous évaluons l'état d'une carte",
+    "captions_en": "English",
+    "captions_fr": "Français"
   },
   "card": {
     "from": "À partir de {price}"

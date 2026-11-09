@@ -12,6 +12,11 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? ` (${detail})` : ""}`);
   if (!ok) failures.push(name);
 };
+/** A check this browser cannot make, and why. */
+const skip = (/** @type {string} */ name, /** @type {string} */ why) => {
+  seen(name);
+  console.log(`skip ${name} (${why})`);
+};
 
 const browser = steady(await chromium.launch({ headless: true }));
 try {
@@ -409,6 +414,64 @@ try {
       );
     } finally {
       await other.close();
+    }
+  }
+  // The home page's condition clip plays from the embedded files in every engine: each byte range
+  // the browser asks for is answered 206 (WebKit also reads the file once without one, a 200), it
+  // seeks to the clip's last part without loading it again from the start, and the reader's
+  // captions show there (#1133). The reader's track is the `default`: Chromium and Firefox show it
+  // unasked, while WebKit leaves captions to its own caption setting, so there the smoke turns the
+  // track on and checks the same cue. Playwright's WebKit on Windows lands a seek on the clip's
+  // start whatever server sends it (a plain Node one too), so it is skipped there; on Linux, as in
+  // CI, it makes the whole check.
+  for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
+    const clipCheck = `${name}: the home page's clip plays from its embedded file by byte ranges, seeks, and shows the reader's captions there`;
+    if (name === "WebKit" && process.platform === "win32") {
+      skip(clipCheck, "Playwright's WebKit on Windows lands a seek on a video's start");
+      continue;
+    }
+    const own = name === "Chromium" ? null : await type.launch({ headless: true });
+    try {
+      const clipPage = await (await (own ?? browser).newContext()).newPage();
+      /** @type {string[]} */
+      const answers = [];
+      clipPage.on("response", (r) => {
+        if (/\/grading\/condition\.(webm|mp4)$/.test(new URL(r.url()).pathname)) answers.push(`${r.request().headers()["range"] ?? "whole"}: ${r.status()} ${r.headers()["content-range"] ?? "-"}`);
+      });
+      await clipPage.goto(`${base}/`);
+      const seen = await clipPage.evaluate(async (/** @type {boolean} */ askFirst) => {
+        const within = (/** @type {Promise<unknown>} */ p, /** @type {string} */ what) =>
+          Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error(`no ${what} in 10 s`)), 10000))]);
+        const video = /** @type {HTMLVideoElement} */ (document.querySelector("video"));
+        const track = /** @type {HTMLTrackElement} */ (video.querySelector("track[default]"));
+        try {
+          if (video.readyState < 1) {
+            await within(new Promise((resolve, reject) => {
+              video.addEventListener("loadedmetadata", resolve, { once: true });
+              video.addEventListener("error", () => reject(new Error(`video error ${video.error?.code}`)), { once: true });
+            }), "metadata");
+          }
+          const unasked = track.track.mode;
+          if (askFirst && unasked !== "showing") track.track.mode = "showing";
+          if (track.readyState !== 2) await within(new Promise((resolve) => track.addEventListener("load", resolve, { once: true })), "captions");
+          video.currentTime = 4.5;
+          await within(new Promise((resolve) => video.addEventListener("seeked", resolve, { once: true })), "seek");
+          const cue = [...(track.track.cues ?? [])].find((c) => c.startTime <= video.currentTime && video.currentTime < c.endTime);
+          return { at: video.currentTime, duration: video.duration, src: video.currentSrc.split("/").pop(), lang: track.srclang, unasked, mode: track.track.mode, cue: cue instanceof VTTCue ? cue.text : null };
+        } catch (e) {
+          return { error: String(e), src: video?.currentSrc, state: video?.readyState, track: track?.readyState };
+        }
+      }, name === "WebKit");
+      check(
+        clipCheck,
+        !("error" in seen) && Math.abs(seen.at - 4.5) < 0.6 && seen.mode === "showing" &&
+          (name === "WebKit" || seen.unasked === "showing") && seen.lang === "en" &&
+          seen.cue?.startsWith("Moderately Played") === true && answers.some((a) => a.startsWith("bytes=")) &&
+          answers.every((a) => a.startsWith("whole: ") || a.includes(": 206 bytes ")),
+        `${JSON.stringify(seen)}; ${answers.join(", ")}`,
+      );
+    } finally {
+      await own?.close();
     }
   }
   // A full document denies the powerful features no page uses: Chromium reads the header (no

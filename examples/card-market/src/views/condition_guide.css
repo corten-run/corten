@@ -1,0 +1,4 @@
+/* The home page's condition clip and its caption. */
+.guide { margin: var(--space-6) 0 0; }
+.clip { display: block; width: 100%; max-width: 32rem; height: auto; border-radius: var(--radius-md); }
+.guide figcaption { margin-top: var(--space-2); color: var(--color-muted); font-size: var(--font-size-sm); }

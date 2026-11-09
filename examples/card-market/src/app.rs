@@ -33,7 +33,7 @@ use crate::{
     routes,
     source::Source,
     text::Msg,
-    views::{self, AlertForm, AlertFormView, AlertMessage, ItemList, ItemPage, Layout, MoreOffers, Shown},
+    views::{self, AlertForm, AlertFormView, AlertMessage, ConditionGuide, ItemList, ItemPage, Layout, MoreOffers, Shown},
 };
 
 /// The app, assembled: routes plus the error page, catalogs and PWA settings. Corten adds the rest.
@@ -344,6 +344,7 @@ pub(crate) async fn home(req: Req, State(source): State<Source>) -> Public<HtmlR
         <Layout req={req} title={t.home_title()} head="">
             <h1>{t.home_title()}</h1>
             <ItemList req={req} t={t} shelf={source.shelf()} />
+            <ConditionGuide req={req} t={t} />
         </Layout>
     }))
 }
@@ -710,6 +711,28 @@ mod tests {
             "only the document is shared"
         );
         assert_eq!(app.get(&ITEM).await.headers()["cache-control"], "private, no-cache");
+    }
+
+    /// The home page's condition clip: the video in MP4, then WebM, and captions in each language,
+    /// the reader's the default, every file from `static/` (a versioned URL) (#1133).
+    #[tokio::test]
+    async fn the_condition_clip_is_captioned_in_the_readers_language() {
+        let app = app();
+        for (language, on, off) in [("en", "en", "fr"), ("fr-CA", "fr", "en")] {
+            let page = app.get(&routes::Home).header(header::ACCEPT_LANGUAGE, language).await;
+            let html = page.text();
+            let track = |lang: &str| {
+                let at = html.find(&format!(r#"srclang="{lang}""#)).unwrap_or_else(|| panic!("{lang} track: {html}"));
+                html[at..at + html[at..].find('>').unwrap()].to_string()
+            };
+            assert!(track(on).ends_with(" default") && !track(off).contains("default"), "{}, {}", track(on), track(off));
+            assert!(track(on).contains(r#"src="/assets/"#) && track(on).contains(&format!(r#"/grading/condition.{on}.vtt""#)));
+            let source = |file: &str, kind: &str| {
+                let at = html.find(&format!(r#"/grading/{file}" type="{kind}">"#));
+                at.unwrap_or_else(|| panic!("{file}: {html}"))
+            };
+            assert!(source("condition.mp4", "video/mp4") < source("condition.webm", "video/webm"));
+        }
     }
 
     #[tokio::test]

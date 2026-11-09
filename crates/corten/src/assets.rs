@@ -828,17 +828,78 @@ impl Assets {
             crate::compress::encoded_headers(res.headers_mut(), file.content_type, None);
             return res;
         }
+        // A range of the file as it is stored, to a client sent it unencoded (a video seeking): an
+        // encoded body's offsets are not the file's, so it is sent whole. `If-Range` holds for this
+        // version's own strong tag only (the files have no date). No `Accept-Ranges`: a browser
+        // asks for a range unprompted, and the header would cost every file's answer (#1133).
+        #[cfg(feature = "compress")]
+        let ranged = coding.is_none();
+        #[cfg(not(feature = "compress"))]
+        let ranged = true;
+        let strong = !etag.as_bytes().starts_with(b"W/");
+        let range = headers
+            .get(header::RANGE)
+            .filter(|_| ranged && headers.get(header::IF_RANGE).is_none_or(|tag| strong && *tag == etag))
+            .and_then(|value| byte_range(value.as_bytes(), body.len()));
         let head = [
             (header::CONTENT_TYPE, HeaderValue::from_static(file.content_type)),
             (header::CACHE_CONTROL, cache),
             (header::ETAG, etag),
         ];
         #[allow(unused_mut)]
-        let mut res = (head, body).into_response();
+        let mut res = match range {
+            None => (head, body).into_response(),
+            Some(Ok(range)) => {
+                let at = format!("bytes {}-{}/{}", range.start, range.end - 1, body.len());
+                let mut res = (StatusCode::PARTIAL_CONTENT, head, body.slice(range)).into_response();
+                res.headers_mut().insert(header::CONTENT_RANGE, HeaderValue::try_from(at).expect("digits"));
+                res
+            }
+            Some(Err(())) => return unsatisfiable(body.len()),
+        };
         #[cfg(feature = "compress")]
         crate::compress::encoded_headers(res.headers_mut(), file.content_type, coding);
         res
     }
+}
+
+/// The one byte range a `Range` header asks of a body `len` bytes long (RFC 9110 14.1.2):
+/// `Some(Ok(range))` to send, `Some(Err(()))` when it starts past the end (a 416), and `None` to
+/// send the whole body, as a server may for a header it does not parse, another unit or several
+/// ranges.
+fn byte_range(value: &[u8], len: usize) -> Option<Result<std::ops::Range<usize>, ()>> {
+    let (unit, set) = std::str::from_utf8(value).ok()?.split_once('=')?;
+    if !unit.trim_ascii().eq_ignore_ascii_case("bytes") || set.contains(',') {
+        return None;
+    }
+    let (first, last) = set.trim_ascii().split_once('-')?;
+    let number = |digits: &str| digits.bytes().all(|b| b.is_ascii_digit()).then(|| digits.parse::<u64>().ok()).flatten();
+    let len64 = len as u64;
+    let (start, end) = if first.is_empty() {
+        // The last `n` bytes; none at all, or of an empty body, cannot be sent.
+        let n = number(last)?;
+        if n == 0 || len == 0 {
+            return Some(Err(()));
+        }
+        (len64.saturating_sub(n), len64)
+    } else {
+        let start = number(first)?;
+        let end = match last {
+            "" => len64,
+            last => number(last).filter(|&last| last >= start)?.saturating_add(1).min(len64),
+        };
+        if start >= len64 {
+            return Some(Err(()));
+        }
+        (start, end)
+    };
+    Some(Ok(start as usize..end as usize))
+}
+
+/// The 416 for a range past the end of a body `len` bytes long, naming its length.
+fn unsatisfiable(len: usize) -> Response {
+    let whole = HeaderValue::try_from(format!("bytes */{len}")).expect("digits");
+    (StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, whole)]).into_response()
 }
 
 /// A file's ETag: its hash in hex, quoted, and its coding's tag after a `-` (`"0123..ef-br"`).
@@ -1086,6 +1147,9 @@ pub(crate) fn content_type(path: &str) -> &'static str {
         Some("woff2") => "font/woff2",
         Some("woff") => "font/woff",
         Some("wasm") => "application/wasm",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("vtt") => "text/vtt; charset=utf-8",
         Some("txt") => "text/plain; charset=utf-8",
         Some("xml") => "application/xml",
         _ => "application/octet-stream",
@@ -1121,6 +1185,27 @@ mod tests {
         root
     }
 
+    /// What serving a file costs: `ASSET_REQUESTS` (200) requests of a 4 KiB stylesheet in process,
+    /// one at a time, unencoded (the answer a range is read for). Counted under callgrind at two
+    /// numbers of requests, the difference over the requests between them is the instructions a
+    /// request: `ASSET_REQUESTS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_serving_a_file_costs`
+    #[test]
+    #[ignore]
+    fn what_serving_a_file_costs() {
+        let requests: usize = std::env::var("ASSET_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        let root = dir("cost", &[("style.css", &"a{color:red}\n".repeat(320))]);
+        let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let app: Router = assets.routes();
+        let url = assets.url("style.css");
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(async {
+            for _ in 0..requests {
+                let res = app.clone().oneshot(Request::get(&url).body(Body::empty()).unwrap()).await.unwrap();
+                assert_eq!(res.status(), StatusCode::OK);
+            }
+        });
+    }
+
     #[tokio::test]
     async fn versioned_urls_are_immutable_and_old_versions_are_not_cached() {
         let root = dir("serve", &[("style.css", "a{}"), ("scripts/x_y.js", "export function f() {}"), (".env", "SECRET=1")]);
@@ -1142,6 +1227,122 @@ mod tests {
         assert_eq!(get(traversal).await.unwrap().status(), StatusCode::NOT_FOUND, "only loaded files are served");
         let dotfile = format!("/assets/{}/.env", assets.version());
         assert_eq!(get(dotfile).await.unwrap().status(), StatusCode::NOT_FOUND, "dotfiles are skipped");
+    }
+
+    /// Video and captions are named by their standard types (#1133).
+    #[test]
+    fn video_and_captions_have_their_types() {
+        assert_eq!(content_type("intro.mp4"), "video/mp4");
+        assert_eq!(content_type("intro.WEBM"), "video/webm");
+        assert_eq!(content_type("captions/en.vtt"), "text/vtt; charset=utf-8");
+    }
+
+    /// One range of bytes, as RFC 9110 writes it; a range past the end is unsatisfiable, and what
+    /// is not one range of bytes is ignored, so the whole body is sent.
+    #[test]
+    fn a_range_is_one_span_of_bytes() {
+        let at = |value: &str| byte_range(value.as_bytes(), 100);
+        assert_eq!(at("bytes=0-9"), Some(Ok(0..10)));
+        assert_eq!(at("bytes=10-"), Some(Ok(10..100)));
+        assert_eq!(at("bytes=90-500"), Some(Ok(90..100)), "a last byte past the end is the end");
+        assert_eq!(at("bytes=-5"), Some(Ok(95..100)));
+        assert_eq!(at("bytes=-500"), Some(Ok(0..100)));
+        assert_eq!(at("Bytes = 0-0"), Some(Ok(0..1)), "the unit is compared without case");
+        assert_eq!(at("bytes=100-"), Some(Err(())));
+        assert_eq!(at("bytes=-0"), Some(Err(())));
+        assert_eq!(byte_range(b"bytes=-1", 0), Some(Err(())), "an empty body has no last byte");
+        for ignored in ["bytes=9-0", "bytes=0-1,5-6", "items=0-1", "bytes=+1-2", "bytes=a-", "bytes", "bytes=-"] {
+            assert_eq!(at(ignored), None, "{ignored}");
+        }
+    }
+
+    /// A video seeks: a range of a file is sent as a 206 of those bytes, named by `Content-Range`,
+    /// a range past its end as a 416 naming its length, a range under another version's tag
+    /// (`If-Range`) as the whole file, and a file the client already has as a 304 (#1133).
+    #[tokio::test]
+    async fn a_file_is_sent_in_the_ranges_asked_for() {
+        let video: String = (0..100u8).map(|i| char::from(b'a' + i % 26)).collect();
+        let root = dir("ranges", &[("intro.mp4", &video)]);
+        let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let app: Router = assets.routes();
+        let url = assets.url("intro.mp4");
+        let get = |headers: &[(header::HeaderName, &str)]| {
+            let mut req = Request::get(&url);
+            for (name, value) in headers {
+                req = req.header(name, *value);
+            }
+            app.clone().oneshot(req.body(Body::empty()).unwrap())
+        };
+        let body = |res: Response| async move { http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes() };
+        let whole = get(&[]).await.unwrap();
+        assert_eq!(whole.status(), StatusCode::OK);
+        assert!(!whole.headers().contains_key(header::ACCEPT_RANGES), "a range is answered, not advertised");
+        assert_eq!(whole.headers()[header::CONTENT_TYPE], "video/mp4");
+        let tag = whole.headers()[header::ETAG].clone();
+        let part = get(&[(header::RANGE, "bytes=10-19")]).await.unwrap();
+        assert_eq!(part.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(part.headers()[header::CONTENT_RANGE], "bytes 10-19/100");
+        assert_eq!(
+            (&part.headers()[header::ETAG], &part.headers()[header::CONTENT_TYPE]),
+            (&tag, &HeaderValue::from_static("video/mp4"))
+        );
+        assert_eq!(body(part).await, video.as_bytes()[10..20]);
+        let tail = get(&[(header::RANGE, "bytes=-5"), (header::IF_RANGE, tag.to_str().unwrap())]).await.unwrap();
+        assert_eq!(
+            (tail.status(), &tail.headers()[header::CONTENT_RANGE]),
+            (StatusCode::PARTIAL_CONTENT, &HeaderValue::from_static("bytes 95-99/100"))
+        );
+        assert_eq!(body(tail).await, video.as_bytes()[95..]);
+        let past = get(&[(header::RANGE, "bytes=100-")]).await.unwrap();
+        assert_eq!(
+            (past.status(), &past.headers()[header::CONTENT_RANGE]),
+            (StatusCode::RANGE_NOT_SATISFIABLE, &HeaderValue::from_static("bytes */100"))
+        );
+        let stale = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, "\"0000000000000000\"")]).await.unwrap();
+        assert_eq!(stale.status(), StatusCode::OK, "another version's range is sent whole");
+        assert_eq!(body(stale).await.len(), 100);
+        let dated = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, "Sun, 08 Nov 2026 00:00:00 GMT")]).await.unwrap();
+        assert_eq!(dated.status(), StatusCode::OK, "the files have no date to compare");
+        let kept = get(&[(header::RANGE, "bytes=10-19"), (header::IF_NONE_MATCH, tag.to_str().unwrap())]).await.unwrap();
+        assert_eq!(kept.status(), StatusCode::NOT_MODIFIED);
+        let head = app
+            .clone()
+            .oneshot(Request::head(&url).header(header::RANGE, "bytes=0-9").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            (head.status(), &head.headers()[header::CONTENT_RANGE]),
+            (StatusCode::PARTIAL_CONTENT, &HeaderValue::from_static("bytes 0-9/100"))
+        );
+    }
+
+    /// Captions compressed for the client are sent whole: an encoded body's offsets are not the
+    /// file's. A client that takes them unencoded gets its range.
+    #[cfg(feature = "compress")]
+    #[tokio::test]
+    async fn an_encoded_file_is_sent_whole() {
+        let captions = format!("WEBVTT\n\n{}", "00:00.000 --> 00:01.000\nA line of captions.\n\n".repeat(60));
+        let root = dir("ranges-encoded", &[("en.vtt", &captions)]);
+        let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let app: Router = assets.routes();
+        let url = assets.url("en.vtt");
+        let get = |encodings: &str| {
+            let req = Request::get(&url).header(header::RANGE, "bytes=0-9").header(header::ACCEPT_ENCODING, encodings);
+            app.clone().oneshot(req.body(Body::empty()).unwrap())
+        };
+        get("br").await.unwrap();
+        assets.files["en.vtt"].body.wait();
+        let encoded = get("br").await.unwrap();
+        assert_eq!(
+            (encoded.status(), &encoded.headers()[header::CONTENT_ENCODING]),
+            (StatusCode::OK, &HeaderValue::from_static("br"))
+        );
+        assert!(!encoded.headers().contains_key(header::ACCEPT_RANGES) && !encoded.headers().contains_key(header::CONTENT_RANGE));
+        let plain = get("identity").await.unwrap();
+        assert_eq!(
+            (plain.status(), &plain.headers()[header::CONTENT_TYPE]),
+            (StatusCode::PARTIAL_CONTENT, &HeaderValue::from_static("text/vtt; charset=utf-8"))
+        );
     }
 
     /// The fixed icon's content is unchanged when its background-compressed form becomes ready.

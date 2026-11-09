@@ -11,6 +11,7 @@ corten::assets::embed! {
 }
 
 mod alert;
+mod condition_guide;
 mod item_card;
 mod item_detail;
 mod item_list;
@@ -20,6 +21,7 @@ mod price;
 mod site_header;
 
 pub use alert::{AlertForm, AlertFormView, AlertMessage};
+pub use condition_guide::ConditionGuide;
 pub use item_card::ItemCard;
 pub use item_detail::{ItemDetail, ItemPage};
 pub use item_list::ItemList;
