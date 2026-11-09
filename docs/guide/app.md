@@ -83,20 +83,32 @@ from flood to flood, which is how it was told from a leak (no allocation count w
 mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
 left 167 MiB, still rising about 18 MiB a flood
 ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+The same floods driven by `bench/fullstack/flood-memory.mjs` (three runs each, the cgroup's
+`memory.current` 35 seconds after the last flood) left 406 to 455 MiB on glibc's allocator, and its
+tunables did not stop it: two arenas or one left 382 to 452 MiB, and a 16 KiB mmap threshold 177 to
+184 MiB, still climbing 20 MiB a flood. jemalloc as it comes left 118 to 139 MiB, since it returns
+memory only while the app allocates (more than the earlier run's 45 MiB 35 seconds after the last
+flood, taken by `docker stats` on a build of `e751d127`, for a cause not found; the sizing below
+uses this run);
+with its background thread
+(`MALLOC_CONF=background_thread:true`) the same app idle went back to 7 to 11 MiB
+([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
-room to spare, sized from the peak repeated floods reach rather than the first. Past the cap,
-connections wait in each listener's queue (up to 511 from `corten::listeners` on Linux). By how
-Linux queues them (reasoned, not measured), the kernel keeps what each has sent so far, up to its
-receive buffer, in the host's TCP memory, and charges it to the container when the app accepts
-the connection, so it lands as the cap frees room. The Dockerfile
-`corten new` writes preloads jemalloc in the image's last stage, which gives the memory back
-between floods at no measured cost per request ([design Choice 23](../design.md#choice-jemalloc-image)).
-An image of the app's own adds the same two lines, before any `USER` line; removing them runs
-the app on glibc's allocator:
+room to spare, sized from the peak repeated floods reach rather than the first: 187 to 197 MiB for
+4,000 here with the background thread, about 48 KiB a connection (sampled a second before each
+flood's hold ended). Past the cap, connections wait in each listener's queue (up to 511 from
+`corten::listeners` on Linux). By how Linux queues them (reasoned, not measured), the kernel keeps
+what each has sent so far, up to its receive buffer, in the host's TCP memory, and charges it to
+the container when the app accepts the connection, so it lands as the cap frees room. The
+Dockerfile `corten new` writes preloads jemalloc in the image's last stage with that background
+thread and a 64 KiB thread cache, which keeps brotli's buffers between responses
+([design Choice 23](../design.md#choice-jemalloc-image)). An image of the app's own adds the same
+three lines, before any `USER` line; removing them runs the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
+ENV MALLOC_CONF=background_thread:true,tcache_max:65536
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of

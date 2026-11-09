@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="{% block lang %}en{% endblock %}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}Card Market{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/components.css">
+{% block head %}{% endblock %}
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/item.js" defer></script>
+</head>
+<body hx-boost="true">
+<header class="site-header__bar"><a href="/">Card Market</a></header>
+<main>{% block main %}{% endblock %}</main>
+</body>
+</html>
