@@ -1,4 +1,5 @@
 import { maxConnections } from "./conformance.mjs";
+import { edgeBase } from "./edge.mjs";
 
 // The apps under test: one image each, same page, same data, same port inside the container. An
 // app with `pages: false` serves only the item as JSON, so it takes part in the JSON steps alone.
@@ -110,6 +111,10 @@ export function runArgs(name, app, source, fixturesDir) {
   // The load generator calls the app by its container name, which Corten answers only when listed.
   args.push("-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=fsw-${name}`);
   args.push(...tierEnv);
+  // The origin a browser reaches the app at in the matched tier, the edge's, as a deploy knows its
+  // own: Django's CSRF check trusts only an Origin it is told of (CSRF_TRUSTED_ORIGINS), and the
+  // edge sends the app its container name as Host.
+  if (tier === "matched") args.push("-e", `ORIGINS=${edgeBase(app, "outside")}`);
   if (source === "fixture") args.push("-v", `${fixturesDir}:/fixtures:ro`, "-e", "ITEM_SOURCE=fixture", "-e", "FIXTURE_PATH=/fixtures/items.json");
   args.push(app.image);
   return args;

@@ -28,17 +28,21 @@ STORAGES = {"staticfiles": {"BACKEND": "whitenoise.storage.CompressedManifestSta
 
 # The matched tier's production profile (PROFILE=matched, bench/fullstack/README.md, "The matched
 # tier"), from Django's own middleware and settings: the names it answers to (localhost and the
-# deploy's HOSTS, as Corten's host check), a CSP (Django's own, `SECURE_CSP`), gzip when asked,
-# and an ETag with a 304 (`ConditionalGetMiddleware`). urls.py marks the pages and the JSON
-# private with `cache_control`. Its forms already take at most 2.5 MB (`DATA_UPLOAD_MAX_MEMORY_SIZE`)
-# and refuse a cross-site post (CSRF); SecurityMiddleware and XFrameOptionsMiddleware already send
-# the other security headers. Django has no setting for Permissions-Policy.
+# deploy's HOSTS, as Corten's host check), the origins its forms are posted from (ORIGINS), a CSP
+# (Django's own, `SECURE_CSP`), gzip when asked, and an ETag with a 304
+# (`ConditionalGetMiddleware`). urls.py marks the pages and the JSON private with `cache_control`.
+# Its forms already take at most 2.5 MiB (`DATA_UPLOAD_MAX_MEMORY_SIZE`) and refuse a cross-site
+# post (CSRF); SecurityMiddleware and XFrameOptionsMiddleware already send the other security
+# headers. Django has no setting for Permissions-Policy.
 PROFILE = os.environ.get("PROFILE") == "matched"
 if PROFILE:
     from django.utils.csp import CSP
 
     hosts = [h.strip() for h in os.environ.get("HOSTS", "").split(",") if h.strip()]
     ALLOWED_HOSTS = ["localhost", "127.0.0.1", "[::1]", *hosts]
+    # The origins browsers reach it at (ORIGINS, the edge's in the tier): behind a proxy that sends
+    # its own Host, the CSRF check refuses any other Origin.
+    CSRF_TRUSTED_ORIGINS = [o.strip() for o in os.environ.get("ORIGINS", "").split(",") if o.strip()]
     SECURE_CSP = {
         "default-src": [CSP.SELF],
         "script-src": [CSP.SELF],

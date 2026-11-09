@@ -245,13 +245,14 @@ test("the matched tier starts its apps with the profile and only its apps; the d
   const defaults = appsUnder({});
   assert.equal(defaults.status, 0, defaults.stderr);
   assert.deepEqual(defaults.tierEnv, []);
-  assert.ok(!defaults.run.some((/** @type {string} */ a) => /^(PROFILE|MAX_CONNECTIONS)=/.test(a)), "no profile in the defaults tier");
+  assert.ok(!defaults.run.some((/** @type {string} */ a) => /^(PROFILE|MAX_CONNECTIONS|ORIGINS)=/.test(a)), "no profile in the defaults tier");
   assert.equal(defaults.apps.length, Object.keys(apps).length);
   const matched = appsUnder({ BENCH_TIER: "matched" });
   assert.equal(matched.status, 0, matched.stderr);
   assert.deepEqual(matched.tierEnv, ["-e", "PROFILE=matched", "-e", "MAX_CONNECTIONS=1000"]);
   const run = matched.run;
   assert.ok(run.indexOf("PROFILE=matched") > 0 && run.indexOf("PROFILE=matched") < run.indexOf("cb-corten"), "set before the image");
+  assert.ok(run.includes("ORIGINS=https://localhost:19410") && run.indexOf("ORIGINS=https://localhost:19410") < run.indexOf("cb-corten"), "the edge's origin, before the image");
   for (const name of ["corten", "axum-maud"]) assert.ok(matched.tierApps.includes(name), name);
   assert.deepEqual(matched.apps, matched.tierApps);
   assert.ok(matched.tierApps.every((/** @type {string} */ n) => /** @type {{ matched?: boolean }} */ (apps[/** @type {keyof typeof apps} */ (n)]).matched), "only the tier's apps");
