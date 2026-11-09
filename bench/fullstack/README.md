@@ -1429,8 +1429,9 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    rewritten by hand; and `axum::serve` has no header timeout or head size setting (hyper's are
    reached by writing the accept loop on hyper-util). Those columns stay unmet.
 3. `leptos`: Leptos serves through axum, so it takes axum-maud's tower-http layers (the security
-   headers, `Cache-Control: private, no-cache` on its routes but not the static files its fallback
-   serves, a 503 past 10 s and a 2 MiB body limit) beside the compression it already had. A
+   headers, `Cache-Control: private, no-cache` on its routes but not on what its fallback serves,
+   the static files and an unknown path's 404 page, which tower-http cannot tell apart; a 503 past
+   10 s and a 2 MiB body limit) beside the compression it already had. A
    page's CSP lets its scripts run by the nonce Leptos makes for each response and writes on the
    hydration scripts (its `nonce` feature, which leptos_axum turns on), set by the shell through
    Leptos's `ResponseOptions`; the page hydrates under it (checked in Chromium: the sort button
@@ -1450,7 +1451,8 @@ the ETag, the cross-site post, the two failed reads (502 `text/plain`), the 404 
 (empty), the unknown Host and the 64 KiB header (200), liveness and readiness, the unfinished head
 (still held at 45 s) and the cap (answered with 1,050 held). Leptos, probed the same way from
 `cb-leptos` built at `07ee94b6` (`results/conform-matched-leptos1/conformance.json`), met the
-same 12 and missed the same 12, but for its failed read's page (200 `text/html`). No load phase
+same 12 and missed the same 12, with two of those answered differently: its failed read's page
+(200 `text/html`) and the cross-site post to its server function (302 with no `serverfnerror`). No load phase
 has run in the tier yet.
 
 ### The hardening step

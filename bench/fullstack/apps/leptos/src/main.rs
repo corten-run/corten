@@ -39,7 +39,7 @@ async fn main() {
         app
     };
     let app = app.fallback(leptos_axum::file_and_error_handler(shell)).layer(CompressionLayer::new()).with_state(leptos_options);
-    let app = if item_page_leptos::app::matched() { matched(app) } else { app };
+    let app = if item_page_leptos::app::matched() { profile_layers(app) } else { app };
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
     println!("leptos item page listening on {addr}");
     axum::serve(listener, app.into_make_service()).await.expect("serve");
@@ -50,7 +50,7 @@ async fn main() {
 /// Leptos's nonce; this one is for the rest), a 503 past a 10 second deadline (card-market's), and
 /// request bodies of at most 2 MiB.
 #[cfg(feature = "ssr")]
-fn matched(router: axum::Router) -> axum::Router {
+fn profile_layers(router: axum::Router) -> axum::Router {
     use std::time::Duration;
 
     use axum::http::{header, HeaderName, HeaderValue, StatusCode};

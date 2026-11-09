@@ -16,13 +16,16 @@ pub fn matched() -> bool {
     *MATCHED
 }
 
-/// The profile's CSP for an answer that is not a page (axum-maud's).
+/// The profile's CSP for an answer that is not a page (axum-maud's). A page's, in `shell`, is the
+/// same but for its `script-src`: keep the two alike.
 #[cfg(feature = "ssr")]
 pub const CSP_REST: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
 pub fn shell(options: LeptosOptions) -> impl IntoView {
     // A page's CSP lets its own scripts run by the nonce Leptos makes for each response (its
     // `nonce` feature, which leptos_axum turns on) and puts on the hydration scripts it writes.
+    // It is sent as a header through `ResponseOptions` rather than the `<Meta http-equiv>` tag
+    // Leptos's nonce docs show, since a meta CSP ignores `frame-ancestors`.
     #[cfg(feature = "ssr")]
     if matched() {
         if let (Some(response), Some(nonce)) = (use_context::<leptos_axum::ResponseOptions>(), leptos::nonce::use_nonce()) {
