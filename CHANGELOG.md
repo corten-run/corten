@@ -4089,7 +4089,7 @@ Corten is pre-1.0, so any minor version may change the API.
   gzip too, and a client that accepts only brotli now gets streams uncompressed. The watchlist
   smoke checks that an event of about 50 KB with nothing after it is dispatched in each engine
   (from a route the app adds only with `SMOKE_TRUSTED_TYPES=1`; only Playwright's Windows WebKit
-  would be sent brotli, the others getting zstd and Linux's WebKit asking for none, so only there
+  would be sent brotli, the others getting zstd and Linux's WebKit asking for gzip, not brotli, so only there
   would it catch a brotli stream), and a streamed download to a
   client that sends `gzip, deflate, br` is now tested to be gzip. A gzip stream
   reserves 360 KiB where a brotli one reserved 1,000 KiB. It sends more than brotli 4, most for a

@@ -413,23 +413,33 @@ impl StreamCoder {
     /// A coder for `coding` (zstd or gzip), or `None` when the stream should go out as it is:
     /// brotli (see above), or the budget is spent.
     pub(crate) fn new(coding: Coding) -> Option<StreamCoder> {
-        // Made only once its share of the budget is reserved: dropping a coder gives its share back.
-        let (cost, make): (usize, fn() -> StreamCoder) = match coding {
-            Coding::Zstd => (ZSTD_STREAM_BYTES, || {
+        // Made only once its share of the budget is reserved: dropping a coder gives the same share
+        // back (`share` is the one source of both).
+        let make: fn() -> StreamCoder = match coding {
+            Coding::Zstd => || {
                 use zstd::zstd_safe::CParameter;
                 let mut cx = zstd::zstd_safe::CCtx::create();
                 for p in [CParameter::CompressionLevel(ZSTD_LEVEL), CParameter::WindowLog(16), CParameter::HashLog(12)] {
                     cx.set_parameter(p).expect("a valid zstd parameter");
                 }
                 StreamCoder::Zstd(cx)
-            }),
-            Coding::Gzip => (GZIP_STREAM_BYTES, || {
+            },
+            Coding::Gzip => || {
                 let level = flate2::Compression::new(GZIP_STREAM_LEVEL);
                 StreamCoder::Gzip(Some(Box::new(flate2::write::GzEncoder::new(Vec::new(), level))))
-            }),
+            },
             Coding::Brotli => return None,
         };
-        reserve(&STREAM_BYTES, cost, STREAM_BUDGET).then(make)
+        reserve(&STREAM_BYTES, Self::share(coding), STREAM_BUDGET).then(make)
+    }
+
+    /// What a stream of `coding` reserves from the budget while it is open.
+    fn share(coding: Coding) -> usize {
+        match coding {
+            Coding::Zstd => ZSTD_STREAM_BYTES,
+            Coding::Gzip => GZIP_STREAM_BYTES,
+            Coding::Brotli => 0,
+        }
     }
 
     fn coding(&self) -> Coding {
@@ -440,10 +450,7 @@ impl StreamCoder {
     }
 
     fn cost(&self) -> usize {
-        match self {
-            StreamCoder::Zstd(_) => ZSTD_STREAM_BYTES,
-            StreamCoder::Gzip(_) => GZIP_STREAM_BYTES,
-        }
+        Self::share(self.coding())
     }
 
     /// `data` compressed and flushed, so the client can decode everything sent so far.
@@ -1143,8 +1150,9 @@ mod tests {
         let StreamCoder::Zstd(cx) = &coder else { unreachable!() };
         assert!(cx.sizeof() <= ZSTD_STREAM_BYTES, "{} bytes", cx.sizeof());
         assert_eq!((coder.coding(), coder.cost()), (Coding::Zstd, ZSTD_STREAM_BYTES));
-        // A gzip stream reserves its own share, and its coder is the one `tests/stream_memory.rs`
-        // measures: the same bytes as flate2's at `GZIP_STREAM_LEVEL`, sync-flushed.
+        // A gzip stream reserves its own share, and its coder is built as `tests/stream_memory.rs`
+        // builds the one it measures: the same bytes as flate2's at `GZIP_STREAM_LEVEL`,
+        // sync-flushed (the same format and level; the memory is that test's).
         let mut coder = StreamCoder::new(Coding::Gzip).unwrap();
         assert_eq!((coder.coding(), coder.cost()), (Coding::Gzip, GZIP_STREAM_BYTES));
         let mut same = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(GZIP_STREAM_LEVEL));
