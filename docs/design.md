@@ -1242,8 +1242,17 @@ rules something out.
     scripts are not held to this; `corten check` checks them with the same compiler options.
     The runtime's minified build (gzip, level 9): `corten.js` 14,842 to 15,057 bytes, of which
     the feed's checks are 188, their own module 9 and the rest 18; `format.js` 1,498 to 1,496.
+    One limit stays: a tab left open across a deploy that changes `Row` keeps the app's script
+    it loaded, and the new server's snapshot (a new generation, so the stream resyncs) gives that
+    script rows of the new shape. If its `patch` throws on one, that write is lost until the next
+    snapshot, since `seq` moved on before the script ran; if its `snapshot` throws, the snapshot
+    is fetched again after the backoff. The live-data guide says to keep a deploy's `Row`
+    readable by the script before it. Reloading open pages when a feed's generation changes
+    would close it, and is not done here.
     Not chosen: validating rows from a schema the server derives (bytes for every app with a
-    feed to catch a server bug the Rust types already prevent); a schema library (a dependency
+    feed; the rows match the server's `Row` except across a deploy, and there a check against
+    the old script's schema would refuse the new rows rather than let them throw in the script,
+    so the write would be lost all the same); a schema library (a dependency
     for the few values that come from outside); checking only that a patch is JSON (a change
     without an `id` would reach the script's `patch` and throw in the app's code, after `seq`
     moved on).
@@ -1254,7 +1263,9 @@ rules something out.
     nine-field row, medians of 15 alternating 100 ms rounds, three runs in Chromium 156 through
     Playwright 1.64.1 on a busy workstation: the full check -1.6% to 8.0% over the parse, and
     `JSON.parse` against itself -8.1% to 6.6%, so the check's cost is within what this timing
-    can resolve); platform (JSDoc and TypeScript types are erased at run time, `JSON.parse`
+    can resolve; the probe is `bench/browser/feed-check-cost.mjs`, committed after those runs, and
+    one run of it on 2026-11-09, in Chromium and in Node, gave the check -7.5% to 14.2% over the
+    parse and the parse against itself -9.6% to 6.8%); platform (JSDoc and TypeScript types are erased at run time, `JSON.parse`
     returns `any`, `EventSource` fails a stream whose type is not `text/event-stream`, and
     TypeScript 5.9's DOM library declares no `window.navigation`); reasoned (a value the checker
     did not see made is only as typed as its producer: the server's rows are, an older runtime's
@@ -1268,8 +1279,9 @@ rules something out.
     way to check JSON against a schema without a library; or a feed carries rows the server did
     not type (a feed relayed from another service).
 
-    Last checked: 2026-11-08, TypeScript 5.9.3 on `c65c10ec` and the change (and 6.0.3 on the
-    change, which checks clean), the timings in Chromium 156 (Playwright 1.64.1).
+    Last checked: 2026-11-09, TypeScript 5.9.3 on `c65c10ec` and the change (and 6.0.3 on the
+    change, which checks clean, on 2026-11-08), the timings in Chromium 156 (Playwright 1.64.1)
+    on 2026-11-08 and 2026-11-09.
 
 ## Rules
 

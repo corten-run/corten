@@ -39,6 +39,11 @@ test("a comment that turns the checker off is found, and the same words elsewher
   assert.equal(js("const a = 1; /* @ts-expect-error */\nconst b = 2;"), 1);
   assert.equal(js("x(); // @ts-nocheck"), 1);
   assert.equal(js("/**\n * Text.\n * @ts-ignore\n */\nconst a = 1;"), 1);
+  // TypeScript reads these as directives too: no word boundary after the name, any run of / and *.
+  assert.equal(js("// @ts-ignored because\nconst a = 1;"), 1);
+  assert.equal(js("// @ts-expect-errors\nconst a = 1;"), 1);
+  assert.equal(js("/*/ @ts-ignore */\nconst a = 1;"), 1);
+  assert.equal(js("/**/ // @ts-ignore\nconst a = 1;"), 1);
   // Prose that names one is not one.
   assert.equal(js("// A fixture marks the line with @ts-expect-error.\nconst a = 1;"), 0);
   assert.equal(js('const a = "// @ts-ignore";\nconst r = /\\/\\/ @ts-ignore/;'), 0);

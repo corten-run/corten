@@ -810,9 +810,10 @@ export function subscribe(url, handlers, { signal } = {}) {
     });
     es.addEventListener("patch", (event) => {
       const receivedAt = performance.now();
-      const batch = patchOf(/** @type {MessageEvent} */ (event).data);
-      // Not a patch (a proxy's page, a server of another version): the write it carried is lost,
-      // so load the snapshot, after a backoff that grows while the patches after it are not either.
+      const batch = patchOf(/** @type {MessageEvent<string>} */ (event).data);
+      // Not a patch (a server of another version, a route that sends other events): the write it
+      // carried is lost, so load the snapshot, after a backoff that grows while the patches after it
+      // are not either.
       if (!batch) {
         console.error(new Error(`corten: feed ${url} sent a bad patch`));
         es.close();
@@ -826,7 +827,7 @@ export function subscribe(url, handlers, { signal } = {}) {
       fresh = false;
       refused = 0;
       rejected = 0;
-      cursor = /** @type {MessageEvent} */ (event).lastEventId;
+      cursor = /** @type {MessageEvent<string>} */ (event).lastEventId;
       handlers.patch(/** @type {FeedChange<Row>[]} */ (batch.changes), batch.seq, receivedAt);
     });
   }
@@ -2946,7 +2947,7 @@ customElements.define(
         liveStatus(this, source.readyState === EventSource.CLOSED ? "closed" : "reconnecting");
       });
       source.addEventListener("patch", (event) => {
-        const { data, origin } = /** @type {MessageEvent} */ (event);
+        const { data, origin } = /** @type {MessageEvent<string>} */ (event);
         // The origin the stream came from, after any redirect: another's fragment is not drawn, nor
         // an event a script dispatched.
         if (!event.isTrusted || origin !== location.origin) return console.error("corten: <corten-live> draws only fragments its stream brought from this origin, not", event.isTrusted ? origin : "an event a script dispatched");
@@ -2996,7 +2997,7 @@ try {
 const devStart = document.querySelector('meta[name="corten-dev"]')?.getAttribute("content");
 if (devStart) {
   new EventSource("/corten/dev").addEventListener("message", (event) => {
-    if (/** @type {MessageEvent} */ (event).data !== devStart) reload();
+    if (/** @type {MessageEvent<string>} */ (event).data !== devStart) reload();
   });
   // A failed load is the browser's own error, which names the URL: a message of the runtime's
   // would be bytes every production page carries.

@@ -26,8 +26,11 @@ export function problems(file, text) {
   };
   visit(source);
   for (const range of commentsOf(source)) {
-    // Where TypeScript reads one: at the start of the comment or of one of its lines.
-    const off = /^\s*(?:\/\/\/?|\/\*+|\*+)?\s*@ts-(ignore|nocheck|expect-error)\b/m.exec(text.slice(range.pos, range.end));
+    // Wherever TypeScript reads one and a few places it does not, so never fewer: at the start of
+    // the comment or of any of its lines, after any run of `/` and `*` (TypeScript's own pattern,
+    // which reads `@ts-ignored` as `@ts-ignore`), where TypeScript reads only a block comment's
+    // last line and `@ts-nocheck` only in the file's leading comments.
+    const off = /^\s*[/*]*\s*@ts-(ignore|nocheck|expect-error)/m.exec(text.slice(range.pos, range.end));
     if (off) found.push(`${at(range.pos)}: @ts-${off[1]} turns the type check off here; fix the type, or narrow the value`);
   }
   return found;

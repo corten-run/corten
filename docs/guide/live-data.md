@@ -282,6 +282,12 @@ again after a backoff. A patch that is not one has lost its write, so the stream
 snapshot loaded again, after a backoff that doubles from 1 s while the patches after it are bad
 too; neither reaches the script. The rows themselves are not checked: each is the feed's `Row`,
 the server's own type, whose JSDoc the browser never sees ([design Choice 33](../design.md#choice-script-boundaries)).
+A page left open across a deploy that changes `Row` keeps the script it loaded, and the new
+server's snapshot gives that script rows of the new shape: if its `patch` throws on one, that
+write is lost until the next snapshot (the stream's `seq` has moved on), and if its `snapshot`
+throws, the snapshot is fetched again after the backoff. Keep a deploy's `Row` readable by the
+script before it (a field added, not one renamed or removed), or reload the page when a
+snapshot's shape is one the script does not know.
 Next to the `JSON.parse` it follows, its cost was within a timing's noise in Chromium (patches of
 1 to 100 changes).
 `subscribe()`'s recovery from a gap in `seq`, a stream answered with an HTTP error, a failed
