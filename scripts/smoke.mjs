@@ -811,10 +811,12 @@ async function run(browser) {
   // Bounded: an event held back fails the check rather than the whole run.
   const streamed = await page.evaluate(async () => {
     const stop = new AbortController();
-    const res = await fetch("/live/trades", { headers: { accept: "text/event-stream" }, signal: AbortSignal.any([stop.signal, AbortSignal.timeout(15_000)]) });
-    const reader = /** @type {ReadableStream<Uint8Array>} */ (res.body).getReader();
     let text = "";
+    let coding = null;
     try {
+      const res = await fetch("/live/trades", { headers: { accept: "text/event-stream" }, signal: AbortSignal.any([stop.signal, AbortSignal.timeout(15_000)]) });
+      coding = res.headers.get("content-encoding");
+      const reader = /** @type {ReadableStream<Uint8Array>} */ (res.body).getReader();
       while (!text.includes("event: patch")) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -824,7 +826,7 @@ async function run(browser) {
       text += ` (${String(error)})`;
     }
     stop.abort();
-    return { coding: res.headers.get("content-encoding"), patch: text.includes("event: patch"), seen: text.slice(-80) };
+    return { coding, patch: text.includes("event: patch"), seen: text.slice(-80) };
   });
   check("a live stream is zstd or gzip as the browser asks, and its first event decodes while it is open", ["zstd", "gzip"].includes(streamed.coding ?? "") && streamed.patch, JSON.stringify(streamed));
 

@@ -1,8 +1,8 @@
 //! Response compression (feature `compress`), tuned for what Corten serves.
 //!
 //! Pages, patches and JSON are generated per request, so they are compressed per request at the
-//! fastest level that still pays: zstd 1 for clients that accept it (current Chrome, Edge,
-//! Firefox and Safari), otherwise brotli 1, otherwise gzip 1. On card-market's item page (8.8 KB
+//! fastest level that still pays: zstd 1 for clients that accept it (current Chrome, Edge and
+//! Firefox; Playwright's WebKit does not send it), otherwise brotli 1, otherwise gzip 1. On card-market's item page (8.8 KB
 //! on average; instructions by callgrind in process, bytes the average `render_cost` reports)
 //! zstd 1 adds about 230,000 user instructions to the request and sends 2,178 bytes; brotli 1 adds
 //! about 690,000 for 2,358 bytes. brotli's other fast levels
@@ -55,9 +55,10 @@ const ZSTD_LEVEL: i32 = 1;
 const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: u32 = 1;
 /// A stream's gzip level: deflate (miniz_oxide) at 1 finds few of an earlier event's matches, so a
-/// 2.7 KB redraw of one changed row costs 436 to 451 bytes a time; at 3 it costs 61 to 73. An event
-/// through `apply` then takes about 286,650 instructions, where brotli 4 took 213,720 and zstd 1
-/// takes 100,470 (callgrind, `what_an_event_stream_costs`, three runs each, release).
+/// 2.7 KB redraw of one changed row costs 129 to 453 bytes a time; at 3 it costs 60 to 69
+/// (`what_a_redraw_sends`). An event made and sent through `apply` then takes about 286,650
+/// instructions, where brotli 4 took 213,720 and zstd 1 takes 100,470 (callgrind,
+/// `what_an_event_stream_costs`, three runs each, release).
 const GZIP_STREAM_LEVEL: u32 = 3;
 
 /// Memory all compressed streams (event streams and streamed `Media`) may hold at once, in bytes.
@@ -66,8 +67,9 @@ const GZIP_STREAM_LEVEL: u32 = 3;
 const STREAM_BUDGET: usize = 256 << 20;
 /// What one stream's context holds, measured with the settings in [`StreamCoder::new`].
 const ZSTD_STREAM_BYTES: usize = 480 << 10;
-/// flate2's deflate (miniz_oxide) at level 3 holds 352,104 bytes from its first event on, whatever
-/// the events' size (levels 1 and 3 alike).
+/// flate2's deflate (miniz_oxide 0.9.1) at level 3 holds 352,104 bytes from its first event on,
+/// whatever the events' size (levels 1 and 3 alike): `tests/stream_memory.rs` counts it, with this
+/// value and `GZIP_STREAM_LEVEL` written out there.
 const GZIP_STREAM_BYTES: usize = 360 << 10;
 static STREAM_BYTES: AtomicUsize = AtomicUsize::new(0);
 
@@ -407,29 +409,23 @@ impl StreamCoder {
     /// A coder for `coding` (zstd or gzip), or `None` when the stream should go out as it is:
     /// brotli (see above), or the budget is spent.
     pub(crate) fn new(coding: Coding) -> Option<StreamCoder> {
-        let cost = match coding {
-            Coding::Zstd => ZSTD_STREAM_BYTES,
-            Coding::Gzip => GZIP_STREAM_BYTES,
-            Coding::Brotli => return None,
-        };
-        if !reserve(&STREAM_BYTES, cost, STREAM_BUDGET) {
-            return None;
-        }
-        Some(match coding {
-            Coding::Zstd => {
+        // Made only once its share of the budget is reserved: dropping a coder gives its share back.
+        let (cost, make): (usize, fn() -> StreamCoder) = match coding {
+            Coding::Zstd => (ZSTD_STREAM_BYTES, || {
                 use zstd::zstd_safe::CParameter;
                 let mut cx = zstd::zstd_safe::CCtx::create();
                 for p in [CParameter::CompressionLevel(ZSTD_LEVEL), CParameter::WindowLog(16), CParameter::HashLog(12)] {
                     cx.set_parameter(p).expect("a valid zstd parameter");
                 }
                 StreamCoder::Zstd(cx)
-            }
-            Coding::Gzip => StreamCoder::Gzip(Some(Box::new(flate2::write::GzEncoder::new(
-                Vec::new(),
-                flate2::Compression::new(GZIP_STREAM_LEVEL),
-            )))),
-            Coding::Brotli => unreachable!("a brotli stream returned above"),
-        })
+            }),
+            Coding::Gzip => (GZIP_STREAM_BYTES, || {
+                let level = flate2::Compression::new(GZIP_STREAM_LEVEL);
+                StreamCoder::Gzip(Some(Box::new(flate2::write::GzEncoder::new(Vec::new(), level))))
+            }),
+            Coding::Brotli => return None,
+        };
+        reserve(&STREAM_BYTES, cost, STREAM_BUDGET).then(make)
     }
 
     fn coding(&self) -> Coding {
@@ -973,7 +969,12 @@ mod tests {
 
     /// A row list redrawn: the same markup with one price changed.
     fn redraw(changed: usize) -> String {
-        let rows: String = (0..40)
+        list(40, changed)
+    }
+
+    /// A list of `rows` rows as a live stream's event, the one at `changed` with another value.
+    fn list(rows: usize, changed: usize) -> String {
+        let rows: String = (0..rows)
             .map(|i| {
                 format!(
                     r#"<li id="row-{i}"><a href="/items/{i}">Item {i}</a><span>{}</span></li>"#,
@@ -1083,8 +1084,46 @@ mod tests {
         assert_eq!(frames.concat(), sent.concat().into_bytes());
     }
 
+    /// What each stream coding sends for a list drawn again with one row changed, against gzip 1 and
+    /// brotli 4 as streams were before #1131: the first event, then the least and most of ten redraws, at
+    /// 40 rows (2.7 KB), 250 (17 KB) and 640 (44 KB, past deflate's 32 KiB window). It prints them:
+    /// `cargo test --release -p corten-run --all-features --lib -- --ignored what_a_redraw_sends --nocapture`
+    #[test]
+    #[ignore]
+    fn what_a_redraw_sends() {
+        for rows in [40, 250, 640] {
+            let events: Vec<String> = (0..11).map(|i| list(rows, if i == 0 { rows } else { i * 7 % rows })).collect();
+            let sizes = |send: &mut dyn FnMut(&[u8]) -> usize| {
+                let sent: Vec<usize> = events.iter().map(|event| send(event.as_bytes())).collect();
+                (sent[0], sent[1..].iter().min().copied().unwrap(), sent[1..].iter().max().copied().unwrap())
+            };
+            let mut zstd = StreamCoder::new(Coding::Zstd).unwrap();
+            let mut gzip = StreamCoder::new(Coding::Gzip).unwrap();
+            let mut brotli = brotli::CompressorWriter::new(Vec::new(), 4096, 4, 16);
+            let mut gzip_1 = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(1));
+            let zstd = sizes(&mut |event| zstd.event(event).len());
+            let gzip = sizes(&mut |event| gzip.event(event).len());
+            let gzip_1 = sizes(&mut |event| {
+                gzip_1.write_all(event).unwrap();
+                gzip_1.flush().unwrap();
+                std::mem::take(gzip_1.get_mut()).len()
+            });
+            let brotli = sizes(&mut |event| {
+                brotli.write_all(event).unwrap();
+                brotli.flush().unwrap();
+                std::mem::take(brotli.get_mut()).len()
+            });
+            println!(
+                "{rows} rows, {} bytes an event (first, least, most redraw): zstd {zstd:?}, gzip {gzip:?}, gzip 1 {gzip_1:?}, brotli 4 {brotli:?}",
+                events[1].len()
+            );
+        }
+    }
+
     #[test]
     fn stream_contexts_share_a_budget_and_return_it_when_dropped() {
+        // `tests/stream_memory.rs` measures a gzip stream at these, written out there.
+        assert_eq!((GZIP_STREAM_LEVEL, GZIP_STREAM_BYTES), (3, 360 << 10));
         let held = AtomicUsize::new(0);
         assert!(reserve(&held, 600, 1000));
         assert!(!reserve(&held, 600, 1000), "past the budget the stream goes out uncompressed");

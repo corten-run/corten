@@ -1106,32 +1106,37 @@ rules something out.
     ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
     So a client that accepts zstd gets zstd 1 as before, any other that accepts gzip gets gzip 3
     (sync-flushed, its window kept), and one that accepts only brotli gets the stream as it is.
-    Gzip sends more than brotli did for a large region: a redraw of one row of 40 (2.7 KB) is 61
-    to 73 bytes against 37 to 55, of 250 rows (17 KB) about 505 against 172, and an event over
-    deflate's 32 KiB window repeats nothing (42 KB: 5,717 against 664). It holds 344 KiB a stream
-    where brotli held 0.96 to 1.3 MiB. Level 3, not 1: at 1 the 2.7 KB redraw costs 436 to 451
-    bytes. It costs more CPU than brotli 4: an event of that redraw through the compression layer
-    is about 286,650 instructions against 213,720 (zstd 1: 100,470, unchanged), so a client without
-    zstd costs the server a third more an event.
+    Gzip sends more than brotli 4 did for a large region (`what_a_redraw_sends`, ten redraws of a
+    list with one row changed): of 40 rows (2.7 KB) 60 to 69 bytes against 20 to 40, of 250
+    (17 KB) 477 to 524 against 23 to 91, and an event over deflate's 32 KiB window repeats nothing
+    (640 rows, 45 KB: 6,203 to 6,214 against 44 to 2,029). Level 3, not 1: at 1 the redraws are
+    129 to 453 bytes, 2,188 to 2,684 and 7,238 to 7,330. A gzip stream holds 352,104 bytes and
+    reserves 360 KiB (`tests/stream_memory.rs`), where brotli reserved 1,000 KiB. It costs more
+    CPU: an event of the 2.7 KB redraw, made and sent through the compression layer, is about
+    286,650 instructions against brotli's 213,720 (zstd 1: 100,470, unchanged).
     Not chosen: brotli with an empty block or a keepalive after each event (WebKit held the event
     back with empty blocks after it); a gzip-only client getting the stream as it is, as before (a
     redraw's saved bytes are why streams are compressed).
 
     Stands on: platform (Playwright's WebKit holds back a flushed brotli event of more than
     16 KiB and sends `deflate, gzip, br`, no zstd; Chromium and Firefox send zstd, which arrives
-    at once there; no WebKit that accepts zstd was tried); measured (bytes a redraw by the
-    crate's tests, one run each; instructions an event by callgrind, `what_an_event_stream_costs` at 2,000
-    and 12,000 events, three runs each, within 20 instructions); reasoned (a sync flush ends deflate's output on a
-    byte boundary with everything sent so far decodable, so a decoder has the whole event);
+    at once there; no WebKit that accepts zstd was tried); measured (bytes a redraw by
+    `what_a_redraw_sends`, one run, the counts fixed by the encoders; a gzip stream's memory by
+    `tests/stream_memory.rs`; instructions an event by callgrind, `what_an_event_stream_costs` at
+    2,000 and 12,000 events, three runs each, within 20 instructions); reasoned (a sync flush ends
+    deflate's output on a byte boundary with everything sent so far decodable, so a decoder has
+    the whole event);
     value (an event on time at the user's end before the bytes brotli saves, Values 1).
 
     Revisit when: a WebKit that Playwright runs dispatches a flushed brotli event of more than
     16 KiB at once, or sends zstd (then check a flushed zstd event there); or apps send redraws
     over 32 KB to clients without zstd often enough that gzip's bytes show in a round.
 
-    Last checked: 2026-11-08, WebKit 27.2, Chromium 156 and Firefox 157 (the late event and each
-    engine's `Accept-Encoding`), on `a378fb97`; 2026-11-09, the callgrind counts on `c65c10ec` (brotli 4, zstd) and
-    `541fc59b` (gzip 3, zstd).
+    Last checked: 2026-11-08, WebKit 27.2, Chromium 156 and Firefox 157: the late brotli event
+    against `c65c10ec`'s streams and Node's encoder, by a probe not kept in the repository, and
+    each engine's `Accept-Encoding`; 2026-11-08, the callgrind counts on `c65c10ec` (brotli 4,
+    zstd) and `541fc59b` (gzip 3, zstd); 2026-11-08, the bytes and the memory, miniz_oxide 0.9.1
+    and brotli 9.0.0, on `19a36210` with `what_a_redraw_sends`.
 
 ## Rules
 

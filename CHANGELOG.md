@@ -4084,13 +4084,13 @@ Corten is pre-1.0, so any minor version may change the API.
   event late: in Playwright's WebKit a 16,385-byte event came 700 ms late (the next chunk's delay)
   in every run, with Corten's encoder and with Node's at quality 4 and 11, and with empty blocks
   after it; gzip and identity were on time at every size tried, to 200 KB, in all three engines.
-  Gzip-only clients, sent streams uncompressed before, get gzip too. A gzip stream holds 344 KiB
-  where a brotli one held 0.96 to 1.3 MiB. It sends more than brotli for a large region: a redraw
-  of one row of 40 (2.7 KB) is 61 to 73 bytes against brotli's 37 to 55, of 250 (17 KB) about 505
-  against 172, and an event over gzip's 32 KiB window repeats nothing (42 KB: 5,717 against 664);
-  it costs more CPU: an event of the 2.7 KB redraw through the compression layer is about 286,650
-  instructions against brotli's 213,720 (zstd's is unchanged at 100,470; callgrind, three runs
-  each, within 20 instructions) ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
+  Gzip-only clients, sent streams uncompressed before, get gzip too. A gzip stream reserves
+  360 KiB where a brotli one reserved 1,000 KiB. It sends more than brotli 4 for a large region:
+  a redraw of one row of 40 (2.7 KB) is 60 to 69 bytes against 20 to 40, of 250 (17 KB) 477 to
+  524 against 23 to 91, and an event over gzip's 32 KiB window repeats nothing (45 KB: about
+  6,210 against 44 to 2,029); and more CPU: an event of the 2.7 KB redraw, made and sent through
+  the compression layer, is about 286,650 instructions against brotli's 213,720 (zstd's is
+  unchanged at 100,470; callgrind, three runs each, within 20 instructions) ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
