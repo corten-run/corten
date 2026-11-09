@@ -12,9 +12,9 @@
 # VARIANTS (as-is and every patch), OUT (results/cost-under-load), AB_ROUNDS (3), and BENCH_APP_CPUS
 # and BENCH_FIXTURE_LOAD_CPUS (else BENCH_LOAD_CPUS) to pin the app and k6 as a round does (on a
 # c-8, BENCH_APP_CPUS=1 BENCH_FIXTURE_LOAD_CPUS=2-7; unset, the app gets --cpus 1 unpinned).
-# OUT/source.txt records the commit (marked -dirty when a tracked file differs from it), how many files differ or are
-# untracked, the source hash, each image's id and
-# the CPU settings the run had. The hash covers this source, not the Dockerfile's base image or
+# OUT/source.txt records the commit (marked -dirty when a tracked file differs from it), how many
+# files differ or are untracked, the source hash, each image's id and the CPU settings the run had.
+# The hash covers this source, not the Dockerfile's base image or
 # packages, so after a base image update remove the cbd-* images before a run.
 set -eo pipefail
 here=bench/fullstack

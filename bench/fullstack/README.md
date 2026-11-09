@@ -1034,13 +1034,15 @@ the six a round gives an app serving from memory (`BENCH_FIXTURE_LOAD_CPUS`, whi
 now). What the run kept of its setting is the droplet's script and CPU (`run.sh` and `host.txt` in
 the results: a Xeon Platinum 8168, `BENCH_APP_CPUS=1`, `AB_ROUNDS=3`); its source was sent as a copy
 of a working tree, so the images and results carry no record of the commit (the tree's head was
-`e6d5b61c` by the operator's note, which nothing here can check). `cost-under-load.sh` now labels
-the images and writes `source.txt` beside the results. The page's 37.5 microseconds on `identity`
-are about a fifth below the r16 round's 47 (21,195 a CPU-second), from the same cgroup counter and
-CPU model. r16's image preloaded no jemalloc (it came to card-market's Dockerfile after r16's
-commit), and [Choice 23](../../docs/design.md#choice-jemalloc-image) counts about 83,000
-instructions a page with it against 87,000 without; the droplet, the commit, the round's settings
-and k6's phase and cores differ too, and which of them accounts for the gap was not measured.
+`e6d5b61c` by the operator's note, which nothing here can check). Beside them are every phase's k6
+and stats files (`raw.tar.xz`). `cost-under-load.sh` now labels the images and writes `source.txt`
+beside the results (a new run belongs in an `OUT` of its own, so it is not read with this one's
+`run.sh`). The page's 37.5 microseconds on `identity` are about a fifth below the r16 round's 47
+(21,195 a CPU-second), from the same cgroup counter and CPU model. r16's image preloaded no jemalloc
+(it came to card-market's Dockerfile after r16's commit), and
+[Choice 23](../../docs/design.md#choice-jemalloc-image) counts about 83,000 instructions a page with
+it against 87,000 without; the droplet, the commit, the round's settings and k6's phase and cores
+differ too, and which of them accounts for the gap was not measured.
 
 At 64 users, CPU microseconds a request (the app's CPU was 86-101% busy: k6, on its four CPUs,
 did not keep it saturated, so these are CPU a request, not the most it can serve):
@@ -1049,12 +1051,12 @@ did not keep it saturated, so these are CPU a request, not the most it can serve
 |---|---|---|---|---|
 | None: requests per CPU-second | 26,656 (25,385-26,693) | 11,722 (11,715-12,754) | 31,813 (29,817-32,015) | 17,604 (16,925-17,823) |
 | None: CPU microseconds a request | 37.5 | 85.3 | 31.4 | 56.8 |
-| Security headers and the CSP | 0.8 (-1.6 to 2.4) | 9.5 (-0.9 to 11.1) | 1.4 (0.0 to 3.8) | 2.8 (2.1-3.4) |
+| Security headers and the CSP | 0.8 (-1.6 to 2.4) | 9.5 (-0.9 to 11.1) | 1.4 (-0.01 to 3.8) | 2.8 (2.1-3.4) |
 | The host check and the same-origin write check | 0.6 (-0.1 to 2.5) | 1.8 (-1.5 to 5.5) | 0.1 (-0.4 to 2.1) | -3.2 (-7.2 to 3.8) |
 | The deadline and the panic catch | -1.3 (-1.6 to -0.7) | 3.5 (-1.0 to 6.7) | -0.4 (-1.6 to 0.8) | -1.8 (-3.8 to -0.8) |
 | Compression | 1.8 (1.7-4.0) | 45.1 (36.5-45.3) | 0.7 (-1.9 to 2.2) | 25.2 (24.6-27.2) |
 | The `ETag` | 1.8 (-1.9 to 2.4) | 6.1 (4.3-6.5) | -0.5 (-0.9 to 1.2) | -3.9 (-4.0 to -0.1) |
-| Setting `Cache-Control` | 0.5 (-0.2 to 2.4) | 4.9 (-0.3 to 9.4) | 0.9 (-2.2 to 2.8) | -1.0 (-1.8 to 0.0) |
+| Setting `Cache-Control` | 0.5 (-0.2 to 2.4) | 4.9 (-0.3 to 9.4) | 0.9 (-2.2 to 2.8) | -1.0 (-1.8 to -0.05) |
 | Error pages and problem+json (on a success) | 0.1 (-0.9 to 2.3) | 0.4 (-2.6 to 1.4) | -0.2 (-1.5 to 1.4) | -1.6 (-4.4 to 3.7) |
 | The header and send timeouts' connection watch | -0.2 (-3.0 to 0.7) | 5.6 (-4.2 to 8.0) | -1.0 (-3.7 to 2.3) | 0.5 (-0.4 to 2.1) |
 
