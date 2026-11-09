@@ -260,7 +260,8 @@ Corten is pre-1.0, so any minor version may change the API.
     brotli 4 gives 376 B, then 13-23 B. A stream holds about 470 KiB (zstd, 64 KiB window) or
     800 KiB (brotli) while open, and all of them share a 256 MiB budget past which a new stream is
     sent as it is. Gzip-only clients get streams as they are. (Since
-    [#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131), under Fixed, a stream is zstd or gzip, never brotli.) Asked for by the Chase Sets pilot
+    [#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131),
+    under Fixed, a stream is zstd or gzip, never brotli.) Asked for by the Chase Sets pilot
     ([#24 corten::live responses are never compressed](https://github.com/todd-skelton/corten/issues/24)).
 36. `SubmitKey` (in the prelude): one submission of a form, so a write whose answer was lost and
     is sent again applies once. A form struct takes a `SubmitKey` field and draws it with
@@ -2310,8 +2311,8 @@ Corten is pre-1.0, so any minor version may change the API.
     `Result<Bytes, E>`. It is pulled only as fast as the client reads and dropped when the client
     leaves, it keeps `Media`'s file name, headers and caching, and a text type is compressed a
     chunk at a time (zstd or brotli, as an event stream is; since
-    [#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131), zstd or gzip), its frame
-    ended when the stream ends;
+    [#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131),
+    zstd or gzip), its frame ended when the stream ends;
     an event stream that ends now ends its frame too, where a decoder that checks for the end
     took it as cut short. A failure after it began, or a stream that does not make the length it
     said, ends the connection without the body's end and is logged. auction-room's bid history is

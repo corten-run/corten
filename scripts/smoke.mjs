@@ -831,24 +831,30 @@ async function run(browser) {
   check("a live stream is zstd or gzip as the browser asks, and its first event decodes while it is open", ["zstd", "gzip"].includes(streamed.coding ?? "") && streamed.patch, JSON.stringify(streamed));
   // An event over 16 KiB followed by nothing, the case WebKit held back under brotli: it is
   // dispatched with the stream left quiet, well inside the keepalive's 15 s, the next thing the
-  // server would send (#1131). The bound is the check's, not a pause: it ends at the event.
-  const large = await page.evaluate(
-    () =>
-      new Promise((done) => {
-        const started = performance.now();
-        const source = new EventSource("/smoke/live/large");
-        const finish = (/** @type {{ size: number, ms: number } | string} */ result) => {
-          source.close();
-          clearTimeout(bound);
-          done(result);
-        };
-        const bound = setTimeout(() => finish("no event in 5 s"), 5000);
-        source.addEventListener("patch", (event) => finish({ size: event.data.length, ms: Math.round(performance.now() - started) }));
-      }),
-  );
+  // server would send (#1131). The bound is the check's, not a pause: it ends at the event. The
+  // stream's status and coding are read first, so a missing route fails as one and a late event
+  // says what coding held it.
+  const large = await page.evaluate(async () => {
+    const stop = new AbortController();
+    const answer = await fetch("/smoke/live/large", { signal: stop.signal });
+    const head = { status: answer.status, coding: answer.headers.get("content-encoding") };
+    stop.abort();
+    return new Promise((done) => {
+      const started = performance.now();
+      const source = new EventSource("/smoke/live/large");
+      const finish = (/** @type {{ size?: number, ms?: number, failed?: string }} */ result) => {
+        source.close();
+        clearTimeout(bound);
+        done({ ...head, ...result });
+      };
+      const bound = setTimeout(() => finish({ failed: "no event in 5 s" }), 5000);
+      source.addEventListener("error", () => finish({ failed: `stream error, readyState ${source.readyState}` }));
+      source.addEventListener("patch", (event) => finish({ size: event.data.length, ms: Math.round(performance.now() - started) }));
+    });
+  });
   check(
     "a live event over 16 KiB with nothing after it is dispatched while the stream is quiet",
-    typeof large === "object" && large !== null && /** @type {{ size: number }} */ (large).size > 16_384,
+    large.status === 200 && (large.size ?? 0) > 16_384,
     JSON.stringify(large),
   );
 

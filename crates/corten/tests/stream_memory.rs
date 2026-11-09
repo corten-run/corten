@@ -1,7 +1,7 @@
 //! What a gzip stream's coder holds stays within what `compress::StreamCoder` reserves for it
 //! from the stream budget (`GZIP_STREAM_BYTES`, 360 KiB), so the budget counts every open stream
-//! (#1131). It counts every allocation, so it runs in a process of its own with this file's
-//! allocator, and is the only test here. Only the test's own thread is counted, so the harness's
+//! (#1131). It counts allocations through this file's global allocator, so it runs in a process
+//! of its own and is the only test here. Only the test's own thread is counted, so the harness's
 //! threads add nothing. The level and the reservation repeat `compress.rs`'s
 //! `GZIP_STREAM_LEVEL` and `GZIP_STREAM_BYTES`; a change to either changes both.
 #![cfg(feature = "compress")]
