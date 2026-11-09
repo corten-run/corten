@@ -461,6 +461,9 @@ export function ranSteps(output) {
   return [...named].filter(([id]) => !cached.has(id)).map(([, what]) => what);
 }
 
+/** Whether a build ran a `RUN` step, given the steps it ran (`ranSteps`): one that ran only copies did not build. */
+export const ranARun = (/** @type {string[]} */ ran) => ran.some((step) => /^\[[^\]]+\] RUN /.test(step));
+
 /**
  * The crates cargo compiled in a BuildKit build, from its `--progress plain` output
  * (`#7 12.1    Compiling corten v0.1.0 (/src/crates/corten)`), by name.

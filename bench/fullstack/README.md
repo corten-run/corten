@@ -1161,19 +1161,21 @@ page's markup, then the file's errors asked for at once):
 | topcoat | 28.4 s | 8.6 s | 5,537 ms (4,914 to 6,934) | 5,298 ms (5 of 5) | 5,598 ms | 2,139 MiB |
 | leptos | 46.1 s | 27.8 s | 10,268 ms (8,186 to 15,105) | 9,721 ms (5 of 5) | 9,005 ms | 3,698 MiB |
 
-1. Inside `html!` the server answers as fast as inside Maud's `html!`: a completion in under a
-   tenth of a second after an edit (the first after the file is opened takes about a second) and
-   an unknown field in the markup reported as an error in the same time, gone as fast once fixed.
-   Inside Topcoat's and Leptos's `view!` each took 5 to 10 seconds (medians; 4.8 to 15.1 s over
-   every edit). The files differ: the one edited is Corten's `views/alert.rs` (60 lines, two
-   `html!`), Maud's `pages.rs` (249, six), Topcoat's `main.rs` (440, nine `view!`) and Leptos's
-   `app.rs` (401, thirty-three); asking for a file's errors analyses all of it, so those columns
-   partly measure the file.
+1. Inside `html!` the server answered in under a tenth of a second (medians of five edits; the
+   first completion after the file is opened took about a second), as it did inside Maud's
+   `html!`: a completion after an edit, and an unknown field in the markup reported as an error
+   and gone once fixed. Inside Topcoat's and Leptos's `view!` each took 5 to 10 seconds (medians;
+   4.8 to 15.1 s over every edit). The markup is not the same size: the macro call the completion
+   is in has 25 lines in Corten's `views/alert.rs` (60 lines, two `html!`), 121 in Maud's
+   `pages.rs` (249, six), 108 in Topcoat's `main.rs` (440, nine `view!`) and 119 in Leptos's
+   `app.rs` (401, thirty-three), and asking for a file's errors analyses all of it. Corten's call
+   is about a fifth the size of the others', so this shows the server is not slow inside a small
+   `html!`, not that it is as fast as inside Maud's on the same markup, which is not measured.
 2. Corten's server loads the whole workspace (its crates and every example app), against axum +
    Maud's one crate; how much of its longer ready time and larger memory that accounts for, and
    what an app with Corten from crates.io would take, is not measured here. Peak memory is the
-   server's processes' peaks summed (the server and the proc-macro server that expands the
-   markup).
+   warm server's processes' peaks summed (the server and the proc-macro server that expands the
+   markup), read after the five edits.
 3. With the experimental diagnostics off, as rust-analyzer ships (`results/dev-loop-default`),
    the server reported the unknown field in none of the four, Maud's included, in any of the
    five edits:
@@ -1200,8 +1202,11 @@ three runs:
    bound, not a like-for-like row (Build's "After the edit", which edits in place, compiles
    card-market alone).
 3. The cold build's time includes exporting the layer cache; every build resolves the
-   Dockerfile's syntax image and base tags over the network, and an imported build's new
-   builder may pull the base images again.
+   Dockerfile's syntax image and base tags over the network, an imported build's new builder may
+   pull the base images again, and a build whose cargo registry cache mount is empty (the cold
+   one, and every imported one) downloads its crates, so the network is in those times too.
+4. `docker-rebuild.json` has no commit: the script recorded none when this ran (it does now). It
+   ran at `c65c10ec` with only this folder's scripts changed, as above.
 
 ## Method
 
@@ -1374,9 +1379,10 @@ three runs:
       build compiles only the app, while the Rust and Go ones compile every dependency. The time
       from a save to the open page showing it, under `corten dev` and each stack's own development
       server, is not measured: it needs each app's development server running (Vite, `next dev`,
-      Phoenix's live reload, `dotnet watch`, Django's and Rails' reloaders, `corten dev`) with
-      a browser on its page, and the round's images are each app's production build, which has
-      none of them, so it would take a second image of every app, which the round does not build.
+      Phoenix's live reload, `dotnet watch`, Django's and Rails' reloaders, `corten dev`), told
+      apart from the build it starts, and a browser kept on its page to see the change, and the
+      round has no harness that does (this step's source images have each app's toolchain and
+      source, but start no server; `browser.mjs` times the production pages).
     - Editor and tests, for the Rust apps: `cargo check --all-targets` clean and again after the
       same edit, which is what rust-analyzer runs for its diagnostics when a file is saved (with
       the features Leptos's documentation has an editor set, `ssr`; Corten's checks card-market
@@ -1425,7 +1431,18 @@ three runs:
       BuildKit exports no cache mount. Each build writes only to the cache (`--output
       type=cacheonly`), so no image export is in its time; its CPU-seconds are the builder
       container's cgroup counter, and for cargo it names the crates it compiled. A build after
-      the edit that ran no step fails rather than reporting a cache hit.
+      the edit that ran no step fails rather than reporting a cache hit. Only the two anchors run
+      unless the variable names others, for time: on the desktop (below) they took 25.4 and 12.0
+      minutes, a cold build and six after the edit, out of a step budget every app's build shares.
+      What a restored cache does to the others is read from their Dockerfiles, not measured.
+      Leptos's and Topcoat's copy their source before building, with cargo's `target/` and
+      registry in cache mounts, as these two do, so a restored layer cache rebuilds them about as
+      if from clean too. The rest copy their dependency list first and install it in a layer of
+      its own (npm, pip, `dotnet restore`, `go mod download`, Maven, Mix, Bundler and Composer;
+      Drogon's builds Drogon in one), so a restored layer cache keeps their dependencies and only
+      the steps after the source's copy run again. Express's and FastAPI's have no `RUN` step after
+      it, so this script, which fails a build after the edit that runs no `RUN` step, cannot time
+      them.
     - rust-analyzer's own latency (`rust-analyzer.mjs`, `rust-analyzer.json`), for the Rust apps,
       with the language server driven over LSP from the host and its check on save off, so every
       number is its own analysis with the apps' proc macros expanded: ready (first quiescent,
@@ -1450,9 +1467,10 @@ three runs:
     finished (`complete` is false until every measured step has run; Corten's diagnostics come
     after it). Each build call has a 90-minute limit and the step a 240-minute budget, counted
     afresh at each start as the unit's hours are (r16's step took 39.2 minutes, and its longest
-    call, Leptos's, 12.1; the Docker build and rust-analyzer add about 25 and 3 minutes to Corten's
-    call and 12 and 2 to axum + Maud's, and a few minutes to Leptos's and Topcoat's, estimated from
-    a desktop run, which built about three times slower, roughly); a stopped or crashed build skips
+    call, Leptos's, 12.1; on a desktop that built about three times slower, roughly, the Docker
+    build took 25.4 minutes for Corten and 12.0 for axum + Maud, and rust-analyzer's ready and
+    probe times summed 0.5 to 3.7 minutes an app, its container's setup not counted, measured, so
+    less in a round, estimated); a stopped or crashed build skips
     its app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 

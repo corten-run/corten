@@ -27,7 +27,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { compiledIn, contextOf, dockerfileOf, median, ranSteps, recipes, runChange } from "./builds.mjs";
+import { compiledIn, contextOf, dockerfileOf, median, ranARun, ranSteps, recipes, runChange } from "./builds.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..");
@@ -84,7 +84,7 @@ const build = (/** @type {string} */ name, /** @type {string} */ context, /** @t
   const ms = Date.now() - s;
   const cpuS = +((usec(name) - c) / 1e6).toFixed(1);
   const ran = ranSteps(output);
-  if (mustRun && !ran.some((step) => / RUN /.test(step))) throw new Error(`a build after the edit ran no RUN step (it ran: ${ran.join("; ") || "nothing"})`);
+  if (mustRun && !ranARun(ran)) throw new Error(`a build after the edit ran no RUN step (it ran: ${ran.join("; ") || "nothing"})`);
   const compiled = compiledIn(output);
   return { ms, cpuS, ran: ran.length, ...(compiled.length ? { compiled } : {}) };
 };

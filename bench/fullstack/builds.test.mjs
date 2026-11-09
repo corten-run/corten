@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { allApps } from "./apps.mjs";
-import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, compiledIn, ranSteps, readStep, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -234,6 +234,8 @@ test("each Rust app's completion point is in its file once, and every app that c
     assert.equal(!!r.ra, !!r.check, `${name}: an app the editor's loop checks has a completion point, and only one`);
     if (!r.ra) continue;
     assert.equal(r.ra.at.split("|").length, 2, `${name}: one | in ${r.ra.at}`);
+    // The probe types `nope_` at the point and looks for an error naming `nope_<expect>`.
+    assert.ok(r.ra.at.split("|")[1].startsWith(r.ra.expect), `${name}: ${r.ra.at} has ${r.ra.expect} right after the |`);
     const text = readFileSync(join(repo, contextOf(name), r.edit), "utf8");
     assert.equal(text.split(r.ra.at.replace("|", "")).length, 2, `${name}: ${r.edit} needs exactly one ${r.ra.at}`);
   }
@@ -272,6 +274,10 @@ test("the steps a BuildKit build ran are the ones its plain output did not mark 
     "[build 4/4] RUN --mount=type=cache,target=/src/target cargo build --release",
   ]);
   assert.deepEqual(ranSteps("#5 [build 4/4] RUN make\n#5 CACHED\n"), []);
+  assert.equal(ranARun(ranSteps(output)), true);
+  // A build after the edit that only copied (the build step cached) did not build.
+  assert.equal(ranARun(["[internal] load build definition from Dockerfile", "[build 2/4] COPY . ."]), false);
+  assert.equal(ranARun(["[build 2/4] COPY ./RUN /src"]), false);
   assert.deepEqual(compiledIn(output.replace("#7 DONE", "#7 30.5    Compiling card-market-two v0.2.0\r\n#7 DONE")), ["card-market", "card-market-two"]);
 });
 
