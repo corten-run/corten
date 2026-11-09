@@ -4084,7 +4084,8 @@ Corten is pre-1.0, so any minor version may change the API.
     brotli responses took 19.3 to 19.4 page faults each on average before, and none now. glibc's
     own tunables were tried: fewer arenas changed nothing, and a lower mmap threshold left about
     180 MiB, still growing. `bench/fullstack/flood-memory.mjs` drives the floods,
-    `alloc-faults.mjs` counts page faults a request, and `ab.mjs` measures brotli alone too
+    `alloc-faults.mjs` counts page faults a request, and `ab.mjs` measures brotli alone too, writes
+    its summary after every row and removes its app however the run ends
     ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 
 ### Fixed

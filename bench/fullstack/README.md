@@ -1034,8 +1034,12 @@ on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
 ### The image's allocator (Docker Desktop, 2026-11-08)
 
 The evidence behind [design Choice 23](../../docs/design.md#choice-jemalloc-image), card-market
-built at `81f1f8ef` with only its allocator's environment changed (the flood and fault folders'
-JSON records every image's id and settings; the table gives the `ab.mjs` folders'):
+built at `81f1f8ef` with only its allocator's environment changed, except the tuned image in
+`results/alloc-faults` and `alloc-idle` (`corten-card-market-p1011b`), a build of this change whose
+commit was not recorded, which matched the environment-only `cm-p1011-tc65536` in
+`results/alloc-faults-br`. The fault folders' JSON records every image's id and settings, the flood
+folders' the image's id and each variant's settings added to it; the table gives the `ab.mjs`
+folders':
 
 | Folder | What | Images |
 |---|---|---|
@@ -1751,7 +1755,8 @@ docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
 # One app before and after, alternating (identity, a browser's encodings, brotli alone; AB_ROUNDS=3,
 # AB_ENCODINGS=br for some), and the memory floods of unfinished heads leave, by allocator setting
-# (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some):
+# (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some); the committed
+# fault folders ran REQUESTS=2000, results/alloc-faults-br with ENCODINGS=br too:
 node bench/fullstack/ab.mjs results/ab-x cb-corten cb-corten-next
 node bench/fullstack/flood-memory.mjs results/flood-x cb-corten [runs=3] [floods=8]
 node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next   # page faults and CPU a request

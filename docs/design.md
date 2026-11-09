@@ -779,8 +779,9 @@ rules something out.
    300 brotli pages a second (12.0 to 14.4) against 16.8% (15.8 to 18.4) and 17.0% on glibc (16.3
    to 17.5), and served 3,486 a second at 64 users (2,298 to 3,829) against 2,132 (1,303 to 2,210)
    and 2,357 (1,908 to 2,470); with `identity` and with a browser's encodings (zstd) their ranges
-   overlapped, except a browser's at 64 users, where glibc's 2,139 to 3,392 sat below both (and
-   above them in `results/ab-jemalloc`, 4,425 to 5,050). No image with glibc's tunables went
+   overlapped, except a browser's at 64 users, where glibc's 2,139 to 3,392 sat below both (while in
+   `results/ab-jemalloc` glibc's median, 4,936, was above theirs, 3,607 and 3,454, the ranges
+   overlapping). No image with glibc's tunables went
    through `ab.mjs`, since none gave a flood's memory back. An earlier set without the thread cache
    (`results/ab-jemalloc`) had glibc at 3,554 brotli pages a second against 1,720 for jemalloc and
    1,905 with its background thread. Those rounds ran on Docker Desktop with other work running,
@@ -796,11 +797,12 @@ rules something out.
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
    Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
-   faults a request, repeatable to 0.1 in every round; idle CPU, three rounds); measured, noisy
-   (CPU time and throughput in three rounds on a shared desktop, whose rounds moved by up to 2.4 times);
-   bet (an app's image is Debian with the `libjemalloc2` package, 5.3, whose option names these
-   are); reasoned (an image package binds only the image, where a `#[global_allocator]` crate
-   compiles C into every build).
+   faults a request, repeatable to 0.1 in every round; idle CPU, three rounds; instructions a
+   request under callgrind, five runs each); measured, noisy (CPU time and throughput in three
+   rounds on a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 12's
+   `libjemalloc2`, 5.3.0, has `background_thread` off and a 32 KiB `tcache_max` unless set, and
+   takes these option names); bet (an app's image is Debian with that package); reasoned (an image
+   package binds only the image, where a `#[global_allocator]` crate compiles C into every build).
 
    Revisit when: a run on a quiet Linux host (`ab.mjs` or `alloc-faults.mjs` on a droplet) shows a
    cost per request or no gain with brotli; the brotli encoder or its level changes what it
@@ -809,7 +811,10 @@ rules something out.
    no settings.
 
    Last checked: 2026-11-06, the callgrind runs on `547b54ae`, recorded at `b179987a`; 2026-11-08,
-   the floods, the page faults and the rounds, images of `81f1f8ef`.
+   the floods, the page faults and the rounds, images of `81f1f8ef` (but for the tuned image in
+   `results/alloc-faults` and `alloc-idle`, a build whose commit was not recorded); 2026-11-09,
+   Debian's libjemalloc2 5.3.0 (package 5.3.0-1) in `debian:bookworm-slim`, its options printed by
+   `MALLOC_CONF=stats_print:true`.
 
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
