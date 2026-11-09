@@ -1136,7 +1136,7 @@ rules something out.
     against `c65c10ec`'s streams and Node's encoder, by a probe not kept in the repository, and
     each engine's `Accept-Encoding`; 2026-11-08, the callgrind counts on `c65c10ec` (brotli 4,
     zstd) and `541fc59b` (gzip 3, zstd); 2026-11-08, the bytes and the memory, miniz_oxide 0.9.1
-    and brotli 9.0.0, on `19a36210` with `what_a_redraw_sends`.
+    and brotli 9.0.0, on `202f6427` with `what_a_redraw_sends`.
 
 ## Rules
 
