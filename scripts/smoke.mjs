@@ -3731,10 +3731,10 @@ async function run(browser) {
     /** @param {URL} url */
     const heldPage = (url) => url.pathname === "/news" && url.searchParams.get("p") === "held";
     /** @type {() => void} */
-    let release = () => {};
-    const released = new Promise((resolve) => (release = () => resolve(undefined)));
+    let releaseHeld = () => {};
+    const heldReleased = new Promise((resolve) => (releaseHeld = () => resolve(undefined)));
     await page.route(heldPage, async (route) => {
-      if (route.request().headers()["purpose"] !== "prefetch") await released;
+      if (route.request().headers()["purpose"] !== "prefetch") await heldReleased;
       await route.continue().catch(() => {});
     });
     navRequests.length = 0;
@@ -3745,7 +3745,7 @@ async function run(browser) {
     // fetched; only then is the answer let through.
     await page.evaluate(() => new Promise((done) => setTimeout(done, 300)));
     const heldSearch = await page.evaluate(() => location.search);
-    release();
+    releaseHeld();
     await page.waitForFunction(() => location.search === "?p=held");
     check(
       "a link followed during its hover's dwell is fetched once, with no prefetch of its page",
