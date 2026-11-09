@@ -48,16 +48,15 @@ fn coded(res: &Response) -> bool {
 #[tokio::test]
 async fn the_stream_budget_is_given_back_however_a_stream_ends() {
     let app = corten::compress::apply(Router::new().route("/{end}", get(events)));
-    // Streams left open fill the budget; the next goes out as it is.
+    // Streams left open fill the budget; the next goes out as it is. Bounded, so a budget that
+    // stops counting fails here rather than holding streams until memory runs out.
     let mut open = Vec::new();
-    loop {
+    for n in 0..ZSTD_STREAMS {
         let res = request(&app, "open").await;
-        if !coded(&res) {
-            break;
-        }
+        assert!(coded(&res), "stream {n} of the {ZSTD_STREAMS} the budget holds");
         open.push(res);
     }
-    assert_eq!(open.len(), ZSTD_STREAMS, "the budget holds this many zstd streams");
+    assert!(!coded(&request(&app, "open").await), "the budget holds no more than {ZSTD_STREAMS}");
     // A client that goes away: its stream is dropped unread.
     open.pop();
     let res = request(&app, "open").await;
