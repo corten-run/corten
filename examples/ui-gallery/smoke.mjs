@@ -827,6 +827,9 @@ async function run(browser) {
   // a control the user sees sends is left to it.
   {
     const outside = await page.context().newPage();
+    /** @type {string[]} */
+    const outsideErrors = [];
+    outside.on("console", (m) => m.type() === "error" && outsideErrors.push(m.text()));
     await outside.route(
       (url) => url.href === unsorted,
       async (route) => {
@@ -857,7 +860,11 @@ async function run(browser) {
           `<a id="back" href="/sales-back?shop=a&amp;sold=day&amp;src=2#rows" ${linked(["other-table", "sales-box"])}>Previous</a> ` +
           `<a id="mid" href="/sales-back?src=3" ${linked(["sales-box"])}>Middle</a> ` +
           `<form id="far" method="get" action="https://example.com/far" ${on("submit", ["sales-box"])}><input type="hidden" name="sold" value="day"><button>Far</button></form>` +
-          `<a id="away" href="/sales-back?sold=day" ${linked(["find"])}>Away</a> <a id="bare" ${linked(["sales-box"])}>Bare</a>`;
+          `<a id="away" href="/sales-back?sold=day" ${linked(["find"])}>Away</a> <a id="bare" ${linked(["sales-box"])}>Bare</a>` +
+          // An image map's link is a link too.
+          `<map name="sales-map"><area id="mapped" shape="rect" coords="0,0,10,10" href="/sales-back?src=4" alt="Mapped" ${linked(["sales-box"])}></map>` +
+          // An element that is not a link, which the compiler cannot refuse to a pager's handler.
+          `<span id="unlinked" ${linked(["sales-box"])}>Not a link</span>`;
         // The wrapper holds a table without sort links first: the sorted one is still found.
         body = `${body.slice(0, at)}${forms}<div id="sales-box"><table><thead><tr><th>Plain</th></tr></thead></table>${body.slice(at, end)}</div>${body.slice(end)}`;
         await route.fulfill({ status: res.status(), headers, body });
@@ -909,6 +916,11 @@ async function run(browser) {
     await outside.getByText("Middle", { exact: true }).click({ button: "middle" });
     const middle = (await seen()).slice(sortedSeen.length);
     const bare = await outside.evaluate(() => document.getElementById("bare")?.hasAttribute("href"));
+    const mapped = await outside.evaluate(() => {
+      const area = document.getElementById("mapped");
+      area?.dispatchEvent(new PointerEvent("pointerover"));
+      return area?.getAttribute("href");
+    });
     // Each submit above was cancelled: a GET form's listener ended with its submit's task, so a
     // list of its fields made later reads its hidden input as drawn.
     const later = await outside.evaluate(() => new FormData(/** @type {HTMLFormElement} */ (document.getElementById("source"))).get("sold"));
@@ -933,9 +945,10 @@ async function run(browser) {
             null,
           ]) &&
         bare === false &&
+        mapped === "/sales-back?src=4&sold=price" &&
         middle.length > 0 &&
         middle.every((to) => to === "/sales-back?src=3&sold=price"),
-      `${JSON.stringify(unsortedSeen)} ${JSON.stringify(sortedSeen)} bare href ${bare} middle ${JSON.stringify(middle)}`,
+      `${JSON.stringify(unsortedSeen)} ${JSON.stringify(sortedSeen)} bare href ${bare} area ${mapped} middle ${JSON.stringify(middle)}`,
     );
     // Drawn again after the sort (as a patch does), the form still sends the order, and the
     // browser goes there. (The runtime may have fetched a link above as a navigation.)
@@ -1016,6 +1029,12 @@ async function run(browser) {
       JSON.stringify(posted) === JSON.stringify(["/sales-supply?shop=a&sold=price"]) && sentTo[0] === "/sales-back?shop=a&src=2&sold=price",
       `${posted.join(" ")} ${sentTo.join(" ")}`,
     );
+    check(
+      // Once each time the element joins the page, and this page is loaded several times.
+      "ordered::link on an element that is not a link says so in the console",
+      outsideErrors.some((text) => text.includes("corten-ui: ordered::link keeps the order in a link's href; this element is not a link")),
+      JSON.stringify(outsideErrors),
+    );
     await outside.close();
   }
   await sales.getByRole("link", { name: "Price" }).click();
@@ -1029,6 +1048,36 @@ async function run(browser) {
   const shownBeforeReload = await sortedBy();
   await page.reload();
   check("a reload after a sort in place shows the order on screen", JSON.stringify(await sortedBy()) === JSON.stringify(shownBeforeReload), `${JSON.stringify(shownBeforeReload)} -> ${JSON.stringify(await sortedBy())}`);
+  // The kit's pager under the table takes the same call as `on:link`, on each link it draws
+  // (#1107): after a sort in place, its Earlier sales link opens the earlier page in the order on
+  // screen, and after another sort in place there, that page's Later sales link comes back in it.
+  {
+    const salesTable = (/** @type {string} */ caption) => page.locator("table", { has: page.locator("caption", { hasText: caption }) });
+    await salesTable("This month's last sales").getByRole("link", { name: "Buyer" }).click();
+    const pager = page.getByRole("navigation", { name: "Sales pages" });
+    const marks = await pager.evaluate((nav) => Array.from(nav.querySelectorAll("li > *"), (el) => `${el.localName} ${el.hasAttribute("data-on")}`).join(", "));
+    const earlier = pager.getByRole("link", { name: "Earlier sales" });
+    await earlier.hover();
+    const href = await earlier.getAttribute("href");
+    await earlier.click();
+    await page.getByText("This month's earlier sales, sorted among themselves", { exact: true }).waitFor();
+    const there = new URL(page.url()).searchParams;
+    const buyers = await salesTable("This month's earlier sales").locator("tbody tr td:nth-child(2)").allTextContents();
+    check(
+      "a kit pager's link that calls ordered::link (on:link) opens its page in the order a sort in place gave, and its disabled end has no handler",
+      marks === "span false, a true" &&
+        new URL(href ?? "", page.url()).searchParams.get("sold") === "buyer" &&
+        there.get("sold") === "buyer" &&
+        there.get("sales") === "earlier" &&
+        JSON.stringify(buyers) === JSON.stringify(["Barbara Liskov", "Edsger Dijkstra", "Katherine Johnson"]),
+      `${marks} ${href} ${page.url()} ${JSON.stringify(buyers)}`,
+    );
+    await salesTable("This month's earlier sales").getByRole("link", { name: "Price" }).click();
+    await page.getByRole("navigation", { name: "Sales pages" }).getByRole("link", { name: "Later sales" }).click();
+    await page.getByText("This month's last sales, sorted among themselves", { exact: true }).waitFor();
+    const back = new URL(page.url()).searchParams;
+    check("the earlier page's Later sales link (PreviousNext's previous) takes a sort in place there too", back.get("sold") === "price" && !back.has("sales"), page.url());
+  }
   await page.goto(unsorted);
   // A tab chosen in place since the page came in, and the fragment, stay in the address and the
   // header links: only the key the sort links differ in (`sold`) is taken from them.
@@ -4173,6 +4222,90 @@ async function run(browser) {
     };
   });
   check("StatusDot and Stack: the dot is not read, and a stack's gap is its only space", spacing.dot && spacing.gap === 1.5 && spacing.paragraph === 1 && spacing.margins === 0, JSON.stringify(spacing));
+  // StatusTone::Text: a dot in a badge is the badge's text color, in a soft badge and a solid one,
+  // where a dot in the badge's own tone would be the color of the fill.
+  const dotInBadge = await orders.evaluate(() => {
+    const dot = /** @type {HTMLElement | null} */ (document.querySelector("[class*='status-dot__text']"));
+    if (!dot?.parentElement) return { missing: true };
+    const badge = dot.parentElement;
+    const drawn = () => ({ dot: getComputedStyle(dot).backgroundColor, text: getComputedStyle(badge).color, fill: getComputedStyle(badge).backgroundColor });
+    const soft = drawn();
+    const was = badge.className;
+    badge.className = was.replace(/badge__soft/, "badge__solid");
+    const solid = drawn();
+    badge.className = was;
+    // Beside plain text, a dot in a status's own tone is the theme's color for it.
+    const own = document.querySelector("[class*='orders__schedule'] > [class*='status-dot__success']");
+    const probe = document.createElement("span");
+    probe.style.setProperty("background", "var(--success)");
+    document.body.append(probe);
+    const success = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return { soft, solid, swapped: was.includes("badge__soft"), own: own && getComputedStyle(own).backgroundColor, success };
+  });
+  check(
+    "StatusDot: StatusTone::Text draws the dot in its badge's text color, so it shows on a solid badge's fill, and a Success dot beside text is the theme's success color",
+    !("missing" in dotInBadge) &&
+      dotInBadge.swapped &&
+      dotInBadge.soft.dot === dotInBadge.soft.text &&
+      dotInBadge.solid.dot === dotInBadge.solid.text &&
+      dotInBadge.solid.dot !== dotInBadge.solid.fill &&
+      dotInBadge.own === dotInBadge.success &&
+      dotInBadge.own !== "rgba(0, 0, 0, 0)",
+    JSON.stringify(dotInBadge),
+  );
+  // LiveDot: inside a <corten-live> whose stream is live it pulses (an opacity animation that
+  // runs), and is still while the stream is not live, outside one, for a user who asks for less
+  // motion; under forced colors it pulses as Progress's sweep moves. The element is made, read and
+  // removed in one task, so its stream is closed before it is fetched (a 204 if it is).
+  await orders.route("**/live-dot-check", (route) => route.fulfill({ status: 204 }).catch(() => {}));
+  const dotPulse = () =>
+    orders.evaluate(() => {
+      const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='status-dot__live']"));
+      const running = () => dot.getAnimations().filter((a) => a instanceof CSSAnimation && a.animationName === "status-dot-live" && a.playState === "running").length;
+      const badge = /** @type {HTMLElement} */ (dot.parentElement);
+      const said = () => badge.innerText.trim();
+      const alone = running();
+      const aloneSaid = said();
+      const live = document.createElement("corten-live");
+      live.setAttribute("src", "/live-dot-check");
+      badge.replaceWith(live);
+      live.append(badge);
+      /** @type {Record<string, number>} */
+      const by = {};
+      /** @type {Record<string, string>} */
+      const words = {};
+      let opacity = false;
+      for (const status of ["connecting", "live", "reconnecting", "closed", "ended"]) {
+        live.setAttribute("status", status);
+        by[status] = running();
+        words[status] = said();
+        const pulse = dot.getAnimations().find((a) => a instanceof CSSAnimation && a.animationName === "status-dot-live");
+        opacity ||= !!pulse?.effect && /** @type {KeyframeEffect} */ (pulse.effect).getKeyframes().some((k) => "opacity" in k);
+      }
+      live.replaceWith(badge);
+      return { alone, by, opacity, aloneSaid, words };
+    });
+  // Asked for, since the default follows the machine's own setting.
+  await orders.emulateMedia({ reducedMotion: "no-preference" });
+  const dotMoving = await dotPulse();
+  await orders.emulateMedia({ reducedMotion: "reduce" });
+  const dotReduced = await dotPulse();
+  await orders.emulateMedia({ reducedMotion: "no-preference" });
+  const dotForced = engine === "webkit" ? null : (await orders.emulateMedia({ forcedColors: "active" }), await dotPulse());
+  await orders.emulateMedia({ reducedMotion: null, forcedColors: engine === "webkit" ? undefined : "none" });
+  const onlyLive = (/** @type {{ alone: number, by: Record<string, number> }} */ p) =>
+    p.alone === 0 && p.by.live === 1 && ["connecting", "reconnecting", "closed", "ended"].every((s) => p.by[s] === 0);
+  check(
+    "LiveDot: the badge's words say Live only inside a live stream, and Not live outside one and in every other state",
+    dotMoving.aloneSaid === "Not live" && Object.entries(dotMoving.words).every(([s, w]) => w === (s === "live" ? "Live" : "Not live")),
+    JSON.stringify({ alone: dotMoving.aloneSaid, words: dotMoving.words }),
+  );
+  check(
+    "LiveDot: it pulses only inside a live stream, not for reduced motion, and under forced colors as Progress does",
+    dotMoving.opacity && onlyLive(dotMoving) && dotReduced.alone === 0 && Object.values(dotReduced.by).every((n) => n === 0) && (dotForced === null || onlyLive(dotForced)),
+    JSON.stringify({ moving: dotMoving, reduced: dotReduced, forced: dotForced }),
+  );
   // Gap::App: the payout row is a cluster with no gap class of the kit's, so the page's .75rem is its gap.
   const appGap = await orders.evaluate(() => {
     const row = document.querySelector("[class*='orders__payout']");

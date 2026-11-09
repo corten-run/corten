@@ -118,7 +118,7 @@ const KIT: &[Piece] = &[
     piece!(
         "status_dot",
         "StatusDot",
-        "a dot in a status's color, before the words that name it",
+        "a dot in a status's color, before the words that name it; LiveDot pulses while a stream is live",
         ["status_dot.rs", "status_dot.css"]
     ),
     piece!(
