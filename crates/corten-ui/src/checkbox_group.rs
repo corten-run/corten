@@ -12,6 +12,16 @@ use corten::prelude::*;
 /// checked, so the handler checks too (`errors.add(f.ships, ..)` when the list is empty): it is
 /// the authority, the script only saves the round trip.
 ///
+/// The group checks again on `change`, which the browser sends when the user checks a box but not
+/// when a script sets `checked` (a "Select all" or "Clear" button). Such a script dispatches
+/// `input` and `change` on each box it set, as the kit's own scripts do for a field they set
+/// (`box.dispatchEvent(new Event("change", { bubbles: true }))`, and `"input"` before it):
+/// without them the group keeps its old answer (a group the script cleared is sent and only the
+/// handler refuses it, and one it filled after the user cleared it is still refused by the browser
+/// with `missing`), and the runtime, which keeps a field for back/forward once it has seen one of
+/// them on it, brings a box the user has not changed back as it was drawn when it swapped the page
+/// in.
+///
 /// Parts: the `fieldset`, its `legend`, and the app's boxes.
 ///
 /// ```

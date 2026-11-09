@@ -118,7 +118,7 @@ const KIT: &[Piece] = &[
     piece!(
         "status_dot",
         "StatusDot",
-        "a dot in a status's color, before the words that name it",
+        "a dot in a status's color, before the words that name it; LiveDot pulses while a stream is live",
         ["status_dot.rs", "status_dot.css"]
     ),
     piece!(
@@ -2530,7 +2530,7 @@ mod tests {
         {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 44, "{names:?}");
+        assert_eq!(names.len(), 48, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
@@ -2750,6 +2750,8 @@ mod tests {
                     && !l.contains("-font-size\"")
                     && !l.contains("\"card-padding\"")
                     && !l.contains("\"stat-")
+                    && !l.contains("\"choice-")
+                    && !l.contains("\"tab-")
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -2766,6 +2768,14 @@ mod tests {
             "{old}"
         );
         assert!(undeclared(&dir, &app_now, &[piece("button")]).sizes.iter().any(|l| l.starts_with("\"control-height-sm\": ")));
+        // The two choice lists each read the same two sizes, named once for both.
+        let both = [
+            r#""choice-list-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#,
+            r#""choice-list-legend-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } }"#,
+        ];
+        for pieces in [&[piece("checkboxes")][..], &[piece("radio_group")], &[piece("checkboxes"), piece("radio_group")]] {
+            assert_eq!(undeclared(&dir, &app_now, pieces).sizes, both, "{}", pieces.len());
+        }
         // A figure's weights and tracking are named with its sizes; its face and its label's case,
         // which the stylesheet reads with a fallback, are the app's to declare or not.
         let stats = undeclared(&dir, &app_now, &[piece("stats")]).sizes;
@@ -2787,6 +2797,22 @@ mod tests {
             stats.contains(&r#""stat-value-font-weight": { "$type": "fontWeight", "$value": 600 }"#.to_string()),
             "{stats:?}"
         );
+        // A tab's and a segmented choice's weight and chosen color, read by both, named once: the
+        // weight as the kit's theme has it, the color by name, as each theme gives it.
+        let dark = std::fs::read_to_string(dir.join("tokens/ui-dark.tokens.json")).unwrap();
+        let untabbed: String = dark.lines().filter(|l| !l.contains("\"tab-")).collect::<Vec<_>>().join("\n");
+        let untabbed = untabbed.trim_end().trim_end_matches('}').trim_end().trim_end_matches(',');
+        std::fs::write(dir.join("tokens/ui-dark.tokens.json"), format!("{untabbed}\n}}\n")).unwrap();
+        for pieces in [&[piece("tabs")][..], &[piece("segmented")], &[piece("tabs"), piece("segmented")]] {
+            let lacking = undeclared(&dir, &app_now, pieces);
+            let tab = |l: &&String| l.contains("\"tab-");
+            assert_eq!(
+                lacking.sizes.iter().filter(tab).collect::<Vec<_>>(),
+                [r#""tab-font-weight": { "$type": "fontWeight", "$value": 500 }"#],
+                "{lacking:?}"
+            );
+            assert_eq!(lacking.colors, ["tab-selected-color"], "{lacking:?}");
+        }
         // One a stylesheet under static/ declares is declared, as the app's startup check counts it.
         std::fs::create_dir_all(dir.join("static/css")).unwrap();
         let css =
@@ -3246,19 +3272,30 @@ mod tests {
 
     /// The theme's text on its backgrounds meets WCAG AA in both themes, as the guide says: each
     /// `-foreground` on its color (4.5:1), a tone's text on a card (an alert's), the muted text on
-    /// the page and a card, and a field's border on the page (3:1, a control's boundary).
+    /// the page and a card, the chosen tab's text on its raised surface, and a field's border on the
+    /// page (3:1, a control's boundary).
     #[test]
     fn the_themes_text_meets_wcag_aa() {
         let tokens = |path: &str| INIT.iter().find(|(p, _)| *p == path).unwrap().1;
         for file in ["tokens/ui.tokens.json", "tokens/ui-dark.tokens.json"] {
             let text = tokens(file);
+            // A color that is a reference to another (`"{foreground}"`) is that one's.
             let hex = |name: &str| {
-                let line = text
-                    .lines()
-                    .find(|l| l.starts_with(&format!("  \"{name}\": ")))
-                    .unwrap_or_else(|| panic!("{file} has no {name}"));
-                let at = line.find("\"hex\": \"#").unwrap() + "\"hex\": \"#".len();
-                u32::from_str_radix(&line[at..at + 6], 16).unwrap()
+                let mut name = name.to_string();
+                for _ in 0..8 {
+                    let line = text
+                        .lines()
+                        .find(|l| l.starts_with(&format!("  \"{name}\": ")))
+                        .unwrap_or_else(|| panic!("{file} has no {name}"));
+                    if let Some(at) = line.find("\"$value\": \"{") {
+                        let to = &line[at + "\"$value\": \"{".len()..];
+                        name = to[..to.find('}').unwrap()].to_string();
+                        continue;
+                    }
+                    let at = line.find("\"hex\": \"#").unwrap() + "\"hex\": \"#".len();
+                    return u32::from_str_radix(&line[at..at + 6], 16).unwrap();
+                }
+                panic!("{file}: {name} is a reference eight deep, or one that goes round in a circle")
             };
             let luminance = |rgb: u32| {
                 let channel = |c: u32| {
@@ -3285,6 +3322,8 @@ mod tests {
             pairs.push(("muted-foreground".into(), "background".into(), 4.5));
             pairs.push(("muted-foreground".into(), "card".into(), 4.5));
             pairs.push(("input".into(), "background".into(), 3.0));
+            // The chosen tab's or segmented choice's text, on its raised surface.
+            pairs.push(("tab-selected-color".into(), "background".into(), 4.5));
             assert!(pairs.len() > 12, "{file}: {pairs:?}");
             for (text_color, on, least) in pairs {
                 let r = ratio(&text_color, &on);
