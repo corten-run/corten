@@ -56,7 +56,7 @@ fn impls(item: &Item) -> Result<TokenStream, Error> {
 /// [`impls`]; with `by_serde`, the `FromJson` impl is the trait's own body (serde_json reads the
 /// text) and its bounds are only the type's own. A generic type's impl also asks for
 /// `Self: DeserializeOwned`, the trait's supertrait, on either path: the bounds inferred for its
-/// `Deserialize` (`T: Default` for a defaulted `T`) need not follow from the ones here, the
+/// `Deserialize` (`T: Default` for a defaulted `Vec<T>`) need not follow from the ones here, the
 /// derive's own `Deserialize` included.
 fn impls_with(item: &Item, by_serde: bool) -> Result<TokenStream, Error> {
     let container = Container::read(&item.attrs, item.is_enum)?;

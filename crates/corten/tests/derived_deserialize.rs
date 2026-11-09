@@ -1074,6 +1074,11 @@ fn fields_and_url_value_describe_what_they_read_as_from_json_does() {
         named(Generator::root_for_read::<generic::ours::Generic<u32>>()),
         named(Generator::root_for_read::<derived::Generic<u32>>())
     );
+    // Its derived reader reads what serde's derive reads; the defaulted Vec<T> asks serde for
+    // T: Default, which the impl's Self: DeserializeOwned carries.
+    for text in [r#"{"value":1,"list":[2,3]}"#, r#"{"value":1}"#, r#"{"value":"x"}"#, r#"{"value":1,"x":2}"#] {
+        same_read::<derived::Generic<u32>, generic::theirs::Generic<u32>>(text);
+    }
     // Another word is one of the enum's.
     assert_eq!(Generator::root_for_read::<wording::ours::Wording>()["type"], "string");
 }

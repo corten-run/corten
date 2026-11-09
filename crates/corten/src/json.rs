@@ -220,6 +220,15 @@
 //! struct Note<'a> { text: &'a str }
 //! impl corten::FromJson for Note<'static> {}
 //! ```
+//!
+//! A generic `#[derive(FromJson)]` type with a defaulted field of the bare parameter is refused
+//! where it is defined, since its reader needs `T: Default` and asks each parameter only for
+//! `FromJson`; a defaulted `Vec<T>` or `Option<T>` is read, and `Fields` takes the bare one:
+//!
+//! ```compile_fail,E0277
+//! #[derive(corten::FromJson)]
+//! struct Pick<T> { #[serde(default)] value: T }
+//! ```
 
 use std::{
     borrow::Cow,

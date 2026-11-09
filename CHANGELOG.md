@@ -4094,10 +4094,14 @@ Corten is pre-1.0, so any minor version may change the API.
     serde_json; a `UrlValue` enum with `#[serde(other)]` reads any other word as that variant (the
     reader gives up on the whole text there, and serde_json reads it again) and is described as any
     string; a form input whose fields borrow from the input cannot be a `FromJson`, which reads
-    owned values. A type that needs `FromJson` and lacks it is told the ways to get one in the
-    compiler's note. An enum with a shift, an arrow or a qualified path in a discriminant (`B = 1 <<
-    1`) is read whole by `UrlValue` and `FromJson` (and `ToJson` splits its variants the same way):
-    the shift hid the variants after it. **Migration:** take `Deserialize` out of a derive list that
+    owned values. A generic `#[derive(FromJson)]` type is a `FromJson` wherever its `Deserialize`
+    applies, so one with a defaulted field holding its parameter (`Vec<T>`), which failed to
+    compile beside serde's derive, compiles and is read by Corten's reader; a defaulted bare `T` is
+    still refused. `#[serde(other)]` on `#[derive(FromJson)]` names `UrlValue` as the derive that
+    reads it. A type that needs `FromJson` and lacks it is told the ways to get one in the
+    compiler's note. An enum with a shift in a discriminant (`B = 1 << 1`) is read whole by
+    `UrlValue` and `FromJson` (and `ToJson` splits its variants the same way): the shift hid the
+    variants after it. **Migration:** take `Deserialize` out of a derive list that
     has `FromJson`, and `FromJson` out of one that has `Fields` or `UrlValue`, and remove a
     hand-written `impl FromJson` or `impl FromJsonSchema` for a `Fields` or `UrlValue` type: each is
     now a second impl (E0119). Reading the benchmark's 500 item API responses costs the same:
