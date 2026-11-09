@@ -287,6 +287,8 @@ fn jsconfig(root: &Path, runtime: &Path) -> String {
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noFallthroughCasesInSwitch": true,
+    "allowUnreachableCode": false,
+    "noUncheckedSideEffectImports": true,
     "target": "es2022",
     "module": "esnext",
     "moduleResolution": "bundler",
