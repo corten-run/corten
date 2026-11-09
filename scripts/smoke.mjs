@@ -1395,9 +1395,13 @@ async function run(browser) {
   // A data-patch form's submit marks the button that sent it busy with the form, one outside the
   // form (`form=`) too, until the answer is drawn; a newer submit by another button takes the
   // marks, and the first button's goes (#1063).
+  // A's read is answered only once B's marks are read, so B replaces a read still on its way.
+  /** @type {() => void} */
+  let answerA = () => {};
+  const heldA = new Promise((resolve) => (answerA = () => resolve(undefined)));
   await page.route("**/busy-read*", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 600));
     const by = new URL(route.request().url()).searchParams.get("by");
+    if (by === "a") await heldA;
     await route.fulfill({ headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body: `<p id="busy-said">read ${by}</p>` }).catch(() => {});
   });
   await page.evaluate(() =>
@@ -1407,14 +1411,17 @@ async function run(browser) {
     ),
   );
   const busyMarks = () => page.evaluate(() => ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
-  await page.click("#busy-a");
-  const whileA = await busyMarks();
-  // B's click and the read in one task: the marks are moved by the submit itself, not by A's fetch
-  // settling later (#1108).
-  const whileB = await page.evaluate(() => {
-    document.getElementById("busy-b")?.click();
-    return ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
-  });
+  // Each click and the read of the marks in one task: the marks are moved by the submit itself,
+  // not by A's read settling later (#1108).
+  /** @param {string} id */
+  const clickAndMarks = (id) =>
+    page.evaluate((id) => {
+      document.getElementById(id)?.click();
+      return ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
+    }, id);
+  const whileA = await clickAndMarks("busy-a");
+  const whileB = await clickAndMarks("busy-b");
+  answerA();
   await page.waitForFunction(() => document.querySelector("#busy-said")?.textContent === "read b", null, { timeout: 5000 }).catch(() => {});
   const busyAfter = await busyMarks();
   check(
