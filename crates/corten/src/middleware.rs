@@ -1,5 +1,6 @@
 //! [`Middleware`]: a step of the app's own in every request (a request id, a rate limit, a trace
-//! span), at one place in Corten's order.
+//! span), at one place in Corten's order. A route that says `stages = bare` goes through none of
+//! it ([`crate::route`]), so a rate limit or a check of the app's does not cover it.
 //!
 //! The order is fixed, outside in, and each stage needs the one before it:
 //!

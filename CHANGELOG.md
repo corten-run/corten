@@ -11,8 +11,9 @@ Corten is pre-1.0, so any minor version may change the API.
   takes only the request's URL and its body read by `Upload` (`corten::answer::Bare`); a bare
   route in a `caller = ..`, area or API module, or with `no_store`, `rows` or `gives(..)`, does
   not compile, nor does one whose path can answer at a path of Corten's own (a first segment that
-  is a parameter, `/corten/..`, `/health/{..}`); one under an area's or API's prefix, or a
-  parameter under the assets, is refused at startup. Its answer gets no host check, CSP or
+  is a parameter, `/corten/..`, `/health/live`, `/health/ready`, `/health/{..}`); one under an
+  area's or API's prefix, at or with a parameter under another path Corten serves (the assets,
+  the PWA's files, an API's or area's companions), is refused at startup. Its answer gets no host check, CSP or
   `nosniff`, so it is for data anyone anywhere may read, not a document built from the request.
   Measured with callgrind: 7,398 (7,397-7,400) instructions a request against 21,302
   (21,301-21,310) through the stages (jemalloc; a plain axum router 7,640).

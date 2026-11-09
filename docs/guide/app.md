@@ -895,7 +895,7 @@ extractor) and its return type.
 ### A route outside the stages
 
 A route whose answer must cost as little as the server allows and that anyone may read (a public
-figure behind a CDN, a beacon, an upload taken in at a high rate) says `stages = bare` in its routes
+figure behind a CDN) says `stages = bare` in its routes
 module; the probes a load balancer sends are Corten's own `/health/live` and `/health/ready`.
 It meets none of the stages above: no host or same-origin check, no signal,
 deadline or panic catch, no middleware, no error page, security headers, `Cache-Control`, tag or

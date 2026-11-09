@@ -308,7 +308,8 @@ impl Policy {
 
     /// A name the app answers to (`shop.example`; `.shop.example` for it and every subdomain).
     /// By default a request is answered only when its `Host` is `localhost` (or a name under
-    /// it), an IP address or missing; any other gets `421 Misdirected Request` before routing.
+    /// it), an IP address or missing; any other gets `421 Misdirected Request` before routing
+    /// (except at a route that says `stages = bare`, which no check covers).
     /// Otherwise a page on a name someone else controls could point that name at this machine
     /// (DNS rebinding) and use every route as if it were the app's own origin, the same-origin
     /// check included, which matters most for an app on loopback, where "only this machine can

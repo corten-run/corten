@@ -835,15 +835,19 @@ fn scan(
                             return err(at, format!("stages = bare says how {name}'s handlers are served, and it has none: #[route(\"{path}\", get = .., stages = bare)]"));
                         }
                         // What the path alone says: a parameter or catch-all as the first segment
-                        // can stand at Corten's own `/corten/` (and every prefix), and `/corten/..`
-                        // and `/health/{..}` are Corten's; the paths an app adds (areas, APIs,
-                        // assets) are checked when it starts.
+                        // can stand at Corten's own `/corten/` (and every prefix), and `/corten/..`,
+                        // `/health/live`, `/health/ready` and `/health/{..}` are Corten's; the paths
+                        // an app adds (areas, APIs, assets, the PWA's) are checked when it starts.
                         let mut segments = path.trim_start_matches('/').split('/');
                         let first = segments.next().unwrap_or("");
                         if first.contains('{') {
                             return err(at, format!("stages = bare serves {name} outside every stage, and \"{path}\" starts with a parameter, which can stand at Corten's own /corten/ and at any area's or API's prefix: give it a first segment of its own text"));
                         }
-                        if first == "corten" || (first == "health" && segments.next().is_some_and(|s| s.contains('{'))) {
+                        let second = segments.next();
+                        let health = first == "health"
+                            && second
+                                .is_some_and(|s| s.contains('{') || ((s == "live" || s == "ready") && segments.next().is_none()));
+                        if first == "corten" || health {
                             return err(at, format!("stages = bare serves {name} outside every stage, and \"{path}\" can answer at a path of Corten's own (/corten/.., /health/live, /health/ready): give it a first segment of its own text"));
                         }
                         // Each of these is done by a stage, which a bare route does not have.

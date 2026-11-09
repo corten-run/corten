@@ -4985,6 +4985,14 @@ mod bare_url {
 
     #[route("/serves", get = bare_serves)]
     pub struct Serves;
+
+    #[route("/inbox", post = bare_inbox, stages = bare)]
+    pub struct Inbox;
+
+    #[route("/where/{id}", get = bare_where, stages = bare)]
+    pub struct Where {
+        pub id: u32,
+    }
 }
 
 async fn bare_ping() -> &'static str {
@@ -5002,6 +5010,25 @@ async fn bare_raw(at: crate::Params<bare_url::Raw>, method: axum::http::Method) 
 
 async fn bare_raw_post(_: crate::Params<bare_url::Raw>) -> &'static str {
     "took"
+}
+
+/// A body read by `Upload`, which bounds its own reads with no stage around it.
+async fn bare_inbox(upload: crate::Upload<std::collections::HashMap<String, String>>) -> String {
+    match upload.fields().await {
+        Ok(fields) => format!("note {}", fields.get("note").map_or("", String::as_str)),
+        Err(error) => format!("refused {error}"),
+    }
+}
+
+/// The rest of what a bare handler may take: the request's `Uri`, the app's state, and an
+/// extractor that is optional.
+async fn bare_where(
+    at: crate::Params<bare_url::Where>,
+    uri: axum::http::Uri,
+    _: axum::extract::State<()>,
+    again: Option<axum::extract::Path<u32>>,
+) -> String {
+    format!("{} {uri} {}", at.id, again.map_or(0, |again| again.0))
 }
 
 async fn bare_page(req: Req) -> HtmlResult {
@@ -5043,6 +5070,8 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!((status, body.as_str()), (StatusCode::OK, "took"));
     let (status, body) = for_host(&router, "/ping", "rebound.attacker.example:3917", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
+    let (status, _, body) = call_with(router.clone(), "GET", "/where/7?x=1", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "7 /where/7?x=1 7"));
     // A path that does not parse is the extractor's own rejection, not the error page.
     let (status, headers, _) = call_with(router.clone(), "GET", "/raw/seven", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -5066,6 +5095,43 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(headers.contains_key("content-security-policy"), "an unknown URL is still answered inside the stages");
     assert!(body.contains("<html"), "with the error page: {body}");
+}
+
+/// A bare route reads its body with `Upload`, which bounds its own reads.
+#[tokio::test]
+async fn a_bare_route_reads_its_body_with_upload() {
+    let router = App::new(bare_url::router()).router();
+    let post = |content_type: &'static str, body: &'static str| {
+        let router = router.clone();
+        async move {
+            let req = Request::builder().method("POST").uri("/inbox").header("content-type", content_type);
+            let res = router.oneshot(req.body(Body::from(body)).unwrap()).await.unwrap();
+            let status = res.status();
+            (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+        }
+    };
+    let form = "--x\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nhi\r\n--x--\r\n";
+    assert_eq!(post("multipart/form-data; boundary=x", form).await, (StatusCode::OK, "note hi".to_string()));
+    // Upload's own refusal, with no stage to turn it into the error page.
+    let (status, _) = post("text/plain", "hi").await;
+    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+}
+
+/// Beside a bare route every other route keeps its stages: an area's pages and its unknown URLs,
+/// and another site's write to a staged route.
+#[tokio::test]
+async fn the_stages_hold_beside_a_bare_route() {
+    let router = App::new(bare_url::router()).area(docs_url::area).error_page(test_error_page, ()).router();
+    let (status, _, body) = call_with(router.clone(), "GET", "/docs/intro", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "doc intro"));
+    let (status, headers, body) = call_with(router.clone(), "GET", "/docs/intro/deeper", None, Some("text/html")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(headers.contains_key("content-security-policy") && body.contains("<html"), "{headers:?} {body}");
+    let cross = [("origin", "https://attacker.example"), ("sec-fetch-site", "cross-site")];
+    let (status, _, _) = call_with_any(router.clone(), "POST", "/page", &cross).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "the staged route beside it still refuses another site's write");
+    let (status, _, body) = call_with_any(router, "POST", "/raw/7", &cross).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "took"), "the bare one has no check");
 }
 
 /// A tower layer around the whole app still goes around a bare route.
@@ -5123,17 +5189,17 @@ fn a_bare_route_under_an_api_is_refused_at_startup() {
         .router();
 }
 
-/// Nor at a path of Corten's own, which the router already holds: the router's own refusal, as
-/// for a staged route there.
+/// Nor at a path of Corten's own the app adds (the PWA's manifest), even with a method Corten's
+/// route there does not have, which would otherwise join it outside the stages.
 #[test]
-#[should_panic(expected = "Overlapping method route")]
+#[should_panic(expected = "says stages = bare and can answer at \"/manifest.webmanifest\"")]
 fn a_bare_route_at_a_path_of_corten_s_own_is_refused_at_startup() {
     #[crate::routes]
-    mod at_health {
-        #[route("/health/live", get = bare_ping, stages = bare)]
-        pub struct Live;
+    mod at_manifest {
+        #[route("/manifest.webmanifest", post = bare_ping, stages = bare)]
+        pub struct Manifest;
     }
-    let _ = App::new(at_health::router()).router();
+    let _ = App::new(at_manifest::router()).pwa(crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A"))).router();
 }
 
 /// Nor one whose parameter stands under a prefix of Corten's the app adds when it starts (the

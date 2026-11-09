@@ -968,7 +968,7 @@ rules something out.
 
     Last checked: 2026-11-06, the `compile_fail` doctests that hold `caller = T`
     (`crates/corten/src/route.rs`) and the caller's own (`crates/corten/src/caller.rs`) at
-    `bcd31ffe`; 2026-11-09, the `stages = bare` `compile_fail` doctests in
+    `bcd31ffe`; 2026-11-08, the `stages = bare` `compile_fail` doctests in
     `crates/corten/src/route.rs` (a stage's input, a header reader, a whole-body reader, a
     `caller = T`, area or API module, a path that reaches Corten's own), on top of `c65c10ec`.
 
@@ -981,7 +981,7 @@ rules something out.
     stages, not inside them: its handler's answer is sent as it made it, a raw `Response` too, and
     every other route keeps every stage. It is all or nothing, so the order a reader checks is
     still one. It is for an answer that must cost what the router alone costs and that anyone may
-    read (a public JSON figure a CDN fronts, a beacon, an upload taken in at a high rate), beside
+    read (a public JSON figure a CDN fronts), beside
     pages that need every stage; the stages add about twice what its handler and the router cost
     together (below). Its answer gets no CSP or `nosniff`, so it is data, not a document built
     from the request, and no host check, so it is data anyone anywhere may read. A bare route
@@ -1001,10 +1001,13 @@ rules something out.
     type that sends HTML, since a raw `Response`, which a bare route exists to allow, carries any
     content type, so the rule is the guide's and the handler's; nor Corten adding `nosniff` and
     `Content-Security-Policy: sandbox` to a bare answer that has neither, or keeping the host
-    check alone: either is a second kind of bare route to read and makes the answer no longer the
-    one the handler made, and the reason is that, not their cost, which was not measured (a header
-    lookup and two inserts, or one header compared). A handler sets the headers itself, and data
-    only this machine or its network may see is not for a bare route.
+    check alone: what a bare route promises is that its answer is the one its handler made, the
+    raw answer an app takes it for, and a header Corten adds breaks that for every bare route to
+    guard against one kind of handler, a raw `Response` with no `Content-Type`, which Corten's own
+    answer types never send. The reason is that, not their cost, which was not measured (a header
+    lookup and two inserts, or one header compared; estimated at about 200 instructions from the
+    header inserts in the bare request's glibc profile, under 3% of it). A handler sets the headers itself,
+    and data only this machine or its network may see is not for a bare route.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -1013,7 +1016,8 @@ rules something out.
     Corten's own code within 18 instructions of before, while its whole request rose from 19,696
     to 19,976 to 19,988 in the allocator with the same allocations, so the same layout effect may
     be in the request outside the area); measured (callgrind, release, the same JSON handler,
-    five runs each alternating with main `c65c10ec`, median and range: with jemalloc a bare route
+    this change at `d0fad8a0`, five runs each alternating with main `c65c10ec`, median and range:
+    with jemalloc a bare route
     7,398 (7,397 to 7,400) instructions a request, the same handler through the stages 21,302
     (21,301 to 21,310), a staged route beside a bare one 21,328 (21,315 to 21,333), and a plain
     axum router 7,640, whose route parses a longer path and builds its answer from a header
@@ -1043,7 +1047,7 @@ rules something out.
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
-    own); 2026-11-09, the `stages = bare` runs against `c65c10ec` (the bench binary was not
+    own); 2026-11-08, the `stages = bare` runs against `c65c10ec` (the bench binary was not
     committed, so the next check writes its own: the same JSON handler answered in process by an
     `App` with it bare, by the same `App` with it staged, and by a plain axum `Router`).
 

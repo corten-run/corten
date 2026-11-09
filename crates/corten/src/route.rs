@@ -679,7 +679,7 @@ pub use corten_macros::UrlValue;
 /// ```
 ///
 /// A route that must be as fast as the server can answer, for an answer anyone may read (a public
-/// figure a CDN fronts, a beacon), says `stages = bare`: it meets none of the app's stages
+/// figure a CDN fronts), says `stages = bare`: it meets none of the app's stages
 /// ([`crate::middleware`]), so no host or same-origin check, no signal, deadline or panic catch,
 /// no middleware, no error page, security headers, `Cache-Control`, tag or compression. Its
 /// handler's answer is sent as it made it, a raw [`axum::response::Response`] too, and every other

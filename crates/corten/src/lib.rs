@@ -41,7 +41,8 @@
 //! [`App`] puts the production pieces around the app's routes with defaults: security headers
 //! and a CSP, a cross-site write check, error pages, versioned static files, cache headers
 //! ([`cache`]), health checks, compression (feature `compress`), and live reload under
-//! `corten dev`.
+//! `corten dev`. A route that says `stages = bare` is served outside all of them, for data anyone
+//! may read that must cost no more than the router.
 //!
 //! Modules: [`answer`] (what a route answers), [`caller`] (who is asking), [`middleware`],
 //! [`api`] (JSON-only routes), [`cache`] (HTTP caching), [`view`] (markup), [`script`]
