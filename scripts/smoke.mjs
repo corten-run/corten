@@ -836,9 +836,16 @@ async function run(browser) {
   // says what coding held it.
   const large = await page.evaluate(async () => {
     const stop = new AbortController();
-    const answer = await fetch("/smoke/live/large", { signal: stop.signal });
-    const head = { status: answer.status, coding: answer.headers.get("content-encoding") };
-    stop.abort();
+    /** @type {{ status?: number, coding?: string | null, failed?: string }} */
+    let head = {};
+    try {
+      const answer = await fetch("/smoke/live/large", { headers: { accept: "text/event-stream" }, signal: AbortSignal.any([stop.signal, AbortSignal.timeout(15_000)]) });
+      head = { status: answer.status, coding: answer.headers.get("content-encoding") };
+    } catch (error) {
+      return { failed: `no answer: ${String(error)}` };
+    } finally {
+      stop.abort();
+    }
     return new Promise((done) => {
       const started = performance.now();
       const source = new EventSource("/smoke/live/large");
