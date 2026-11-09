@@ -287,12 +287,12 @@ Sorting in place leaves the order on the page, and its readers must take it. `ro
 into the address, into the part read again around the table and into that part's forms that post.
 Any other form or link whose route reads it, a link or a `GET` form in the part or anything outside
 it (a kit `Pagination` or `PreviousNext` through its `on:link`), names the table with
-`ordered::send` or `ordered::link` (above); none is found by searching the page ([Rule
-3](../design.md#rule-handler-arguments)). One that does not sends the order the page was drawn with,
-unless it is a form that posts without an `action` or `formaction`, and no build or check notices (a
-kit pager must write `on:link`, but `on:link={None::<Handler>}` builds; [Limit
-24](../design.md#limit-sort-readers)), so where a sorted table's order is read, each such form and
-link takes one of those calls.
+`ordered::send` or `ordered::link` (above); none is found by searching the page
+([Rule 3](../design.md#rule-handler-arguments)). One that does not sends the order the page was
+drawn with, unless it is a form that posts without an `action` or `formaction`, and no build or
+check notices (a kit pager must write `on:link`, but `on:link={None::<Handler>}` builds;
+[Limit 24](../design.md#limit-sort-readers)), so where a sorted table's order is read, each such
+form and link takes one of those calls.
 
 It sorts the rows the page has, so it is for a table that shows all of its rows; on a table that
 shows a page of them it would sort that page alone. Such a table (the kit's `Pagination` under
