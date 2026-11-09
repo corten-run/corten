@@ -176,10 +176,10 @@ the table's order (a "Refresh" beside the table whose answer redirects back to t
 it was asked) calls `corten_ui::ordered::send` when it is sent, with the id of the table or an
 element around it, its `#[derive(Id)]` type given to `corten_ui::sorted` (an `ElementId`: a
 string does not compile there, so a renamed table's id cannot name nothing). That is the rule for
-every form but two kinds: a form that posts inside the table's `ReadAgain` part is rewritten by
-the sort itself (above), and a form that posts without an `action` sends to the address the sort
-wrote; every other form whose route reads the order calls `send`: a GET form inside the part, and
-a form with an `action` in a table that has no such part (a row's own post form) too:
+every form but two kinds: a form that posts inside the table's `ReadAgain` part is rewritten by the
+sort itself (above), and a form that posts without an `action` or `formaction` sends to the address
+the sort wrote; every other form whose route reads the order calls `send`: a GET form inside the
+part, and a form with an `action` in a table that has no such part (a row's own post form) too:
 
 ```rust,ignore
 <form method="post" action={&url::RefreshSupply { choice }}
@@ -280,19 +280,19 @@ ranges overlap, though the round trip adds to every swap. A swap fetched ahead s
 place or faster there, but only when the answer is in before the click: a pointer that rests on the
 header for its 65 ms dwell and then the fetch, or a tap, whose prefetch starts at `touchstart` (not
 measured here), while a key press or a quick click gets none. So in place's range overlaps the
-fastest case's at every size, it is faster by the round trip on a network up to 500 rows, and it
-asks the server for nothing.
+lowest median case's at every size, it is faster by the round trip on a network up to 500 rows, and
+it asks the server for nothing.
 
 Sorting in place leaves the order on the page, and its readers must take it. `rows::sort` writes it
 into the address, into the part read again around the table and into that part's forms that post.
 Any other form or link whose route reads it, a link or a `GET` form in the part or anything outside
 it (a kit `Pagination` or `PreviousNext` through its `on:link`), names the table with
-`ordered::send` or `ordered::link` (above); none is found by searching the page
-([Rule 3](../design.md#rule-handler-arguments)). One that does not sends the order the page was
-drawn with, unless it is a form that posts without an `action`, and no build or check notices
-(a kit pager must write `on:link`, but `on:link={None::<Handler>}` builds;
-[Limit 24](../design.md#limit-sort-readers)), so where a sorted table's order is read, each such
-form and link takes one of those calls.
+`ordered::send` or `ordered::link` (above); none is found by searching the page ([Rule
+3](../design.md#rule-handler-arguments)). One that does not sends the order the page was drawn with,
+unless it is a form that posts without an `action` or `formaction`, and no build or check notices (a
+kit pager must write `on:link`, but `on:link={None::<Handler>}` builds; [Limit
+24](../design.md#limit-sort-readers)), so where a sorted table's order is read, each such form and
+link takes one of those calls.
 
 It sorts the rows the page has, so it is for a table that shows all of its rows; on a table that
 shows a page of them it would sort that page alone. Such a table (the kit's `Pagination` under
