@@ -2551,6 +2551,39 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+277. The kit's `status_dot` has `LiveDot { tone }`, the dot of a live view's badge: its opacity
+    pulses while the `<corten-live>` around it is live, so a glance tells a live view from a frozen
+    one, and is still while it connects, reconnects or has closed or ended, before the runtime
+    runs, without JavaScript and outside a `<corten-live>`. It is still under
+    `prefers-reduced-motion: reduce`, pulses in the system's text color under forced colors as
+    `Progress`'s sweep moves. The guides give the rules that make the words beside it follow the
+    stream too ("Live" only while it is live, "Not live" otherwise and without JavaScript).
+    Not breaking: `StatusDot` is unchanged (its doc test no longer names a class a live form
+    could have), and `corten ui add status_dot --merge` takes `LiveDot`. The kit's new rules
+    add 195 bytes to the stylesheet of every app that draws a `StatusDot`, as the two share one:
+    measured on the ui-gallery's served `components.css`, 60,666 bytes with them where it was
+    60,471 (gzip 10,056 against 10,012, brotli 8,856 against 8,814, Node's zlib at gzip level 9
+    and brotli's default; the earlier size is the served file without the new rules). The
+    ui-gallery's orders page has a live badge with those words, whose own three rules bring the
+    served file to 60,833 bytes (gzip 10,081, brotli 8,876), and the smoke test puts it inside a
+    `<corten-live>` and checks it in each state
+    ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
+277. `bench/fullstack` measures what each production default costs in CPU a request under load:
+    `cost-under-load.sh` builds card-market's round image as it is and with each `ablate/` patch,
+    and `ab.mjs` loads the page and the JSON at a fixed 300 a second and with 64 users, alternating,
+    on a droplet's pinned CPU; `cost-under-load.mjs` gives each default's microseconds a request.
+    Three rounds on a c-8 (the README's "What each production default costs under load"): for a
+    browser, compression is 45 of the page's 85 microseconds at 64 users (53%) and 25 of the JSON's
+    57 (44%); no other default is separated from the run's order and noise: the page's `ETag`,
+    7.7% of its instructions under callgrind, measures 6 microseconds there, as do defaults with
+    almost no instructions. `ab.mjs` now starts each round one image later, gives k6 the load CPUs
+    a round gives an app serving from memory (`BENCH_FIXTURE_LOAD_CPUS`), never reads an earlier
+    run's file, writes the rows so far to `summary.partial.json` after each one, and on a failed k6
+    run stops and removes the app; `cost-under-load.sh` reuses a `cbd-*` image only when its label
+    says it was built from the same source, and writes `source.txt` beside the results (its commit
+    unknown in a copy with no `.git`, as a droplet gets), which now keep the droplet's script and
+    CPU (`run.sh`, `host.txt`)
+    ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
 278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
     after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
     apps: how long it takes to be ready, cold and warm, and after an edit how long a completion
@@ -2571,7 +2604,21 @@ Corten is pre-1.0, so any minor version may change the API.
     The time from a save to the page showing it under each stack's development server is not
     measured, and the bench README says why
     ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
-
+280. The kit's `StatusTone` has `Text`, the color of the text around the dot: in a badge, the
+    badge's, so `<span class={Badge { tone, .. }}><StatusDot tone={StatusTone::Text} />"Open"</span>`
+    writes a computed tone once, on the badge, and a dot that takes it cannot disagree with it. It
+    shows on a `Solid` badge's fill too, where a dot in the badge's own tone was the fill's color
+    and could not be seen; the kit doc and guide say a dot in a badge takes it. `LiveDot` takes it
+    as well. Under forced colors it is `CanvasText`, as every tone is.
+    A dot in another tone in a badge still compiles: kit files are copied into an app one by one,
+    so the dot has no badge type to check against. Not
+    breaking: the other tones are unchanged, and `corten ui add status_dot --merge` takes `Text`.
+    The kit's rule adds 42 bytes to the stylesheet (measured on the ui-gallery's served
+    `components.css`: 60,920 bytes against 60,878, gzip 10,099 against 10,089, brotli 8,900
+    against 8,884, with the rule taken out for the earlier size). The ui-gallery's badges use it,
+    and its smoke test checks the dot is the badge's text color in a soft badge and a solid one, and
+    that a `Success` dot beside plain text is the theme's success color
+    ([#1092 Kit StatusDot and Badge take separate tone enums, so a badge with a computed tone writes it twice and a mismatched pair compiles](https://github.com/corten-run/corten/issues/1092)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
     apps are: the item page, the catalog page, the localized marketplace page and the live price
