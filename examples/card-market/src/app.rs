@@ -964,7 +964,10 @@ mod tests {
                 .unwrap();
             let res = router.clone().oneshot(req).await.unwrap();
             assert_eq!(res.status(), StatusCode::OK);
-            bytes += std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes()).len();
+            let body = std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes());
+            // A tool error is a 200 too: measure the output written, not the error path.
+            assert!(body.windows(19).any(|w| w == b"\"structuredContent\""), "{}", String::from_utf8_lossy(&body));
+            bytes += body.len();
         }
         println!("{calls} calls, {} bytes avg", bytes / calls);
     }

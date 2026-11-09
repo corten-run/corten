@@ -16,7 +16,7 @@
 //! ```should_panic
 //! #[derive(serde::Serialize)]
 //! struct Foreign { at: String }
-//! #[derive(serde::Serialize, corten::ToJson)]
+//! #[derive(corten::ToJson)]
 //! struct Row { when: Foreign }
 //! let _ = corten::types::Types::new().add::<Row>();
 //! ```

@@ -445,10 +445,10 @@ impl ToJson for Raw {
 /// `#[derive(ToJson)]` implements it for a struct with named fields, so
 ///
 /// ```
-/// #[derive(serde::Serialize, corten::ToJson)]
+/// #[derive(corten::ToJson)]
 /// struct Dimension { id: u32, name: String }
 ///
-/// #[derive(serde::Serialize, corten::ToJson)]
+/// #[derive(corten::ToJson)]
 /// struct DimensionDetail {
 ///     #[serde(flatten)]
 ///     dimension: Dimension,
