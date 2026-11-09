@@ -576,6 +576,8 @@ pub(crate) mod tests {
         assert_eq!(html, r#"<span class="status-dot__dot status-dot__success" aria-hidden="true"></span>"#);
         let live = LiveDot { tone: StatusTone::Info }.to_html();
         assert_eq!(live, r#"<span class="status-dot__dot status-dot__live status-dot__info" aria-hidden="true"></span>"#);
+        let text = StatusDot { tone: StatusTone::Text }.to_html();
+        assert_eq!(text, r#"<span class="status-dot__dot status-dot__text" aria-hidden="true"></span>"#);
     }
 
     /// A hidden legend is still the fieldset's legend, which names the group, with the class that
