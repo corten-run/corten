@@ -239,6 +239,27 @@ try {
   check("offline navigation shows the offline page", (await page.textContent("h1")) === "Not available");
   await context.setOffline(false);
 
+  // Under the worker, a range of a versioned file still goes to the network as a 206, after the
+  // worker has cached the whole file (the cache holds whole files and cannot hold a 206) (#1133).
+  await page.goto(`${base}/`);
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+  const underWorker = await page.evaluate(async () => {
+    const src = /** @type {HTMLSourceElement} */ (document.querySelector('video source[type="video/mp4"]')).src;
+    const length = (await (await fetch(src)).arrayBuffer()).byteLength;
+    let cached = false;
+    for (let i = 0; i < 50 && !cached; i += 1) {
+      cached = !!(await caches.match(src));
+      if (!cached) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const part = await fetch(src, { headers: { range: "bytes=100-199" } });
+    return { cached, length, status: part.status, range: part.headers.get("content-range"), bytes: (await part.arrayBuffer()).byteLength };
+  });
+  check(
+    "under the service worker, a range of the clip is a 206 of those bytes after the whole file is cached",
+    underWorker.cached && underWorker.status === 206 && underWorker.range === `bytes 100-199/${underWorker.length}` && underWorker.bytes === 100,
+    JSON.stringify(underWorker),
+  );
+
   const csp = errors.filter((e) => /Content Security Policy|Refused to/.test(e));
   check("no CSP violations", csp.length === 0, csp.join(" | "));
   const other = errors.filter((e) => !/Content Security Policy|Refused to|ERR_INTERNET_DISCONNECTED|Failed to load resource|net::ERR/.test(e));
@@ -430,16 +451,17 @@ try {
       skip(clipCheck, "Playwright's WebKit on Windows lands a seek on a video's start");
       continue;
     }
-    const own = name === "Chromium" ? null : await type.launch({ headless: true });
+    const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
+    const clipContext = await (own ?? browser).newContext();
     try {
-      const clipPage = await (await (own ?? browser).newContext()).newPage();
+      const clipPage = await clipContext.newPage();
       /** @type {string[]} */
       const answers = [];
       clipPage.on("response", (r) => {
         if (/\/grading\/condition\.(webm|mp4)$/.test(new URL(r.url()).pathname)) answers.push(`${r.request().headers()["range"] ?? "whole"}: ${r.status()} ${r.headers()["content-range"] ?? "-"}`);
       });
       await clipPage.goto(`${base}/`);
-      const seen = await clipPage.evaluate(async (/** @type {boolean} */ askFirst) => {
+      const clip = await clipPage.evaluate(async (/** @type {boolean} */ askFirst) => {
         const within = (/** @type {Promise<unknown>} */ p, /** @type {string} */ what) =>
           Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error(`no ${what} in 10 s`)), 10000))]);
         const video = /** @type {HTMLVideoElement} */ (document.querySelector("video"));
@@ -464,13 +486,15 @@ try {
       }, name === "WebKit");
       check(
         clipCheck,
-        !("error" in seen) && Math.abs(seen.at - 4.5) < 0.6 && seen.mode === "showing" &&
-          (name === "WebKit" || seen.unasked === "showing") && seen.lang === "en" &&
-          seen.cue?.startsWith("Moderately Played") === true && answers.some((a) => a.startsWith("bytes=")) &&
-          answers.every((a) => a.startsWith("whole: ") || a.includes(": 206 bytes ")),
-        `${JSON.stringify(seen)}; ${answers.join(", ")}`,
+        !("error" in clip) && Math.abs(clip.at - 4.5) < 0.6 && clip.mode === "showing" &&
+          (name === "WebKit" || clip.unasked === "showing") && clip.lang === "en" &&
+          clip.cue?.startsWith("Moderately Played") === true && answers.some((a) => a.startsWith("bytes=")) &&
+          // A request the browser dropped is reported with status 0 and no answer.
+          answers.every((a) => /^whole: (200|0) /.test(a) || /^bytes=\S+: 206 bytes /.test(a)),
+        `${JSON.stringify(clip)}; ${answers.join(", ")}`,
       );
     } finally {
+      await clipContext.close();
       await own?.close();
     }
   }

@@ -7,9 +7,10 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Added
 
 - Static files with `mp4`, `webm` and `vtt` names are sent as `video/mp4`, `video/webm` and
-  `text/vtt`, and a file sent as it is stored answers a single byte `Range` with a `206` (`416`
-  past its end, the whole file for several ranges), honoring `If-Range` for its strong ETag, so a
-  native `<video>` with captions plays and seeks from `embed!`
+  `text/vtt`, and a `GET` for a file sent as it is stored answers a single byte `Range` with a
+  `206` (a bare `416` past its end, the whole file for several ranges or a `HEAD`), honoring
+  `If-Range` for its strong ETag, so a native `<video>` with captions plays and seeks from
+  `embed!`; the PWA's service worker leaves a range to the network
   ([#1133 Serve embedded video and caption assets with standard MIME types and byte-range responses](https://github.com/corten-run/corten/issues/1133)).
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent

@@ -70,7 +70,7 @@ use std::{
 use axum::body::Bytes;
 use axum::{
     extract::Path as UrlPath,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
     Router,
@@ -220,11 +220,11 @@ pub(crate) fn favicon<S: Clone + Send + Sync + 'static>(assets: Option<&Arc<Asse
     });
     Router::new().route(
         FAVICON_PATH,
-        get(move |headers: HeaderMap| {
+        get(move |method: Method, headers: HeaderMap| {
             let icon = icon.clone();
             async move {
                 match icon {
-                    Some((assets, path)) => assets.serve(path, &headers, FAVICON_CACHE, true),
+                    Some((assets, path)) => assets.serve(path, &method, &headers, FAVICON_CACHE, true),
                     None => {
                         let mut res = (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, NO_FAVICON_CACHE)]).into_response();
                         res.extensions_mut().insert(crate::page::AsIs);
@@ -786,17 +786,17 @@ impl Assets {
         let assets = self.clone();
         Router::new().route(
             &format!("{}/{{version}}/{{*path}}", self.mount),
-            get(move |UrlPath((version, path)): UrlPath<(String, String)>, headers: HeaderMap| {
+            get(move |UrlPath((version, path)): UrlPath<(String, String)>, method: Method, headers: HeaderMap| {
                 let assets = assets.clone();
                 async move {
                     let cache = if version == assets.version { IMMUTABLE } else { HeaderValue::from_static("no-cache") };
-                    assets.serve(&path, &headers, cache, false)
+                    assets.serve(&path, &method, &headers, cache, false)
                 }
             }),
         )
     }
 
-    fn serve(&self, path: &str, headers: &HeaderMap, cache: HeaderValue, fixed: bool) -> Response {
+    fn serve(&self, path: &str, method: &Method, headers: &HeaderMap, cache: HeaderValue, fixed: bool) -> Response {
         let Some(file) = self.files.get(path) else {
             return StatusCode::NOT_FOUND.into_response();
         };
@@ -828,19 +828,23 @@ impl Assets {
             crate::compress::encoded_headers(res.headers_mut(), file.content_type, None);
             return res;
         }
-        // A range of the file as it is stored, to a client sent it unencoded (a video seeking): an
-        // encoded body's offsets are not the file's, so it is sent whole. `If-Range` holds for this
-        // version's own strong tag only (the files have no date). No `Accept-Ranges`: a browser
-        // asks for a range unprompted, and the header would cost every file's answer (#1133).
+        // A range of the file as it is stored, to a GET sent it unencoded (a video seeking): an
+        // encoded body's offsets are not the file's, so it is sent whole, and RFC 9110 has every other
+        // method ignore `Range`. `If-Range` holds for this version's own strong tag only (the files
+        // have no date). No `Accept-Ranges`: a browser asks for a range unprompted, and the header
+        // would cost every file's answer (#1133).
         #[cfg(feature = "compress")]
-        let ranged = coding.is_none();
+        let ranged = coding.is_none() && method == Method::GET;
         #[cfg(not(feature = "compress"))]
-        let ranged = true;
-        let strong = !etag.as_bytes().starts_with(b"W/");
-        let range = headers
-            .get(header::RANGE)
-            .filter(|_| ranged && headers.get(header::IF_RANGE).is_none_or(|tag| strong && *tag == etag))
-            .and_then(|value| byte_range(value.as_bytes(), body.len()));
+        let ranged = method == Method::GET;
+        let range = match ranged.then(|| headers.get(header::RANGE)).flatten() {
+            Some(value) => {
+                let strong = !etag.as_bytes().starts_with(b"W/");
+                let current = headers.get(header::IF_RANGE).is_none_or(|tag| strong && *tag == etag);
+                current.then(|| byte_range(value.as_bytes(), body.len())).flatten()
+            }
+            None => None,
+        };
         let head = [
             (header::CONTENT_TYPE, HeaderValue::from_static(file.content_type)),
             (header::CACHE_CONTROL, cache),
@@ -876,10 +880,14 @@ fn byte_range(value: &[u8], len: usize) -> Option<Result<std::ops::Range<usize>,
     let number = |digits: &str| digits.bytes().all(|b| b.is_ascii_digit()).then(|| digits.parse::<u64>().ok()).flatten();
     let len64 = len as u64;
     let (start, end) = if first.is_empty() {
-        // The last `n` bytes; none at all, or of an empty body, cannot be sent.
+        // The last `n` bytes; none at all cannot be sent, and of an empty body they are the whole
+        // (empty) body (RFC 9110 14.1.1).
         let n = number(last)?;
-        if n == 0 || len == 0 {
+        if n == 0 {
             return Some(Err(()));
+        }
+        if len == 0 {
+            return None;
         }
         (len64.saturating_sub(n), len64)
     } else {
@@ -896,10 +904,13 @@ fn byte_range(value: &[u8], len: usize) -> Option<Result<std::ops::Range<usize>,
     Some(Ok(start as usize..end as usize))
 }
 
-/// The 416 for a range past the end of a body `len` bytes long, naming its length.
+/// The 416 for a range past the end of a body `len` bytes long, naming its length: sent as it is,
+/// not as the app's error page, which would drop `Content-Range`.
 fn unsatisfiable(len: usize) -> Response {
     let whole = HeaderValue::try_from(format!("bytes */{len}")).expect("digits");
-    (StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, whole)]).into_response()
+    let mut res = (StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, whole)]).into_response();
+    res.extensions_mut().insert(crate::page::AsIs);
+    res
 }
 
 /// A file's ETag: its hash in hex, quoted, and its coding's tag after a `-` (`"0123..ef-br"`).
@@ -1250,7 +1261,7 @@ mod tests {
         assert_eq!(at("Bytes = 0-0"), Some(Ok(0..1)), "the unit is compared without case");
         assert_eq!(at("bytes=100-"), Some(Err(())));
         assert_eq!(at("bytes=-0"), Some(Err(())));
-        assert_eq!(byte_range(b"bytes=-1", 0), Some(Err(())), "an empty body has no last byte");
+        assert_eq!(byte_range(b"bytes=-1", 0), None, "of an empty body, the last bytes are all of it");
         for ignored in ["bytes=9-0", "bytes=0-1,5-6", "items=0-1", "bytes=+1-2", "bytes=a-", "bytes", "bytes=-"] {
             assert_eq!(at(ignored), None, "{ignored}");
         }
@@ -1258,7 +1269,8 @@ mod tests {
 
     /// A video seeks: a range of a file is sent as a 206 of those bytes, named by `Content-Range`,
     /// a range past its end as a 416 naming its length, a range under another version's tag
-    /// (`If-Range`) as the whole file, and a file the client already has as a 304 (#1133).
+    /// (`If-Range`) as the whole file, a file the client already has as a 304, and a `HEAD` whole
+    /// (#1133).
     #[tokio::test]
     async fn a_file_is_sent_in_the_ranges_asked_for() {
         let video: String = (0..100u8).map(|i| char::from(b'a' + i % 26)).collect();
@@ -1310,10 +1322,8 @@ mod tests {
             .oneshot(Request::head(&url).header(header::RANGE, "bytes=0-9").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(
-            (head.status(), &head.headers()[header::CONTENT_RANGE]),
-            (StatusCode::PARTIAL_CONTENT, &HeaderValue::from_static("bytes 0-9/100"))
-        );
+        assert_eq!(head.status(), StatusCode::OK, "only a GET is answered in part (RFC 9110 14.2)");
+        assert!(!head.headers().contains_key(header::CONTENT_RANGE));
     }
 
     /// Captions compressed for the client are sent whole: an encoded body's offsets are not the

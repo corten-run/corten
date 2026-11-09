@@ -21,7 +21,8 @@
 //!   they may carry the signed-in user's data, and the browser's HTTP cache already follows the
 //!   page's `Cache-Control` ([`crate::cache`]).
 //! - Versioned files (`/assets/{version}/...` and the runtime) are served cache-first, and only
-//!   responses marked `immutable` are stored, so a mismatched version is never cached.
+//!   responses marked `immutable` are stored, so a mismatched version is never cached. A request
+//!   for a range of one (a video seeking) is left to the network.
 //! - Everything else (runtime navigation fetches, form actions, feeds, JSON, anything under a
 //!   `network_only` prefix) is not touched by the worker at all, so it costs nothing.
 //! - A new deploy changes the worker's bytes (the cache name includes the version), the browser
@@ -834,8 +835,9 @@ self.addEventListener("fetch", (event) => {
     );
     return;
   }
-  // Only versioned files are cached; everything else is left to the browser.
-  if (!CACHED.some((prefix) => url.pathname.startsWith(prefix))) return;
+  // Only versioned files are cached; everything else is left to the browser. A range (a video
+  // seeking) is too: the cache holds whole files and cannot hold a 206.
+  if (!CACHED.some((prefix) => url.pathname.startsWith(prefix)) || request.headers.has("range")) return;
   event.respondWith(
     (async () => {
       const hit = await caches.match(request);

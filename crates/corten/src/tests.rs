@@ -9842,6 +9842,26 @@ async fn the_favicon_path_is_the_static_directory_s_icon() {
     }
 }
 
+/// Through the app, a static file's range is the bytes asked for and a range past its end is a
+/// bare 416 naming the file's length, not the app's error page, whatever the client accepts (#1133).
+#[tokio::test]
+async fn a_range_through_the_app_is_answered_as_the_file_server_answers_it() {
+    let router = App::new(policy_url::router()).assets(IconStatic).router();
+    let bytes = &include_bytes!("assets/favicon-ico/favicon.ico")[..];
+    let ranged = |range: &'static str| {
+        let req = Request::get("/favicon.ico").header(header::RANGE, range).header(header::ACCEPT, "text/html");
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    let part = ranged("bytes=2-3").await.unwrap();
+    assert_eq!(part.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(part.headers()[header::CONTENT_RANGE], format!("bytes 2-3/{}", bytes.len()));
+    assert_eq!(&part.into_body().collect().await.unwrap().to_bytes()[..], &bytes[2..4]);
+    let past = ranged("bytes=100-").await.unwrap();
+    assert_eq!(past.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(past.headers()[header::CONTENT_RANGE], format!("bytes */{}", bytes.len()));
+    assert!(past.into_body().collect().await.unwrap().to_bytes().is_empty(), "no error page");
+}
+
 /// An API at `/` leaves `/favicon.ico` to Corten, the icon or the empty 404 whatever the client
 /// accepts, unless the API has a route there (#1056).
 #[tokio::test]
