@@ -52,7 +52,8 @@ fn a_gzip_streams_context_fits_what_it_reserves() {
         drop(std::mem::take(coder.get_mut()));
         most = most.max(LIVE.load(Ordering::Relaxed) - before);
     }
-    // The figure design.md (Choice 32) cites: `cargo test -p corten-run --test stream_memory -- --nocapture`.
+    // The figure design.md (Choice 32) cites:
+    // `cargo test -p corten-run --features compress --test stream_memory -- --nocapture`.
     println!("a gzip stream holds {most} bytes of the {RESERVED} it reserves");
     assert!(most <= RESERVED, "a gzip stream holds {most} bytes, more than the {RESERVED} it reserves");
     // And the reservation is not far above it, or the budget turns streams away it could hold.
