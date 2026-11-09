@@ -1079,6 +1079,7 @@ fn fields_and_url_value_describe_what_they_read_as_from_json_does() {
     for text in [r#"{"value":1,"list":[2,3]}"#, r#"{"value":1}"#, r#"{"value":"x"}"#, r#"{"value":1,"x":2}"#] {
         same_read::<derived::Generic<u32>, generic::theirs::Generic<u32>>(text);
     }
+    read_alone::<derived::Generic<u32>, generic::theirs::Generic<u32>>(r#"{"value":1,"list":[2,3]}"#);
     // Another word is one of the enum's.
     assert_eq!(Generator::root_for_read::<wording::ours::Wording>()["type"], "string");
 }

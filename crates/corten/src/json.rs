@@ -223,7 +223,8 @@
 //!
 //! A generic `#[derive(FromJson)]` type with a defaulted field of the bare parameter is refused
 //! where it is defined, since its reader needs `T: Default` and asks each parameter only for
-//! `FromJson`; a defaulted `Vec<T>` or `Option<T>` is read, and `Fields` takes the bare one:
+//! `FromJson`. A defaulted `Vec<T>` or `Option<T>` is read by its reader, where `T: Default` (as
+//! serde's derive asks), and `Fields` takes the bare one, read by serde_json:
 //!
 //! ```compile_fail,E0277
 //! #[derive(corten::FromJson)]
