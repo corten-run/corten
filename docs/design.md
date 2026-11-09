@@ -1094,6 +1094,30 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
+32. <a id="choice-runtime-terser"></a>**The runtime and its modules are bundled by esbuild and minified by terser.** Every
+    page of every app loads the runtime, so its bytes are paid on each first visit. esbuild
+    bundles each file (the runtime takes in `on.js`) and lowers it to ES2022 as before; terser,
+    a development dependency of the repository's tooling that no app installs, then minifies
+    it, compressing in two passes and mangling the module's top-level names. Its output is
+    smaller after compression than esbuild's minifier makes it: the runtime on `c65c10ec` is
+    14,373 bytes with gzip (level 9) against 14,836, and 13,015 with brotli (level 11) against
+    13,424, 3.1% less with each. Not chosen: esbuild's minifier alone (above); terser mangling names
+    without compressing (177 bytes more with gzip, 190 with brotli); one pass (10 and 12 bytes
+    more); a third pass (the same bytes as two).
+
+    Stands on: measured (each built file compressed as served, before and after, on
+    `c65c10ec`: the runtime 463 bytes less with gzip and 409 with brotli; `view.js` 55 and 44
+    less; `format.js`, `upload.js` and `keys.js` within 12 bytes either way); reasoned (the
+    build's output is checked in and `npm run check` rebuilds it, so a minifier that changed
+    what the code does would fail the browser smoke tests that run on the built files); value
+    (fewer bytes on every page, Values 1, for a dependency of the tooling only, Values 6).
+
+    Revisit when: esbuild's minifier comes within 1% of terser's output after compression, so
+    one tool does both and terser goes; or terser output fails a smoke test in a supported
+    engine that esbuild's does not.
+
+    Last checked: 2026-11-08, sizes on `c65c10ec` with esbuild 0.28.2 and terser 5.51.2.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

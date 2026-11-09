@@ -4075,6 +4075,12 @@ Corten is pre-1.0, so any minor version may change the API.
     again (a `chunk()` inside a `timeout` or `select!`) no longer starts the idle time again, so a
     client that went quiet is given up on after the idle time however the handler reads
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
+176. The runtime and its modules are minified by terser after esbuild bundles them, so every page
+    ships fewer bytes: the runtime is 14,373 bytes with gzip (level 9), 463 fewer, and 13,015 with
+    brotli (level 11), 409 fewer (3.1% each); `view.js` is 55 and 44 bytes smaller, and the other
+    modules within 12 bytes either way. terser (5.51.2) is a development dependency of the
+    repository's tooling; apps install nothing new ([design Choice 32](docs/design.md#choice-runtime-terser),
+    [#1047 Benchmark round r16: item-page JavaScript grew 9.1% (13,187 to 14,392 gzip bytes)](https://github.com/corten-run/corten/issues/1047)).
 
 ### Fixed
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
