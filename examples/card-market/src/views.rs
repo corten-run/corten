@@ -32,7 +32,8 @@ pub use site_header::SiteHeader;
 
 /// Every component with a script or a stylesheet, tokens first: for `App::components` and the
 /// generated types.
-pub const COMPONENTS: &[Component] = &[theme::TOKENS, SiteHeader, ItemDetail, AlertForm, Price, ItemList, ItemCard, ListingSort];
+pub const COMPONENTS: &[Component] =
+    &[theme::TOKENS, SiteHeader, ItemDetail, AlertForm, Price, ItemList, ItemCard, ListingSort, ConditionGuide];
 
 /// The page for a failed request (`App::error_page`), in the layout; under `corten dev` it shows
 /// the error. The PWA's offline page is `Failure::Offline`.
