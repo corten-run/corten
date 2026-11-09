@@ -4184,6 +4184,12 @@ Corten is pre-1.0, so any minor version may change the API.
     1,074), loaded only by a page that calls it. A pager step that writes is a form the app draws
     in place of the pager, which the guides now say
     ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
+176. The runtime and its modules are minified by terser after esbuild bundles them, so every page
+    ships fewer bytes: the runtime is 14,373 bytes with gzip (level 9), 463 fewer, and 13,015 with
+    brotli (level 11), 409 fewer (3.1% each); `view.js` is 55 and 44 bytes smaller, and the other
+    modules within 12 bytes either way. terser (5.51.2) is a development dependency of the
+    repository's tooling; apps install nothing new ([design Choice 32](docs/design.md#choice-runtime-terser),
+    [#1047 Benchmark round r16: item-page JavaScript grew 9.1% (13,187 to 14,392 gzip bytes)](https://github.com/corten-run/corten/issues/1047)).
 
 ### Fixed
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
