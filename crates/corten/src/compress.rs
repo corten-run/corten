@@ -2,14 +2,14 @@
 //!
 //! Pages, patches and JSON are generated per request, so they are compressed per request at the
 //! fastest level that still pays: zstd 1 for clients that accept it (current Chrome, Edge and
-//! Firefox; Playwright's WebKit does not send it), otherwise brotli 1, otherwise gzip 1. On card-market's item page (8.8 KB
-//! on average; instructions by callgrind in process, bytes the average `render_cost` reports)
-//! zstd 1 adds about 230,000 user instructions to the request and sends 2,178 bytes; brotli 1 adds
-//! about 690,000 for 2,358 bytes. brotli's other fast levels
-//! cost more: 2 adds 1.22 million for 2,142 bytes, and 0 (with its window sized to the body) adds
+//! Firefox; Playwright's WebKit does not send it), otherwise brotli 1, otherwise gzip 1. On
+//! card-market's item page (8.8 KB on average; instructions by callgrind in process, bytes the
+//! average `render_cost` reports) zstd 1 adds about 230,000 user instructions to the request and
+//! sends 2,178 bytes; brotli 1 adds about 690,000 for 2,358 bytes. brotli's other fast levels cost
+//! more: 2 adds 1.22 million for 2,142 bytes, and 0 (with its window sized to the body) adds
 //! 745,000 for 2,492. The runtime and [`crate::assets`] files never change, so they are compressed
-//! once, at brotli 11 and gzip 9, the first time a client asks for them (in a background thread,
-//! so startup is not delayed; until then they go out as dynamic responses).
+//! once, at brotli 11 and gzip 9, the first time a client asks for them (in a background thread, so
+//! startup is not delayed; until then they go out as dynamic responses).
 //! JSON the app holds as bytes and sends again ([`crate::json::Raw`]) is compressed once too, the
 //! second time it is sent, at brotli 9 and gzip 9, by one background thread that takes them in
 //! turn from a bounded queue: on a 79 KB JSON document that takes 17 ms once, where compressing
@@ -1084,9 +1084,10 @@ mod tests {
         assert_eq!(frames.concat(), sent.concat().into_bytes());
     }
 
-    /// What each stream coding sends for a list drawn again with one row changed, against gzip 1 and
-    /// brotli 4 as streams were before #1131: the first event, then the least and most of ten redraws, at
-    /// 40 rows (2.7 KB), 250 (17 KB) and 640 (44 KB, past deflate's 32 KiB window). It prints them:
+    /// What each stream coding sends for a list drawn again with one row changed, against gzip 1
+    /// and brotli 4 as streams were before #1131: the first event, then the least and most of ten
+    /// redraws, at 40 rows (2.7 KB), 250 (17 KB) and 640 (44 KB, past deflate's 32 KiB window). It
+    /// prints them:
     /// `cargo test --release -p corten-run --all-features --lib -- --ignored what_a_redraw_sends --nocapture`
     #[test]
     #[ignore]

@@ -4079,18 +4079,20 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Fixed
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
-  flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to more than
-  16 KiB only once more of the body arrived, so the last change before a quiet spell showed one
-  event late: in Playwright's WebKit a 16,385-byte event came 700 ms late (the next chunk's delay)
-  in every run, with Corten's encoder and with Node's at quality 4 and 11, and with empty blocks
-  after it; gzip and identity were on time at every size tried, to 200 KB, in all three engines.
-  Gzip-only clients, sent streams uncompressed before, get gzip too. A gzip stream reserves
-  360 KiB where a brotli one reserved 1,000 KiB. It sends more than brotli 4 for a large region:
-  a redraw of one row of 40 (2.7 KB) is 60 to 69 bytes against 20 to 40, of 250 (17 KB) 477 to
-  524 against 23 to 91, and an event over gzip's 32 KiB window repeats nothing (45 KB: about
-  6,210 against 44 to 2,029); and more CPU: an event of the 2.7 KB redraw, made and sent through
-  the compression layer, is about 286,650 instructions against brotli's 213,720 (zstd's is
-  unchanged at 100,470; callgrind, three runs each, within 20 instructions) ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
+  flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
+  more than 16 KiB only once more of the body arrived, so the last change before a quiet spell
+  showed one event late: in Playwright's WebKit a 16,385-byte event came 700 ms late (the next
+  chunk's delay) in every run, with Corten's encoder and with Node's at quality 4 and 11, and with
+  empty blocks after it; gzip and identity were on time at every size tried, to 200 KB, in all
+  three engines. Gzip-only clients, sent streams uncompressed before, get gzip too. A gzip stream
+  reserves 360 KiB where a brotli one reserved 1,000 KiB. It sends more than brotli 4, most for a
+  large region: a redraw of one row of 40 (2.7 KB) is 60 to 69 bytes against 20 to 40, of 250 (17 KB)
+  477 to 524 against 23 to 91, and an event over gzip's 32 KiB window repeats nothing (45 KB:
+  about 6,210 bytes a redraw, where brotli's 64 KiB window still repeated most of it); and more
+  CPU: an event of the 2.7 KB redraw, made and sent through the compression layer, is about
+  286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470; callgrind, three
+  runs each, within 20 instructions)
+  ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

@@ -1106,14 +1106,14 @@ rules something out.
     ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
     So a client that accepts zstd gets zstd 1 as before, any other that accepts gzip gets gzip 3
     (sync-flushed, its window kept), and one that accepts only brotli gets the stream as it is.
-    Gzip sends more than brotli 4 did for a large region (`what_a_redraw_sends`, ten redraws of a
-    list with one row changed): of 40 rows (2.7 KB) 60 to 69 bytes against 20 to 40, of 250
-    (17 KB) 477 to 524 against 23 to 91, and an event over deflate's 32 KiB window repeats nothing
-    (640 rows, 45 KB: 6,203 to 6,214 against 44 to 2,029). Level 3, not 1: at 1 the redraws are
-    129 to 453 bytes, 2,188 to 2,684 and 7,238 to 7,330. A gzip stream holds 352,104 bytes and
-    reserves 360 KiB (`tests/stream_memory.rs`), where brotli reserved 1,000 KiB. It costs more
-    CPU: an event of the 2.7 KB redraw, made and sent through the compression layer, is about
-    286,650 instructions against brotli's 213,720 (zstd 1: 100,470, unchanged).
+    Gzip sends more than brotli 4 did, most for a large region (`what_a_redraw_sends`, ten redraws
+    of a list with one row changed): of 40 rows (2.7 KB) 60 to 69 bytes against 20 to 40, of 250 (17
+    KB) 477 to 524 against 23 to 91, and an event over deflate's 32 KiB window repeats nothing (640
+    rows, 45 KB: 6,203 to 6,214 against 44 to 2,029). Level 3, not 1: at 1 the redraws are 129 to
+    453 bytes, 2,188 to 2,684 and 7,238 to 7,330. A gzip stream holds 352,104 bytes and reserves 360
+    KiB (`tests/stream_memory.rs`), where brotli reserved 1,000 KiB. It costs more CPU: an event of
+    the 2.7 KB redraw, made and sent through the compression layer, is about 286,650 instructions
+    against brotli's 213,720 (zstd 1: 100,470, unchanged).
     Not chosen: brotli with an empty block or a keepalive after each event (WebKit held the event
     back with empty blocks after it); a gzip-only client getting the stream as it is, as before (a
     redraw's saved bytes are why streams are compressed).
@@ -1133,7 +1133,8 @@ rules something out.
     over 32 KB to clients without zstd often enough that gzip's bytes show in a round.
 
     Last checked: 2026-11-08, WebKit 27.2, Chromium 156 and Firefox 157: the late brotli event
-    against `c65c10ec`'s streams and Node's encoder, by a probe not kept in the repository, and
+    against `c65c10ec`'s streams and Node's encoder, by replaying a stream's captured chunks one a
+    second from a Node server (the issue's Isolation), and
     each engine's `Accept-Encoding`; 2026-11-08, the callgrind counts on `c65c10ec` (brotli 4,
     zstd) and `541fc59b` (gzip 3, zstd); 2026-11-08, the bytes and the memory, miniz_oxide 0.9.1
     and brotli 9.0.0, on `202f6427` with `what_a_redraw_sends`.
