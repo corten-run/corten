@@ -779,9 +779,10 @@ rules something out.
    300 brotli pages a second (12.0 to 14.4) against 16.8% (15.8 to 18.4) and 17.0% on glibc (16.3
    to 17.5), and served 3,486 a second at 64 users (2,298 to 3,829) against 2,132 (1,303 to 2,210)
    and 2,357 (1,908 to 2,470); with `identity` and with a browser's encodings (zstd) their ranges
-   overlapped, except a browser's at 64 users, where glibc's 2,139 to 3,392 sat below both (and
-   above them in `results/ab-jemalloc`, 4,425 to 5,050). No image with glibc's tunables went
-   through `ab.mjs`, since none gave a flood's memory back. An earlier set without the thread cache
+   overlapped, except a browser's at 64 users, where glibc's 2,139 to 3,392 sat below both (while in
+   `results/ab-jemalloc` glibc's median, 4,936, was above theirs, 3,607 and 3,454, the ranges
+   overlapping). No image with glibc's tunables went through `ab.mjs`, since none gave a flood's
+   memory back. An earlier set without the thread cache
    (`results/ab-jemalloc`) had glibc at 3,554 brotli pages a second against 1,720 for jemalloc and
    1,905 with its background thread. Those rounds ran on Docker Desktop with other work running,
    where rounds of one image moved by up to 2.4 times at 64 users (glibc with `identity`, 3,490 to
@@ -796,11 +797,12 @@ rules something out.
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
    Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
-   faults a request, repeatable to 0.1 in every round; idle CPU, three rounds); measured, noisy
-   (CPU time and throughput in three rounds on a shared desktop, whose rounds moved by up to 2.4 times);
-   bet (an app's image is Debian with the `libjemalloc2` package, 5.3, whose option names these
-   are); reasoned (an image package binds only the image, where a `#[global_allocator]` crate
-   compiles C into every build).
+   faults a request, repeatable to 0.1 in every round; idle CPU, three rounds; instructions a
+   request under callgrind, five runs each); measured, noisy (CPU time and throughput in three
+   rounds on a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 12's
+   `libjemalloc2`, 5.3.0, has `background_thread` off and a 32 KiB `tcache_max` unless set, and
+   takes these option names); bet (an app's image is Debian with that package); reasoned (an image
+   package binds only the image, where a `#[global_allocator]` crate compiles C into every build).
 
    Revisit when: a run on a quiet Linux host (`ab.mjs` or `alloc-faults.mjs` on a droplet) shows a
    cost per request or no gain with brotli; the brotli encoder or its level changes what it
@@ -809,7 +811,10 @@ rules something out.
    no settings.
 
    Last checked: 2026-11-06, the callgrind runs on `547b54ae`, recorded at `b179987a`; 2026-11-08,
-   the floods, the page faults and the rounds, images of `81f1f8ef`.
+   the floods, the page faults and the rounds, images of `81f1f8ef` (but for the tuned image in
+   `results/alloc-faults` and `alloc-idle`, a build whose commit was not recorded); 2026-11-09,
+   Debian's libjemalloc2 5.3.0 (package 5.3.0-1) in `debian:bookworm-slim`, its options printed by
+   `MALLOC_CONF=stats_print:true`.
 
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
@@ -1143,14 +1148,17 @@ rules something out.
    not reach outside a component; `RelativeTime` keeps the page's relative times in its
    module, so one timer serves them all, with a `visibilitychange` and a `pageshow` listener for
    the life of the page that read the clock again when it comes back; and `rows::sort` writes the
-   order it drew into the `ReadAgain::from` tag of the part around its table, which the server
-   puts beside the part as a patch instruction, so no ref can name it, and into where the forms
-   in that part post, looking only beside the elements with an id around the table, as the
-   runtime finds a part. A form or link elsewhere whose route reads the order calls
-   `ordered::send` (a form's `on:submit`) or `ordered::link` (a link's `on:connect`) from its
-   own markup with the tables' ids, `ElementId`s made from their `#[derive(Id)]` types, as
-   `CopyButton` is given the element it copies, and it reads the order from the address when it
-   is sent or about to be followed; nothing searches the page for them.)
+   order it drew into the address and into the part the runtime reads again around its table,
+   found as the runtime finds a part: its `ReadAgain::from` tag, which no ref can name, and where
+   its forms that post send (a `GET` form's fields are its query, so it is not rewritten). That
+   search is closed: any other form or link whose route reads the order, inside the part or not,
+   except a form that posts without an `action` or `formaction` (it sends to the address, which
+   has the order), names the tables in its markup or in a kit pager's `on:link` (`ordered::send`,
+   `ordered::link`, with `sorted(&Id)` of each table's `#[derive(Id)]`, or of an element around
+   them, as `CopyButton` is given the element it copies) and reads the order from the address, so a
+   new kind of reader is one of those calls, not a wider search ([Limit 24](#limit-sort-readers)).
+   Which tables sort in place, also when other routes read their order, is decided in the [UI
+   guide](guide/ui.md) from the measurements there.)
 4. <a id="rule-user-facing-text"></a>User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a
@@ -1352,7 +1360,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `target` an `HTMLElement`, so its script narrows (`event instanceof MouseEvent`) where an
     `on:click` written on an `<a>` declares `MouseEvent` and `HTMLAnchorElement`. Typing a prop by
     the event and element it lands on would make each prop name its element's type, and the
-    arguments the call passes (a column, as a Rust type) are checked either way.
+    arguments the call passes (a column, as a Rust type) are checked either way. A handler meant
+    for such a prop takes the wide type too (corten-ui's `rows::sort` and `ordered::link`, which
+    the kit's pagers take as `on:link`), so written on an element of its own it accepts any
+    element: `ordered::link` on a `<button>` compiles, is reported in the console, and does nothing.
 19. <a id="limit-permissions-policy"></a>The `Permissions-Policy` a document is sent (`Feature`) is enforced by Chromium-based browsers
     (measured in Chromium 156: with the location granted, `geolocation=()` refuses it). Firefox 157
     and WebKit 27.2 gave the location under the same header (probed), so in them the features it
@@ -1432,3 +1443,14 @@ by design; where it is known, a limit says what would lift it or why it is so.
     endpoint, and a trial of one directive beside the enforced policy is not built in: the
     enforced policy's reports show what a change must allow, and `report_only` tries the whole
     policy.
+24. <a id="limit-sort-readers"></a>A form or link whose route reads a table's order that
+    `rows::sort` drew takes that order only by naming the table (`ordered::send`, `ordered::link`,
+    [Rule 3](#rule-handler-arguments)). Two kinds need no call: a form in the part read again around
+    the table that posts, which `rows::sort` rewrites, and a form that posts without an `action` or
+    `formaction`, which sends to the address it keeps. Any other that does not name the table sends
+    the order the page was drawn with, and nothing notices (a kit pager must write `on:link`, but
+    `on:link={None::<Handler>}` builds): the compiler cannot see which routes read the order, and
+    the runtime cannot tell a form that should carry it from one that should not. A navigating sort
+    header would close this at the cost of a round trip on every sort ([UI guide](guide/ui.md)). It
+    lifts when a route's type says it reads a table's order, so markup that sends to it on a page
+    that draws that table without the call does not build.

@@ -87,7 +87,10 @@ The same floods driven by `bench/fullstack/flood-memory.mjs` (three runs each, t
 `memory.current` 35 seconds after the last flood) left 406 to 455 MiB on glibc's allocator, and its
 tunables did not stop it: two arenas or one left 382 to 452 MiB, and a 16 KiB mmap threshold 177 to
 184 MiB, still climbing 20 MiB a flood. jemalloc as it comes left 118 to 139 MiB, since it returns
-memory only while the app allocates; with its background thread
+memory only while the app allocates (more than the earlier run's 45 MiB 35 seconds after the last
+flood, taken by `docker stats` on a build of `e751d127`, for a cause not found; the sizing below
+uses this run);
+with its background thread
 (`MALLOC_CONF=background_thread:true`) the same app idle went back to 7 to 11 MiB
 ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
