@@ -1040,6 +1040,8 @@ fn a_generic_form_a_shifted_discriminant_and_another_word_read_as_serde_s() {
 #[test]
 fn fields_and_url_value_describe_what_they_read_as_from_json_does() {
     use corten::json::schema::Generator;
+    // Built by the readers and described by the schema; no field is read.
+    #[allow(dead_code)]
     mod derived {
         #[derive(corten::FromJson)]
         #[serde(rename_all = "snake_case")]
