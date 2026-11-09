@@ -3682,8 +3682,8 @@ async function run(browser) {
     const afterOptOut = navRequests.length;
     const control = navTo("?from=hover", true);
     await page.hover("#prefetch");
-    await control;
-    check("data-no-prefetch: hovering the link fetches nothing", afterOptOut === 0 && navRequests.length === 1, `${afterOptOut} then ${navRequests.join()}`);
+    const controlSeen = (await control) !== null;
+    check("data-no-prefetch: hovering the link fetches nothing", afterOptOut === 0 && controlSeen && navRequests.length === 1, `${afterOptOut} then ${navRequests.join()}`);
 
     // The prefetch cache keeps the 8 newest pages: after hovering 9 links, following the oldest of
     // the 8 kept and the newest reuses their prefetches, so a cache of fewer than 8 fails here, and
@@ -3712,21 +3712,23 @@ async function run(browser) {
     await page.click('header a.hovered[href="/news?p=0"]');
     await page.waitForFunction(() => location.search === "?p=0");
     // Playwright can report the request after the address changes.
-    await fetchedAgain;
+    const oldestFetched = (await fetchedAgain) !== null;
     // The oldest kept and the newest were reused: no visit fetched either, however late its
     // request was reported.
     const keptFetched = ["/news?p=1", "/news?p=8"].filter((path) => navRequests.includes(new URL(path, base).href));
     check(
       "prefetch keeps the 8 newest pages: the oldest kept and the newest are reused, the oldest is fetched again",
-      hoveredCount === 10 && keptFetched.length === 0 && navRequests.length === 11,
-      `${hoveredCount}, ${keptFetched.length ? `fetched ${keptFetched.join(" ")}` : "both reused"} (p1 prefetch seen about ${p1Age} ms before its click), ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
+      hoveredCount === 10 && keptFetched.length === 0 && oldestFetched && navRequests.length === 11,
+      `${hoveredCount}, ${oldestFetched ? "" : "the oldest not fetched again, "}${keptFetched.length ? `fetched ${keptFetched.join(" ")}` : "both reused"} (p1 prefetch seen about ${p1Age} ms before its click), ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
     );
 
     // The page a visit is fetching is not prefetched as well, by the dwell the click cut short or
     // by the pointer leaving its link and coming back: the address stays this page's until that
     // page is in, so the prefetch would fetch it a second time (#1053). Its answer is held until
     // both dwells have ended, however long the hover takes: once the address changes, a dwell
-    // finds its link is this page and fetches nothing, so the check would pass untested.
+    // finds its link is this page and fetches nothing, so the check would pass untested. A
+    // prefetch is held too: one sent before the click, when a slow click lets the first dwell end,
+    // is the fetch the visit reuses, and still counts once.
     if (await page.evaluate(precommits)) {
       await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?p=held">held</a>')));
       /** @param {URL} url */
@@ -3735,7 +3737,7 @@ async function run(browser) {
       let releaseHeld = () => {};
       const heldReleased = new Promise((resolve) => (releaseHeld = () => resolve(undefined)));
       await page.route(heldPage, async (route) => {
-        if (route.request().headers()["purpose"] !== "prefetch") await heldReleased;
+        await heldReleased;
         await route.continue().catch(() => {});
       });
       navRequests.length = 0;
