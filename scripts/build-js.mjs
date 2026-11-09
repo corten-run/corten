@@ -9,7 +9,7 @@
 //   dist/view.js    rows() and the helpers of the generated view classes, which Corten puts at
 //                   the start of an app's corten/views module (one script: no extra request)
 // esbuild bundles, lowers to ES2022 and minifies each file; terser minifies its output again,
-// about 3.5% smaller after compression and a little smaller before it (docs/design.md#choice-runtime-terser).
+// about 3.6% smaller after compression and a little smaller before it (docs/design.md#choice-runtime-terser).
 // `node scripts/build-js.mjs --check` fails when a built file is not what its source builds to, or
 // when the runtime's size in README.md ("A(n) <size> KB (gzip) runtime") is not the built file's,
 // which a build writes there (scripts/readme-size.mjs).
