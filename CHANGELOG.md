@@ -8,7 +8,7 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - `stages = bare` on a `#[route(..)]` serves that route outside every stage, beside routes that
   keep them all: its handler's answer, a raw `Response` too, is sent as it made it. The handler
-  takes only the request's URL and its body read by `Upload` (`corten::answer::Bare`); a bare
+  takes only the request's URL (`corten::answer::Bare`); a bare
   route in a `caller = ..`, area or API module, or with `no_store`, `rows` or `gives(..)`, does
   not compile, nor does one whose path can answer at a path of Corten's own (a first segment that
   is a parameter, `/corten/..`, `/health/live`, `/health/ready`, `/health/{..}`); one under an
@@ -17,6 +17,11 @@ Corten is pre-1.0, so any minor version may change the API.
   `nosniff`, so it is for data anyone anywhere may read, not a document built from the request.
   Measured with callgrind: 7,398 (7,397-7,400) instructions a request against 21,302
   (21,301-21,310) through the stages (jemalloc; a plain axum router 7,640).
+
+- `Media` sets `X-Content-Type-Options: nosniff` itself, and `Content-Security-Policy: sandbox`
+  on a type that runs script (HTML, SVG, any XML), so a file it sends cannot run script on a
+  route that says `stages = bare`; on a route with stages the app's policy still replaces the
+  sandbox (with `Policy::report_only`, the sandbox is enforced beside the reported policy).
 
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent

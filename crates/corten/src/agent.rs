@@ -1122,6 +1122,25 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND, "no document is served");
     }
 
+    /// A route served outside every stage at the metadata's path, which Corten adds when the app
+    /// starts, would join its route there: refused then.
+    #[test]
+    #[should_panic(expected = "says stages = bare and can answer at \"/.well-known/oauth-protected-resource/mcp\"")]
+    fn a_bare_route_at_the_metadata_s_path_is_refused_at_startup() {
+        #[crate::routes]
+        mod at_metadata {
+            #[route("/.well-known/oauth-protected-resource/mcp", post = bare_metadata, stages = bare)]
+            pub struct Metadata;
+        }
+        let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example");
+        let tools = Tools::new("test", "1.0").authorization(authorization);
+        let _ = crate::App::new(at_metadata::router()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+    }
+
+    async fn bare_metadata() -> &'static str {
+        "mine"
+    }
+
     #[derive(crate::Route)]
     #[route("/")]
     struct Root;

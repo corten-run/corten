@@ -940,10 +940,11 @@ rules something out.
     and another server's answer passed on (`Relay`) are such routes too. A route that says
     `stages = bare` ([Choice 28](#choice-fixed-stages)) is in `Routes` too, but meets no stage, so
     its answer type is not checked; its handler is checked instead to take only the request's URL
-    and its body read by `Upload` (`corten::answer::Bare`): no `Caller` and no headers, which carry
+    (`corten::answer::Bare`): no `Caller` and no headers, which carry
     the cookies and credentials, so no input Corten gives it says who is asking (an extractor of
     the app's own that implements `Bare` is the app's to keep so, as with `Anonymous`), and no
-    reader of the whole body, which no deadline would end there. A module with `caller = T`
+    reader of the body, which no deadline would end there and no same-origin check would keep
+    another site from posting. A module with `caller = T`
     cannot hold one, and its handlers are a type (`BareMethods`) that only `Routes` takes, so `Area::route`
     and `Api::route` still take only checked `Methods`. Not chosen: guards and
     a context object checked per request (`App::guard`, `Area::guard`, `App<C>`), which Corten
@@ -969,7 +970,7 @@ rules something out.
     Last checked: 2026-11-06, the `compile_fail` doctests that hold `caller = T`
     (`crates/corten/src/route.rs`) and the caller's own (`crates/corten/src/caller.rs`) at
     `bcd31ffe`; 2026-11-08, the `stages = bare` `compile_fail` doctests in
-    `crates/corten/src/route.rs` (a stage's input, a header reader, a whole-body reader, a
+    `crates/corten/src/route.rs` (a stage's input, a header reader, a body reader, a
     `caller = T`, area or API module, a path that reaches Corten's own), on top of `c65c10ec`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
@@ -983,8 +984,12 @@ rules something out.
     still one. It is for an answer that must cost what the router alone costs and that anyone may
     read (a public JSON figure a CDN fronts), beside
     pages that need every stage; the stages add about twice what its handler and the router cost
-    together (below). Its answer gets no CSP or `nosniff`, so it is data, not a document built
-    from the request, and no host check, so it is data anyone anywhere may read. A bare route
+    together (below). No stage gives its answer a CSP or `nosniff`, so it is data, not a document
+    built from the request (`Media`, the answer type for a file, sets `nosniff` itself, and
+    `Content-Security-Policy: sandbox` on a type that runs script, as `NoStore` sets its own
+    header), and no host check, so it is data anyone anywhere may read. Its handler reads no body:
+    a form posted as `multipart/form-data` needs no preflight, so with no same-origin check any
+    site could make its visitors post one there, and no deadline would end a slow one. A bare route
     whose path can answer at one of Corten's own paths does not compile where the path alone
     shows it, and one that can answer under an area's or API's prefix, or under a path the app
     adds, is refused when the app starts. Not chosen: an app's own tower layer that
@@ -999,15 +1004,17 @@ rules something out.
     on a branch not merged: about 200 to 360 instructions fewer a request with glibc's allocator,
     but about 200 to 263 more with jemalloc, which the images preload; nor refusing an answer
     type that sends HTML, since a raw `Response`, which a bare route exists to allow, carries any
-    content type, so the rule is the guide's and the handler's; nor Corten adding `nosniff` and
-    `Content-Security-Policy: sandbox` to a bare answer that has neither, or keeping the host
-    check alone: what a bare route promises is that its answer is the one its handler made, the
-    raw answer an app takes it for, and a header Corten adds breaks that for every bare route to
-    guard against one kind of handler, a raw `Response` with no `Content-Type`, which Corten's own
-    answer types never send. The reason is that, not their cost, which was not measured (a header
-    lookup and two inserts, or one header compared; estimated at about 200 instructions from the
-    header inserts in the bare request's glibc profile, under 3% of it). A handler sets the headers itself,
-    and data only this machine or its network may see is not for a bare route.
+    content type, so the rule is the guide's and the handler's; nor a stage-like step adding
+    `nosniff` and `Content-Security-Policy: sandbox` to every bare answer that has neither, or
+    keeping the host check alone: what a bare route promises is that its answer is the one its
+    handler made, the raw answer an app takes it for, and a header added after the handler breaks
+    that for every bare route to guard against a raw `Response` that sends a document, while
+    Corten's own answer types send text with its type (`&'static str`, `String`) or set the
+    headers themselves (`Media`). The reason is that, not their cost, which was not measured (a
+    header lookup and two inserts, or one header compared; estimated at about 200 instructions
+    from the header inserts in the bare request's glibc profile, under 3% of it). A handler that
+    builds a raw `Response` sets the headers itself, and data only this machine or its network
+    may see is not for a bare route.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -1306,7 +1313,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     no step for one route, whose needs are its handler's arguments and return type. A route
     takes every stage or, with `stages = bare`, none: no host or same-origin check, deadline,
     panic catch, error page, security headers or cache rule, which its handler gives itself if it
-    needs them; a wrong method or a missing suffix at its path is the router's plain 405 or 404.
+    needs them; a wrong method or a missing suffix at its path is the router's plain 405 or 404,
+    and a panic there goes to Rust's panic hook, not the app's log.
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the

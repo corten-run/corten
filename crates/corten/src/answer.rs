@@ -812,9 +812,12 @@ impl Answer for Relay {
 /// Bytes the app holds, sent as their media type: a picture a user uploaded, a document the app
 /// made, or bytes it makes as they are sent ([`Media::stream`]). The type is one the app names
 /// (`"image/png"`), never the one a client sent with the bytes: read an upload's type from its
-/// first bytes. What keeps a file that holds HTML from running as a page is the app's headers,
-/// which every `Media` gets: browsers do not guess another type
-/// (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script.
+/// first bytes. What keeps a file that holds HTML from running as a page is its headers: browsers
+/// do not guess another type (`X-Content-Type-Options: nosniff`, which `Media` sets itself), and
+/// one that runs script (HTML, SVG, XML) gets `Content-Security-Policy: sandbox` from `Media`
+/// itself, which the app's policy replaces on a route with stages, so it holds on a route that
+/// says `stages = bare` too (with [`Policy::report_only`](crate::security::Policy::report_only),
+/// the sandbox is enforced beside the reported policy).
 ///
 /// It is cached as anything the app answers is (`private, no-cache`). At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
@@ -847,9 +850,22 @@ pub struct Media(Response);
 impl Media {
     /// `bytes`, sent as `media_type` (`"image/webp"`), a valid header value.
     pub fn new(media_type: &'static str, bytes: impl Into<axum::body::Bytes>) -> Self {
+        Media::typed(Response::new(axum::body::Body::from(bytes.into())), media_type)
+    }
+
+    /// `res` sent as `media_type`, never sniffed as another, and sandboxed when the type is one a
+    /// browser runs script in.
+    fn typed(mut res: Response, media_type: &'static str) -> Self {
         use axum::http::{header, HeaderValue};
-        let mut res = Response::new(axum::body::Body::from(bytes.into()));
-        res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
+        let headers = res.headers_mut();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
+        headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+        let essence = media_type.split(';').next().unwrap_or("").trim();
+        let is = |name: &str| essence.eq_ignore_ascii_case(name);
+        let xml = essence.len() > 4 && essence.get(essence.len() - 4..).is_some_and(|end| end.eq_ignore_ascii_case("+xml"));
+        if is("text/html") || is("text/xml") || is("application/xml") || xml {
+            headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+        }
         Media(res)
     }
 
@@ -947,9 +963,8 @@ impl Media {
             }
         });
         let mut res = Response::new(axum::body::Body::from_stream(checked));
-        res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         res.extensions_mut().insert(Streamed);
-        Media(res)
+        Media::typed(res, media_type)
     }
 
     /// Saved as a file named `file_name` rather than shown (`Content-Disposition: attachment`):
@@ -1696,24 +1711,23 @@ impl Anonymous for corten_feed::Since {}
 #[doc(hidden)]
 pub trait AllAnonymous {}
 
-/// An input a route with `stages = bare` may take: its URL, or its body read by [`Upload`](crate::form::Upload),
-/// which bounds its own reads. No stage runs there, so nothing gives the request its signal, its
-/// nonce or who is asking, and an extractor that reads one of those (`Req`, `Signal`, `Nonce`,
-/// `Caller`, `ClientIp`) does not compile. Nor does one that reads the headers (`HeaderMap`, the
-/// whole `Request`), which carry the visitor's cookies and credentials, since no stage keeps a
-/// shared cache from storing what a bare handler made of them; nor one that reads the whole body
-/// at once (`Bytes`, `String`, `Form`, `Json`), since no deadline ends a client that sends it a
-/// byte at a time. Implement it for an extractor of the app's own that reads none of these.
+/// An input a route with `stages = bare` may take: its URL. No stage runs there, so nothing gives
+/// the request its signal, its nonce or who is asking, and an extractor that reads one of those
+/// (`Req`, `Signal`, `Nonce`, `Caller`, `ClientIp`) does not compile. Nor does one that reads the
+/// headers (`HeaderMap`, the whole `Request`), which carry the visitor's cookies and credentials,
+/// since no stage keeps a shared cache from storing what a bare handler made of them; nor one
+/// that reads the body (`Bytes`, `String`, `Form`, `Json`, `Upload`): no deadline ends a client
+/// that sends it a byte at a time, and no same-origin check keeps another site from posting it.
+/// Implement it for an extractor of the app's own that reads none of these.
 #[diagnostic::on_unimplemented(
     message = "a route with `stages = bare` runs no stage, so its handler cannot take `{Self}`",
-    label = "`{Self}` reads what a stage gives the request, its headers, or a body no deadline bounds",
-    note = "take the request's URL (Params, Method, Uri) or read its body with Upload, or leave stages = bare out so the route gets every stage; an extractor of the app's own that reads none of those implements `corten::answer::Bare`"
+    label = "`{Self}` reads what a stage gives the request, its headers, or its body",
+    note = "take the request's URL (Params, Method, Uri), or leave stages = bare out so the route gets every stage; an extractor of the app's own that reads none of those implements `corten::answer::Bare`"
 )]
 pub trait Bare {}
 
 impl<T> Bare for axum::extract::Path<T> {}
 impl<R: crate::route::FromUrl + ?Sized> Bare for crate::route::Params<R> {}
-impl<T> Bare for crate::form::Upload<T> {}
 impl<T> Bare for State<T> {}
 impl<T: Bare> Bare for Option<T> {}
 impl Bare for Method {}

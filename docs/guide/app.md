@@ -930,12 +930,12 @@ let app = App::new(url::router());
 The route says it where it is declared, so a reader of the routes module sees which routes skip
 the stages. What the compiler can check, it does:
 
-1. The handler takes only the request's URL (`Params`, `Method`, `Uri`) and its body read by
-   `Upload`, which ends a client that stops or sends too slowly by itself
+1. The handler takes only the request's URL (`Params`, `Method`, `Uri`)
    (`corten::answer::Bare`). `Req`, `Signal`, `Nonce`, `Caller` and `ClientIp` read what a stage
    gives; `HeaderMap` and the whole `Request` read the visitor's cookies and credentials, which no
-   stage would keep a shared cache from storing; and `Form`, `Json`, `Bytes` and `String` read the
-   whole body, and no deadline there ends a client that sends it a byte a minute. None compiles
+   stage would keep a shared cache from storing; and `Form`, `Json`, `Bytes`, `String` and
+   `Upload` read the body, which no deadline there bounds and no same-origin check keeps another
+   site from posting (a form posted as `multipart/form-data` needs no preflight). None compiles
    there.
 2. A routes module with `caller = ..` cannot have one, since every route there takes the caller.
    Nor can an area's or API's module, whose deadline, policy and middleware cover every request
@@ -953,16 +953,20 @@ What it gives up is the app's to weigh: a bare route answers a DNS-rebound page 
 site's write, and it can be framed or sniffed, so it is for answers anyone anywhere may read:
 not a figure only this machine or its network should see, which a page on another site can read
 through a name it points at this machine. A handler
-that panics drops the connection rather than answering 500, and nothing ends it at a deadline.
-Nothing gives its answer a CSP, `nosniff` or `frame-ancestors`, so a document it builds from
+that panics drops the connection rather than answering 500, its panic goes to Rust's panic hook
+(standard error) rather than the app's log, and nothing ends it at a deadline; a 5xx it answers is
+logged only when it is a `corten::Error`, which logs itself.
+No stage gives its answer a CSP, `nosniff` or `frame-ancestors`, so a document it builds from
 what the request says (HTML, SVG, or text a browser sniffs as HTML) runs as script on the app's
 origin, where it can read every other page with the visitor's cookies. A bare answer is data
-(text, JSON, a file) with its `Content-Type` set, as `&'static str`, `String` and `Media` set it
-and a raw `Response` does not until the handler says (a body without one is sniffed); a handler
-that must send a document sets those headers on it itself. Its
+(text, JSON, a file) with its `Content-Type` set, as `&'static str` and `String` set it and a
+raw `Response` does not until the handler says (a body without one is sniffed). `Media` sets its
+own `nosniff`, and `Content-Security-Policy: sandbox` for a type that runs script (HTML, SVG,
+any XML), so an uploaded picture it sends cannot run there; a handler that must send another
+document sets those headers on it itself. Its
 answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
 own rules, `Set-Cookie` or not ([Caching](#caching) describes the stages' rules, which it does
-not meet), and an upload it reads with `Upload::idle(None)` has no time limit at all.
+not meet).
 A request for a method the route has no handler for gets the router's plain 405, and one whose
 segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) its plain 404, not the
 app's error page; any other unknown URL is still the app's 404, inside its stages.

@@ -4986,13 +4986,13 @@ mod bare_url {
     #[route("/serves", get = bare_serves)]
     pub struct Serves;
 
-    #[route("/inbox", post = bare_inbox, stages = bare)]
-    pub struct Inbox;
-
     #[route("/where/{id}", get = bare_where, stages = bare)]
     pub struct Where {
         pub id: u32,
     }
+
+    #[route("/picture", get = bare_picture, stages = bare)]
+    pub struct Picture;
 }
 
 async fn bare_ping() -> &'static str {
@@ -5012,14 +5012,6 @@ async fn bare_raw_post(_: crate::Params<bare_url::Raw>) -> &'static str {
     "took"
 }
 
-/// A body read by `Upload`, which bounds its own reads with no stage around it.
-async fn bare_inbox(upload: crate::Upload<std::collections::HashMap<String, String>>) -> String {
-    match upload.fields().await {
-        Ok(fields) => format!("note {}", fields.get("note").map_or("", String::as_str)),
-        Err(error) => format!("refused {error}"),
-    }
-}
-
 /// The rest of what a bare handler may take: the request's `Uri`, the app's state, and an
 /// extractor that is optional.
 async fn bare_where(
@@ -5029,6 +5021,11 @@ async fn bare_where(
     again: Option<axum::extract::Path<u32>>,
 ) -> String {
     format!("{} {uri} {}", at.id, again.map_or(0, |again| again.0))
+}
+
+/// A picture that can run script, as an uploaded SVG can.
+async fn bare_picture() -> crate::Media {
+    crate::Media::new("image/svg+xml", r#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#)
 }
 
 async fn bare_page(req: Req) -> HtmlResult {
@@ -5072,6 +5069,11 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
     let (status, _, body) = call_with(router.clone(), "GET", "/where/7?x=1", None, None).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "7 /where/7?x=1 7"));
+    // `Media` keeps a file that can run script from running it, with no stage to do so.
+    let (status, headers, _) = call_with(router.clone(), "GET", "/picture", None, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["content-security-policy"], "sandbox");
     // A path that does not parse is the extractor's own rejection, not the error page.
     let (status, headers, _) = call_with(router.clone(), "GET", "/raw/seven", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -5095,26 +5097,6 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(headers.contains_key("content-security-policy"), "an unknown URL is still answered inside the stages");
     assert!(body.contains("<html"), "with the error page: {body}");
-}
-
-/// A bare route reads its body with `Upload`, which bounds its own reads.
-#[tokio::test]
-async fn a_bare_route_reads_its_body_with_upload() {
-    let router = App::new(bare_url::router()).router();
-    let post = |content_type: &'static str, body: &'static str| {
-        let router = router.clone();
-        async move {
-            let req = Request::builder().method("POST").uri("/inbox").header("content-type", content_type);
-            let res = router.oneshot(req.body(Body::from(body)).unwrap()).await.unwrap();
-            let status = res.status();
-            (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
-        }
-    };
-    let form = "--x\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nhi\r\n--x--\r\n";
-    assert_eq!(post("multipart/form-data; boundary=x", form).await, (StatusCode::OK, "note hi".to_string()));
-    // Upload's own refusal, with no stage to turn it into the error page.
-    let (status, _) = post("text/plain", "hi").await;
-    assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
 }
 
 /// Beside a bare route every other route keeps its stages: an area's pages and its unknown URLs,
@@ -5187,6 +5169,48 @@ fn a_bare_route_under_an_api_is_refused_at_startup() {
     let _ = App::new(under_api::router())
         .api::<ApiRoot>(|api| api.route::<ApiRates>(crate::Methods::reads(get(|| async { "rates" }))))
         .router();
+}
+
+/// Nor one whose parameter can stand at an area's prefix (`/admin/{x}` at `/admin/quick`).
+#[test]
+#[should_panic(expected = "says stages = bare and is under the area \"/admin/quick\"")]
+fn a_bare_parameter_at_an_area_s_prefix_is_refused_at_startup() {
+    let _ = App::new(bare_beside_area::router())
+        .area::<AdminQuick>(|quick| quick.route::<AdminQuickSlow>(crate::Methods::reads(get(|| async { "slow" }))))
+        .router();
+}
+
+/// Nor one whose parameter can stand at an API's prefix (`/pay/{x}` at `/pay/api`).
+#[test]
+#[should_panic(expected = "says stages = bare and is under App::api(\"/pay/api\")")]
+fn a_bare_parameter_at_an_api_s_prefix_is_refused_at_startup() {
+    let _ = App::new(bare_beside_api::router())
+        .api::<PayApi>(|api| api.route::<PayApiGo>(crate::Methods::reads(get(|| async { "go" }))))
+        .router();
+}
+
+#[crate::routes]
+mod bare_beside_area {
+    #[route("/admin/{x}", get = bare_beside_area_any, stages = bare)]
+    pub struct Any<'a> {
+        pub x: &'a str,
+    }
+}
+
+async fn bare_beside_area_any(_: crate::Params<bare_beside_area::Any<'_>>) -> &'static str {
+    "any"
+}
+
+#[crate::routes]
+mod bare_beside_api {
+    #[route("/pay/{x}", get = bare_beside_api_any, stages = bare)]
+    pub struct Any<'a> {
+        pub x: &'a str,
+    }
+}
+
+async fn bare_beside_api_any(_: crate::Params<bare_beside_api::Any<'_>>) -> &'static str {
+    "any"
 }
 
 /// Nor at a path of Corten's own the app adds (the PWA's manifest), even with a method Corten's

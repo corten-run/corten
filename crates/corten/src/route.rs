@@ -683,11 +683,11 @@ pub use corten_macros::UrlValue;
 /// ([`crate::middleware`]), so no host or same-origin check, no signal, deadline or panic catch,
 /// no middleware, no error page, security headers, `Cache-Control`, tag or compression. Its
 /// handler's answer is sent as it made it, a raw [`axum::response::Response`] too, and every other
-/// route beside it keeps every stage. Its handler takes only the request's URL, and its body read
-/// by [`crate::form::Upload`] ([`crate::answer::Bare`]). Nothing gives its answer a CSP or
-/// `nosniff`, so a document built from what the request says (HTML, SVG) would run as script on
-/// the app's origin: a bare answer is data, and a handler that sends a document sets those
-/// headers itself.
+/// route beside it keeps every stage. Its handler takes only the request's URL
+/// ([`crate::answer::Bare`]). No stage gives its answer a CSP or `nosniff`, so a document built
+/// from what the request says (HTML, SVG) would run as script on the app's origin: a bare answer
+/// is data, [`crate::Media`] sets those headers on a type that runs script, and a handler that
+/// sends another document sets them itself.
 ///
 /// ```
 /// use corten::prelude::*;
@@ -745,7 +745,8 @@ pub use corten_macros::UrlValue;
 /// # fn main() { let _ = url::router(); }
 /// ```
 ///
-/// Nor one that reads the whole body at once, which no deadline would end there:
+/// Nor one that reads the body (`Bytes`, `Form`, `Json`, `Upload`), which no deadline would end
+/// there and no same-origin check would keep another site from posting:
 ///
 /// ```compile_fail,E0277
 /// #[corten::routes]
