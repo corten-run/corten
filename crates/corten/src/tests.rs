@@ -6241,6 +6241,13 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
             assert_eq!((headers[header::CONTENT_LENGTH].to_str().unwrap(), &body[..]), ("8", &b"a,1\nb,2\n"[..]));
             assert_eq!(headers[header::VARY], "accept-encoding");
         }
+        // A client that takes brotli and gzip, as WebKit asks, gets gzip, where a buffered body
+        // would be brotli: the stream's own coding, not the page's.
+        for path in ["/export", "/sized"] {
+            let (_, headers, body) = get_with(path, Some("gzip, deflate, br")).await;
+            assert_eq!(headers[header::CONTENT_ENCODING], "gzip", "{path}");
+            assert_eq!(decoded("gzip", &body).unwrap(), csv.as_bytes(), "{path}");
+        }
         // A client that takes only brotli gets it as it is, with its length: a stream is never
         // brotli (`compress::StreamCoder`).
         let (_, headers, body) = get_with("/sized", Some("br")).await;

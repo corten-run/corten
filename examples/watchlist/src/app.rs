@@ -29,7 +29,7 @@ use crate::{
     lists::Lists,
     market::{self, Market},
     news::{self, Readers},
-    socket,
+    smoke, socket,
     theme::*,
 };
 
@@ -67,7 +67,7 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
         pictures: Pictures::default(),
         readers: Readers::default(),
     };
-    App::new(url::router(shared.clone()))
+    let app = App::new(url::router(shared.clone()))
         .policy(policy())
         .assets(crate::layout::Static)
         // The picture's form is drawn by `/account` and by `/avatar`'s answer without JavaScript.
@@ -79,7 +79,14 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
         // Started by `serve` once it listens, stopped at shutdown; a test's `app.test()` starts
         // none, so its prices stay put.
         .task("market", move |signal| market::simulate(trading, signal))
-        .client_zone()
+        .client_zone();
+    if for_the_smoke() { app.area(smoke::url::area) } else { app }
+}
+
+/// Whether the browser test runs the app (`SMOKE_TRUSTED_TYPES=1`): it then gets its own policy
+/// and routes (`smoke.rs`).
+fn for_the_smoke() -> bool {
+    std::env::var("SMOKE_TRUSTED_TYPES").is_ok_and(|on| on == "1")
 }
 
 /// Corten's policy. The browser test writes markup of its own into the page to set up a case, which
@@ -88,11 +95,7 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
 /// test serves as a payment SDK's host would.
 fn policy() -> corten::security::Policy {
     let policy = corten::security::Policy::new();
-    if std::env::var("SMOKE_TRUSTED_TYPES").is_ok_and(|on| on == "1") {
-        policy.trusted_types_policy("smoke").script_src("http://scripts.test")
-    } else {
-        policy
-    }
+    if for_the_smoke() { policy.trusted_types_policy("smoke").script_src("http://scripts.test") } else { policy }
 }
 
 /// The page for a failed request, in the layout, for who is asking: a signed-in user who mistypes

@@ -1097,31 +1097,37 @@ rules something out.
 32. <a id="choice-stream-coding"></a>**A compressed stream is zstd, else gzip, never brotli.** A
     live stream, a feed and a streamed `Media` are compressed as one stream per connection,
     flushed after each event or chunk with the context kept, so the client decodes each at once
-    and a redraw costs about what changed. Playwright's WebKit dispatches a flushed brotli event
-    that decodes to more than 16 KiB only once more of the body arrives, so the last change before
-    a quiet spell showed one event late: a 16,385-byte event came 700 ms late (the next chunk's
-    delay) in every run, with Corten's encoder and with Node's at quality 4 and 11, and with empty
-    blocks after it. Gzip and identity were on time at every size tried, to 200 KB, in all three
-    engines
+    and a redraw costs about what changed. Playwright's WebKit (27.2, on Windows) dispatches a
+    flushed brotli event that decodes to more than 16 KiB only once more of the body arrives, so the
+    last change before a quiet spell showed one event late: an event of 16,385 bytes showed only
+    when the next chunk came, with Corten's encoder and with Node's at quality 4 and 11, and with
+    empty blocks after it (the issue saw a 17 KB event from Node's encoder on time; that was not
+    seen again). Gzip and identity were on time at every size tried, to 200 KB, in all three
+    engines, and the watchlist smoke holds it: an event of about 50 KB with nothing after it is
+    dispatched in each engine
     ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
     So a client that accepts zstd gets zstd 1 as before, any other that accepts gzip gets gzip 3
-    (sync-flushed, its window kept), and one that accepts only brotli gets the stream as it is.
+    (sync-flushed, its window kept), and one that accepts only brotli gets the stream as it is. A
+    streamed `Media` follows the same rule though a download ends, so its tail is never held for
+    long: one rule for every stream, at the cost of gzip's bytes for a client without zstd.
     Gzip sends more than brotli 4 did, most for a large region (`what_a_redraw_sends`, ten redraws
     of a list with one row changed): of 40 rows (2.7 KB) 60 to 69 bytes against 20 to 40, of 250 (17
     KB) 477 to 524 against 23 to 91, and an event over deflate's 32 KiB window repeats nothing (640
     rows, 45 KB: 6,203 to 6,214 against 44 to 2,029). Level 3, not 1: at 1 the redraws are 129 to
     453 bytes, 2,188 to 2,684 and 7,238 to 7,330. A gzip stream holds 352,232 bytes and reserves 360
-    KiB (`tests/stream_memory.rs`), where brotli reserved 1,000 KiB. It costs more CPU: an event of
-    the 2.7 KB redraw, made and sent through the compression layer, is about 286,650 instructions
+    KiB (`tests/stream_memory.rs`, the bytes asked of the system allocator; jemalloc, which the
+    template's image preloads, rounds them up to its size classes, which is not measured), where
+    brotli reserved 1,000 KiB. It costs more CPU: an event of the 2.7 KB redraw, made and sent through the compression layer, is about 286,650 instructions
     against brotli's 213,720 (zstd 1: 100,470, unchanged).
     Not chosen: brotli with an empty block or a keepalive after each event (WebKit held the event
     back with empty blocks after it); a gzip-only client getting the stream as it is, as before (a
     redraw's saved bytes are why streams are compressed).
 
-    Stands on: platform (Playwright's WebKit holds back a flushed brotli event of more than
-    16 KiB and sends `deflate, gzip, br`, no zstd; Chromium and Firefox send zstd, which arrives
-    at once there; no WebKit that accepts zstd was tried); measured (bytes a redraw by
-    `what_a_redraw_sends`, one run, the counts fixed by the encoders; a gzip stream's memory by
+    Stands on: platform (Playwright's WebKit on Windows holds back a flushed brotli event of more
+    than 16 KiB and sends `deflate, gzip, br`, no zstd; Chromium and Firefox send zstd, which
+    arrives at once there; no WebKit that accepts zstd was tried, and Safari, whose network stack
+    is not Playwright's and which caniuse lists as sending zstd over HTTPS from 26.3, was not
+    tried at all); measured (bytes a redraw by `what_a_redraw_sends`, one run, the counts fixed by the encoders; a gzip stream's memory by
     `tests/stream_memory.rs`; instructions an event by callgrind, `what_an_event_stream_costs` at
     2,000 and 12,000 events, three runs each, within 20 instructions); reasoned (a sync flush ends
     deflate's output on a byte boundary with everything sent so far decodable, so a decoder has
@@ -1129,7 +1135,8 @@ rules something out.
     value (an event on time at the user's end before the bytes brotli saves, Values 1).
 
     Revisit when: a WebKit that Playwright runs dispatches a flushed brotli event of more than
-    16 KiB at once, or sends zstd (then check a flushed zstd event there); or apps send redraws
+    16 KiB at once, or sends zstd (then check a flushed zstd event there); Safari is tried and
+    shows a large event on time under brotli, or late under zstd or gzip; or apps send redraws
     over 32 KB to clients without zstd often enough that gzip's bytes show in a round.
 
     Last checked: 2026-11-08, WebKit 27.2, Chromium 156 and Firefox 157: the late brotli event

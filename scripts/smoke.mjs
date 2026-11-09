@@ -829,6 +829,28 @@ async function run(browser) {
     return { coding, patch: text.includes("event: patch"), seen: text.slice(-80) };
   });
   check("a live stream is zstd or gzip as the browser asks, and its first event decodes while it is open", ["zstd", "gzip"].includes(streamed.coding ?? "") && streamed.patch, JSON.stringify(streamed));
+  // An event over 16 KiB followed by nothing, the case WebKit held back under brotli: it is
+  // dispatched with the stream left quiet, well inside the keepalive's 15 s, the next thing the
+  // server would send (#1131). The bound is the check's, not a pause: it ends at the event.
+  const large = await page.evaluate(
+    () =>
+      new Promise((done) => {
+        const started = performance.now();
+        const source = new EventSource("/smoke/live/large");
+        const finish = (/** @type {{ size: number, ms: number } | string} */ result) => {
+          source.close();
+          clearTimeout(bound);
+          done(result);
+        };
+        const bound = setTimeout(() => finish("no event in 5 s"), 5000);
+        source.addEventListener("patch", (event) => finish({ size: event.data.length, ms: Math.round(performance.now() - started) }));
+      }),
+  );
+  check(
+    "a live event over 16 KiB with nothing after it is dispatched while the stream is quiet",
+    typeof large === "object" && large !== null && /** @type {{ size: number }} */ (large).size > 16_384,
+    JSON.stringify(large),
+  );
 
   // Only what the page's own origin answered goes through the runtime's policy: not another
   // origin's answer (one connect-src allows), a Response a script made, or an event a script

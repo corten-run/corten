@@ -20,7 +20,7 @@
 //! Event streams ([`crate::live`], feeds) are compressed as one stream per connection, flushed
 //! after every event so it arrives at once, with the context kept between events: a redraw that
 //! repeats the last one costs tens of bytes. A stream is zstd 1 (a 64 KiB window, about 470 KiB
-//! held) or else gzip 3 (deflate's 32 KiB window, about 350 KiB held), never brotli: WebKit holds
+//! held) or else gzip 3 (deflate's 32 KiB window, about 344 KiB held), never brotli: WebKit holds
 //! back the end of a flushed brotli event that decodes to more than 16 KiB until more bytes arrive,
 //! so the last event of a quiet stream would wait for the next one (#1131). Every stream's context
 //! shares a budget of 256 MiB (about 550 zstd streams): past it a new stream goes out
@@ -1086,7 +1086,7 @@ mod tests {
 
     /// What each stream coding sends for a list drawn again with one row changed, against gzip 1
     /// and brotli 4 as streams were before #1131: the first event, then the least and most of ten
-    /// redraws, at 40 rows (2.7 KB), 250 (17 KB) and 640 (44 KB, past deflate's 32 KiB window). It
+    /// redraws, at 40 rows (2.7 KB), 250 (17 KB) and 640 (45 KB, past deflate's 32 KiB window). It
     /// prints them:
     /// `cargo test --release -p corten-run --all-features --lib -- --ignored what_a_redraw_sends --nocapture`
     #[test]

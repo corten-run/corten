@@ -259,7 +259,8 @@ Corten is pre-1.0, so any minor version may change the API.
     the first event 425 B with zstd 1 and each redraw 16-23 B, where every event was 6,126 B;
     brotli 4 gives 376 B, then 13-23 B. A stream holds about 470 KiB (zstd, 64 KiB window) or
     800 KiB (brotli) while open, and all of them share a 256 MiB budget past which a new stream is
-    sent as it is. Gzip-only clients get streams as they are. Asked for by the Chase Sets pilot
+    sent as it is. Gzip-only clients get streams as they are. (Since #1131, under Fixed, a stream is
+    zstd or gzip, never brotli.) Asked for by the Chase Sets pilot
     ([#24 corten::live responses are never compressed](https://github.com/todd-skelton/corten/issues/24)).
 36. `SubmitKey` (in the prelude): one submission of a form, so a write whose answer was lost and
     is sent again applies once. A form struct takes a `SubmitKey` field and draws it with
@@ -2308,7 +2309,8 @@ Corten is pre-1.0, so any minor version may change the API.
     app makes as it is sent (an export of every order, an archive), from a stream of
     `Result<Bytes, E>`. It is pulled only as fast as the client reads and dropped when the client
     leaves, it keeps `Media`'s file name, headers and caching, and a text type is compressed a
-    chunk at a time (zstd or brotli, as an event stream is), its frame ended when the stream ends;
+    chunk at a time (zstd or brotli, as an event stream is; since #1131, zstd or gzip), its frame
+    ended when the stream ends;
     an event stream that ends now ends its frame too, where a decoder that checks for the end
     took it as cut short. A failure after it began, or a stream that does not make the length it
     said, ends the connection without the body's end and is logged. auction-room's bid history is
@@ -4081,10 +4083,14 @@ Corten is pre-1.0, so any minor version may change the API.
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
   flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
   more than 16 KiB only once more of the body arrived, so the last change before a quiet spell
-  showed one event late: in Playwright's WebKit a 16,385-byte event came 700 ms late (the next
-  chunk's delay) in every run, with Corten's encoder and with Node's at quality 4 and 11, and with
-  empty blocks after it; gzip and identity were on time at every size tried, to 200 KB, in all
-  three engines. Gzip-only clients, sent streams uncompressed before, get gzip too. A gzip stream
+  showed one event late: in Playwright's WebKit 27.2 on Windows an event of 16,385 bytes showed
+  only when the next chunk came, with Corten's encoder and with Node's at quality 4 and 11, and
+  with empty blocks after it; gzip and identity were on time at every size tried, to 200 KB, in all
+  three engines. Safari was not tried. Gzip-only clients, sent streams uncompressed before, get
+  gzip too, and a client that accepts only brotli now gets streams uncompressed. The watchlist
+  smoke checks that an event of about 50 KB with nothing after it is dispatched in each engine
+  (from a route the app adds only with `SMOKE_TRUSTED_TYPES=1`), and a streamed download to a
+  client that sends `gzip, deflate, br` is now tested to be gzip. A gzip stream
   reserves 360 KiB where a brotli one reserved 1,000 KiB. It sends more than brotli 4, most for a
   large region: a redraw of one row of 40 (2.7 KB) is 60 to 69 bytes against 20 to 40, of 250 (17 KB)
   477 to 524 against 23 to 91, and an event over gzip's 32 KiB window repeats nothing (45 KB:
