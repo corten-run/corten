@@ -5136,63 +5136,24 @@ fn a_bare_route_at_a_path_of_corten_s_own_is_refused_at_startup() {
     let _ = App::new(at_health::router()).router();
 }
 
-/// A bare route's parameter that can stand where an API's prefix is would answer its unknown
-/// URLs outside the API's settings: refused, as one under the prefix is.
+/// Nor one whose parameter stands under a prefix of Corten's the app adds when it starts (the
+/// assets'), which the routes macro cannot see: the parameters it can see, a first segment or
+/// `/health/{..}`, do not compile (`compile_fail` doctests in `route.rs`).
 #[test]
-#[should_panic(expected = "says stages = bare and is under App::api(\"/api\")")]
-fn a_bare_parameter_that_reaches_an_api_is_refused_at_startup() {
-    let _ = App::new(bare_reaching_url::router())
-        .api::<ApiRoot>(|api| api.route::<ApiRates>(crate::Methods::reads(get(|| async { "rates" }))))
-        .router();
-}
-
-/// A bare catch-all at the root would answer Corten's unknown paths and every unknown URL.
-#[test]
-#[should_panic(expected = "says stages = bare and can answer at \"/corten\"")]
-fn a_bare_catch_all_at_the_root_is_refused_at_startup() {
-    let _ = App::new(bare_everywhere_url::router()).router();
-}
-
-/// Nor one whose parameter can stand where Corten's health checks are.
-#[test]
-#[should_panic(expected = "says stages = bare and can answer at \"/health/live\"")]
-fn a_bare_parameter_that_reaches_the_health_checks_is_refused_at_startup() {
-    let _ = App::new(bare_health_url::router()).router();
+#[should_panic(expected = "says stages = bare and can answer at \"/assets\"")]
+fn a_bare_parameter_under_the_assets_is_refused_at_startup() {
+    let _ = App::new(bare_assets_url::router()).assets(IconStatic).router();
 }
 
 #[crate::routes]
-mod bare_reaching_url {
-    #[route("/{section}/ping", get = bare_section_ping, stages = bare)]
-    pub struct SectionPing<'a> {
-        pub section: &'a str,
+mod bare_assets_url {
+    #[route("/assets/{file}", get = bare_asset_ping, stages = bare)]
+    pub struct File<'a> {
+        pub file: &'a str,
     }
 }
 
-#[crate::routes]
-mod bare_everywhere_url {
-    #[route("/{*rest}", get = bare_rest_ping, stages = bare)]
-    pub struct Rest<'a> {
-        pub rest: &'a str,
-    }
-}
-
-#[crate::routes]
-mod bare_health_url {
-    #[route("/health/{check}", get = bare_health_ping, stages = bare)]
-    pub struct Check<'a> {
-        pub check: &'a str,
-    }
-}
-
-async fn bare_section_ping(_: crate::Params<bare_reaching_url::SectionPing<'_>>) -> &'static str {
-    "pong"
-}
-
-async fn bare_rest_ping(_: crate::Params<bare_everywhere_url::Rest<'_>>) -> &'static str {
-    "pong"
-}
-
-async fn bare_health_ping(_: crate::Params<bare_health_url::Check<'_>>) -> &'static str {
+async fn bare_asset_ping(_: crate::Params<bare_assets_url::File<'_>>) -> &'static str {
     "pong"
 }
 

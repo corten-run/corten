@@ -941,9 +941,10 @@ rules something out.
     `stages = bare` ([Choice 28](#choice-fixed-stages)) is in `Routes` too, but meets no stage, so
     its answer type is not checked; its handler is checked instead to take only the request's URL
     and its body read by `Upload` (`corten::answer::Bare`): no `Caller` and no headers, which carry
-    the cookies and credentials, so what it answers cannot depend on who is asking, and no reader
-    of the whole body, which no deadline would end there. A module with `caller = T` cannot hold
-    one, and its handlers are a type (`BareMethods`) that only `Routes` takes, so `Area::route`
+    the cookies and credentials, so no input Corten gives it says who is asking (an extractor of
+    the app's own that implements `Bare` is the app's to keep so, as with `Anonymous`), and no
+    reader of the whole body, which no deadline would end there. A module with `caller = T`
+    cannot hold one, and its handlers are a type (`BareMethods`) that only `Routes` takes, so `Area::route`
     and `Api::route` still take only checked `Methods`. Not chosen: guards and
     a context object checked per request (`App::guard`, `Area::guard`, `App<C>`), which Corten
     had and removed in
@@ -967,7 +968,9 @@ rules something out.
 
     Last checked: 2026-11-06, the `compile_fail` doctests that hold `caller = T`
     (`crates/corten/src/route.rs`) and the caller's own (`crates/corten/src/caller.rs`) at
-    `bcd31ffe`.
+    `bcd31ffe`; 2026-11-09, the `stages = bare` `compile_fail` doctests in
+    `crates/corten/src/route.rs` (a stage's input, a header reader, a whole-body reader, a
+    `caller = T`, area or API module, a path that reaches Corten's own), on top of `c65c10ec`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
@@ -981,8 +984,10 @@ rules something out.
     read (a public JSON figure a CDN fronts, a beacon, an upload taken in at a high rate), beside
     pages that need every stage; the stages add about twice what its handler and the router cost
     together (below). Its answer gets no CSP or `nosniff`, so it is data, not a document built
-    from the request, and the app refuses at startup a bare route that can answer under an area's
-    or API's prefix or at one of Corten's own paths. Not chosen: an app's own tower layer that
+    from the request, and no host check, so it is data anyone anywhere may read. A bare route
+    whose path can answer at one of Corten's own paths does not compile where the path alone
+    shows it, and one that can answer under an area's or API's prefix, or under a path the app
+    adds, is refused when the app starts. Not chosen: an app's own tower layer that
     answers the route's path before the stages (`.layer(l)`), which works today but is outside
     the routes module: its path is a
     string, not a typed route, its handler is checked for nothing, and a reader of the routes does
@@ -994,7 +999,12 @@ rules something out.
     on a branch not merged: about 200 to 360 instructions fewer a request with glibc's allocator,
     but about 200 to 263 more with jemalloc, which the images preload; nor refusing an answer
     type that sends HTML, since a raw `Response`, which a bare route exists to allow, carries any
-    content type, so the rule is the guide's and the handler's.
+    content type, so the rule is the guide's and the handler's; nor Corten adding `nosniff` and
+    `Content-Security-Policy: sandbox` to a bare answer that has neither, or keeping the host
+    check alone: either is a second kind of bare route to read and makes the answer no longer the
+    one the handler made, and the reason is that, not their cost, which was not measured (a header
+    lookup and two inserts, or one header compared). A handler sets the headers itself, and data
+    only this machine or its network may see is not for a bare route.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -1002,22 +1012,29 @@ rules something out.
     outside that area 19,909 to 19,913 against 19,706; an app whose areas and APIs have none runs
     Corten's own code within 18 instructions of before, while its whole request rose from 19,696
     to 19,976 to 19,988 in the allocator with the same allocations, so the same layout effect may
-    be in the request outside the area); measured (callgrind, release, the same request a JSON
-    answer, five runs each alternating with main `c65c10ec`, medians: with jemalloc a bare route
-    7,400 instructions, the same route through the stages 21,307, and a plain axum router 7,640;
-    the routes without it within 3 of main, and a staged route beside a bare one 21,324; with
-    glibc's allocator a bare route 8,392 against 23,848 staged, the page and 404 within main's
-    spread, and an API request 17,900 to 18,430 against 17,559 to 17,799, where the profile
-    finds the difference in glibc's `_int_malloc` and no function of Corten's 30 apart, and with
-    jemalloc the two within 4); reasoned (one place for the app's steps is one order to read, a tuple
-    resolved at compile time costs no box, and a route that needs none of it says so where it is
-    declared); value (one way to do each thing, Value 5, and good defaults with easy overrides,
+    be in the request outside the area); measured (callgrind, release, the same JSON handler,
+    five runs each alternating with main `c65c10ec`, median and range: with jemalloc a bare route
+    7,398 (7,397 to 7,400) instructions a request, the same handler through the stages 21,302
+    (21,301 to 21,310), a staged route beside a bare one 21,328 (21,315 to 21,333), and a plain
+    axum router 7,640, whose route parses a longer path and builds its answer from a header
+    tuple, about 140 instructions of the difference and the rest in the allocator; an app with no
+    bare route within 2 of main on an API request, the staged handler and a 404; with glibc's
+    allocator a bare route 8,392 (8,392 to 8,393), the same handler through the stages 23,788
+    (23,769 to 23,796; main 23,727 to 23,853), beside a bare one 23,915 (23,844 to 23,986), a
+    plain axum router 8,716, an API request 17,603 to 17,872 against main's 17,598 to 17,839, and
+    a 404 21,646 to 21,728 against 21,640 to 22,333); reasoned (one place for the app's steps is
+    one order to read, a tuple resolved at compile time costs no box, and a route that needs none
+    of it says so where it is declared); bet (apps have an answer anyone may read whose cost the
+    stages would about triple, beside pages that need them all; no example or template uses
+    `stages = bare` yet); value
+    (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
     layer around the app cannot serve it; or a route needs some stages and not others, which
-    `stages = bare` cannot give; or a bare route costs more than about 10% over a plain axum
-    router's; or a request outside every area costs more than twice
+    `stages = bare` cannot give (the host check or `nosniff` on a bare route among them); or no
+    app uses `stages = bare` by the next minor release; or a bare route costs more than about
+    10% over a plain axum router's; or a request outside every area costs more than twice
     the about 200 instructions measured here over the build before area middleware (the lookup
     and any layout effect together; layout alone moved a whole request by about 280). Area
     middleware has no switch, so the next check builds current main with the prefix lookup taken
@@ -1026,7 +1043,7 @@ rules something out.
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
-    own); 2026-11-08, the `stages = bare` runs against `c65c10ec` (the bench binary was not
+    own); 2026-11-09, the `stages = bare` runs against `c65c10ec` (the bench binary was not
     committed, so the next check writes its own: the same JSON handler answered in process by an
     `App` with it bare, by the same `App` with it staged, and by a plain axum `Router`).
 

@@ -702,7 +702,8 @@ pub use corten_macros::UrlValue;
 /// }
 ///
 /// async fn ping() -> corten::axum::response::Response {
-///     corten::axum::response::Response::new("pong".into())
+///     let text = "text/plain; charset=utf-8";
+///     corten::axum::response::Response::builder().header("content-type", text).body("pong".into()).unwrap()
 /// }
 ///
 /// async fn home(req: Req) -> HtmlResult {
@@ -815,6 +816,54 @@ pub use corten_macros::UrlValue;
 /// }
 ///
 /// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// Nor one whose path can answer at a path of Corten's own, as far as the path alone shows: a
+/// first segment that is a parameter or catch-all (which can stand at `/corten/`), a path under
+/// `/corten`, or a parameter after `/health`. The app refuses the rest when it starts (a parameter
+/// under its assets' prefix, an area's or an API's):
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/{section}/ping", get = ping, stages = bare)]
+///     pub struct Ping<'a> {
+///         pub section: &'a str,
+///     }
+/// }
+///
+/// async fn ping(_: corten::Params<url::Ping<'_>>) -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/corten/ping", get = ping, stages = bare)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/health/{check}", get = ping, stages = bare)]
+///     pub struct Check<'a> {
+///         pub check: &'a str,
+///     }
+/// }
+///
+/// async fn ping(_: corten::Params<url::Check<'_>>) -> &'static str {
 ///     "pong"
 /// }
 /// # fn main() {}

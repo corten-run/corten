@@ -30,6 +30,7 @@ your routes. Each default can be replaced in one line.
 | Logs | errors, warnings and other `tracing` events at `INFO` and above to stdout, one line each, as `tracing-subscriber`'s `fmt()` writes them without targets (`2026-11-06T21:20:29.018154Z  WARN corten: ...`), in its colors when stdout is a terminal and `NO_COLOR` is unset; control characters other than a tab are escaped in every field, so request text cannot start a line of its own or send the terminal a command; spans are not printed (feature `log`, a subscriber of Corten's own with no dependency) | set your own `tracing` subscriber first (`tracing_subscriber::fmt().init()` for spans, filters such as `RUST_LOG` or JSON lines); `serve` then leaves it alone |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd or brotli; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page |
+| A route outside all of the above | none: every route gets every default here | `stages = bare` on one route's `#[route(..)]`: no host or same-origin check, security headers, cache rule, deadline or error page, for data anyone may read ([below](#a-route-outside-the-stages)) |
 | Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language`, or the locale a page's URL names (a `Locale<Msg>` route field the handler gives `req.set_locale`, [Views](views.md#a-locale-in-the-url)); each page says its locale in `Content-Language` |
 | Visitors' time zones | not known: dates are UTC unless a zone is given | `.client_zone()`: the runtime keeps the browser's zone in a `corten-zone` cookie, `Option<ClientZone>` reads its name and, with the `zones` feature, `req.zone()` gives it with its rules; `.zoned_dates()` (`zones` feature) also writes dates in it ([Views](views.md)) |
 | Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild, and the browser's console names a form control drawn with a value its own attributes refuse (a stored `250` under `step="100"`), which stops its form being sent, and a live region drawn inside another (`errors.form_message()` inside the kit's destructive `Alert`), which a screen reader may announce twice, and it warns of a closed `<dialog>` or popover that a rule inside `@media` or `@container` gives a `display` (a filters rail drawn in place from a breakpoint, or an open look written without `[open]`), which the components' stylesheet keeps hidden, with the rule for each, from `/corten/dev.js`, a module only a dev server serves | `.dev(bool)` |
@@ -914,7 +915,8 @@ mod url {
 }
 
 async fn ping() -> Response {
-    Response::new("pong".into())
+    let text = "text/plain; charset=utf-8";
+    Response::builder().header("content-type", text).body("pong".into()).unwrap()
 }
 
 async fn home(req: Req) -> HtmlResult {
@@ -937,22 +939,27 @@ the stages. What the compiler can check, it does:
    there.
 2. A routes module with `caller = ..` cannot have one, since every route there takes the caller.
    Nor can an area's or API's module, whose deadline, policy and middleware cover every request
-   at its prefix. When it starts, the app refuses a bare route that can answer at a path not its
-   own: under an area's or API's prefix, or at one of Corten's (`/corten/`, the assets, the
-   health checks, the PWA's files), whether at the path or through a parameter or catch-all
-   (`/health/{check}`). A bare route whose first segment is a parameter or a catch-all
-   (`/{section}/ping`, `/{*rest}`) can stand at `/corten/`, so it is always refused.
+   at its prefix. Nor can a route whose path can answer at a path not its own, as far as the
+   path shows: a first segment that is a parameter or a catch-all (`/{section}/ping`, `/{*rest}`,
+   which can stand at `/corten/` and at any prefix), a path under `/corten`, or a parameter after
+   `/health` (`/health/{check}`). When it starts, the app refuses the rest: a bare route under an
+   area's or API's prefix, or one whose parameter stands under a path the app adds (its assets,
+   an API's or area's companion routes).
 3. `no_store`, `rows` and `gives(..)` are applied by stages, so a bare route does not say them; a
    bare handler that must not be kept returns `NoStore<..>` itself.
 4. It is not a page: `Req::serves` does not send a visitor there after sign-in.
 
 What it gives up is the app's to weigh: a bare route answers a DNS-rebound page and another
-site's write, and it can be framed or sniffed, so it is for answers anyone may read. A handler
+site's write, and it can be framed or sniffed, so it is for answers anyone anywhere may read:
+not a figure only this machine or its network should see, which a page on another site can read
+through a name it points at this machine. A handler
 that panics drops the connection rather than answering 500, and nothing ends it at a deadline.
 Nothing gives its answer a CSP, `nosniff` or `frame-ancestors`, so a document it builds from
 what the request says (HTML, SVG, or text a browser sniffs as HTML) runs as script on the app's
 origin, where it can read every other page with the visitor's cookies. A bare answer is data
-(text, JSON, a file); a handler that must send a document sets those headers on it itself. Its
+(text, JSON, a file) with its `Content-Type` set, as `&'static str`, `String` and `Media` set it
+and a raw `Response` does not until the handler says (a body without one is sniffed); a handler
+that must send a document sets those headers on it itself. Its
 answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
 own rules, `Set-Cookie` or not ([Caching](#caching) describes the stages' rules, which it does
 not meet), and an upload it reads with `Upload::idle(None)` has no time limit at all.
@@ -964,10 +971,11 @@ A tower layer the app puts around the whole app (`.layer(l)`) still goes around 
 which lets a bare route's request run for the longer of the shutdown grace and the app's longest
 deadline, since it records none of its own.
 
-What it saves, measured with callgrind on a release build answering the same JSON in process:
-7,400 instructions a request bare against 21,307 through the stages with jemalloc (a plain axum
-router: 7,640), and 8,392 against 23,848 with glibc's allocator. The routes beside it cost what
-they did before.
+What it saves, measured with callgrind on a release build answering the same JSON in process
+(median of five runs, range in parentheses): 7,398 (7,397-7,400) instructions a request bare
+against 21,302 (21,301-21,310) through the stages with jemalloc (a plain axum router: 7,640),
+and 8,392 (8,392-8,393) against 23,788 (23,769-23,796) with glibc's allocator (axum: 8,716).
+An app with no bare route costs what it did before.
 
 ## Static files
 

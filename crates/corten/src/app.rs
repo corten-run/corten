@@ -1175,13 +1175,15 @@ impl<M: Middleware> App<M> {
             routes = routes.merge(crate::assets::favicon(assets.as_ref()));
         }
         // Nor where Corten's own paths are (`/corten/`, the assets, the health checks, the PWA's
-        // files): a bare route's parameter or catch-all there would answer them when unknown,
-        // and a bare `/{*rest}` every unknown URL the app's 404 would. A route at one of them
-        // exactly is the router's own refusal, as for a staged route.
+        // files, an API's or area's companions): a bare route's parameter or catch-all there
+        // would answer them when unknown. The routes macro refuses what the path alone shows (a
+        // first segment that is a parameter, `/corten/..`, `/health/{..}`); this is the rest. A
+        // route at one of them exactly is the router's own refusal, as for a staged route.
         for &path in &self.bare.paths {
             let reached = (own.prefixes.iter().map(|prefix| prefix.trim_end_matches('/')))
                 .find(|prefix| crate::api::under(prefix, path) || crate::api::reaches(path, prefix))
-                .or_else(|| own.exact.iter().copied().find(|exact| crate::api::reaches(path, exact)));
+                .or_else(|| own.exact.iter().copied().find(|exact| crate::api::reaches(path, exact)))
+                .or_else(|| own.companions.iter().map(String::as_str).find(|companion| crate::api::reaches(path, companion)));
             if let Some(corten_s) = reached {
                 panic!("corten: the route {path:?} says stages = bare and can answer at {corten_s:?}, which is Corten's own; give it a first segment of its own text");
             }
