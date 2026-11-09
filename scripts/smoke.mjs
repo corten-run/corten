@@ -1398,7 +1398,10 @@ async function run(browser) {
   // A's read is answered only once B's marks are read, so B replaces a read still on its way.
   /** @type {() => void} */
   let answerA = () => {};
-  const heldA = new Promise((resolve) => (answerA = () => resolve(undefined)));
+  /** @type {Promise<unknown>} */
+  let heldA = Promise.resolve();
+  const holdA = () => (heldA = new Promise((resolve) => (answerA = () => resolve(undefined))));
+  holdA();
   await page.route("**/busy-read*", async (route) => {
     const by = new URL(route.request().url()).searchParams.get("by");
     if (by === "a") await heldA;
@@ -1419,9 +1422,14 @@ async function run(browser) {
       document.getElementById(id)?.click();
       return ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
     }, id);
-  const whileA = await clickAndMarks("busy-a");
-  const whileB = await clickAndMarks("busy-b");
-  answerA();
+  let whileA = "";
+  let whileB = "";
+  try {
+    whileA = await clickAndMarks("busy-a");
+    whileB = await clickAndMarks("busy-b");
+  } finally {
+    answerA();
+  }
   await page.waitForFunction(() => document.querySelector("#busy-said")?.textContent === "read b", null, { timeout: 5000 }).catch(() => {});
   const busyAfter = await busyMarks();
   check(
@@ -1429,6 +1437,28 @@ async function run(browser) {
     whileA === "true,true,-" && whileB === "true,-,true" && busyAfter === "-,-,-",
     `${whileA} | ${whileB} | ${busyAfter}`,
   );
+  // A navigation abandons a read on its way, which drops its marks at once, not when its own code
+  // next runs (#1108). The page reads itself again, so the check stays on this page.
+  const abandonName = "a submit a navigation abandons drops its marks at once";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(abandonName, "without the Navigation API a navigation is a full load");
+  else {
+    holdA();
+    /** @type {string[]} */
+    let abandoned = [];
+    try {
+      abandoned = await page.evaluate(() => {
+        const marks = () => ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
+        document.getElementById("busy-a")?.click();
+        const before = marks();
+        /** @type {any} */ (window).navigation.navigate(location.pathname + location.search);
+        return [before, marks()];
+      });
+    } finally {
+      answerA();
+    }
+    await page.waitForFunction(() => !document.getElementById("busy-said") && !document.querySelector("main")?.hasAttribute("aria-busy"), null, { timeout: 10000 }).catch(() => {});
+    check(abandonName, abandoned[0] === "true,true,-" && abandoned[1] === "-,-,-", abandoned.join(" -> "));
+  }
   await page.unroute("**/busy-read*");
   await page.evaluate(() => ["busy-form", "busy-said", "busy-a", "busy-b"].forEach((id) => document.getElementById(id)?.remove()));
 

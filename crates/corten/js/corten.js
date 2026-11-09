@@ -2745,7 +2745,7 @@ async function send(form, submitter, sends) {
   const mine = {};
   const busy = submitter ? [form, submitter] : [form];
   // Cleared at once when it is abandoned (a newer submit of the form, a navigation), not when its
-  // read next runs, after its fetch rejects or once what it waits on to draw has loaded (#1108).
+  // own code next runs, after its fetch rejects or once what it waits on to draw has loaded (#1108).
   signal.addEventListener("abort", () => {
     for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
   });
