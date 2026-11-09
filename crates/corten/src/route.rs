@@ -684,7 +684,7 @@ pub use corten_macros::UrlValue;
 /// no middleware, no error page, security headers, `Cache-Control`, tag or compression. Its
 /// handler's answer is sent as it made it, a raw [`axum::response::Response`] too, with
 /// `X-Content-Type-Options: nosniff` added when it has none and `Content-Security-Policy:
-/// sandbox` when it is HTML, SVG or XML with no policy of its own, and every other route beside
+/// sandbox` beside any policy of its own when it may be HTML, SVG or XML, and every other route beside
 /// it keeps every stage. It answers `get` only, and its handler takes only the request's URL
 /// ([`crate::answer::Bare`]).
 ///
@@ -3892,11 +3892,12 @@ pub mod __private {
     /// A bare handler whose answer gets `X-Content-Type-Options: nosniff` when it has none, so a
     /// browser takes it only as the type it says: a page of the app's cannot load it as a script
     /// (`script-src 'self'` trusts every URL of the app's), nor a browser sniff it as HTML. One of
-    /// a type a browser runs script in (HTML, SVG, any XML), or with more than one type (several
-    /// `Content-Type`s, or a list, of which a browser takes the last), and no policy of its own
-    /// gets `Content-Security-Policy: sandbox`, so a file it sends (an uploaded picture) runs no
-    /// script on the app's origin; a policy of the handler's own replaces the sandbox, so it says
-    /// itself what script may run. An answer that sets a cookie and says nothing of its caching
+    /// a type a browser runs script in (HTML, SVG, any XML), with no type or more than one (several
+    /// `Content-Type`s, or a list, of which a browser takes the last), gets a
+    /// `Content-Security-Policy: sandbox` of its own beside any policy the handler set, since a
+    /// browser enforces each: a file it sends (an uploaded picture) runs no script on the app's
+    /// origin. A handler whose policy has a `sandbox` already (`sandbox allow-scripts`) gets none
+    /// added. An answer that sets a cookie and says nothing of its caching
     /// gets `Cache-Control: private, no-cache`, as the stages give one, so no shared cache hands
     /// one visitor's cookie to another. It is the answer's handler, not a stage, so it adds no box
     /// and no step a request goes through.
@@ -3911,8 +3912,8 @@ pub mod __private {
         }
     }
 
-    /// `res` with `nosniff`, `sandbox` when it may be a document and has no policy, and `private`
-    /// when it sets a cookie with no caching of its own, unless it says each itself.
+    /// `res` with `nosniff`, `sandbox` when it may be a document, and `private` when it sets a
+    /// cookie with no caching of its own, unless it says each itself.
     fn nosniff(mut res: axum::response::Response) -> axum::response::Response {
         use axum::http::{header, HeaderValue};
         let headers = res.headers_mut();
@@ -3921,12 +3922,12 @@ pub mod __private {
         }
         let mut types = headers.get_all(header::CONTENT_TYPE).iter();
         let document = match (types.next(), types.next()) {
-            (None, _) => false,
+            (None, _) => true,
             (Some(one), None) => one.as_bytes().contains(&b',') || runs_script(one.as_bytes()),
             (Some(_), Some(_)) => true,
         };
-        if document && !headers.contains_key(header::CONTENT_SECURITY_POLICY) {
-            headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+        if document && !headers.get_all(header::CONTENT_SECURITY_POLICY).iter().any(|policy| sandboxes(policy.as_bytes())) {
+            headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
         }
         if headers.contains_key(header::SET_COOKIE) && !headers.contains_key(header::CACHE_CONTROL) {
             headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache"));
@@ -3934,13 +3935,21 @@ pub mod __private {
         res
     }
 
-    /// Whether a browser runs script in a document of `media_type` (HTML, SVG, any XML), the part
-    /// before any `;` compared without case.
+    /// Whether a policy has a `sandbox` directive, of any flags.
+    pub(crate) fn sandboxes(policy: &[u8]) -> bool {
+        policy.split(|&b| b == b';').any(|directive| {
+            let name = directive.trim_ascii().split(|b| b.is_ascii_whitespace()).next().unwrap_or_default();
+            name.eq_ignore_ascii_case(b"sandbox")
+        })
+    }
+
+    /// Whether a browser runs script in a document of `media_type` (HTML, SVG, any XML, XSL), the
+    /// part before any `;` compared without case.
     pub(crate) fn runs_script(media_type: &[u8]) -> bool {
         let essence = media_type.split(|&b| b == b';').next().unwrap_or_default().trim_ascii();
         let is = |name: &[u8]| essence.eq_ignore_ascii_case(name);
         let xml = essence.len() > 4 && essence[essence.len() - 4..].eq_ignore_ascii_case(b"+xml");
-        is(b"text/html") || is(b"text/xml") || is(b"application/xml") || xml
+        is(b"text/html") || is(b"text/xml") || is(b"application/xml") || is(b"text/xsl") || xml
     }
 
     /// A bare route's `get`, its only method.

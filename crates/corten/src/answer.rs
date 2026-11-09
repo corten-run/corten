@@ -818,7 +818,8 @@ impl Answer for Relay {
 /// `stages = bare` has no stages, and its answer gets `nosniff` and, when its type is one a
 /// browser runs script in (HTML, SVG, any XML), `Content-Security-Policy: sandbox` instead.
 ///
-/// It is cached as anything the app answers is (`private, no-cache`). At a URL that names its
+/// It is cached as anything the app answers is (`private, no-cache`), except on a bare route,
+/// which sends no `Cache-Control` unless the handler says one. At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
 /// keep it for a year, as Corten's own versioned files are; its handler cannot read who is asking,
 /// as any `Public` handler cannot.

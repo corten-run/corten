@@ -986,7 +986,7 @@ rules something out.
     read (a public JSON figure a CDN fronts), beside
     pages that need every stage; the stages add about 1.6 times what its handler and the router cost
     together (below). Its answer gets `X-Content-Type-Options: nosniff` when it has none, and
-    `Content-Security-Policy: sandbox` when it is HTML, SVG or XML with no policy of its own, both
+    `Content-Security-Policy: sandbox` when it may be HTML, SVG or XML and has no `sandbox`, both
     added in its handler's own future, not by a stage: a browser takes it only as the type it
     says, a page of the app's cannot load it as a script (`script-src 'self'` trusts every URL of
     the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
@@ -1030,14 +1030,14 @@ rules something out.
     be in the request outside the area); measured (callgrind, release, the same JSON handler
     answering `Media`, a request counted as the run of 1,200 less the run of 200 over 1,000, five
     runs each, this change's request path as committed, the staged variants alternating with main
-    `c65c10ec`, median and range: with jemalloc a bare route 8,123 (8,123 to 8,125) instructions
+    `c65c10ec`, median and range: with jemalloc a bare route 8,132 (8,130 to 8,132) instructions
     a request with its `nosniff`, type and cookie checks, 7,398 (7,397 to 7,400) before any, the
     same handler through the stages 21,314 (21,306 to 21,321; main 21,308, 21,300 to 21,315), a
-    staged route beside a bare one 21,322 (21,319 to 21,333), and a plain axum router 7,640; an
+    staged route beside a bare one 21,325 (21,320 to 21,328), and a plain axum router 7,640; an
     API request 15,813 against main's 15,813 and a 404 20,000 against 19,997; with glibc's
-    allocator a bare route 9,118 (9,117 to 9,118), the same handler through the stages 23,791
-    (23,762 to 23,853; main 23,831, 23,729 to 23,910), beside a bare one 23,830 (23,792 to
-    23,903), a plain axum router 8,716 (8,720 in this build), an API request 17,654 (17,616 to
+    allocator a bare route 9,125 (9,124 to 9,125), the same handler through the stages 23,791
+    (23,762 to 23,853; main 23,831, 23,729 to 23,910), beside a bare one 23,873 (23,827 to
+    23,966), a plain axum router 8,716 (8,720 in this build), an API request 17,654 (17,616 to
     17,845) against main's 17,599 (17,599 to 17,839), and a 404 21,735 (21,678 to 21,907) against
     21,685 (21,628 to 22,225)); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none

@@ -5104,12 +5104,15 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["x-content-type-options"], "nosniff");
     assert_eq!(headers["content-security-policy"], "sandbox");
-    // A handler's own policy and `nosniff` are kept, once each; a cookie is never shared.
+    // A handler's own policy is kept, with the sandbox beside it, and its `nosniff` once; a
+    // cookie is never shared.
     let (_, headers, _) = call_with(router.clone(), "GET", "/framed", None, None).await;
-    assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["frame-ancestors 'none'"]);
+    assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["frame-ancestors 'none'", "sandbox"]);
     assert_eq!(headers.get_all("x-content-type-options").iter().count(), 1);
     let (_, headers, _) = call_with(router.clone(), "GET", "/cookie", None, None).await;
     assert_eq!(headers["cache-control"], "private, no-cache");
+    // It says no type, which a browser could take as a document.
+    assert_eq!(headers["content-security-policy"], "sandbox");
     // A type it cannot tell is one, a list a browser takes the last of, is sandboxed too.
     let (_, headers, _) = call_with(router.clone(), "GET", "/listed", None, None).await;
     assert_eq!(headers["content-security-policy"], "sandbox");
@@ -5167,11 +5170,20 @@ async fn the_stages_hold_beside_a_bare_route() {
 #[test]
 fn a_type_that_runs_script_is_known() {
     let runs = crate::route::__private::runs_script;
-    for script in ["text/html", "text/html; charset=utf-8", "Image/SVG+XML", "application/xhtml+xml", "application/xml"] {
+    for script in
+        ["text/html", "text/html; charset=utf-8", "Image/SVG+XML", "application/xhtml+xml", "application/xml", "text/xsl"]
+    {
         assert!(runs(script.as_bytes()), "{script}");
     }
     for data in ["application/json", "image/png", "text/csv", "text/plain", "+xml", "application/xmlish"] {
         assert!(!runs(data.as_bytes()), "{data}");
+    }
+    let sandboxes = crate::route::__private::sandboxes;
+    for policy in ["sandbox", "default-src 'none'; Sandbox allow-scripts", " sandbox ;"] {
+        assert!(sandboxes(policy.as_bytes()), "{policy}");
+    }
+    for policy in ["frame-ancestors 'none'", "default-src 'none'; sandboxed", "script-src 'self' sandbox"] {
+        assert!(!sandboxes(policy.as_bytes()), "{policy}");
     }
 }
 

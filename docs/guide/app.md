@@ -960,7 +960,7 @@ What it gives up is the app's to weigh: a bare route answers a DNS-rebound page 
 framed, so it is for answers anyone anywhere may read:
 not a figure only this machine or its network should see, which a page on another site can read
 through a name it points at this machine. A handler
-that panics drops the connection (under HTTP/2, the stream) rather than answering 500, its panic goes to Rust's panic hook
+that panics drops the connection rather than answering 500, its panic goes to Rust's panic hook
 (standard error) rather than the app's log, and nothing ends it at a deadline; a 5xx it answers is
 logged only when it is a `corten::Error`, which logs itself.
 No stage gives its answer a CSP or `frame-ancestors`; a document it builds from what the request
@@ -969,11 +969,12 @@ the visitor's cookies, but for the sandbox below. A bare answer is data (text, J
 set, as `&'static str` and `String` set it and a raw `Response` does not until the handler says;
 `nosniff` keeps a browser from taking it as another type, a page of the app's from loading it
 as a script, and one without a type from being read as HTML. An answer of a type that runs
-script (HTML, SVG, any XML), or with more than one type (two `Content-Type` headers, or a list,
-of which a browser takes the last), and no policy of its own gets `Content-Security-Policy:
-sandbox`, so an uploaded picture a `Media` sends cannot run there. A policy of the handler's own replaces the
-sandbox, any policy, even one that says nothing of script (`frame-ancestors 'none'`), so a
-handler that sets one on a document says in it what script may run. Its
+script (HTML, SVG, any XML, XSL), with no type or more than one (two `Content-Type` headers, or
+a list, of which a browser takes the last), gets a `Content-Security-Policy: sandbox` header of
+its own beside any policy the handler set, since a browser enforces every policy it is sent, so
+an uploaded picture a `Media` sends cannot run script there. A handler whose policy says
+`sandbox` itself gets none added: `sandbox allow-scripts` runs the document's script in an
+origin of its own, never the app's. Its
 answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
 own rules ([Caching](#caching) describes the stages' rules, which it does not meet), except that
 one that sets a cookie and says nothing of caching gets `Cache-Control: private, no-cache`.
@@ -986,9 +987,9 @@ which lets a bare route's request run for the longer of the shutdown grace and t
 deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(median of five runs, range in parentheses): 8,123 (8,123-8,125) instructions a request bare
+(median of five runs, range in parentheses): 8,132 (8,130-8,132) instructions a request bare
 against 21,314 (21,306-21,321) through the stages with jemalloc (a plain axum router: 7,640),
-and 9,118 (9,117-9,118) against 23,791 (23,762-23,853) with glibc's allocator (axum: 8,716).
+and 9,125 (9,124-9,125) against 23,791 (23,762-23,853) with glibc's allocator (axum: 8,716).
 An app with no bare route costs what it did before.
 
 ## Static files
