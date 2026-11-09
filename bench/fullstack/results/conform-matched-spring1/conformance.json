@@ -1,16 +1,16 @@
 {
   "format": 2,
   "tier": "matched",
-  "commit": "e99d2a4ec88d5913f26b2f146cebc0748c1fa23d",
+  "commit": "efbfa015c8f79acb088934d0da8ddeac035721cb",
   "dirty": false,
   "imagesFrom": null,
-  "date": "2026-11-09T07:33:29.512Z",
+  "date": "2026-11-09T08:24:25.687Z",
   "apps": [
     "spring"
   ],
   "results": {
     "spring": {
-      "image": "sha256:688303cd3c1a1885dd4c4d6812b02e5169fa3e2b909da6f0518cb8f70ea90949",
+      "image": "sha256:396c4706f6e0be7d1dbf2135c06f3dbd6a577bdf798b93bc65ad19a5a729d941",
       "probes": {
         "pages": true,
         "page": {
@@ -25,11 +25,11 @@
             "cross-origin-opener-policy": "same-origin",
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
             "set-cookie": [
-              "XSRF-TOKEN=3fd562a3-6ed3-4562-b04c-05b89fbfa49d; Path=/; HttpOnly"
+              "XSRF-TOKEN=9f371570-5232-47f4-99c7-d310314fde33; Path=/; HttpOnly"
             ]
           },
           "bodyLength": 8053,
-          "ms": 89
+          "ms": 52
         },
         "pageBr": {
           "status": 200,
@@ -44,11 +44,11 @@
             "cross-origin-opener-policy": "same-origin",
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
             "set-cookie": [
-              "XSRF-TOKEN=8c3fbfc5-c855-49bb-b4d6-f84de7f91864; Path=/; HttpOnly"
+              "XSRF-TOKEN=d9093c99-0184-42ec-84fa-a4430bd2e84f; Path=/; HttpOnly"
             ]
           },
-          "bodyLength": 1940,
-          "ms": 69
+          "bodyLength": 1943,
+          "ms": 53
         },
         "pageAgain": null,
         "json": {
@@ -64,7 +64,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 8839,
-          "ms": 51
+          "ms": 33
         },
         "jsonBr": {
           "status": 200,
@@ -80,7 +80,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 1583,
-          "ms": 51
+          "ms": 34
         },
         "jsonGzip": {
           "status": 200,
@@ -96,7 +96,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 1583,
-          "ms": 55
+          "ms": 58
         },
         "head": {
           "status": 200,
@@ -111,7 +111,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 0,
-          "ms": 61
+          "ms": 45
         },
         "json404": {
           "status": 404,
@@ -125,7 +125,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 0,
-          "ms": 57
+          "ms": 50
         },
         "json405": {
           "status": 403,
@@ -139,11 +139,11 @@
             "cross-origin-opener-policy": "same-origin",
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
             "set-cookie": [
-              "XSRF-TOKEN=b5eb4ce6-f5aa-4af9-8600-73399133674d; Path=/; HttpOnly"
+              "XSRF-TOKEN=f227dc64-58cf-4fda-add3-c64a57cfc1e9; Path=/; HttpOnly"
             ]
           },
           "bodyLength": 100,
-          "ms": 86
+          "ms": 49
         },
         "page404": {
           "status": 404,
@@ -158,7 +158,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 575,
-          "ms": 64
+          "ms": 62
         },
         "page500": {
           "status": 500,
@@ -173,7 +173,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 287,
-          "ms": 59
+          "ms": 65
         },
         "json500": {
           "status": 500,
@@ -188,7 +188,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 120,
-          "ms": 55
+          "ms": 57
         },
         "badHost": {
           "status": 400,
@@ -196,7 +196,7 @@
             "content-type": "application/json"
           },
           "bodyLength": 102,
-          "ms": 66
+          "ms": 44
         },
         "bigHead": {
           "status": 400,
@@ -204,7 +204,7 @@
             "content-type": "text/html;charset=utf-8"
           },
           "bodyLength": 435,
-          "ms": 42
+          "ms": 61
         },
         "formPath": "/items/item_5",
         "ownPost": {
@@ -220,7 +220,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 8140,
-          "ms": 72
+          "ms": 103
         },
         "crossSite": {
           "status": 403,
@@ -233,10 +233,10 @@
             "x-frame-options": "DENY",
             "cross-origin-opener-policy": "same-origin",
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
-            "set-cookie": "XSRF-TOKEN=522773d9-bf6d-4575-b425-3fbc65802da5; Path=/; HttpOnly"
+            "set-cookie": "XSRF-TOKEN=1d86e459-694a-4cfa-925a-99400cd14d9d; Path=/; HttpOnly"
           },
           "bodyLength": 275,
-          "ms": 47
+          "ms": 27
         },
         "bigBody": {
           "status": 413,
@@ -251,7 +251,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 283,
-          "ms": 49
+          "ms": 48
         },
         "afterBig": {
           "status": 200,
@@ -265,16 +265,16 @@
             "cross-origin-opener-policy": "same-origin",
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
             "set-cookie": [
-              "XSRF-TOKEN=c14748c9-970e-40b1-bba9-1b316553ea5f; Path=/; HttpOnly"
+              "XSRF-TOKEN=99e471af-d505-480a-8974-c8433638059c; Path=/; HttpOnly"
             ]
           },
           "bodyLength": 8053,
-          "ms": 55
+          "ms": 75
         },
         "logLines": "0",
         "tier": "matched",
         "unfinishedHead": {
-          "closedMs": 30072
+          "closedMs": 30048
         },
         "cap": {
           "below": 950,
@@ -282,7 +282,7 @@
           "held": 1050,
           "whileHeld": null,
           "afterRelease": 200,
-          "releaseMs": 127,
+          "releaseMs": 26,
           "afterwards": 200
         },
         "live": {
@@ -298,13 +298,13 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 15,
-          "ms": 156,
+          "ms": 53,
           "path": "/actuator/health/liveness"
         },
         "readyPath": "/actuator/health/readiness",
         "slow": {
           "timedOut": true,
-          "ms": 45032
+          "ms": 45019
         },
         "readyDown": {
           "status": 200,
@@ -319,7 +319,7 @@
             "permissions-policy": "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
           },
           "bodyLength": 15,
-          "ms": 102
+          "ms": 117
         }
       },
       "row": {
@@ -346,7 +346,7 @@
         "live": "/actuator/health/liveness 200",
         "readyDown": "/actuator/health/readiness 200 in 0.1 s",
         "deadline": "held 45 s",
-        "unfinishedHead": "closed in 30.1 s",
+        "unfinishedHead": "closed in 30.0 s",
         "connectionCap": "capped, then 200",
         "unmet": [
           "etag",
