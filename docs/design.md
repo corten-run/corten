@@ -1130,8 +1130,8 @@ rules something out.
     over 32 KB to clients without zstd often enough that gzip's bytes show in a round.
 
     Last checked: 2026-11-08, WebKit 27.2, Chromium 156 and Firefox 157 (the late event and each
-    engine's `Accept-Encoding`), on `a378fb97`; 2026-11-09, the callgrind counts on `c65c10ec` (brotli 4, zstd) and the
-    worktree of `a378fb97` with this Choice's review fixes (gzip 3, zstd).
+    engine's `Accept-Encoding`), on `a378fb97`; 2026-11-09, the callgrind counts on `c65c10ec` (brotli 4, zstd) and
+    `541fc59b` (gzip 3, zstd).
 
 ## Rules
 
