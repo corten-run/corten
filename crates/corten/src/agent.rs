@@ -1141,6 +1141,26 @@ mod tests {
         "mine"
     }
 
+    /// One at a path beside it that cannot match it (`/.well-known/{file}`, one segment) starts.
+    #[test]
+    fn a_bare_route_beside_the_metadata_s_path_starts() {
+        let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example");
+        let tools = Tools::new("test", "1.0").authorization(authorization);
+        let _ = crate::App::new(beside_metadata::router()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+    }
+
+    #[crate::routes]
+    mod beside_metadata {
+        #[route("/.well-known/{file}", get = well_known, stages = bare)]
+        pub struct WellKnown<'a> {
+            pub file: &'a str,
+        }
+    }
+
+    async fn well_known(_: crate::Params<beside_metadata::WellKnown<'_>>) -> &'static str {
+        "file"
+    }
+
     #[derive(crate::Route)]
     #[route("/")]
     struct Root;

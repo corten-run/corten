@@ -932,7 +932,8 @@ let app = App::new(url::router());
 The route says it where it is declared, so a reader of the routes module sees which routes skip
 the stages. What the compiler can check, it does:
 
-1. The handler takes only the request's URL (`Params`, `Method`, `Uri`)
+1. The handler takes only the request's URL (`Params`, `Method`, `Uri`) and the module's
+   `State`
    (`corten::answer::Bare`). `Req`, `Signal`, `Nonce`, `Caller` and `ClientIp` read what a stage
    gives; `HeaderMap` and the whole `Request` read the visitor's cookies and credentials, which no
    stage would keep a shared cache from storing; and `Form`, `Json`, `Bytes`, `String` and
@@ -967,11 +968,12 @@ set, as `&'static str` and `String` set it and a raw `Response` does not until t
 `nosniff` keeps a browser from taking it as another type, a page of the app's from loading it
 as a script, and one without a type from being read as HTML. An answer of a type that runs
 script (HTML, SVG, any XML) with no policy of its own gets `Content-Security-Policy: sandbox`, so
-an uploaded picture a `Media` sends cannot run there; a handler that means a document to run
-script sets a policy of its own on it. Its
+an uploaded picture a `Media` sends cannot run there. A policy of the handler's own replaces the
+sandbox, any policy, even one that says nothing of script (`frame-ancestors 'none'`), so a
+handler that sets one on a document says in it what script may run. Its
 answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
-own rules, `Set-Cookie` or not ([Caching](#caching) describes the stages' rules, which it does
-not meet).
+own rules ([Caching](#caching) describes the stages' rules, which it does not meet), except that
+one that sets a cookie and says nothing of caching gets `Cache-Control: private, no-cache`.
 A request for a method the route has no handler for gets the router's plain 405, and one whose
 segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) its plain 404, not the
 app's error page; any other unknown URL is still the app's 404, inside its stages.
@@ -981,9 +983,9 @@ which lets a bare route's request run for the longer of the shutdown grace and t
 deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(median of five runs, range in parentheses): 7,992 (7,992-7,993) instructions a request bare
-against 21,311 (21,304-21,320) through the stages with jemalloc (a plain axum router: 7,640),
-and 8,984 (8,984-8,985) against 23,783 (23,762-23,866) with glibc's allocator (axum: 8,716).
+(median of five runs, range in parentheses): 8,078 (8,078-8,080) instructions a request bare
+against 21,308 (21,303-21,317) through the stages with jemalloc (a plain axum router: 7,640),
+and 9,073 (9,072-9,073) against 23,796 (23,784-23,850) with glibc's allocator (axum: 8,716).
 An app with no bare route costs what it did before.
 
 ## Static files

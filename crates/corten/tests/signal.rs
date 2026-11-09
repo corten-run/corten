@@ -29,6 +29,9 @@ mod url {
 
     #[route("/quick", get = quick)]
     pub struct Quick;
+
+    #[route("/bare", get = bare, stages = bare)]
+    pub struct Bare;
 }
 
 async fn slow(signal: Signal, State(tx): State<Tx>) -> &'static str {
@@ -39,6 +42,23 @@ async fn slow(signal: Signal, State(tx): State<Tx>) -> &'static str {
 async fn quick(req: corten::Req, State(tx): State<Tx>) -> &'static str {
     report(req.signal().clone(), tx);
     "done"
+}
+
+/// A bare route takes the module's state too.
+async fn bare(State(tx): State<Tx>) -> &'static str {
+    if tx.is_closed() {
+        "closed"
+    } else {
+        "open"
+    }
+}
+
+#[tokio::test]
+async fn a_bare_route_takes_the_module_s_state() {
+    let (router, _rx) = app(Duration::from_secs(60));
+    let res = router.oneshot(Request::get("/bare").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "open");
 }
 
 async fn next(rx: &mut mpsc::UnboundedReceiver<Abort>) -> Abort {

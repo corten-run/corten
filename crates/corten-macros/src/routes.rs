@@ -1198,11 +1198,14 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             }
         }
     }
-    // A bare route is not a page, so a link to it is not fetched ahead of a click.
+    // A bare route is not a page, so a link to it is not fetched ahead of a click: it says
+    // `prefetch = false` for `#[derive(Route)]`, and refuses a `prefetch` of its own.
     if serves.bare.is_some() {
         if let Some(at) = serves.prefetch_at {
             return err(at, format!("stages = bare serves \"{path}\" as data, not a page, and a link to it is never prefetched: leave prefetch out"));
         }
+    }
+    if serves.bare.is_some() && serves.prefetch_at.is_none() {
         keep.extend(q(", prefetch = false", &[]));
     }
     let mut cut_args = Group::new(Delimiter::Parenthesis, stream(std::iter::once(TokenTree::Literal(lit.clone())).chain(keep)));

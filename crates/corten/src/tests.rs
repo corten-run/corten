@@ -4994,6 +4994,12 @@ mod bare_url {
     #[route("/picture", get = bare_picture, stages = bare)]
     pub struct Picture;
 
+    #[route("/framed", get = bare_framed, stages = bare)]
+    pub struct Framed;
+
+    #[route("/cookie", get = bare_cookie, stages = bare)]
+    pub struct Cookie;
+
     #[route("/feeds/{name}.xml", get = bare_feed, stages = bare)]
     pub struct Feed<'a> {
         pub name: &'a str,
@@ -5017,15 +5023,24 @@ async fn bare_feed(feed: crate::Params<bare_url::Feed<'_>>) -> String {
     format!("feed {}", feed.name)
 }
 
-/// The rest of what a bare handler may take: the request's `Uri`, the app's state, and an
-/// extractor that is optional.
-async fn bare_where(
-    at: crate::Params<bare_url::Where>,
-    uri: axum::http::Uri,
-    _: axum::extract::State<()>,
-    again: Option<axum::extract::Path<u32>>,
-) -> String {
-    format!("{} {uri} {}", at.id, again.map_or(0, |again| again.0))
+/// The rest of what a bare handler may take: the request's `Uri` and the app's state.
+async fn bare_where(at: crate::Params<bare_url::Where>, uri: axum::http::Uri, _: axum::extract::State<()>) -> String {
+    format!("{} {uri}", at.id)
+}
+
+/// A document with headers of its own, which the ones a bare route adds do not replace.
+async fn bare_framed() -> axum::response::Response {
+    axum::response::Response::builder()
+        .header("content-type", "text/html")
+        .header("content-security-policy", "frame-ancestors 'none'")
+        .header("x-content-type-options", "nosniff")
+        .body(Body::from("<p>framed</p>"))
+        .unwrap()
+}
+
+/// A cookie set with nothing said of caching.
+async fn bare_cookie() -> axum::response::Response {
+    axum::response::Response::builder().header("set-cookie", "seen=1").body(Body::from("seen")).unwrap()
 }
 
 /// A picture that can run script, as an uploaded SVG can.
@@ -5075,12 +5090,18 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     let (status, body) = for_host(&router, "/ping", "rebound.attacker.example:3917", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
     let (status, _, body) = call_with(router.clone(), "GET", "/where/7?x=1", None, None).await;
-    assert_eq!((status, body.as_str()), (StatusCode::OK, "7 /where/7?x=1 7"));
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "7 /where/7?x=1"));
     // `Media` keeps a file that can run script from running it, with no stage to do so.
     let (status, headers, _) = call_with(router.clone(), "GET", "/picture", None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["x-content-type-options"], "nosniff");
     assert_eq!(headers["content-security-policy"], "sandbox");
+    // A handler's own policy and `nosniff` are kept, once each; a cookie is never shared.
+    let (_, headers, _) = call_with(router.clone(), "GET", "/framed", None, None).await;
+    assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["frame-ancestors 'none'"]);
+    assert_eq!(headers.get_all("x-content-type-options").iter().count(), 1);
+    let (_, headers, _) = call_with(router.clone(), "GET", "/cookie", None, None).await;
+    assert_eq!(headers["cache-control"], "private, no-cache");
     // A path that does not parse is the extractor's own rejection, not the error page.
     let (status, headers, _) = call_with(router.clone(), "GET", "/raw/seven", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -5139,6 +5160,20 @@ fn a_type_that_runs_script_is_known() {
     for data in ["application/json", "image/png", "text/csv", "text/plain", "+xml", "application/xmlish"] {
         assert!(!runs(data.as_bytes()), "{data}");
     }
+}
+
+/// Whether a bare route can match a path of Corten's own exactly, segment by segment.
+#[test]
+fn a_route_matches_a_path_segment_by_segment() {
+    let can = crate::app::can_match;
+    assert!(can("/.well-known/{a}/{b}", "/.well-known/oauth-protected-resource/mcp"));
+    assert!(!can("/.well-known/{a}/{b}/{c}", "/.well-known/oauth-protected-resource/mcp"));
+    assert!(can("/.well-known/{*rest}", "/.well-known/oauth-protected-resource/mcp"));
+    assert!(!can("/.well-known/{file}", "/.well-known/oauth-protected-resource/mcp"));
+    assert!(can("/{file}.webmanifest", "/manifest.webmanifest"));
+    assert!(!can("/{file}.json", "/manifest.webmanifest"));
+    assert!(!can("/manifest.webmanifest/{x}", "/manifest.webmanifest"));
+    assert!(can("/sw.js", "/sw.js") && !can("/sw.js", "/sw.json"));
 }
 
 /// A tower layer around the whole app still goes around a bare route.

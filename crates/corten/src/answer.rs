@@ -1709,14 +1709,12 @@ pub trait AllAnonymous {}
 #[diagnostic::on_unimplemented(
     message = "a route with `stages = bare` runs no stage, so its handler cannot take `{Self}`",
     label = "`{Self}` reads what a stage gives the request, its headers, or its body",
-    note = "take the request's URL (Params, Method, Uri), or leave stages = bare out so the route gets every stage; an extractor of the app's own that reads none of those implements `corten::answer::Bare`"
+    note = "take the request's URL (Params, Method, Uri) or the module's State, or leave stages = bare out so the route gets every stage; an extractor of the app's own that reads none of those implements `corten::answer::Bare`"
 )]
 pub trait Bare {}
 
-impl<T> Bare for axum::extract::Path<T> {}
 impl<R: crate::route::FromUrl + ?Sized> Bare for crate::route::Params<R> {}
 impl<T> Bare for State<T> {}
-impl<T: Bare> Bare for Option<T> {}
 impl Bare for Method {}
 impl Bare for Uri {}
 

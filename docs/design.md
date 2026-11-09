@@ -983,13 +983,15 @@ rules something out.
     every other route keeps every stage. It is all or nothing, so the order a reader checks is
     still one. It is for an answer that must cost what the router alone costs and that anyone may
     read (a public JSON figure a CDN fronts), beside
-    pages that need every stage; the stages add about twice what its handler and the router cost
+    pages that need every stage; the stages add about 1.6 times what its handler and the router cost
     together (below). Its answer gets `X-Content-Type-Options: nosniff` when it has none, and
     `Content-Security-Policy: sandbox` when it is HTML, SVG or XML with no policy of its own, both
     added in its handler's own future, not by a stage: a browser takes it only as the type it
     says, a page of the app's cannot load it as a script (`script-src 'self'` trusts every URL of
     the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
-    client that reads it as its type sees nothing else change. It gets no host check, so it is
+    client that reads it as its type sees nothing else change; one that sets a cookie and says
+    nothing of caching gets `Cache-Control: private, no-cache`, so no shared cache hands one
+    visitor's cookie to another. It gets no host check, so it is
     data anyone anywhere may read. It answers `get` alone and its handler reads no body: no
     same-origin check covers it, a form posted to it needs no preflight, so any site could make
     its visitors send one, and no deadline would end a slow body. A bare route
@@ -1027,18 +1029,19 @@ rules something out.
     be in the request outside the area); measured (callgrind, release, the same JSON handler
     answering `Media`, a request counted as the run of 1,200 less the run of 200 over 1,000, five
     runs each, this change's request path as committed, the staged variants alternating with main
-    `c65c10ec`, median and range: with jemalloc a bare route 7,992 (7,992 to 7,993) instructions
-    a request with its `nosniff` and type check, 7,398 (7,397 to 7,400) before they were added,
-    the same handler through the stages 21,311 (21,304 to 21,320; main 21,308, 21,300 to 21,316),
-    a staged route beside a bare one 21,320 (21,319 to 21,335), and a plain axum router 7,640;
-    an API request 15,812 against main's 15,813 and a 404 19,986 against 19,984; with glibc's
-    allocator a bare route 8,984 (8,984 to 8,985), the same handler through the stages 23,783
-    (23,762 to 23,866; main 23,854, 23,729 to 23,908), beside a bare one 23,878 (23,835 to
-    24,129), a plain axum router 8,716 (8,720 in this build), an API request 17,842 (17,616 to
-    17,880) against main's 17,799 (17,599 to 17,839), and a 404 21,682 against 21,685); reasoned (one place for the app's steps is
+    `c65c10ec`, median and range: with jemalloc a bare route 8,078 (8,078 to 8,080) instructions
+    a request with its `nosniff`, type and cookie checks, 7,992 before the cookie check and
+    7,398 (7,397 to 7,400) before any, the same handler through the stages 21,308 (21,303 to
+    21,317; main 21,309, 21,300 to 21,316), a staged route beside a bare one 21,321 (21,315 to
+    21,325), and a plain axum router 7,640; an API request 15,812 against main's 15,813 and a 404
+    19,982 against 19,985; with glibc's allocator a bare route 9,073 (9,072 to 9,073), the same
+    handler through the stages 23,796 (23,784 to 23,850; main 23,845, 23,742 to 23,882), beside a
+    bare one 23,933 (23,817 to 24,099), a plain axum router 8,716, an API request 17,642 (17,604
+    to 17,872) against main's 17,800 (17,599 to 17,839), and a 404 21,731 (21,675 to 21,742)
+    against 21,893 (21,693 to 22,332)); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
     of it says so where it is declared); bet (apps have an answer anyone may read whose cost the
-    stages would about triple, beside pages that need them all; no example or template uses
+    stages would make about 2.6 times as costly, beside pages that need them all; no example or template uses
     `stages = bare` yet); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7).

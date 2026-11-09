@@ -899,6 +899,34 @@ pub use corten_macros::UrlValue;
 /// # fn main() {}
 /// ```
 ///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/health/live", get = ping, stages = bare)]
+///     pub struct Live;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/{*rest}", get = ping, stages = bare)]
+///     pub struct Rest<'a> {
+///         pub rest: &'a str,
+///     }
+/// }
+///
+/// async fn ping(_: corten::Params<url::Rest<'_>>) -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
 /// `bare` is the only value it takes, and it is not said with what only a stage applies
 /// (`no_store`, `rows`, `gives(..)`), twice, or without a handler:
 ///
@@ -3871,8 +3899,11 @@ pub mod __private {
     /// (`script-src 'self'` trusts every URL of the app's), nor a browser sniff it as HTML. One of
     /// a type a browser runs script in (HTML, SVG, any XML) with no policy of its own gets
     /// `Content-Security-Policy: sandbox`, so a file it sends (an uploaded picture) runs no
-    /// script on the app's origin. It is the answer's handler, not a stage, so it adds no box and
-    /// no step a request goes through.
+    /// script on the app's origin; a policy of the handler's own replaces the sandbox, so it says
+    /// itself what script may run. An answer that sets a cookie and says nothing of its caching
+    /// gets `Cache-Control: private, no-cache`, as the stages give one, so no shared cache hands
+    /// one visitor's cookie to another. It is the answer's handler, not a stage, so it adds no box
+    /// and no step a request goes through.
     #[derive(Clone)]
     pub struct NoSniff<H>(H);
 
@@ -3884,8 +3915,8 @@ pub mod __private {
         }
     }
 
-    /// `res` with `nosniff`, and `sandbox` when it is a document with no policy, unless it says
-    /// either itself.
+    /// `res` with `nosniff`, `sandbox` when it is a document with no policy, and `private` when it
+    /// sets a cookie with no caching of its own, unless it says each itself.
     fn nosniff(mut res: axum::response::Response) -> axum::response::Response {
         use axum::http::{header, HeaderValue};
         let headers = res.headers_mut();
@@ -3895,6 +3926,9 @@ pub mod __private {
         let document = headers.get(header::CONTENT_TYPE).is_some_and(|t| runs_script(t.as_bytes()));
         if document && !headers.contains_key(header::CONTENT_SECURITY_POLICY) {
             headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+        }
+        if headers.contains_key(header::SET_COOKIE) && !headers.contains_key(header::CACHE_CONTROL) {
+            headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache"));
         }
         res
     }
