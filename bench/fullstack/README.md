@@ -160,6 +160,9 @@ than counted and a one-process item API), and r1-r5 are kept for the record; tim
 | phoenix | 1.3 s (1.3 s-1.3 s) | 125.3 MiB | 262 MB |
 | spring | 7.5 s (7.3 s-7.8 s) | 140.8 MiB | 516 MB |
 
+Spring's image has since grown by 5.9 MB for the matched tier's profile, and may start a little
+later without it ([The matched tier](#the-matched-tier), item 6); its row here is r16's, before that.
+
 ### Item page, items in memory (no database)
 
 | App | 300/s offered: served, p50 / p99, CPU | 64 users: req/s, p50 / p99 | 256 users: req/s, p99, errors | Memory under load |
@@ -1502,19 +1505,23 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    `application.properties` excludes all of Actuator's auto-configuration unless the profile is on,
    so without it the app starts the same 60 conditional and 6 unconditional auto-configurations as
    before (Boot's `--debug` condition report, compared) and its defaults-tier matrix is unchanged;
-   its image grows by 5.9 MB (Spring Security's two modules and Actuator). Measured locally against
-   the image before them, without the profile (noisy, on a loaded machine): the first 200 came a
-   median 19.8 s after start against 18.8 s (26 alternating runs), and memory after 1,000 requests
-   was 327-332 MiB against 321-324 MiB (three runs each). Spring writes no ETag: Spring's
-   `ShallowEtagHeaderFilter` writes none for a `no-store` answer (checked: none on the page or the
-   JSON), and the page's CSRF token is masked afresh on each render, as Django's is, so a second
-   render would not repeat one either. Left out: the item API's deadline (the app makes its client
-   with `RestClient.create()`, which Boot's `spring.http.clients.read-timeout` does not reach; the
-   client is the app's code in both tiers), a readiness that knows the item API (a health indicator
-   of the app's own), and the JSON's 404 (the controller's own empty answer). A `DELETE` on the JSON
-   is refused by the CSRF check (403 JSON) before Spring MVC can answer 405. The alert form, the
-   sort and "show all" work in Chromium through the edge, with the same one htmx indicator
-   `style-src` violation as Django.
+   its image grows by 5.9 MB (Spring Security's two modules and Actuator). Measured locally, without
+   the profile, against the app at `e4eccc2c` (the commit before them), one CPU each, the two images
+   alternated, on a machine busy with other builds: the first 200 came a median 29.5 s after start
+   (22.1-37.0 s, 12 runs) against 28.0 s (24.5-34.9 s), and Boot's own start a median 21.2 s against
+   19.9 s, each within the other's spread, and memory after 1,000 requests was 327-332 MiB against
+   321-324 MiB (three runs each). The defaults tier's Spring row may move by that much in its next
+   round. Spring writes no ETag, and the profile registers no filter for one: Spring's
+   `ShallowEtagHeaderFilter`, a bean the app would add, writes none for an answer Spring Security
+   marks `no-store` (checked with it registered: no ETag on the page or the JSON), and the page's
+   CSRF token is masked afresh on each render, as Django's is, so a second render would not repeat
+   one either. Left out: the item API's deadline (the app makes its client with
+   `RestClient.create()`, which Boot's `spring.http.clients.read-timeout` does not reach; the client
+   is the app's code in both tiers), a readiness that knows the item API (a health indicator of the
+   app's own), and the JSON's 404 (the controller's own empty answer). A `DELETE` on the JSON is
+   refused by the CSRF check (403 JSON) before Spring MVC can answer 405. The alert form, the sort
+   and "show all" work in Chromium through the edge, with the same one htmx indicator `style-src`
+   violation as Django.
 7. `nextjs` and `aspnet` (and `aspnet-aot`) are not in it yet: each joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
