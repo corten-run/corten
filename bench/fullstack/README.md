@@ -1457,8 +1457,24 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    header but not a 64 KiB one), and its error answers (a failed read as a 500 `text/plain`, a
    missing item as a 404 `text/plain`, an empty 405) are the app's and Topcoat's own, which the
    profile does not change.
-5. `nextjs`, `django`, `aspnet` (and `aspnet-aot`) and `spring` are not in it yet: each joins
-   with its profile.
+5. `django`: its settings read `PROFILE` at start, so the profile is Django's own middleware and
+   settings: `ALLOWED_HOSTS` from `HOSTS` (beside localhost, as Corten's host check), a CSP from its
+   `SECURE_CSP` setting and CSP middleware (the page's scripts are files, so `script-src 'self'`),
+   `GZipMiddleware`, `ConditionalGetMiddleware` for an ETag, and `cache_control(private=True,
+   no_cache=True)` on the pages' and the JSON's views (`never_cache` adds `no-store`, for which
+   `ConditionalGetMiddleware` writes no ETag); the static files keep WhiteNoise's headers. Its
+   defaults already send the other security headers, refuse a cross-site form post (CSRF, 403) and a
+   body over 2.5 MB (400), and under gunicorn's worker timeout answer a hung read with a 500 and
+   close an unfinished head at about 30 s. The page's ETag never repeats: each render masks its CSRF
+   token afresh, so a second request with `If-None-Match` gets a 200. htmx puts its indicator styles
+   in a `<style>` element, which `style-src 'self'` blocks (one violation in Chromium); the sort,
+   "show all" and the price alert still work (checked in Chromium). Django has no setting for
+   Permissions-Policy, a liveness or readiness endpoint, or a connection cap (gunicorn's three sync
+   workers serve three connections at a time), and its error answers (HTML for the JSON's 404 and
+   500, the CSRF 403 for a `DELETE` on the JSON, a 405 for `HEAD` from the view's `require_GET`) are
+   the app's and Django's own.
+6. `nextjs`, `aspnet` (and `aspnet-aot`) and `spring` are not in it yet: each joins with its
+   profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1476,7 +1492,10 @@ same 12 and missed the same 12, with two of those answered differently: its fail
 Topcoat, probed the same way from `cb-topcoat` built at `9a17b8ea`
 (`results/conform-matched-topcoat1/conformance.json`), met 13 and missed 11: it meets the
 cross-site post (403) and the unfinished head (closed in 30.0 s) that axum-maud misses, and misses
-the page's script CSP (`'unsafe-eval'`) that axum-maud meets.
+the page's script CSP (`'unsafe-eval'`) that axum-maud meets. Django, from `cb-django` built at
+`d7f377b2` (`results/conform-matched-django1/conformance.json`), met 15 and missed 9:
+Permissions-Policy, the ETag (a 200 again), the JSON's 404, `DELETE` (403) and failed read as
+HTML, `HEAD` (405), liveness and readiness, and the cap (not served with 950 held).
 No load phase has run in the tier yet.
 
 ### The hardening step

@@ -1,0 +1,350 @@
+{
+  "format": 2,
+  "tier": "matched",
+  "commit": "d7f377b21236ebb3b10ae65f5f4ff6ea48cf48eb",
+  "dirty": false,
+  "imagesFrom": null,
+  "date": "2026-11-09T06:26:14.609Z",
+  "apps": [
+    "django"
+  ],
+  "results": {
+    "django": {
+      "image": "sha256:2e7ae7e073e764de869fdfb433c933aec9d5f845e4ecdbebde69d8126760f58c",
+      "probes": {
+        "pages": true,
+        "page": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "\"58a41c9319ca391fb9c3b104720c4f97\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "set-cookie": [
+              "csrftoken=EVP3iTpbuwPXlpApkobI2VLU76yo8jK3; expires=Mon, 08 Nov 2027 06:24:12 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
+            ]
+          },
+          "bodyLength": 8113,
+          "ms": 107
+        },
+        "pageBr": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "content-encoding": "gzip",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"edbe245bb09d0cc71965eb28ffed47a4\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "set-cookie": [
+              "csrftoken=co7AtBZHhok4xQ8uNfZaAUGfDB4ForNz; expires=Mon, 08 Nov 2027 06:24:12 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
+            ]
+          },
+          "bodyLength": 2032,
+          "ms": 36
+        },
+        "pageAgain": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "content-encoding": "gzip",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"115a2b96b95b59005fa5e9a646210c53\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "set-cookie": [
+              "csrftoken=lj2am3GCFRDUclpuXT8AvsF6U1ldr6nX; expires=Mon, 08 Nov 2027 06:24:13 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
+            ]
+          },
+          "bodyLength": 2028,
+          "ms": 43
+        },
+        "json": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "cache-control": "private, no-cache",
+            "etag": "\"6cc7438b24c06ed300c40e31a5089172\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 9695,
+          "ms": 53
+        },
+        "jsonBr": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"6cc7438b24c06ed300c40e31a5089172\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 1612,
+          "ms": 50
+        },
+        "jsonGzip": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+            "cache-control": "private, no-cache",
+            "etag": "W/\"6cc7438b24c06ed300c40e31a5089172\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 1640,
+          "ms": 47
+        },
+        "head": {
+          "status": 405,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 0,
+          "ms": 45
+        },
+        "json404": {
+          "status": 404,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "etag": "\"64db5ad5f2ef41babdba80a6dd0518f6\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 179,
+          "ms": 53
+        },
+        "json405": {
+          "status": 403,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 1450,
+          "ms": 80
+        },
+        "page404": {
+          "status": 404,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "\"4e84eba6b5dd5e95e71c43dd1d5f4d0d\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 654,
+          "ms": 48
+        },
+        "page500": {
+          "status": 500,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "etag": "\"ac6a5d6f575db01370a1a7dba173f6d1\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 145,
+          "ms": 32
+        },
+        "json500": {
+          "status": 500,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "etag": "\"ac6a5d6f575db01370a1a7dba173f6d1\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 145,
+          "ms": 46
+        },
+        "badHost": {
+          "status": 400,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "etag": "\"d4fa651ac72fe0026823084e47702b7b\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 143,
+          "ms": 43
+        },
+        "bigHead": {
+          "status": 431,
+          "headers": {
+            "content-type": "text/html"
+          },
+          "bodyLength": 229,
+          "ms": 102
+        },
+        "formPath": "/items/item_5",
+        "ownPost": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "set-cookie": "csrftoken=EVP3iTpbuwPXlpApkobI2VLU76yo8jK3; expires=Mon, 08 Nov 2027 06:24:24 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
+          },
+          "bodyLength": 8187,
+          "ms": 43
+        },
+        "crossSite": {
+          "status": 403,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 1087,
+          "ms": 44
+        },
+        "bigBody": {
+          "status": 400,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 143,
+          "ms": 40
+        },
+        "afterBig": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "etag": "\"ced3e4da9013bcd73a8a663a71386606\"",
+            "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "same-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin",
+            "set-cookie": [
+              "csrftoken=ZTaiuVc0bvlxeKKoEuRTHrw3nTPC1Eqt; expires=Mon, 08 Nov 2027 06:24:26 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
+            ]
+          },
+          "bodyLength": 8113,
+          "ms": 90
+        },
+        "logLines": "0",
+        "tier": "matched",
+        "unfinishedHead": {
+          "closedMs": 30394
+        },
+        "cap": {
+          "below": 950,
+          "belowHeld": null,
+          "held": 1050,
+          "whileHeld": null,
+          "afterRelease": 200,
+          "releaseMs": 76,
+          "afterwards": 200
+        },
+        "live": null,
+        "readyPath": null,
+        "slow": {
+          "status": 500,
+          "headers": {
+            "content-type": "text/html"
+          },
+          "bodyLength": 141,
+          "ms": 30411
+        },
+        "readyDown": null
+      },
+      "row": {
+        "pageHeaders": "all",
+        "pageScripts": "strict",
+        "permissions": "no",
+        "pageCache": "private, no-cache",
+        "etag": "200",
+        "pageCompression": "gzip",
+        "crossSite": "403",
+        "bigBody": "400",
+        "page404": "404 html",
+        "page500": "500 html",
+        "jsonHeaders": "all",
+        "jsonCache": "private, no-cache",
+        "jsonCompression": "gzip; gzip",
+        "json404": "404 html",
+        "json405": "403 html",
+        "json500": "500 html",
+        "head": "405",
+        "host": "400",
+        "bigHead": "431",
+        "logLines": "0",
+        "live": "none",
+        "readyDown": "no readiness endpoint",
+        "deadline": "500 in 30.4 s",
+        "unfinishedHead": "closed in 30.4 s",
+        "connectionCap": "not served with 950 held",
+        "unmet": [
+          "permissions",
+          "etag",
+          "json404",
+          "json405",
+          "json500",
+          "head",
+          "live",
+          "readyDown",
+          "connectionCap"
+        ]
+      }
+    }
+  }
+}

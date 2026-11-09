@@ -2561,6 +2561,10 @@ Corten is pre-1.0, so any minor version may change the API.
     runtime compiles the page's expressions with `new Function`. Answers Topcoat makes from an
     error go without the profile's headers. Its matched matrix meets 13 of 24 columns
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+279. Django joins `bench/fullstack`'s matched tier: under `PROFILE=matched` its settings add its
+    host list, its CSP middleware, gzip, an ETag and `cache_control` on the pages and the JSON,
+    and its matched matrix meets 15 of 24 columns
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
