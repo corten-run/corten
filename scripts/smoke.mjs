@@ -81,7 +81,7 @@ const liveEvent = (accept) =>
   new Promise((resolve, reject) => {
     const req = http.get(`${base}/live/trades`, { headers: { "accept-encoding": accept } }, (res) => {
       const coding = res.headers["content-encoding"];
-      const body = coding === "br" ? res.pipe(zlib.createBrotliDecompress()) : res;
+      const body = coding === "gzip" ? res.pipe(zlib.createGunzip()) : coding === "br" ? res.pipe(zlib.createBrotliDecompress()) : res;
       let text = "";
       const timer = setTimeout(() => (req.destroy(), resolve({ coding, first: text })), 5000);
       body.on("data", (chunk) => {
@@ -99,10 +99,12 @@ const liveEvent = (accept) =>
 {
   const zstd = await liveEvent("gzip, deflate, br, zstd");
   check("a live stream is zstd for a client that accepts it", zstd.coding === "zstd", String(zstd.coding));
-  const br = await liveEvent("gzip, br");
-  check("a live stream's first event decodes before the stream ends (brotli, flushed per event)", br.coding === "br" && br.first.includes("Last trade"), `${br.coding}: ${br.first.slice(0, 60)}`);
-  const plain = await liveEvent("gzip");
-  check("a gzip-only client gets the stream as it is", plain.coding === undefined && plain.first.includes("event: patch"), String(plain.coding));
+  // Never brotli, which Playwright's Windows WebKit holds back past 16 KiB of an event (#1131): a
+  // client without zstd, as that WebKit asks.
+  const gzip = await liveEvent("gzip, deflate, br");
+  check("a live stream's first event decodes before the stream ends (gzip, flushed per event, for a client without zstd)", gzip.coding === "gzip" && gzip.first.includes("Last trade"), `${gzip.coding}: ${gzip.first.slice(0, 60)}`);
+  const plain = await liveEvent("br");
+  check("a client that takes only brotli gets the stream as it is", plain.coding === undefined && plain.first.includes("event: patch"), String(plain.coding));
 }
 
 // A DNS-rebound page reaches the server under a name the app is not: 421, and nothing of the app.
@@ -804,6 +806,65 @@ async function run(browser) {
   // A trade a second: one drawn in four seconds is a fragment the runtime applied.
   const nextTrade = (await page.textContent("#last-trade")) ?? "";
   check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
+  // As this browser asks for it, a live stream is zstd or gzip, never brotli, which
+  // Playwright's WebKit on Windows holds back past 16 KiB of an event until more of the stream
+  // arrives (#1131); its first event decodes while the stream is open.
+  // Bounded: an event held back fails the check rather than the whole run.
+  const streamed = await page.evaluate(async () => {
+    const stop = new AbortController();
+    let text = "";
+    let coding = null;
+    try {
+      const res = await fetch("/live/trades", { headers: { accept: "text/event-stream" }, signal: AbortSignal.any([stop.signal, AbortSignal.timeout(15_000)]) });
+      coding = res.headers.get("content-encoding");
+      const reader = /** @type {ReadableStream<Uint8Array>} */ (res.body).getReader();
+      while (!text.includes("event: patch")) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += new TextDecoder().decode(value);
+      }
+    } catch (error) {
+      text += ` (${String(error)})`;
+    }
+    stop.abort();
+    return { coding, patch: text.includes("event: patch"), seen: text.slice(-80) };
+  });
+  check("a live stream is zstd or gzip as the browser asks, and its first event decodes while it is open", ["zstd", "gzip"].includes(streamed.coding ?? "") && streamed.patch, JSON.stringify(streamed));
+  // An event over 16 KiB followed by nothing, the case WebKit held back under brotli: it is
+  // dispatched with the stream left quiet, well inside the keepalive's 15 s, the next thing the
+  // server would send (#1131). The bound is the check's, not a pause: it ends at the event. The
+  // stream's status and coding are read first, so a missing route fails as one and a late event
+  // says what coding held it.
+  const large = await page.evaluate(async () => {
+    const stop = new AbortController();
+    /** @type {{ status?: number, coding?: string | null, failed?: string }} */
+    let head = {};
+    try {
+      const answer = await fetch("/smoke/live/large", { headers: { accept: "text/event-stream" }, signal: AbortSignal.any([stop.signal, AbortSignal.timeout(15_000)]) });
+      head = { status: answer.status, coding: answer.headers.get("content-encoding") };
+    } catch (error) {
+      return { failed: `no answer: ${String(error)}` };
+    } finally {
+      stop.abort();
+    }
+    return new Promise((done) => {
+      const started = performance.now();
+      const source = new EventSource("/smoke/live/large");
+      const finish = (/** @type {{ size?: number, ms?: number, failed?: string }} */ result) => {
+        source.close();
+        clearTimeout(bound);
+        done({ ...head, ...result });
+      };
+      const bound = setTimeout(() => finish({ failed: "no event in 5 s" }), 5000);
+      source.addEventListener("error", () => finish({ failed: `stream error, readyState ${source.readyState}` }));
+      source.addEventListener("patch", (event) => finish({ size: event.data.length, ms: Math.round(performance.now() - started) }));
+    });
+  });
+  check(
+    "a live event over 16 KiB with nothing after it is dispatched while the stream is quiet",
+    large.status === 200 && (large.size ?? 0) > 16_384,
+    JSON.stringify(large),
+  );
 
   // Only what the page's own origin answered goes through the runtime's policy: not another
   // origin's answer (one connect-src allows), a Response a script made, or an event a script
@@ -2407,6 +2468,21 @@ async function run(browser) {
     const scripted = { id: await scriptPage.inputValue("#alert-form select"), above: await scriptPage.inputValue("#alert-form input[name=above]") };
     check("back to a page puts back what the user chose and not a value a script set", scripted.id === "SOLR" && scripted.above === "", JSON.stringify(scripted));
     await scriptPage.context().close();
+    // A value a script set and then dispatched input and change for, as a typed field sends, is.
+    const toldPage = await changed((body) => body);
+    await toldPage.evaluate(() => {
+      const above = /** @type {HTMLInputElement} */ (document.querySelector("#alert-form input[name=above]"));
+      above.value = "7";
+      above.dispatchEvent(new Event("input", { bubbles: true }));
+      above.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await toldPage.click('header nav a[href="/news"]');
+    await toldPage.waitForFunction(() => document.title === "News | Watchlist");
+    await toldPage.goBack();
+    await toldPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form") && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const told = await toldPage.inputValue("#alert-form input[name=above]");
+    check("back to a page puts back a value a script set and dispatched input and change for", told === "7", told);
+    await toldPage.context().close();
     // A form with a control named like one of a form's own methods is still read by the form's:
     // leaving it swaps the page in and Back puts back what was typed. (Playwright's own select
     // and checks call getAttribute on the form, so only the text field is typed in, by keys.)
@@ -2568,6 +2644,7 @@ async function run(browser) {
       "back to a page puts back a checkbox and a radio, and leaves a select whose options changed and a checkbox whose value changed as the server draws them",
       "back to a page puts back no file, the other fields before the page's elements connect",
       "back to a page puts back what the user chose and not a value a script set",
+      "back to a page puts back a value a script set and dispatched input and change for",
       "back to a page puts back what was typed in a form with a control named getAttribute",
       "back to a page puts back what was typed in more fields than are looked up one by one",
       "back to a page puts back what was typed there after a link the server sent elsewhere",

@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="<%= typeof lang === "string" ? lang : "en" %>">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title><%= title %></title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/components.css">
+<% if (typeof sheet === "string") { %><link rel="stylesheet" href="/static/<%= sheet %>"><% } %>
+<script src="/static/htmx.min.js" defer></script>
+<script src="/static/item.js" defer></script>
+</head>
+<body hx-boost="true">
+<header class="site-header__bar"><a href="/">Card Market</a></header>
+<main>
