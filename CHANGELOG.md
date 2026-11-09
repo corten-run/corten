@@ -4122,8 +4122,9 @@ Corten is pre-1.0, so any minor version may change the API.
     an array's element or a record's value read by index is `T | undefined` until the script
     checks it, a `switch` case that runs into the next one is an error, as are code after a
     `return` and `import "./file.js"` naming a module that does not exist. An app cannot turn one
-    off (`--no-script-types` leaves every script unchecked). An app's script that reads by index without a check fails `corten check` until
-    it does (`for (const x of xs)`, `const [first] = xs`, or a check of what it read).
+    off (`--no-script-types` leaves every script unchecked). An app's script that reads by index
+    without a check fails `corten check` until it does (`for (const x of xs)`, `const [first] =
+    xs`, or a check of what it read).
     `rows(..).at(i)` is `V | undefined`: none past either end, and a negative `i` counts back
     from the last, as an array's `at()`, where it gave a view of no row before. The kit's
     `ComboBox` with no options threw on Enter after Arrow Down; it closes now.
