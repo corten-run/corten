@@ -781,8 +781,8 @@ rules something out.
    and 2,357 (1,908 to 2,470); with `identity` and with a browser's encodings (zstd) their ranges
    overlapped, except a browser's at 64 users, where glibc's 2,139 to 3,392 sat below both (while in
    `results/ab-jemalloc` glibc's median, 4,936, was above theirs, 3,607 and 3,454, the ranges
-   overlapping). No image with glibc's tunables went
-   through `ab.mjs`, since none gave a flood's memory back. An earlier set without the thread cache
+   overlapping). No image with glibc's tunables went through `ab.mjs`, since none gave a flood's
+   memory back. An earlier set without the thread cache
    (`results/ab-jemalloc`) had glibc at 3,554 brotli pages a second against 1,720 for jemalloc and
    1,905 with its background thread. Those rounds ran on Docker Desktop with other work running,
    where rounds of one image moved by up to 2.4 times at 64 users (glibc with `identity`, 3,490 to
