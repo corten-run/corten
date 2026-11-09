@@ -535,7 +535,9 @@ async function run(browser) {
     const drawn = (/** @type {string} */ title) => !!document.querySelector("main") && document.title === title && !document.querySelector("main[aria-busy]");
     await nav.getByRole("link", { name: "Orders", exact: true }).first().click();
     const left = await nav.waitForFunction(drawn, "Orders | corten-ui", { timeout: 10000 }).then(() => true, () => false);
-    await nav.goBack();
+    // Back from the page, as the runtime's smoke takes it: Playwright's Linux WebKit loses the page
+    // when it drives a traverse the runtime intercepts.
+    await nav.evaluate(() => history.back());
     const back = left && (await nav.waitForFunction(drawn, galleryTitle, { timeout: 10000 }).then(() => true, () => false));
     const after = await nav.evaluate(({ told, untold }) => {
       const box = (/** @type {string} */ value) => /** @type {HTMLInputElement | null} */ (document.querySelector(`form[action$="/sell"] fieldset input[type="checkbox"][value="${value}"]`));
