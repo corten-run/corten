@@ -2584,6 +2584,26 @@ Corten is pre-1.0, so any minor version may change the API.
     unknown in a copy with no `.git`, as a droplet gets), which now keep the droplet's script and
     CPU (`run.sh`, `host.txt`)
     ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
+278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
+    after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
+    apps: how long it takes to be ready, cold and warm, and after an edit how long a completion
+    inside the item page's markup and the errors for an unknown field there take. In one run on a
+    desktop, with rust-analyzer's experimental diagnostics on (off by default, when only `cargo
+    check` on save shows the error), both had medians under 0.1 s inside Corten's `html!` and
+    Maud's, against 5 to 10 s inside Topcoat's and Leptos's `view!`; Corten's macro call there
+    is about a fifth the size of the others', so this is not a like-for-like comparison with
+    Maud's, and the errors' times partly measure each file. `results/dev-loop-default` has the
+    same run with those diagnostics off. `docker-rebuild.mjs` times each
+    anchor app's own `docker build` after the edit with BuildKit's cache warm, both on the builder
+    that built it and on a new builder given only the exported layer cache. That second case is
+    what a hosted CI runner restoring a cache gets. Since BuildKit exports no cache mount, it
+    rebuilds an app whose Dockerfile copies its source before building, as both of these do, about
+    as if from clean. Only those two apps run by default, for time, and the README says what the
+    others' Dockerfiles do instead. The results are in `results/dev-loop`, and `summarize.mjs`
+    prints both.
+    The time from a save to the page showing it under each stack's development server is not
+    measured, and the bench README says why
+    ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
 279. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
     tokens, `choice-list-gap` and `choice-list-legend-gap` (.75rem each, the values the two
     stylesheets printed and kept equal by hand), so a theme with tighter choice lists sets them once
