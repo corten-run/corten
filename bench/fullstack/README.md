@@ -1606,10 +1606,10 @@ Next.js, from `cb-nextjs-matched` built at `eedbcc2a`
 compression (none), 405 and failed read (empty), the unknown Host (200), liveness and readiness,
 the item API's deadline and the unfinished head (each held 45 s), and the cap (served with 1,050
 held).
-ASP.NET Core's Razor Pages app, from `cb-aspnet` built at COMMIT807
+ASP.NET Core's Razor Pages app, from `cb-aspnet` built at `b74e1b1e`
 (`results/conform-matched-aspnet1/conformance.json`), met 22 and missed 2: the ETag, and
 readiness with the item API hung (200). aspnet-aot, from `cb-aspnet-aot` built at the same
-commit, met all 14 of its columns that are not about pages (its readiness 503 in 2.0 s, its
+commit, met all 14 of its columns that are not about pages (its readiness 503 in 2.1 s, its
 deadline 503 in 10.0 s).
 No load phase has run in the tier yet.
 
