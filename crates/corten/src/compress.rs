@@ -24,8 +24,8 @@
 //! Playwright's WebKit (on Windows) holds back the end of a flushed brotli event that decodes to
 //! more than 16 KiB until more bytes arrive, so the last event of a quiet stream would wait for
 //! the next one (#1131). Every stream's context shares a budget of 256 MiB (about 550 zstd
-//! streams): past it a new stream goes out uncompressed. An event repeats cheaply when the one before it is within the window, so events
-//! up to about 64 KB with zstd and 32 KB with gzip.
+//! streams): past it a new stream goes out uncompressed. An event repeats cheaply when the one
+//! before it is within the window, so events up to about 64 KB with zstd and 32 KB with gzip.
 //!
 //! `corten::compress::apply(router)` wraps the whole app. Images, fonts, bodies under 1 KiB,
 //! another server's answer ([`crate::Relay`]) and responses that are already encoded or marked
