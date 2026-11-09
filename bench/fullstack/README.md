@@ -1527,8 +1527,8 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    violation as Django.
 7. `nextjs`: Next.js fixes its config when it builds, so the tier runs an image of its own,
    `cb-nextjs-matched`, built with `--build-arg PROFILE=matched` (`buildArgs` in `apps.mjs`, which
-   `droplet.mjs` builds from); the defaults tier's `cb-nextjs` is built from the same config as
-   before. That build adds axum-maud's security headers to every answer, and its CSP and
+   `droplet.mjs` builds from, and the build step's recipe in a matched round, `builds.mjs`); the
+   defaults tier's `cb-nextjs` is built from the same config as before. That build adds axum-maud's security headers to every answer, and its CSP and
    `Cache-Control: private, no-cache` to the JSON, from `next.config.mjs`'s `headers()`, and the
    pages' CSP from a Proxy (`proxy.matched.ts`, Next.js's file for code that runs before a route,
    which only that build takes, through `pageExtensions`), the code Next.js's Content Security
@@ -1538,14 +1538,17 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    alert work). The App Router's pages were already rendered for each request, as a nonce needs; the
    Proxy leaves out the JSON, the static files, bench/live's stream and the Pages Router's
    marketplace pages, which are not in the tier and would need `_document` to write the nonce.
+   The 404 page Next.js prerenders (`/_not-found`, for an unknown path) gets the policy but not the
+   nonce, which needs a page rendered for the request, so its 10 scripts are blocked (measured); its
+   text and links work without them, and the tier measures no script there.
    Next.js refuses a server action whose Origin is not the request's host, and the edge sends the
    app its container name as Host, so the build lists the edge's host in
    `serverActions.allowedOrigins` (the Dockerfile's `EDGE_HOST`, which `edge.test.mjs` checks
    against the edge's port and the built config), as a deploy names its own domain; that refusal and
    the 1 MB body limit on a server action were already defaults (a 500, counted as refused).
-   Next.js's own compression and ETag (`compress` and `generateEtags`, on by default) reach neither
-   the route handler's JSON nor a page rendered for each request, and it has no setting for a JSON
-   405 or 500 (a route handler's are empty), a host list, liveness or readiness, a deadline, or the
+   Next.js's own compression (`compress`, on by default) gzips the pages but not the route
+   handler's JSON, and its ETag (`generateEtags`) is on no page rendered for the request; it has no
+   setting for a JSON 405 or 500 (a route handler's are empty), a host list, liveness or readiness, a deadline, or the
    Node server's header timeout (Node's `headersTimeout` is 60 s, and the standalone server sets
    only `keepAliveTimeout`) or connection cap (`server.maxConnections`, which it does not set), so
    those columns stay unmet.

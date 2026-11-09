@@ -2574,9 +2574,10 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 281. Next.js joins `bench/fullstack`'s matched tier: Next.js fixes its config when it builds, so the
     tier runs an image of its own, built with `--build-arg PROFILE=matched` (`apps.mjs`'s
-    `buildArgs`), which adds the security headers from `next.config.mjs`'s `headers()`, a nonce CSP
-    from a Proxy as Next.js's guide writes it, and the edge's host for server actions; the defaults
-    tier's image is built from the same config as before. Its matched matrix meets 14 of 24 columns
+    `buildArgs`, and in a matched round's build step), which adds the security headers from
+    `next.config.mjs`'s `headers()`, a nonce CSP from a Proxy as Next.js's guide writes it, and the
+    edge's host for server actions; the defaults tier's image is built from the same config as
+    before. Its matched matrix meets 14 of 24 columns
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed

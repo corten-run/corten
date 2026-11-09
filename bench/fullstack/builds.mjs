@@ -178,7 +178,9 @@ export const recipes = {
     dev: 'cmake -S . -B debug -DCMAKE_BUILD_TYPE=Debug && cmake --build debug -j"$(nproc)"',
     edit: "views/ItemPage.csp",
   },
-  nextjs: node("app/items/[id]/interactive.tsx", { NEXT_TELEMETRY_DISABLED: "1" }),
+  // A matched round (BENCH_TIER=matched) builds Next.js as the tier's image is built: with the
+  // profile (apps.mjs, buildArgs; the Dockerfile's PROFILE and EDGE_HOST arguments).
+  nextjs: node("app/items/[id]/interactive.tsx", { NEXT_TELEMETRY_DISABLED: "1", ...(process.env.BENCH_TIER === "matched" && { PROFILE: "matched", EDGE_HOST: "localhost:19411" }) }),
   "tanstack-start": node("src/routes/items.$id.tsx"),
   sveltekit: node("src/routes/items/[id]/+page.svelte"),
   "react-router": node("app/routes/item.tsx"),
