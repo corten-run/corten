@@ -1537,7 +1537,7 @@ the page's script CSP (`'unsafe-eval'`) that axum-maud meets. Django, from `cb-d
 `37361430` (`results/conform-matched-django1/conformance.json`), met 15 and missed 9:
 Permissions-Policy, the ETag (a 200 again), the JSON's 404, `DELETE` (403) and failed read as
 HTML, `HEAD` (405), liveness and readiness, and the cap (not served with 950 held). Spring,
-from `cb-spring` built at `e99d2a4e` (`results/conform-matched-spring1/conformance.json`), met 19
+from `cb-spring` built at `efbfa015` (`results/conform-matched-spring1/conformance.json`), met 19
 and missed 5: the ETag, the JSON's 404 (empty) and `DELETE` (the CSRF 403), readiness with the item
 API hung (200), and the item API's deadline (held 45 s).
 No load phase has run in the tier yet.

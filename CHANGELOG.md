@@ -2568,8 +2568,9 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 280. Spring joins `bench/fullstack`'s matched tier: under `PROFILE=matched` Spring Security adds its
     headers, a CSRF check and a host check, and Boot adds gzip, problem details, Tomcat's head
-    timeout and connection cap, and Actuator's liveness and readiness; without it the app starts as
-    before. Its matched matrix meets 19 of 24 columns
+    timeout and connection cap, and Actuator's liveness and readiness (no metrics or observation);
+    without it the app starts the same auto-configurations as before. Its matched matrix meets 19
+    of 24 columns
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
