@@ -137,9 +137,47 @@ const tabType = (/** @type {string[][]} */ pairs) => {
   document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme];
   const themed = read();
   document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
+  // Read once more so the kit's values are computed while transitions are still off, and removing
+  // that sheet starts no fade.
   read();
   document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== still);
   return { kit, themed, foreground: probe("var(--foreground)"), primary: probe("var(--primary)") };
+};
+// Hovers each chosen choice under a theme whose chosen color is its primary, with transitions off,
+// and reads whether it is hovered, its color and the primary's: a chosen choice under the pointer
+// keeps the theme's chosen color (#1123).
+const chosenUnderPointer = async (/** @type {import("@playwright/test").Page} */ pg, /** @type {string[]} */ selectors) => {
+  const hoverTheme = await pg.evaluateHandle(() => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(":root { --tab-selected-color: var(--primary); } * { transition: none !important; }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    return sheet;
+  });
+  /** @type {{ hovered: boolean, color: string, primary: string }[]} */
+  const hoveredChoices = [];
+  try {
+    for (const chosen of selectors) {
+      const choice = pg.locator(chosen);
+      await choice.hover();
+      hoveredChoices.push(
+        await choice.evaluate((el) => {
+          const probe = document.createElement("span");
+          probe.style.color = "var(--primary)";
+          document.body.append(probe);
+          const out = { hovered: el.matches(":hover"), color: getComputedStyle(el).color, primary: getComputedStyle(probe).color };
+          probe.remove();
+          return out;
+        }),
+      );
+    }
+  } finally {
+    await pg.evaluate((sheet) => {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+    }, hoverTheme);
+    await hoverTheme.dispose();
+    await pg.mouse.move(0, 0);
+  }
+  return hoveredChoices;
 };
 /** @param {{ kit: string[], themed: string[], foreground: string, primary: string }} t */
 const tabTypeIsTheThemes = (t) =>
@@ -1265,6 +1303,17 @@ async function run(browser) {
     ["[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"true\"]", "[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"false\"]"],
   ]);
   check("Tabs and Segmented: each choice's weight and the chosen one's color are the theme's tab-font-weight and tab-selected-color", tabTypeIsTheThemes(tabsType), JSON.stringify(tabsType));
+  // The selected tab and the checked Segmented choice keep it under the pointer too: their chosen
+  // rules come after their hover rules at the same weight.
+  const hoveredTabs = await chosenUnderPointer(page, [
+    "[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"true\"]",
+    "[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"true\"]",
+  ]);
+  check(
+    "Tabs and Segmented: the chosen choice keeps the theme's chosen color under the pointer",
+    hoveredTabs.length === 2 && hoveredTabs.every((c) => c.hovered && c.color === c.primary),
+    JSON.stringify(hoveredTabs),
+  );
   await period("Week").click();
   check("a click chooses in place, and every part of the group follows", (await period("Week").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $12.10 this week.|Sold 3 this week.", await showing());
   check("the address follows the choice", new URL(page.url()).searchParams.get("period") === "week", page.url());
@@ -2793,36 +2842,7 @@ async function run(browser) {
   // Under the pointer the checked SegmentedRadio and the current SegmentedLinks link keep the
   // theme's chosen color: the radio's hover rule, which weighs more than its checked one, leaves a
   // checked choice alone, and the link's chosen rule comes after its hover rule.
-  const hoverTheme = await orders.evaluateHandle(() => {
-    const sheet = new CSSStyleSheet();
-    sheet.replaceSync(":root { --tab-selected-color: var(--primary); } * { transition: none !important; }");
-    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-    return sheet;
-  });
-  /** @type {{ hovered: boolean, color: string, primary: string }[]} */
-  const hoveredChoices = [];
-  try {
-    for (const chosen of ["[class*='segmented__track'] > label:has(> input:checked)", "nav[class*='segmented__links'] > a[aria-current='page']"]) {
-      const choice = orders.locator(chosen);
-      await choice.hover();
-      hoveredChoices.push(
-        await choice.evaluate((el) => {
-          const probe = document.createElement("span");
-          probe.style.color = "var(--primary)";
-          document.body.append(probe);
-          const out = { hovered: el.matches(":hover"), color: getComputedStyle(el).color, primary: getComputedStyle(probe).color };
-          probe.remove();
-          return out;
-        }),
-      );
-    }
-  } finally {
-    await orders.evaluate((sheet) => {
-      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
-    }, hoverTheme);
-    await hoverTheme.dispose();
-    await orders.mouse.move(0, 0);
-  }
+  const hoveredChoices = await chosenUnderPointer(orders, ["[class*='segmented__track'] > label:has(> input:checked)", "nav[class*='segmented__links'] > a[aria-current='page']"]);
   check(
     "SegmentedRadios and SegmentedLinks: the chosen choice keeps the theme's chosen color under the pointer",
     hoveredChoices.length === 2 && hoveredChoices.every((c) => c.hovered && c.color === c.primary),
