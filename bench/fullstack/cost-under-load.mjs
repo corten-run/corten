@@ -69,7 +69,8 @@ export function costs(rows) {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const rows = costs(JSON.parse(fs.readFileSync(process.argv[2], "utf8")));
   const n = (/** @type {number} */ x) => Math.round(x).toLocaleString("en-US");
-  const us = (/** @type {number} */ x) => x.toFixed(1);
+  // No "-0.0": a cost that rounds to zero is written 0.0.
+const us = (/** @type {number} */ x) => (Math.abs(x) < 0.05 ? 0 : x).toFixed(1);
   for (const r of rows.sort((a, b) => [a.target, a.encoding, a.phase, a.variant].join(" ").localeCompare([b.target, b.encoding, b.phase, b.variant].join(" ")))) {
     console.log([r.target, r.encoding, r.phase, r.variant, n(r.rate), `${n(r.rateRange[0])}-${n(r.rateRange[1])}`,
       r.variant === "as-is" ? "" : `${us(r.cost)} us (${us(r.costRange[0])} to ${us(r.costRange[1])}) ${(r.share * 100).toFixed(1)}%`].join("\t"));

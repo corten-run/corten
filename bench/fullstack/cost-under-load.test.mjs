@@ -11,10 +11,13 @@ const row = (/** @type {string} */ image, /** @type {number} */ round, /** @type
 const rows = [row("cbd-as-is", 1, 2000), row("cbd-no-x", 1, 2500), row("cbd-as-is", 2, 2500), row("cbd-no-x", 2, 3125),
   row("cbd-as-is", 1, 9999, { phase: "vus64" })];
 
-test("each phase is its own group, by build, target, encoding and round", () => {
-  const per = perCpuSecond(rows);
+test("each build, target, encoding and phase is its own group, by round", () => {
+  const per = perCpuSecond([...rows, row("cbd-as-is", 1, 7777, { target: "json" }), row("cbd-as-is", 1, 6666, { enc: "browser" })]);
   assert.deepEqual([...per.get("as-is\tpage\tidentity\tfixed300") ?? []], [[1, 2000], [2, 2500]]);
+  assert.deepEqual([...per.get("no-x\tpage\tidentity\tfixed300") ?? []], [[1, 2500], [2, 3125]]);
   assert.deepEqual([...per.get("as-is\tpage\tidentity\tvus64") ?? []], [[1, 9999]]);
+  assert.deepEqual([...per.get("as-is\tjson\tidentity\tfixed300") ?? []], [[1, 7777]]);
+  assert.deepEqual([...per.get("as-is\tpage\tbrowser\tfixed300") ?? []], [[1, 6666]]);
 });
 
 test("a default costs the CPU a request takes with it less without it, round by round, with the median and range", () => {
@@ -28,7 +31,8 @@ test("a default costs the CPU a request takes with it less without it, round by 
 test("a round with failed requests, an uncounted CPU or a missing as-is round stops it", () => {
   assert.throws(() => costs([row("cbd-as-is", 1, 2000, { failed: 3 })]), /3 failed requests/);
   assert.throws(() => costs([row("cbd-as-is", 1, 0, { perCpuSecond: null })]), /not counted/);
-  assert.throws(() => costs([row("cbd-as-is", 1, 2000), row("cbd-no-x", 2, 2500)]), /no run of round 1|round 2 has no as-is run/);
+  assert.throws(() => costs([row("cbd-as-is", 1, 2000), row("cbd-no-x", 1, 2500), row("cbd-no-x", 2, 2500)]), /round 2 has no as-is run/);
+  assert.throws(() => costs([row("cbd-as-is", 1, 2000), row("cbd-as-is", 2, 2000), row("cbd-no-x", 2, 2500)]), /no run of round 1/);
   assert.throws(() => costs([row("cbd-no-x", 1, 2500)]), /no as-is build/);
   // A variant measured at a phase the build as it is was not.
   assert.throws(() => costs([row("cbd-as-is", 1, 2000), row("cbd-no-x", 1, 2500, { phase: "vus64" })]), /no as-is build for page identity vus64/);

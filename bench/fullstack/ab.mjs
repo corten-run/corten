@@ -6,8 +6,9 @@
 // JSON too; the summary gives each image's median and range of CPU use and throughput, and of
 // requests per CPU-second in each phase, the app's CPU counted from its cgroup (cpu-time.mjs).
 // On a bench host BENCH_APP_CPUS and BENCH_FIXTURE_LOAD_CPUS (else BENCH_LOAD_CPUS) pin the app and
-// k6 as a round does for an app serving from memory (apps.mjs). A failed run stops with the rows so
-// far in summary.partial.json, leaving an earlier summary.json as it was.
+// k6 as a round does for an app serving from memory (apps.mjs). The rows so far are written to
+// summary.partial.json after each one, so a failed or killed run keeps them and leaves an earlier
+// summary.json as it was; a finished run writes summary.json and removes the partial file.
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -71,6 +72,7 @@ try {
           const perCpuSecond = cpuSeconds ? Math.round(requests / cpuSeconds) : null;
           const row = { round, image, target, enc: encName, phase, rps: Math.round(k6.metrics.http_reqs.rate), p50: +d["p(50)"].toFixed(2), p99: +d["p(99)"].toFixed(2), failed: k6.metrics.checks?.fails ?? 0, cpu, bytesPerResponse: Math.round(bytes), requests, cpuSeconds: cpuSeconds === null ? null : +cpuSeconds.toFixed(3), perCpuSecond };
           rows.push(row);
+          writeFileSync(join(dir, "summary.partial.json"), JSON.stringify(rows, null, 1));
           console.log(JSON.stringify(row));
         }
       }

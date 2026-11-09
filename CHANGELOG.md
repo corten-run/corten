@@ -2561,9 +2561,10 @@ Corten is pre-1.0, so any minor version may change the API.
     7.7% of its instructions under callgrind, measures 6 microseconds there, as do defaults with
     almost no instructions. `ab.mjs` now starts each round one image later, gives k6 the load CPUs
     a round gives an app serving from memory (`BENCH_FIXTURE_LOAD_CPUS`), never reads an earlier
-    run's file, and on a failed k6 run stops, removing the app and writing the rows so far to
-    `summary.partial.json`; `cost-under-load.sh` reuses a `cbd-*` image only when its label says it
-    was built from the same source, and writes `source.txt` beside the results
+    run's file, writes the rows so far to `summary.partial.json` after each one, and on a failed k6
+    run stops and removes the app; `cost-under-load.sh` reuses a `cbd-*` image only when its label
+    says it was built from the same source, and writes `source.txt` beside the results, which now
+    keep the droplet's script and CPU (`run.sh`, `host.txt`)
     ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
