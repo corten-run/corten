@@ -79,12 +79,16 @@ fn matched() -> bool {
     std::env::var("PROFILE").as_deref() == Ok("matched")
 }
 
-/// The rest of the matched tier's production profile, as axum-maud adds it: tower-http's layers,
-/// run by Topcoat's `TowerLayer` (its `tower` feature) as one layer around every request. The
-/// security headers on every answer, `Cache-Control: private, no-cache` on one that sets none (the
-/// assets keep their `public, immutable`), and a 503 past a 10 second deadline (card-market's).
-/// Topcoat already refuses a body over 2 MiB and compresses. Its runtime compiles the expressions it
-/// reads from the page's markup with `new Function`, so the CSP has `'unsafe-eval'`.
+/// The rest of the matched tier's production profile, as axum-maud adds it: tower-http's header
+/// layers and its timeout, run by Topcoat's `TowerLayer` (its `tower` feature) as one layer around
+/// every request. The security headers, `Cache-Control: private, no-cache` on an answer that sets
+/// none (the assets keep their `public, immutable`), and a 503 past a 10 second deadline
+/// (card-market's). An answer a handler or Topcoat returns as an `Error` (a JSON 404, a 405, a
+/// failed read's 500, the 403 and 413 below) goes without them: `TowerLayer` passes the error
+/// through and the router makes its answer after every layer. Topcoat's defaults already refuse a
+/// body over 2 MiB (413) and a cross-site form post (403, its origin policy), compress, and close a
+/// request head left unfinished at 30 s. Its runtime compiles the expressions it reads from the
+/// page's markup with `new Function`, so the CSP has `'unsafe-eval'`.
 fn profile_layer() -> impl Layer {
     let header =
         |name: HeaderName, value: &'static str| SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value));
