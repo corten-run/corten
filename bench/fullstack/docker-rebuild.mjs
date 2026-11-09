@@ -37,8 +37,9 @@ if (!Number.isInteger(runs) || runs < 1) throw new Error("runs is a whole number
 const apps = appsArg.split(",");
 for (const name of apps) if (!recipes[name]) throw new Error(`no build recipe for ${name}`);
 const minute = 60_000;
-// Every command ends well inside build.mjs's call limit (90 minutes), so a hang fails this
-// script's app, not the call: a build may take 20 minutes, anything else 10.
+// Each command ends well inside build.mjs's call limit (90 minutes), so a hang fails this
+// script's app, not the call: a build may take 20 minutes, anything else 10. An app's seven builds
+// together could still pass it at worst, which stops the call as any other.
 const run = (/** @type {string} */ cmd, /** @type {string[]} */ args, timeout = 10 * minute) =>
   spawnSync(cmd, args, { encoding: "utf8", maxBuffer: 256 * 2 ** 20, timeout });
 const must = (/** @type {string[]} */ args, timeout = 10 * minute) => {

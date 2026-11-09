@@ -1440,7 +1440,9 @@ three runs:
       if from clean too. The rest copy their dependency list first and install it in a layer of
       its own (npm, pip, `dotnet restore`, `go mod download`, Maven, Mix, Bundler and Composer;
       Drogon's builds Drogon in one), so a restored layer cache keeps their dependencies and only
-      the steps after the source's copy run again. Express's and FastAPI's have no `RUN` step after
+      the steps after the source's copy run again; Gin's keeps only its modules' downloads, since
+      with no cache mount for Go's build cache `go build` compiles them again, on a kept builder
+      too. Express's and FastAPI's have no `RUN` step after
       it, so this script, which fails a build after the edit that runs no `RUN` step, cannot time
       them.
     - rust-analyzer's own latency (`rust-analyzer.mjs`, `rust-analyzer.json`), for the Rust apps,
@@ -1467,10 +1469,11 @@ three runs:
     finished (`complete` is false until every measured step has run; Corten's diagnostics come
     after it). Each build call has a 90-minute limit and the step a 240-minute budget, counted
     afresh at each start as the unit's hours are (r16's step took 39.2 minutes, and its longest
-    call, Leptos's, 12.1; on a desktop that built about three times slower, roughly, the Docker
-    build took 25.4 minutes for Corten and 12.0 for axum + Maud, and rust-analyzer's ready and
-    probe times summed 0.5 to 3.7 minutes an app, its container's setup not counted, measured, so
-    less in a round, estimated); a stopped or crashed build skips
+    call, Leptos's, 12.1). The two added here were measured on a desktop that built about three
+    times slower, roughly, so a round should take less: the Docker build took 25.4 minutes for
+    Corten and 12.0 for axum + Maud, and rust-analyzer's ready and timed probes 0.5 to 3.7 minutes
+    an app with the experimental diagnostics on, as a round runs it (its container's setup and the
+    untimed requests not counted). A stopped or crashed build skips
     its app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
