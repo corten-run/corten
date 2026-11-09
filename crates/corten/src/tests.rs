@@ -5006,6 +5006,9 @@ mod bare_url {
     #[route("/boom", get = bare_boom, stages = bare)]
     pub struct Boom;
 
+    #[route("/shared-cookie", get = bare_shared_cookie, stages = bare)]
+    pub struct SharedCookie;
+
     #[route("/feeds/{name}.xml", get = bare_feed, stages = bare)]
     pub struct Feed<'a> {
         pub name: &'a str,
@@ -5061,6 +5064,16 @@ async fn bare_boom() -> &'static str {
     } else {
         "never"
     }
+}
+
+/// A cookie set on an answer that says a shared cache may keep it.
+async fn bare_shared_cookie() -> axum::response::Response {
+    axum::response::Response::builder()
+        .header("set-cookie", "id=fresh")
+        .header("cache-control", "public, max-age=60")
+        .header("cdn-cache-control", "max-age=600")
+        .body(Body::from("id"))
+        .unwrap()
 }
 
 /// A picture that can run script, as an uploaded SVG can.
@@ -5123,6 +5136,10 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(headers.get_all("x-content-type-options").iter().count(), 1);
     let (_, headers, _) = call_with(router.clone(), "GET", "/cookie", None, None).await;
     assert_eq!(headers["cache-control"], "private, no-cache");
+    // Whatever caching it says, a CDN's own header too.
+    let (_, headers, _) = call_with(router.clone(), "GET", "/shared-cookie", None, None).await;
+    assert_eq!(headers["cache-control"], "private, no-cache");
+    assert!(!headers.contains_key("cdn-cache-control"), "{headers:?}");
     // It says no type, which a browser could take as a document.
     assert_eq!(headers["content-security-policy"], "sandbox");
     // A type it cannot tell is one, a list a browser takes the last of, is sandboxed too.
@@ -5207,6 +5224,13 @@ fn a_type_that_runs_script_is_known() {
         "sandbox allow-same-origin allow-scripts",
     ] {
         assert!(!sandboxes(policy.as_bytes()), "{policy}");
+    }
+    let unshared = crate::route::__private::unshared;
+    for kept in ["private", "no-store", "Private, max-age=60", "no-cache, no-store"] {
+        assert!(unshared(kept.as_bytes()), "{kept}");
+    }
+    for shared in ["public, max-age=60", "no-cache", "max-age=0, s-maxage=60"] {
+        assert!(!unshared(shared.as_bytes()), "{shared}");
     }
 }
 

@@ -685,7 +685,7 @@ pub use corten_macros::UrlValue;
 /// handler's answer is sent as it made it, a raw [`axum::response::Response`] too, with
 /// `X-Content-Type-Options: nosniff` added when it has none and `Content-Security-Policy:
 /// sandbox` beside any policy of its own when it may be HTML, SVG or XML, a panic answered
-/// `500`, and every other route beside it keeps every stage. It answers `get` only, and its handler takes only the request's URL
+/// `500`, and every other route beside it keeps every stage. It answers `get` only, and its handler takes only the request's method and URL
 /// ([`crate::answer::Bare`]).
 ///
 /// ```
@@ -3898,13 +3898,14 @@ pub mod __private {
     /// browser enforces each: a file it sends (an uploaded picture) runs no script on the app's
     /// origin. A handler whose policy has a `sandbox` already (`sandbox allow-scripts`) gets none
     /// added, unless it also allows the same origin, which would run script as the app's. An
-    /// answer that sets a cookie and says nothing of its caching gets `Cache-Control: private,
-    /// no-cache`, as the stages give one, so no shared cache hands one visitor's cookie to
-    /// another. A handler that panics is logged and answered `500`, as a staged one is, rather
-    /// than dropping the connection. It is the answer's handler, not a stage, so it adds no box
-    /// and no step a request goes through.
+    /// answer that sets a cookie gets `Cache-Control: private,
+    /// no-cache` in place of any caching that would let a shared cache keep it (one that says
+    /// `private` or `no-store` keeps its own), as the stages give one, so no shared cache hands one
+    /// visitor's cookie to another. A handler that panics is logged with the route's path and
+    /// answered `500`, as a staged one is, rather than dropping the connection. It is the answer's
+    /// handler, not a stage, so it adds no box and no step a request goes through.
     #[derive(Clone)]
-    pub struct BareHandler<H>(H);
+    pub struct BareHandler<H>(H, &'static str);
 
     impl<H: Handler<T, S>, T, S> Handler<T, S> for BareHandler<H>
     where
@@ -3913,16 +3914,15 @@ pub mod __private {
         type Future = BareFuture<H::Future>;
 
         fn call(self, req: axum::extract::Request, state: S) -> Self::Future {
-            // For the log of a panic only: a URI clones without allocating.
-            let uri = req.uri().clone();
-            BareFuture { inner: self.0.call(req, state), uri }
+            BareFuture { inner: self.0.call(req, state), path: self.1 }
         }
     }
 
     /// A bare handler's future: its answer with [`bare_headers`], or a `500` when it panics.
     pub struct BareFuture<F> {
         inner: F,
-        uri: axum::http::Uri,
+        /// The route's path as written, for the log.
+        path: &'static str,
     }
 
     impl<F: std::future::Future<Output = axum::response::Response> + Unpin> std::future::Future for BareFuture<F> {
@@ -3935,7 +3935,7 @@ pub mod __private {
                 Ok(Poll::Ready(res)) => res,
                 Err(panic) => {
                     let message = crate::task::panic_message(&*panic);
-                    tracing::error!("corten: {} (stages = bare) panicked: {message}", self.uri.path());
+                    tracing::error!("corten: {} (stages = bare) panicked: {message}", self.path);
                     axum::response::IntoResponse::into_response((
                         axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                         "Internal Server Error",
@@ -3963,10 +3963,23 @@ pub mod __private {
         if document && !headers.get_all(header::CONTENT_SECURITY_POLICY).iter().any(|policy| sandboxes(policy.as_bytes())) {
             headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
         }
-        if headers.contains_key(header::SET_COOKIE) && !headers.contains_key(header::CACHE_CONTROL) {
+        if headers.contains_key(header::SET_COOKIE) && !headers.get(header::CACHE_CONTROL).is_some_and(|c| unshared(c.as_bytes()))
+        {
             headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache"));
+            // A CDN reads these before `Cache-Control`.
+            headers.remove("cdn-cache-control");
+            headers.remove("surrogate-control");
         }
         res
+    }
+
+    /// Whether a `Cache-Control` keeps a shared cache from storing the answer: `private` or
+    /// `no-store`, compared without case.
+    pub(crate) fn unshared(cache_control: &[u8]) -> bool {
+        cache_control.split(|&b| b == b',').any(|directive| {
+            let name = directive.split(|&b| b == b'=').next().unwrap_or_default().trim_ascii();
+            name.eq_ignore_ascii_case(b"private") || name.eq_ignore_ascii_case(b"no-store")
+        })
     }
 
     /// Whether a policy has a `sandbox` directive that keeps script off the app's origin: any but
@@ -3997,7 +4010,7 @@ pub mod __private {
 
     /// A bare route's `get`, its only method.
     #[inline]
-    pub fn bare_get<H, T, S, P, J>(handler: H) -> BareMethods<S>
+    pub fn bare_get<H, T, S, P, J>(handler: H, path: &'static str) -> BareMethods<S>
     where
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
         <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
@@ -4006,7 +4019,7 @@ pub mod __private {
         T: 'static,
         S: Clone + Send + Sync + 'static,
     {
-        BareMethods(Methods(axum::routing::get(BareHandler(handler.into_handler())), false, None))
+        BareMethods(Methods(axum::routing::get(BareHandler(handler.into_handler(), path)), false, None))
     }
 
     /// A handler's rows (`Self`, [`crate::answer::Answer::Rows`]) are the ones its route names

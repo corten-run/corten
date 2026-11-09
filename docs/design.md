@@ -990,8 +990,8 @@ rules something out.
     added in its handler's own future, not by a stage: a browser takes it only as the type it
     says, a page of the app's cannot load it as a script (`script-src 'self'` trusts every URL of
     the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
-    client that reads it as its type sees nothing else change; one that sets a cookie and says
-    nothing of caching gets `Cache-Control: private, no-cache`, so no shared cache hands one
+    client that reads it as its type sees nothing else change; one that sets a cookie gets
+    `Cache-Control: private, no-cache` unless it says `private` or `no-store`, so no shared cache hands one
     visitor's cookie to another; a panic is logged and answered `500` in the same future. It gets
     no host check, so it is
     data anyone anywhere may read. It answers `get` alone and its handler reads no body: no
@@ -1031,14 +1031,14 @@ rules something out.
     be in the request outside the area); measured (callgrind, release, the same JSON handler
     answering `Media`, a request counted as the run of 1,200 less the run of 200 over 1,000, five
     runs each, this change's request path as committed, the staged variants alternating with main
-    `c65c10ec`, median and range: with jemalloc a bare route 8,304 (8,303 to 8,304) instructions
+    `c65c10ec`, median and range: with jemalloc a bare route 8,242 (8,240 to 8,243) instructions
     a request with its headers and panic catch, 7,398 (7,397 to 7,400) before either, the same
     handler through the stages 21,318 (21,304 to 21,321; main 21,310, 21,301 to 21,316), a
-    staged route beside a bare one 21,327 (21,321 to 21,337), and a plain axum router 7,640; an
+    staged route beside a bare one 21,319 (21,316 to 21,330), and a plain axum router 7,640; an
     API request 15,813 against main's 15,813 and a 404 19,986 against 19,985; with glibc's
-    allocator a bare route 9,294 (9,294 to 9,295), the same handler through the stages 23,795
-    (23,773 to 23,854; main 23,733, 23,719 to 23,811), beside a bare one 23,888 (23,828 to
-    23,999), a plain axum router 8,716, an API request 17,643 (17,604 to 17,873) against main's
+    allocator a bare route 9,304 (9,304 to 9,306), the same handler through the stages 23,795
+    (23,773 to 23,854; main 23,733, 23,719 to 23,811), beside a bare one 24,013 (23,875 to
+    24,134), a plain axum router 8,716, an API request 17,643 (17,604 to 17,873) against main's
     17,559 (17,559 to 17,839), and a 404 21,680 (21,650 to 21,919) against 21,640 (21,579 to
     22,332)); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none

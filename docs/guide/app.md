@@ -932,7 +932,7 @@ let app = App::new(url::router());
 The route says it where it is declared, so a reader of the routes module sees which routes skip
 the stages. What the compiler can check, it does:
 
-1. The handler takes only the request's URL (`Params`, `Method`, `Uri`) and the module's
+1. The handler takes only the request's method and URL (`Params`, `Method`, `Uri`) and the module's
    `State`
    (`corten::answer::Bare`). `Req`, `Signal`, `Nonce`, `Caller` and `ClientIp` read what a stage
    gives; `HeaderMap` and the whole `Request` read the visitor's cookies and credentials, which no
@@ -954,7 +954,9 @@ the stages. What the compiler can check, it does:
 5. It is not a page: `Req::serves` does not send a visitor there after sign-in, and a link to it
    is never prefetched (it does not say `prefetch = ..`). A link a visitor follows to it takes
    `download` or `data-reload`, as one to a `Media` does: without them the runtime fetches it as a
-   page, finds it is not one, and loads it again, so the handler runs twice.
+   page, finds it is not one, and loads it again, so the handler runs twice. A link says only
+   whether a hover may fetch it, not that it is not a page, so Corten cannot add `data-reload`
+   for it, as it cannot for a link to any route that answers data.
 
 What it gives up is the app's to weigh: a bare route answers a DNS-rebound page and can be
 framed, so it is for answers anyone anywhere may read:
@@ -980,7 +982,9 @@ origin of its own, never the app's. One that allows both `allow-scripts` and `al
 runs it as the app's, so it gets the plain `sandbox` too. Its
 answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
 own rules ([Caching](#caching) describes the stages' rules, which it does not meet), except that
-one that sets a cookie and says nothing of caching gets `Cache-Control: private, no-cache`.
+one that sets a cookie gets `Cache-Control: private, no-cache` unless it says `private` or
+`no-store` itself, in place of any other caching it says and of a CDN's own `CDN-Cache-Control`
+and `Surrogate-Control`, so no shared cache hands one visitor's cookie to another.
 A request for a method the route has no handler for gets the router's plain 405, and one whose
 segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) its plain 404, not the
 app's error page; any other unknown URL is still the app's 404, inside its stages.
@@ -990,9 +994,9 @@ which lets a bare route's request run for the longer of the shutdown grace and t
 deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(median of five runs, range in parentheses): 8,304 (8,303-8,304) instructions a request bare
+(median of five runs, range in parentheses): 8,242 (8,240-8,243) instructions a request bare
 against 21,318 (21,304-21,321) through the stages with jemalloc (a plain axum router: 7,640),
-and 9,294 (9,294-9,295) against 23,795 (23,773-23,854) with glibc's allocator (axum: 8,716).
+and 9,304 (9,304-9,306) against 23,795 (23,773-23,854) with glibc's allocator (axum: 8,716).
 An app with no bare route costs what it did before.
 
 ## Static files
