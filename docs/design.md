@@ -984,12 +984,15 @@ rules something out.
     still one. It is for an answer that must cost what the router alone costs and that anyone may
     read (a public JSON figure a CDN fronts), beside
     pages that need every stage; the stages add about twice what its handler and the router cost
-    together (below). No stage gives its answer a CSP or `nosniff`, so it is data, not a document
-    built from the request (`Media`, the answer type for a file, sets `nosniff` and
-    `Content-Security-Policy: sandbox` itself on a type that runs script, as `NoStore` sets its
-    own header), and no host check, so it is data anyone anywhere may read. Its handler reads no body:
-    a form posted as `multipart/form-data` needs no preflight, so with no same-origin check any
-    site could make its visitors post one there, and no deadline would end a slow one. A bare route
+    together (below). Its answer gets `X-Content-Type-Options: nosniff` when it has none, and
+    `Content-Security-Policy: sandbox` when it is HTML, SVG or XML with no policy of its own, both
+    added in its handler's own future, not by a stage: a browser takes it only as the type it
+    says, a page of the app's cannot load it as a script (`script-src 'self'` trusts every URL of
+    the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
+    client that reads it as its type sees nothing else change. It gets no host check, so it is
+    data anyone anywhere may read. It answers `get` alone and its handler reads no body: no
+    same-origin check covers it, a form posted to it needs no preflight, so any site could make
+    its visitors send one, and no deadline would end a slow body. A bare route
     whose path can answer at one of Corten's own paths does not compile where the path alone
     shows it, and one that can answer under an area's or API's prefix, or under a path the app
     adds, is refused when the app starts. Not chosen: an app's own tower layer that
@@ -1004,17 +1007,16 @@ rules something out.
     on a branch not merged: about 200 to 360 instructions fewer a request with glibc's allocator,
     but about 200 to 263 more with jemalloc, which the images preload; nor refusing an answer
     type that sends HTML, since a raw `Response`, which a bare route exists to allow, carries any
-    content type, so the rule is the guide's and the handler's; nor a stage-like step adding
-    `nosniff` and `Content-Security-Policy: sandbox` to every bare answer that has neither, or
-    keeping the host check alone: what a bare route promises is that its answer is the one its
-    handler made, the raw answer an app takes it for, and a header added after the handler breaks
-    that for every bare route to guard against a raw `Response` that sends a document, while
-    Corten's own answer types send text with its type (`&'static str`, `String`) or set the
-    headers themselves (`Media`). The reason is that, not their cost, which was not measured (a
-    header lookup and two inserts, or one header compared; estimated at about 200 instructions
-    from the header inserts in the bare request's glibc profile, under 3% of it). A handler that
-    builds a raw `Response` sets the headers itself, and data only this machine or its network
-    may see is not for a bare route.
+    content type, and the sandbox keeps such a document from running script; nor sending the
+    answer with no header added, as this Choice first had it, which left a `text/plain` echo of
+    the URL loadable as a script by the app's own pages and an uploaded SVG running script on its
+    origin: correctness comes before the cost (below); nor `Media` setting the headers itself,
+    measured on an API request answering `Media` at 524 instructions more with `nosniff` on every
+    type and 106 more checking its type alone, paid on every route for what only a bare one
+    needs; nor writes or body readers on a bare route, which no app has asked for and which
+    no same-origin check or deadline would cover; nor keeping the host check alone, a second kind
+    of bare route that, for an answer anyone may read, keeps out only readers who may read it
+    anyway. Data only this machine or its network may see is not for a bare route.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -1022,18 +1024,18 @@ rules something out.
     outside that area 19,909 to 19,913 against 19,706; an app whose areas and APIs have none runs
     Corten's own code within 18 instructions of before, while its whole request rose from 19,696
     to 19,976 to 19,988 in the allocator with the same allocations, so the same layout effect may
-    be in the request outside the area); measured (callgrind, release, the same JSON handler,
-    this change at `d0fad8a0`, five runs each alternating with main `c65c10ec`, median and range:
-    with jemalloc a bare route
-    7,398 (7,397 to 7,400) instructions a request, the same handler through the stages 21,302
-    (21,301 to 21,310), a staged route beside a bare one 21,328 (21,315 to 21,333), and a plain
-    axum router 7,640, whose route parses a longer path and builds its answer from a header
-    tuple, about 140 instructions of the difference and the rest in the allocator; an app with no
-    bare route within 2 of main on an API request, the staged handler and a 404; with glibc's
-    allocator a bare route 8,392 (8,392 to 8,393), the same handler through the stages 23,788
-    (23,769 to 23,796; main 23,727 to 23,853), beside a bare one 23,915 (23,844 to 23,986), a
-    plain axum router 8,716, an API request 17,603 to 17,872 against main's 17,598 to 17,839, and
-    a 404 21,646 to 21,728 against 21,640 to 22,333); reasoned (one place for the app's steps is
+    be in the request outside the area); measured (callgrind, release, the same JSON handler
+    answering `Media`, a request counted as the run of 1,200 less the run of 200 over 1,000, five
+    runs each, this change's request path as committed, the staged variants alternating with main
+    `c65c10ec`, median and range: with jemalloc a bare route 7,992 (7,992 to 7,993) instructions
+    a request with its `nosniff` and type check, 7,398 (7,397 to 7,400) before they were added,
+    the same handler through the stages 21,311 (21,304 to 21,320; main 21,308, 21,300 to 21,316),
+    a staged route beside a bare one 21,320 (21,319 to 21,335), and a plain axum router 7,640;
+    an API request 15,812 against main's 15,813 and a 404 19,986 against 19,984; with glibc's
+    allocator a bare route 8,984 (8,984 to 8,985), the same handler through the stages 23,783
+    (23,762 to 23,866; main 23,854, 23,729 to 23,908), beside a bare one 23,878 (23,835 to
+    24,129), a plain axum router 8,716 (8,720 in this build), an API request 17,842 (17,616 to
+    17,880) against main's 17,799 (17,599 to 17,839), and a 404 21,682 against 21,685); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
     of it says so where it is declared); bet (apps have an answer anyone may read whose cost the
     stages would about triple, beside pages that need them all; no example or template uses
@@ -1043,7 +1045,7 @@ rules something out.
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
     layer around the app cannot serve it; or a route needs some stages and not others, which
-    `stages = bare` cannot give (the host check or `nosniff` on a bare route among them); or no
+    `stages = bare` cannot give (the host check, a write or a body on a bare route among them); or no
     app uses `stages = bare` by the next minor release; or a bare route costs more than about
     10% over a plain axum router's; or a request outside every area costs more than twice
     the about 200 instructions measured here over the build before area middleware (the lookup
@@ -1054,9 +1056,10 @@ rules something out.
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
-    own); 2026-11-08, the `stages = bare` runs against `c65c10ec` (the bench binary was not
-    committed, so the next check writes its own: the same JSON handler answered in process by an
-    `App` with it bare, by the same `App` with it staged, and by a plain axum `Router`).
+    own); 2026-11-09, the `stages = bare` runs on this change against main `c65c10ec` (the bench
+    binary was not committed, so the next check writes its own: the same JSON handler answered in
+    process by an `App` with it bare, by the same `App` with it staged, and by a plain axum
+    `Router`).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
@@ -1312,9 +1315,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     request before every stage is a tower layer around the whole app (`.layer(l)`), and there is
     no step for one route, whose needs are its handler's arguments and return type. A route
     takes every stage or, with `stages = bare`, none: no host or same-origin check, deadline,
-    panic catch, error page, security headers or cache rule, which its handler gives itself if it
-    needs them; a wrong method or a missing suffix at its path is the router's plain 405 or 404,
-    and a panic there goes to Rust's panic hook, not the app's log.
+    panic catch, error page, security headers but `nosniff` (and `sandbox` on a document), or
+    cache rule, which its handler gives itself if it needs them; it answers reads only; a wrong
+    method or a missing suffix at its path is the router's plain 405 or 404, and a panic there
+    goes to Rust's panic hook, not the app's log.
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the

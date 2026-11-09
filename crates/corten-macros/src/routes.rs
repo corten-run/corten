@@ -834,6 +834,11 @@ fn scan(
                         if serves.handlers.is_empty() {
                             return err(at, format!("stages = bare says how {name}'s handlers are served, and it has none: #[route(\"{path}\", get = .., stages = bare)]"));
                         }
+                        // It reads only its URL, and no same-origin check covers it: it answers a
+                        // read (`get`, which `HEAD` takes too), never another site's write.
+                        if let Some((method, _)) = serves.handlers.iter().find(|(m, _)| m.to_string() != "get") {
+                            return err(method.span(), format!("stages = bare serves {name} with no same-origin check, so it answers reads only: give it get = .. alone, and serve {method} on a route with stages"));
+                        }
                         // What the path alone says: a parameter or catch-all as the first segment
                         // can stand at Corten's own `/corten/` (and every prefix), and `/corten/..`,
                         // `/health/live`, `/health/ready` and `/health/{..}` are Corten's; the paths
@@ -1192,6 +1197,13 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 return err(method.span(), format!("no_store({method}) names a method this route has no handler for: #[route(\"{path}\", {method} = .., no_store({method}))]"));
             }
         }
+    }
+    // A bare route is not a page, so a link to it is not fetched ahead of a click.
+    if serves.bare.is_some() {
+        if let Some(at) = serves.prefetch_at {
+            return err(at, format!("stages = bare serves \"{path}\" as data, not a page, and a link to it is never prefetched: leave prefetch out"));
+        }
+        keep.extend(q(", prefetch = false", &[]));
     }
     let mut cut_args = Group::new(Delimiter::Parenthesis, stream(std::iter::once(TokenTree::Literal(lit.clone())).chain(keep)));
     cut_args.set_span(attr.span());

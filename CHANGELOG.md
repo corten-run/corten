@@ -7,21 +7,18 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Added
 
 - `stages = bare` on a `#[route(..)]` serves that route outside every stage, beside routes that
-  keep them all: its handler's answer, a raw `Response` too, is sent as it made it. The handler
-  takes only the request's URL (`corten::answer::Bare`); a bare
-  route in a `caller = ..`, area or API module, or with `no_store`, `rows` or `gives(..)`, does
-  not compile, nor does one whose path can answer at a path of Corten's own (a first segment that
-  is a parameter, `/corten/..`, `/health/live`, `/health/ready`, `/health/{..}`); one under an
-  area's or API's prefix, at or with a parameter under another path Corten serves (the assets,
-  the PWA's files, an API's or area's companions), is refused at startup. Its answer gets no host check, CSP or
-  `nosniff`, so it is for data anyone anywhere may read, not a document built from the request.
-  Measured with callgrind: 7,398 (7,397-7,400) instructions a request against 21,302
-  (21,301-21,310) through the stages (jemalloc; a plain axum router 7,640).
-
-- `Media` of a type that runs script (HTML, SVG, any XML) sets `X-Content-Type-Options: nosniff`
-  and `Content-Security-Policy: sandbox` itself, so a file it sends cannot run script on a route
-  that says `stages = bare`; on a route with stages the app's policy still replaces the sandbox
-  (with `Policy::report_only`, the sandbox is enforced beside the reported policy).
+  keep them all: its handler's answer, a raw `Response` too, is sent as it made it, with
+  `X-Content-Type-Options: nosniff` added when it has none, and `Content-Security-Policy:
+  sandbox` when it is HTML, SVG or XML with no policy of its own. It answers `get` only, its
+  handler takes only the request's URL (`corten::answer::Bare`), and a link to it is never
+  prefetched; a bare route with another method or `prefetch = ..`, in a `caller = ..`, area or
+  API module, or with `no_store`, `rows` or `gives(..)`, does not compile, nor does one whose
+  path can answer at a path of Corten's own (a first segment that is a parameter, `/corten/..`,
+  `/health/live`, `/health/ready`, `/health/{..}`); one under an area's or API's prefix, at or
+  with a parameter under another path Corten serves (the assets, the PWA's files, an API's or
+  area's companions), is refused at startup. Its answer gets no host check, so it is for data
+  anyone anywhere may read. Measured with callgrind: 7,992 (7,992-7,993) instructions a request
+  against 21,311 (21,304-21,320) through the stages (jemalloc; a plain axum router 7,640).
 
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent

@@ -1129,7 +1129,7 @@ mod tests {
     fn a_bare_route_at_the_metadata_s_path_is_refused_at_startup() {
         #[crate::routes]
         mod at_metadata {
-            #[route("/.well-known/oauth-protected-resource/mcp", post = bare_metadata, stages = bare)]
+            #[route("/.well-known/oauth-protected-resource/mcp", get = bare_metadata, stages = bare)]
             pub struct Metadata;
         }
         let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example");

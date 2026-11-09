@@ -899,8 +899,10 @@ figure behind a CDN) says `stages = bare` in its routes
 module; the probes a load balancer sends are Corten's own `/health/live` and `/health/ready`.
 It meets none of the stages above: no host or same-origin check, no signal,
 deadline or panic catch, no middleware, no error page, security headers, `Cache-Control`, tag or
-compression. Its handler's answer is sent as it made it, a raw `Response` too, and every other
-route keeps every stage, so the fast route and a page that needs all of them sit side by side:
+compression. Its handler's answer is sent as it made it, a raw `Response` too, with
+`X-Content-Type-Options: nosniff` added when it has none (and `Content-Security-Policy: sandbox`
+on a document, below), and every other route keeps every stage, so the fast route and a page
+that needs all of them sit side by side:
 
 ```rust
 use corten::{axum::response::Response, prelude::*};
@@ -934,10 +936,11 @@ the stages. What the compiler can check, it does:
    (`corten::answer::Bare`). `Req`, `Signal`, `Nonce`, `Caller` and `ClientIp` read what a stage
    gives; `HeaderMap` and the whole `Request` read the visitor's cookies and credentials, which no
    stage would keep a shared cache from storing; and `Form`, `Json`, `Bytes`, `String` and
-   `Upload` read the body, which no deadline there bounds and no same-origin check keeps another
-   site from posting (a form posted as `multipart/form-data` needs no preflight). None compiles
-   there.
-2. A routes module with `caller = ..` cannot have one, since every route there takes the caller.
+   `Upload` read the body, which no deadline there bounds. None compiles there.
+2. It answers reads only: `get` (which `HEAD` takes too), never `post` or another method, since
+   no same-origin check keeps another site from sending it a write (a form posted to it needs no
+   preflight).
+3. A routes module with `caller = ..` cannot have one, since every route there takes the caller.
    Nor can an area's or API's module, whose deadline, policy and middleware cover every request
    at its prefix. Nor can a route whose path can answer at a path not its own, as far as the
    path shows: a first segment that is a parameter or a catch-all (`/{section}/ping`, `/{*rest}`,
@@ -945,25 +948,27 @@ the stages. What the compiler can check, it does:
    `/health` (`/health/{check}`). When it starts, the app refuses the rest: a bare route under an
    area's or API's prefix, or one whose parameter stands under a path the app adds (its assets,
    an API's or area's companion routes).
-3. `no_store`, `rows` and `gives(..)` are applied by stages, so a bare route does not say them; a
+4. `no_store`, `rows` and `gives(..)` are applied by stages, so a bare route does not say them; a
    bare handler that must not be kept returns `NoStore<..>` itself.
-4. It is not a page: `Req::serves` does not send a visitor there after sign-in.
+5. It is not a page: `Req::serves` does not send a visitor there after sign-in, and a link to it
+   is never prefetched (it does not say `prefetch = ..`).
 
-What it gives up is the app's to weigh: a bare route answers a DNS-rebound page and another
-site's write, and it can be framed or sniffed, so it is for answers anyone anywhere may read:
+What it gives up is the app's to weigh: a bare route answers a DNS-rebound page and can be
+framed, so it is for answers anyone anywhere may read:
 not a figure only this machine or its network should see, which a page on another site can read
 through a name it points at this machine. A handler
 that panics drops the connection rather than answering 500, its panic goes to Rust's panic hook
 (standard error) rather than the app's log, and nothing ends it at a deadline; a 5xx it answers is
 logged only when it is a `corten::Error`, which logs itself.
-No stage gives its answer a CSP, `nosniff` or `frame-ancestors`, so a document it builds from
-what the request says (HTML, SVG, or text a browser sniffs as HTML) runs as script on the app's
-origin, where it can read every other page with the visitor's cookies. A bare answer is data
-(text, JSON, a file) with its `Content-Type` set, as `&'static str` and `String` set it and a
-raw `Response` does not until the handler says (a body without one is sniffed). `Media` of a
-type that runs script (HTML, SVG, any XML) sets `nosniff` and `Content-Security-Policy: sandbox`
-itself, so an uploaded picture it sends cannot run there; a handler that must send another
-document sets those headers on it itself. Its
+No stage gives its answer a CSP or `frame-ancestors`, so a document it builds from what the
+request says (HTML, SVG) runs as script on the app's origin, where it can read every other page
+with the visitor's cookies. A bare answer is data (text, JSON, a file) with its `Content-Type`
+set, as `&'static str` and `String` set it and a raw `Response` does not until the handler says;
+`nosniff` keeps a browser from taking it as another type, a page of the app's from loading it
+as a script, and one without a type from being read as HTML. An answer of a type that runs
+script (HTML, SVG, any XML) with no policy of its own gets `Content-Security-Policy: sandbox`, so
+an uploaded picture a `Media` sends cannot run there; a handler that means a document to run
+script sets a policy of its own on it. Its
 answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
 own rules, `Set-Cookie` or not ([Caching](#caching) describes the stages' rules, which it does
 not meet).
@@ -976,9 +981,9 @@ which lets a bare route's request run for the longer of the shutdown grace and t
 deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(median of five runs, range in parentheses): 7,398 (7,397-7,400) instructions a request bare
-against 21,302 (21,301-21,310) through the stages with jemalloc (a plain axum router: 7,640),
-and 8,392 (8,392-8,393) against 23,788 (23,769-23,796) with glibc's allocator (axum: 8,716).
+(median of five runs, range in parentheses): 7,992 (7,992-7,993) instructions a request bare
+against 21,311 (21,304-21,320) through the stages with jemalloc (a plain axum router: 7,640),
+and 8,984 (8,984-8,985) against 23,783 (23,762-23,866) with glibc's allocator (axum: 8,716).
 An app with no bare route costs what it did before.
 
 ## Static files

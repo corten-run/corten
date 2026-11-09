@@ -4975,7 +4975,7 @@ mod bare_url {
     #[route("/ping", get = bare_ping, stages = bare)]
     pub struct Ping;
 
-    #[route("/raw/{id}", get = bare_raw, post = bare_raw_post, stages = bare)]
+    #[route("/raw/{id}", get = bare_raw, stages = bare)]
     pub struct Raw {
         pub id: u32,
     }
@@ -4993,6 +4993,11 @@ mod bare_url {
 
     #[route("/picture", get = bare_picture, stages = bare)]
     pub struct Picture;
+
+    #[route("/feeds/{name}.xml", get = bare_feed, stages = bare)]
+    pub struct Feed<'a> {
+        pub name: &'a str,
+    }
 }
 
 async fn bare_ping() -> &'static str {
@@ -5008,8 +5013,8 @@ async fn bare_raw(at: crate::Params<bare_url::Raw>, method: axum::http::Method) 
         .unwrap()
 }
 
-async fn bare_raw_post(_: crate::Params<bare_url::Raw>) -> &'static str {
-    "took"
+async fn bare_feed(feed: crate::Params<bare_url::Feed<'_>>) -> String {
+    format!("feed {}", feed.name)
 }
 
 /// The rest of what a bare handler may take: the request's `Uri`, the app's state, and an
@@ -5038,25 +5043,27 @@ async fn bare_serves(req: Req) -> String {
     format!("{} {}", serves("/ping"), serves("/page"))
 }
 
-/// `stages = bare` sends the handler's answer as it made it: no host check, no same-origin check,
-/// no security headers, `Cache-Control`, error page or tag. The route beside it, and an unknown
-/// URL, still go through every stage.
+/// `stages = bare` sends the handler's answer as it made it, with `nosniff` added when it has
+/// none: no host check, no CSP or other security headers, `Cache-Control`, error page or tag. It
+/// answers reads only. The route beside it, and an unknown URL, still go through every stage.
 #[tokio::test]
 async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     let router = App::new(bare_url::router()).error_page(test_error_page, ()).router();
     let (status, headers, body) = call_with(router.clone(), "GET", "/ping", None, Some("text/html")).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
-    for name in ["content-security-policy", "x-content-type-options", "cache-control", "etag", "referrer-policy"] {
+    for name in ["content-security-policy", "cache-control", "etag", "referrer-policy", "x-frame-options"] {
         assert!(!headers.contains_key(name), "a bare route has no {name}: {headers:?}");
     }
+    assert_eq!(headers["x-content-type-options"], "nosniff", "no page of the app's can load it as a script");
     // A `get` answers `HEAD` too, with no body, as axum's own routes do.
     let (status, _, body) = call_with_any(router.clone(), "HEAD", "/ping", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, ""));
     let (status, headers, body) = call_with(router.clone(), "GET", "/raw/7", None, None).await;
     assert_eq!((status, body.as_str()), (StatusCode::IM_A_TEAPOT, "raw"), "a 4xx is sent as it is, not as the error page");
     assert_eq!(headers.get("x-raw").unwrap(), "GET 7");
-    assert!(!headers.contains_key("cache-control"));
-    // Another site's write and another host's request reach it: it has no stage to refuse them.
+    assert!(!headers.contains_key("cache-control") && headers["x-content-type-options"] == "nosniff", "{headers:?}");
+    // It answers no write, so another site's is the router's plain 405; another host's read
+    // reaches it, with no stage to refuse it.
     let (status, _, body) = call_with_any(
         router.clone(),
         "POST",
@@ -5064,7 +5071,7 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
         &[("origin", "https://attacker.example"), ("sec-fetch-site", "cross-site")],
     )
     .await;
-    assert_eq!((status, body.as_str()), (StatusCode::OK, "took"));
+    assert_eq!((status, body.as_str()), (StatusCode::METHOD_NOT_ALLOWED, ""));
     let (status, body) = for_host(&router, "/ping", "rebound.attacker.example:3917", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
     let (status, _, body) = call_with(router.clone(), "GET", "/where/7?x=1", None, None).await;
@@ -5081,6 +5088,12 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     // A method it has no handler for is the router's plain 405, not the error page.
     let (status, headers, body) = call_with(router.clone(), "PUT", "/ping", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert!(!headers.contains_key("content-security-policy") && !body.contains("<html"), "{headers:?} {body}");
+    // A segment without the route's suffix is the router's plain 404, not the error page.
+    let (status, _, body) = call_with(router.clone(), "GET", "/feeds/new.xml", None, None).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "feed new"));
+    let (status, headers, body) = call_with(router.clone(), "GET", "/feeds/new", None, Some("text/html")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(!headers.contains_key("content-security-policy") && !body.contains("<html"), "{headers:?} {body}");
 
     let (status, headers, _) = call_with(router.clone(), "GET", "/page", None, Some("text/html")).await;
@@ -5112,8 +5125,20 @@ async fn the_stages_hold_beside_a_bare_route() {
     let cross = [("origin", "https://attacker.example"), ("sec-fetch-site", "cross-site")];
     let (status, _, _) = call_with_any(router.clone(), "POST", "/page", &cross).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "the staged route beside it still refuses another site's write");
-    let (status, _, body) = call_with_any(router, "POST", "/raw/7", &cross).await;
-    assert_eq!((status, body.as_str()), (StatusCode::OK, "took"), "the bare one has no check");
+    let (status, _, _) = call_with_any(router, "POST", "/raw/7", &cross).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "the bare one answers no write");
+}
+
+/// The types a bare answer is sandboxed for, whatever their case and parameters.
+#[test]
+fn a_type_that_runs_script_is_known() {
+    let runs = crate::route::__private::runs_script;
+    for script in ["text/html", "text/html; charset=utf-8", "Image/SVG+XML", "application/xhtml+xml", "application/xml"] {
+        assert!(runs(script.as_bytes()), "{script}");
+    }
+    for data in ["application/json", "image/png", "text/csv", "text/plain", "+xml", "application/xmlish"] {
+        assert!(!runs(data.as_bytes()), "{data}");
+    }
 }
 
 /// A tower layer around the whole app still goes around a bare route.
@@ -5213,14 +5238,14 @@ async fn bare_beside_api_any(_: crate::Params<bare_beside_api::Any<'_>>) -> &'st
     "any"
 }
 
-/// Nor at a path of Corten's own the app adds (the PWA's manifest), even with a method Corten's
-/// route there does not have, which would otherwise join it outside the stages.
+/// Nor at a path of Corten's own the app adds (the PWA's manifest), which would otherwise answer
+/// there outside the stages.
 #[test]
 #[should_panic(expected = "says stages = bare and can answer at \"/manifest.webmanifest\"")]
 fn a_bare_route_at_a_path_of_corten_s_own_is_refused_at_startup() {
     #[crate::routes]
     mod at_manifest {
-        #[route("/manifest.webmanifest", post = bare_ping, stages = bare)]
+        #[route("/manifest.webmanifest", get = bare_ping, stages = bare)]
         pub struct Manifest;
     }
     let _ = App::new(at_manifest::router()).pwa(crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A"))).router();

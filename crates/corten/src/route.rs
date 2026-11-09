@@ -682,12 +682,11 @@ pub use corten_macros::UrlValue;
 /// figure a CDN fronts), says `stages = bare`: it meets none of the app's stages
 /// ([`crate::middleware`]), so no host or same-origin check, no signal, deadline or panic catch,
 /// no middleware, no error page, security headers, `Cache-Control`, tag or compression. Its
-/// handler's answer is sent as it made it, a raw [`axum::response::Response`] too, and every other
-/// route beside it keeps every stage. Its handler takes only the request's URL
-/// ([`crate::answer::Bare`]). No stage gives its answer a CSP or `nosniff`, so a document built
-/// from what the request says (HTML, SVG) would run as script on the app's origin: a bare answer
-/// is data, [`crate::Media`] sets those headers on a type that runs script, and a handler that
-/// sends another document sets them itself.
+/// handler's answer is sent as it made it, a raw [`axum::response::Response`] too, with
+/// `X-Content-Type-Options: nosniff` added when it has none and `Content-Security-Policy:
+/// sandbox` when it is HTML, SVG or XML with no policy of its own, and every other route beside
+/// it keeps every stage. It answers `get` only, and its handler takes only the request's URL
+/// ([`crate::answer::Bare`]).
 ///
 /// ```
 /// use corten::prelude::*;
@@ -751,12 +750,42 @@ pub use corten_macros::UrlValue;
 /// ```compile_fail,E0277
 /// #[corten::routes]
 /// mod url {
-///     #[route("/ping", post = ping, stages = bare)]
+///     #[route("/ping", get = ping, stages = bare)]
 ///     pub struct Ping;
 /// }
 ///
 /// async fn ping(_: corten::axum::body::Bytes) -> &'static str {
 ///     "took"
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// It answers reads only (`get`, which `HEAD` takes too), since no same-origin check keeps
+/// another site from sending it a write, and a link to it is never prefetched, since it is not a
+/// page:
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, post = ping, stages = bare)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, prefetch = false, stages = bare)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
 /// }
 /// # fn main() { let _ = url::router(); }
 /// ```
@@ -3818,7 +3847,8 @@ pub mod __private {
 
     // A route that says `stages = bare`: no stage runs, so the handler takes only what the request
     // itself carries (`crate::answer::Bare`), and what it answers is sent as it is, a raw
-    // `Response` too. Its route's `Params` (`P`) is still required, as on any route.
+    // `Response` too, with one header added when it has none: `nosniff` (`NoSniff`). Its route's
+    // `Params` (`P`) is still required, as on any route.
 
     /// A bare route's handlers: only `Routes::__bare_route` takes them, so a handler checked for
     /// its arguments alone cannot reach `Area::route` or `Api::route`, which take `Methods`.
@@ -3836,6 +3866,48 @@ pub mod __private {
         }
     }
 
+    /// A bare handler whose answer gets `X-Content-Type-Options: nosniff` when it has none, so a
+    /// browser takes it only as the type it says: a page of the app's cannot load it as a script
+    /// (`script-src 'self'` trusts every URL of the app's), nor a browser sniff it as HTML. One of
+    /// a type a browser runs script in (HTML, SVG, any XML) with no policy of its own gets
+    /// `Content-Security-Policy: sandbox`, so a file it sends (an uploaded picture) runs no
+    /// script on the app's origin. It is the answer's handler, not a stage, so it adds no box and
+    /// no step a request goes through.
+    #[derive(Clone)]
+    pub struct NoSniff<H>(H);
+
+    impl<H: Handler<T, S>, T, S> Handler<T, S> for NoSniff<H> {
+        type Future = futures_util::future::Map<H::Future, fn(axum::response::Response) -> axum::response::Response>;
+
+        fn call(self, req: axum::extract::Request, state: S) -> Self::Future {
+            futures_util::FutureExt::map(self.0.call(req, state), nosniff as fn(_) -> _)
+        }
+    }
+
+    /// `res` with `nosniff`, and `sandbox` when it is a document with no policy, unless it says
+    /// either itself.
+    fn nosniff(mut res: axum::response::Response) -> axum::response::Response {
+        use axum::http::{header, HeaderValue};
+        let headers = res.headers_mut();
+        if let header::Entry::Vacant(entry) = headers.entry(header::X_CONTENT_TYPE_OPTIONS) {
+            entry.insert(HeaderValue::from_static("nosniff"));
+        }
+        let document = headers.get(header::CONTENT_TYPE).is_some_and(|t| runs_script(t.as_bytes()));
+        if document && !headers.contains_key(header::CONTENT_SECURITY_POLICY) {
+            headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+        }
+        res
+    }
+
+    /// Whether a browser runs script in a document of `media_type` (HTML, SVG, any XML), the part
+    /// before any `;` compared without case.
+    pub(crate) fn runs_script(media_type: &[u8]) -> bool {
+        let essence = media_type.split(|&b| b == b';').next().unwrap_or_default().trim_ascii();
+        let is = |name: &[u8]| essence.eq_ignore_ascii_case(name);
+        let xml = essence.len() > 4 && essence[essence.len() - 4..].eq_ignore_ascii_case(b"+xml");
+        is(b"text/html") || is(b"text/xml") || is(b"application/xml") || xml
+    }
+
     macro_rules! bare_methods {
         ($($name:ident => $method:ident),*) => {
             $(
@@ -3848,21 +3920,13 @@ pub mod __private {
                     T: 'static,
                     S: Clone + Send + Sync + 'static,
                 {
-                    BareMethods(Methods(axum::routing::$method(handler.into_handler()), false, None))
+                    BareMethods(Methods(axum::routing::$method(NoSniff(handler.into_handler())), false, None))
                 }
             )*
         };
     }
     bare_methods!(
-        bare_get => get,
-        bare_post => post,
-        bare_put => put,
-        bare_delete => delete,
-        bare_patch => patch,
-        bare_head => head,
-        bare_options => options,
-        bare_trace => trace,
-        bare_any => any
+        bare_get => get
     );
 
     /// A handler's rows (`Self`, [`crate::answer::Answer::Rows`]) are the ones its route names
