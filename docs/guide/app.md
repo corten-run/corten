@@ -960,9 +960,9 @@ No stage gives its answer a CSP, `nosniff` or `frame-ancestors`, so a document i
 what the request says (HTML, SVG, or text a browser sniffs as HTML) runs as script on the app's
 origin, where it can read every other page with the visitor's cookies. A bare answer is data
 (text, JSON, a file) with its `Content-Type` set, as `&'static str` and `String` set it and a
-raw `Response` does not until the handler says (a body without one is sniffed). `Media` sets its
-own `nosniff`, and `Content-Security-Policy: sandbox` for a type that runs script (HTML, SVG,
-any XML), so an uploaded picture it sends cannot run there; a handler that must send another
+raw `Response` does not until the handler says (a body without one is sniffed). `Media` of a
+type that runs script (HTML, SVG, any XML) sets `nosniff` and `Content-Security-Policy: sandbox`
+itself, so an uploaded picture it sends cannot run there; a handler that must send another
 document sets those headers on it itself. Its
 answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
 own rules, `Set-Cookie` or not ([Caching](#caching) describes the stages' rules, which it does

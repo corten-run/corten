@@ -985,9 +985,9 @@ rules something out.
     read (a public JSON figure a CDN fronts), beside
     pages that need every stage; the stages add about twice what its handler and the router cost
     together (below). No stage gives its answer a CSP or `nosniff`, so it is data, not a document
-    built from the request (`Media`, the answer type for a file, sets `nosniff` itself, and
-    `Content-Security-Policy: sandbox` on a type that runs script, as `NoStore` sets its own
-    header), and no host check, so it is data anyone anywhere may read. Its handler reads no body:
+    built from the request (`Media`, the answer type for a file, sets `nosniff` and
+    `Content-Security-Policy: sandbox` itself on a type that runs script, as `NoStore` sets its
+    own header), and no host check, so it is data anyone anywhere may read. Its handler reads no body:
     a form posted as `multipart/form-data` needs no preflight, so with no same-origin check any
     site could make its visitors post one there, and no deadline would end a slow one. A bare route
     whose path can answer at one of Corten's own paths does not compile where the path alone

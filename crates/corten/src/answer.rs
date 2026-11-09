@@ -812,12 +812,14 @@ impl Answer for Relay {
 /// Bytes the app holds, sent as their media type: a picture a user uploaded, a document the app
 /// made, or bytes it makes as they are sent ([`Media::stream`]). The type is one the app names
 /// (`"image/png"`), never the one a client sent with the bytes: read an upload's type from its
-/// first bytes. What keeps a file that holds HTML from running as a page is its headers: browsers
-/// do not guess another type (`X-Content-Type-Options: nosniff`, which `Media` sets itself), and
-/// one that runs script (HTML, SVG, XML) gets `Content-Security-Policy: sandbox` from `Media`
-/// itself, which the app's policy replaces on a route with stages, so it holds on a route that
-/// says `stages = bare` too (with [`Policy::report_only`](crate::security::Policy::report_only),
-/// the sandbox is enforced beside the reported policy).
+/// first bytes. What keeps a file that holds HTML from running as a page is the app's headers,
+/// which every `Media` on a route with stages gets: browsers do not guess another type
+/// (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script. A type a browser
+/// runs script in (HTML, SVG, any XML) gets `nosniff` and `Content-Security-Policy: sandbox`
+/// from `Media` itself, so it cannot run script on a route that says `stages = bare` either;
+/// the app's policy replaces the sandbox on a route with stages (with
+/// [`Policy::report_only`](crate::security::Policy::report_only), the sandbox is enforced beside
+/// the reported policy).
 ///
 /// It is cached as anything the app answers is (`private, no-cache`). At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
@@ -853,17 +855,15 @@ impl Media {
         Media::typed(Response::new(axum::body::Body::from(bytes.into())), media_type)
     }
 
-    /// `res` sent as `media_type`, never sniffed as another, and sandboxed when the type is one a
-    /// browser runs script in.
+    /// `res` sent as `media_type`, and sandboxed, never sniffed, when the type is one a browser
+    /// runs script in. Any other type gets no header of its own here: the stages give it
+    /// `nosniff`, and a browser does not run a declared image, JSON or CSV as a page.
     fn typed(mut res: Response, media_type: &'static str) -> Self {
         use axum::http::{header, HeaderValue};
         let headers = res.headers_mut();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
-        headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-        let essence = media_type.split(';').next().unwrap_or("").trim();
-        let is = |name: &str| essence.eq_ignore_ascii_case(name);
-        let xml = essence.len() > 4 && essence.get(essence.len() - 4..).is_some_and(|end| end.eq_ignore_ascii_case("+xml"));
-        if is("text/html") || is("text/xml") || is("application/xml") || xml {
+        if runs_script(media_type) {
+            headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
             headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
         }
         Media(res)
@@ -1055,6 +1055,15 @@ fn disposition(kind: &str, name: &str) -> String {
         }
     }
     out
+}
+
+/// Whether a browser runs script in a document of `media_type` (HTML, SVG, any XML), the part
+/// before any `;` compared without case.
+fn runs_script(media_type: &str) -> bool {
+    let essence = media_type.split(';').next().unwrap_or("").trim();
+    let is = |name: &str| essence.eq_ignore_ascii_case(name);
+    let xml = essence.len() > 4 && essence.get(essence.len() - 4..).is_some_and(|end| end.eq_ignore_ascii_case("+xml"));
+    is("text/html") || is("text/xml") || is("application/xml") || xml
 }
 
 /// A [`Media::stream`]'s answer, which compression takes a chunk at a time.
@@ -1907,6 +1916,19 @@ where
 
 #[cfg(test)]
 mod tests {
+    /// The types a browser runs script in are sandboxed by `Media`, whatever their case and
+    /// parameters; others are left to the stages.
+    #[test]
+    fn a_type_that_runs_script_is_known() {
+        let scripts = ["text/html", "text/html; charset=utf-8", "Image/SVG+XML", "application/xhtml+xml", "application/xml"];
+        for script in scripts {
+            assert!(super::runs_script(script), "{script}");
+        }
+        for data in ["application/json", "image/png", "text/csv", "text/plain", "+xml", "application/xmlish"] {
+            assert!(!super::runs_script(data), "{data}");
+        }
+    }
+
     /// The handler argument lists a route can hold to a type, written out rather than taken from
     /// `holds!`: every position of every arity, 136 in all (#933). `Free` holds for any list.
     #[test]

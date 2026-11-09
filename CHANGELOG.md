@@ -18,10 +18,10 @@ Corten is pre-1.0, so any minor version may change the API.
   Measured with callgrind: 7,398 (7,397-7,400) instructions a request against 21,302
   (21,301-21,310) through the stages (jemalloc; a plain axum router 7,640).
 
-- `Media` sets `X-Content-Type-Options: nosniff` itself, and `Content-Security-Policy: sandbox`
-  on a type that runs script (HTML, SVG, any XML), so a file it sends cannot run script on a
-  route that says `stages = bare`; on a route with stages the app's policy still replaces the
-  sandbox (with `Policy::report_only`, the sandbox is enforced beside the reported policy).
+- `Media` of a type that runs script (HTML, SVG, any XML) sets `X-Content-Type-Options: nosniff`
+  and `Content-Security-Policy: sandbox` itself, so a file it sends cannot run script on a route
+  that says `stages = bare`; on a route with stages the app's policy still replaces the sandbox
+  (with `Policy::report_only`, the sandbox is enforced beside the reported policy).
 
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent
