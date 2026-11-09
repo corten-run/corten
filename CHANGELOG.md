@@ -5866,8 +5866,8 @@ Corten is pre-1.0, so any minor version may change the API.
     a `StackStart` column also lost the browser's width, as the column's `max-width: 100%` cap
     reached it, so a modal with a long line touched the screen's edges. Both rules now leave a
     dialog or popover child alone, still with no specificity; its long words still break, as the
-    column's do, and every other child is as before. A non-modal dialog is not in the top layer and
-    stays in the column. The ui-gallery's smoke test opens a modal with a long word and a popover in
+    column's do, and every other child is as before. A non-modal dialog opens where it is written,
+    over the content after it, as the browser places it. The ui-gallery's smoke test opens a modal with a long word and a popover in
     a `StackStart` column at 320px and checks both are centered, the dialog clear of the edges and
     not scrolling sideways, and that a paragraph beside them still drops its margin; against the
     earlier stylesheet it fails in Chromium with the dialog at the top, touching both edges, and the

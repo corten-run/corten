@@ -2925,8 +2925,10 @@ async function run(browser) {
     dialog.showModal();
     popover.showPopover();
     const place = (/** @type {HTMLElement} */ el) => {
+      // Against the viewport without a classic scrollbar, where the top layer lays them out.
       const r = el.getBoundingClientRect();
-      return [r.top, innerHeight - r.bottom, r.left, innerWidth - r.right].map(Math.round);
+      const { clientWidth, clientHeight } = document.documentElement;
+      return [r.top, clientHeight - r.bottom, r.left, clientWidth - r.right].map(Math.round);
     };
     const at = { dialog: place(dialog), sideways: dialog.scrollWidth > dialog.clientWidth + 1, popover: place(popover), para: getComputedStyle(para).marginBlockStart };
     popover.hidePopover();
