@@ -1363,6 +1363,7 @@ mod tests {
         let body = axum::body::to_bytes(refused.into_body(), usize::MAX).await.unwrap();
         let body = String::from_utf8_lossy(&body);
         assert!(!body.contains("connection reset") && !body.contains("error sending request"), "nor is the client: {body}");
+        assert!(body.contains("internal error"), "{body}");
         let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
         let logged: Vec<&str> = text.lines().collect();
         assert_eq!(logged.len(), 2, "{text}");
