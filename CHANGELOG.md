@@ -5563,10 +5563,12 @@ Corten is pre-1.0, so any minor version may change the API.
     of the nine hovers waits for its prefetch, the oldest page's click for its fetch (or its
     hover's), and the `data-no-prefetch` control for its own prefetch. Only the opt-out still
     pauses, since the request it checks for must not come; its pause is the page's own timer, set
-    after the dwell. The reuse of the oldest page kept and of the newest is read from the requests
-    themselves (no visit asked for either), so a cache of fewer than 8 now fails the check, where
-    one of 7 passed it. The module check already waited for the event it counts; why its third
-    request once did not come is not known
+    after the dwell; the held-page check's 150 ms wait, which its held answer outlasted, is gone.
+    The reuse of the oldest page kept and of the newest is read from the requests themselves (no
+    visit asked for either), so a cache of fewer than 8 now fails the check, where one of 7 passed
+    it, and its failure says how old the oldest kept prefetch was at its click, since one past the
+    runtime's 10 s is fetched again however large the cache. The module check already waited for
+    the event it counts; why its third request once did not come is not known
     ([#1053 Two Firefox watchlist smoke checks (prefetch's newest 8, a script module imported again) each fail now and then on a branch that does not touch them](https://github.com/corten-run/corten/issues/1053)).
 186. A page upload whose client stopped sending was answered at the deadline as the server's
     timeout (503, `Failure::TimedOut`) and logged as a deadline, never as the stalled client it
