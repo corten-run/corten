@@ -1501,7 +1501,7 @@ Topcoat, probed the same way from `cb-topcoat` built at `9a17b8ea`
 (`results/conform-matched-topcoat1/conformance.json`), met 13 and missed 11: it meets the
 cross-site post (403) and the unfinished head (closed in 30.0 s) that axum-maud misses, and misses
 the page's script CSP (`'unsafe-eval'`) that axum-maud meets. Django, from `cb-django` built at
-`d7f377b2` (`results/conform-matched-django1/conformance.json`), met 15 and missed 9:
+`37361430` (`results/conform-matched-django1/conformance.json`), met 15 and missed 9:
 Permissions-Policy, the ETag (a 200 again), the JSON's 404, `DELETE` (403) and failed read as
 HTML, `HEAD` (405), liveness and readiness, and the cap (not served with 950 held).
 No load phase has run in the tier yet.

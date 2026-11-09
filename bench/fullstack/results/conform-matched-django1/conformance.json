@@ -1,16 +1,16 @@
 {
   "format": 2,
   "tier": "matched",
-  "commit": "d7f377b21236ebb3b10ae65f5f4ff6ea48cf48eb",
+  "commit": "3736143047c803ea02dba9bf4bd6d02e98b5dde3",
   "dirty": false,
   "imagesFrom": null,
-  "date": "2026-11-09T06:26:14.609Z",
+  "date": "2026-11-09T06:51:46.386Z",
   "apps": [
     "django"
   ],
   "results": {
     "django": {
-      "image": "sha256:2e7ae7e073e764de869fdfb433c933aec9d5f845e4ecdbebde69d8126760f58c",
+      "image": "sha256:632a1c95be648729e26cb4c044ca5c0d8a26bc2abee0cde6750ece9120e3df1a",
       "probes": {
         "pages": true,
         "page": {
@@ -18,18 +18,18 @@
           "headers": {
             "content-type": "text/html; charset=utf-8",
             "cache-control": "private, no-cache",
-            "etag": "\"58a41c9319ca391fb9c3b104720c4f97\"",
+            "etag": "\"7600cfca97ca1e0cbffa0132a56ab7a7\"",
             "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
             "x-content-type-options": "nosniff",
             "referrer-policy": "same-origin",
             "x-frame-options": "DENY",
             "cross-origin-opener-policy": "same-origin",
             "set-cookie": [
-              "csrftoken=EVP3iTpbuwPXlpApkobI2VLU76yo8jK3; expires=Mon, 08 Nov 2027 06:24:12 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
+              "csrftoken=Ab3oKcUfdGdCsGzjNZOymP7gXCTrw3Zx; expires=Mon, 08 Nov 2027 06:49:47 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
             ]
           },
           "bodyLength": 8113,
-          "ms": 107
+          "ms": 70
         },
         "pageBr": {
           "status": 200,
@@ -37,18 +37,18 @@
             "content-type": "text/html; charset=utf-8",
             "content-encoding": "gzip",
             "cache-control": "private, no-cache",
-            "etag": "W/\"edbe245bb09d0cc71965eb28ffed47a4\"",
+            "etag": "W/\"b32cedeb01d738865d592eb3d6f8003d\"",
             "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
             "x-content-type-options": "nosniff",
             "referrer-policy": "same-origin",
             "x-frame-options": "DENY",
             "cross-origin-opener-policy": "same-origin",
             "set-cookie": [
-              "csrftoken=co7AtBZHhok4xQ8uNfZaAUGfDB4ForNz; expires=Mon, 08 Nov 2027 06:24:12 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
+              "csrftoken=oxGOU5VXixhrIcK5y8a7q1ClwuDWWalr; expires=Mon, 08 Nov 2027 06:49:48 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
             ]
           },
-          "bodyLength": 2032,
-          "ms": 36
+          "bodyLength": 2062,
+          "ms": 43
         },
         "pageAgain": {
           "status": 200,
@@ -56,18 +56,18 @@
             "content-type": "text/html; charset=utf-8",
             "content-encoding": "gzip",
             "cache-control": "private, no-cache",
-            "etag": "W/\"115a2b96b95b59005fa5e9a646210c53\"",
+            "etag": "W/\"512f0ce79c13104c273c1fc028e00ad8\"",
             "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
             "x-content-type-options": "nosniff",
             "referrer-policy": "same-origin",
             "x-frame-options": "DENY",
             "cross-origin-opener-policy": "same-origin",
             "set-cookie": [
-              "csrftoken=lj2am3GCFRDUclpuXT8AvsF6U1ldr6nX; expires=Mon, 08 Nov 2027 06:24:13 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
+              "csrftoken=Se7HMO39bAYhEXJNEXW2yDC6atpvY0pK; expires=Mon, 08 Nov 2027 06:49:49 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
             ]
           },
-          "bodyLength": 2028,
-          "ms": 43
+          "bodyLength": 2050,
+          "ms": 42
         },
         "json": {
           "status": 200,
@@ -82,7 +82,7 @@
             "cross-origin-opener-policy": "same-origin"
           },
           "bodyLength": 9695,
-          "ms": 53
+          "ms": 30
         },
         "jsonBr": {
           "status": 200,
@@ -97,8 +97,8 @@
             "x-frame-options": "DENY",
             "cross-origin-opener-policy": "same-origin"
           },
-          "bodyLength": 1612,
-          "ms": 50
+          "bodyLength": 1686,
+          "ms": 36
         },
         "jsonGzip": {
           "status": 200,
@@ -113,8 +113,8 @@
             "x-frame-options": "DENY",
             "cross-origin-opener-policy": "same-origin"
           },
-          "bodyLength": 1640,
-          "ms": 47
+          "bodyLength": 1595,
+          "ms": 29
         },
         "head": {
           "status": 405,
@@ -128,7 +128,7 @@
             "cross-origin-opener-policy": "same-origin"
           },
           "bodyLength": 0,
-          "ms": 45
+          "ms": 38
         },
         "json404": {
           "status": 404,
@@ -142,7 +142,7 @@
             "cross-origin-opener-policy": "same-origin"
           },
           "bodyLength": 179,
-          "ms": 53
+          "ms": 32
         },
         "json405": {
           "status": 403,
@@ -155,7 +155,7 @@
             "cross-origin-opener-policy": "same-origin"
           },
           "bodyLength": 1450,
-          "ms": 80
+          "ms": 38
         },
         "page404": {
           "status": 404,
@@ -170,7 +170,7 @@
             "cross-origin-opener-policy": "same-origin"
           },
           "bodyLength": 654,
-          "ms": 48
+          "ms": 36
         },
         "page500": {
           "status": 500,
@@ -184,7 +184,7 @@
             "cross-origin-opener-policy": "same-origin"
           },
           "bodyLength": 145,
-          "ms": 32
+          "ms": 35
         },
         "json500": {
           "status": 500,
@@ -198,7 +198,7 @@
             "cross-origin-opener-policy": "same-origin"
           },
           "bodyLength": 145,
-          "ms": 46
+          "ms": 35
         },
         "badHost": {
           "status": 400,
@@ -211,7 +211,7 @@
             "cross-origin-opener-policy": "same-origin"
           },
           "bodyLength": 143,
-          "ms": 43
+          "ms": 27
         },
         "bigHead": {
           "status": 431,
@@ -219,7 +219,7 @@
             "content-type": "text/html"
           },
           "bodyLength": 229,
-          "ms": 102
+          "ms": 36
         },
         "formPath": "/items/item_5",
         "ownPost": {
@@ -232,10 +232,10 @@
             "referrer-policy": "same-origin",
             "x-frame-options": "DENY",
             "cross-origin-opener-policy": "same-origin",
-            "set-cookie": "csrftoken=EVP3iTpbuwPXlpApkobI2VLU76yo8jK3; expires=Mon, 08 Nov 2027 06:24:24 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
+            "set-cookie": "csrftoken=Ab3oKcUfdGdCsGzjNZOymP7gXCTrw3Zx; expires=Mon, 08 Nov 2027 06:49:57 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
           },
           "bodyLength": 8187,
-          "ms": 43
+          "ms": 39
         },
         "crossSite": {
           "status": 403,
@@ -248,7 +248,7 @@
             "cross-origin-opener-policy": "same-origin"
           },
           "bodyLength": 1087,
-          "ms": 44
+          "ms": 20
         },
         "bigBody": {
           "status": 400,
@@ -260,31 +260,31 @@
             "x-frame-options": "DENY",
             "cross-origin-opener-policy": "same-origin"
           },
-          "bodyLength": 143,
-          "ms": 40
+          "bodyLength": 0,
+          "ms": 36
         },
         "afterBig": {
           "status": 200,
           "headers": {
             "content-type": "text/html; charset=utf-8",
             "cache-control": "private, no-cache",
-            "etag": "\"ced3e4da9013bcd73a8a663a71386606\"",
+            "etag": "\"65cb6e19b342ced90a3e7ceaad2d3e25\"",
             "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
             "x-content-type-options": "nosniff",
             "referrer-policy": "same-origin",
             "x-frame-options": "DENY",
             "cross-origin-opener-policy": "same-origin",
             "set-cookie": [
-              "csrftoken=ZTaiuVc0bvlxeKKoEuRTHrw3nTPC1Eqt; expires=Mon, 08 Nov 2027 06:24:26 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
+              "csrftoken=50OXQn6cNKzuyw6Ch6hK1qjBrDe5aqiv; expires=Mon, 08 Nov 2027 06:49:59 GMT; Max-Age=31449600; Path=/; SameSite=Lax"
             ]
           },
           "bodyLength": 8113,
-          "ms": 90
+          "ms": 39
         },
         "logLines": "0",
         "tier": "matched",
         "unfinishedHead": {
-          "closedMs": 30394
+          "closedMs": 30762
         },
         "cap": {
           "below": 950,
@@ -292,7 +292,7 @@
           "held": 1050,
           "whileHeld": null,
           "afterRelease": 200,
-          "releaseMs": 76,
+          "releaseMs": 55,
           "afterwards": 200
         },
         "live": null,
@@ -303,7 +303,7 @@
             "content-type": "text/html"
           },
           "bodyLength": 141,
-          "ms": 30411
+          "ms": 30855
         },
         "readyDown": null
       },
@@ -330,8 +330,8 @@
         "logLines": "0",
         "live": "none",
         "readyDown": "no readiness endpoint",
-        "deadline": "500 in 30.4 s",
-        "unfinishedHead": "closed in 30.4 s",
+        "deadline": "500 in 30.9 s",
+        "unfinishedHead": "closed in 30.8 s",
         "connectionCap": "not served with 950 held",
         "unmet": [
           "permissions",
