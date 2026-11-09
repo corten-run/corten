@@ -900,9 +900,9 @@ module; the probes a load balancer sends are Corten's own `/health/live` and `/h
 It meets none of the stages above: no host or same-origin check, no signal or
 deadline, no middleware, no error page, security headers, `Cache-Control`, tag or
 compression. Its handler's answer is sent as it made it, a raw `Response` too, with
-`X-Content-Type-Options: nosniff` added when it has none (and `Content-Security-Policy: sandbox`
-on a document, below) and a panic answered `500`, and every other route keeps every stage, so the fast route and a page
-that needs all of them sit side by side:
+`X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` added (below) and a
+panic answered `500`, and every other route keeps every stage, so the fast route and a page that
+needs all of them sit side by side:
 
 ```rust
 use corten::{axum::response::Response, prelude::*};
@@ -969,22 +969,20 @@ Details document a staged JSON route answers, and a path that does not parse is 
 plain-text rejection; a handler that owes its clients JSON failures returns them as its answer.
 No stage gives its answer a CSP or `frame-ancestors`; a document it builds from what the request
 says (HTML, SVG) would run script on the app's origin, where it can read every other page with
-the visitor's cookies, but for the sandbox below. A bare answer is data (text, JSON, a file) with its `Content-Type`
-set, as `&'static str` and `String` set it and a raw `Response` does not until the handler says;
-`nosniff` keeps a browser from taking it as another type, a page of the app's from loading it
-as a script, and one without a type from being read as HTML. An answer of a type that runs
-script (HTML, SVG, any XML, XSL), with no type or more than one (two `Content-Type` headers, or
-a list, of which a browser takes the last), gets a `Content-Security-Policy: sandbox` header of
-its own beside any policy the handler set, since a browser enforces every policy it is sent, so
-an uploaded picture a `Media` sends cannot run script there. A handler whose policy says
-`sandbox` itself gets none added: `sandbox allow-scripts` runs the document's script in an
-origin of its own, never the app's. One that allows both `allow-scripts` and `allow-same-origin`
-runs it as the app's, so it gets the plain `sandbox` too. Its
-answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
-own rules ([Caching](#caching) describes the stages' rules, which it does not meet), except that
-one that sets a cookie gets `Cache-Control: private, no-cache` unless it says `private` or
-`no-store` itself, in place of any other caching it says and of a CDN's own `CDN-Cache-Control`
-and `Surrogate-Control`, so no shared cache hands one visitor's cookie to another.
+the visitor's cookies, but for the sandbox below. A bare answer is data (text, JSON, a file) with
+its `Content-Type` set, as `&'static str` and `String` set it and a raw `Response` does not until
+the handler says. Every bare answer gets `X-Content-Type-Options: nosniff`, which keeps a browser
+from taking it as another type and a page of the app's from loading it as a script, and a
+`Content-Security-Policy: sandbox` header of its own beside any policy the handler set: a browser
+enforces every policy it is sent, so whatever type the answer says, a document it sends (an
+uploaded SVG a `Media` sends) runs no script on the app's origin. Neither reads the answer's type
+or policy, so no type or policy a handler writes gets past them; an answer whose own script must
+run is a page, not a bare route's. Its answer has no `Cache-Control` unless the handler sets one,
+so a shared cache may keep it by its own rules ([Caching](#caching) describes the stages' rules,
+which it does not meet), except that one that sets a cookie is `private, no-cache` (`no-store`
+when it says one), whatever caching it says, and loses a CDN's own `CDN-Cache-Control`,
+`Cloudflare-CDN-Cache-Control` and `Surrogate-Control`, so no shared cache hands one visitor's
+cookie to another.
 A request for a method the route has no handler for gets the router's plain 405, and one whose
 segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) its plain 404, not the
 app's error page; any other unknown URL is still the app's 404, inside its stages.
@@ -994,10 +992,11 @@ which lets a bare route's request run for the longer of the shutdown grace and t
 deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(median of five runs, range in parentheses): 8,242 (8,240-8,243) instructions a request bare
+(median of five runs, range in parentheses): 8,067 (8,065-8,067) instructions a request bare
 against 21,318 (21,304-21,321) through the stages with jemalloc (a plain axum router: 7,640),
-and 9,304 (9,304-9,306) against 23,795 (23,773-23,854) with glibc's allocator (axum: 8,716).
-An app with no bare route costs what it did before.
+and 9,130 (9,129-9,131) against 23,795 (23,773-23,854) with glibc's allocator (axum: 8,716).
+An app with no bare route costs what it did before, within each allocator's run-to-run spread
+(jemalloc's medians within 10 instructions, glibc's runs about 200 apart either way).
 
 ## Static files
 

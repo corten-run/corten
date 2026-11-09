@@ -816,9 +816,8 @@ impl Answer for Relay {
 /// first bytes. What keeps a file that holds HTML from running as a page is the app's headers,
 /// which every `Media` gets: browsers do not guess another type
 /// (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script. A route that says
-/// `stages = bare` has no stages, and its answer gets `nosniff` and, when it may be a document
-/// (HTML, SVG, any XML or XSL, no type or more than one), `Content-Security-Policy: sandbox`
-/// instead.
+/// `stages = bare` has no stages, and its answer gets `nosniff` and `Content-Security-Policy:
+/// sandbox` instead, whatever its type.
 ///
 /// It is cached as anything the app answers is (`private, no-cache`), except on a bare route,
 /// which sends no `Cache-Control` unless the handler says one. At a URL that names its

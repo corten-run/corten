@@ -985,13 +985,13 @@ rules something out.
     still one. It is for an answer that must cost what the router alone costs and that anyone may
     read (a public JSON figure a CDN fronts), beside
     pages that need every stage; the stages add about 1.6 times what its handler and the router cost
-    together (below). Its answer gets `X-Content-Type-Options: nosniff` when it has none, and
-    `Content-Security-Policy: sandbox` when it may be HTML, SVG or XML and has no `sandbox`, both
+    together (below). Its answer gets `X-Content-Type-Options: nosniff` and its own
+    `Content-Security-Policy: sandbox` beside any the handler set, whatever its type, both
     added in its handler's own future, not by a stage: a browser takes it only as the type it
     says, a page of the app's cannot load it as a script (`script-src 'self'` trusts every URL of
     the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
-    client that reads it as its type sees nothing else change; one that sets a cookie gets
-    `Cache-Control: private, no-cache` unless it says `private` or `no-store`, so no shared cache hands one
+    client that reads it as its type sees nothing else change; one that sets a cookie is
+    `private, no-cache` (`no-store` when it says one) with no CDN caching header, so no shared cache hands one
     visitor's cookie to another; a panic is logged and answered `500` in the same future. It gets
     no host check, so it is
     data anyone anywhere may read. It answers `get` alone and its handler reads no body: no
@@ -1017,7 +1017,11 @@ rules something out.
     origin: correctness comes before the cost (below); nor `Media` setting the headers itself,
     measured on an API request answering `Media` at 524 instructions more with `nosniff` on every
     type and 106 more checking its type alone, paid on every route for what only a bare one
-    needs; nor writes or body readers on a bare route, which no app has asked for and which
+    needs; nor adding the sandbox only to a type that runs script, or only when the handler's
+    policy has none, which reads text a handler writes (a list of types, a second header, a
+    `sandbox` that allows the same origin) and so can be fooled, and cost more: a bare request
+    measured 8,242 instructions reading them against 8,067 adding both headers always
+    (jemalloc); nor writes or body readers on a bare route, which no app has asked for and which
     no same-origin check or deadline would cover; nor keeping the host check alone, a second kind
     of bare route that, for an answer anyone may read, keeps out only readers who may read it
     anyway. Data only this machine or its network may see is not for a bare route.
@@ -1031,14 +1035,14 @@ rules something out.
     be in the request outside the area); measured (callgrind, release, the same JSON handler
     answering `Media`, a request counted as the run of 1,200 less the run of 200 over 1,000, five
     runs each, this change's request path as committed, the staged variants alternating with main
-    `c65c10ec`, median and range: with jemalloc a bare route 8,242 (8,240 to 8,243) instructions
+    `c65c10ec`, median and range: with jemalloc a bare route 8,067 (8,065 to 8,067) instructions
     a request with its headers and panic catch, 7,398 (7,397 to 7,400) before either, the same
     handler through the stages 21,318 (21,304 to 21,321; main 21,310, 21,301 to 21,316), a
-    staged route beside a bare one 21,319 (21,316 to 21,330), and a plain axum router 7,640; an
+    staged route beside a bare one 21,317 (21,316 to 21,331), and a plain axum router 7,640; an
     API request 15,813 against main's 15,813 and a 404 19,986 against 19,985; with glibc's
-    allocator a bare route 9,304 (9,304 to 9,306), the same handler through the stages 23,795
-    (23,773 to 23,854; main 23,733, 23,719 to 23,811), beside a bare one 24,013 (23,875 to
-    24,134), a plain axum router 8,716, an API request 17,643 (17,604 to 17,873) against main's
+    allocator a bare route 9,130 (9,129 to 9,131), the same handler through the stages 23,795
+    (23,773 to 23,854; main 23,733, 23,719 to 23,811), beside a bare one 23,821 (23,766 to
+    23,852), a plain axum router 8,716, an API request 17,643 (17,604 to 17,873) against main's
     17,559 (17,559 to 17,839), and a 404 21,680 (21,650 to 21,919) against 21,640 (21,579 to
     22,332)); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
@@ -1320,7 +1324,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
     request before every stage is a tower layer around the whole app (`.layer(l)`), and there is
     no step for one route, whose needs are its handler's arguments and return type. A route
     takes every stage or, with `stages = bare`, none: no host or same-origin check, deadline,
-    error page, security headers but `nosniff` (and `sandbox` on a document), or cache rule
+    error page, security headers but `nosniff` and `sandbox`, or cache rule
     but `private` on a cookie, which its handler gives itself if it needs them; it answers reads
     only; a wrong method or a missing suffix at its path is the router's plain 405 or 404, a
     failure is sent as its handler made it (plain text, not Problem Details), and a panic is

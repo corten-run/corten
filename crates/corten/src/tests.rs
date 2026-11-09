@@ -5009,6 +5009,9 @@ mod bare_url {
     #[route("/shared-cookie", get = bare_shared_cookie, stages = bare)]
     pub struct SharedCookie;
 
+    #[route("/private-cookie", get = bare_private_cookie, stages = bare)]
+    pub struct PrivateCookie;
+
     #[route("/feeds/{name}.xml", get = bare_feed, stages = bare)]
     pub struct Feed<'a> {
         pub name: &'a str,
@@ -5066,6 +5069,16 @@ async fn bare_boom() -> &'static str {
     }
 }
 
+/// A cookie set on an answer that says it is private, with a CDN's header that says otherwise.
+async fn bare_private_cookie() -> axum::response::Response {
+    axum::response::Response::builder()
+        .header("set-cookie", "id=fresh")
+        .header("cache-control", "private=\"x-id\", no-store")
+        .header("cdn-cache-control", "max-age=600")
+        .body(Body::from("id"))
+        .unwrap()
+}
+
 /// A cookie set on an answer that says a shared cache may keep it.
 async fn bare_shared_cookie() -> axum::response::Response {
     axum::response::Response::builder()
@@ -5099,10 +5112,11 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     let router = App::new(bare_url::router()).error_page(test_error_page, ()).router();
     let (status, headers, body) = call_with(router.clone(), "GET", "/ping", None, Some("text/html")).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
-    for name in ["content-security-policy", "cache-control", "etag", "referrer-policy", "x-frame-options"] {
+    for name in ["cache-control", "etag", "referrer-policy", "x-frame-options"] {
         assert!(!headers.contains_key(name), "a bare route has no {name}: {headers:?}");
     }
     assert_eq!(headers["x-content-type-options"], "nosniff", "no page of the app's can load it as a script");
+    assert_eq!(headers["content-security-policy"], "sandbox", "a document it sends runs no script on the app's origin");
     // A `get` answers `HEAD` too, with no body, as axum's own routes do.
     let (status, _, body) = call_with_any(router.clone(), "HEAD", "/ping", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, ""));
@@ -5129,20 +5143,21 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(headers["x-content-type-options"], "nosniff");
     assert_eq!(headers["content-security-policy"], "sandbox");
-    // A handler's own policy is kept, with the sandbox beside it, and its `nosniff` once; a
+    // A handler's own policy is kept, with the sandbox beside it, and `nosniff` is sent once; a
     // cookie is never shared.
     let (_, headers, _) = call_with(router.clone(), "GET", "/framed", None, None).await;
     assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["frame-ancestors 'none'", "sandbox"]);
     assert_eq!(headers.get_all("x-content-type-options").iter().count(), 1);
     let (_, headers, _) = call_with(router.clone(), "GET", "/cookie", None, None).await;
     assert_eq!(headers["cache-control"], "private, no-cache");
-    // Whatever caching it says, a CDN's own header too.
+    // Whatever caching it says, a CDN's own header too, and `no-store` where it says one.
     let (_, headers, _) = call_with(router.clone(), "GET", "/shared-cookie", None, None).await;
     assert_eq!(headers["cache-control"], "private, no-cache");
     assert!(!headers.contains_key("cdn-cache-control"), "{headers:?}");
-    // It says no type, which a browser could take as a document.
-    assert_eq!(headers["content-security-policy"], "sandbox");
-    // A type it cannot tell is one, a list a browser takes the last of, is sandboxed too.
+    let (_, headers, _) = call_with(router.clone(), "GET", "/private-cookie", None, None).await;
+    assert_eq!(headers["cache-control"], "no-store");
+    assert!(!headers.contains_key("cdn-cache-control"), "{headers:?}");
+    // Whatever type it says: a list a browser takes the last of too.
     let (_, headers, _) = call_with(router.clone(), "GET", "/listed", None, None).await;
     assert_eq!(headers["content-security-policy"], "sandbox");
     // A link to it is not fetched ahead of a click.
@@ -5156,7 +5171,7 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     // A path that does not parse is the extractor's own rejection, not the error page.
     let (status, headers, _) = call_with(router.clone(), "GET", "/raw/seven", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(!headers.contains_key("content-security-policy"));
+    assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "not the error page's policy");
     // A method it has no handler for is the router's plain 405, not the error page.
     let (status, headers, body) = call_with(router.clone(), "PUT", "/ping", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
@@ -5199,39 +5214,6 @@ async fn the_stages_hold_beside_a_bare_route() {
     assert_eq!(status, StatusCode::FORBIDDEN, "the staged route beside it still refuses another site's write");
     let (status, _, _) = call_with_any(router, "POST", "/raw/7", &cross).await;
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "the bare one answers no write");
-}
-
-/// The types a bare answer is sandboxed for, whatever their case and parameters.
-#[test]
-fn a_type_that_runs_script_is_known() {
-    let runs = crate::route::__private::runs_script;
-    for script in
-        ["text/html", "text/html; charset=utf-8", "Image/SVG+XML", "application/xhtml+xml", "application/xml", "text/xsl"]
-    {
-        assert!(runs(script.as_bytes()), "{script}");
-    }
-    for data in ["application/json", "image/png", "text/csv", "text/plain", "+xml", "application/xmlish"] {
-        assert!(!runs(data.as_bytes()), "{data}");
-    }
-    let sandboxes = crate::route::__private::sandboxes;
-    for policy in ["sandbox", "default-src 'none'; Sandbox allow-scripts", " sandbox ;"] {
-        assert!(sandboxes(policy.as_bytes()), "{policy}");
-    }
-    for policy in [
-        "frame-ancestors 'none'",
-        "default-src 'none'; sandboxed",
-        "script-src 'self' sandbox",
-        "sandbox allow-same-origin allow-scripts",
-    ] {
-        assert!(!sandboxes(policy.as_bytes()), "{policy}");
-    }
-    let unshared = crate::route::__private::unshared;
-    for kept in ["private", "no-store", "Private, max-age=60", "no-cache, no-store"] {
-        assert!(unshared(kept.as_bytes()), "{kept}");
-    }
-    for shared in ["public, max-age=60", "no-cache", "max-age=0, s-maxage=60"] {
-        assert!(!unshared(shared.as_bytes()), "{shared}");
-    }
 }
 
 /// A bare JSON route's failure is sent as its handler made it: plain text, not Problem Details,

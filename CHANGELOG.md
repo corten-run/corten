@@ -8,9 +8,9 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - `stages = bare` on a `#[route(..)]` serves that route outside every stage, beside routes that
   keep them all: its handler's answer, a raw `Response` too, is sent as it made it, with
-  `X-Content-Type-Options: nosniff` added when it has none, and `Content-Security-Policy:
-  sandbox` beside any policy of its own when it may be HTML, SVG or XML, and `Cache-Control: private,
-  no-cache` when it sets a cookie and does not say `private` or `no-store`; a panic is logged and answered 500,
+  `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` added whatever its
+  type, and `Cache-Control: private, no-cache` (or `no-store`) with no CDN caching header when it
+  sets a cookie; a panic is logged and answered 500,
   and a failure is plain text, not Problem Details. It answers `get` only, its
   handler takes only the request's method and URL (`corten::answer::Bare`), and a link to it is never
   prefetched; a bare route with another method or `prefetch = ..`, in a `caller = ..`, area or
@@ -19,7 +19,7 @@ Corten is pre-1.0, so any minor version may change the API.
   `/health/live`, `/health/ready`, `/health/{..}`); one under an area's or API's prefix, that can
   match another path Corten serves (the assets, the PWA's files and offline page, an API's or
   area's companions), is refused at startup. Its answer gets no host check, so it is for data
-  anyone anywhere may read. Measured with callgrind: 8,242 (8,240-8,243) instructions a request
+  anyone anywhere may read. Measured with callgrind: 8,067 (8,065-8,067) instructions a request
   against 21,318 (21,304-21,321) through the stages (jemalloc; a plain axum router 7,640).
 
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
