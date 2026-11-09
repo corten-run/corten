@@ -1409,8 +1409,12 @@ async function run(browser) {
   const busyMarks = () => page.evaluate(() => ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
   await page.click("#busy-a");
   const whileA = await busyMarks();
-  await page.click("#busy-b");
-  const whileB = await busyMarks();
+  // B's click and the read in one task: the marks are moved by the submit itself, not by A's fetch
+  // settling later (#1108).
+  const whileB = await page.evaluate(() => {
+    document.getElementById("busy-b")?.click();
+    return ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
+  });
   await page.waitForFunction(() => document.querySelector("#busy-said")?.textContent === "read b", null, { timeout: 5000 }).catch(() => {});
   const busyAfter = await busyMarks();
   check(

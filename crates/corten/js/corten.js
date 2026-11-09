@@ -2737,6 +2737,9 @@ async function send(form, submitter, sends) {
   }
   if (previous?.key === key) return;
   previous?.controller.abort();
+  // The submit this one replaces is over now, not when its fetch settles (a task later in some
+  // engines): its marks go at once, and this submit's own are set below (#1108).
+  if (previous) for (const el of previous.busy) if (busyBy.get(el) === previous.mine) formCall(el, "removeAttribute", "aria-busy");
   const sent = sentState(form);
   const controller = new AbortController();
   const { signal } = controller;

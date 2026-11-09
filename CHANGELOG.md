@@ -4077,6 +4077,10 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
 
 ### Fixed
+- A `data-patch` form sent by GET again by another button drops the first button's `aria-busy`
+  mark at once, as the guide says, rather than when the aborted read settles (a task later in
+  WebKit), so the replaced button is never shown working; the runtime grows 13 bytes gzip
+  (14,872 to 14,885) (#1108).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
