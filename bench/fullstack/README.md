@@ -1428,8 +1428,16 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    are the app's own code, which the profile does not change, as no framework's error pages are
    rewritten by hand; and `axum::serve` has no header timeout or head size setting (hyper's are
    reached by writing the accept loop on hyper-util). Those columns stay unmet.
-3. `nextjs`, `leptos`, `django`, `aspnet` (and `aspnet-aot`), `spring` and `topcoat` are not
-   in it yet: each joins with its profile.
+3. `leptos`: Leptos serves through axum, so it takes axum-maud's tower-http layers (the security
+   headers, `Cache-Control: private, no-cache` on its routes but not the static files its fallback
+   serves, a 503 past 10 s and a 2 MiB body limit) beside the compression it already had. A
+   page's CSP lets its scripts run by the nonce Leptos makes for each response and writes on the
+   hydration scripts (its `nonce` feature, which leptos_axum turns on), set by the shell through
+   Leptos's `ResponseOptions`; the page hydrates under it (checked in Chromium: the sort button
+   works, no CSP violation, every inline script has the nonce). It misses what axum-maud misses,
+   but its page for a failed read is its own 200 with the error in it, the app's code as before.
+4. `nextjs`, `django`, `aspnet` (and `aspnet-aot`), `spring` and `topcoat` are not in it
+   yet: each joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1440,7 +1448,10 @@ answered with 950 connections held, and one past 1,050 waited until they closed 
 axum-maud met 12 and missed 12:
 the ETag, the cross-site post, the two failed reads (502 `text/plain`), the 404 and 405 formats
 (empty), the unknown Host and the 64 KiB header (200), liveness and readiness, the unfinished head
-(still held at 45 s) and the cap (answered with 1,050 held). No load phase has run in the tier yet.
+(still held at 45 s) and the cap (answered with 1,050 held). Leptos, probed the same way from
+`cb-leptos` built at `07ee94b6` (`results/conform-matched-leptos1/conformance.json`), met the
+same 12 and missed the same 12, but for its failed read's page (200 `text/html`). No load phase
+has run in the tier yet.
 
 ### The hardening step
 

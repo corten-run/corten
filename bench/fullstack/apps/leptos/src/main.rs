@@ -31,14 +31,14 @@ async fn main() {
     // The profile's cache policy is the pages' and the JSON's, not the static files' (the fallback
     // serves those).
     let app = if item_page_leptos::app::matched() {
-        app.route_layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache")))
+        app.route_layer(SetResponseHeaderLayer::if_not_present(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-cache"),
+        ))
     } else {
         app
     };
-    let app = app
-        .fallback(leptos_axum::file_and_error_handler(shell))
-        .layer(CompressionLayer::new())
-        .with_state(leptos_options);
+    let app = app.fallback(leptos_axum::file_and_error_handler(shell)).layer(CompressionLayer::new()).with_state(leptos_options);
     let app = if item_page_leptos::app::matched() { matched(app) } else { app };
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
     println!("leptos item page listening on {addr}");

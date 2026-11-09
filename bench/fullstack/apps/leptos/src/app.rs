@@ -29,7 +29,10 @@ pub fn shell(options: LeptosOptions) -> impl IntoView {
             let csp = format!(
                 "default-src 'self'; script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
             );
-            response.insert_header(axum::http::header::CONTENT_SECURITY_POLICY, axum::http::HeaderValue::from_str(&csp).expect("a nonce is base64"));
+            response.insert_header(
+                axum::http::header::CONTENT_SECURITY_POLICY,
+                axum::http::HeaderValue::from_str(&csp).expect("a nonce is base64"),
+            );
         }
     }
     view! {

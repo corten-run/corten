@@ -2551,6 +2551,10 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+277. Leptos joins `bench/fullstack`'s matched tier: under `PROFILE=matched` it adds axum-maud's
+    tower-http layers and a page CSP whose scripts run by the nonce Leptos makes for each
+    response, and its matched matrix meets the same 12 of 24 columns as axum-maud's
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
