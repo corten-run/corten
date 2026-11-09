@@ -516,6 +516,7 @@ async function run(browser) {
   nav.on("console", (m) => m.type() === "error" && !bug(m.text()) && errors.push(m.text()));
   nav.on("pageerror", (e) => errors.push(e.message));
   await nav.goto(`${base}/`);
+  const galleryTitle = await nav.title();
   const backCheck = "CheckboxGroup: back to a swapped page keeps a box a script set with input and change, and brings one set without them back as drawn";
   if (await nav.evaluate(() => "navigation" in window)) {
     const set = await nav.evaluate(() => {
@@ -528,15 +529,19 @@ async function run(browser) {
       (/** @type {any} */ (window)).__sameDocument = 1;
       return { told: told.value, untold: untold.value };
     });
+    // Wait for each page's title, not its address: without NavigationPrecommitController the
+    // runtime moves the address at the click, before the page is drawn, and a Back taken then, or
+    // read before the page it brings back is in, reads the old <main>.
+    const drawn = (/** @type {string} */ title) => !!document.querySelector("main") && document.title === title && !document.querySelector("main[aria-busy]");
     await nav.getByRole("link", { name: "Orders", exact: true }).first().click();
-    await nav.waitForFunction(() => location.pathname === "/orders", null, { timeout: 5000 }).catch(() => {});
+    const left = await nav.waitForFunction(drawn, "Orders | corten-ui", { timeout: 10000 }).then(() => true, () => false);
     await nav.goBack();
-    await nav.waitForFunction(() => location.pathname === "/" && !!document.querySelector('form[action$="/sell"]'), null, { timeout: 5000 }).catch(() => {});
+    const back = left && (await nav.waitForFunction(drawn, galleryTitle, { timeout: 10000 }).then(() => true, () => false));
     const after = await nav.evaluate(({ told, untold }) => {
       const box = (/** @type {string} */ value) => /** @type {HTMLInputElement | null} */ (document.querySelector(`form[action$="/sell"] fieldset input[type="checkbox"][value="${value}"]`));
       return { swapped: (/** @type {any} */ (window)).__sameDocument === 1, told: box(told)?.checked, untold: box(untold)?.checked };
     }, set);
-    check(backCheck, after.swapped && after.told === true && after.untold === false, JSON.stringify({ set, after }));
+    check(backCheck, left && back && after.swapped && after.told === true && after.untold === false, JSON.stringify({ left, back, set, after }));
   } else skip(backCheck, "no Navigation API: a navigation is a full page load");
   await navContext.close();
   await us.uncheck();

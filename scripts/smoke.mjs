@@ -2363,6 +2363,21 @@ async function run(browser) {
     const scripted = { id: await scriptPage.inputValue("#alert-form select"), above: await scriptPage.inputValue("#alert-form input[name=above]") };
     check("back to a page puts back what the user chose and not a value a script set", scripted.id === "SOLR" && scripted.above === "", JSON.stringify(scripted));
     await scriptPage.context().close();
+    // A value a script set and then dispatched input and change for, as a typed field sends, is.
+    const toldPage = await changed((body) => body);
+    await toldPage.evaluate(() => {
+      const above = /** @type {HTMLInputElement} */ (document.querySelector("#alert-form input[name=above]"));
+      above.value = "7";
+      above.dispatchEvent(new Event("input", { bubbles: true }));
+      above.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await toldPage.click('header nav a[href="/news"]');
+    await toldPage.waitForFunction(() => document.title === "News | Watchlist");
+    await toldPage.goBack();
+    await toldPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form") && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const told = await toldPage.inputValue("#alert-form input[name=above]");
+    check("back to a page puts back a value a script set and dispatched input and change for", told === "7", told);
+    await toldPage.context().close();
     // A form with a control named like one of a form's own methods is still read by the form's:
     // leaving it swaps the page in and Back puts back what was typed. (Playwright's own select
     // and checks call getAttribute on the form, so only the text field is typed in, by keys.)

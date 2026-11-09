@@ -19,7 +19,8 @@ use corten::prelude::*;
 /// without them the group keeps its old answer (a group the script cleared is sent and only the
 /// handler refuses it, and one it filled after the user cleared it is still refused by the browser
 /// with `missing`), and the runtime, which keeps a field for back/forward once it has seen one of
-/// them on it, brings a box back as it was drawn when it swapped the page in.
+/// them on it, brings a box the user has not changed back as it was drawn when it swapped the page
+/// in.
 ///
 /// Parts: the `fieldset`, its `legend`, and the app's boxes.
 ///
