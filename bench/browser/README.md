@@ -39,6 +39,7 @@ node view-check.mjs     # rows() (corten/views) against 3,000 random edits, some
 node rows-cost.mjs      # what rows() costs: removing rows by key, push then get, replace
 node rows-ab.mjs <a.js> <b.js>  # two copies of view.js's source taking turns, for a few percent on a busy machine
 node patch-cost.mjs     # what a patch of rows with a menu, or a form, on each costs
+node sort-cost.mjs [engine] [rows.js]   # a sort click: rows::sort in place against a swap of the server-sorted table, fetched at the click or before
 node run.mjs            # client operations, memory and load (two rounds, in alternating order)
 node ssr.mjs            # 1,000 server-rendered rows: take over, then interact
 node dashboard.mjs      # 200 cards on one shared store
@@ -49,7 +50,7 @@ node summarize.mjs <round>   # the client-heavy table in docs/performance.md, fr
 ```
 
 On a Linux droplet: `node bench/fullstack/droplet.mjs <round> --ssh-key <id> --suite browser`
-runs the eighteen-app browser pass of `bench/fullstack` and then `run-all.mjs`.
+runs the twenty-app browser pass of `bench/fullstack` and then `run-all.mjs`.
 
 Takeover on the server-rendered pages is the time from the parser finishing to the app being
 ready, less the rendering of any frame the browser paints in between: Chromium paints the

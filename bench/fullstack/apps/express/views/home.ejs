@@ -1,0 +1,3 @@
+<%- include("head", { title: "Popular items | Card Market" }) %><h1>Popular items</h1>
+<% if (items.length) { %><ul class="item-list__list"><% for (const item of items) { %><li><a class="item-card__card" href="/items/<%= item.id %>"><strong><%= item.title %></strong><% if (item.subtitle) { %><span class="item-card__set"><%= item.subtitle %></span><% } %><% if (item.summary) { %><span class="item-card__from">From <%= item.summary.lowest ?? "\u2014" %></span><% } else { %><span class="item-card__from">No listings yet</span><% } %></a></li><% } %></ul>
+<% } else { %><ul class="item-list__list item-list__ids"><% for (let n = 1; n <= 50; n++) { %><li><a href="/items/item_<%= n %>">Item <%= n %></a></li><% } %></ul><% } %><%- include("foot") %>

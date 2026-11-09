@@ -61,7 +61,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [corten, nextjs, tanstack-start, sveltekit, react-router, leptos, django, rails, laravel, aspnet, spring, phoenix, astro, nuxt, topcoat, axum-maud, gin, drogon]
+        app: [corten, nextjs, tanstack-start, sveltekit, react-router, leptos, django, rails, laravel, aspnet, spring, phoenix, astro, nuxt, topcoat, axum-maud, gin, drogon, fastapi, express]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
