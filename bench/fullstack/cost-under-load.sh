@@ -13,7 +13,8 @@
 # and BENCH_FIXTURE_LOAD_CPUS (else BENCH_LOAD_CPUS) to pin the app and k6 as a round does (on a
 # c-8, BENCH_APP_CPUS=1 BENCH_FIXTURE_LOAD_CPUS=2-7; unset, the app gets --cpus 1 unpinned).
 # OUT/source.txt records the commit (marked -dirty when a tracked file differs from it), how many
-# files differ or are untracked, the source hash, each image's id and the CPU settings the run had.
+# files differ or are untracked (both unknown in a copy with no .git), the source hash, each
+# image's id and the CPU settings the run had.
 # The hash covers this source, not the Dockerfile's base image or
 # packages, so after a base image update remove the cbd-* images before a run.
 set -eo pipefail
@@ -40,7 +41,13 @@ fi
 out=bench/fullstack/${OUT:-results/cost-under-load}
 # Read before source.txt is written, and outside results/, so the record does not count itself.
 commit=$(git describe --always --dirty --abbrev=40 2>/dev/null || echo unknown)
-changed=$(git status --porcelain -- . ':!bench/fullstack/results' 2>/dev/null | wc -l)
+# A copy of a tree with no .git (as droplet.mjs sends one) records unknown for both; under
+# pipefail a failed git status would otherwise stop the run here.
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  changed=$(git status --porcelain -- . ':!bench/fullstack/results' | wc -l)
+else
+  changed=unknown
+fi
 mkdir -p "$out"
 {
   echo "commit $commit"

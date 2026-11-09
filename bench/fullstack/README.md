@@ -1852,9 +1852,9 @@ docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
 # The same builds' requests per CPU-second under load (a round's image of each, ab.mjs on pinned
 # cores; on a c-8, the app on CPU 1 and k6 on 2-7; without them the app gets --cpus 1 unpinned),
-# then each cost:
-BENCH_APP_CPUS=1 BENCH_FIXTURE_LOAD_CPUS=2-7 AB_ROUNDS=3 bash bench/fullstack/cost-under-load.sh
-node bench/fullstack/cost-under-load.mjs bench/fullstack/results/cost-under-load/summary.json
+# then each cost; a new run goes in an OUT of its own, not the committed results/cost-under-load:
+OUT=results/cost-under-load-<date> BENCH_APP_CPUS=1 BENCH_FIXTURE_LOAD_CPUS=2-7 AB_ROUNDS=3 bash bench/fullstack/cost-under-load.sh
+node bench/fullstack/cost-under-load.mjs bench/fullstack/results/cost-under-load-<date>/summary.json
 # One app before and after, alternating (identity, a browser's encodings, brotli alone; AB_ROUNDS=3,
 # AB_ENCODINGS=br for some), and the memory floods of unfinished heads leave, by allocator setting
 # (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some); the committed
