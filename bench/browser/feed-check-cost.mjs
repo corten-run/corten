@@ -1,4 +1,5 @@
-// What checking a feed's patch costs next to the JSON.parse it follows (design Choice 33):
+// What checking a feed's patch costs next to the JSON.parse it follows
+// (docs/design.md#choice-script-boundaries):
 // crates/corten/js/feed.js's patchOf against JSON.parse alone, and JSON.parse against itself for
 // the timing's own noise, on patches of 1, 10 and 100 changes of a nine-field row (one in five a
 // remove). Each takes turns in 15 rounds of 100 ms; prints each one's median nanoseconds a patch

@@ -1,8 +1,6 @@
 // Browser smoke test of the production pieces, against the card-market example (API or fixture mode).
 // Usage: node examples/card-market/smoke.mjs [http://localhost:18410]
 import { chromium, firefox, webkit } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { runInNewContext } from "node:vm";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
 
@@ -208,57 +206,49 @@ try {
   check("a shortcut opens a page of the app", shortcut.status === 200 && shortcut.type.startsWith("text/html") && /ember.reach/i.test(shortcut.title), JSON.stringify(shortcut));
   await manifestCdp.detach();
 
-  // Push: the app's worker script (Pwa::import_script) handles a push sent through DevTools.
-  await context.grantPermissions(["notifications"], { origin: base });
-  const cdp = await context.newCDPSession(page);
-  /** @type {string | null} */
-  let registrationId = null;
-  cdp.on("ServiceWorker.workerRegistrationUpdated", ({ registrations }) => {
-    for (const r of registrations) if (r.scopeURL === `${base}/` && !r.isDeleted) registrationId = r.registrationId;
-  });
-  await cdp.send("ServiceWorker.enable");
-  for (let i = 0; i < 50 && registrationId === null; i += 1) await page.waitForTimeout(100);
-  if (registrationId !== null) {
-    const data = JSON.stringify({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
-    await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data });
-  }
-  const shown = await page
-    .waitForFunction(async () => (await (await navigator.serviceWorker.ready).getNotifications()).some((n) => n.title === "Price drop"), null, { timeout: 5000 })
-    .then(() => true, () => false);
-  check("a push message shows a notification", shown, registrationId === null ? "no registration id" : "");
-  // The worker script itself, run in Node with a stand-in for a worker's global: what it shows for
-  // the app's message, for one of another shape (no title, a url that is not text) and for one with
-  // no data (#1039). Headless Chromium grants the page notifications but not the worker.
-  const pushScript = readFileSync(new URL("static/sw-push.js", import.meta.url), "utf8");
-  const shownFor = async (/** @type {string | null} */ payload) => {
-    /** @type {Record<string, (event: unknown) => void>} */
-    const listeners = {};
-    /** @type {unknown[]} */
-    const shown = [];
-    const self = {
-      addEventListener: (/** @type {string} */ type, /** @type {(event: unknown) => void} */ f) => { listeners[type] = f; },
-      registration: { showNotification: async (/** @type {string} */ title, /** @type {object} */ options) => { shown.push({ title, ...options }); } },
-      clients: { openWindow: async () => {} },
+  // Push: the app's worker script (Pwa::import_script) handles a push sent through DevTools, in
+  // full Chromium (channel "chromium"): the headless shell denies notifications however they are
+  // granted, so its worker's showNotification fails. The app's message, and one of another shape
+  // (no title, a url that is not text) shown untitled and opening / (#1039).
+  const full = await chromium.launch({ headless: true, channel: "chromium" });
+  try {
+    const pushContext = await full.newContext();
+    const pushPage = await pushContext.newPage();
+    await pushPage.goto(base + "/");
+    await pushPage.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 10000 }).catch(() => {});
+    await pushContext.grantPermissions(["notifications"], { origin: base });
+    const cdp = await pushContext.newCDPSession(pushPage);
+    /** @type {string | null} */
+    let registrationId = null;
+    cdp.on("ServiceWorker.workerRegistrationUpdated", ({ registrations }) => {
+      for (const r of registrations) if (r.scopeURL === `${base}/` && !r.isDeleted) registrationId = r.registrationId;
+    });
+    await cdp.send("ServiceWorker.enable");
+    for (let i = 0; i < 50 && registrationId === null; i += 1) await pushPage.waitForTimeout(100);
+    /** The notifications the worker shows, read until one has `body` or 5 s pass. @param {string} body */
+    const shownWith = async (body) => {
+      for (const until = Date.now() + 5000; Date.now() < until; await pushPage.waitForTimeout(100)) {
+        const found = await pushPage.evaluate(async (body) => {
+          const n = (await (await navigator.serviceWorker.ready).getNotifications()).find((n) => n.body === body);
+          return n ? { title: n.title, url: n.data?.url } : null;
+        }, body);
+        if (found) return found;
+      }
+      return null;
     };
-    runInNewContext(pushScript, { self });
-    /** @type {Promise<unknown> | undefined} */
-    let done;
-    listeners.push?.({ data: payload === null ? null : { json: () => JSON.parse(payload) }, waitUntil: (/** @type {Promise<unknown>} */ p) => { done = p; } });
-    await done;
-    return JSON.stringify(shown);
-  };
-  const pushes = [
-    await shownFor(JSON.stringify({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" })),
-    await shownFor(JSON.stringify({ body: "Card Name 7 is back", url: 5 })),
-    await shownFor(null),
-  ];
-  check(
-    "the push worker shows a message's title, body and url, an empty title and / for one of another shape",
-    pushes[0] === '[{"title":"Price drop","body":"Card Name 5 is below $4.50","data":{"url":"/items/item_5"}}]'
-      && pushes[1] === '[{"title":"","body":"Card Name 7 is back","data":{"url":"/"}}]'
-      && pushes[2] === '[{"title":"","data":{"url":"/"}}]',
-    pushes.join(" "),
-  );
+    /** @param {object} message */
+    const push = async (message) => {
+      if (registrationId !== null) await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify(message) });
+    };
+    await push({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
+    const shown = await shownWith("Card Name 5 is below $4.50");
+    check("a push message shows a notification", shown?.title === "Price drop" && shown?.url === "/items/item_5", registrationId === null ? "no registration id" : JSON.stringify(shown));
+    await push({ body: "Card Name 7 is back", url: 5 });
+    const odd = await shownWith("Card Name 7 is back");
+    check("a push message with no title and a url that is not text shows untitled and opens /", odd?.title === "" && odd?.url === "/", JSON.stringify(odd));
+  } finally {
+    await full.close();
+  }
 
   // Offline: a fresh navigation through the runtime falls back to the worker's offline page.
   await page.reload();

@@ -1277,7 +1277,8 @@ rules something out.
     library declares the Navigation API (6.0's does, with `NavigateEvent.info` as `any`), when
     `navigation.d.ts` goes and `info` alone is cast to the runtime's type; the browser gets a
     way to check JSON against a schema without a library; or a feed carries rows the server did
-    not type (a feed relayed from another service).
+    not type (a feed relayed from another service); or open pages reload when a feed's generation
+    changes, which ends the limit above.
 
     Last checked: 2026-11-09, TypeScript 5.9.3 on `c65c10ec` and the change (and 6.0.3 on the
     change, which checks clean, on 2026-11-08), the timings in Chromium 156 (Playwright 1.64.1)
