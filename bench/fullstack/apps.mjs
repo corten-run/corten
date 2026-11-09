@@ -18,7 +18,7 @@ const catalog = {
   rails: { image: "cb-rails", port: 18417, label: "Rails 8.1 (Ruby, Puma, YJIT, Turbo)" },
   laravel: { image: "cb-laravel", port: 18418, label: "Laravel 13 (PHP, Octane on FrankenPHP, Livewire)" },
   aspnet: { image: "cb-aspnet", port: 18419, label: "ASP.NET Core 10 Razor Pages (C#, Kestrel, htmx)" },
-  spring: { image: "cb-spring", port: 18420, label: "Spring Boot 4.1 (Java 25, Thymeleaf, htmx)" },
+  spring: { image: "cb-spring", port: 18420, label: "Spring Boot 4.1 (Java 25, Thymeleaf, htmx)", matched: true },
   phoenix: { image: "cb-phoenix", port: 18421, label: "Phoenix 1.8 LiveView (Elixir)" },
   astro: { image: "cb-astro", port: 18422, label: "Astro 7 (Node adapter, client router)" },
   nuxt: { image: "cb-nuxt", port: 18423, label: "Nuxt 4 (Vue 3, Nitro)" },
