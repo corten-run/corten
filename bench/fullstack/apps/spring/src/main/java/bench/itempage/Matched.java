@@ -22,7 +22,9 @@ import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWrite
  * Cache-Control that keeps every answer that sets none from shared caches) with axum-maud's CSP,
  * Referrer-Policy, Cross-Origin-Opener-Policy and Permissions-Policy added, its CSRF check on posts
  * (Thymeleaf writes the token into each form), and its firewall's host check (localhost and the
- * deploy's HOSTS, as Corten's). Every request is let through: the app has no sign-in.
+ * deploy's HOSTS, as Corten's). Every request is let through: the app has no sign-in. Without Boot's
+ * security starter the filter chain is a plain servlet filter, so it runs for a request's own
+ * dispatch, not the error page's: the headers it writes stay on that answer.
  * application-matched.properties has Spring Boot's part.
  */
 @Configuration
@@ -35,7 +37,8 @@ public class Matched {
                 .authorizeHttpRequests(requests -> requests.anyRequest().permitAll())
                 // The token in a cookie, as Django keeps it: the default keeps it in a server session,
                 // which would hold one session for every page a load phase reads.
-                .csrf(csrf -> csrf.csrfTokenRepository(new CookieCsrfTokenRepository()))
+                // /live/publish takes bench/live's publisher's posts, as Django's handler (csrf_exempt) does.
+                .csrf(csrf -> csrf.csrfTokenRepository(new CookieCsrfTokenRepository()).ignoringRequestMatchers("/live/publish"))
                 .headers(headers -> headers
                         .contentSecurityPolicy(csp -> csp.policyDirectives(
                                 "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"))

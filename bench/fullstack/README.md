@@ -1486,25 +1486,35 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    (`Matched.java`) keeps its default headers (nosniff, `X-Frame-Options: DENY`, and a
    `Cache-Control` of `no-cache, no-store, max-age=0, must-revalidate` on every answer that sets
    none, so the static files keep their year-long one), adds axum-maud's CSP, Referrer-Policy,
-   Cross-Origin-Opener-Policy and Permissions-Policy, checks a CSRF token on every post (kept in a
-   cookie, as Django keeps it, since the default keeps it in a server session, one for every page a
-   load phase reads; Thymeleaf writes it into the form), and refuses a Host not listed (its
-   firewall's `setAllowedHostnames`: localhost and `HOSTS`, 400). `application-matched.properties`
-   turns on Boot's gzip, problem details for the errors Spring MVC answers itself, Tomcat's 30 s
-   connection timeout (which closes an unfinished head) and `MAX_CONNECTIONS` as Tomcat's
-   `max-connections`, and Actuator's liveness and readiness probes. The app uses Spring Security's
-   own modules, not Boot's starter, whose auto-configuration would secure the defaults tier too,
-   and `application.properties` excludes Actuator's auto-configuration unless the profile is on, so
-   without it the app starts the same 60 auto-configurations as before (Boot's `--debug` condition
-   report, compared) and its defaults-tier matrix is unchanged. Spring writes no ETag: Spring's
-   `ShallowEtagHeaderFilter` writes none for a `no-store` answer, and the page's CSRF token is
-   masked afresh on each render, as Django's is, so a second render would not repeat one either.
-   Left out: the item API's deadline (`RestClient` waits as long as it is let, and setting a
-   timeout is the app's code, the same in both tiers), a readiness that knows the item API (a
-   health indicator of the app's own), and the JSON's 404 (the controller's own empty answer).
-   A `DELETE` on the JSON is refused by the CSRF check (403 JSON) before Spring MVC can answer 405.
-   The alert form, the sort and "show all" work in Chromium through the edge, with the same one
-   htmx indicator `style-src` violation as Django.
+   Cross-Origin-Opener-Policy and Permissions-Policy, checks a CSRF token on every post but
+   bench/live's `/live/publish` (as Django's `csrf_exempt` handler; the token is kept in a cookie,
+   as Django keeps it, since the default keeps it in a server session, one for every page a load
+   phase reads; Thymeleaf writes it into the form), and refuses a Host not listed (its firewall's
+   `setAllowedHostnames`: localhost and `HOSTS`, 400). Without Boot's security starter the chain is
+   a plain servlet filter, run for a request's own dispatch: an error page keeps the headers it
+   wrote on the answer (the probe's 404 and 500 have them). `application-matched.properties` turns
+   on Boot's gzip, problem details for the errors Spring MVC answers itself, Tomcat's 30 s
+   connection timeout (which closes an unfinished head, and idle kept connections at 30 s instead of
+   60) and `MAX_CONNECTIONS` as Tomcat's `max-connections`, and Actuator's liveness and readiness
+   probes: its endpoint and health auto-configuration only, so the app records no metrics or
+   per-request observation, as no other app of the tier does. The app uses Spring Security's own
+   modules, not Boot's starter, whose auto-configuration would secure the defaults tier too, and
+   `application.properties` excludes all of Actuator's auto-configuration unless the profile is on,
+   so without it the app starts the same 60 conditional and 6 unconditional auto-configurations as
+   before (Boot's `--debug` condition report, compared) and its defaults-tier matrix is unchanged;
+   its image grows by 5.9 MB (Spring Security's two modules and Actuator). Measured locally against
+   the image before them, without the profile (noisy, on a loaded machine): the first 200 came a
+   median 19.8 s after start against 18.8 s (26 alternating runs), and memory after 1,000 requests
+   was 327-332 MiB against 321-324 MiB (three runs each). Spring writes no ETag: Spring's
+   `ShallowEtagHeaderFilter` writes none for a `no-store` answer (checked: none on the page or the
+   JSON), and the page's CSRF token is masked afresh on each render, as Django's is, so a second
+   render would not repeat one either. Left out: the item API's deadline (the app makes its client
+   with `RestClient.create()`, which Boot's `spring.http.clients.read-timeout` does not reach; the
+   client is the app's code in both tiers), a readiness that knows the item API (a health indicator
+   of the app's own), and the JSON's 404 (the controller's own empty answer). A `DELETE` on the JSON
+   is refused by the CSRF check (403 JSON) before Spring MVC can answer 405. The alert form, the
+   sort and "show all" work in Chromium through the edge, with the same one htmx indicator
+   `style-src` violation as Django.
 7. `nextjs` and `aspnet` (and `aspnet-aot`) are not in it yet: each joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
