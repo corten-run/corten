@@ -6356,8 +6356,9 @@ Corten is pre-1.0, so any minor version may change the API.
     "Clear" button dispatches `input` and `change` on each box it set, as the kit's own scripts do;
     without them the group keeps its old answer, so a cleared group is sent and only the handler
     refuses it, a group the script filled after the user cleared it is still refused by the browser,
-    and back/forward brings the boxes back as drawn. The ui-gallery's smoke test checks both
-    directions in each engine, the filled one from a box other than the first
+    and back/forward to a page the runtime swapped in brings the boxes back as drawn. The
+    ui-gallery's smoke test checks both directions in each engine, the filled one from a box other
+    than the first, and the back/forward case where the Navigation API is
     ([#1098 CheckboxGroup docs do not say a script that sets checked must dispatch change, so the group keeps its old validity](https://github.com/corten-run/corten/issues/1098)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)

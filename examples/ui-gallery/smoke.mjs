@@ -507,6 +507,41 @@ async function run(browser) {
     scripted.count > 1 && scripted.cleared && !scripted.clearedTold && !scripted.filled && scripted.message === "Choose where you ship." && scripted.filledTold && scripted.back,
     JSON.stringify(scripted),
   );
+  // Back to a page the runtime swapped in brings back a box a script set with input and change,
+  // and one it set without them as drawn (the runtime keeps only fields it saw an event on). On a
+  // page of its own, so the form above keeps its state; only where the Navigation API is, which
+  // the runtime's back/forward needs.
+  const navContext = await browser.newContext();
+  const nav = await navContext.newPage();
+  nav.on("console", (m) => m.type() === "error" && !bug(m.text()) && errors.push(m.text()));
+  nav.on("pageerror", (e) => errors.push(e.message));
+  await nav.goto(`${base}/`);
+  if (await nav.evaluate(() => "navigation" in window)) {
+    const set = await nav.evaluate(() => {
+      const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
+      const [told, untold] = boxes.filter((b) => !b.defaultChecked);
+      told.checked = true;
+      told.dispatchEvent(new Event("input", { bubbles: true }));
+      told.dispatchEvent(new Event("change", { bubbles: true }));
+      untold.checked = true;
+      (/** @type {any} */ (window)).__sameDocument = 1;
+      return { told: told.value, untold: untold.value };
+    });
+    await nav.getByRole("link", { name: "Orders", exact: true }).first().click();
+    await nav.waitForFunction(() => location.pathname === "/orders", null, { timeout: 5000 }).catch(() => {});
+    await nav.goBack();
+    await nav.waitForFunction(() => location.pathname === "/" && !!document.querySelector('form[action$="/sell"]'), null, { timeout: 5000 }).catch(() => {});
+    const after = await nav.evaluate(({ told, untold }) => {
+      const box = (/** @type {string} */ value) => /** @type {HTMLInputElement | null} */ (document.querySelector(`form[action$="/sell"] fieldset input[type="checkbox"][value="${value}"]`));
+      return { swapped: (/** @type {any} */ (window)).__sameDocument === 1, told: box(told)?.checked, untold: box(untold)?.checked };
+    }, set);
+    check(
+      "CheckboxGroup: back to a swapped page keeps a box a script set with input and change, and brings one set without them back as drawn",
+      after.swapped && after.told === true && after.untold === false,
+      JSON.stringify({ set, after }),
+    );
+  }
+  await navContext.close();
   await us.uncheck();
   const shipMessage = await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
   await page.getByRole("button", { name: "List for sale" }).click();
