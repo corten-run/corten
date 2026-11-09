@@ -1198,8 +1198,10 @@ mod tests {
 
     /// What serving a file costs: `ASSET_REQUESTS` (200) requests of a 4 KiB stylesheet in process,
     /// one at a time, unencoded (the answer a range is read for). Counted under callgrind at two
-    /// numbers of requests, the difference over the requests between them is the instructions a
-    /// request: `ASSET_REQUESTS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_serving_a_file_costs`
+    /// numbers of requests (200 and 1,200), the difference over the 1,000 requests between them is
+    /// the instructions a request:
+    /// `ASSET_REQUESTS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_serving_a_file_costs`,
+    /// then the same with `ASSET_REQUESTS=1200`.
     #[test]
     #[ignore]
     fn what_serving_a_file_costs() {

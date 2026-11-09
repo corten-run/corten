@@ -438,13 +438,14 @@ try {
     }
   }
   // The home page's condition clip plays from the embedded files in every engine: each byte range
-  // the browser asks for is answered 206 (WebKit also reads the file once without one, a 200), it
-  // seeks to the clip's last part without loading it again from the start, and the reader's
-  // captions show there (#1133). The reader's track is the `default`: Chromium and Firefox show it
-  // unasked, while WebKit leaves captions to its own caption setting, so there the smoke turns the
-  // track on and checks the same cue. Playwright's WebKit on Windows lands a seek on the clip's
-  // start whatever server sends it (a plain Node one too), so it is skipped there; on Linux, as in
-  // CI, it makes the whole check.
+  // the browser asks for is answered 206 (WebKit also reads the file once without one, a 200; a
+  // request the browser drops shows as status 0), it seeks to the clip's last part, and the
+  // reader's captions show there (#1133). The clip is 8 KB, so the first range may be the whole
+  // file; the Rust tests cover ranges inside a file. The reader's track is the `default`: Chromium
+  // and Firefox show it unasked, while WebKit leaves captions to its own caption setting, so there
+  // the smoke turns the track on and checks the same cue. Playwright's WebKit on Windows lands a
+  // seek on the clip's start whatever server sends it (a plain Node one too), so it is skipped
+  // there; on Linux, as in CI, it makes the whole check.
   for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
     const clipCheck = `${name}: the home page's clip plays from its embedded file by byte ranges, seeks, and shows the reader's captions there`;
     if (name === "WebKit" && process.platform === "win32") {
@@ -488,9 +489,9 @@ try {
         clipCheck,
         !("error" in clip) && Math.abs(clip.at - 4.5) < 0.6 && clip.mode === "showing" &&
           (name === "WebKit" || clip.unasked === "showing") && clip.lang === "en" &&
-          clip.cue?.startsWith("Moderately Played") === true && answers.some((a) => a.startsWith("bytes=")) &&
-          // A request the browser dropped is reported with status 0 and no answer.
-          answers.every((a) => /^whole: (200|0) /.test(a) || /^bytes=\S+: 206 bytes /.test(a)),
+          clip.cue?.startsWith("Moderately Played") === true &&
+          answers.some((a) => /^bytes=\S+: 206 bytes /.test(a)) &&
+          answers.every((a) => /^whole: (200|0) /.test(a) || /^bytes=\S+: (206 bytes |0 )/.test(a)),
         `${JSON.stringify(clip)}; ${answers.join(", ")}`,
       );
     } finally {
