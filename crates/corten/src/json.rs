@@ -187,10 +187,18 @@
 //!
 //! A generic one is a `FromJson` wherever the `Deserialize` they wrote applies (with the bounds
 //! serde infers, such as `T: Default` for a defaulted `T`), read by serde_json rather than
-//! Corten's reader, and a `UrlValue` enum with `#[serde(other)]` reads any other word as that
-//! variant (Corten's reader gives up on it and
-//! the `Deserialize` they wrote reads it). A form input whose fields borrow from the input gets
-//! none and cannot take one, since a `FromJson` reads owned values.
+//! Corten's reader (so inside another value it is read twice: the reader finds its text, then
+//! serde_json reads that). A `UrlValue` enum with `#[serde(other)]` reads any other word as that
+//! variant: Corten's reader gives up on the whole text at such a word and serde_json reads it all
+//! again with the `Deserialize` they wrote. A form input whose fields borrow from the input gets
+//! none and cannot take one, since a `FromJson` reads owned values. `#[derive(FromJson)]` itself
+//! still refuses `#[serde(other)]`, which its reader does not follow; derive `UrlValue` for that:
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Shown { All, Mine, #[serde(other)] Other }
+//! ```
 //!
 //! ```
 //! #[derive(Debug, PartialEq, corten::UrlValue)]
@@ -211,6 +219,16 @@
 //! #[derive(corten::Fields)]
 //! struct Note<'a> { text: &'a str }
 //! impl corten::FromJson for Note<'static> {}
+//! ```
+//!
+//! A generic `#[derive(FromJson)]` type with a defaulted field of the bare parameter is refused
+//! where it is defined, since its reader needs `T: Default` and asks each parameter only for
+//! `FromJson`. A defaulted `Vec<T>` or `Option<T>` is read by its reader, where `T: Default` (as
+//! serde's derive asks), and `Fields` takes the bare one, read by serde_json:
+//!
+//! ```compile_fail,E0277
+//! #[derive(corten::FromJson)]
+//! struct Pick<T> { #[serde(default)] value: T }
 //! ```
 
 use std::{

@@ -919,6 +919,12 @@ pub fn for_from_json(item: &Item) -> Result<TokenStream, Error> {
                     }
                     "skip" | "skip_deserializing" => skip = true,
                     "skip_serializing" | "serialize_with" | "bound" => {}
+                    "other" => {
+                        return err(
+                            arg.span,
+                            "FromJson: #[serde(other)] is not followed by FromJson's reader; derive corten::UrlValue for this enum instead, which reads any other word as this variant and is a FromJson (serde_json reads a word the reader does not know)",
+                        );
+                    }
                     _ => return Err(unsupported(&arg)),
                 }
             }

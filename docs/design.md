@@ -912,9 +912,12 @@ rules something out.
     as well. A generic type's `FromJson` is the trait's own body, which hands the text to
     serde_json, under `Self: DeserializeOwned`: the bounds serde infers for its `Deserialize`
     (`T: Default` for a defaulted `T`, a bound on `T::Assoc`) are not one per parameter, and a
-    reader written against them would have to repeat each; an
-    enum with `#[serde(other)]` is read by the reader up to a word it does not know, which the
-    `Deserialize` reads as that variant, and is described as any string. One whose
+    reader written against them would have to repeat each. So a generic form type is read by
+    serde_json, a value nested in another twice (the reader finds its text, serde_json reads it),
+    with no way back to the reader: `FromJson` beside `Fields` and an empty impl are both a
+    second impl. An enum with `#[serde(other)]` is read by the reader up to a word it does not
+    know, where it gives up on the whole text and serde_json reads it again, and is described as
+    any string. One whose
     `Deserialize` borrows from its input cannot be a `FromJson`, which reads owned values. Not
     chosen: depending on serde_derive from `corten-macros`, which builds on `proc_macro` alone, or
     keeping the second derive, which a derive cannot add to the item it reads
