@@ -6210,16 +6210,16 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
     {
         use std::io::Read;
         // Decoded by readers that check for the coding's end: a body without zstd's frame end or
-        // brotli's last block is an error, not a short file.
+        // gzip's trailer is an error, not a short file.
         let decoded = |coding: &str, body: &[u8]| -> std::io::Result<Vec<u8>> {
             let mut out = Vec::new();
             match coding {
                 "zstd" => zstd::stream::read::Decoder::new(body)?.read_to_end(&mut out)?,
-                _ => brotli::Decompressor::new(body, 4096).read_to_end(&mut out)?,
+                _ => flate2::read::GzDecoder::new(body).read_to_end(&mut out)?,
             };
             Ok(out)
         };
-        for coding in ["zstd", "br"] {
+        for coding in ["zstd", "gzip"] {
             for path in ["/export", "/sized"] {
                 let (_, headers, body) = get_with(path, Some(&format!("gzip, {coding}"))).await;
                 assert_eq!(headers[header::CONTENT_ENCODING], coding, "{path}");
@@ -6241,8 +6241,9 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
             assert_eq!((headers[header::CONTENT_LENGTH].to_str().unwrap(), &body[..]), ("8", &b"a,1\nb,2\n"[..]));
             assert_eq!(headers[header::VARY], "accept-encoding");
         }
-        // A client that takes only gzip gets it as it is, with its length.
-        let (_, headers, body) = get_with("/sized", Some("gzip")).await;
+        // A client that takes only brotli gets it as it is, with its length: a stream is never
+        // brotli (`compress::StreamCoder`).
+        let (_, headers, body) = get_with("/sized", Some("br")).await;
         assert!(!headers.contains_key(header::CONTENT_ENCODING));
         assert_eq!(headers[header::CONTENT_LENGTH], length.to_string());
         assert_eq!(body, csv.as_bytes());
@@ -6682,7 +6683,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
     let long = read_all(request("/long").await).await;
     assert!(long.contains("content-length: 5") && long.ends_with("\r\n\r\nabc"), "{long}");
     #[cfg(feature = "compress")]
-    for (coding, accept) in [("zstd", "accept-encoding: zstd\r\n"), ("br", "accept-encoding: br\r\n")] {
+    for (coding, accept) in [("zstd", "accept-encoding: zstd\r\n"), ("gzip", "accept-encoding: gzip\r\n")] {
         use std::io::Read;
         let mut stream = request_with("/broken-text", accept).await;
         let mut raw = Vec::new();
@@ -6707,7 +6708,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
         let mut out = Vec::new();
         let decoded = match coding {
             "zstd" => zstd::stream::read::Decoder::new(&body[..]).unwrap().read_to_end(&mut out),
-            _ => brotli::Decompressor::new(&body[..], 4096).read_to_end(&mut out),
+            _ => flate2::read::GzDecoder::new(&body[..]).read_to_end(&mut out),
         };
         assert!(decoded.is_err(), "{coding}: a failed stream does not end its coding: {out:?}");
     }

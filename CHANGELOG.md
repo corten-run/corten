@@ -4077,6 +4077,19 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
 
 ### Fixed
+- A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
+  gets zstd as before, and any other that accepts gzip (Safari) gets gzip at level 3, flushed per
+  event with its window kept. WebKit dispatched a flushed brotli event that decodes to more than
+  16 KiB only once more of the body arrived, so the last change before a quiet spell showed one
+  event late: in Playwright's WebKit a 16,385-byte event came 700 ms late (the next chunk's delay)
+  in every run, with Corten's encoder and with Node's at quality 4 and 11, and with empty blocks
+  after it; gzip and identity were on time at every size tried, to 200 KB, in all three engines.
+  Gzip-only clients, sent streams uncompressed before, get gzip too. A gzip stream holds 352 KiB
+  where a brotli one held 0.96 to 1.3 MiB. It sends more than brotli for a large region: a redraw
+  of one row of 40 (2.7 KB) is 61 to 73 bytes against brotli's 37 to 55, of 250 (17 KB) about 505
+  against 172, and an event over gzip's 32 KiB window repeats nothing (42 KB: 5,717 against 664);
+  CPU an event was 23 against 31 µs, 109 against 99 and 663 against 443 (one run each, release,
+  Windows) ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

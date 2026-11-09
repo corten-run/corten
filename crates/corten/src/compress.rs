@@ -19,11 +19,13 @@
 //!
 //! Event streams ([`crate::live`], feeds) are compressed as one stream per connection, flushed
 //! after every event so it arrives at once, with the context kept between events: a redraw that
-//! repeats the last one costs tens of bytes. A stream holds its context while it is open, so
-//! streams use small windows (zstd 1 with a 64 KiB window, about 470 KiB; brotli 4, about 800 KiB;
-//! gzip clients get the stream as it is) and share a budget of 256 MiB (about 550 streams): past
-//! it a new stream goes out uncompressed. An event repeats cheaply when the one before it is within the
-//! window, so events up to about 64 KB.
+//! repeats the last one costs tens of bytes. A stream is zstd 1 (a 64 KiB window, about 470 KiB
+//! held) or else gzip 3 (deflate's 32 KiB window, about 350 KiB held), never brotli: WebKit holds
+//! back the end of a flushed brotli event that decodes to more than 16 KiB until more bytes arrive,
+//! so the last event of a quiet stream would wait for the next one (#1131). Every stream's context
+//! shares a budget of 256 MiB (about 550 zstd streams): past it a new stream goes out
+//! uncompressed. An event repeats cheaply when the one before it is within the window, so events
+//! up to about 64 KB with zstd and 32 KB with gzip.
 //!
 //! `corten::compress::apply(router)` wraps the whole app. Images, fonts, bodies under 1 KiB,
 //! another server's answer ([`crate::Relay`]) and responses that are already encoded or marked
@@ -52,6 +54,10 @@ const MIN_SIZE: u64 = 1024;
 const ZSTD_LEVEL: i32 = 1;
 const BROTLI_LEVEL: u32 = 1;
 const GZIP_LEVEL: u32 = 1;
+/// A stream's gzip level: deflate (miniz_oxide) at 1 finds few of an earlier event's matches, so a
+/// 2.7 KB redraw of one changed row costs 436 to 451 bytes a time; at 3 it costs 61 to 73, in
+/// about the time brotli 4 took (23 against 31 µs an event, one run on Windows, release).
+const GZIP_STREAM_LEVEL: u32 = 3;
 
 /// Memory all compressed streams (event streams and streamed `Media`) may hold at once, in bytes.
 /// Each open stream holds its coder's context ([`StreamCoder`]); a stream that would pass this is
@@ -59,7 +65,9 @@ const GZIP_LEVEL: u32 = 1;
 const STREAM_BUDGET: usize = 256 << 20;
 /// What one stream's context holds, measured with the settings in [`StreamCoder::new`].
 const ZSTD_STREAM_BYTES: usize = 480 << 10;
-const BROTLI_STREAM_BYTES: usize = 1000 << 10;
+/// flate2's deflate (miniz_oxide) at level 3 holds 352,104 bytes from its first event on, whatever
+/// the events' size (levels 1 and 3 alike).
+const GZIP_STREAM_BYTES: usize = 360 << 10;
 static STREAM_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 /// A content coding Corten writes.
@@ -233,6 +241,12 @@ impl Accepts {
         self.best(&[Coding::Zstd, Coding::Brotli, Coding::Gzip])
     }
 
+    /// The coding for a body compressed as it is sent and flushed a chunk at a time (an event
+    /// stream, a streamed `Media`): zstd, else gzip, never brotli ([`StreamCoder`]).
+    fn streamed(self) -> Option<Coding> {
+        self.best(&[Coding::Zstd, Coding::Gzip])
+    }
+
     /// The coding for a body compressed before ([`Precompressed`]: brotli or gzip), when the
     /// client ranks it as high as any it accepts: one that prefers zstd gets zstd made now.
     fn stored(self) -> Option<Coding> {
@@ -274,7 +288,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     let content_type = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
     let event_stream = crate::api::media_type(content_type) == "text/event-stream";
     if event_stream {
-        return stream(res, coding);
+        return stream(res, accepts.streamed());
     }
     // A `Media::stream`: a chunk at a time as it comes, never collected, when its type is worth
     // it. Only a body of no stated size can be one, so a buffered answer pays one size check.
@@ -289,7 +303,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
             vary(&mut parts.headers);
             return Response::from_parts(parts, body);
         }
-        return stream(res, coding);
+        return stream(res, accepts.streamed());
     }
     if !varies(content_type, headers)
         || headers.contains_key(header::CONTENT_ENCODING)
@@ -334,7 +348,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
 
 /// An event stream, compressed one event at a time with the context kept between them, or a
 /// streamed `Media`, one chunk at a time. Each is flushed, so the client can use it at once, and
-/// a body that ends ends its coding too (zstd's frame, brotli's stream), so a decoder that checks
+/// a body that ends ends its coding too (zstd's frame, gzip's trailer), so a decoder that checks
 /// for the end takes it as whole; one that fails is cut where it failed, without that end.
 fn stream(res: Response, coding: Option<Coding>) -> Response {
     let headers = res.headers();
@@ -373,21 +387,27 @@ fn stream(res: Response, coding: Option<Coding>) -> Response {
 
 /// One stream's coder (an event stream's, or a streamed `Media`'s): everything written so far is
 /// its context, so an event like an earlier one costs only what differs. Holds its share of
-/// `STREAM_BUDGET` until dropped. The brotli writer is taken out when the stream ends
-/// ([`StreamCoder::end`]), since only giving it up finishes its stream.
+/// `STREAM_BUDGET` until dropped. The gzip writer is taken out when the stream ends
+/// ([`StreamCoder::end`]), since only finishing it writes its trailer.
+///
+/// No brotli: WebKit (Playwright's 27.2 build, measured) dispatches a flushed brotli event that
+/// decodes to more than 16 KiB only once more of the body arrives, so a stream's last event before
+/// a quiet spell waits for the next one or a keepalive, whatever the encoder (Node's own brotli,
+/// quality 4 or 11, does the same) and whatever empty blocks follow it. Gzip, sync-flushed, arrives
+/// at once in every engine at every size tried (to 200 KB), and so does zstd where it is accepted.
 pub(crate) enum StreamCoder {
     Zstd(zstd::zstd_safe::CCtx<'static>),
-    Brotli(Option<Box<brotli::CompressorWriter<Vec<u8>>>>),
+    Gzip(Option<Box<flate2::write::GzEncoder<Vec<u8>>>>),
 }
 
 impl StreamCoder {
-    /// A coder for `coding`, or `None` when the stream should go out as it is: a gzip client
-    /// (deflate repeats an event poorly at a level worth its time), or the budget is spent.
+    /// A coder for `coding` (zstd or gzip), or `None` when the stream should go out as it is:
+    /// brotli (see above), or the budget is spent.
     pub(crate) fn new(coding: Coding) -> Option<StreamCoder> {
         let cost = match coding {
             Coding::Zstd => ZSTD_STREAM_BYTES,
-            Coding::Brotli => BROTLI_STREAM_BYTES,
-            Coding::Gzip => return None,
+            Coding::Gzip => GZIP_STREAM_BYTES,
+            Coding::Brotli => return None,
         };
         if !reserve(&STREAM_BYTES, cost, STREAM_BUDGET) {
             return None;
@@ -401,21 +421,21 @@ impl StreamCoder {
                 }
                 StreamCoder::Zstd(cx)
             }
-            _ => StreamCoder::Brotli(Some(Box::new(brotli::CompressorWriter::new(Vec::new(), 4096, 4, 16)))),
+            _ => StreamCoder::Gzip(Some(Box::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(GZIP_STREAM_LEVEL))))),
         })
     }
 
     fn coding(&self) -> Coding {
         match self {
             StreamCoder::Zstd(_) => Coding::Zstd,
-            StreamCoder::Brotli(_) => Coding::Brotli,
+            StreamCoder::Gzip(_) => Coding::Gzip,
         }
     }
 
     fn cost(&self) -> usize {
         match self {
             StreamCoder::Zstd(_) => ZSTD_STREAM_BYTES,
-            StreamCoder::Brotli(_) => BROTLI_STREAM_BYTES,
+            StreamCoder::Gzip(_) => GZIP_STREAM_BYTES,
         }
     }
 
@@ -423,21 +443,24 @@ impl StreamCoder {
     pub(crate) fn event(&mut self, data: &[u8]) -> Bytes {
         match self {
             StreamCoder::Zstd(cx) => zstd_stream(cx, data, zstd::zstd_safe::zstd_sys::ZSTD_EndDirective::ZSTD_e_flush),
-            StreamCoder::Brotli(writer) => {
-                let writer = writer.as_mut().expect("a brotli stream is not written after it ends");
-                writer.write_all(data).expect("brotli writes to memory");
-                writer.flush().expect("brotli writes to memory");
+            StreamCoder::Gzip(writer) => {
+                let writer = writer.as_mut().expect("a gzip stream is not written after it ends");
+                writer.write_all(data).expect("gzip writes to memory");
+                // A sync flush: everything so far decodes, and the window is kept.
+                writer.flush().expect("gzip writes to memory");
                 std::mem::take(writer.get_mut()).into()
             }
         }
     }
 
-    /// What ends the stream's coding (zstd's frame end, brotli's last block), after which nothing
+    /// What ends the stream's coding (zstd's frame end, gzip's last block and trailer), after which nothing
     /// is written: without it a decoder that checks for the end takes the body as cut short.
     pub(crate) fn end(&mut self) -> Bytes {
         match self {
             StreamCoder::Zstd(cx) => zstd_stream(cx, &[], zstd::zstd_safe::zstd_sys::ZSTD_EndDirective::ZSTD_e_end),
-            StreamCoder::Brotli(writer) => writer.take().map_or_else(Bytes::new, |writer| writer.into_inner().into()),
+            StreamCoder::Gzip(writer) => {
+                writer.take().map_or_else(Bytes::new, |writer| writer.finish().expect("gzip writes to memory").into())
+            }
         }
     }
 }
@@ -939,8 +962,8 @@ mod tests {
     }
 
     /// What compressing an event stream costs per event: `EVENTS` (20,000) redraws, each changing
-    /// one row, sent through `apply` as zstd and as brotli and read to the end (`CODING`, `zstd` or
-    /// `br`, picks one). Counted with callgrind in release, one `CODING` at a time at two `EVENTS`
+    /// one row, sent through `apply` as zstd and as gzip and read to the end (`CODING`, `zstd` or
+    /// `gzip`, picks one). Counted with callgrind in release, one `CODING` at a time at two `EVENTS`
     /// (2,000 and 12,000): the difference over the 10,000 redraws between them is the instructions
     /// an event, making each redraw included: `CODING=zstd EVENTS=2000 valgrind --tool=callgrind
     /// <release test binary> --ignored what_an_event_stream_costs --test-threads 1`, then the same
@@ -952,8 +975,8 @@ mod tests {
     async fn what_an_event_stream_costs() {
         let events: usize = std::env::var("EVENTS").ok().and_then(|n| n.parse().ok()).unwrap_or(20_000);
         let only = std::env::var("CODING").ok();
-        assert!(only.as_deref().is_none_or(|only| matches!(only, "zstd" | "br")), "CODING is zstd or br, not {only:?}");
-        for coding in ["zstd", "br"].into_iter().filter(|coding| only.as_deref().is_none_or(|only| only == *coding)) {
+        assert!(only.as_deref().is_none_or(|only| matches!(only, "zstd" | "gzip")), "CODING is zstd or gzip, not {only:?}");
+        for coding in ["zstd", "gzip"].into_iter().filter(|coding| only.as_deref().is_none_or(|only| only == *coding)) {
             let made: Vec<Bytes> = (0..events).map(|i| Bytes::from(redraw(i % 40))).collect();
             let app = apply(Router::new().route(
                 "/live",
@@ -1013,21 +1036,25 @@ mod tests {
         // A stream that ends ends its frame, so a decoder that checks for the end takes it whole.
         assert_eq!(zstd::stream::decode_all(&frames.concat()[..]).unwrap(), sent.concat().into_bytes());
 
-        let (headers, frames) = events("gzip, br").await;
-        assert_eq!(headers["content-encoding"], "br");
-        let mut decoder = brotli::DecompressorWriter::new(Vec::new(), 4096);
+        // A client that takes brotli but not zstd (WebKit) gets gzip: never brotli (`StreamCoder`).
+        let (headers, frames) = events("gzip, deflate, br").await;
+        assert_eq!(headers["content-encoding"], "gzip");
+        assert_eq!(frames.len(), 4, "one compressed chunk per event, then the trailer");
+        let mut decoder = flate2::write::GzDecoder::new(Vec::new());
         for (frame, event) in frames.iter().zip(&sent) {
             decoder.write_all(frame).unwrap();
             decoder.flush().unwrap();
             assert_eq!(String::from_utf8(std::mem::take(decoder.get_mut())).unwrap(), *event);
         }
-        assert!(frames[2].len() < 40, "{}", frames[2].len());
+        assert!(frames[0].len() < sent[0].len() / 3, "first event {} of {}", frames[0].len(), sent[0].len());
+        assert!(frames[1].len() < sent[1].len() / 5, "a redraw costs about what changed: {}", frames[1].len());
+        assert!(frames[2].len() < 100, "a repeated redraw costs little: {}", frames[2].len());
         let mut whole = Vec::new();
-        std::io::Read::read_to_end(&mut brotli::Decompressor::new(&frames.concat()[..], 4096), &mut whole).unwrap();
+        std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&frames.concat()[..]), &mut whole).unwrap();
         assert_eq!(whole, sent.concat().into_bytes());
 
-        // Deflate repeats a 4 KB event poorly at a level worth its time: gzip clients get it as it is.
-        let (headers, frames) = events("gzip").await;
+        // A client that takes only brotli gets the stream as it is.
+        let (headers, frames) = events("br").await;
         assert!(!headers.contains_key("content-encoding"));
         assert_eq!(headers["vary"], "accept-encoding");
         assert_eq!(frames.concat(), sent.concat().into_bytes());
@@ -1040,7 +1067,7 @@ mod tests {
         assert!(!reserve(&held, 600, 1000), "past the budget the stream goes out uncompressed");
         assert!(reserve(&held, 400, 1000));
         assert_eq!(held.load(Ordering::Acquire), 1000);
-        assert!(StreamCoder::new(Coding::Gzip).is_none());
+        assert!(StreamCoder::new(Coding::Brotli).is_none());
         // What a zstd stream reserves covers its context once it has seen large events.
         let mut coder = StreamCoder::new(Coding::Zstd).unwrap();
         for _ in 0..3 {
