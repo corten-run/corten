@@ -475,27 +475,36 @@ async function run(browser) {
   });
   check("Checkbox: drawn as a checkbox, but not an input whose role is switch", drawnBox.box === "none" && drawnBox.asSwitch === "auto", JSON.stringify(drawnBox));
   // A script that sets checked sends no change, so the group keeps its answer until the script
-  // dispatches one from a box, as the CheckboxGroup doc says.
+  // dispatches input and change on each box it set, as the CheckboxGroup doc says. The filled step
+  // sets only the last box, so the group answers a change from a box other than its first.
   const scripted = await page.evaluate(() => {
     const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
     const was = boxes.map((b) => b.checked);
     const valid = () => boxes.every((b) => b.checkValidity());
-    const tell = () => boxes[0].dispatchEvent(new Event("change", { bubbles: true }));
+    /** @param {HTMLInputElement[]} set */
+    const tell = (set) => {
+      for (const b of set) {
+        b.dispatchEvent(new Event("input", { bubbles: true }));
+        b.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    };
     for (const b of boxes) b.checked = false;
     const cleared = valid();
-    tell();
+    tell(boxes);
     const clearedTold = valid();
-    for (const b of boxes) b.checked = true;
+    const last = /** @type {HTMLInputElement} */ (boxes.at(-1));
+    last.checked = true;
     const filled = valid();
-    tell();
+    const message = boxes[0].validationMessage;
+    tell([last]);
     const filledTold = valid();
     for (const [i, b] of boxes.entries()) b.checked = was[i];
-    tell();
-    return { cleared, clearedTold, filled, filledTold, back: valid() };
+    tell(boxes);
+    return { count: boxes.length, cleared, clearedTold, filled, message, filledTold, back: valid() };
   });
   check(
-    "CheckboxGroup: boxes a script sets keep the group's old answer until it dispatches a change (cleared: valid, then refused; filled: refused, then valid)",
-    scripted.cleared && !scripted.clearedTold && !scripted.filled && scripted.filledTold && scripted.back,
+    "CheckboxGroup: boxes a script sets keep the group's old answer until it dispatches input and change on them (cleared: valid, then refused; last box filled: refused with the app's message, then valid)",
+    scripted.count > 1 && scripted.cleared && !scripted.clearedTold && !scripted.filled && scripted.message === "Choose where you ship." && scripted.filledTold && scripted.back,
     JSON.stringify(scripted),
   );
   await us.uncheck();

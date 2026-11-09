@@ -6353,10 +6353,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#960 Design Rule 3's rows::sort exception grows with each kind of form or link that reads the order: decide which tables sort in place and which ask the server](https://github.com/corten-run/corten/issues/960)).
 79. `corten-ui`'s `CheckboxGroup` doc and the UI guide's row say the group checks again on a box's
     `change`, which the browser does not send when a script sets `checked`, so a "Select all" or
-    "Clear" button dispatches one after setting the boxes; without it the group keeps its old
-    answer, so a cleared group is sent and only the handler refuses it, and a group the script filled
-    after the user cleared it is still refused by the browser. The ui-gallery's smoke test checks
-    both directions in each engine
+    "Clear" button dispatches `input` and `change` on each box it set, as the kit's own scripts do;
+    without them the group keeps its old answer, so a cleared group is sent and only the handler
+    refuses it, a group the script filled after the user cleared it is still refused by the browser,
+    and back/forward brings the boxes back as drawn. The ui-gallery's smoke test checks both
+    directions in each engine, the filled one from a box other than the first
     ([#1098 CheckboxGroup docs do not say a script that sets checked must dispatch change, so the group keeps its old validity](https://github.com/corten-run/corten/issues/1098)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
