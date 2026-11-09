@@ -14,11 +14,12 @@ export function proxy(request: NextRequest) {
 }
 
 // The guide's matcher: not the JSON (next.config.mjs gives it a fixed policy), the static files or
-// a link's prefetch.
+// a link's prefetch; and not bench/live's stream (no page), nor the Pages Router's marketplace pages,
+// which are not in the tier and would need _document to write the nonce.
 export const config = {
   matcher: [
     {
-      source: "/((?!api|_next/static|_next/image|favicon.ico).*)",
+      source: "/((?!api|live|marketplace|_next/static|_next/image|favicon.ico).*)",
       missing: [
         { type: "header", key: "next-router-prefetch" },
         { type: "header", key: "purpose", value: "prefetch" },

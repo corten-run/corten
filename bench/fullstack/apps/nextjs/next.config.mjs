@@ -1,6 +1,6 @@
 // PROFILE=matched at build: the matched tier's production profile (bench/fullstack/README.md, "The
-// matched tier"). Next.js fixes its config when it builds, so the image builds the app twice, without
-// the profile and with it, and starts the one PROFILE names (Dockerfile).
+// matched tier"). Next.js fixes its config when it builds, so the matched tier builds its own image
+// (the Dockerfile's PROFILE build argument).
 const matched = process.env.PROFILE === "matched";
 
 // axum-maud's headers. The pages' CSP is proxy.matched.ts's, with a nonce for each response.

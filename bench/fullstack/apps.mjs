@@ -8,7 +8,9 @@ import { edgeBase } from "./edge.mjs";
 // matched tier") also names aspnet (with aspnet-aot for the JSON); it joins with its profile.
 const catalog = {
   corten: { image: "cb-corten", port: 18410, label: "Corten 0.1 (Rust, axum, html! views)", matched: true },
-  nextjs: { image: "cb-nextjs", port: 18411, label: "Next.js 16.4 (App Router, RSC)", matched: true },
+  // Next.js fixes its config when it builds, so the matched tier runs an image of its own, built with
+  // --build-arg PROFILE=matched (`matchedImage`); the defaults tier's is built as before.
+  nextjs: { image: "cb-nextjs", port: 18411, label: "Next.js 16.4 (App Router, RSC)", matched: true, matchedImage: "cb-nextjs-matched" },
   "tanstack-start": { image: "cb-tanstack-start", port: 18412, label: "TanStack Start 1.169 (React 19, Nitro)" },
   sveltekit: { image: "cb-sveltekit", port: 18413, label: "SvelteKit 3.1 (Svelte 5, adapter-node)" },
   "react-router": { image: "cb-react-router", port: 18414, label: "React Router 7.18 + Express" },
@@ -57,7 +59,17 @@ if (only && !only.includes("corten")) throw new Error("BENCH_APPS must include c
 /** Every app, whatever BENCH_APPS names (the tests check the catalog as a whole). */
 export const allApps = catalog;
 /** The apps of the tier a round runs. */
-export const tierApps = tier === "matched" ? Object.fromEntries(Object.entries(catalog).filter(([, app]) => /** @type {{ matched?: boolean }} */ (app).matched)) : catalog;
+/** An app as the matched tier runs it: from its matched image where it has one. */
+const inMatched = (/** @type {{ image: string, matchedImage?: string }} */ app) => (app.matchedImage ? { ...app, image: app.matchedImage } : app);
+export const tierApps = tier === "matched" ? Object.fromEntries(Object.entries(catalog).filter(([, app]) => /** @type {{ matched?: boolean }} */ (app).matched).map(([name, app]) => [name, inMatched(app)])) : catalog;
+/** The `docker build` arguments for an app's image in a tier, from the repository root (droplet.mjs). */
+export const buildArgs = (/** @type {string} */ name, /** @type {string} */ forTier) => {
+  /** @type {{ image: string, matchedImage?: string }} */
+  const app = catalog[/** @type {keyof typeof catalog} */ (name)] ?? { image: `cb-${name}` };
+  return forTier === "matched" && app.matchedImage
+    ? ["build", "-q", "--build-arg", "PROFILE=matched", "-t", app.matchedImage, `bench/fullstack/apps/${name}`]
+    : ["build", "-q", "-t", app.image, `bench/fullstack/apps/${name}`];
+};
 export const apps = only ? Object.fromEntries(Object.entries(tierApps).filter(([name]) => only.includes(name))) : tierApps;
 /** The apps that render the pages: every step that loads one (parity, look, bytes, browser, cold start's probe, the page phases). */
 export const pageApps = Object.fromEntries(Object.entries(apps).filter(([, app]) => app.pages !== false));

@@ -163,10 +163,6 @@ than counted and a one-process item API), and r1-r5 are kept for the record; tim
 Spring's image has since grown by 5.9 MB for the matched tier's profile, and may start a little
 later without it ([The matched tier](#the-matched-tier), item 6); its row here is r16's, before that.
 
-Next.js's image has since grown by 40.5 MB for the matched tier's second build, which the defaults
-tier does not start ([The matched tier](#the-matched-tier), item 7); its row here is r16's, before
-that.
-
 ### Item page, items in memory (no database)
 
 | App | 300/s offered: served, p50 / p99, CPU | 64 users: req/s, p50 / p99 | 256 users: req/s, p99, errors | Memory under load |
@@ -1418,7 +1414,10 @@ An app uses what its framework provides for each part and nothing hand-written; 
 framework has nothing for is left out and shows as a column not met, and no app is tuned beyond
 the profile. "Provides" is a middleware, a setting or a builder option of the framework or of the
 companion its documentation points to for it (tower-http for axum); a part that needs the app to
-write its own handler, error mapper or server loop is left out, as the defaults tier leaves it. The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
+write its own handler, error mapper or server loop is left out, as the defaults tier leaves it;
+code the framework's own documentation gives for a part, written as it gives it, counts as provided
+(Next.js's Proxy for a nonce CSP).
+The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
 rule (Corten; axum-maud, the anchor every tier shares; the three best on the tier's own measure
 and the four most used in the Stack Overflow survey, on r13 and the 2026 survey ASP.NET Core,
 Topcoat and Leptos, and Next.js, ASP.NET Core, Spring and Django; ASP.NET Core as its Razor Pages
@@ -1526,29 +1525,30 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    refused by the CSRF check (403 JSON) before Spring MVC can answer 405. The alert form, the sort
    and "show all" work in Chromium through the edge, with the same one htmx indicator `style-src`
    violation as Django.
-7. `nextjs`: Next.js fixes its config when it builds, so the image holds a second build of the same
-   app, made with `PROFILE=matched`, and starts the build `PROFILE` names; without it, the build it
-   always did. That build adds axum-maud's security headers to every answer, and its CSP and
+7. `nextjs`: Next.js fixes its config when it builds, so the tier runs an image of its own,
+   `cb-nextjs-matched`, built with `--build-arg PROFILE=matched` (`buildArgs` in `apps.mjs`, which
+   `droplet.mjs` builds from); the defaults tier's `cb-nextjs` is built from the same config as
+   before. That build adds axum-maud's security headers to every answer, and its CSP and
    `Cache-Control: private, no-cache` to the JSON, from `next.config.mjs`'s `headers()`, and the
    pages' CSP from a Proxy (`proxy.matched.ts`, Next.js's file for code that runs before a route,
-   which only that build takes, through `pageExtensions`), written as Next.js's Content Security
-   Policy guide writes it: a nonce for each response, which Next.js writes on its own scripts, so
-   the page hydrates under a strict policy (checked in Chromium through the edge: all 11 scripts
-   have the nonce, no violation, and the sort, "show all" and the alert work). The pages were
-   already rendered for each request, as a nonce needs. Next.js refuses a server action whose Origin
-   is not the request's host, and the edge sends the app its container name as Host, so the build
-   lists the edge's host in `serverActions.allowedOrigins` (`EDGE_HOST` in the Dockerfile, which
-   `edge.test.mjs` checks against the edge's port), as a deploy names its own domain; that refusal
-   and the 1 MB body limit on a server action were already defaults (a 500, counted as refused).
-   Next.js has no setting for an ETag on a rendered page, compression of a route handler's answer
-   (its pages are gzipped), a JSON 405 or 500 (a route handler's are empty), a host list, liveness
-   or readiness, a deadline, or the Node server's header timeout (Node's `headersTimeout` is 60 s,
-   and the standalone server sets only `keepAliveTimeout`) or connection cap
-   (`server.maxConnections`, which it does not set), so those columns stay unmet. The image grows by
-   40.5 MB (270.6 to 311.1 MB) for the second build. Measured locally against the app at `a5a3549c`
-   (the commit before), one CPU each, the two images alternated: the first 200 came a median 3.2 s
-   after `docker run` (2.7-5.3 s, 12 runs) against 3.7 s (2.8-4.8 s), and memory after 1,000
-   requests was 204-213 MiB against 204-239 MiB (three runs each), each within the other's spread.
+   which only that build takes, through `pageExtensions`), the code Next.js's Content Security
+   Policy guide gives: a nonce for each response, which Next.js writes on the scripts of a page it
+   renders for the request, so the item page hydrates under a strict policy (checked in Chromium
+   through the edge: all 11 scripts have the nonce, no violation, and the sort, "show all" and the
+   alert work). The App Router's pages were already rendered for each request, as a nonce needs; the
+   Proxy leaves out the JSON, the static files, bench/live's stream and the Pages Router's
+   marketplace pages, which are not in the tier and would need `_document` to write the nonce.
+   Next.js refuses a server action whose Origin is not the request's host, and the edge sends the
+   app its container name as Host, so the build lists the edge's host in
+   `serverActions.allowedOrigins` (the Dockerfile's `EDGE_HOST`, which `edge.test.mjs` checks
+   against the edge's port and the built config), as a deploy names its own domain; that refusal and
+   the 1 MB body limit on a server action were already defaults (a 500, counted as refused).
+   Next.js's own compression and ETag (`compress` and `generateEtags`, on by default) reach neither
+   the route handler's JSON nor a page rendered for each request, and it has no setting for a JSON
+   405 or 500 (a route handler's are empty), a host list, liveness or readiness, a deadline, or the
+   Node server's header timeout (Node's `headersTimeout` is 60 s, and the standalone server sets
+   only `keepAliveTimeout`) or connection cap (`server.maxConnections`, which it does not set), so
+   those columns stay unmet.
 8. `aspnet` (and `aspnet-aot`) is not in it yet: it joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
@@ -1842,6 +1842,8 @@ docker build -f examples/card-market/Dockerfile -t cb-corten .
 for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud gin drogon django rails laravel aspnet aspnet-aot spring phoenix astro nuxt; do
   docker build -t cb-$app bench/fullstack/apps/$app
 done
+# The matched tier builds Next.js again, as `buildArgs` in apps.mjs says:
+docker build --build-arg PROFILE=matched -t cb-nextjs-matched bench/fullstack/apps/nextjs
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file
 cd bench/fullstack && node run-all.mjs legacy1 10   # BENCH_APPS=corten,aspnet-aot for only those
 node conform.mjs [apps] [round]   # the feature matrix above (on the bench network; removes its containers when done)
