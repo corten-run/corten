@@ -1482,8 +1482,30 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    `require_safe` would answer it, but the view is the app's in both tiers, so the profile leaves
    it. Its other error answers (HTML for the JSON's 404 and 500, the CSRF 403 for a `DELETE` on the
    JSON) are Django's own.
-6. `nextjs`, `aspnet` (and `aspnet-aot`) and `spring` are not in it yet: each joins with its
-   profile.
+6. `spring`: `PROFILE=matched` turns on Spring's `matched` profile. Spring Security's builder
+   (`Matched.java`) keeps its default headers (nosniff, `X-Frame-Options: DENY`, and a
+   `Cache-Control` of `no-cache, no-store, max-age=0, must-revalidate` on every answer that sets
+   none, so the static files keep their year-long one), adds axum-maud's CSP, Referrer-Policy,
+   Cross-Origin-Opener-Policy and Permissions-Policy, checks a CSRF token on every post (kept in a
+   cookie, as Django keeps it, since the default keeps it in a server session, one for every page a
+   load phase reads; Thymeleaf writes it into the form), and refuses a Host not listed (its
+   firewall's `setAllowedHostnames`: localhost and `HOSTS`, 400). `application-matched.properties`
+   turns on Boot's gzip, problem details for the errors Spring MVC answers itself, Tomcat's 30 s
+   connection timeout (which closes an unfinished head) and `MAX_CONNECTIONS` as Tomcat's
+   `max-connections`, and Actuator's liveness and readiness probes. The app uses Spring Security's
+   own modules, not Boot's starter, whose auto-configuration would secure the defaults tier too,
+   and `application.properties` excludes Actuator's auto-configuration unless the profile is on, so
+   without it the app starts the same 60 auto-configurations as before (Boot's `--debug` condition
+   report, compared) and its defaults-tier matrix is unchanged. Spring writes no ETag: Spring's
+   `ShallowEtagHeaderFilter` writes none for a `no-store` answer, and the page's CSRF token is
+   masked afresh on each render, as Django's is, so a second render would not repeat one either.
+   Left out: the item API's deadline (`RestClient` waits as long as it is let, and setting a
+   timeout is the app's code, the same in both tiers), a readiness that knows the item API (a
+   health indicator of the app's own), and the JSON's 404 (the controller's own empty answer).
+   A `DELETE` on the JSON is refused by the CSRF check (403 JSON) before Spring MVC can answer 405.
+   The alert form, the sort and "show all" work in Chromium through the edge, with the same one
+   htmx indicator `style-src` violation as Django.
+7. `nextjs` and `aspnet` (and `aspnet-aot`) are not in it yet: each joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1504,7 +1526,10 @@ cross-site post (403) and the unfinished head (closed in 30.0 s) that axum-maud 
 the page's script CSP (`'unsafe-eval'`) that axum-maud meets. Django, from `cb-django` built at
 `37361430` (`results/conform-matched-django1/conformance.json`), met 15 and missed 9:
 Permissions-Policy, the ETag (a 200 again), the JSON's 404, `DELETE` (403) and failed read as
-HTML, `HEAD` (405), liveness and readiness, and the cap (not served with 950 held).
+HTML, `HEAD` (405), liveness and readiness, and the cap (not served with 950 held). Spring,
+from `cb-spring` built at `e99d2a4e` (`results/conform-matched-spring1/conformance.json`), met 19
+and missed 5: the ETag, the JSON's 404 (empty) and `DELETE` (the CSRF 403), readiness with the item
+API hung (200), and the item API's deadline (held 45 s).
 No load phase has run in the tier yet.
 
 ### The hardening step
