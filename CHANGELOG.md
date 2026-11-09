@@ -2572,6 +2572,12 @@ Corten is pre-1.0, so any minor version may change the API.
     without it the app starts the same auto-configurations as before. Its matched matrix meets 19
     of 24 columns
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+281. Next.js joins `bench/fullstack`'s matched tier: Next.js fixes its config when it builds, so its
+    image holds a second build made with `PROFILE=matched`, which adds the security headers from
+    `next.config.mjs`'s `headers()`, a nonce CSP from a Proxy as Next.js's guide writes it, and the
+    edge's host for server actions; without the profile the image starts the build it always did,
+    40.5 MB larger. Its matched matrix meets 14 of 24 columns
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
