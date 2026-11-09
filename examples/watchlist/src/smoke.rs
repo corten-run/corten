@@ -8,7 +8,7 @@ pub mod url {
     #[route("/smoke")]
     pub struct Smoke;
 
-    /// One event of 640 rows (about 45 KB), then a quiet stream until the keepalive.
+    /// One event of 640 rows (52,395 bytes on the wire), then a quiet stream until the keepalive.
     #[route("/smoke/live/large", get = large)]
     pub struct LargeLive;
 }

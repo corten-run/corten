@@ -20,7 +20,7 @@
 //! Event streams ([`crate::live`], feeds) are compressed as one stream per connection, flushed
 //! after every event so it arrives at once, with the context kept between events: a redraw that
 //! repeats the last one costs tens of bytes. A stream is zstd 1 (a 64 KiB window, about 470 KiB
-//! held) or else gzip 3 (deflate's 32 KiB window, about 344 KiB held), never brotli: WebKit holds
+//! held) or else gzip 3 (deflate's 32 KiB window, about 344 KiB held), never brotli: Playwright's WebKit (on Windows) holds
 //! back the end of a flushed brotli event that decodes to more than 16 KiB until more bytes arrive,
 //! so the last event of a quiet stream would wait for the next one (#1131). Every stream's context
 //! shares a budget of 256 MiB (about 550 zstd streams): past it a new stream goes out

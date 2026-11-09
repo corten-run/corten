@@ -1,11 +1,13 @@
 //! What a gzip stream's coder holds stays within what `compress::StreamCoder` reserves for it
 //! from the stream budget (`GZIP_STREAM_BYTES`, 360 KiB), so the budget counts every open stream
 //! (#1131). It counts every allocation, so it runs in a process of its own with this file's
-//! allocator, and is the only test here. The level and the reservation repeat `compress.rs`'s
+//! allocator, and is the only test here. Only the test's own thread is counted, so the harness's
+//! threads add nothing. The level and the reservation repeat `compress.rs`'s
 //! `GZIP_STREAM_LEVEL` and `GZIP_STREAM_BYTES`; a change to either changes both.
 #![cfg(feature = "compress")]
 
 use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -14,12 +16,20 @@ const RESERVED: usize = 360 << 10;
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 
+thread_local! {
+    static COUNTED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn counted() -> bool {
+    COUNTED.try_with(Cell::get).unwrap_or(false)
+}
+
 struct Counting;
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let at = System.alloc(layout);
-        if !at.is_null() {
+        if !at.is_null() && counted() {
             LIVE.fetch_add(layout.size(), Ordering::Relaxed);
         }
         at
@@ -27,7 +37,9 @@ unsafe impl GlobalAlloc for Counting {
 
     unsafe fn dealloc(&self, at: *mut u8, layout: Layout) {
         System.dealloc(at, layout);
-        LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+        if counted() {
+            LIVE.fetch_sub(layout.size(), Ordering::Relaxed);
+        }
     }
 }
 
@@ -42,6 +54,7 @@ fn a_gzip_streams_context_fits_what_it_reserves() {
         .enumerate()
         .map(|(i, &len)| (0..len).map(|n| b"<tr><td>ACME</td><td>133.62</td></tr>"[(n + i) % 37]).collect())
         .collect();
+    COUNTED.with(|on| on.set(true));
     let before = LIVE.load(Ordering::Relaxed);
     let mut coder = Box::new(flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::new(LEVEL)));
     let mut most = 0;
@@ -52,6 +65,7 @@ fn a_gzip_streams_context_fits_what_it_reserves() {
         drop(std::mem::take(coder.get_mut()));
         most = most.max(LIVE.load(Ordering::Relaxed) - before);
     }
+    COUNTED.with(|on| on.set(false));
     // The figure `docs/design.md#choice-stream-coding` cites:
     // `cargo test -p corten-run --features compress --test stream_memory -- --nocapture`.
     println!("a gzip stream holds {most} bytes of the {RESERVED} it reserves");
