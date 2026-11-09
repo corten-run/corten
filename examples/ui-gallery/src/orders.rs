@@ -30,7 +30,7 @@ use crate::ui::{
     slider::Slider,
     stack::{Cluster, Gap, Stack, StackStart},
     stats::{Stat, StatTone, Stats, StatsSurface},
-    status_dot::{StatusDot, StatusTone},
+    status_dot::{LiveDot, StatusDot, StatusTone},
     steps::{Step, StepState, Steps, StepsLayout},
     switch::Switch,
     table::{CellLabel, Sort, SortHeader, Table, TableLayout, TableNumeric},
@@ -298,6 +298,11 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                 <span class={Badge { tone: BadgeTone::Success, emphasis: BadgeEmphasis::Soft }}>
                     <StatusDot tone={StatusTone::Success} />
                     "Taking orders"
+                </span>
+                <span class={Badge { tone: BadgeTone::Info, emphasis: BadgeEmphasis::Soft }}>
+                    <LiveDot tone={StatusTone::Info} />
+                    <span class={WhenLive}>"Live"</span>
+                    <span class={WhenNot}>"Not live"</span>
                 </span>
             </div>
             <Alert variant={AlertVariant::Warning} emphasis={AlertEmphasis::Soft}>

@@ -2551,6 +2551,23 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+277. The kit's `status_dot` has `LiveDot { tone }`, the dot of a live view's badge: its opacity
+    pulses while the `<corten-live>` around it is live, so a glance tells a live view from a frozen
+    one, and is still while it connects, reconnects or has closed or ended, before the runtime
+    runs, without JavaScript and outside a `<corten-live>`. It is still under
+    `prefers-reduced-motion: reduce`, pulses in the system's text color under forced colors as
+    `Progress`'s sweep moves. The guides give the rules that make the words beside it follow the
+    stream too ("Live" only while it is live, "Not live" otherwise and without JavaScript).
+    Not breaking: `StatusDot` is unchanged (its doc test no longer names a class a live form
+    could have), and `corten ui add status_dot --merge` takes `LiveDot`. The kit's new rules
+    add 195 bytes to the stylesheet of every app that draws a `StatusDot`, as the two share one:
+    measured on the ui-gallery's served `components.css`, 60,666 bytes with them where it was
+    60,471 (gzip 10,056 against 10,012, brotli 8,856 against 8,814, Node's zlib at gzip level 9
+    and brotli's default; the earlier size is the served file without the new rules). The
+    ui-gallery's orders page has a live badge with those words, whose own three rules bring the
+    served file to 60,833 bytes (gzip 10,081, brotli 8,876), and the smoke test puts it inside a
+    `<corten-live>` and checks it in each state
+    ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
     apps are: the item page, the catalog page, the localized marketplace page and the live price
