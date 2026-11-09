@@ -516,6 +516,7 @@ async function run(browser) {
   nav.on("console", (m) => m.type() === "error" && !bug(m.text()) && errors.push(m.text()));
   nav.on("pageerror", (e) => errors.push(e.message));
   await nav.goto(`${base}/`);
+  const backCheck = "CheckboxGroup: back to a swapped page keeps a box a script set with input and change, and brings one set without them back as drawn";
   if (await nav.evaluate(() => "navigation" in window)) {
     const set = await nav.evaluate(() => {
       const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
@@ -535,12 +536,8 @@ async function run(browser) {
       const box = (/** @type {string} */ value) => /** @type {HTMLInputElement | null} */ (document.querySelector(`form[action$="/sell"] fieldset input[type="checkbox"][value="${value}"]`));
       return { swapped: (/** @type {any} */ (window)).__sameDocument === 1, told: box(told)?.checked, untold: box(untold)?.checked };
     }, set);
-    check(
-      "CheckboxGroup: back to a swapped page keeps a box a script set with input and change, and brings one set without them back as drawn",
-      after.swapped && after.told === true && after.untold === false,
-      JSON.stringify({ set, after }),
-    );
-  }
+    check(backCheck, after.swapped && after.told === true && after.untold === false, JSON.stringify({ set, after }));
+  } else skip(backCheck, "no Navigation API: a navigation is a full page load");
   await navContext.close();
   await us.uncheck();
   const shipMessage = await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
