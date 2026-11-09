@@ -1094,11 +1094,6 @@ impl<M: Middleware> App<M> {
             {
                 panic!("corten: the route {path:?} says stages = bare and is under the area {:?}, whose deadline, policy and middleware cover every request there; give it a path outside the area", area.prefix);
             }
-            // Nor where Corten's own paths are, which a bare `/{*rest}` would answer when unknown,
-            // with every unknown URL the app's 404 would.
-            if crate::api::under("/corten", path) || crate::api::reaches(path, "/corten") {
-                panic!("corten: the route {path:?} says stages = bare and can answer under /corten, whose paths are Corten's own; give it a first segment of its own text");
-            }
         }
         // An area's stylesheet is a section of the asset pipeline.
         let sections: Vec<(&str, &[crate::Component])> = self
@@ -1178,6 +1173,18 @@ impl<M: Middleware> App<M> {
         if !taken {
             own.exact.push(favicon);
             routes = routes.merge(crate::assets::favicon(assets.as_ref()));
+        }
+        // Nor where Corten's own paths are (`/corten/`, the assets, the health checks, the PWA's
+        // files): a bare route's parameter or catch-all there would answer them when unknown,
+        // and a bare `/{*rest}` every unknown URL the app's 404 would. A route at one of them
+        // exactly is the router's own refusal, as for a staged route.
+        for &path in &self.bare.paths {
+            let reached = (own.prefixes.iter().map(|prefix| prefix.trim_end_matches('/')))
+                .find(|prefix| crate::api::under(prefix, path) || crate::api::reaches(path, prefix))
+                .or_else(|| own.exact.iter().copied().find(|exact| crate::api::reaches(path, exact)));
+            if let Some(corten_s) = reached {
+                panic!("corten: the route {path:?} says stages = bare and can answer at {corten_s:?}, which is Corten's own; give it a first segment of its own text");
+            }
         }
         routes = routes.merge(match self.ready {
             None => crate::health(|| async { true }),
@@ -1340,8 +1347,10 @@ impl<M: Middleware> App<M> {
             if plain { wrap!(Plain(self.middleware)) } else { wrap!(Scoped { app: self.middleware, areas: area_middleware }) };
         // The routes that say `stages = bare`, beside the others and outside every stage. They
         // are merged into, not onto: of two default fallbacks a merge keeps the one merged in, so
-        // an unknown URL is still the app's 404 inside its stages.
-        let mut router = self.bare.router.merge(router);
+        // an unknown URL is still the app's 404 inside its stages. (A wrong method at a bare
+        // route's path, or a segment without its suffix, is the router's plain 405 or 404.) An
+        // app with none merges nothing.
+        let mut router = if self.bare.paths.is_empty() { router } else { self.bare.router.merge(router) };
         for wrap in self.layers {
             router = wrap(router);
         }

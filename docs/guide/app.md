@@ -894,7 +894,7 @@ extractor) and its return type.
 ### A route outside the stages
 
 A route whose answer must cost as little as the server allows and that anyone may read (a public
-figure behind a CDN, a beacon, a body taken in at a high rate) says `stages = bare` in its routes
+figure behind a CDN, a beacon, an upload taken in at a high rate) says `stages = bare` in its routes
 module; the probes a load balancer sends are Corten's own `/health/live` and `/health/ready`.
 It meets none of the stages above: no host or same-origin check, no signal,
 deadline or panic catch, no middleware, no error page, security headers, `Cache-Control`, tag or
@@ -928,16 +928,20 @@ let app = App::new(url::router());
 The route says it where it is declared, so a reader of the routes module sees which routes skip
 the stages. What the compiler can check, it does:
 
-1. The handler takes only the request's URL and body (`Params`, `Form`, `Json`, `Upload`,
-   `Method`, `Uri`, `Bytes`, `String`): `Req`, `Signal`, `Nonce`, `Caller` and `ClientIp` read
-   what a stage gives, and `HeaderMap` and the whole `Request` read the visitor's cookies and
-   credentials, which no stage would keep a shared cache from storing; none compiles there
-   (`corten::answer::Bare`).
+1. The handler takes only the request's URL (`Params`, `Method`, `Uri`) and its body read by
+   `Upload`, which ends a client that stops or sends too slowly by itself
+   (`corten::answer::Bare`). `Req`, `Signal`, `Nonce`, `Caller` and `ClientIp` read what a stage
+   gives; `HeaderMap` and the whole `Request` read the visitor's cookies and credentials, which no
+   stage would keep a shared cache from storing; and `Form`, `Json`, `Bytes` and `String` read the
+   whole body, and no deadline there ends a client that sends it a byte a minute. None compiles
+   there.
 2. A routes module with `caller = ..` cannot have one, since every route there takes the caller.
    Nor can an area's or API's module, whose deadline, policy and middleware cover every request
-   at its prefix. When it starts, the app refuses a bare route under an area's or API's prefix
-   or under `/corten`, or whose parameter or catch-all could stand there (`/{section}/ping`
-   beside `App::api("/api")`, `/{*rest}` at the root).
+   at its prefix. When it starts, the app refuses a bare route that can answer at a path not its
+   own: under an area's or API's prefix, or at one of Corten's (`/corten/`, the assets, the
+   health checks, the PWA's files), whether at the path or through a parameter or catch-all
+   (`/health/{check}`). A bare route whose first segment is a parameter or a catch-all
+   (`/{section}/ping`, `/{*rest}`) can stand at `/corten/`, so it is always refused.
 3. `no_store`, `rows` and `gives(..)` are applied by stages, so a bare route does not say them; a
    bare handler that must not be kept returns `NoStore<..>` itself.
 4. It is not a page: `Req::serves` does not send a visitor there after sign-in.
@@ -945,8 +949,16 @@ the stages. What the compiler can check, it does:
 What it gives up is the app's to weigh: a bare route answers a DNS-rebound page and another
 site's write, and it can be framed or sniffed, so it is for answers anyone may read. A handler
 that panics drops the connection rather than answering 500, and nothing ends it at a deadline.
-Its answer has no `Cache-Control` unless the handler sets one, and an upload it reads with
-`Upload::idle(None)` has no time limit at all.
+Nothing gives its answer a CSP, `nosniff` or `frame-ancestors`, so a document it builds from
+what the request says (HTML, SVG, or text a browser sniffs as HTML) runs as script on the app's
+origin, where it can read every other page with the visitor's cookies. A bare answer is data
+(text, JSON, a file); a handler that must send a document sets those headers on it itself. Its
+answer has no `Cache-Control` unless the handler sets one, so a shared cache may keep it by its
+own rules, `Set-Cookie` or not ([Caching](#caching) describes the stages' rules, which it does
+not meet), and an upload it reads with `Upload::idle(None)` has no time limit at all.
+A request for a method the route has no handler for gets the router's plain 405, and one whose
+segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) its plain 404, not the
+app's error page; any other unknown URL is still the app's 404, inside its stages.
 A tower layer the app puts around the whole app (`.layer(l)`) still goes around it, and so does
 `serve`'s handling of connections: the head's size and time, connection limits, and shutdown,
 which lets a bare route's request run for the longer of the shutdown grace and the app's longest
@@ -1012,7 +1024,9 @@ forms become ready; versioned files retain their encoding-specific tags.
 Static files, component scripts, the components' stylesheet and the runtime have content-hashed
 URLs and are sent `public, max-age=31536000, immutable`; the PWA's worker keeps them. The icon at
 `/favicon.ico`, a fixed path, is sent `public, max-age=86400` ([above](#static-files)). Everything
-else `App` serves that does not set `Cache-Control` is sent `private, no-cache`: the browser
+else `App` serves that does not set `Cache-Control` is sent `private, no-cache`, except a route
+that says `stages = bare`, whose answer is sent as its handler made it
+([above](#a-route-outside-the-stages)): the browser
 may keep it but asks again before using it, and no shared cache (a CDN, a proxy) stores it. A
 page's layout may show who is asking, so a shared copy could show one user's page to another.
 
@@ -1060,7 +1074,8 @@ Public::new(Duration::from_secs(60), page)
 Both stale directives stay on an answer sent privately, for any private cache that implements
 them (Chromium and Firefox implement `stale-while-revalidate`, not `stale-if-error`).
 
-`App` still checks what it can see before it lets a shared cache keep the answer:
+`App` still checks what it can see before it lets a shared cache keep the answer (on every route
+but a bare one):
 
 | The request or response | Sent |
 |---|---|

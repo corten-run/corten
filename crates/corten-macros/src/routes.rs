@@ -408,7 +408,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
         let template = if within.is_some() {
             ".route::<__A0::__A1>(::corten::Methods::with_state(__A2, state.clone()))"
         } else if route.bare.is_some() {
-            ".__bare_route::<__A0::__A1>(::corten::Methods::with_state(__A2, state.clone()))"
+            ".__bare_route::<__A0::__A1>(::corten::route::__private::BareMethods::with_state(__A2, state.clone()))"
         } else {
             ".__route::<__A0::__A1>(::corten::Methods::with_state(__A2, state.clone()))"
         };
@@ -845,7 +845,11 @@ fn scan(
                             None
                         };
                         if let Some(said) = said {
-                            let hint = if said == "no_store" { " (a bare handler that must not be kept returns NoStore<..> itself)" } else { "" };
+                            let hint = if said == "no_store" {
+                                " (a bare handler that must not be kept returns NoStore<..> itself)"
+                            } else {
+                                ""
+                            };
                             return err(at, format!("stages = bare sends {name}'s answer as its handler made it, with no stage to apply {said}: leave one of them out{hint}"));
                         }
                     }

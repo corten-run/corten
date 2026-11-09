@@ -8,10 +8,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 - `stages = bare` on a `#[route(..)]` serves that route outside every stage, beside routes that
   keep them all: its handler's answer, a raw `Response` too, is sent as it made it. The handler
-  takes only what the request carries (`corten::answer::Bare`); a bare route in a `caller = ..`,
-  area or API module, or with `no_store`, `rows` or `gives(..)`, does not compile, and one under an
-  area's or API's prefix is refused at startup. Measured with callgrind: 7,400 instructions a
-  request against 21,307 through the stages (jemalloc; a plain axum router 7,640).
+  takes only the request's URL and its body read by `Upload` (`corten::answer::Bare`); a bare
+  route in a `caller = ..`, area or API module, or with `no_store`, `rows` or `gives(..)`, does
+  not compile, and one that can answer under an area's or API's prefix or at a path of Corten's
+  own is refused at startup. Its answer gets no CSP or `nosniff`, so it is for data, not a
+  document built from the request. Measured with callgrind: 7,400 instructions a request against
+  21,307 through the stages (jemalloc; a plain axum router 7,640).
 
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent

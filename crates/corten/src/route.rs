@@ -683,8 +683,11 @@ pub use corten_macros::UrlValue;
 /// ([`crate::middleware`]), so no host or same-origin check, no signal, deadline or panic catch,
 /// no middleware, no error page, security headers, `Cache-Control`, tag or compression. Its
 /// handler's answer is sent as it made it, a raw [`axum::response::Response`] too, and every other
-/// route beside it keeps every stage. Its handler takes only the request's URL and body
-/// ([`crate::answer::Bare`]):
+/// route beside it keeps every stage. Its handler takes only the request's URL, and its body read
+/// by [`crate::form::Upload`] ([`crate::answer::Bare`]). Nothing gives its answer a CSP or
+/// `nosniff`, so a document built from what the request says (HTML, SVG) would run as script on
+/// the app's origin: a bare answer is data, and a handler that sends a document sets those
+/// headers itself.
 ///
 /// ```
 /// use corten::prelude::*;
@@ -741,9 +744,25 @@ pub use corten_macros::UrlValue;
 /// # fn main() { let _ = url::router(); }
 /// ```
 ///
+/// Nor one that reads the whole body at once, which no deadline would end there:
+///
+/// ```compile_fail,E0277
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", post = ping, stages = bare)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping(_: corten::axum::body::Bytes) -> &'static str {
+///     "took"
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
 /// Nor does one in a module whose `caller = ..` every route must take, or in an area's or an
 /// API's module, whose settings and middleware cover every request at its prefix (the app refuses
-/// a bare route under an area's or API's prefix when it starts):
+/// a bare route that can answer under an area's or API's prefix, or at a path of Corten's own,
+/// when it starts):
 ///
 /// ```compile_fail
 /// use corten::{http::request::Parts, prelude::*};
@@ -763,7 +782,7 @@ pub use corten_macros::UrlValue;
 ///     pub struct Ping;
 /// }
 ///
-/// async fn ping(_: Caller<Staff>) -> &'static str {
+/// async fn ping() -> &'static str {
 ///     "pong"
 /// }
 /// # fn main() {}
@@ -844,9 +863,23 @@ pub use corten_macros::UrlValue;
 /// ```
 ///
 /// ```compile_fail
+/// # use std::future::Future;
+/// use corten::{http::request::Parts, prelude::*, LayoutRead};
+///
+/// struct CartCount;
+/// impl LayoutRead for CartCount {
+///     type Value = u32;
+///     fn start(&self, _: &Parts) -> Option<impl Future<Output = u32> + Send + 'static> {
+///         Some(async { 3 })
+///     }
+///     fn view(count: &u32) -> impl Render + '_ {
+///         html! { {*count} }
+///     }
+/// }
+///
 /// #[corten::routes]
 /// mod url {
-///     #[route("/ping", get = ping, gives(u32), stages = bare)]
+///     #[route("/ping", get = ping, gives(CartCount), stages = bare)]
 ///     pub struct Ping;
 /// }
 ///
@@ -870,10 +903,17 @@ pub use corten_macros::UrlValue;
 /// ```
 ///
 /// ```compile_fail
-/// #[corten::routes]
-/// mod url {
-///     #[route("/ping", stages = bare)]
+/// #[corten::routes(area = Admin)]
+/// mod admin {
+///     #[route("/admin", stages = bare)]
+///     pub struct Admin;
+///
+///     #[route("/admin/ping", get = ping)]
 ///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
 /// }
 /// # fn main() {}
 /// ```
@@ -3343,9 +3383,11 @@ impl Routes {
 
     /// Used by `#[corten::routes]`: `R`'s handlers at its path, a route with `stages = bare`,
     /// which `App` serves outside its stages. It is not a page (`Req::serves`): no stage gives its
-    /// answer the app's layout. Not a public API.
+    /// answer the app's layout. Its handlers are [`__private::BareMethods`], which nothing else
+    /// takes, so the checks a `Methods` carries are not skipped anywhere else. Not a public API.
     #[doc(hidden)]
-    pub fn __bare_route<R: Route>(self, methods: Methods) -> Self {
+    pub fn __bare_route<R: Route>(self, methods: __private::BareMethods) -> Self {
+        let methods = methods.0;
         let mut paths = self.1;
         paths.push((R::WRITTEN, false));
         let Unstaged { router, paths: mut bare } = self.2;
@@ -3727,11 +3769,28 @@ pub mod __private {
     // A route that says `stages = bare`: no stage runs, so the handler takes only what the request
     // itself carries (`crate::answer::Bare`), and what it answers is sent as it is, a raw
     // `Response` too. Its route's `Params` (`P`) is still required, as on any route.
+
+    /// A bare route's handlers: only `Routes::__bare_route` takes them, so a handler checked for
+    /// its arguments alone cannot reach `Area::route` or `Api::route`, which take `Methods`.
+    pub struct BareMethods<S = ()>(pub(crate) Methods<S>);
+
+    impl<S: Clone + Send + Sync + 'static> BareMethods<S> {
+        /// The handlers with the state they take, as [`Methods::with_state`].
+        pub fn with_state<S2>(self, state: S) -> BareMethods<S2> {
+            BareMethods(self.0.with_state(state))
+        }
+
+        /// The route's handlers for two sets of methods, as `Methods::__merge`.
+        pub fn __merge(self, other: BareMethods<S>) -> Self {
+            BareMethods(self.0.__merge(other.0))
+        }
+    }
+
     macro_rules! bare_methods {
         ($($name:ident => $method:ident),*) => {
             $(
                 #[inline]
-                pub fn $name<H, T, S, P, J>(handler: H) -> Methods<S>
+                pub fn $name<H, T, S, P, J>(handler: H) -> BareMethods<S>
                 where
                     H: RouteHandler<T, S> + crate::answer::Signature<T>,
                     <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
@@ -3739,7 +3798,7 @@ pub mod __private {
                     T: 'static,
                     S: Clone + Send + Sync + 'static,
                 {
-                    Methods(axum::routing::$method(handler.into_handler()), matches!(stringify!($method), "get" | "any"), None)
+                    BareMethods(Methods(axum::routing::$method(handler.into_handler()), false, None))
                 }
             )*
         };

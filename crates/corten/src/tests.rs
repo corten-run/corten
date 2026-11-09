@@ -5000,8 +5000,8 @@ async fn bare_raw(at: crate::Params<bare_url::Raw>, method: axum::http::Method) 
         .unwrap()
 }
 
-async fn bare_raw_post(_: crate::Params<bare_url::Raw>, body: axum::body::Bytes) -> String {
-    format!("took {}", body.len())
+async fn bare_raw_post(_: crate::Params<bare_url::Raw>) -> &'static str {
+    "took"
 }
 
 async fn bare_page(req: Req) -> HtmlResult {
@@ -5040,13 +5040,17 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
         &[("origin", "https://attacker.example"), ("sec-fetch-site", "cross-site")],
     )
     .await;
-    assert_eq!((status, body.as_str()), (StatusCode::OK, "took 0"));
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "took"));
     let (status, body) = for_host(&router, "/ping", "rebound.attacker.example:3917", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
     // A path that does not parse is the extractor's own rejection, not the error page.
     let (status, headers, _) = call_with(router.clone(), "GET", "/raw/seven", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(!headers.contains_key("content-security-policy"));
+    // A method it has no handler for is the router's plain 405, not the error page.
+    let (status, headers, body) = call_with(router.clone(), "PUT", "/ping", None, Some("text/html")).await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    assert!(!headers.contains_key("content-security-policy") && !body.contains("<html"), "{headers:?} {body}");
 
     let (status, headers, _) = call_with(router.clone(), "GET", "/page", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::OK);
@@ -5144,9 +5148,16 @@ fn a_bare_parameter_that_reaches_an_api_is_refused_at_startup() {
 
 /// A bare catch-all at the root would answer Corten's unknown paths and every unknown URL.
 #[test]
-#[should_panic(expected = "says stages = bare and can answer under /corten")]
+#[should_panic(expected = "says stages = bare and can answer at \"/corten\"")]
 fn a_bare_catch_all_at_the_root_is_refused_at_startup() {
     let _ = App::new(bare_everywhere_url::router()).router();
+}
+
+/// Nor one whose parameter can stand where Corten's health checks are.
+#[test]
+#[should_panic(expected = "says stages = bare and can answer at \"/health/live\"")]
+fn a_bare_parameter_that_reaches_the_health_checks_is_refused_at_startup() {
+    let _ = App::new(bare_health_url::router()).router();
 }
 
 #[crate::routes]
@@ -5165,11 +5176,23 @@ mod bare_everywhere_url {
     }
 }
 
+#[crate::routes]
+mod bare_health_url {
+    #[route("/health/{check}", get = bare_health_ping, stages = bare)]
+    pub struct Check<'a> {
+        pub check: &'a str,
+    }
+}
+
 async fn bare_section_ping(_: crate::Params<bare_reaching_url::SectionPing<'_>>) -> &'static str {
     "pong"
 }
 
 async fn bare_rest_ping(_: crate::Params<bare_everywhere_url::Rest<'_>>) -> &'static str {
+    "pong"
+}
+
+async fn bare_health_ping(_: crate::Params<bare_health_url::Check<'_>>) -> &'static str {
     "pong"
 }
 

@@ -808,8 +808,9 @@ rules something out.
    axum's; the handler bound and axum's features are Corten's.** Corten owns the layer around
    them: the accept loop and connection limits, its middleware stages, typed routes and
    `Params`, the readers (`Form`, `Json`, `Upload`), `Upgrade`, and the checks every route
-   passes. What stays axum's is `Router`, `MethodRouter` and matchit, axum's `Handler` impls
-   that read each argument and call the function, and `Sse`.
+   passes (a route that says `stages = bare`, [Choice 28](#choice-fixed-stages), passes the check
+   of its arguments and no stage). What stays axum's is `Router`, `MethodRouter` and matchit,
+   axum's `Handler` impls that read each argument and call the function, and `Sse`.
 
     Owning them was weighed against correctness first (the order in the README's Values): a router
     of Corten's would write again what axum's tests already hold it to, `HEAD`, `405` with
@@ -939,9 +940,11 @@ rules something out.
     and another server's answer passed on (`Relay`) are such routes too. A route that says
     `stages = bare` ([Choice 28](#choice-fixed-stages)) is in `Routes` too, but meets no stage, so
     its answer type is not checked; its handler is checked instead to take only the request's URL
-    and body (`corten::answer::Bare`): no `Caller` and no headers, which carry the cookies and
-    credentials, so what it answers cannot depend on who is asking, and a module with
-    `caller = T` cannot hold one. Not chosen: guards and
+    and its body read by `Upload` (`corten::answer::Bare`): no `Caller` and no headers, which carry
+    the cookies and credentials, so what it answers cannot depend on who is asking, and no reader
+    of the whole body, which no deadline would end there. A module with `caller = T` cannot hold
+    one, and its handlers are a type (`BareMethods`) that only `Routes` takes, so `Area::route`
+    and `Api::route` still take only checked `Methods`. Not chosen: guards and
     a context object checked per request (`App::guard`, `Area::guard`, `App<C>`), which Corten
     had and removed in
     [#81 A route's handler says what it answers, who may call it and how it caches, checked for every route](https://github.com/corten-run/corten/pull/81).
@@ -975,10 +978,13 @@ rules something out.
     stages, not inside them: its handler's answer is sent as it made it, a raw `Response` too, and
     every other route keeps every stage. It is all or nothing, so the order a reader checks is
     still one. It is for an answer that must cost what the router alone costs and that anyone may
-    read (a public JSON figure a CDN fronts, a beacon, a body taken in at a high rate), beside
+    read (a public JSON figure a CDN fronts, a beacon, an upload taken in at a high rate), beside
     pages that need every stage; the stages add about twice what its handler and the router cost
-    together (below). Not chosen: an app's own tower layer that answers the route's path before
-    the stages (`.layer(l)`), which works today but is outside the routes module: its path is a
+    together (below). Its answer gets no CSP or `nosniff`, so it is data, not a document built
+    from the request, and the app refuses at startup a bare route that can answer under an area's
+    or API's prefix or at one of Corten's own paths. Not chosen: an app's own tower layer that
+    answers the route's path before the stages (`.layer(l)`), which works today but is outside
+    the routes module: its path is a
     string, not a typed route, its handler is checked for nothing, and a reader of the routes does
     not see it; hooks at several stages (before routing, after the caller, around the error page), each a
     place an app's step could run and a reader of the app would have to check; what must see the
@@ -986,7 +992,9 @@ rules something out.
     Nor presets that keep some stages and drop others (`stages = fast`), each another order to
     read and test, with no app yet needing one; nor the stages rewritten as combinators, measured
     on a branch not merged: about 200 to 360 instructions fewer a request with glibc's allocator,
-    but about 200 to 263 more with jemalloc, which the images preload.
+    but about 200 to 263 more with jemalloc, which the images preload; nor refusing an answer
+    type that sends HTML, since a raw `Response`, which a bare route exists to allow, carries any
+    content type, so the rule is the guide's and the handler's.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -1019,7 +1027,8 @@ rules something out.
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
     own); 2026-11-08, the `stages = bare` runs against `c65c10ec` (the bench binary was not
-    committed).
+    committed, so the next check writes its own: the same JSON handler answered in process by an
+    `App` with it bare, by the same `App` with it staged, and by a plain axum `Router`).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
@@ -1275,7 +1284,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     request before every stage is a tower layer around the whole app (`.layer(l)`), and there is
     no step for one route, whose needs are its handler's arguments and return type. A route
     takes every stage or, with `stages = bare`, none: no host or same-origin check, deadline,
-    panic catch, security headers or cache rule, which its handler gives itself if it needs them.
+    panic catch, error page, security headers or cache rule, which its handler gives itself if it
+    needs them; a wrong method or a missing suffix at its path is the router's plain 405 or 404.
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the
