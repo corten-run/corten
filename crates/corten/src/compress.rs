@@ -1133,7 +1133,8 @@ mod tests {
     }
 
     #[test]
-    fn stream_contexts_share_a_budget_and_return_it_when_dropped() {
+    fn stream_coders_reserve_their_share_of_a_budget() {
+        // `tests/stream_budget.rs` checks the real budget: full, then given back however a stream ends.
         // `tests/stream_memory.rs` measures a gzip stream at these, written out there.
         assert_eq!((GZIP_STREAM_LEVEL, GZIP_STREAM_BYTES), (3, 360 << 10));
         let held = AtomicUsize::new(0);

@@ -1111,14 +1111,16 @@ rules something out.
     Linux WebKit takes no brotli, so there the rule is held by the negotiation tests and the smoke's
     HTTP checks, which ask for each coding themselves.
     So a client that accepts zstd gets zstd 1 as before, any other that accepts gzip gets gzip 3
-    (sync-flushed, its window kept), and one that accepts only brotli gets the stream as it is. A
+    (sync-flushed, its window kept), and one that accepts only brotli gets the stream as it is, even
+    if it says `identity;q=0` (RFC 9110 section 12.4.1 lets a server disregard the field when nothing
+    it has is acceptable, as a stream past the budget already does, rather than answer 406). A
     streamed `Media` follows the same rule though a download ends, so its tail is never held for
     long: one rule for every stream, at the cost of gzip's bytes for a client without zstd.
     Gzip sends more than brotli 4 did, most for a large region (`what_a_redraw_sends`, ten redraws
     of a list with one row changed): of 40 rows (2.7 KB) 60 to 69 bytes against 20 to 40, of 250 (17
-    KB) 477 to 524 against 23 to 91, and an event over deflate's 32 KiB window repeats nothing (640
-    rows, 45 KB: 6,203 to 6,214 against 44 to 2,029). Level 3, not 1: at 1 the redraws are 129 to
-    453 bytes, 2,188 to 2,684 and 7,238 to 7,330. A gzip stream holds 352,232 bytes and reserves 360
+    KB) 477 to 524 against 23 to 91, and of 640 (45 KB, past deflate's 32 KiB window, so most of the
+    event before is out of reach) 6,203 to 6,214 against 44 to 2,029. Level 3, not 1: at 1 the
+    redraws are 129 to 453 bytes, 2,188 to 2,684 and 7,238 to 7,330. A gzip stream holds 352,232 bytes and reserves 360
     KiB (`tests/stream_memory.rs`, the bytes asked of the system allocator; jemalloc, which the
     template's image preloads, rounds them up to its size classes, which is not measured), where
     brotli reserved 1,000 KiB. It costs more CPU: an event of the 2.7 KB redraw, made and sent

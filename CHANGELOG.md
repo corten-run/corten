@@ -4091,14 +4091,15 @@ Corten is pre-1.0, so any minor version may change the API.
   (from a route the app adds only with `SMOKE_TRUSTED_TYPES=1`; only Playwright's Windows WebKit
   would be sent brotli, the others getting zstd and Linux's WebKit asking for gzip, not
   brotli, so only there would it catch a brotli stream), and a streamed download to a client that
-  sends `gzip, deflate, br` is now tested to be gzip. A gzip stream reserves 360 KiB where a
-  brotli one reserved 1,000 KiB. It sends more than brotli 4, most for a
-  large region: a redraw of one row of 40 (2.7 KB) is 60 to 69 bytes against 20 to 40, of 250 (17 KB)
-  477 to 524 against 23 to 91, and an event over gzip's 32 KiB window repeats nothing (45 KB:
-  about 6,210 bytes a redraw, where brotli's 64 KiB window still repeated most of it); and more
-  CPU: an event of the 2.7 KB redraw, made and sent through the compression layer, is about
-  286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470; callgrind, three
-  runs each, within 20 instructions)
+  sends `gzip, deflate, br` is now tested to be gzip; a new test fills the stream budget and checks
+  that a stream's share comes back when it is dropped unread, read to its end or cut by an error. A
+  gzip stream reserves 360 KiB where a brotli one reserved 1,000 KiB. It sends more than brotli 4,
+  most for a large region: a redraw of one row of 40 (2.7 KB) is 60 to 69 bytes against 20 to 40,
+  of 250 (17 KB) 477 to 524 against 23 to 91, and of 640 (45 KB, past gzip's 32 KiB window, so
+  most of the event before is out of reach) about 6,210 bytes, where brotli's 64 KiB window still
+  reached it; and more CPU: an event of the 2.7 KB redraw, made and sent through the compression
+  layer, is about 286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470;
+  callgrind, three runs each, within 20 instructions)
   ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
