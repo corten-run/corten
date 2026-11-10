@@ -78,7 +78,8 @@ sends the part only when its version moved, ends after the state that settles it
 few failed reads in a row draws that the job could not be read before it ends:
 
 ```rust,ignore
-async fn batch_live(Path(id): Path<BatchId>, State(jobs): State<Jobs>, since: LiveSince) -> LiveResponse {
+async fn batch_live(Params(at): Params<url::BatchLive>, State(jobs): State<Jobs>, since: LiveSince) -> LiveResponse {
+    let id = at.id;
     // The version the page shows, failed reads in a row, and the wait before the next read
     // (None once the batch has settled and its last state is sent).
     let start = (since.0, 0, Some(Duration::ZERO));

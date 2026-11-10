@@ -1,6 +1,6 @@
 # Marketplace v2: equivalent localization work
 
-**A separate application workload, with eighteen native adapters and a pre-load conformance
+**A separate application workload, with twenty native adapters and a pre-load conformance
 gate.** Every selected app must pass the Docker/browser checks before any load test starts.
 No v2 performance baseline is published here. Passing the formatting-capture checker alone
 never qualifies an app for load testing.
@@ -104,7 +104,7 @@ node bench/marketplace/report.mjs bench/marketplace/results/w2/summary.json
 ```
 
 Use a fresh `wN` each time: an existing result directory is never overwritten. `--apps` may
-select individual apps for development checks. A full publishable baseline needs all eighteen
+select individual apps for development checks. A full publishable baseline needs all twenty
 apps and three passes; the read-only reporter rejects subsets, check-only runs, dirty commits,
 missing profiles or passes, failed cleanup and aggregates that disagree with saved passes.
 The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
@@ -126,7 +126,7 @@ responsive application, visible row counts, exact formatted text, escaped conten
 forms, navigation, missing IDs and unsupported locales. HTTP probes change the record between
 requests and verify one upstream read, reserialization rather than forwarding, and errors.
 Every selected app must pass both sources before *any* app is timed. CI runs both the legacy
-catalog gate and this gate for each of the eighteen apps.
+catalog gate and this gate for each of the twenty apps.
 
 Load uses a one-CPU app quota, a four-CPU load-generator quota and a two-CPU upstream quota.
 For disjoint pinning set `MARKETPLACE_APP_CPUS`, `MARKETPLACE_LOAD_CPUS` and
@@ -148,7 +148,7 @@ browser and instruction measurements remain evidence only for their original wor
 
 ## Formatting conformance
 
-`contract.mjs` provides numeric edge cases, the eighteen-app inventory, an independent
+`contract.mjs` provides numeric edge cases, the twenty-app inventory, an independent
 ECMA-402/CLDR-based oracle and a formatting-capture validator. It is test tooling, never an
 implementation helper for the apps. No app imports the oracle to produce measured answers.
 
@@ -189,7 +189,7 @@ always reports `readyForLoad: false`: no standalone formatting test certifies a 
 
 ## Before measuring
 
-1. Run the eighteen adapters' ecosystem-local tests and Docker/browser gate. Keep catalog
+1. Run the twenty adapters' ecosystem-local tests and Docker/browser gate. Keep catalog
    behavior unchanged, and do not rewrite historical result files.
 2. Review request-time native localization and serializer paths, not just captured answers.
    Missing support is a failed contract, not a fast row.

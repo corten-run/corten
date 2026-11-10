@@ -35,9 +35,9 @@ use std::{
     task::{Context, Poll},
 };
 
+use crate::extract::FromRequestParts;
 use axum::{
     body::{Body, Bytes, HttpBody},
-    extract::FromRequestParts,
     http::request::Parts,
     response::Response,
 };
