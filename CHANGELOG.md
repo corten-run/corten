@@ -6438,11 +6438,12 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
-77. Design Choice 35 records why shared state keeps `#[derive(Clone, FromRef)]` rather than a
-    `#[corten::state]` attribute that writes both: `Clone` is the router's requirement and
-    `FromRef` each handler's, and the attribute would take one word off the four example state
-    types that derive both while giving the four that derive `Clone` alone a third way to write
-    theirs
+77. [Design Choice 35](docs/design.md#choice-state-derives) records why shared state keeps
+    `#[derive(Clone, FromRef)]` rather than a `#[corten::state]` attribute that writes both:
+    `Clone` is the router's requirement and `FromRef` each handler's, and the attribute would take
+    one word off the four example state types that derive both while giving three of the four
+    that derive `Clone` alone (the fourth is an enum, which `FromRef` does not take) a third way
+    to write theirs
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 78. Which tables sort in place is decided and measured: every table whose page has all its rows,
     also when other routes read its order. `bench/browser/sort-cost.mjs` times a sort click with
