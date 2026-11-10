@@ -21,8 +21,8 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+use crate::extract::{FromRequestParts, Request};
 use axum::{
-    extract::{FromRequestParts, Request},
     http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},

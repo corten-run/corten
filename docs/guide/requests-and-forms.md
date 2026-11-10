@@ -15,9 +15,14 @@ app names about a request is Corten's too: an extractor of its own implements
 the same name), a middleware takes `corten::extract::Request` and answers a
 `corten::middleware::Response` (`IntoResponse` makes one of a `Refused` or a status), a relay's
 body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a
-`corten::Listener`, and a test sends its requests with `app.test()`. These are axum's own traits
-and types, named from Corten so the app imports one crate
-([design Choice 21](../design.md#choice-own-extractors)). A handler that takes the whole `Request` and answers
+`corten::Listener`, and a test sends its requests with `app.test()`. The extractor and handler
+traits and `State` are Corten's own, with the names, the `Rejection` and the
+`from_request_parts(parts, state)` signature they had as axum's, so an extractor written against
+axum's compiles against them with its `use` changed; `Request`, `Response` and `Body` are the
+`http` crate's and axum's types, named from Corten so the app imports one crate
+([design Choice 21](../design.md#choice-own-extractors)). axum's own extractors (`Path`,
+`Query`, `Json`, `Extension`, `ConnectInfo`, `Parts`) are not handler arguments: a route's path
+and query are its `Params`, a body its `Json` or `Form`, and the whole head its `Req`. A handler that takes the whole `Request` and answers
 a body over a limit of its own itself (a route that keeps another server's error shape) reads it
 with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A body too
 large to hold (a file `PUT` as `application/octet-stream`) is passed on as it arrives instead:

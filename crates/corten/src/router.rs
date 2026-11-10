@@ -23,10 +23,9 @@ use std::{
     task::{Context, Poll},
 };
 
+use crate::{extract::Request, handler::Handler};
 use axum::{
     body::Body,
-    extract::Request,
-    handler::Handler,
     http::{header, uri::PathAndQuery, HeaderValue, Method, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
@@ -40,13 +39,6 @@ pub(crate) type Answering = Pin<Box<dyn Future<Output = Response> + Send>>;
 /// A route's handler for one or more methods, with its state: what the router calls.
 pub(crate) trait Endpoint: Send + Sync + 'static {
     fn call(&self, req: Request) -> Answering;
-
-    /// The answer in an unstaged route's lane. A handler's ([`Handled`]) is its own future and
-    /// the lane's work in one box; the router's own answers (`404`, `405`) are boxed by `call` and
-    /// then again with the lane, as only a failure takes this.
-    fn call_in(&self, req: Request, lane: Arc<crate::route::Lane>) -> Answering {
-        Box::pin(crate::route::laned(lane, self.call(req)))
-    }
 }
 
 /// The handler the router chose for a request, which the stages call last.
@@ -63,11 +55,6 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     #[inline]
     fn call(&self, req: Request) -> Answering {
         Box::pin(self.handler.clone().call(req, self.state.clone()))
-    }
-
-    #[inline]
-    fn call_in(&self, req: Request, lane: Arc<crate::route::Lane>) -> Answering {
-        Box::pin(crate::route::laned(lane, self.handler.clone().call(req, self.state.clone())))
     }
 }
 

@@ -1142,11 +1142,13 @@ pub use corten_macros::routes;
 #[derive(Clone, Copy)]
 pub(crate) struct NoStoreHandler<H>(pub(crate) H);
 
-impl<H: axum::handler::Handler<T, S>, T, S> axum::handler::Handler<T, S> for NoStoreHandler<H> {
-    type Future = futures_util::future::Map<H::Future, fn(axum::response::Response) -> axum::response::Response>;
-
+impl<H: crate::handler::Handler<T, S>, T, S> crate::handler::Handler<T, S> for NoStoreHandler<H> {
     #[inline]
-    fn call(self, req: axum::extract::Request, state: S) -> Self::Future {
+    fn call(
+        self,
+        req: axum::extract::Request,
+        state: S,
+    ) -> impl std::future::Future<Output = axum::response::Response> + Send + 'static {
         fn apply(mut res: axum::response::Response) -> axum::response::Response {
             crate::cache::Cache::no_store().apply(&mut res);
             res
@@ -3251,7 +3253,7 @@ impl<R: FromUrl + ?Sized> std::ops::DerefMut for Params<R> {
     }
 }
 
-impl<R: FromUrl + ?Sized, S: Send + Sync> axum::extract::FromRequestParts<S> for Params<R>
+impl<R: FromUrl + ?Sized, S: Send + Sync> crate::extract::FromRequestParts<S> for Params<R>
 where
     R::Path: __private::ReadPath,
     R::Params: Send,
@@ -3425,8 +3427,7 @@ macro_rules! methods {
             pub fn $method<H, T, S>(handler: H) -> Methods<S>
             where
                 H: __private::RouteHandler<T, S> + crate::answer::Signature<T>,
-                <H as __private::RouteHandler<T, S>>::Handler: axum::handler::Handler<T, S>,
-                <<H as __private::RouteHandler<T, S>>::Handler as axum::handler::Handler<T, S>>::Future: Unpin,
+                <H as __private::RouteHandler<T, S>>::Handler: crate::handler::Handler<T, S>,
                 <H as crate::answer::Signature<T>>::Out: crate::answer::Answer + 'static,
                 <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs:
                     crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
@@ -3444,8 +3445,7 @@ macro_rules! methods {
                 pub fn $method<H, T>(self, handler: H) -> Self
                 where
                     H: __private::RouteHandler<T, S> + crate::answer::Signature<T>,
-                    <H as __private::RouteHandler<T, S>>::Handler: axum::handler::Handler<T, S>,
-                    <<H as __private::RouteHandler<T, S>>::Handler as axum::handler::Handler<T, S>>::Future: Unpin,
+                    <H as __private::RouteHandler<T, S>>::Handler: crate::handler::Handler<T, S>,
                     <H as crate::answer::Signature<T>>::Out: crate::answer::Answer + 'static,
                     <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs:
                         crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
@@ -3748,8 +3748,8 @@ fn written_checked<R: Route + ?Sized>() {
 /// caching header, so no shared cache hands one visitor's cookie to another. A handler that panics
 /// is logged with the route's path and answered `500`, as a staged one is, rather than dropping
 /// the connection. Under an API's prefix a failure after the host check is the API's JSON, as
-/// every failure there is. It wraps the handler's own future inside the one box the router makes
-/// for it ([`laned`]); only a failure under an API boxes the JSON it writes.
+/// every failure there is. It wraps the handler's boxed future in one box of its own ([`laned`]);
+/// only a failure under an API boxes the JSON it writes.
 pub(crate) struct Lane {
     pub(crate) hosts: crate::security::HostCheck,
     /// Under an API's prefix: how the API writes a failure, and whether the app runs under
@@ -3767,14 +3767,13 @@ impl crate::router::Stages for Lane {
             res.headers_mut().insert(axum::http::header::CACHE_CONTROL, crate::cache::PRIVATE);
             return Box::pin(std::future::ready(unstaged_headers(res)));
         }
-        route.call_in(req, self)
+        Box::pin(laned(self, route.call(req)))
     }
 }
 
 /// `answering` in `lane`: its answer with [`unstaged_headers`], or a `500` when the handler
-/// panics, and under an API's prefix a failure as the API's JSON. Generic, so the router boxes it
-/// with the handler's own future, once.
-pub(crate) async fn laned<F>(lane: std::sync::Arc<Lane>, answering: F) -> axum::response::Response
+/// panics, and under an API's prefix a failure as the API's JSON.
+async fn laned<F>(lane: std::sync::Arc<Lane>, answering: F) -> axum::response::Response
 where
     F: std::future::Future<Output = axum::response::Response>,
 {
@@ -3845,7 +3844,7 @@ pub mod __private {
         fmt::{self, Display, Write as _},
     };
 
-    use axum::handler::Handler;
+    use crate::handler::Handler;
 
     use super::{Encode, Methods, REST, SEGMENT};
 
@@ -3864,7 +3863,6 @@ pub mod __private {
                 where
                     H: RouteHandler<T, S> + crate::answer::Signature<T>,
                     <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
-                    <<H as RouteHandler<T, S>>::Handler as Handler<T, S>>::Future: Unpin,
                     <H as crate::answer::Signature<T>>::Out: crate::answer::Answer + 'static,
                     <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Rows: RowsAre<D>,
                     <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs:
@@ -3893,7 +3891,6 @@ pub mod __private {
                 where
                     H: RouteHandler<T, S> + crate::answer::Signature<T>,
                     <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
-                    <<H as RouteHandler<T, S>>::Handler as Handler<T, S>>::Future: Unpin,
                     crate::NoStore<<H as crate::answer::Signature<T>>::Out>: crate::answer::Answer + 'static,
                     <crate::NoStore<<H as crate::answer::Signature<T>>::Out> as crate::answer::Answer>::Rows: RowsAre<D>,
                     <crate::NoStore<<H as crate::answer::Signature<T>>::Out> as crate::answer::Answer>::Inputs:
@@ -3902,7 +3899,6 @@ pub mod __private {
                     T: 'static,
                     S: Clone + Send + Sync + 'static,
                 {
-                    refuse_axum_routing::<T>();
                     let endpoint: crate::answer::Endpoint<_, crate::NoStore<<H as crate::answer::Signature<T>>::Out>> = crate::answer::Endpoint {
                         handler: super::NoStoreHandler(handler.into_handler()),
                         answer: std::marker::PhantomData,
@@ -4483,28 +4479,7 @@ pub mod __private {
     where
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
     {
-        refuse_axum_routing::<T>();
         crate::answer::Endpoint { handler: handler.into_handler(), answer: std::marker::PhantomData, shared }
-    }
-
-    /// Stops the app at startup when a handler takes one of axum's readers of what axum's router
-    /// stored, which Corten's router does not store, so it would answer `500` to every request.
-    /// They are axum's `FromRequestParts` impls, which no bound can leave out, so the check reads
-    /// the arguments' type names, once, as the route is made.
-    pub(crate) fn refuse_axum_routing<T>() {
-        let args = std::any::type_name::<T>();
-        for (axum, instead) in [
-            ("axum::extract::path::Path<", "its `Params`"),
-            ("axum::extract::path::RawPathParams", "its `Params`"),
-            ("axum::extract::matched_path::MatchedPath", "`corten::middleware::MatchedPath` from the request's extensions"),
-        ] {
-            if args.contains(axum) {
-                let name = axum.rsplit("::").next().unwrap_or(axum).trim_end_matches('<');
-                panic!(
-                    "corten: a route's handler takes axum's `{name}` ({args}), which Corten's router does not fill: read {instead} instead"
-                );
-            }
-        }
     }
 
     /// A handler a route names: an async function whose arguments a request fills (extractors,
@@ -4519,14 +4494,14 @@ pub mod __private {
         fn into_handler(self) -> Self::Handler;
     }
 
-    // One impl per arity, with axum's own bounds written out (and `S: Clone`, which every route
-    // already asks of its state), rather than one over every axum `Handler`: a handler that
-    // misses one of them then fails this trait, in its words, instead of axum's `Handler` bound,
+    // One impl per arity, with the bounds of Corten's `Handler` written out (and `S: Clone`, which
+    // every route already asks of its state), rather than one over every `Handler`: a handler
+    // that misses one of them then fails this trait, in its words, instead of the `Handler` bound,
     // which the compiler would report for a blanket impl.
     impl<F, Fut, S, Res> RouteHandler<((),), S> for F
     where
         F: FnOnce() -> Fut + Clone + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Res> + Send,
+        Fut: std::future::Future<Output = Res> + Send + 'static,
         S: Clone + Send + Sync + 'static,
         Res: axum::response::IntoResponse,
     {
@@ -4542,11 +4517,12 @@ pub mod __private {
             impl<F, Fut, S, Res, M, $($ty,)* $last> RouteHandler<(M, $($ty,)* $last,), S> for F
             where
                 F: FnOnce($($ty,)* $last,) -> Fut + Clone + Send + Sync + 'static,
-                Fut: std::future::Future<Output = Res> + Send,
+                Fut: std::future::Future<Output = Res> + Send + 'static,
                 S: Clone + Send + Sync + 'static,
                 Res: axum::response::IntoResponse,
-                $( $ty: axum::extract::FromRequestParts<S> + Send, )*
-                $last: axum::extract::FromRequest<S, M> + Send,
+                M: 'static,
+                $( $ty: crate::extract::FromRequestParts<S> + Send + 'static, )*
+                $last: crate::extract::FromRequest<S, M> + Send + 'static,
             {
                 type Handler = F;
                 #[inline(always)]

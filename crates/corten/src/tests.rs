@@ -63,7 +63,7 @@ macro_rules! paths {
 /// route struct of its own.
 struct Num<T>(T);
 
-impl<S: Send + Sync, T: serde::de::DeserializeOwned + Send> axum::extract::FromRequestParts<S> for Num<T> {
+impl<S: Send + Sync, T: serde::de::DeserializeOwned + Send> crate::extract::FromRequestParts<S> for Num<T> {
     type Rejection = crate::ParamsRejection;
 
     async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
@@ -605,7 +605,7 @@ async fn a_live_fragment_carries_its_cursor_and_a_reconnect_reads_it_back() {
             req = req.header("last-event-id", header);
         }
         let (mut parts, ()) = req.body(()).unwrap().into_parts();
-        async move { <LiveSince as axum::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await.unwrap().0 }
+        async move { <LiveSince as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await.unwrap().0 }
     };
     assert_eq!(since("/live", None).await, None, "a first connection without since");
     assert_eq!(since("/live?since=a%20b&x=1", None).await.as_deref(), Some("a b"), "the page's cursor");
@@ -1659,7 +1659,7 @@ impl<S: Sync> crate::Identify<S> for Person {
 /// Reads [`Seller`] and [`Bucket`] joined, as a middleware's extractor might.
 struct Joined;
 
-impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Joined {
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for Joined {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> std::result::Result<Self, Response> {
@@ -1902,7 +1902,7 @@ async fn a_rule_read_by_an_outer_layer_keys_the_page_as_its_base() {
         .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
             let (mut parts, body) = req.into_parts();
             parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
-            let _ = <Caller<Seller> as axum::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
+            let _ = <Caller<Seller> as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
             next.run(axum::extract::Request::from_parts(parts, body)).await
         }))
         .router();
@@ -3842,7 +3842,7 @@ struct StartedAhead(crate::Ahead<u32>);
 
 static AHEAD_FINISHED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-impl<S: Sync> axum::extract::FromRequestParts<S> for StartedAhead {
+impl<S: Sync> crate::extract::FromRequestParts<S> for StartedAhead {
     type Rejection = std::convert::Infallible;
 
     async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
@@ -4182,7 +4182,7 @@ impl<S: Sync> crate::Identify<S> for Slow {
 /// Reads `Slow` twice at once, as a type over two others that share it would.
 struct TwoAtOnce;
 
-impl<S: Sync + Send> axum::extract::FromRequestParts<S> for TwoAtOnce {
+impl<S: Sync + Send> crate::extract::FromRequestParts<S> for TwoAtOnce {
     type Rejection = Response;
 
     async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> std::result::Result<Self, Response> {
@@ -4222,7 +4222,7 @@ async fn a_layer_outside_the_app_shares_the_lookup_with_the_handler() {
         .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
             let (mut parts, body) = req.into_parts();
             parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
-            let _ = <Caller<Viewer> as axum::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
+            let _ = <Caller<Viewer> as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
             next.run(axum::extract::Request::from_parts(parts, body)).await
         }))
         .router();
@@ -5053,7 +5053,7 @@ async fn unstaged_feed(feed: crate::Params<unstaged_url::Feed<'_>>) -> String {
 }
 
 /// The rest of what an unstaged handler may take: the request's `Uri` and the app's state.
-async fn unstaged_where(at: crate::Params<unstaged_url::Where>, uri: axum::http::Uri, _: axum::extract::State<()>) -> String {
+async fn unstaged_where(at: crate::Params<unstaged_url::Where>, uri: axum::http::Uri, _: crate::extract::State<()>) -> String {
     format!("{} {uri}", at.id)
 }
 
@@ -5992,7 +5992,7 @@ mod api_module {
     }
 }
 
-async fn module_item(axum::extract::State(base): axum::extract::State<u32>, item: crate::Params<api_module::ModItem>) -> String {
+async fn module_item(crate::extract::State(base): crate::extract::State<u32>, item: crate::Params<api_module::ModItem>) -> String {
     format!("item {}", base + item.id)
 }
 
@@ -6312,7 +6312,7 @@ async fn a_json_body_that_does_not_parse_is_a_json_400() {
     let router = App::new(Routes::new())
         .api::<ApiRoot>(|api| {
             api.route::<ApiItems>(crate::Methods::writes(crate::router::post(
-                |axum::Json(v): axum::Json<serde_json::Value>| async move { v.to_string() },
+                |crate::Json(v): crate::Json<serde_json::Value>| async move { v.to_string() },
             )))
         })
         .router();
@@ -12122,7 +12122,7 @@ mod layout_reads {
         ) -> Option<impl std::future::Future<Output = &'static str> + Send + 'static> {
             let mut parts = parts.clone();
             Some(async move {
-                use axum::extract::FromRequestParts;
+                use crate::extract::FromRequestParts;
                 let req = Req::from_request_parts(&mut parts, &()).await.unwrap();
                 req.lang()
             })
@@ -13219,8 +13219,8 @@ async fn path_parameters_are_read_from_the_path_matched() {
             .route("/s/{s}", get(|Num(s): Num<String>| async move { s }))
             .route(
                 "/two/{a}",
-                get(|parts: axum::http::request::Parts| async move {
-                    match crate::route::read_path::<(u32, u32)>(&parts) {
+                get(|req: crate::extract::Request| async move {
+                    match crate::route::read_path::<(u32, u32)>(&req.into_parts().0) {
                         Ok(_) => StatusCode::OK.into_response(),
                         Err(rejection) => rejection.into_response(),
                     }
@@ -13238,7 +13238,7 @@ async fn path_parameters_are_read_from_the_path_matched() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     // A handler called with no router before it.
     let (mut parts, _) = Request::get("/n/7").body(Body::empty()).unwrap().into_parts();
-    let unmatched = <Num<u32> as axum::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
+    let unmatched = <Num<u32> as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
     assert_eq!(unmatched.err().unwrap().into_response().status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
@@ -13282,21 +13282,3 @@ async fn an_app_layer_is_made_once_outside_the_router() {
     assert!(!matched.load(Ordering::Relaxed), "a layer runs before the route is matched");
 }
 
-/// A handler that takes axum's `Path`, which Corten's router does not fill, stops the app as its
-/// route is made, rather than answering 500 to every request.
-#[test]
-#[should_panic(expected = "takes axum's `Path`")]
-fn a_handler_taking_axum_s_path_stops_the_app() {
-    let _: crate::Methods = crate::route::get(|axum::extract::Path(n): axum::extract::Path<u32>| async move { n.to_string() });
-}
-
-/// The same for axum's raw parameters, and in a route that says `no_store`.
-#[test]
-#[should_panic(expected = "takes axum's `RawPathParams`")]
-fn a_no_store_handler_taking_axum_s_raw_parameters_stops_the_app() {
-    use crate::route::__private::no_store_get;
-    let _: crate::Methods =
-        no_store_get::<_, _, (), (), _, (), _, crate::answer::NotAFeed>(|_: axum::extract::RawPathParams| async {
-            String::new()
-        });
-}

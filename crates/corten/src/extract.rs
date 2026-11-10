@@ -74,10 +74,62 @@
 //! # fn main() { let _ = App::new(url::router(Shared { lists: Lists })); }
 //! ```
 //!
-//! These are the traits of axum, the server library under Corten, named here so an app's code
-//! names Corten alone (`docs/design.md#choice-own-extractors`). The traits come from `axum-core`, where
-//! axum's own paths would also carry axum's derives of the same names when its `macros` feature is
-//! on anywhere in the build.
+//! These are Corten's own traits, with the names, the `Rejection` and the
+//! `from_request_parts(parts, state)` signature they had when they were axum's
+//! (`docs/design.md#choice-own-extractors`), so an extractor written against axum's compiles
+//! against them as it is. axum's own extractors (its `Path`, `Query`, `Extension`) implement
+//! axum's traits, not these, so a handler cannot take one: a route's path and query are its
+//! [`crate::Params`]. One that does not compile, where before it compiled and answered `500` to
+//! every request:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/items/{id}", get = item)]
+//!     pub struct Item { pub id: u32 }
+//! }
+//!
+//! async fn item(corten::axum::extract::Path(id): corten::axum::extract::Path<u32>) -> String {
+//!     id.to_string()
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Nor does one under `no_store`, which reads its arguments the same way:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/items/{id}", get = item, no_store)]
+//!     pub struct Item { pub id: u32 }
+//! }
+//!
+//! async fn item(_: corten::axum::extract::RawPathParams) -> String {
+//!     String::new()
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! The same handler with [`crate::Params`] compiles:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/items/{id}", get = item, no_store)]
+//!     pub struct Item { pub id: u32 }
+//! }
+//!
+//! async fn item(Params(at): Params<url::Item>) -> String {
+//!     at.id.to_string()
+//! }
+//! # fn main() { let _ = App::new(url::router()); }
+//! ```
 //!
 //! A handler that takes the whole [`Request`] reads its body with [`bytes_up_to`], up to a limit
 //! of the route's own, and answers a body over it itself.
@@ -88,8 +140,7 @@
 use std::{future::Future, pin::Pin, task::Poll, time::Duration};
 
 use axum::body::{BodyDataStream, HttpBody};
-pub use axum::extract::State;
-pub use axum_core::extract::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request};
+pub use crate::handler::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request, State};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use tokio::time::Sleep;

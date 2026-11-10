@@ -120,6 +120,7 @@ mod client;
 pub mod compress;
 pub mod extract;
 pub mod form;
+mod handler;
 mod html;
 pub mod i18n;
 #[cfg(feature = "json")]
@@ -635,7 +636,17 @@ impl From<String> for Fragment {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LiveSince(pub Option<String>);
 
-impl<S: Send + Sync> axum::extract::FromRequestParts<S> for LiveSince {
+/// A feed's cursor ([`feed::Since`]), read by [`feed::Since::read`].
+#[cfg(feature = "feed")]
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for corten_feed::Since {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> std::result::Result<Self, Self::Rejection> {
+        Ok(corten_feed::Since::read(parts))
+    }
+}
+
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for LiveSince {
     type Rejection = Infallible;
 
     async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> std::result::Result<Self, Self::Rejection> {

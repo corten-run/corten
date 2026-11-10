@@ -2,8 +2,8 @@
 //! and a request that is answered.
 use std::{io::Write, time::Duration};
 
-use axum::{body::Body, extract::State, http::Request};
-use corten::{Abort, App, Router, Signal};
+use axum::{body::Body, http::Request};
+use corten::{extract::State, Abort, App, Router, Signal};
 use http_body_util::BodyExt;
 use tokio::sync::mpsc;
 use tower::ServiceExt;

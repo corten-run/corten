@@ -52,14 +52,14 @@ use std::{
     future::Future,
     marker::PhantomData,
     ops::{Deref, DerefMut},
-    pin::Pin,
-    task::{Context, Poll},
     time::Duration,
 };
 
-use axum::{
+use crate::{
     extract::{Request, State},
     handler::Handler,
+};
+use axum::{
     http::{Method, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
@@ -1682,9 +1682,6 @@ impl Unshared for AnyInputs {}
 )]
 pub trait Anonymous {}
 
-// Says nothing of who is asking; refused when its route is made instead, since Corten's router does
-// not fill it (`route::__private::refuse_axum_routing`).
-impl<T> Anonymous for axum::extract::Path<T> {}
 impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {}
 impl<T> Anonymous for crate::Form<T> {}
 impl<T> Anonymous for crate::form::Upload<T> {}
@@ -1740,7 +1737,7 @@ impl<A: AllAnonymous> Accepts<A> for AnonymousInputs {
     const SHARED: bool = true;
 }
 
-/// A handler's arguments and result, by the shapes axum's `Handler` uses.
+/// A handler's arguments and result, by the shapes Corten's `Handler` uses.
 #[doc(hidden)]
 pub trait Signature<T> {
     type Args;
@@ -1845,40 +1842,25 @@ impl<H: Clone, O> Clone for Endpoint<H, O> {
     }
 }
 
-/// The handler's future, marking a JSON route's failures.
-#[doc(hidden)]
-pub struct Marked<F, O> {
-    inner: F,
-    answer: PhantomData<fn() -> O>,
-}
-
-impl<F: Future<Output = Response> + Unpin, O: Answer> Future for Marked<F, O> {
-    type Output = Response;
-
-    #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Response> {
-        Pin::new(&mut self.inner).poll(cx).map(|mut res| {
-            // A constant: an HTML route's check compiles away.
-            if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
-                res.extensions_mut().insert(Answered);
-            }
-            res
-        })
+/// A JSON route's failure marked as one, which the stages leave as it is.
+#[inline]
+fn marked<O: Answer>(mut res: Response) -> Response {
+    // A constant: an HTML route's check compiles away.
+    if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
+        res.extensions_mut().insert(Answered);
     }
+    res
 }
 
 impl<H, T, S, O> Handler<T, S> for Endpoint<H, O>
 where
     H: Handler<T, S>,
-    H::Future: Unpin,
     O: Answer + 'static,
     S: Send + 'static,
     T: 'static,
 {
-    type Future = Marked<H::Future, O>;
-
     #[inline]
-    fn call(self, mut req: Request, state: S) -> Self::Future {
+    fn call(self, mut req: Request, state: S) -> impl Future<Output = Response> + Send + 'static {
         // A whole document's layout reads (`crate::LayoutRead`) start as its page route is called,
         // after the middleware, beside the handler's own reads.
         if let Some(here) = req.extensions().get::<crate::layout::StartHere>().cloned() {
@@ -1892,7 +1874,7 @@ where
                 signal.mark_for_everyone();
             }
         }
-        Marked { inner: self.handler.call(req, state), answer: PhantomData }
+        futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>)
     }
 }
 

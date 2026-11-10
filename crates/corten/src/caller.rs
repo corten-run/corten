@@ -88,8 +88,8 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+use crate::extract::{FromRequestParts, OptionalFromRequestParts};
 use axum::{
-    extract::{FromRequestParts, OptionalFromRequestParts},
     http::{request::Parts, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };

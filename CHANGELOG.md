@@ -2625,6 +2625,26 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- Handlers are called through Corten's own `Handler`, and `corten::extract`'s
+  `FromRequestParts`, `OptionalFromRequestParts`, `FromRequest` and `State` are Corten's own
+  traits and type (design Choice 25, step 3, and Choice 21), with the names, `Rejection` and
+  `from_request_parts(parts, state)` signature they had as axum's. What an app sees:
+  1. An extractor that implements `corten::extract::FromRequestParts` (or `FromRequest`) compiles
+     as it was. One written against `axum::extract::FromRequestParts` (or through `corten::axum`)
+     no longer fills a handler argument: change its `use` to `corten::extract`; the body is the
+     same.
+  2. `State` is Corten's own: `corten::extract::State` and the prelude's, as before. A handler
+     that takes `axum::extract::State` does not compile; take `corten::extract::State`.
+  3. axum's own extractors are no longer handler arguments: `Path`, `RawPathParams`, `Query`,
+     `Json`, `Extension`, `ConnectInfo`, `MatchedPath` and `http::request::Parts`. A route's path
+     and query are its `Params`, a body its `corten::Json`, `Form` or `Upload`, the client's
+     address its `ClientIp`, and the head its `Req`. axum's `Path` and `RawPathParams` compiled
+     before and stopped the app at startup; they now fail to compile.
+  4. A handler argument no request fills is reported as "a request cannot fill `T`", naming
+     `corten::extract::FromRequestParts`, where rustc named axum's trait.
+  `Bytes`, `Json` and `Form` read the body through axum's readers as before, with the same
+  limit, refusals and texts. MEASURE_PLACEHOLDER
+
 - Corten routes with a router of its own on matchit, `corten::Router`, in place of axum's `Router`
   and `MethodRouter` (design Choice 25, step 2), and passes the dispatch suite unchanged. Every
   request measured costs less (callgrind, release, jemalloc): card-market's item page 79,731
