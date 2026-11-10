@@ -233,8 +233,9 @@ read under another name than it is written under or under an `alias` too, anothe
 key (a `rename`, an `alias`, the row's `rename_all` or `tag`; a flattened field's members are not
 checked), and
 `into`, `transparent`, `from` or `try_from` on the row. It reads the row's attributes, not the
-id type's own `Serialize`, so an id type that writes other than the text it derefs to is not
-checked. `Row` is the derive and the trait at once (`use corten::feed::Row`); a struct row with
+id type's own `Serialize` and `Deserialize`, so an id type that writes or reads other than the
+text it derefs to is not checked, nor is a row whose `Serialize` or `Deserialize` is not serde's
+derive. `Row` is the derive and the trait at once (`use corten::feed::Row`); a struct row with
 named fields, keyed by one of them, derives it, and only a row the derive cannot express (such as
 an enum, a tuple struct, whose fields serde writes without names, a key made of several fields, or
 an `id` that does more than return a field) implements it by hand. A generic row needs no bounds on its parameters: it is a row for each type argument that

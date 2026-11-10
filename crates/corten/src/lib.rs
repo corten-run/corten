@@ -114,8 +114,9 @@ pub mod feed {
     /// of them, derives it; only a row the derive cannot express (such as an enum, a tuple struct,
     /// a key made of several fields, or an `id` that does more than return a field) implements the
     /// trait by hand. The derive reads the row's serde
-    /// attributes, not the id type's own `Serialize`: an id type that writes other than the text it
-    /// derefs to is not checked. A generic row needs no bounds on its parameters: it is a `Row` for each type
+    /// attributes, not the id type's own `Serialize` and `Deserialize`: an id type that writes or
+    /// reads other than the text it derefs to is not checked, nor is a row whose `Serialize` or
+    /// `Deserialize` is not serde's derive. A generic row needs no bounds on its parameters: it is a `Row` for each type
     /// argument that makes it `Clone`, `Serialize`, `Send`, `Sync` and `'static`, and a feed of
     /// one that is not does not compile where it is built:
     ///

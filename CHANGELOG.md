@@ -2667,7 +2667,8 @@ Corten is pre-1.0, so any minor version may change the API.
     under an `alias` too, another field serde writes or reads under the id's key (a `rename`, an `alias`, the row's
     `rename_all` or `tag`; a flattened field's members are not checked), a row serde writes or reads as another value
     (`into`, `transparent`, `from`, `try_from`), or a tuple struct, whose fields serde writes
-    without names (an id type's own `Serialize` is not checked); the trait's bounds
+    without names (an id type's own `Serialize` and `Deserialize`, and a row's that are not serde's
+    derive, are not checked); the trait's bounds
     (`Serialize`, `Clone`, `Send`, `Sync`, `'static`) still hold, each with a `compile_fail` example
     on the derive. A row a `macro_rules!` declares with the id's visibility or attributes passed in
     derives it too, and a generic row needs no bounds on its parameters: it is a row for each type
@@ -2677,8 +2678,8 @@ Corten is pre-1.0, so any minor version may change the API.
     enum, a tuple struct, a key made of several fields, or an `id` that does more than return a
     field). `corten::feed` is now a module that re-exports `corten-feed`
     and the derive, so every `corten::feed::..` path still resolves. The feed sends the same rows and
-    patches (`tests/derived_row.rs` compares a derived row's snapshot and replayed patch, parsed,
-    with a hand-written row's), so
+    patches (`tests/derived_row.rs` compares a derived row's snapshot, parsed without its epoch, and
+    its replayed patch, byte for byte, with a hand-written row's), so
     nothing on the request path changed to measure
     ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and

@@ -1309,8 +1309,9 @@ rules something out.
     the derive refuses what makes a script or a replica read the key as something other than
     `id()`, as far as the row's own serde attributes say: one that leaves the id out, writes or
     reads it as other text or under two names, reads or writes the row as another value, or has
-    another member that serde writes or reads under the id's key. An id type's own `Serialize` and a flattened field's
-    members are not known when the derive runs, so they are not checked
+    another member that serde writes or reads under the id's key. An id type's own `Serialize` and `Deserialize`, a row's
+    that are not serde's derive, and a flattened field's members are not known when the derive
+    runs, so they are not checked
     ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
 
     The derive is `corten::feed::Row`, beside the trait, and not in `corten-feed` itself: its impl
