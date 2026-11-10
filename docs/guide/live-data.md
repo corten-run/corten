@@ -229,8 +229,9 @@ str`). The feed sends what `Serialize` writes, so `#[serde(..)]` on the row, the
 changes the JSON and not the key; a script reads the key under the id's serde name, so the derive
 refuses a serde attribute that leaves the id out or writes or reads it as other text than `id()`
 returns (`skip` and its variants, `with`, `serialize_with`, `deserialize_with`, `flatten`), an id
-read under another name than it is written under, another field written under the id's key (a
-`rename`, the row's `rename_all` or `tag`; a flattened field's members are not checked), and
+read under another name than it is written under, another field written or read under the id's
+key (a `rename`, an `alias`, the row's `rename_all` or `tag`; a flattened field's members are not
+checked), and
 `into`, `transparent`, `from` or `try_from` on the row. It reads the row's attributes, not the
 id type's own `Serialize`, so an id type that writes other than the text it derefs to is not
 checked. `Row` is the derive and the trait at once (`use corten::feed::Row`); a struct row with
@@ -264,9 +265,11 @@ impl Row for Entry {
 ```
 
 A row with no field marked, two marked, a field marked twice, an id that is not text, an enum,
-a unit struct, a `row` attribute on the struct, or a `row` attribute that is not `#[row(id)]` on
-a field does not compile, and neither does a row that is not `Clone`, `Send` and `Sync`, the
-trait's bounds (each case is a `compile_fail` example in the documentation of `corten::feed::Row`).
+a tuple struct, a unit struct, a `row` attribute on the struct, a `row` attribute that is not
+`#[row(id)]` on a field, or another member serde writes or reads under the id's key does not
+compile, and neither does a row that is not `Clone`, `Serialize`, `Send`, `Sync` and `'static`,
+the trait's bounds (each case is a `compile_fail` example in the documentation of
+`corten::feed::Row`).
 
 ```rust,ignore
 let stocks = Feed::new(rows);

@@ -384,6 +384,29 @@ pub mod feed {
     /// stock!(rename = "ticker");
     /// ```
     ///
+    /// Another member serde reads under the id's key (a `rename(deserialize = ..)` or an `alias`),
+    /// which a replica would read in the id's place:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[serde(rename(deserialize = "ticker"), default)]
+    ///     symbol: String,
+    ///     #[row(id)]
+    ///     #[serde(default)]
+    ///     ticker: String,
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[serde(alias = "ticker")] symbol: String }
+    /// ```
+    ///
+    /// Both sides are checked whether or not the row derives `Deserialize`, so a row that renames
+    /// its id for writing alone (`rename_all(serialize = ..)`) is refused too; `rename` or
+    /// `rename_all` without a side names both.
+    ///
     /// The same rows with distinct keys compile:
     ///
     /// ```

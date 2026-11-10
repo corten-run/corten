@@ -2664,8 +2664,8 @@ Corten is pre-1.0, so any minor version may change the API.
     compile, nor does an id serde leaves out of the JSON, where a script reads the key, or writes or
     reads as other text than `id()` returns (`skip` and its variants, `with`, `serialize_with`,
     `deserialize_with`, `flatten`), an id serde reads under another name than it writes it under,
-    another field serde writes under the id's key (a `rename`, the row's `rename_all` or `tag`; a
-    flattened field's members are not checked), a row serde writes or reads as another value
+    another field serde writes or reads under the id's key (a `rename`, an `alias`, the row's
+    `rename_all` or `tag`; a flattened field's members are not checked), a row serde writes or reads as another value
     (`into`, `transparent`, `from`, `try_from`), or a tuple struct, whose fields serde writes
     without names (an id type's own `Serialize` is not checked); the trait's bounds
     (`Serialize`, `Clone`, `Send`, `Sync`, `'static`) still hold, each with a `compile_fail` example

@@ -132,8 +132,10 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     };
     let (write_rule, read_rule) = (rule("serialize"), rule("deserialize"));
     let tag = container.iter().find(|a| a.key == "tag").and_then(|a| named(a, "serialize"));
-    // Each other written field's JSON key, to find one that takes the id's place.
+    // Each other field's JSON key as serde writes it, and each name serde reads it under (its
+    // read key and aliases), to find one that takes the id's place.
     let mut keys: Vec<(String, Span)> = Vec::new();
+    let mut reads: Vec<(String, Span)> = Vec::new();
     let mut id: Option<(Ident, String)> = None;
     for field in split(fields.stream(), ',') {
         let field = opened(field);
@@ -188,6 +190,15 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             if !left_out {
                 keys.push((key, ident.span()));
             }
+            if !args.iter().any(|a| matches!(a.key.as_str(), "skip" | "skip_deserializing" | "flatten")) {
+                reads.push((key_on(&args, name, read_rule.as_ref(), "deserialize"), ident.span()));
+                reads.extend(
+                    args.iter()
+                        .filter(|a| a.key == "alias")
+                        .filter_map(|a| named(a, "deserialize"))
+                        .map(|alias| (alias, ident.span())),
+                );
+            }
             continue;
         };
         if let Some((at, key)) = skipped {
@@ -207,6 +218,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     };
     if let Some((_, at)) = keys.iter().find(|(key, _)| *key == id_key) {
         return err(*at, format!("this field is written as \"{id_key}\" too, the id's key, so a script reads it in the id's place: rename one of them"));
+    }
+    if let Some((_, at)) = reads.iter().find(|(key, _)| *key == id_key) {
+        return err(*at, format!("serde reads this field under \"{id_key}\" too, the id's key, so a replica reads it in the id's place: rename one of them"));
     }
     if tag.as_ref() == Some(&id_key) {
         return err(item.name.span(), format!("#[serde(tag = \"{id_key}\")] writes the struct's name as \"{id_key}\", the id's key, so a script reads it in the id's place: rename one of them"));
