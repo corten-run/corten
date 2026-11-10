@@ -2657,7 +2657,7 @@ Corten is pre-1.0, so any minor version may change the API.
 282. `#[derive(Row)]` (`corten::feed::Row`, the derive and the trait at once): a feed row's key is
     the field marked `#[row(id)]`, in place of the `impl Row` each row wrote by hand, so a renamed
     key field moves the key with it. The row's `Clone` and `Serialize` stay in its derive list
-    (design Choice 34). A row with no field marked or two, a field marked twice, an id that is not
+    (design Choice 35). A row with no field marked or two, a field marked twice, an id that is not
     text (a type that derefs to `str`: `String`, `Box<str>`, `Arc<str>`, `&'static str`,
     `Cow<'static, str>`), an enum, a unit struct, a `row` attribute on the struct, or one other than
     `#[row(id)]` on a field does not compile, and the trait's `Send` and `Sync` still hold. The
@@ -4231,6 +4231,14 @@ Corten is pre-1.0, so any minor version may change the API.
     counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
     every row and removes its app however the run ends
     ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
+176. The runtime and its modules are minified by terser after esbuild minifies them, so every page
+    ships fewer bytes: the runtime is 14,318 bytes with gzip (level 9), 533 fewer, and 12,955 with
+    brotli (level 11), 532 fewer (3.6% and 3.9%), and 105 fewer uncompressed (against `4de159ab`); `view.js` is 75 and 60
+    bytes smaller compressed, `format.js` 8 and 18, and `upload.js` and `keys.js` within 11 bytes
+    either way. terser (5.51.2) is a development dependency of the repository's tooling; apps
+    install nothing new
+    ([design Choice 34](docs/design.md#choice-runtime-terser),
+    [#1047 Benchmark round r16: item-page JavaScript grew 9.1% (13,187 to 14,392 gzip bytes)](https://github.com/corten-run/corten/issues/1047)).
 
 ### Fixed
 - The ui-gallery smoke's check that keyboard focus never lands under a dialog's or sheet's sticky
