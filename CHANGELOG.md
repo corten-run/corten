@@ -276,12 +276,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `render_cost` (median of 3) reads one in 304.8 µs through serde_json and 185.5 µs. Its
     `render_cost` checks the 500 responses read the same both ways.
 35. Live streams are compressed (feature `compress`). A `corten::live` or feed response to a client
-    that accepts zstd or brotli is one compressed stream per connection, flushed after every
-    event, with the context kept between events. On a 33-row list (6,126 B an event), measured:
-    the first event 425 B with zstd 1 and each redraw 16-23 B, where every event was 6,126 B;
-    brotli 4 gives 376 B, then 13-23 B. A stream holds about 470 KiB (zstd, 64 KiB window) or
-    800 KiB (brotli) while open, and all of them share a 256 MiB budget past which a new stream is
-    sent as it is. Gzip-only clients get streams as they are. Asked for by the Chase Sets pilot
+    that accepts zstd or gzip is one compressed stream per connection, flushed after every event,
+    with the context kept between events; never brotli
+    ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131),
+    under Fixed). On a 33-row list (6,126 B an event), measured: the first event 425 B with zstd 1
+    and each redraw 16-23 B, where every event was 6,126 B. A stream holds about 470 KiB (zstd,
+    64 KiB window) or 344 KiB (gzip) while open, and all of them share a 256 MiB budget past which
+    a new stream is sent as it is. Asked for by the Chase Sets pilot
     ([#24 corten::live responses are never compressed](https://github.com/todd-skelton/corten/issues/24)).
 36. `SubmitKey` (in the prelude): one submission of a form, so a write whose answer was lost and
     is sent again applies once. A form struct takes a `SubmitKey` field and draws it with
@@ -2330,7 +2331,7 @@ Corten is pre-1.0, so any minor version may change the API.
     app makes as it is sent (an export of every order, an archive), from a stream of
     `Result<Bytes, E>`. It is pulled only as fast as the client reads and dropped when the client
     leaves, it keeps `Media`'s file name, headers and caching, and a text type is compressed a
-    chunk at a time (zstd or brotli, as an event stream is), its frame ended when the stream ends;
+    chunk at a time (zstd or gzip, as an event stream is), its frame ended when the stream ends;
     an event stream that ends now ends its frame too, where a decoder that checks for the end
     took it as cut short. A failure after it began, or a stream that does not make the length it
     said, ends the connection without the body's end and is logged. auction-room's bid history is
@@ -4218,6 +4219,29 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
 
 ### Fixed
+- A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
+  gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
+  flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
+  more than 16 KiB only once more of the body arrived, so the last change before a quiet spell
+  showed one event late: in Playwright's WebKit 27.2 on Windows an event of 16,385 bytes showed
+  only when the next chunk came, with Corten's encoder and with Node's at quality 4 and 11, and
+  with empty blocks after it; gzip and identity were on time at every size tried, to 200 KB, in all
+  three engines. Safari was not tried. Gzip-only clients, sent streams uncompressed before, get
+  gzip too, and a client that accepts only brotli now gets streams uncompressed. The watchlist
+  smoke checks that an event of about 50 KB with nothing after it is dispatched in each engine
+  (from a route the app adds only with `SMOKE_TRUSTED_TYPES=1`; only Playwright's Windows WebKit
+  would be sent brotli, the others getting zstd and Linux's WebKit asking for gzip, not
+  brotli, so only there would it catch a brotli stream), and a streamed download to a client that
+  sends `gzip, deflate, br` is now tested to be gzip; a new test fills the stream budget and checks
+  that a stream's share comes back when it is dropped unread, read to its end or cut by an error. A
+  gzip stream reserves 360 KiB where a brotli one reserved 1,000 KiB. It sends more than brotli 4,
+  most for a large region: a redraw of one row of 40 (2.7 KB) is 60 to 69 bytes against 20 to 40,
+  of 250 (17 KB) 477 to 524 against 23 to 91, and of 640 (45 KB, past gzip's 32 KiB window, so
+  most of the event before is out of reach) about 6,210 bytes, where brotli's 64 KiB window still
+  reached it; and more CPU: an event of the 2.7 KB redraw, made and sent through the compression
+  layer, is about 286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470;
+  callgrind, three runs each, within 20 instructions)
+  ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
