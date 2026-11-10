@@ -1328,6 +1328,13 @@ mod tests {
         let stale = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, "\"0000000000000000\"")]).await.unwrap();
         assert_eq!(stale.status(), StatusCode::OK, "another version's range is sent whole");
         assert_eq!(body(stale).await.len(), 100);
+        let weak = format!("W/{}", tag.to_str().unwrap());
+        let weak = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, &weak)]).await.unwrap();
+        assert_eq!(
+            weak.status(),
+            StatusCode::OK,
+            "If-Range compares strongly: the weak tag a compressed copy carries is not this file"
+        );
         let dated = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, "Sun, 08 Nov 2026 00:00:00 GMT")]).await.unwrap();
         assert_eq!(dated.status(), StatusCode::OK, "the files have no date to compare");
         let huge = get(&[(header::RANGE, "bytes=99999999999999999999-")]).await.unwrap();
@@ -1397,6 +1404,27 @@ mod tests {
             "accept-encoding",
             "a shared cache keeps the 206 from a client that takes brotli"
         );
+    }
+
+    /// Through the compression middleware, a range of a compressible file sent as it is stored
+    /// (before its compressed forms exist, or to a client that takes only zstd) stays the exact
+    /// bytes asked for: the middleware never encodes an answer that has a `Content-Range`.
+    #[cfg(feature = "compress")]
+    #[tokio::test]
+    async fn the_middleware_leaves_a_range_as_it_is() {
+        let captions = format!("WEBVTT\n\n{}", "00:00.000 --> 00:01.000\nA line of captions.\n\n".repeat(60));
+        let root = dir("ranges-middleware", &[("en.vtt", &captions)]);
+        let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let app: Router = crate::compress::apply(assets.routes());
+        let url = assets.url("en.vtt");
+        for encodings in ["gzip", "zstd"] {
+            let req = Request::get(&url).header(header::RANGE, "bytes=100-1299").header(header::ACCEPT_ENCODING, encodings);
+            let res = app.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT, "{encodings}");
+            assert!(!res.headers().contains_key(header::CONTENT_ENCODING), "{encodings}: a range is never encoded");
+            let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
+            assert_eq!(body, captions.as_bytes()[100..1300], "{encodings}: a slice large enough to compress");
+        }
     }
 
     /// The fixed icon's content is unchanged when its background-compressed form becomes ready.

@@ -964,8 +964,9 @@ instead, whatever its methods: one written as that path, or one with a parameter
 The fixed icon uses a weak content tag that stays the same when its background-compressed
 forms become ready; versioned files retain their encoding-specific tags.
 
-A file is sent with the type its extension names: scripts, styles, images, fonts, `wasm`, video
-(`mp4`, `webm`) and captions (`vtt`, `text/vtt`); any other is `application/octet-stream`. A
+A file is sent with the type its extension names: scripts, styles, HTML, JSON and source maps,
+web manifests, images, fonts, `wasm`, video (`mp4`, `webm`), captions (`vtt`, `text/vtt`), text
+and XML; any other is `application/octet-stream`. A
 `GET` of the current version's URL for a file sent as it is stored (a video, a font or a raster
 image, which are never compressed; a file too small to compress; or any file sent unencoded)
 answers a `Range`, so a
