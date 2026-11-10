@@ -2,28 +2,25 @@
 
 use std::{convert::Infallible, future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
-use axum::{
-    extract::Request,
-    http::header,
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        Response,
-    },
-};
 use futures_util::{stream, StreamExt};
+use http::header;
 
 use crate::{
     api::{Api, Mount},
     assets::Assets,
     cache::{self, Seen},
     client::Peer,
+    extract::Request,
+    listener::Listener,
     middleware::Middleware,
     page::{self, default_error_page, error_page_fn, Asked, Credentials, ErrorPageFn, Failure, Shared},
     pwa::Pwa,
+    response::Response,
     route::{Methods, Prefix, Route as TypedRoute, Routes},
     router::{get, Route, Router, Table},
     security::{Applied, NonceSlot, Policy},
     signal::{self, Watch},
+    sse::Event,
     task::{Finishing, Running, Task},
     Mode, Signal,
 };
@@ -1009,7 +1006,7 @@ impl<M: Middleware> App<M> {
     where
         L: tower_layer::Layer<Router> + Send + 'static,
         L::Service: tower_service::Service<Request> + Clone + Send + Sync + 'static,
-        <L::Service as tower_service::Service<Request>>::Response: axum::response::IntoResponse + 'static,
+        <L::Service as tower_service::Service<Request>>::Response: crate::response::IntoResponse + 'static,
         <L::Service as tower_service::Service<Request>>::Error: Into<Infallible> + 'static,
         <L::Service as tower_service::Service<Request>>::Future: Send + 'static,
     {
@@ -1060,7 +1057,8 @@ impl<M: Middleware> App<M> {
     /// The finished router: the app's routes with everything around them, its
     /// [layers](App::layer) included. For serving it another way, and for a test that sends what
     /// [`App::test`]'s client does not (a live stream it reads as it comes); it starts none of the
-    /// app's [tasks](App::task).
+    /// app's [tasks](App::task). A connection loop of the app's own gives each request the client's
+    /// address as a [`crate::PeerAddr`] in its extensions, which [`crate::ClientIp`] starts from.
     pub fn router(mut self) -> Router {
         let dev = self.dev.unwrap_or_else(|| std::env::var_os("CORTEN_DEV").is_some());
         let bounds = self.drain().each;
@@ -1186,9 +1184,9 @@ impl<M: Middleware> App<M> {
             routes = routes.route(
                 "/corten/dev",
                 get(move || {
-                    let first = Event::default().retry(Duration::from_millis(250)).data(boot.clone());
-                    let events = stream::once(async move { Ok::<_, std::convert::Infallible>(first) }).chain(stream::pending());
-                    async move { Sse::new(events).keep_alive(KeepAlive::default()) }
+                    let first = Event::new().retry(Duration::from_millis(250)).data(&boot);
+                    let events = stream::once(async move { first }).chain(stream::pending());
+                    async move { crate::sse::response(events) }
                 }),
             );
             // The runtime's checks that only a developer needs (js/dev.js), as the source: no
@@ -1282,7 +1280,7 @@ impl<M: Middleware> App<M> {
         }
         shared.dev = dev;
         shared.layout_reads = self.layout_reads.into();
-        // The same path routed in two places (the app's routes and an area's) is one route to axum,
+        // The same path routed in two places (the app's routes and an area's) is one route to the router,
         // with the methods of both.
         let mut pages: Vec<(&'static str, bool)> = Vec::new();
         let written: Vec<&str> = self
@@ -1471,7 +1469,7 @@ pub async fn listeners(port: u16) -> std::io::Result<Vec<tokio::net::TcpListener
     bind(host.as_deref(), port).await
 }
 
-/// [`serve`] on listeners of the app's own: anything that implements axum's
+/// [`serve`] on listeners of the app's own: anything that implements
 /// [`Listener`](crate::Listener), such as a Unix socket or a socket a supervisor hands
 /// over. Shutdown is `serve`'s, across all of them: on Ctrl-C or `SIGTERM` the app's tasks are
 /// told, live streams end, every listener closes and finishes its requests, and it returns once
@@ -1480,7 +1478,7 @@ pub async fn listeners(port: u16) -> std::io::Result<Vec<tokio::net::TcpListener
 /// connection over would have it outside them.
 pub async fn serve_on<L, M>(listeners: Vec<L>, app: App<M>) -> std::io::Result<()>
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     M: Middleware,
 {
@@ -1505,7 +1503,7 @@ where
 /// The step's error is not read: the connection closes.
 pub async fn serve_wrapped<L, W, F, Io, E, M>(listeners: Vec<L>, wrap: W, app: App<M>) -> std::io::Result<()>
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
     F: Future<Output = Result<Io, E>> + Send + 'static,
@@ -1536,7 +1534,7 @@ pub(crate) async fn run<L, W, F, Io, E, M>(
     stop: impl Future<Output = ()>,
 ) -> std::io::Result<()>
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
     F: Future<Output = Result<Io, E>> + Send + 'static,
@@ -1601,7 +1599,7 @@ pub(crate) async fn serve_router<L, W, F, Io, E>(
     stop: impl Future<Output = ()>,
 ) -> std::io::Result<()>
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
     F: Future<Output = Result<Io, E>> + Send + 'static,
@@ -1688,7 +1686,7 @@ async fn serve_listener<L, W, F, Io, E>(
     mut stop: tokio::sync::watch::Receiver<Option<Closing>>,
 ) -> std::io::Result<usize>
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
     F: Future<Output = Result<Io, E>> + Send + 'static,
@@ -1790,7 +1788,7 @@ struct Connection {
 }
 
 impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connection {
-    type Response = axum::http::Response<crate::watch::Answered>;
+    type Response = http::Response<crate::watch::Answered>;
     type Error = std::convert::Infallible;
     type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
 
@@ -1800,7 +1798,7 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
         // Marks a read of the body that waits for the client, for the deadline (#1061).
-        let req = req.map(|body| axum::body::Body::new(crate::extract::Arriving(body)));
+        let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         if let Some(bound) = &self.bound {
             bound.arrived();
@@ -2054,9 +2052,9 @@ impl<S: Steps> Layer<S> {
         // nothing.
         let tagged = !own
             && mount.is_none()
-            && matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD)
+            && matches!(*req.method(), http::Method::GET | http::Method::HEAD)
             && (worth_a_tag || req.headers().contains_key(header::IF_NONE_MATCH));
-        let has: Vec<axum::http::HeaderValue> = match tagged {
+        let has: Vec<http::HeaderValue> = match tagged {
             true => req.headers().get_all(header::IF_NONE_MATCH).iter().cloned().collect(),
             false => Vec::new(),
         };
@@ -2074,7 +2072,7 @@ impl<S: Steps> Layer<S> {
         // The outer route's `Allow` (the router adds it to a method that route lacks) would list
         // methods the path does not have: none has any here, whatever answered.
         if foreign {
-            res.headers_mut().insert(header::ALLOW, axum::http::HeaderValue::from_static(""));
+            res.headers_mut().insert(header::ALLOW, http::HeaderValue::from_static(""));
         }
         // First: the security headers reserve room for `Cache-Control` and `Vary` too.
         self.policy.headers(&mut res, nonce.as_ref(), csp);
@@ -2134,7 +2132,7 @@ impl<S: Steps> Layer<S> {
     /// A request's signal in this app: the app's state, and the zone the browser reported when
     /// the app learns its visitors' zones (`req.zone()`; with `zoned_dates` the page and a live
     /// part's fragments are written in it, none for a `Public` answer, `Signal::zone`).
-    fn signal(&self, headers: &axum::http::HeaderMap) -> Signal {
+    fn signal(&self, headers: &http::HeaderMap) -> Signal {
         #[cfg(feature = "zones")]
         if self.shared.client_zone {
             return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(headers));
@@ -2246,7 +2244,7 @@ struct StaticFiles {
     /// The `embed!` struct, which its files name.
     owner: &'static str,
     /// Its files, as compiled in.
-    files: fn() -> Vec<(String, axum::body::Bytes)>,
+    files: fn() -> Vec<(String, bytes::Bytes)>,
 }
 
 #[cfg(test)]
@@ -2276,7 +2274,7 @@ mod tests {
         assert_eq!(bound.drain(drain, false), drain.grace, "the next request, not known yet");
     }
 
-    fn none() -> Vec<(String, axum::body::Bytes)> {
+    fn none() -> Vec<(String, bytes::Bytes)> {
         Vec::new()
     }
 

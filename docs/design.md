@@ -625,9 +625,8 @@ rules something out.
    (`Wrapped::call`), which the reads' checks grew, and the app renders a page as it did before. In
    an app with them, a whole document pays the reads' start and a copy of the page's body: a small
    page drawing a count read takes 42.5k instructions where the same page drawing a value its
-   handler awaited takes 28.8k. A plain axum handler that takes `Req` starts the reads whatever it
-   answers (its answer type is not known there), and so does a `PageOr` or `SwitchOr` that answers a
-   file or an upgrade: each read's `start` runs (a read that looks up the caller starts that lookup)
+   handler awaited takes 28.8k. A `PageOr` or `SwitchOr` that answers a file or an upgrade
+   starts the reads, since either may answer a page: each read's `start` runs (a read that looks up the caller starts that lookup)
    and the reads are polled with the handler, then dropped unused, since the answer has no places. A
    `Public` answer draws none of their values however they were started. A route whose page always
    gives a read's value says `gives(CartCount)` in its routes module, so the read is not started for
@@ -677,28 +676,35 @@ rules something out.
     handlers needed every argument to implement axum's trait, and Rust's orphan rule forbade a
     trait of Corten's bridged to it), so an axum release that changed the trait changed every
     app's extractors with it; now the shape is Corten's and changes only with a Corten release
-    that says so. `Request` stays the `http` crate's `Request` over Corten's body,
-    `corten::middleware` names `Response` and `IntoResponse` (still axum-core's until step 4),
-    `corten::answer` names `Body`, and `corten::Bytes` and `corten::Listener` the rest.
-    `FromRef` (the trait and the derive) stays axum-core's: it is a conversion of the routes'
-    state that Corten's `State` reads, nothing on the request path, and leaves with axum. axum's
+    that says so. `Request` and `Response` are the `http` crate's over Corten's own body
+    (`corten::answer::Body`), `corten::middleware` names `IntoResponse` and `IntoResponseParts`,
+    Corten's since step 4 with axum-core's names and shapes, and `corten::Bytes` and
+    `corten::Listener` the rest. `FromRef` (the trait and the derive) is Corten's too: a
+    conversion of the routes' state that Corten's `State` reads, with the impl for the state
+    itself that axum-core's had. axum's
     own extractors (`Path`, `Query`, `RawQuery`, `Json`, `Extension`, `ConnectInfo`,
     `MatchedPath`, `Parts`) implement axum's traits, not these, so a handler that takes one does
     not compile: a route's path and query are its `Params`, a body its `Json`, `Form` or
     `Upload`, and the head its `Req`; a second reader of each would be a second way. Before,
     axum's `Path` and `RawPathParams` compiled and answered `500` to every request on Corten's
-    router, refused at startup by type name; now they fail to compile (`compile_fail` doctests in
-    `extract.rs`). A handler that takes the whole `Request` reads its body up to a limit of its own
-    with `corten::extract::bytes_up_to`, as an upload's file is read with `File::bytes_up_to`, not
+    router, refused at startup by type name; now they fail to compile as any type implementing
+    neither trait does (the `compile_fail` doctest in `extract.rs` holds that with a type of the
+    app's own; axum is not a dependency to name in one). A handler that takes the whole
+    `Request` reads its body up to a limit of its own with `corten::extract::bytes_up_to`, as an upload's file is read with `File::bytes_up_to`, not
     axum's `to_bytes`, whose one error is both a body over the limit and one that broke, and which
     leaves the rest of a body over it unread, so a client still sending can miss the answer; a
     body too large to hold is read piece by piece with `pieces_up_to`. `Bytes`, `String` and Corten's
-    `Json` and `Form` still read the body through axum's readers until step 4, so their limit (2 MiB),
-    refusals and texts are unchanged. `corten::axum` stays for a stand-in server in a test (its
-    `Router` and `serve`): the stand-in is another server the app calls, not the app, so a Corten
-    name for it would be a second server API for tests alone. This lasts while axum is a
-    dependency: when it leaves ([Choice 25](#choice-axum-router), step 4) the re-export goes with
-    it, and a test that wants a stand-in depends on axum itself.
+    `Json` and `Form` read a whole body with Corten's reader at axum's limit (2 MiB) and with its
+    texts: a 413 over it, a 400 for a body that broke or text that is not UTF-8, a 415 for a
+    content type that is not the reader's, each one `corten::extract::BodyRejection` (plain text)
+    where axum had a type for each. A body over the limit is read past until 4 MiB of it has arrived
+    (and the piece that crossed that), so a browser still sending sees the 413, and one whose length says it is
+    longer is refused unread: these readers serve every route that takes one, so a refused
+    request costs about what the limit allows, not the 64 MiB `bytes_up_to` and an upload read
+    past, which an app chooses per route. `Json`'s answers are axum 0.8.9's, recorded before it
+    left and held by a test (`json.rs`, `AXUM_0_8_9`). A test's stand-in for another server the
+    app calls is not the app, so Corten names nothing for it: the test depends on a server of its
+    own (axum as a dev-dependency, say), as the app guide shows.
 
     Not chosen: new names for the traits (`FromHead`, `FromBody`), which would say what they read
     better but make every app's extractor change for no behavior; keeping axum's traits as
@@ -710,18 +716,21 @@ rules something out.
     against step 2 at `7bba1e2b`: about 100 instructions fewer a staged request with jemalloc
     and 150 to 170 with glibc, an unstaged one the same; [Choice 25](#choice-axum-router), Stands
     on);
+    measured (axum 0.8.9's `Json` answers to twelve bodies under eight content types, recorded
+    before it left and held by `json.rs`'s `AXUM_0_8_9` table);
     reasoned (the trait's shape is axum 0.8's, so an extractor's `impl` body compiles unchanged;
     the router calls `Handler` once per request, as it called axum's); value (one way to read
     each part of a request, Value 5, and a mistake that fails when the app compiles rather than
     when it answers, Value 4).
 
     Revisit when: an app needs an extractor that cannot be written with this signature (one that
-    borrows from the request beyond its call, say); or an axum or http release changes what
-    `Parts` holds; or axum leaves ([Choice 25](#choice-axum-router), step 4), which takes `FromRef`
-    and `IntoResponse` with it and reopens where they come from.
+    borrows from the request beyond its call, say); or an `http` release changes what `Parts`
+    holds.
 
     Last checked: 2026-11-09, axum 0.8.9 (`axum-core` 0.5.6) and rustc 1.99.1, Corten's own
-    traits at the commit that adds them ([Choice 25](#choice-axum-router), Last checked).
+    traits at the commit that adds them ([Choice 25](#choice-axum-router), Last checked);
+    2026-11-10, `IntoResponse`, `FromRef` and the body readers Corten's, axum gone
+    ([Choice 25](#choice-axum-router), step 4), with axum 0.8.9's `Json` answers recorded first.
 
 22. <a id="choice-locale-in-url"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
@@ -819,9 +828,10 @@ rules something out.
    2026-11-06, OpenAPI 3.2.0's `in: querystring`, as written at `92df8899`.
 
 25. <a id="choice-axum-router"></a>**Corten's request path is built from parts of its own on hyper, `http`, tokio and
-    matchit: a connection loop, stages, a router, handlers and the readers they take. axum and
-    tower leave it in steps, each measured; until a step lands, the part it replaces stays
-    axum's.** Each part is one of these, and each is built on the one before it:
+    matchit: a connection loop, stages, a router, handlers and the readers they take. axum left
+    it in four steps, each measured, and tower's traits stay only at its edges: `App::layer`
+    takes a tower layer, and the whole router is a tower `Service` for a server of the app's
+    own.** Each part is one of these, and each is built on the one before it:
 
     1. Transport: tokio's TCP listeners, and the app's own (`corten::Listener`, a TLS step in
        `serve_wrapped`). UDP is only HTTP/3's, which [Limit 14](#limit-http1) leaves to the proxy.
@@ -840,10 +850,11 @@ rules something out.
        answer is any `IntoResponse`, a raw `Response` included.
     7. Typed routes, `#[corten::routes]`, areas, APIs and `App`, which say what each route gets.
 
-    Today 2 and 3 are hyper's and the `http` crate's, Corten's own code is 1, 4, 5 and 7 (the
+    Today 2 and 3 are hyper's and the `http` crate's, and the rest is Corten's own code (the
     accept loop and connection limits, the stages, `corten::Router` on matchit, `Params`, the
-    readers `Form`, `Json` and `Upload`, `Upgrade`, and since step 3 the `Handler` impls and
-    `FromRequestParts`), and of 6 only `Sse` is still axum's. Until step 2 the stages sat on tower's `Layer` and `Service`
+    readers `Form`, `Json` and `Upload`, `Upgrade`, since step 3 the `Handler` impls and
+    `FromRequestParts`, and since step 4 the body, `IntoResponse`, the server-sent events writer
+    and `Listener`): axum is no longer a dependency. Until step 2 the stages sat on tower's `Layer` and `Service`
     because axum's router took them. That seam was what an app paid for: axum boxed every layered
     route again and cloned that box on each request, so what went around one route had to be
     written into its handler to cost nothing more. An `unstaged` route's host check and its API's
@@ -853,8 +864,10 @@ rules something out.
     checked from the repository) took 5,393 instructions for one JSON request through its router
     against axum's 8,508, and 9,493 with every default stage against Corten's 17,336. tower's
     `Service` (`poll_ready`, `&mut self`, a clone per call) is a shape for backpressure that
-    a request's route does not have; it stays only at the app's edge, where `App::layer` takes
-    a tower layer ([Limit 12](#limit-fixed-stages)).
+    a request's route does not have; it stays only at the edges: `App::layer` takes a tower
+    layer ([Limit 12](#limit-fixed-stages)), `corten::Router` is a `Service` (its `poll_ready`
+    always ready) so an app's own loop or tower's tools can serve it, and the connection loop
+    calls it so. No stage, route or handler is one.
 
     The steps, in order, each landing only when the one before it has:
     1. The dispatch suite (`crates/corten/tests/dispatch.rs`): raw HTTP/1.1 to `serve_on` and the
@@ -942,6 +955,47 @@ rules something out.
        `corten::Listener` a trait of its own; then axum leaves Corten's dependencies, which
        reopens [Choice 21](#choice-own-extractors)'s `corten::axum` for a test's stand-in server:
        an app's test that wants one then depends on axum itself.
+       It has landed. The body (`corten::answer::Body`), `IntoResponse` and `IntoResponseParts`,
+       the readers of a whole body, the server-sent events writer and `Listener` are Corten's, and
+       `corten::axum`, `compress::apply` and `Policy::apply` are gone: compression and the
+       security headers are stages `App` puts around every route, and a route with neither is
+       `unstaged`. corten-feed answers with the `http` crate's `Response` over a body of its own
+       (`FeedBody`). Corten's workspace keeps axum only as a dev-dependency: card-market's bench
+       binary answers with it beside Corten (the benchmark apps outside the workspace depend on it
+       as one of the frameworks they measure), and the harness that measures this Choice keeps a
+       plain axum router beside a control of no framework (tower's `service_fn`), which stayed at
+       3,190 (3,568) in both builds where axum's moved ([Choice 28](#choice-fixed-stages)). The dispatch suite passes unchanged. Measured against
+       step 3 at `67e7f5f5` (callgrind, release, jemalloc with glibc in brackets, two runs each,
+       every run the same), a staged page costs about 480 fewer and the rest the same: a page
+       route 17,713 against 18,192 (18,956 against 19,497), one with a middleware 17,997 against
+       18,476 (19,237 against 19,778), a staged route beside an unstaged one 17,724 against
+       18,203 (18,986 against 19,527), an API request 13,005 against 13,009 (14,021 against
+       14,025), the 404s 12,144 and 18,078 against 12,170 and 18,105 (13,286 and 19,989 against
+       13,311 and 19,992), an unstaged route 7,022 against 7,012 and 7,073 against 7,063 in an
+       API's module (7,826 and 7,879 against 7,816 and 7,869), and axum's plain router 7,057
+       against 7,088 (8,071 against 8,102), the same source compiled differently beside a
+       different Corten ([Choice 28](#choice-fixed-stages) has its profile and the control that
+       did not move). The body is two words: none for an empty one and one box for any other, the
+       bytes of a whole one included. Held as bytes beside a box, four words where axum's body
+       was two, it made a `Response<Body>` 144 bytes rather than 128, and every request moves
+       one through the stages: `memcpy` was called 40 to 57 times a request rather than under
+       once, and an API request cost 13,393, its 404 12,416 and a page's 404 18,561 (jemalloc,
+       five runs, every run the same), 246 to 468 more than step 3 in the same runs (13,009,
+       12,170 and 18,093). With the body two words,
+       `memcpy`'s cost on the API request is step 3's to the instruction (1,594,184 over the
+       run). A JSON body read whole by `Json` under an API, now through Corten's reader, costs 410
+       fewer: a `POST` 14,164 against 14,574 (15,706 against 15,969 with glibc; built with
+       feature `json`, where the same `GET` is 13,057 against 13,058). A [`live`](guide/live-data.md) stream's events are Corten's writer's: one patch event
+       with its id, read from the response's body, costs 2,140 instructions against axum's `Sse`
+       4,960 (2,381 against 4,051 with glibc), its buffer sized for the fragment up front; grown
+       from empty, as axum's was, it cost 4,451 (3,461). A feed's live event (a row written,
+       its patch read from the stream) costs about 48 more, 7,567 and 7,568 against 7,517 and
+       7,521 in two runs each (7,676 and 7,677 against 7,571 and 7,573 with glibc, about 105): corten-feed's body (`FeedBody`, which
+       names no Corten type) boxes its stream, and Corten boxes that body as it boxes any other,
+       so each event passes one more `poll_frame` than axum's one box did, and a stream opens
+       with one more allocation. Not taken out: one box needs a stream type Corten can box itself,
+       which `FeedBody` cannot name (its stream holds an `async fn`'s future) without making
+       the public `FeedBody` generic, for 0.6% of an event.
 
     Not chosen: keeping axum's router and handlers, which this Choice held until the seam above
     was measured (functions named for axum, tower or matchit were 2.5% of the item page's user
@@ -960,14 +1014,27 @@ rules something out.
     with `Handler`'s bounds written out, so a handler argument no request can fill fails Corten's
     trait in its words and a second error names the argument in Corten's words too ("a request
     cannot fill `T`", `tests/handler_message.rs`); one impl over every `Handler` reported the
-    unmet `Handler<_, ()>` and named no argument. axum's features are only
+    unmet `Handler<_, ()>` and named no argument. Until step 4, axum's features were only
     `http1` and `tokio` (and `json` with Corten's `json`): `original-uri` copied every request's
     URI for nothing to read (153 instructions a request at `fa597483`), `matched-path` named the
     route for axum's router, which Corten's now does itself (`corten::middleware::MatchedPath`), and
     `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
-    Stands on: measured (callgrind, release, five runs with jemalloc and three with glibc, every
-    run the same, Corten's handler traits against axum's, step 3 at its commit against step 2 at
+    Stands on: measured (callgrind, release, two runs each with jemalloc and glibc, every run the
+    same, with feature `json`, a `POST` of a JSON body read by `Json` under an API, step 4
+    uncommitted against step 3 at `67e7f5f5`: 14,164 instructions against 14,574); measured
+    (callgrind, release, two runs each with jemalloc and glibc, every run the
+    same, a `live` stream of 1,200 fragments less one of 200, over 1,000, step 4 uncommitted
+    against step 3 at `67e7f5f5`: 2,140 instructions an event against 4,960, 4,451 with the
+    event's buffer grown from empty); measured (callgrind, release, two runs each with jemalloc
+    and glibc, every run the same, step 4 uncommitted on `67e7f5f5` against step 3 at `67e7f5f5`, the dispatch suite
+    unchanged: a staged page about 480 fewer, every other request within 31; on an uncommitted
+    variant with the body four words, five runs with jemalloc and three with glibc, an API
+    request 384 more, its 404 246 and a page's 404 468, against step 3's 13,009, 12,170 and
+    18,093 in the same runs, with `memcpy` called 40 to 57 times a
+    request); reasoned (LLVM copies a move of up to 128 bytes on x86-64 with inline stores and
+    calls `memcpy` past it, and 144 is past it); measured (callgrind, release, five runs with
+    jemalloc and three with glibc, every run the same, Corten's handler traits against axum's, step 3 at its commit against step 2 at
     `7bba1e2b`: staged requests 103 to 104 fewer with jemalloc and 153 to 167 with glibc, an
     unstaged route and the 404s within 12; on uncommitted variants of it, one run each, the
     request split inside the handler's future 62 more unstaged and about 60 more staged, and
@@ -1008,8 +1075,7 @@ rules something out.
 
     Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case, or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
-    Choice says why); an axum release changes `IntoResponse` or `Sse` in a way apps see before
-    step 4 lands; or Corten serves HTTP/2 or HTTP/3 itself
+    Choice says why); a `Response<Body>` grows past 128 bytes (step 4); or Corten serves HTTP/2 or HTTP/3 itself
     ([Limit 14](#limit-http1)), which adds a protocol under 3 and must leave 4 to 7 as they are.
 
     Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
@@ -1022,7 +1088,8 @@ rules something out.
     Corten's router against axum's, at `373a10f9`, with the suite unchanged; 2026-11-09, the
     stages as combinators on Corten's router, on the uncommitted variant of `8ddeaea2`, and the
     unstaged route's lane, at `bfa20380`, with the suite unchanged; 2026-11-10, Corten's handler
-    traits (step 3) at `6d78a069` against step 2 at `7bba1e2b`, with the suite unchanged; 2026-11-09, the lane boxed
+    traits (step 3) at `6d78a069` against step 2 at `7bba1e2b`, with the suite unchanged;
+    2026-11-10, axum gone (step 4) against step 3 at `67e7f5f5`, with the suite unchanged; 2026-11-09, the lane boxed
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
     the `laned` variant of `fa0b1525`.
 
@@ -1066,8 +1133,8 @@ rules something out.
     may keep it; a handler there that returns `NoStore<..>` too says it twice, and a hand-added
     route says it with `NoStore<..>`. Every route reaches the app through these checks: `App::new`
     takes the `Routes` a `#[corten::routes]` module makes, and `Area::route` and `Api::route` take
-    `Methods`, made by Corten's `get`, `post` and the others, which check the same things. A plain
-    axum `Router` or method router does not fit any of them, so no route given to the `App` is
+    `Methods`, made by Corten's `get`, `post` and the others, which check the same things. Nothing
+    else (another framework's router, a tower service) fits any of them, so no route given to the `App` is
     unchecked (what an app answers in a `.layer(l)` around the `Router` that `App::router()` hands
     out, or in a server of its own around it, is its own). A WebSocket (`Upgrade`)
     and another server's answer passed on (`Relay`) are such routes too. A route that says
@@ -1207,7 +1274,21 @@ rules something out.
     The bound stays where it was, below: the plain axum router counted the same in both builds
     (7,085; 8,099 with glibc), so these are the lane's own cost and not a difference between
     builds, and the next change to an unstaged route has about 29 left in the app's routes and 14
-    in an API's module.
+    in an API's module. Step 4 ([Choice 25](#choice-axum-router)) leaves it at 7,022 and 7,073
+    (7,826 and 7,879 with glibc), 10 more than step 3 in the same harness (7,012 and 7,063): about
+    10 left in each. The plain axum router stopped being a control at that step: the same source
+    with the same features counted 7,057 against 7,088 (8,071 against 8,102 with glibc), since in
+    step 3's build its header array's `into_response_parts` was a call (272 instructions a
+    request) and collecting its body another (354), and in step 4's both are inlined: it moved
+    with how axum's code compiled beside a different Corten. From step 4 the control is a service
+    of no framework (tower's `service_fn` reading the id from the path and answering the same
+    JSON), which shares no code with Corten or axum. In the harness built with it, it counted 3,190
+    in both builds (3,568 with glibc), so the builds do not differ, and the unstaged route 7,030
+    against 7,019 and 7,076 against 7,065 (7,834 against 7,823 and 7,882 against 7,871 with
+    glibc): 11 more, the route's own. The same Corten code counted up to 8 fewer in the harness
+    built before the control was added, which is how far a harness's own build moves it. The
+    bound is met, barely: 7,030 is 98 over 6,932 and 7,076 is 94 over 6,982 (jemalloc), so the
+    next change that adds to an unstaged route reopens this.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -1236,7 +1317,13 @@ rules something out.
     for a plain axum router in both builds; 7,812 and 7,879 with glibc, three runs, against 7,745
     and 7,797, and 8,099 for a plain axum router in both); measured (callgrind, release, three runs each, every run the same, an uncommitted
     variant of `fa0b1525` whose `laned` adds the headers as it takes the handler's answer: 7,022
-    and 7,083 against 7,003 and 7,068); measured (callgrind, release, three runs each, the stages written as combinators
+    and 7,083 against 7,003 and 7,068); measured (callgrind, release, three runs each with
+    jemalloc and with glibc, every run the same, step 4's uncommitted tree against step 3 at
+    `67e7f5f5`, in the harness with the control: an unstaged route 7,030 against 7,019 and
+    7,076 in an API's module against 7,065, a `service_fn` with no framework 3,190 in both, a
+    plain axum router 7,059 against 7,092; with glibc 7,834 against 7,823, 7,882 against 7,871,
+    3,568 in both, and 8,073 against 8,106; the harness built before the control, two runs each:
+    7,022 against 7,012 and 7,073 against 7,063); measured (callgrind, release, three runs each, the stages written as combinators
     on Corten's router, an uncommitted variant of `8ddeaea2`: 92 to 367 instructions more a
     staged request with jemalloc and 16 to 298 with glibc); measured
     (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
@@ -1267,8 +1354,10 @@ rules something out.
     app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
     than about 100 instructions over what it cost with its checks in its handler at `8ddeaea2`
     with jemalloc, 6,932 in the app's routes and 6,982 in an API's module (7,003 and 7,068
-    through its lane since), against a plain axum router in the same build (7,085 in both), the
-    control that shows whether two builds differ; or a request outside every area costs more than twice
+    through its lane, 7,030 and 7,076 since step 4), when a control that shares no code with
+    Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
+    step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
+    builds by more than the route does, which says the harness no longer separates them; or a request outside every area costs more than twice
     the about 200 instructions measured here over the build before area middleware (the lookup
     and any layout effect together; layout alone moved a whole request by about 280). Area
     middleware has no switch, so the next check builds current main with the prefix lookup taken
@@ -1292,7 +1381,10 @@ rules something out.
     plain router in the same build ([Choice 25](#choice-axum-router), step 2); 2026-11-09, the
     unstaged route through its lane at `bfa20380` against its checks in its handler at
     `8ddeaea2`; 2026-11-09, the stages as combinators on Corten's router, on an uncommitted
-    variant of `8ddeaea2`; 2026-11-09, the `laned` variant of `fa0b1525`.
+    variant of `8ddeaea2`; 2026-11-09, the `laned` variant of `fa0b1525`; 2026-11-10, the
+    unstaged route and the plain axum router with axum gone (step 4) against step 3 at
+    `67e7f5f5`, with the profile of each, and the `service_fn` control with no framework in both
+    builds (three runs each with jemalloc and with glibc, every run the same).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports

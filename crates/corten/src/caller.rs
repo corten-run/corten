@@ -89,10 +89,11 @@ use std::{
 };
 
 use crate::extract::{FromRequestParts, OptionalFromRequestParts};
-use axum::{
-    http::{request::Parts, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
-};
+use crate::response::IntoResponse;
+use crate::response::Response;
+use http::request::Parts;
+use http::HeaderValue;
+use http::StatusCode;
 
 use crate::{route::Href, Error, Signal};
 
@@ -423,7 +424,7 @@ fn refused(status: StatusCode, message: Option<std::sync::Arc<str>>, retry_after
         res.extensions_mut().insert(crate::Failed(message));
     }
     if let Some(seconds) = retry_after {
-        res.headers_mut().insert(axum::http::header::RETRY_AFTER, seconds.into());
+        res.headers_mut().insert(http::header::RETRY_AFTER, seconds.into());
     }
     res
 }

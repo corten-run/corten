@@ -944,38 +944,46 @@ mod tests {
         use std::time::{Duration, Instant};
 
         // Against axum alone too (`bare-json`), so through the router, not the test client.
-        use corten::{answer::Body, axum::Router, http::Request};
+        use corten::http::{HeaderMap, Request, Response};
         use http_body_util::BodyExt;
-        use tower::{ServiceExt, util::BoxCloneService};
+        use tower::ServiceExt;
+
+        /// Sends `paths` through `router` over and over for `seconds`, each request as `request`
+        /// makes it: how many it sent, in how long, and the headers of the first path's answer.
+        /// Generic, so Corten's router and axum's are each driven with their own body types.
+        async fn drive<S, B, R>(
+            router: S,
+            request: impl Fn(&str) -> Request<B>,
+            paths: &[String],
+            seconds: u64,
+        ) -> (u64, Duration, HeaderMap)
+        where
+            S: tower::Service<Request<B>, Response = Response<R>, Error = std::convert::Infallible> + Clone,
+            R: http_body::Body,
+            R::Error: std::fmt::Debug,
+        {
+            let start = Instant::now();
+            let mut count = 0u64;
+            while start.elapsed() < Duration::from_secs(seconds) {
+                for path in paths {
+                    let res = router.clone().oneshot(request(path)).await.unwrap();
+                    std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes());
+                }
+                count += paths.len() as u64;
+            }
+            let took = start.elapsed();
+            let res = router.oneshot(request(&paths[0])).await.unwrap();
+            (count, took, res.headers().clone())
+        }
+
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
         let source = Source::fixture(&std::fs::read_to_string(path).unwrap()).unwrap();
-        // Corten's router and axum's are different types: each is boxed the same way.
-        type Boxed = BoxCloneService<Request<Body>, corten::middleware::Response, std::convert::Infallible>;
-        fn boxed<S>(service: S) -> Boxed
-        where
-            S: tower::Service<Request<Body>, Response = corten::middleware::Response, Error = std::convert::Infallible>
-                + Clone
-                + Send
-                + 'static,
-            S::Future: Send + 'static,
-        {
-            BoxCloneService::new(service)
-        }
         let target = std::env::var("LOOP_TARGET").unwrap_or_else(|_| "json".into());
         let seconds: u64 = std::env::var("LOOP_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
-        let (router, prefix, mode) = match target.as_str() {
-            "json" => (boxed(super::app(source.clone()).router()), "/api/items/", None),
-            "bare-json" => {
-                // Axum alone, without Corten around the handler: what Corten's layer costs. The
-                // item is read as `item_json` reads it, its id by axum's own `Path`.
-                use corten::axum::extract::{Path, State};
-                let bare = corten::axum::routing::get(|State(source): State<Source>, Path(id): Path<String>| async move {
-                    corten::middleware::IntoResponse::into_response(super::item_view(&source, &id).await)
-                });
-                (boxed(Router::new().route(api::ItemJson::PATH, bare).with_state(source.clone())), "/api/items/", None)
-            }
-            "page" => (boxed(super::app(source.clone()).router()), "/items/", Some("nav")),
-            "document" => (boxed(super::app(source.clone()).router()), "/items/", None),
+        let (prefix, mode) = match target.as_str() {
+            "json" | "bare-json" => ("/api/items/", None),
+            "page" => ("/items/", Some("nav")),
+            "document" => ("/items/", None),
             other => panic!("unknown LOOP_TARGET {other}"),
         };
         // What the client sends: `curl`'s `identity` by default. A browser's names its compressions
@@ -992,20 +1000,33 @@ mod tests {
             if let Some(mode) = mode {
                 req = req.header("corten", mode);
             }
-            req.body(Body::empty()).unwrap()
+            req
         };
-        let start = Instant::now();
-        let mut count = 0u64;
-        while start.elapsed() < Duration::from_secs(seconds) {
-            for path in &paths {
-                let res = router.clone().oneshot(request(path)).await.unwrap();
-                std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes());
-            }
-            count += paths.len() as u64;
-        }
-        let per = start.elapsed().as_secs_f64() * 1e6 / count as f64;
-        let res = router.clone().oneshot(request(&paths[0])).await.unwrap();
-        let header = |name| res.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or("none").to_owned();
+        let (count, took, headers) = if target == "bare-json" {
+            // Axum alone (its own dependency here, not Corten's), without Corten around the
+            // handler: what Corten's layer costs. The item is read as `item_json` reads it, its
+            // id by axum's own `Path`, and its JSON written as Corten's `Json` writes it, into
+            // axum's body, which boxes it once, as Corten's does. A failure (none in this loop) is
+            // Corten's answer.
+            use axum::extract::{Path, State};
+            let bare = axum::routing::get(|State(source): State<Source>, Path(id): Path<String>| async move {
+                let item = match super::item_view(&source, &id).await {
+                    Ok(corten::Json(item)) => item,
+                    Err(e) => return corten::middleware::IntoResponse::into_response(e).map(axum::body::Body::new),
+                };
+                let mut res = Response::new(axum::body::Body::from(corten::json::to_vec(&item)));
+                res.headers_mut()
+                    .insert(corten::http::header::CONTENT_TYPE, corten::http::HeaderValue::from_static("application/json"));
+                res
+            });
+            let router = axum::Router::new().route(api::ItemJson::PATH, bare).with_state(source.clone());
+            drive(router, |path| request(path).body(axum::body::Body::empty()).unwrap(), &paths, seconds).await
+        } else {
+            let router = super::app(source.clone()).router();
+            drive(router, |path| request(path).body(corten::answer::Body::empty()).unwrap(), &paths, seconds).await
+        };
+        let per = took.as_secs_f64() * 1e6 / count as f64;
+        let header = |name| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("none").to_owned();
         println!("{target} ({encoding}): tag {}, content-encoding {}", header("etag"), header("content-encoding"));
         println!("{target}: {count} requests, {per:.2} us per request");
     }

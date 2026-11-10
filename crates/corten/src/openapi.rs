@@ -122,7 +122,7 @@
 //! by describing what it sends as that type does:
 //!
 //! ```
-//! use corten::{answer::{AnyInputs, Format, NotAFeed}, axum::response::{IntoResponse, Response}};
+//! use corten::{answer::{AnyInputs, Format, NotAFeed}, middleware::{IntoResponse, Response}};
 //!
 //! /// Rates as text, from a cache of the app's own.
 //! struct Cached(String);
@@ -166,7 +166,7 @@
 //! Without it, the handler does not compile:
 //!
 //! ```compile_fail,E0277
-//! use corten::{answer::{AnyInputs, Format, NotAFeed}, axum::response::{IntoResponse, Response}};
+//! use corten::{answer::{AnyInputs, Format, NotAFeed}, middleware::{IntoResponse, Response}};
 //!
 //! /// Rates as text, from a cache of the app's own.
 //! struct Cached(String);
@@ -585,7 +585,7 @@ macro_rules! raw_body {
         })*
     };
 }
-raw_body!(bytes::Bytes, String, axum::body::Body, axum::extract::Request);
+raw_body!(bytes::Bytes, String, crate::body::Body, crate::extract::Request);
 
 /// Nothing a client sends that the document shows: what the server holds or works out.
 macro_rules! nothing {
@@ -593,15 +593,7 @@ macro_rules! nothing {
         $(impl Argument for $ty {})*
     };
 }
-nothing!(
-    crate::Req,
-    crate::Signal,
-    axum::http::Method,
-    axum::http::Uri,
-    axum::http::HeaderMap,
-    crate::ClientIp,
-    crate::ClientZone
-);
+nothing!(crate::Req, crate::Signal, http::Method, http::Uri, http::HeaderMap, crate::ClientIp, crate::ClientZone);
 
 /// A request to switch protocols: a `GET` with `Upgrade` (and `Connection: upgrade`).
 impl Argument for crate::upgrade::Upgrade {
@@ -681,7 +673,7 @@ impl Answers for crate::JsonResponse {
     }
 }
 
-impl Answers for axum::http::StatusCode {
+impl Answers for http::StatusCode {
     fn describe(operation: &mut Operation<'_>) {
         operation.response("2XX", "A status the handler sets, without a body", None);
     }

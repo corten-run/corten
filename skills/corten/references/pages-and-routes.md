@@ -228,8 +228,8 @@ and Corten serves the RFC 9728 metadata and names it in the 401; the token check
 audience with `authorization.resource()`; a token missing a scope is
 `ToolError::InsufficientScope("a b".into())`, a 403.
 
-`Json` is the prelude's `corten::Json`: axum's extractor, and a response written in one buffer
-(faster than `axum::Json`; keep the prelude's unless a crate hands you axum's). The response type
+`Json` is the prelude's `corten::Json`: a reader that refuses as axum's did (415, 400, 422, 413
+over 2 MiB, each a `corten::extract::BodyRejection`), and a response written in one buffer. The response type
 derives `ToJson` next to `Serialize` (`#[derive(Serialize, ToJson)] struct Price ..`); it reads the
 same `#[serde(...)]` attributes, and one it cannot write as serde does is a compile error.
 Every failure under the prefix is an RFC 9457 Problem Details document (`application/problem+json`,

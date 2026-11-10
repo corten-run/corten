@@ -23,12 +23,16 @@ use std::{
     task::{Context, Poll},
 };
 
+use crate::body::Body;
+use crate::response::IntoResponse;
+use crate::response::Response;
 use crate::{extract::Request, handler::Handler};
-use axum::{
-    body::Body,
-    http::{header, uri::PathAndQuery, HeaderValue, Method, StatusCode, Uri},
-    response::{IntoResponse, Response},
-};
+use http::header;
+use http::uri::PathAndQuery;
+use http::HeaderValue;
+use http::Method;
+use http::StatusCode;
+use http::Uri;
 use serde::de::{self, DeserializeOwned, DeserializeSeed, Deserializer, SeqAccess, Visitor};
 
 use crate::form::FormError;

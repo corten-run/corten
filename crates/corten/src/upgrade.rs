@@ -9,10 +9,15 @@ use std::{
 };
 
 use crate::extract::{FromRequestParts, OptionalFromRequestParts};
-use axum::{
-    http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
-    response::{IntoResponse, Response},
-};
+use crate::response::IntoResponse;
+use crate::response::Response;
+use http::header;
+use http::request::Parts;
+use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
+use http::Method;
+use http::StatusCode;
 use hyper::upgrade::{OnUpgrade, Upgraded};
 use hyper_util::rt::TokioIo;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};

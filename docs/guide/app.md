@@ -107,9 +107,12 @@ and the answer is the client's 408 (`Failure::Failed`, as a stalled upload's `?`
 client that stops sending a form is not told the server was slow. With the defaults the deadline
 (30 seconds) comes before an upload's idle time (`Upload::idle`, a minute), so it is the deadline
 that answers a stalled upload, with that 408. A deadline that passes while a body over an
-`Upload`'s or a `pieces_up_to` limit is read past is the 413 that read gives. Only a request
+`Upload`'s or a `pieces_up_to` limit, or over the 2 MiB of `Json`, `Form`, `String` or `Bytes`,
+is read past is the 413 that read gives. Only a request
 `corten::serve` reads from its connection is marked as waiting for its body; through
-`app.router()` served another way that deadline is the 503 (the 413 still holds). See
+`app.router()` served another way that deadline is the 503 (the 413 still holds). A connection
+loop of the app's own gives each request its client's address as a `corten::PeerAddr` in the
+request's extensions, which `ClientIp` starts from as it does from `serve`'s connection. See
 [Cancellation](cancellation.md).
 
 ```rust,ignore
@@ -551,15 +554,17 @@ array in markup (`class={[Row, Selected]}`, a look's `[Tile, Raised]`) lists not
 get a listed one stays the app's choice, which a drawn page checks.
 
 An app that calls another service over HTTP points it, in a test, at a stand-in started on a
-local port. The stand-in is the other service, not the app, so it is axum's server, named
-through `corten::axum`, and keeps none of the app's defaults (its headers, CSP, shutdown) that
-the service does not have ([design Choice 21](../design.md#choice-own-extractors)):
+local port. The stand-in is the other service, not the app, so it keeps none of the app's
+defaults (its headers, CSP, shutdown) that the service does not have: it is a server of the
+test's own, here axum's as a dev-dependency (`axum = { version = "0.8", default-features = false,
+features = ["http1", "tokio"] }`), since Corten depends on no web framework
+([design Choice 21](../design.md#choice-own-extractors)):
 
 ```rust,ignore
 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
 let origin = format!("http://{}", listener.local_addr().unwrap());
-let stand_in = corten::axum::Router::new().fallback(platform).with_state(calls.clone());
-tokio::spawn(async move { corten::axum::serve(listener, stand_in).await.unwrap() });
+let stand_in = axum::Router::new().fallback(platform).with_state(calls.clone());
+tokio::spawn(async move { axum::serve(listener, stand_in).await.unwrap() });
 let app = app(Config { platform: origin }).test();
 ```
 
@@ -932,7 +937,7 @@ answer is otherwise sent as it made it, a raw `Response` too, and every other ro
 stage, so the fast route and a page that needs all of them sit side by side:
 
 ```rust
-use corten::{axum::response::Response, prelude::*};
+use corten::{middleware::Response, prelude::*};
 
 #[corten::routes]
 mod url {
@@ -1050,13 +1055,16 @@ shutdown, which lets an unstaged route's request run for the longer of the shutd
 app's longest deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(five runs with jemalloc and three with glibc, which did not differ): 7,003 instructions a request
-unstaged (7,068 in an API's module) against 18,299 through the stages beside it with jemalloc,
-where a plain axum router takes 7,085, and 7,812 unstaged with glibc's allocator (7,879 in an
-API's module; axum: 8,099). What the route keeps (the host check, the headers above, the panic
+(three runs each with jemalloc and glibc, every run the same): 7,030 instructions a request
+unstaged (7,076 in an API's module) with jemalloc, where a plain axum router takes 7,059 and a
+service of no framework that only answers the JSON 3,190, and 7,834 unstaged with glibc's
+allocator (7,882 in an API's module; axum: 8,073; no framework: 3,568). Through the stages
+beside it the same answer took 17,724 (18,986 with glibc), in a build of the harness without
+the no-framework service, where the unstaged route took 7,022 (two runs each). What the route keeps (the host check, the headers above, the panic
 catch and an API's JSON) the router runs around its handler in place of the stages, so its 404
-and 405 meet it as its handler's answer does; it costs 71 of those instructions (86 in an API's module; 67 and 82 with glibc)
-over the same checks written into the handler, and wall times did not tell them apart.
+and 405 meet it as its handler's answer does; when that was measured it cost 71 instructions
+more than the same checks written into the handler (86 in an API's module; 67 and 82 with
+glibc), and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
 check's read of `Host` and its match against the app's names. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
@@ -1526,9 +1534,11 @@ Under the prefix:
    pages keep refusing that site's writes. The site authenticates with a token: a write from it
    that carries the user's cookies is refused, and no `Access-Control-Allow-Credentials` is sent.
 6. `Json` in the prelude is `corten::Json` (feature `json`). It reads a request body into a
-   `FromJson` (item 8) with the value and the rejections axum's `Json` gives: Corten's reader takes
-   an `application/json` body, and axum (`serde_json`) any other JSON content type and any body
-   the reader gives up on. What it writes is a `ToJson`: derive it
+   `FromJson` (item 8) with the value and the rejections axum's `Json` gave (recorded from axum
+   0.8.9 and held by a test): a body with a JSON content type (`application/json`,
+   `application/problem+json`, either with parameters such as a `charset`) is read by Corten's
+   reader, and by `serde_json` only where that reader gives up, so the content type does not
+   choose the reader. What it writes is a `ToJson`: derive it
    (`#[derive(ToJson)]`, also in the prelude) on the response type, next to `Serialize` if other
    surfaces read it too. The derive lays the JSON out when the crate compiles, so a response
    copies one byte string between each pair of values instead of writing every key, quote and
@@ -1537,7 +1547,6 @@ Under the prefix:
    is a struct that derives `ToJson` is written in place, its members laid out the same way; an
    attribute it cannot follow (`flatten` of a map or an enum, `serialize_with`) does not compile. A field whose type has only `Serialize` (an id or a
    date from another crate) is written by `serde_json`. `serde_json::Value` is a `ToJson`, as above.
-   axum's `Json` works too, and writes any `Serialize` through `serde_json` and a `BytesMut`.
 7. Numbers are written as serde_json writes them, a whole float as `2.0`
    ([Numbers in JSON](#numbers-in-json)).
 8. To read JSON another service answers, derive `FromJson` (in the prelude) next to `Deserialize`

@@ -2622,8 +2622,57 @@ Corten is pre-1.0, so any minor version may change the API.
     Which one). Design Limit 17, which recorded that they were untyped, is gone, so Limits 18 to 24
     are now 17 to 23, and the other entries here that cite them say the new numbers
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
+14. axum, from Corten's dependencies (design Choice 25, step 4), and with it what named axum:
+    `corten::axum` (a test's stand-in for another service depends on a server of its own, axum
+    as a dev-dependency say, as the app guide shows); `compress::apply` and `Policy::apply`, which
+    wrapped an axum router (`App` puts compression, feature `compress`, and its policy,
+    `App::policy`, around every route, and a route that wants neither is `unstaged`); and the
+    answers only axum wrote: `Html` is `([(CONTENT_TYPE, "text/html; charset=utf-8")], body)` or
+    a page, `Redirect` is `req.redirect(&route)` or `(StatusCode::SEE_OTHER, [(LOCATION, ..)])`,
+    and `AppendHeaders`, which added to a header the answer inside it had set, is
+    `res.headers_mut().append(..)` on that answer's response (a `HeaderMap` part, as in axum,
+    sends its own repeated lines but replaces a header of the same name the answer set). axum's
+    `DefaultBodyLimit` layer no longer changes the 2 MiB `Bytes`, `String`, `Json` and `Form`
+    read: a route that takes a larger body takes the whole `Request` and reads it with
+    `corten::extract::bytes_up_to(request.into_body(), max)`. Corten's `IntoResponse` has no
+    impl for `()` as a part, for a one-element tuple, for a tuple of parts as one part, or for a
+    tuple that starts with `response::Parts` or `Response<()>`, takes up to 8 parts where axum
+    took 16, and `corten::Listener` has no
+    `tap_io`: a listener written for `axum::serve` implements `corten::Listener` (the same two
+    methods) to be given to `serve_on`.
 
 ### Changed
+
+- axum is no longer one of Corten's dependencies (design Choice 25, step 4, and Choice 21). The
+  body (`corten::answer::Body`), `IntoResponse`, `IntoResponseParts`, the readers of a whole
+  body, the server-sent events writer and `Listener` are Corten's own, with axum's names and
+  shapes; the dispatch suite passes unchanged. What it removed is under Removed (14). What an
+  app sees:
+  1. `Bytes`, `String`, `Json` and `Form` refuse a body with
+     `corten::extract::BodyRejection` (plain text) in place of axum's `BytesRejection`,
+     `StringRejection` and `JsonRejection`, with the same statuses (413 over the 2 MiB limit,
+     400, 415), and `Json`'s texts and the content types it takes as axum 0.8.9 had them. `FormRejection::Body` holds one. A
+     body over the limit is read past until 4 MiB has arrived, so a browser still sending sees the
+     413 (also when the deadline passes meanwhile), and one whose length says it is longer than 4
+     MiB is refused unread.
+  2. axum's `ConnectInfo` and `MockConnectInfo` are no longer read: the client's address is
+     `ClientIp`, a test gives one with `Call::peer`, and an app that serves `App::router()` with
+     a connection loop of its own puts `corten::PeerAddr(addr)` in each request's extensions.
+  3. corten-feed's `FeedResponse` wraps the `http` crate's `Response` over `FeedBody`
+     (`into_body`, `into_http`), and `Since` is no longer an axum extractor.
+  4. `Form` reads a `HEAD`'s query string, as a `GET`'s, where axum answered 415, and takes a
+     body only as `application/x-www-form-urlencoded` (in any case, parameters after it), where
+     axum took any content type that started with it.
+  5. A server-sent event's data splits on CRLF and CR as on LF, one line each, and empty data
+     writes no `data:` line (axum wrote an empty one), so such an event is not dispatched;
+     Corten's own events always carry data.
+  A staged page costs about 480 instructions fewer (callgrind, release, jemalloc; 541 with
+  glibc): a page route 17,713 against 18,192, one with a middleware 17,997 against 18,476. An API
+  request, the 404s and an unstaged route are within 31 of before (13,005 against 13,009, 7,022
+  against 7,012). A `live` stream writes an event in 2,140 instructions against axum's 4,960
+  (2,381 against 4,051 with glibc), and a JSON `POST` read by `Json` costs 14,164 against 14,574
+  (15,706 against 15,969). A feed's live event costs about 48 more (7,567 to 7,568 against 7,517 to
+  7,521; about 105 with glibc): `FeedBody` boxes its stream and Corten boxes the body again.
 
 - Handlers are called through Corten's own `Handler`, and `corten::extract`'s
   `FromRequestParts`, `OptionalFromRequestParts`, `FromRequest` and `State` are Corten's own
@@ -2657,8 +2706,7 @@ Corten is pre-1.0, so any minor version may change the API.
   instructions against 82,792 and its JSON 59,754 against 63,008, an API request 13,112 against
   15,726, and an `unstaged` route 6,932 against 8,479. Breaking for an app that named axum's
   router through Corten: `App::router()` (and `Router::from(app)`) gives `corten::Router`, a
-  tower `Service<Request>` that is `Clone`, served by `serve` (or by axum's `serve` through
-  `into_make_service`), and no longer an `axum::Router` to add routes to; and `corten::routes()`,
+  tower `Service<Request>` that is `Clone`, served by `serve`, and no longer an `axum::Router` to add routes to; and `corten::routes()`,
   `corten::health`, `Assets::routes` and `Pwa::routes`, which gave axum routers for an app to
   merge, are gone, since `App` serves them. axum's extractors that read what axum's router stored,
   `axum::extract::Path`, `RawPathParams` and `MatchedPath`, still compile in a handler, and stop

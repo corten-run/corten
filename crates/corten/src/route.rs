@@ -452,7 +452,7 @@ pub use corten_macros::UrlValue;
 /// # fn main() { let _ = url::router(); }
 /// ```
 ///
-/// Nor two routes a request could not tell apart, which axum would refuse when the app starts:
+/// Nor two routes a request could not tell apart, which the router would refuse when the app starts:
 ///
 /// ```compile_fail
 /// # async fn item() {}
@@ -686,7 +686,7 @@ pub use corten_macros::UrlValue;
 /// place: the host check every request meets (`421` for a name the app does not answer to), `X-Content-Type-Options:
 /// nosniff` and `Content-Security-Policy: sandbox` on its answer, a panic answered `500`, and,
 /// under an API's prefix, the API's JSON for a failure. Its handler's answer is otherwise sent as
-/// it made it, a raw [`axum::response::Response`] too, and every route beside it keeps every
+/// it made it, a raw [`crate::response::Response`] too, and every route beside it keeps every
 /// stage. It answers `get` only, and its handler takes only the request's method and URL
 /// ([`crate::answer::Unstaged`]). It is said in any routes module, the app's, an area's or an
 /// API's:
@@ -712,14 +712,14 @@ pub use corten_macros::UrlValue;
 ///     pub struct Figure;
 /// }
 ///
-/// async fn ping() -> corten::axum::response::Response {
+/// async fn ping() -> corten::middleware::Response {
 ///     let text = "text/plain; charset=utf-8";
-///     corten::axum::response::Response::builder().header("content-type", text).body("pong".into()).unwrap()
+///     corten::middleware::Response::builder().header("content-type", text).body("pong".into()).unwrap()
 /// }
 ///
-/// async fn figure() -> corten::axum::response::Response {
+/// async fn figure() -> corten::middleware::Response {
 ///     let json = "application/json";
-///     corten::axum::response::Response::builder().header("content-type", json).body("42".into()).unwrap()
+///     corten::middleware::Response::builder().header("content-type", json).body("42".into()).unwrap()
 /// }
 ///
 /// async fn home(req: Req) -> HtmlResult {
@@ -771,7 +771,7 @@ pub use corten_macros::UrlValue;
 ///     pub struct Ping;
 /// }
 ///
-/// async fn ping(_: corten::axum::body::Bytes) -> &'static str {
+/// async fn ping(_: corten::Bytes) -> &'static str {
 ///     "took"
 /// }
 /// # fn main() { let _ = url::router(); }
@@ -1146,10 +1146,10 @@ impl<H: crate::handler::Handler<T, S>, T, S> crate::handler::Handler<T, S> for N
     #[inline]
     fn call(
         self,
-        req: axum::extract::Request,
+        req: crate::extract::Request,
         state: S,
-    ) -> impl std::future::Future<Output = axum::response::Response> + Send + 'static {
-        fn apply(mut res: axum::response::Response) -> axum::response::Response {
+    ) -> impl std::future::Future<Output = crate::response::Response> + Send + 'static {
+        fn apply(mut res: crate::response::Response) -> crate::response::Response {
             crate::cache::Cache::no_store().apply(&mut res);
             res
         }
@@ -1160,7 +1160,7 @@ impl<H: crate::handler::Handler<T, S>, T, S> crate::handler::Handler<T, S> for N
 /// A URL built from a typed value. Implemented by `#[derive(Route)]`, together with `Render`,
 /// `AttrValue` (so `href={route}` works) and `Display` (the plain URL).
 pub trait Route {
-    /// The path as axum matches it: `"/items/{id}"`. A parameter followed by text in its segment
+    /// The path as the router matches it: `"/items/{id}"`. A parameter followed by text in its segment
     /// (`#[route("/sitemap/{page}.xml")]`) is matched as the whole segment (`"/sitemap/{page}"`),
     /// and Corten checks the text.
     const PATH: &'static str;
@@ -2270,12 +2270,12 @@ pub fn no_prefetch(name: &str, prefetch: bool, out: &mut String) {
 }
 
 /// The URL of any [`Href`] as a header value: `Location` for a redirect.
-pub(crate) fn header_value(to: &(impl Href + ?Sized)) -> Result<axum::http::HeaderValue, axum::http::header::InvalidHeaderValue> {
+pub(crate) fn header_value(to: &(impl Href + ?Sized)) -> Result<http::HeaderValue, http::header::InvalidHeaderValue> {
     // From text, not from the `String`: one with room to spare would cost `Bytes` an allocation of
     // its own.
     match to.as_text() {
-        Some(text) => axum::http::HeaderValue::from_str(text),
-        None => axum::http::HeaderValue::from_str(&link(to)),
+        Some(text) => http::HeaderValue::from_str(text),
+        None => http::HeaderValue::from_str(&link(to)),
     }
 }
 
@@ -2542,17 +2542,17 @@ pub(crate) fn chosen(routes: &[(&'static str, bool)], path: &str) -> Option<(&'s
         .filter(|(pattern, _)| routes_path(pattern, path))
 }
 
-/// Whether `path` is one `pattern` routes, as axum (matchit) matches it: `{name}` is one segment,
+/// Whether `path` is one `pattern` routes, as the router (matchit) matches it: `{name}` is one segment,
 /// which may be empty when another follows (`/items//edit` is `/items/{id}/edit`) but not when it
 /// is the last; `{*rest}` is the rest of the path (not empty); `{name}text` is a segment that
-/// ends in the text with something before it (Corten checks the text, as axum matches `{name}`);
+/// ends in the text with something before it (Corten checks the text, as the router matches `{name}`);
 /// and the text is compared as it is written, so `/items/` is not `/items`. These are all the
 /// shapes a route macro takes.
 pub(crate) fn routes_path(pattern: &str, path: &str) -> bool {
     segments_match(pattern, path, true)
 }
 
-/// [`routes_path`], with the text after a parameter required (`text`) or not (as axum matches).
+/// [`routes_path`], with the text after a parameter required (`text`) or not (as the router matches).
 fn segments_match(pattern: &str, path: &str, text: bool) -> bool {
     let (mut pattern, mut path) = (pattern.split('/'), path.split('/'));
     loop {
@@ -2589,7 +2589,7 @@ mod local_tests {
     use super::{chosen, routes_path, Local};
 
     #[test]
-    fn a_path_matches_a_pattern_as_axum_matches_it() {
+    fn a_path_matches_a_pattern_as_the_router_matches_it() {
         for (pattern, path, want) in [
             ("/", "/", true),
             ("/", "/a", false),
@@ -2743,7 +2743,7 @@ mod local_tests {
         use super::{link, Href};
         use crate::view::AttrValue;
         let local = Local::parse("/a?q=\"x\"&b='<y>'").unwrap();
-        let uri = axum::http::Uri::from_static("https://example.com/p?a=1&b=2");
+        let uri = http::Uri::from_static("https://example.com/p?a=1&b=2");
         for (to, want) in [
             (&local as &dyn Href, r#" href="/a?q=&quot;x&quot;&amp;b=&#39;&lt;y&gt;&#39;""#),
             (&uri as &dyn Href, r#" href="https://example.com/p?a=1&amp;b=2""#),
@@ -2756,7 +2756,7 @@ mod local_tests {
     }
 }
 
-impl Href for axum::http::Uri {
+impl Href for http::Uri {
     fn write_link(&self, out: &mut String, html: bool) {
         write_text(&self.to_string(), out, html)
     }
@@ -2781,13 +2781,13 @@ impl Href for axum::http::Uri {
 /// A place on one of the app's own pages is [`Route::at`], whose id the markup and the URL share,
 /// so the address is a full URL (a scheme and a host); a path is a mistake a debug build reports.
 pub struct Elsewhere<'a> {
-    uri: &'a axum::http::Uri,
+    uri: &'a http::Uri,
     id: &'a str,
 }
 
 impl<'a> Elsewhere<'a> {
     /// The element with `id` on the page at `uri`.
-    pub fn at(uri: &'a axum::http::Uri, id: &'a str) -> Self {
+    pub fn at(uri: &'a http::Uri, id: &'a str) -> Self {
         debug_assert!(
             uri.scheme().is_some() && uri.authority().is_some(),
             "corten: Elsewhere::at takes a full URL outside the app ({uri}); a place on the app's own page is route.at(Id)"
@@ -3018,7 +3018,10 @@ impl fmt::Write for Encode<'_> {
 /// A handler that reads its parameters some other way, or another route's, does not compile:
 ///
 /// ```compile_fail,E0277
-/// use corten::{axum::extract::Path, prelude::*};
+/// use corten::prelude::*;
+///
+/// /// A reader of the path that is not Corten's, as another framework's `Path` is.
+/// struct Path<T>(T);
 ///
 /// #[corten::routes]
 /// mod url {
@@ -3260,7 +3263,7 @@ where
 {
     type Rejection = ParamsRejection;
 
-    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, ParamsRejection> {
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> Result<Self, ParamsRejection> {
         let path = <R::Path as __private::ReadPath>::read(parts).await?;
         R::__read(path, parts.uri.query().unwrap_or_default()).map(Params).map_err(ParamsRejection::query)
     }
@@ -3269,13 +3272,13 @@ where
 /// Why [`Params`] refused a request: a path or query parameter that does not fit its field, a
 /// 400 in plain text, as axum's rejections are. Boxed, so a request that fits moves nothing large.
 #[derive(Debug)]
-pub struct ParamsRejection(Box<axum::response::Response>);
+pub struct ParamsRejection(Box<crate::response::Response>);
 
 impl ParamsRejection {
     #[cold]
     fn query(error: crate::form::FormError) -> Self {
-        use axum::response::IntoResponse as _;
-        let status = axum::http::StatusCode::BAD_REQUEST;
+        use crate::response::IntoResponse as _;
+        let status = http::StatusCode::BAD_REQUEST;
         // A path parameter is said as axum's `Path` said it, a query one as its `Query` did.
         let what = if error.is_in_path() { "Invalid URL" } else { "Failed to deserialize query string" };
         let rejection = crate::form::FormRejection::invalid(status, what, error);
@@ -3285,9 +3288,9 @@ impl ParamsRejection {
     /// The route's parameters cannot be read from the request as it now is: the app's fault.
     #[cold]
     fn unreadable(why: String) -> Self {
-        use axum::response::IntoResponse as _;
+        use crate::response::IntoResponse as _;
         tracing::error!("corten: {why}");
-        let status = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+        let status = http::StatusCode::INTERNAL_SERVER_ERROR;
         ParamsRejection(Box::new((status, format!("corten: {why}")).into_response()))
     }
 }
@@ -3295,7 +3298,7 @@ impl ParamsRejection {
 /// A route's path parameters as `T`, a tuple in the order its path names them, from what the
 /// router matched ([`crate::middleware::MatchedPath`]): each percent-decoded, then read as its
 /// type (a 400 when it is not one).
-pub(crate) fn read_path<T: serde::de::DeserializeOwned>(parts: &axum::http::request::Parts) -> Result<T, ParamsRejection> {
+pub(crate) fn read_path<T: serde::de::DeserializeOwned>(parts: &http::request::Parts) -> Result<T, ParamsRejection> {
     let matched = parts.extensions.get::<crate::router::MatchedPath>();
     crate::router::path_params(matched).map_err(|error| match error {
         crate::router::PathError::Invalid(error) => ParamsRejection::query(error),
@@ -3303,8 +3306,8 @@ pub(crate) fn read_path<T: serde::de::DeserializeOwned>(parts: &axum::http::requ
     })
 }
 
-impl axum::response::IntoResponse for ParamsRejection {
-    fn into_response(self) -> axum::response::Response {
+impl crate::response::IntoResponse for ParamsRejection {
+    fn into_response(self) -> crate::response::Response {
         *self.0
     }
 }
@@ -3359,7 +3362,8 @@ pub trait FromUrl {
 /// let _ = get(rates);
 /// ```
 ///
-/// Nor does a method router made by axum's own `get`, which checks nothing:
+/// Nor does a router of its own (another app's finished routes), whose handlers were checked for
+/// that app, not this route:
 ///
 /// ```compile_fail,E0308
 /// use corten::prelude::*;
@@ -3368,10 +3372,8 @@ pub trait FromUrl {
 /// #[route("/admin")]
 /// struct Admin;
 ///
-/// async fn dashboard() -> &'static str {
-///     "admin"
-/// }
-/// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Admin>(corten::axum::routing::get(dashboard)));
+/// let other = App::new(Routes::new()).router();
+/// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Admin>(other));
 /// ```
 ///
 /// `S` is the state its handlers take (`State<S>`), given with [`Methods::with_state`].
@@ -3463,16 +3465,14 @@ methods!(get, post, put, delete, patch, head, options, trace);
 /// `#[corten::routes]` module's `router()`. An app whose every route is under
 /// [`crate::App::api`] or [`crate::App::area`] starts from `Routes::new()`, which has none.
 ///
-/// It is the only thing `App::new` takes, so no route reaches the app without its handler checked;
-/// an axum `Router` does not compile there:
+/// It is the only thing `App::new` takes, so no route reaches the app without its handler checked:
+/// not another app's finished router, for one.
 ///
 /// ```compile_fail,E0308
 /// use corten::prelude::*;
 ///
-/// async fn home() -> &'static str {
-///     "home"
-/// }
-/// let app = App::new(corten::axum::Router::new().route("/", corten::axum::routing::get(home)));
+/// let other = App::new(Routes::new()).router();
+/// let app = App::new(other);
 /// ```
 #[derive(Default)]
 pub struct Routes(pub(crate) crate::router::Table, pub(crate) Vec<(&'static str, bool)>, pub(crate) UnstagedRoutes);
@@ -3603,10 +3603,10 @@ fn text_after(segment: &str) -> &str {
 }
 
 /// Two routes of the app (in any module, area or API) that differ only in the text after a
-/// parameter, which axum matches as one path: a startup panic naming both, since only one could
+/// parameter, which the router matches as one path: a startup panic naming both, since only one could
 /// be reached (a `#[corten::routes]` module already refuses them when it compiles). Routes that
 /// differ only in their parameters' names are left to the router, which refuses them itself. So
-/// is a route with text beside a catch-all where it has its parameter, which axum would refuse
+/// is a route with text beside a catch-all where it has its parameter, which the router would refuse
 /// naming the path without the text. Only a route with text after a parameter can clash, so each
 /// of those is compared with the others, and an app with none compares nothing.
 pub(crate) fn assert_no_clash(written: &[&str]) {
@@ -3761,10 +3761,10 @@ pub(crate) struct Lane {
 
 impl crate::router::Stages for Lane {
     #[inline]
-    fn run(self: std::sync::Arc<Self>, req: axum::extract::Request, route: &crate::router::Route) -> crate::router::Answering {
+    fn run(self: std::sync::Arc<Self>, req: crate::extract::Request, route: &crate::router::Route) -> crate::router::Answering {
         if !self.hosts.answers(&req) {
             let mut res = crate::security::misdirected();
-            res.headers_mut().insert(axum::http::header::CACHE_CONTROL, crate::cache::PRIVATE);
+            res.headers_mut().insert(http::header::CACHE_CONTROL, crate::cache::PRIVATE);
             return Box::pin(std::future::ready(unstaged_headers(res)));
         }
         Box::pin(laned(self, route.call(req)))
@@ -3773,9 +3773,9 @@ impl crate::router::Stages for Lane {
 
 /// `answering` in `lane`: its answer with [`unstaged_headers`], or a `500` when the handler
 /// panics, and under an API's prefix a failure as the API's JSON.
-async fn laned<F>(lane: std::sync::Arc<Lane>, answering: F) -> axum::response::Response
+async fn laned<F>(lane: std::sync::Arc<Lane>, answering: F) -> crate::response::Response
 where
-    F: std::future::Future<Output = axum::response::Response>,
+    F: std::future::Future<Output = crate::response::Response>,
 {
     use std::{panic::AssertUnwindSafe, task::Poll};
     let mut answering = std::pin::pin!(answering);
@@ -3790,7 +3790,7 @@ where
     })
     .await;
     let res = polled.unwrap_or_else(|| {
-        axum::response::IntoResponse::into_response((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"))
+        crate::response::IntoResponse::into_response((http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"))
     });
     let res = unstaged_headers(res);
     match &lane.json {
@@ -3803,8 +3803,9 @@ where
 }
 
 /// `res` with `nosniff`, `sandbox`, and no shared caching when it sets a cookie.
-fn unstaged_headers(mut res: axum::response::Response) -> axum::response::Response {
-    use axum::http::{header, HeaderValue};
+fn unstaged_headers(mut res: crate::response::Response) -> crate::response::Response {
+    use http::header;
+    use http::HeaderValue;
     let headers = res.headers_mut();
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
@@ -4437,15 +4438,13 @@ pub mod __private {
     /// A route's path parameters, read for [`super::Params`]: `()` when its path has none.
     pub trait ReadPath: Sized + Send {
         fn read(
-            parts: &mut axum::http::request::Parts,
+            parts: &mut http::request::Parts,
         ) -> impl std::future::Future<Output = Result<Self, super::ParamsRejection>> + Send;
     }
 
     impl ReadPath for () {
         #[inline]
-        fn read(
-            _: &mut axum::http::request::Parts,
-        ) -> impl std::future::Future<Output = Result<Self, super::ParamsRejection>> + Send {
+        fn read(_: &mut http::request::Parts) -> impl std::future::Future<Output = Result<Self, super::ParamsRejection>> + Send {
             std::future::ready(Ok(()))
         }
     }
@@ -4456,7 +4455,7 @@ pub mod __private {
     impl<T: serde::de::DeserializeOwned + Send> ReadPath for InPath<T> {
         #[inline]
         fn read(
-            parts: &mut axum::http::request::Parts,
+            parts: &mut http::request::Parts,
         ) -> impl std::future::Future<Output = Result<Self, super::ParamsRejection>> + Send {
             std::future::ready(super::read_path(parts).map(InPath))
         }
@@ -4503,7 +4502,7 @@ pub mod __private {
         F: FnOnce() -> Fut + Clone + Send + Sync + 'static,
         Fut: std::future::Future<Output = Res> + Send + 'static,
         S: Clone + Send + Sync + 'static,
-        Res: axum::response::IntoResponse,
+        Res: crate::response::IntoResponse,
     {
         type Handler = F;
         #[inline(always)]
@@ -4519,7 +4518,7 @@ pub mod __private {
                 F: FnOnce($($ty,)* $last,) -> Fut + Clone + Send + Sync + 'static,
                 Fut: std::future::Future<Output = Res> + Send + 'static,
                 S: Clone + Send + Sync + 'static,
-                Res: axum::response::IntoResponse,
+                Res: crate::response::IntoResponse,
                 M: 'static,
                 $( $ty: crate::extract::FromRequestParts<S> + Send + 'static, )*
                 $last: crate::extract::FromRequest<S, M> + Send + 'static,

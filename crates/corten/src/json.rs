@@ -72,8 +72,8 @@
 //! let _ = Json(grid).into_response();
 //! ```
 //!
-//! As an extractor `Json` is axum's, with the same rejections (under [`crate::App::api`] they are
-//! answered as JSON errors).
+//! As an extractor `Json` refuses as axum's did, recorded from axum 0.8.9 (a 415, 400, 422 or 413
+//! [`crate::extract::BodyRejection`]; under [`crate::App::api`] they are answered as JSON errors).
 //!
 //! # Reading
 //!
@@ -134,11 +134,12 @@ use std::{
     },
 };
 
-use crate::extract::{FromRequest, Request};
-use axum::{
-    body::{Body, Bytes},
-    extract::rejection::JsonRejection,
-    http::{header, HeaderValue},
+use crate::extract::{BodyRejection, FromRequest, Request};
+use bytes::Bytes;
+use http::{header, HeaderValue, StatusCode};
+
+use crate::{
+    answer::Body,
     response::{IntoResponse, Response},
 };
 
@@ -813,25 +814,134 @@ pub mod __private {
     }
 }
 
-/// A body read by Corten's reader, or by axum (serde_json) where the reader gives up: the same
-/// value, or the same rejection, as `axum::Json`.
+/// A body with a JSON content type (`application/json`, or a `+json` one), up to 2 MiB, read by
+/// Corten's reader, or by serde_json where that reader gives up, which also says why one does not
+/// read: a 415 for another content type, a 400 for JSON that does not parse, and a 422 naming the
+/// field for JSON that does not fit `T` ([`BodyRejection`]).
 impl<T: FromJson, S: Send + Sync> FromRequest<S> for Json<T> {
-    type Rejection = JsonRejection;
+    type Rejection = BodyRejection;
 
-    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        // Any other content type, `application/json` with parameters among them, is axum's to
-        // judge: it parses the media type.
-        if req.headers().get(header::CONTENT_TYPE).is_none_or(|ct| ct.as_bytes() != crate::api::JSON.as_bytes()) {
-            let axum::Json(value) = <axum::Json<T> as axum::extract::FromRequest<S>>::from_request(req, state).await?;
-            return Ok(Json(value));
+    async fn from_request(req: Request, _: &S) -> Result<Self, BodyRejection> {
+        let kind = req.headers().get(header::CONTENT_TYPE);
+        // The content type every client sends compared whole first, so most bodies skip the parse.
+        if !kind.is_some_and(|kind| kind.as_bytes() == crate::api::JSON.as_bytes() || kind.to_str().is_ok_and(is_json)) {
+            return Err(BodyRejection::new(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "Expected request with `Content-Type: application/json`",
+            ));
         }
-        let bytes = <Bytes as axum::extract::FromRequest<S>>::from_request(req, state).await?;
+        let bytes = crate::extract::whole(req.into_body()).await?;
         if let Some(value) = std::str::from_utf8(&bytes).ok().and_then(read::fast) {
             return Ok(Json(value));
         }
-        let axum::Json(value) = axum::Json::<T>::from_bytes(&bytes)?;
-        Ok(Json(value))
+        from_bytes(&bytes).map(Json)
     }
+}
+
+/// Whether a `Content-Type` value is JSON, read as axum 0.8.9 read it with mime 0.3.17's grammar
+/// (the tests below hold the cases): an `application/` type whose subtype, or whose last `+`
+/// suffix, is `json`, in any case (`application/json`, `application/problem+json`, and, as
+/// mime reads a subtype up to its `+`, `application/json+xml`), then parameters, each
+/// `; name=value` with the value a token or quoted. A space may come before a parameter's name
+/// and after a quoted value, nowhere else; a quoted value holds any visible character but `"`,
+/// with no escapes. That is narrower than RFC 9110 (8.3.1), which allows a tab, a space before
+/// `;` and escapes, and is kept so an app's clients are answered as before. A value that does not
+/// parse is not JSON.
+fn is_json(value: &str) -> bool {
+    fn token(c: u8) -> bool {
+        c.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&c)
+    }
+    /// The parameters after the first `;`, as mime reads them.
+    fn parameters(b: &[u8]) -> bool {
+        let mut at = 0;
+        while at < b.len() {
+            if b[at] == b' ' {
+                at += 1;
+                continue;
+            }
+            let name = at;
+            while at < b.len() && token(b[at]) {
+                at += 1;
+            }
+            if at == name || b.get(at) != Some(&b'=') {
+                return false;
+            }
+            at += 1;
+            if b.get(at) == Some(&b'"') {
+                at += 1;
+                let open = at;
+                loop {
+                    match b.get(at) {
+                        Some(b'"') if at > open => break,
+                        Some(&c) if c > 31 && c != 127 => at += 1,
+                        _ => return false,
+                    }
+                }
+                at += 1;
+                while b.get(at) == Some(&b' ') {
+                    at += 1;
+                }
+                match b.get(at) {
+                    None => {}
+                    Some(b';') => at += 1,
+                    Some(_) => return false,
+                }
+            } else {
+                let start = at;
+                while at < b.len() && token(b[at]) {
+                    at += 1;
+                }
+                match b.get(at) {
+                    None => {}
+                    Some(b';') if at > start => at += 1,
+                    Some(_) => return false,
+                }
+            }
+        }
+        true
+    }
+    let b = value.as_bytes();
+    let Some(slash) = b.iter().position(|&c| !token(c)) else { return false };
+    if slash == 0 || b[slash] != b'/' {
+        return false;
+    }
+    let sub = slash + 1;
+    let (mut end, mut plus) = (sub, None);
+    while end < b.len() && token(b[end]) {
+        if b[end] == b'+' && end > sub {
+            plus = Some(end);
+        }
+        end += 1;
+    }
+    if end < b.len() && !(b[end] == b';' && end > sub && parameters(&b[end + 1..])) {
+        return false;
+    }
+    let (subtype, suffix) = match plus {
+        Some(plus) => (&value[sub..plus], Some(&value[plus + 1..end])),
+        None => (&value[sub..end], None),
+    };
+    value[..slash].eq_ignore_ascii_case("application")
+        && (subtype.eq_ignore_ascii_case("json") || suffix.is_some_and(|suffix| suffix.eq_ignore_ascii_case("json")))
+}
+
+/// `bytes` read by serde_json, or why not: a 422 naming the field (`target: invalid value ..`)
+/// for a value that does not fit `T`, a 400 for JSON that does not parse.
+fn from_bytes<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, BodyRejection> {
+    let mut json = serde_json::Deserializer::from_slice(bytes);
+    let value = serde_path_to_error::deserialize(&mut json).map_err(|error| match error.inner().classify() {
+        serde_json::error::Category::Data => {
+            let text = format!("Failed to deserialize the JSON body into the target type: {error}");
+            BodyRejection::new(StatusCode::UNPROCESSABLE_ENTITY, text)
+        }
+        _ => syntax(error),
+    })?;
+    json.end().map_err(syntax)?;
+    Ok(value)
+}
+
+#[cold]
+fn syntax(error: impl std::fmt::Display) -> BodyRejection {
+    BodyRejection::new(StatusCode::BAD_REQUEST, format!("Failed to parse the request body as JSON: {error}"))
 }
 
 impl<T> From<T> for Json<T> {
@@ -858,7 +968,7 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
 
     use super::*;
-    use axum::body::to_bytes;
+    use crate::body::to_bytes;
     use serde::Serialize;
 
     /// serde_json's bytes for `value`, for comparing.
@@ -1210,16 +1320,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn writes_what_axum_writes() {
+    async fn writes_what_serde_json_writes() {
         let value = serde_json::json!({ "id": "item_1", "price": 0.5, "tags": ["a", "<b>"], "none": null });
         let ours = Json(&value).into_response();
-        let theirs = axum::Json(&value).into_response();
-        assert_eq!(ours.status(), theirs.status());
-        assert_eq!(ours.headers()[header::CONTENT_TYPE], theirs.headers()[header::CONTENT_TYPE]);
-        assert_eq!(axum::body::HttpBody::size_hint(ours.body()).exact(), axum::body::HttpBody::size_hint(theirs.body()).exact());
-        let (ours, theirs) =
-            (to_bytes(ours.into_body(), usize::MAX).await.unwrap(), to_bytes(theirs.into_body(), usize::MAX).await.unwrap());
-        assert_eq!(ours, theirs);
+        assert_eq!(ours.status(), StatusCode::OK);
+        assert_eq!(ours.headers()[header::CONTENT_TYPE], "application/json");
+        let expected = serde_json::to_vec(&value).unwrap();
+        assert_eq!(http_body::Body::size_hint(ours.body()).exact(), Some(expected.len() as u64));
+        assert_eq!(to_bytes(ours.into_body(), usize::MAX).await.unwrap(), expected);
     }
 
     #[test]
@@ -1250,32 +1358,74 @@ mod tests {
         }
     }
 
-    async fn axum_reads<T: serde::de::DeserializeOwned + std::fmt::Debug>(
-        ct: Option<&str>,
-        body: &'static [u8],
-    ) -> (String, String) {
-        let mut req = Request::post("/");
-        if let Some(ct) = ct {
-            req = req.header(header::CONTENT_TYPE, ct);
-        }
-        match <axum::Json<T> as axum::extract::FromRequest<()>>::from_request(req.body(Body::from(body)).unwrap(), &()).await {
-            Ok(axum::Json(v)) => ("ok".into(), format!("{v:?}")),
-            Err(e) => (e.status().to_string(), e.body_text()),
+    #[test]
+    fn json_is_application_json_or_a_json_suffix_with_parameters_that_parse() {
+        // As axum 0.8.9 (mime 0.3.17) read each.
+        for (value, json) in [
+            ("application/json", true),
+            ("application/json; charset=utf-8", true),
+            ("APPLICATION/JSON", true),
+            ("application/problem+json", true),
+            ("application/vnd.api+json;charset=\"utf-8\"", true),
+            ("application/json;", true),
+            ("application/json;x=1;", true),
+            ("application/json;;", false),
+            ("application/json; ;x=1", false),
+            ("application/json;x", false),
+            ("application/jsonx", false),
+            ("application/+json", false),
+            ("text/plain", false),
+            ("text/json", false),
+            (" application/json", false),
+            ("application/json ", false),
+            ("application", false),
+            ("application/json; x=\"a;b\"", true),
+            ("application/json; charset=\"utf-8\" ", true),
+            ("application/json;  x=1", true),
+            ("application/json; ", true),
+            ("application/json;x=", true),
+            ("application/json+xml", true),
+            ("application/a+b+json", true),
+            ("application/json;x=\"\"", false),
+            ("application/json;x=;", false),
+            ("application/json ;x=1", false),
+            ("application/json;\tx=1", false),
+            ("application/json;x=1 ", false),
+            ("application/json;x=\"a\"b", false),
+            ("application/;x=1", false),
+            ("/json", false),
+        ] {
+            assert_eq!(is_json(value), json, "{value}");
         }
     }
 
+    /// What axum 0.8.9's `Json` answered for each body below under a JSON content type, as an
+    /// `Alert` and as a `serde_json::Value` (its status, or `ok`, and its text or the value): the
+    /// reader answered the same while axum was Corten's, and still does.
+    const AXUM_0_8_9: [(&str, &str, &str, &str); 12] = [
+            ("ok", "Alert { email: \"a@b.c\", target: Some(5) }", "ok", "Object {\"email\": String(\"a@b.c\"), \"target\": Number(5)}"),
+            ("ok", "Alert { email: \"a@b.c\", target: None }", "ok", "Object {\"email\": String(\"a@b.c\"), \"extra\": Array [Number(1), Object {\"x\": Number(2)}], \"target\": Null}"),
+            ("ok", "Alert { email: \"a@b.c\", target: None }", "ok", "Object {\"email\": String(\"a@b.c\")}"),
+            ("ok", "Alert { email: \"a@b.c\", target: Some(7) }", "ok", "Object {\"email\": String(\"a@b.c\"), \"target\": Number(7)}"),
+            ("422 Unprocessable Entity", "Failed to deserialize the JSON body into the target type: missing field `email` at line 1 column 12", "ok", "Object {\"target\": Number(5)}"),
+            ("422 Unprocessable Entity", "Failed to deserialize the JSON body into the target type: target: invalid value: integer `-1`, expected u32 at line 1 column 28", "ok", "Object {\"email\": String(\"a@b.c\"), \"target\": Number(-1)}"),
+            ("422 Unprocessable Entity", "Failed to deserialize the JSON body into the target type: duplicate field `email` at line 1 column 35", "ok", "Object {\"email\": String(\"x\"), \"target\": Number(5)}"),
+            ("400 Bad Request", "Failed to parse the request body as JSON: EOF while parsing an object at line 1 column 16", "400 Bad Request", "Failed to parse the request body as JSON: EOF while parsing an object at line 1 column 16"),
+            ("400 Bad Request", "Failed to parse the request body as JSON: trailing characters at line 1 column 19", "400 Bad Request", "Failed to parse the request body as JSON: trailing characters at line 1 column 19"),
+            ("ok", "Alert { email: \"a@b.c\", target: Some(5) }", "ok", "Array [String(\"a@b.c\"), Number(5)]"),
+            ("400 Bad Request", "Failed to parse the request body as JSON: email: invalid unicode code point at line 1 column 11", "400 Bad Request", "Failed to parse the request body as JSON: email: invalid unicode code point at line 1 column 11"),
+            ("400 Bad Request", "Failed to parse the request body as JSON: EOF while parsing a value at line 1 column 0", "400 Bad Request", "Failed to parse the request body as JSON: EOF while parsing a value at line 1 column 0"),
+    ];
+
     #[tokio::test]
-    async fn reads_a_body_as_axum_does() {
-        let types = [
-            None,
+    async fn reads_a_body_as_axum_did() {
+        let json = [
             Some("application/json"),
             Some("application/json; charset=utf-8"),
             Some("APPLICATION/JSON"),
             Some("application/problem+json"),
-            Some("application/json;;"),
-            Some("text/plain"),
-            Some("application/jsonx"),
         ];
+        let other = [None, Some("application/json;;"), Some("text/plain"), Some("application/jsonx")];
         let bodies: [&[u8]; 12] = [
             br#"{"email":"a@b.c","target":5}"#,
             br#"{"target":null,"email":"a@b.c","extra":[1,{"x":2}]}"#,
@@ -1290,15 +1440,21 @@ mod tests {
             b"{\"email\":\"\xff\"}",
             b"",
         ];
-        for ct in types {
-            for body in bodies {
-                let text = String::from_utf8_lossy(body);
-                assert_eq!(read::<Alert>(ct, body).await, axum_reads::<Alert>(ct, body).await, "{ct:?} {text}");
+        let unsupported =
+            ("415 Unsupported Media Type".to_string(), "Expected request with `Content-Type: application/json`".to_string());
+        for (body, (alert, alert_text, value, value_text)) in bodies.iter().zip(AXUM_0_8_9) {
+            let text = String::from_utf8_lossy(body);
+            for ct in json {
+                assert_eq!(read::<Alert>(ct, body).await, (alert.to_string(), alert_text.to_string()), "{ct:?} {text}");
                 assert_eq!(
                     read::<serde_json::Value>(ct, body).await,
-                    axum_reads::<serde_json::Value>(ct, body).await,
+                    (value.to_string(), value_text.to_string()),
                     "{ct:?} {text}"
                 );
+            }
+            for ct in other {
+                assert_eq!(read::<Alert>(ct, body).await, unsupported, "{ct:?} {text}");
+                assert_eq!(read::<serde_json::Value>(ct, body).await, unsupported, "{ct:?} {text}");
             }
         }
         assert_eq!(read::<Alert>(Some("application/json"), bodies[0]).await.0, "ok");

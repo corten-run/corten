@@ -1,7 +1,9 @@
 //! A relay behind catch-all routes: `any = ..` serves every method, and one generic handler
 //! serves several routes while each still takes its own `Params`.
-use axum::{body::Body, extract::Request, http::StatusCode};
 use corten::{
+    answer::Body,
+    extract::Request,
+    http::StatusCode,
     prelude::*,
     route::{FromUrl, Local},
     App, Relay,
@@ -60,7 +62,7 @@ mod legacy {
 }
 
 /// Whether the app serves the path in `?p=`, as a sign-in's `next` is checked.
-async fn served(req: Req, uri: axum::http::Uri) -> &'static str {
+async fn served(req: Req, uri: corten::http::Uri) -> &'static str {
     let p = uri.query().and_then(|q| q.strip_prefix("p=")).unwrap_or("");
     match Local::parse(p) {
         Some(local) if req.serves(&local) => "served",
@@ -92,7 +94,7 @@ async fn call(method: &str, path: &str) -> (StatusCode, String) {
 
 async fn call_app(app: App, method: &str, path: &str) -> (StatusCode, String) {
     let router = app.router();
-    let req = axum::http::Request::builder().method(method).uri(path).body(Body::empty()).unwrap();
+    let req = corten::http::Request::builder().method(method).uri(path).body(Body::empty()).unwrap();
     let res = router.oneshot(req).await.unwrap();
     let status = res.status();
     (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())

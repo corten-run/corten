@@ -42,11 +42,16 @@
 
 use std::marker::PhantomData;
 
-use axum::{
-    body::{Body, HttpBody},
-    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
-    response::{IntoResponse, Response},
-};
+use crate::body::Body;
+use crate::response::IntoResponse;
+use crate::response::Response;
+use http::header;
+use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
+use http::Method;
+use http::StatusCode;
+use http_body::Body as HttpBody;
 
 use crate::{
     html::json_string,
@@ -534,7 +539,7 @@ pub(crate) async fn json_failure(res: Response, dev: bool, shape: Option<&ErrorS
     let detail = match failed {
         Some(message) => Some(message.to_string()),
         None if text => {
-            let bytes = axum::body::to_bytes(body, 16 * 1024).await.unwrap_or_default();
+            let bytes = crate::body::to_bytes(body, 16 * 1024).await.unwrap_or_default();
             let text = String::from_utf8_lossy(&bytes).trim().to_string();
             if status.is_server_error() {
                 tracing::error!(status = status.as_u16(), "corten: request failed: {text}");

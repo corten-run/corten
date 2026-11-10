@@ -67,11 +67,13 @@ use std::{
     sync::Arc,
 };
 
-use axum::body::Bytes;
-use axum::{
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
-};
+use crate::response::IntoResponse;
+use crate::response::Response;
+use bytes::Bytes;
+use http::header;
+use http::HeaderMap;
+use http::HeaderValue;
+use http::StatusCode;
 
 use crate::router::{get, Table};
 
@@ -785,7 +787,7 @@ impl Assets {
         let assets = self.clone();
         Table::new().route(
             &format!("{}/{{version}}/{{*path}}", self.mount),
-            get(move |req: axum::extract::Request| {
+            get(move |req: crate::extract::Request| {
                 let assets = assets.clone();
                 async move {
                     let (parts, _) = req.into_parts();
@@ -1099,9 +1101,9 @@ pub(crate) fn content_type(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::body::Body;
     use crate::tests::Scratch;
-    use axum::body::Body;
-    use axum::http::Request;
+    use http::Request;
     use tower::ServiceExt;
 
     /// A file's tag is its hash in 16 hex digits, quoted, with each coding's tag after a `-`.
@@ -1155,13 +1157,18 @@ mod tests {
         let svg = format!("<svg>{}</svg>", "<path d=\"M0 0h1v1\"/>".repeat(200));
         let root = dir("favicon-compression", &[("favicon.svg", &svg)]);
         let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
-        let app = crate::compress::apply(axum::Router::new().fallback_service(crate::Router::from(favicon(Some(&assets)))));
+        let app = crate::Router::from(favicon(Some(&assets)));
         let request = |tag: Option<HeaderValue>| {
             let mut req = Request::get(FAVICON_PATH).header(header::ACCEPT_ENCODING, "gzip, deflate");
             if let Some(tag) = tag {
                 req = req.header(header::IF_NONE_MATCH, tag);
             }
-            app.clone().oneshot(req.body(Body::empty()).unwrap())
+            let (app, req) = (app.clone(), req.body(Body::empty()).unwrap());
+            async move {
+                let coding = crate::compress::negotiate(req.headers());
+                let res = app.oneshot(req).await?;
+                Ok::<_, std::convert::Infallible>(crate::compress::finish(res, coding).await)
+            }
         };
         let cold = request(None).await.unwrap();
         assert_eq!(cold.status(), StatusCode::OK);
@@ -1173,7 +1180,7 @@ mod tests {
         assert_eq!(again.status(), StatusCode::NOT_MODIFIED);
         assert_eq!(again.headers()[header::ETAG], tag);
         assert_eq!(again.headers()[header::VARY], "accept-encoding");
-        assert!(axum::body::to_bytes(again.into_body(), usize::MAX).await.unwrap().is_empty());
+        assert!(crate::body::to_bytes(again.into_body(), usize::MAX).await.unwrap().is_empty());
         let warm = request(None).await.unwrap();
         assert_eq!(warm.status(), StatusCode::OK);
         assert_eq!(warm.headers()[header::CONTENT_ENCODING], "gzip");
@@ -1490,10 +1497,8 @@ mod tests {
         };
         let assets = Arc::new(Assets::build(None, &[theme(&[("sm", "40rem"), ("md", "48rem")]), wide], "/assets").unwrap());
         let url = assets.stylesheet().expect("a stylesheet").to_string();
-        let res = crate::Router::from(assets.routes())
-            .oneshot(axum::http::Request::get(url).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let res =
+            crate::Router::from(assets.routes()).oneshot(http::Request::get(url).body(Body::empty()).unwrap()).await.unwrap();
         let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
         assert_eq!(
             &body[..],
@@ -1542,7 +1547,7 @@ mod tests {
                 .unwrap();
         let admin = area.url("sections/admin.css");
         let res = crate::Router::from(Arc::new(area).routes())
-            .oneshot(axum::http::Request::get(admin).body(Body::empty()).unwrap())
+            .oneshot(http::Request::get(admin).body(Body::empty()).unwrap())
             .await
             .unwrap();
         let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
@@ -1558,7 +1563,7 @@ mod tests {
         let url = assets.stylesheet().expect("a stylesheet").to_string();
         assert_eq!(url, assets.url(STYLESHEET));
         let app = crate::Router::from(assets.routes());
-        let res = app.oneshot(axum::http::Request::get(url).body(Body::empty()).unwrap()).await.unwrap();
+        let res = app.oneshot(http::Request::get(url).body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(res.headers()["content-type"], "text/css; charset=utf-8");
         let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
         assert_eq!(

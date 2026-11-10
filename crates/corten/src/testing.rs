@@ -104,7 +104,7 @@ use std::{
     pin::Pin,
 };
 
-use axum::{body::Body, extract::connect_info::ConnectInfo};
+use crate::answer::Body;
 
 use crate::Router;
 use bytes::Bytes;
@@ -370,7 +370,7 @@ impl<'c, K> Call<'c, K> {
         let mut req = Request::builder().method(method).uri(uri).body(body).expect("an address is a URI");
         *req.headers_mut() = headers;
         if let Some(ip) = peer {
-            req.extensions_mut().insert(ConnectInfo(SocketAddr::new(ip, 4000)));
+            req.extensions_mut().insert(crate::PeerAddr(SocketAddr::new(ip, 4000)));
         }
         let mut router = client.router.clone();
         let Ok(()) = std::future::poll_fn(|cx| Service::<Request<Body>>::poll_ready(&mut router, cx)).await;
@@ -385,7 +385,7 @@ impl<'c, K> Call<'c, K> {
             "the answer is a live stream, which has no end to read to: send it with app.router() and read it as it comes"
         );
         let (parts, body) = res.into_parts();
-        let bytes = axum::body::to_bytes(body, usize::MAX).await.expect("the app's answer is read to its end");
+        let bytes = crate::body::to_bytes(body, usize::MAX).await.expect("the app's answer is read to its end");
         Answer(Response::from_parts(parts, bytes))
     }
 }
@@ -521,9 +521,9 @@ mod tests {
     }
 
     /// What the request was: its method, query, the headers a test sets, and its body.
-    async fn echo(req: axum::extract::Request) -> String {
+    async fn echo(req: crate::extract::Request) -> String {
         let (parts, body) = req.into_parts();
-        let body = axum::body::to_bytes(body, 1 << 16).await.unwrap();
+        let body = crate::body::to_bytes(body, 1 << 16).await.unwrap();
         let h = |name: &str| parts.headers.get_all(name).iter().map(|v| v.to_str().unwrap()).collect::<Vec<_>>().join("|");
         format!(
             "{} {} accept={} corten={} cookie={} type={} lang={} body={}",

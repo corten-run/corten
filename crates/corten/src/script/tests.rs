@@ -410,8 +410,9 @@ fn a_view_number_javascript_cannot_hold_exactly_stops_debug_builds() {
 
 #[tokio::test]
 async fn a_page_loads_its_handler_modules_as_module_scripts_and_the_views_only_for_one_that_imports_them() {
+    use crate::body::Body;
     use crate::router::{get, Table};
-    use axum::{body::Body, http::Request};
+    use http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -465,8 +466,9 @@ async fn a_page_loads_its_handler_modules_as_module_scripts_and_the_views_only_f
 /// whose handlers are in it maps `corten/events` and fetches it with the script, not after it.
 #[tokio::test]
 async fn a_script_brings_the_events_it_imports_and_its_page_fetches_them_with_it() {
+    use crate::body::Body;
     use crate::router::{get, Table};
-    use axum::{body::Body, http::Request};
+    use http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -507,8 +509,9 @@ fn KeyPause() -> impl Render {
 /// then, and a page whose handlers are in that script fetches it with the script, not after it.
 #[tokio::test]
 async fn a_script_that_imports_corten_keys_brings_it_and_its_page_fetches_it_with_it() {
+    use crate::body::Body;
     use crate::router::{get, Table};
-    use axum::{body::Body, http::Request};
+    use http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -553,8 +556,9 @@ async fn a_script_that_imports_corten_keys_brings_it_and_its_page_fetches_it_wit
 /// format loads it with theirs, and a page whose handlers take none does not.
 #[tokio::test]
 async fn a_page_loads_the_format_module_only_when_its_handlers_take_a_format() {
+    use crate::body::Body;
     use crate::router::{get, Table};
-    use axum::{body::Body, http::Request};
+    use http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -602,8 +606,9 @@ script::script!(mod chained = "chain.js");
 /// runtime imports, and nothing for a page whose modules import nothing.
 #[tokio::test]
 async fn a_swapped_in_page_preloads_what_its_handler_modules_import() {
+    use crate::body::Body;
     use crate::router::{get, Table};
-    use axum::{body::Body, http::Request};
+    use http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -675,8 +680,9 @@ async fn a_swapped_in_page_preloads_what_its_handler_modules_import() {
 #[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_page_whose_handlers_call_an_unserved_module_fails_in_debug_builds() {
+    use crate::body::Body;
     use crate::router::{get, Table};
-    use axum::{body::Body, http::Request};
+    use http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -690,10 +696,10 @@ async fn a_page_whose_handlers_call_an_unserved_module_fails_in_debug_builds() {
     };
     let res = crate::App::new(Routes::from(page())).components(&[Badge]).router();
     let res = res.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
-    assert_eq!(res.status(), axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(res.status(), http::StatusCode::INTERNAL_SERVER_ERROR);
     let res = crate::App::new(Routes::from(page())).components(&[LineItem, Badge]).router();
     let res = res.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
-    assert_eq!(res.status(), axum::http::StatusCode::OK, "listed, it is served");
+    assert_eq!(res.status(), http::StatusCode::OK, "listed, it is served");
     let body = res.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&body).contains("line_item.js"));
 }

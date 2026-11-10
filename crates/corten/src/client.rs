@@ -14,11 +14,9 @@ use std::{
 };
 
 use crate::extract::{FromRequestParts, OptionalFromRequestParts};
-use axum::{
-    extract::connect_info::{ConnectInfo, MockConnectInfo},
-    http::{request::Parts, Extensions, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
+use http::{request::Parts, Extensions, HeaderMap, StatusCode};
+
+use crate::response::{IntoResponse, Response};
 
 use crate::{app::Bound, Error, Signal};
 
@@ -61,7 +59,7 @@ impl ClientIp {
     /// The address of who sent `req`, for a [`crate::Middleware`] (a limit by address), the
     /// same as a handler that takes `Option<ClientIp>` gets: `None` when it cannot be known.
     /// The answer is then private to that address, as a handler's would be.
-    pub fn of(req: &mut axum::extract::Request) -> Option<Self> {
+    pub fn of(req: &mut crate::extract::Request) -> Option<Self> {
         let (found, fresh) = Self::look(req.extensions(), req.headers());
         if fresh {
             req.extensions_mut().insert(Found(found));
@@ -83,13 +81,11 @@ impl ClientIp {
         if let Some(Found(found)) = extensions.get::<Found>() {
             return (*found, false);
         }
-        // A test's address first, then the connection's.
-        let peer = match extensions.get::<ConnectInfo<SocketAddr>>() {
-            Some(ConnectInfo(peer)) => Peer::Ip(peer.ip()),
-            None => match extensions.get::<MockConnectInfo<SocketAddr>>() {
-                Some(MockConnectInfo(peer)) => Peer::Ip(peer.ip()),
-                None => PEER.get(),
-            },
+        // An address the request was given first (a test's, or a server's of the app's own),
+        // then the connection's.
+        let peer = match extensions.get::<PeerAddr>() {
+            Some(PeerAddr(peer)) => Peer::Ip(peer.ip()),
+            None => PEER.get(),
         };
         let signal = extensions.get::<Signal>();
         let proxies = signal.and_then(Signal::shared).map_or(&[][..], |shared| &shared.proxies[..]);
@@ -115,6 +111,13 @@ impl ClientIp {
     }
 }
 
+/// The address of the client's end of the connection a request came on, for an app that serves
+/// [`crate::App::router`] with a connection loop of its own: put in the request's extensions
+/// (`req.extensions_mut().insert(PeerAddr(addr))`), it is what [`ClientIp`] starts from, as
+/// [`crate::serve`]'s connection is. A test gives one with [`crate::testing::Call::peer`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerAddr(pub SocketAddr);
+
 /// The request's [`ClientIp`], once looked up.
 #[derive(Clone, Copy)]
 struct Found(Option<ClientIp>);
@@ -126,7 +129,7 @@ impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
         ClientIp::find(parts).ok_or_else(|| {
             Error::new(
                 "corten::ClientIp: the request has no client address (a Unix socket with no Policy::proxy, a listener \
-                 without socket addresses, or a test without ConnectInfo); take Option<ClientIp> where none is an answer",
+                 without socket addresses, a router served without a PeerAddr, or a test without Call::peer); take Option<ClientIp> where none is an answer",
             )
             .with_status(StatusCode::INTERNAL_SERVER_ERROR)
             .into_response()
@@ -196,7 +199,7 @@ fn zone_name(value: &str) -> bool {
 }
 
 /// The zone the browser reported in the request's cookie, if it is a zone name.
-pub(crate) fn zone_of(headers: &axum::http::HeaderMap) -> Option<&str> {
+pub(crate) fn zone_of(headers: &http::HeaderMap) -> Option<&str> {
     crate::security::cookie::get(headers, ZONE_COOKIE).filter(|name| zone_name(name))
 }
 
@@ -211,7 +214,7 @@ pub(crate) struct ZoneName {
 #[cfg(feature = "zones")]
 impl ZoneName {
     /// The zone in the request's cookie, if any.
-    pub(crate) fn of(headers: &axum::http::HeaderMap) -> Option<Self> {
+    pub(crate) fn of(headers: &http::HeaderMap) -> Option<Self> {
         let name = zone_of(headers)?;
         let mut bytes = [0; 64];
         bytes[..name.len()].copy_from_slice(name.as_bytes());

@@ -104,12 +104,13 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
-pub use crate::router::MatchedPath;
-use axum::extract::Request;
+use crate::extract::Request;
 /// What a middleware answers, and how it makes one of anything else
 /// (`Refused::too_many(wait).into_response()`, `StatusCode::FORBIDDEN.into_response()`). It takes
-/// the whole request, [`crate::extract::Request`].
-pub use axum::response::{IntoResponse, Response};
+/// the whole request, [`crate::extract::Request`]. A part set on another answer in a tuple before
+/// it, `([(header::LOCATION, url)], "moved")`, is an [`IntoResponseParts`].
+pub use crate::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
+pub use crate::router::MatchedPath;
 use futures_util::future::Either;
 
 /// The rest of the request after a middleware: the next middleware, then the handler.
@@ -250,7 +251,7 @@ fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Outp
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let answer = match route {
         Some(route) => Either::Left(route.call(req)),
-        None => Either::Right(std::future::ready(axum::response::IntoResponse::into_response(axum::http::StatusCode::NOT_FOUND))),
+        None => Either::Right(std::future::ready(IntoResponse::into_response(http::StatusCode::NOT_FOUND))),
     };
     match here {
         None => Either::Left(answer),

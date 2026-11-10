@@ -2,11 +2,11 @@
 name = "corten-run"
 version.workspace = true
 edition = "2021"
-description = "A full-stack Rust web framework: pages in html!, fragment patches, typed handlers and live feeds, on axum."
+description = "A full-stack Rust web framework: pages in html!, fragment patches, typed handlers and live feeds, on hyper."
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-keywords = ["web", "framework", "html", "server-rendering", "axum"]
+keywords = ["web", "framework", "html", "server-rendering", "hyper"]
 categories = ["web-programming::http-server", "template-engine"]
 readme = "../../README.md"
 
@@ -17,53 +17,49 @@ readme = "../../README.md"
 name = "corten"
 
 [dependencies]
-# Only the features Corten uses: its own `serve_on` loop on axum's `Listener` and `ConnectInfo`
-# (`tokio`, `http1`). Not `matched-path`: Corten routes with its own router (`corten::Router`),
-# which names the matched route itself. Corten's `json` feature adds axum's, whose rejection `corten::Json` shares with `axum::Json`. Not
-# `original-uri`, which inserts a copy of every request's URI that nothing reads, nor `form` and
-# `query`, readers Corten has its own of (`Form`, `Params`), nor `tracing` and `tower-log`
-# (#761). corten-feed asks for none either, so an app with `feed` gets the same set.
-axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
-# Already in axum's tree, at the version axum 0.8.9 needs (keep it at axum's): the extractor traits
-# alone (`corten::extract`, and `FromRef` beside Corten's derive). axum's own paths also carry its
-# derives of the same names when its `macros` feature is on anywhere in the build.
-axum-core = "0.5.5"
-# Already in axum's tree (its body's `Bytes` is this crate's): a multipart body's pieces joined in
-# room it reuses, so one sent a few bytes at a time does not allocate per piece.
+# A body's bytes (`corten::Bytes`, hyper's), and a multipart body's pieces joined in room it
+# reuses, so one sent a few bytes at a time does not allocate per piece.
 bytes = "1"
 corten-macros.workspace = true
-futures-util = { version = "0.3", default-features = false }
+# `alloc` for `try_join_all` over the listeners.
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 getrandom = "0.3"
-# Already in axum's tree: the HTTP vocabulary (`StatusCode`, `HeaderMap`, `Uri`, `request::Parts`),
-# which apps name as `corten::http`, the crate hyper, axum and HTTP clients share.
+# The HTTP vocabulary (`StatusCode`, `HeaderMap`, `Uri`, `request::Parts`), which apps name as
+# `corten::http`, the crate hyper and HTTP clients share.
 http = "1"
-# Already in axum's tree: the response body type, for the request signal.
+# The body trait hyper reads and writes (`corten::answer::Body` implements it).
 http-body = "1"
-# Already in axum's tree (axum::serve): a connection that switches protocols (corten::upgrade).
+# Already in hyper's tree: the projections `Body`'s wrappers and the event stream's pacing need,
+# without `unsafe` in Corten.
+pin-project-lite = "0.2"
+# HTTP/1.1 on each connection (`corten::serve`), and a connection that switches protocols
+# (`corten::upgrade`).
 hyper = { version = "1", default-features = false, features = ["http1", "server"] }
 hyper-util = { version = "0.1", default-features = false, features = ["tokio", "service"] }
-# Already in axum's tree: the traits App's middleware implements.
+# The layer and service traits `App::layer` takes and `corten::Router` implements, so a tower
+# layer (a rate limit, a trace span) goes around the app.
 tower-layer = "0.3"
 tower-service = "0.3"
-# Already in axum's tree, at the version its router uses: the path to its route, for Corten's own
-# router (`corten::Router`).
+# The path to its route, for Corten's router (`corten::Router`).
 matchit = "0.8.4"
-# Already in axum's tree (through form_urlencoded): a path parameter's percent-decoding, after
-# the path is matched.
+# A path parameter's percent-decoding, after the path is matched.
 percent-encoding = "2"
-# Percent-decoding form bodies and query strings (Corten's own `Form` and `Params`; axum's
-# `form` and `query` features, which would also bring it, are off).
+# Percent-decoding form bodies and query strings (Corten's own `Form` and `Params`).
 form_urlencoded = "1"
-# Already in axum's tree (axum and serde_json): finding a multipart boundary fast whatever bytes
-# the client sends, 2.3 to 35 times a byte-by-byte search (`memmem` is from 2.4).
+# Finding a multipart boundary fast whatever bytes the client sends, 2.3 to 35 times a
+# byte-by-byte search (`memmem` is from 2.4). Already in serde_json's tree.
 memchr = "2.4"
-# Already in axum's tree (through serde_json): float digits for views.
+# Float digits for views. Already in serde_json's tree.
 zmij = "1"
-tokio = { version = "1", default-features = false, features = ["net", "rt", "signal", "sync", "time"] }
+# `macros` for `tokio::select!` in the accept loop and shutdown.
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "signal", "sync", "time"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
-# Already in axum's tree. Always on for `Form` and `Query`; `json` adds the derive.
+# Always on for `Form` and `Query`; `json` adds the derive.
 serde = { version = "1", default-features = false, features = ["std"] }
 serde_json = { version = "1", optional = true }
+# Where in a JSON body a value did not fit (`Json`'s 422 names the path, as it did when it was
+# axum's reader).
+serde_path_to_error = { version = "0.1", optional = true }
 corten-feed = { workspace = true, optional = true }
 brotli = { version = "9", optional = true }
 flate2 = { version = "1", optional = true }
@@ -80,7 +76,7 @@ default = ["log"]
 # a subscriber of Corten's own (src/log.rs), so the feature adds no dependency.
 log = []
 # Handler arguments of any Serialize type (JSON in the markup) and JSON screens for data clients.
-json = ["serde/derive", "dep:serde_json", "axum/json"]
+json = ["serde/derive", "dep:serde_json", "dep:serde_path_to_error"]
 # corten::types: TypeScript declarations for scripts and JSON Schema for agents, from the same
 # reading of the types that #[derive(ToJson)] and #[derive(FromJson)] write and read them by.
 # serde_json's `raw_value` (no dependency): a `Box<RawValue>` field is described as any JSON.

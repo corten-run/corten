@@ -2,8 +2,7 @@
 //! and a request that is answered.
 use std::{io::Write, time::Duration};
 
-use axum::{body::Body, http::Request};
-use corten::{extract::State, Abort, App, Router, Signal};
+use corten::{answer::Body, extract::State, http::Request, Abort, App, Router, Signal};
 use http_body_util::BodyExt;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
@@ -67,10 +66,10 @@ async fn next(rx: &mut mpsc::UnboundedReceiver<Abort>) -> Abort {
 
 #[tokio::test]
 async fn a_client_that_closes_the_connection_aborts_the_request() {
-    let (router, mut rx) = app(Duration::from_secs(60));
+    let (tx, mut rx) = mpsc::unbounded_channel();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, axum::ServiceExt::<Request<Body>>::into_make_service(router)).await });
+    tokio::spawn(corten::serve_on(vec![listener], App::new(url::router(tx)).deadline(Duration::from_secs(60))));
     let started = std::time::Instant::now();
     tokio::task::spawn_blocking(move || {
         let mut socket = std::net::TcpStream::connect(addr).unwrap();
@@ -81,6 +80,34 @@ async fn a_client_that_closes_the_connection_aborts_the_request() {
     .unwrap();
     assert_eq!(next(&mut rx).await, Abort::Disconnected);
     println!("HTTP/1.1 disconnect seen {:?} after connecting (100 ms of that before closing)", started.elapsed());
+}
+
+/// The same, with the router served another way: hyper's own connection loop around
+/// `App::router`, as an app with a server of its own serves it, giving each request its client's
+/// address.
+#[tokio::test]
+async fn a_client_that_leaves_a_router_served_another_way_aborts_the_request() {
+    let (router, mut rx) = app(Duration::from_secs(60));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (stream, peer) = listener.accept().await.unwrap();
+        let service = hyper::service::service_fn(move |req: Request<hyper::body::Incoming>| {
+            let mut req = req.map(Body::new);
+            req.extensions_mut().insert(corten::PeerAddr(peer));
+            router.clone().oneshot(req)
+        });
+        let io = hyper_util::rt::TokioIo::new(stream);
+        let _ = hyper::server::conn::http1::Builder::new().serve_connection(io, service).await;
+    });
+    tokio::task::spawn_blocking(move || {
+        let mut socket = std::net::TcpStream::connect(addr).unwrap();
+        socket.write_all(b"GET /slow HTTP/1.1\r\nhost: localhost\r\n\r\n").unwrap();
+        std::thread::sleep(Duration::from_millis(100));
+    })
+    .await
+    .unwrap();
+    assert_eq!(next(&mut rx).await, Abort::Disconnected);
 }
 
 #[tokio::test]

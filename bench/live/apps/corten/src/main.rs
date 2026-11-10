@@ -2,14 +2,14 @@
 //! follow `/live/feed/live` (server-sent events, as `subscribe()` in corten.js does); every
 //! `POST /live/publish` is one write, so one numbered patch, encoded once for every client.
 use corten::{
-    axum::{Json, http::StatusCode},
     feed::{Feed, FeedResponse, Row, Since},
+    http::StatusCode,
     prelude::*,
 };
 use serde::{Deserialize, Serialize};
 
 /// A listing's price, with what the benchmark needs to time and order its delivery.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, ToJson)]
 struct Tick {
     id: String,
     seq: u64,
@@ -23,7 +23,7 @@ impl Row for Tick {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, FromJson)]
 struct Publish {
     seq: u64,
     sent: f64,

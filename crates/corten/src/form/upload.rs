@@ -3,13 +3,14 @@
 
 use std::{borrow::Cow, marker::PhantomData, time::Duration};
 
+use crate::body::BodyDataStream;
 use crate::extract::{FromRequest, Request};
-use axum::{
-    body::{BodyDataStream, Bytes},
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
-};
+use crate::response::IntoResponse;
+use crate::response::Response;
+use bytes::Bytes;
 use bytes::BytesMut;
+use http::header;
+use http::StatusCode;
 use serde::de::DeserializeOwned;
 
 use super::FieldName;
@@ -18,9 +19,9 @@ use crate::{
     Error,
 };
 
-/// What a request keeps of the body unless the handler sets another ([`Upload::limit`]): axum's
-/// default for a body.
-const DEFAULT_LIMIT: usize = 2 * 1024 * 1024;
+/// What a request keeps of the body unless the handler sets another ([`Upload::limit`]): the limit
+/// of a body read whole ([`crate::extract::BODY_LIMIT`]).
+const DEFAULT_LIMIT: usize = crate::extract::BODY_LIMIT;
 
 /// How much of a body past its limit is read past (not kept) before the answer, so the browser,
 /// still sending, reads the answer instead of a broken connection. Past this the connection is

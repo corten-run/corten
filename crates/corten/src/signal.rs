@@ -35,12 +35,12 @@ use std::{
     task::{Context, Poll},
 };
 
+use crate::body::Body;
 use crate::extract::FromRequestParts;
-use axum::{
-    body::{Body, Bytes, HttpBody},
-    http::request::Parts,
-    response::Response,
-};
+use crate::response::Response;
+use bytes::Bytes;
+use http::request::Parts;
+use http_body::Body as HttpBody;
 use http_body::{Frame, SizeHint};
 use tokio::sync::Notify;
 
@@ -274,7 +274,7 @@ impl Signal {
     /// waits for the handler up to the [deadline](crate::App::deadline) (none with
     /// `deadline(None)`); once the handler is gone, shutdown waits for the work up to
     /// [`crate::App::shutdown_grace`] and then leaves it to end with the process. Served another
-    /// way than [`crate::serve`] (the router passed to `axum::serve`), the work still runs to its
+    /// way than [`crate::serve`] (an app's own hyper loop around [`crate::App::router`]), the work still runs to its
     /// end and sees the client leave and the deadline, but is not told of shutdown or waited for.
     ///
     /// A step that stopping midway would lose (a paid call whose answer is not recorded yet) is the
@@ -535,9 +535,9 @@ struct Followed {
 
 impl HttpBody for Followed {
     type Data = Bytes;
-    type Error = axum::Error;
+    type Error = crate::body::BoxError;
 
-    fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, axum::Error>>> {
+    fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, crate::body::BoxError>>> {
         // Inside this poll only: the fragments the stream renders as it is read.
         #[cfg(feature = "zones")]
         let entered = self.zone.take().map(crate::i18n::ZoneScope::enter);

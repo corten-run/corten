@@ -17,5 +17,9 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 [dev-dependencies]
 # Only for the `render_cost` and `route_loop` benchmarks, which time requests through the router
 # itself, beside axum alone; the tests send theirs with `app.test()`.
+http-body = "1"
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
+# Only `route_loop`'s `bare-json`: the same handler on axum's router alone, to measure what
+# Corten's costs around it. Not Corten's dependency; none of axum's features.
+axum = { version = "0.8", default-features = false }

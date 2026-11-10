@@ -1,8 +1,8 @@
 use futures_util::StreamExt;
 
 use super::*;
+use crate::body::Body;
 use crate::form::Errors;
-use axum::body::Body;
 
 #[derive(corten_macros::Fields, Debug, PartialEq)]
 struct Listing {
@@ -1221,6 +1221,27 @@ async fn a_body_read_past_its_limit_at_the_deadline_is_the_413() {
         "accept: text/html\r\n",
         Some(bytes.len()),
         (std::time::Duration::ZERO, &bytes[..3000]),
+    )
+    .await;
+    assert!(page.starts_with("HTTP/1.1 413"), "{page}");
+    assert_eq!(took, std::time::Duration::from_secs(30), "at the default deadline");
+}
+
+/// So is a body `String` (or `Bytes`, `Json`, `Form`) reads whole, over its 2 MiB: still being
+/// read past at the deadline, it is the 413, not a 408 that would have the client send it again.
+#[tokio::test(start_paused = true)]
+async fn a_whole_body_read_past_its_limit_at_the_deadline_is_the_413() {
+    async fn whole(text: String) -> String {
+        text
+    }
+    let app = crate::App::new(crate::Routes::from(crate::router::Table::new().route("/up", crate::router::post(whole))));
+    let bytes = vec![b'a'; 3 << 20];
+    let (page, took) = stalled_over_a_socket(
+        app,
+        "/up",
+        "accept: text/html\r\n",
+        Some(bytes.len()),
+        (std::time::Duration::ZERO, &bytes[..(5 << 19)]),
     )
     .await;
     assert!(page.starts_with("HTTP/1.1 413"), "{page}");

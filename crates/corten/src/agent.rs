@@ -62,11 +62,13 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use axum::{
-    body::Bytes,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponse, Response},
-};
+use crate::response::IntoResponse;
+use crate::response::Response;
+use bytes::Bytes;
+use http::header;
+use http::HeaderMap;
+use http::HeaderValue;
+use http::StatusCode;
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
 
@@ -779,8 +781,9 @@ fn json_response(body: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::body::Body;
     use crate::{router::Table, Router};
-    use axum::{body::Body, http::Request};
+    use http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -1169,7 +1172,7 @@ mod tests {
     struct Deny;
 
     impl crate::Middleware for Deny {
-        async fn call(&self, _: axum::extract::Request, _: impl crate::middleware::Next) -> Response {
+        async fn call(&self, _: crate::extract::Request, _: impl crate::middleware::Next) -> Response {
             crate::Refused::unauthorized().into_response()
         }
     }

@@ -113,6 +113,7 @@ pub mod api;
 mod app;
 mod ascii;
 pub mod assets;
+mod body;
 pub mod cache;
 pub mod caller;
 mod client;
@@ -126,6 +127,7 @@ pub mod i18n;
 #[cfg(feature = "json")]
 pub mod json;
 mod layout;
+mod listener;
 #[cfg(feature = "log")]
 mod log;
 pub mod middleware;
@@ -133,12 +135,14 @@ pub mod middleware;
 pub mod openapi;
 mod page;
 pub mod pwa;
+mod response;
 pub mod route;
 mod router;
 pub mod script;
 pub mod security;
 pub mod seo;
 mod signal;
+mod sse;
 pub mod style;
 mod task;
 pub mod testing;
@@ -153,14 +157,13 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
-use axum::{
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        IntoResponse, Response,
-    },
-};
 use futures_util::{Stream, StreamExt};
+use http::{header, HeaderMap, HeaderValue, StatusCode};
+
+use crate::{
+    response::{IntoResponse, Response},
+    sse::Event,
+};
 
 pub use ahead::Ahead;
 pub use answer::{
@@ -170,19 +173,11 @@ pub use answer::{
 pub use answer::{JsonError, JsonResponse, JsonResult};
 pub use api::Api;
 pub use app::{listeners, serve, serve_on, serve_wrapped, App, Area};
-/// The axum version Corten is built on, so an app never depends on a second one.
-pub use axum;
-/// What [`serve_on`] serves on besides the TCP sockets [`listeners`] binds: a Unix socket, a socket
-/// a supervisor hands over.
-pub use axum::serve::Listener;
-/// A part of the routes' state a handler takes (`State<Market>`), or that an extractor of the
-/// app's own reads ([`extract`]): `#[derive(FromRef)]` writes it for each field.
-pub use axum_core::extract::FromRef;
 /// The bytes of a body or an upload, shared rather than copied: what
 /// [`form::File::bytes_up_to`] gives and [`Media::new`] takes.
 pub use bytes::Bytes;
 pub use caller::{Caller, Identify, Refused};
-pub use client::{ClientIp, ClientZone};
+pub use client::{ClientIp, ClientZone, PeerAddr};
 /// Form field names as constants: `#[derive(Fields)] struct AlertInput { email: String }`
 /// gives `AlertInput::FIELDS.email`, the [`FieldName`] `"email"` (serde `rename` and `rename_all`
 /// applied). Use them for `name=` in the form and in [`Errors::add`], and a renamed or misspelled
@@ -363,14 +358,16 @@ pub use corten_macros::Fields;
 /// ```
 pub use corten_macros::FromRef;
 pub use form::{Bounds, Entry, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
+pub use handler::FromRef;
 pub use html::escape;
 /// The HTTP vocabulary an app names (`StatusCode`, `HeaderMap`, `HeaderValue`, `Uri`,
-/// `request::Parts`): the `http` crate hyper, axum, tower and HTTP clients share, the same types
-/// `corten::axum::http` names, so an app's code does not depend on the server library under it.
+/// `request::Parts`): the `http` crate hyper, tower and HTTP clients share, so an app's code
+/// names the same types its HTTP client does.
 pub use http;
 #[cfg(feature = "json")]
 pub use json::{FromJson, Json, ToJson};
 pub use layout::{later, Later, LayoutRead};
+pub use listener::Listener;
 pub use middleware::{Middleware, Next};
 #[cfg(feature = "json")]
 pub use page::JsonLd;
@@ -501,20 +498,19 @@ where
         if let Some(problem) = crate::html::patch_problem(&html) {
             panic!("corten: a live fragment's top-level {problem}, so the browser would drop it: give each top-level element a #[derive(Id)] id the page has");
         }
-        let event = Event::default().event("patch");
+        // Room for the event's fields, `data: ` and a line feed for about ten lines of the fragment
+        // (most are one), so the event is written into one buffer without growing it.
+        let room = 13 + cursor.as_ref().map_or(0, |cursor| cursor.len() + 5) + html.len() + 70 + 1;
+        let event = Event::with_capacity(room).event("patch");
         match cursor {
-            Some(cursor) => event.id(cursor),
+            Some(cursor) => event.id(&cursor),
             None => event,
         }
-        .data(html)
+        .data(&html)
     });
     // An event with no data is never dispatched, so `end` carries some.
-    let end = futures_util::stream::once(async { Event::default().event("end").data("end") });
-    LiveResponse(unbuffered(
-        Sse::new(patches.chain(end).map(Ok::<_, Infallible>).take_until(draining()))
-            .keep_alive(KeepAlive::default())
-            .into_response(),
-    ))
+    let end = futures_util::stream::once(async { Event::new().event("end").data("end") });
+    LiveResponse(unbuffered(sse::response(patches.chain(end).take_until(draining()))))
 }
 
 /// A [`live`] stream of one value that changes (the last trade, a count, a status), kept in a
@@ -615,8 +611,7 @@ fn event_cursor(cursor: String, of: &str) -> Option<String> {
 /// `X-Accel-Buffering: no` per response (and does not send it on to the browser). Only event
 /// streams carry it, so no other answer pays for it.
 pub(crate) fn unbuffered(mut res: Response) -> Response {
-    res.headers_mut()
-        .insert(axum::http::HeaderName::from_static("x-accel-buffering"), axum::http::HeaderValue::from_static("no"));
+    res.headers_mut().insert(http::HeaderName::from_static("x-accel-buffering"), HeaderValue::from_static("no"));
     res
 }
 
@@ -641,7 +636,7 @@ pub struct LiveSince(pub Option<String>);
 impl<S: Send + Sync> crate::extract::FromRequestParts<S> for corten_feed::Since {
     type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> std::result::Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> std::result::Result<Self, Self::Rejection> {
         Ok(corten_feed::Since::read(parts))
     }
 }
@@ -649,7 +644,7 @@ impl<S: Send + Sync> crate::extract::FromRequestParts<S> for corten_feed::Since 
 impl<S: Send + Sync> crate::extract::FromRequestParts<S> for LiveSince {
     type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> std::result::Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> std::result::Result<Self, Self::Rejection> {
         let header =
             parts.headers.get("last-event-id").and_then(|v| v.to_str().ok()).filter(|v| !v.is_empty()).map(str::to_string);
         let query = || {
@@ -794,8 +789,8 @@ pub fn shutdown() {
 /// Unix; Ctrl-Break, closing the console or the system shutting down on Windows) or the app asks
 /// ([`shutdown`]), after ending every open [`live`] stream and live feed stream (feature `feed`)
 /// so a graceful shutdown is not held open by them. [`serve`] uses it; an app that serves its
-/// router another way passes it to `axum::serve(...).with_graceful_shutdown(corten::shutdown_signal())`,
-/// and then runs no [`App::task`], and work handlers finish ([`Signal::finish`]) is not told of
+/// router another way (hyper's own connection loop) stops accepting when it resolves, and then
+/// runs no [`App::task`], and work handlers finish ([`Signal::finish`]) is not told of
 /// shutdown or waited for.
 pub async fn shutdown_signal() {
     use futures_util::future::select;

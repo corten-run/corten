@@ -25,7 +25,7 @@
 //! it a new stream goes out uncompressed. An event repeats cheaply when the one before it is within the
 //! window, so events up to about 64 KB.
 //!
-//! `corten::compress::apply(router)` wraps the whole app. Images, fonts, bodies under 1 KiB,
+//! [`crate::App`] compresses every response itself. Images, fonts, bodies under 1 KiB,
 //! another server's answer ([`crate::Relay`]) and responses that are already encoded or marked
 //! `no-transform` pass through.
 
@@ -38,14 +38,11 @@ use std::{
     },
 };
 
-use axum::{
-    body::{Body, Bytes, HttpBody},
-    extract::Request,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    middleware::{self, Next},
-    response::Response,
-    Router,
-};
+use bytes::Bytes;
+use http::{header, HeaderMap, HeaderValue, StatusCode};
+use http_body::Body as HttpBody;
+
+use crate::{body::Body, response::Response};
 
 /// Bodies smaller than this are sent as they are: compression would not save a packet.
 const MIN_SIZE: u64 = 1024;
@@ -207,16 +204,6 @@ pub(crate) fn encode(coding: Coding, data: &[u8], level: Level) -> Vec<u8> {
     }
 }
 
-/// Compresses every compressible response of `router` for clients that accept it. Apply it
-/// outermost, so it sees every response. [`crate::App`] compresses its responses itself; this is
-/// for a router served without one.
-pub fn apply<S: Clone + Send + Sync + 'static>(router: Router<S>) -> Router<S> {
-    router.layer(middleware::from_fn(|req: Request, next: Next| async move {
-        let coding = negotiate(req.headers());
-        finish(next.run(req).await, coding).await
-    }))
-}
-
 /// What a request accepts, read before it moves on: each coding's q-value (in thousandths, `0`:
 /// not accepted), in the server's order of preference, zstd, brotli, gzip.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -306,7 +293,7 @@ pub(crate) async fn finish(res: Response, accepts: Accepts) -> Response {
     };
     // Exact size: a buffered page or JSON body, never a stream, so collecting it does not wait
     // (one held `Bytes` comes back as it is, with no copy).
-    let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+    let Ok(bytes) = crate::body::to_bytes(body, usize::MAX).await else {
         return Response::from_parts(parts, Body::empty());
     };
     // A held value's stored form, only while the body is still its bytes: a handler or a
@@ -664,9 +651,29 @@ pub(crate) fn encoded_headers(headers: &mut HeaderMap, content_type: &str, codin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{routing::get, Router};
+    use crate::{
+        extract::Request,
+        router::{get, Table},
+    };
     use http_body_util::BodyExt;
-    use tower::ServiceExt;
+
+    /// A router whose answers are compressed as [`crate::App`] compresses them.
+    #[derive(Clone)]
+    struct Compressed(crate::Router);
+
+    impl Compressed {
+        async fn oneshot(self, req: Request) -> Result<Response, std::convert::Infallible> {
+            let coding = negotiate(req.headers());
+            let res = tower::ServiceExt::oneshot(self.0, req).await?;
+            Ok(finish(res, coding).await)
+        }
+    }
+
+    fn apply(table: Table) -> Compressed {
+        Compressed(crate::Router::from(table))
+    }
+
+    const HTML: (header::HeaderName, &str) = (header::CONTENT_TYPE, "text/html; charset=utf-8");
 
     fn accept(value: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
@@ -687,12 +694,12 @@ mod tests {
         assert_eq!(accepted(&accept("zstd, gzip"), &[Coding::Brotli, Coding::Gzip]), Some(Coding::Gzip));
     }
 
-    fn app() -> Router {
+    fn app() -> Compressed {
         let page = "<p>corten</p>".repeat(200);
         apply(
-            Router::new()
-                .route("/page", get(move || async move { axum::response::Html(page) }))
-                .route("/small", get(|| async { axum::response::Html("<p>small</p>") }))
+            Table::new()
+                .route("/page", get(move || async move { ([HTML], page) }))
+                .route("/small", get(|| async { ([HTML], "<p>small</p>") }))
                 .route("/png", get(|| async { ([(header::CONTENT_TYPE, "image/png")], vec![0u8; 4096]) }))
                 .route("/relay", get(|| async { relayed("text/html; charset=utf-8", Body::from("<p>corten</p>".repeat(200))) }))
                 .route(
@@ -716,7 +723,7 @@ mod tests {
             format!("[{}]", (0..300).map(|i| format!(r#"{{"id":{i},"name":"row {i}"}}"#)).collect::<Vec<_>>().join(","));
         let raw = crate::json::Raw::new(text.clone()).unwrap();
         let held = raw.clone();
-        let app = apply(Router::new().route("/doc", get(move || std::future::ready(crate::Json(held.clone())))));
+        let app = apply(Table::new().route("/doc", get(move || std::future::ready(crate::Json(held.clone())))));
         let read = |encoding: &'static str| {
             let app = app.clone();
             async move {
@@ -788,7 +795,7 @@ mod tests {
         let other = format!("[{}]", (300..600).map(row).collect::<Vec<_>>().join(","));
         let raw = crate::json::Raw::new(held).unwrap();
         let (doc, replaced, replacement) = (raw.clone(), raw.clone(), other.clone());
-        let app = apply(Router::new().route("/doc", get(move || std::future::ready(crate::Json(doc.clone())))).route(
+        let app = apply(Table::new().route("/doc", get(move || std::future::ready(crate::Json(doc.clone())))).route(
             "/replaced",
             get(move || {
                 let mut res = crate::JsonResponse::from(crate::Json(replaced.clone()));
@@ -872,7 +879,7 @@ mod tests {
     fn relayed(content_type: &'static str, body: Body) -> Response {
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
-        axum::response::IntoResponse::into_response(crate::Relay::new(StatusCode::OK, headers, body))
+        crate::response::IntoResponse::into_response(crate::Relay::new(StatusCode::OK, headers, body))
     }
 
     async fn get_with(uri: &str, encoding: &str) -> (HeaderMap, Vec<u8>) {
@@ -955,7 +962,7 @@ mod tests {
         assert!(only.as_deref().is_none_or(|only| matches!(only, "zstd" | "br")), "CODING is zstd or br, not {only:?}");
         for coding in ["zstd", "br"].into_iter().filter(|coding| only.as_deref().is_none_or(|only| only == *coding)) {
             let made: Vec<Bytes> = (0..events).map(|i| Bytes::from(redraw(i % 40))).collect();
-            let app = apply(Router::new().route(
+            let app = apply(Table::new().route(
                 "/live",
                 get(move || async move {
                     let chunks = futures_util::stream::iter(made.into_iter().map(Ok::<_, std::convert::Infallible>));
@@ -979,7 +986,7 @@ mod tests {
         let chunks = futures_util::stream::iter(
             [redraw(1), redraw(2), redraw(2)].map(|e| Ok::<_, std::convert::Infallible>(Bytes::from(e))),
         );
-        let app = apply(Router::new().route(
+        let app = apply(Table::new().route(
             "/live",
             get(move || async move { ([(header::CONTENT_TYPE, "text/event-stream")], Body::from_stream(chunks)) }),
         ));

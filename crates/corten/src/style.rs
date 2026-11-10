@@ -1097,7 +1097,7 @@ mod tests {
         let url = assets.stylesheet().unwrap().to_string();
         let res = tower::ServiceExt::oneshot(
             crate::Router::from(std::sync::Arc::new(assets).routes()),
-            axum::http::Request::get(url).body(axum::body::Body::empty()).unwrap(),
+            http::Request::get(url).body(crate::body::Body::empty()).unwrap(),
         )
         .await
         .unwrap();
@@ -1117,7 +1117,7 @@ mod tests {
         let url = assets.stylesheet().unwrap().to_string();
         let res = tower::ServiceExt::oneshot(
             crate::Router::from(assets.routes()),
-            axum::http::Request::get(url).body(axum::body::Body::empty()).unwrap(),
+            http::Request::get(url).body(crate::body::Body::empty()).unwrap(),
         )
         .await
         .unwrap();
@@ -1167,11 +1167,12 @@ mod tests {
     #[cfg(debug_assertions)]
     #[tokio::test]
     async fn in_a_debug_build_a_page_with_an_unlisted_styled_component_fails_and_names_it() {
+        use crate::body::Body;
         use crate::{
             router::{get, Table},
             Router,
         };
-        use axum::{body::Body, http::Request};
+        use http::Request;
         use http_body_util::BodyExt;
         use tower::ServiceExt;
 
@@ -1212,11 +1213,12 @@ mod tests {
 
     #[tokio::test]
     async fn an_area_links_its_stylesheet_from_its_pages_only() {
+        use crate::body::Body;
         use crate::{
             router::{get, Table},
             Router,
         };
-        use axum::{body::Body, http::Request};
+        use http::Request;
         use http_body_util::BodyExt;
         use tower::ServiceExt;
 
@@ -1280,7 +1282,7 @@ mod tests {
         let (status, body) = get_page(app(false), "/administrator", false).await;
         assert_eq!(
             (status, links(&body)),
-            (axum::http::StatusCode::OK, vec!["components.css".to_string()]),
+            (http::StatusCode::OK, vec!["components.css".to_string()]),
             "a prefix is whole segments"
         );
         let (status, body) = get_page(app(false), "/", true).await;
@@ -1310,8 +1312,9 @@ mod tests {
     /// same components: their rules are in a file the two share, linked from their pages only.
     #[tokio::test]
     async fn areas_that_list_the_same_component_share_its_stylesheet() {
+        use crate::body::Body;
         use crate::router::get;
-        use axum::{body::Body, http::Request};
+        use http::Request;
         use http_body_util::BodyExt;
         use tower::ServiceExt;
 

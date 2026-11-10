@@ -8,8 +8,8 @@
 
 A status, a method, a header or a URL outside the app is named from `corten::http`
 (`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the `header` constants,
-`Uri`, `request::Parts`): the `http` crate's types, which hyper, axum and HTTP clients share, so
-an app's code names them without naming the server library under Corten. The rest of what an
+`Uri`, `request::Parts`): the `http` crate's types, which hyper and HTTP clients share, so an
+app's code names them without naming the server library under Corten. The rest of what an
 app names about a request is Corten's too: an extractor of its own implements
 `corten::extract::FromRequestParts` (with `FromRef` for a part of the state, beside the derive of
 the same name), a middleware takes `corten::extract::Request` and answers a
@@ -18,10 +18,18 @@ body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listene
 `corten::Listener`, and a test sends its requests with `app.test()`. The extractor and handler
 traits and `State` are Corten's own, with the names, the `Rejection` and the
 `from_request_parts(parts, state)` signature they had as axum's, so an extractor written against
-axum's compiles against them with its `use` changed; `Request`, `Response` and `Body` are the
-`http` crate's and axum's types, named from Corten so the app imports one crate
-([design Choice 21](../design.md#choice-own-extractors)). axum's own extractors (`Path`,
-`Query`, `Json`, `Extension`, `ConnectInfo`, `Parts`) are not handler arguments: a route's path
+axum's compiles against them with its `use` changed; `Request` and `Response` are the `http`
+crate's with Corten's `Body`, and `IntoResponse` is Corten's, so the app imports one crate and
+Corten depends on no web framework ([design Choice 21](../design.md#choice-own-extractors)).
+A body read whole (`Bytes`, `String`, `Json`, `Form`) is refused over 2 MiB with a 413 (the rest
+read past until 4 MiB has arrived, so a browser still sending reads it, and refused unread when
+its length says it is longer than that), or with a 400 when it cannot be read; the refusal is a `corten::extract::BodyRejection`, plain text
+as axum's were, so a handler that takes `Result<Json<T>, BodyRejection>` answers it itself.
+axum's own extractors (`Path`,
+`Query`, `Json`, `Extension`, `ConnectInfo`, `Parts`) are not handler arguments, since they
+implement axum's traits and Rust's orphan rule keeps an app from implementing Corten's for
+them (a type that implements neither does not compile, `corten::extract`'s `compile_fail`
+example): a route's path
 and query are its `Params`, a body its `Json` or `Form`, and the whole head its `Req`. A handler
 that answers a refusal itself takes `Result<T, T::Rejection>`, as `Option<T>` goes without a
 value; an extractor of the app's own that needs two others reads each in turn, since a tuple of
@@ -41,8 +49,8 @@ breaks is a 400; each is a
 `corten::extract::BodyError` to match or pass on with `?`. The handler removes what it wrote of a
 body it does not finish, and puts the route in an API with a `deadline` that leaves time to read
 it, which shutdown also waits for. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
-path and query are read as its `Params`, never another way. `corten::axum` stays for a stand-in
-server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-app)).
+path and query are read as its `Params`, never another way. A test's stand-in for another
+service is a server of the test's own, not Corten ([Testing an app](app.md#testing-an-app)).
 
 ### Request modes
 

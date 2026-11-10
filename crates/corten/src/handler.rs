@@ -10,10 +10,12 @@
 
 use std::{convert::Infallible, future::Future};
 
-use axum_core::response::{IntoResponse, Response};
-use http::{request::Parts, HeaderMap, Method, Uri, Version};
+use http::{request::Parts, HeaderMap, Method, StatusCode, Uri, Version};
 
-use crate::FromRef;
+use crate::{
+    extract::BodyRejection,
+    response::{IntoResponse, Response},
+};
 
 /// A request as a handler or a middleware takes it whole.
 pub type Request<T = crate::answer::Body> = http::Request<T>;
@@ -152,26 +154,28 @@ impl<S: Send + Sync> FromRequest<S> for Request {
     }
 }
 
-/// The whole body as [`crate::Bytes`], refused with a `413` over 2 MiB. axum's reader still
-/// reads it until axum leaves Corten's dependencies (`docs/design.md#choice-axum-router`, step 4),
-/// so the limit, the refusal and its text are what they were.
+/// The whole body as [`crate::Bytes`], refused with a `413` over 2 MiB ([`BodyRejection`]).
 impl<S: Send + Sync> FromRequest<S> for bytes::Bytes {
-    type Rejection = axum::extract::rejection::BytesRejection;
+    type Rejection = BodyRejection;
 
-    #[inline]
-    fn from_request(req: Request, state: &S) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
-        <bytes::Bytes as axum::extract::FromRequest<S>>::from_request(req, state)
+    async fn from_request(req: Request, _: &S) -> Result<Self, BodyRejection> {
+        crate::extract::whole(req.into_body()).await
     }
 }
 
-/// The whole body as text, refused with a `400` when it is not UTF-8 and a `413` over 2 MiB, by
-/// axum's reader until step 4, as [`bytes::Bytes`] is.
+/// The whole body as text, refused with a `400` when it is not UTF-8 and a `413` over 2 MiB
+/// ([`BodyRejection`]).
 impl<S: Send + Sync> FromRequest<S> for String {
-    type Rejection = axum::extract::rejection::StringRejection;
+    type Rejection = BodyRejection;
 
-    #[inline]
-    fn from_request(req: Request, state: &S) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
-        <String as axum::extract::FromRequest<S>>::from_request(req, state)
+    async fn from_request(req: Request, _: &S) -> Result<Self, BodyRejection> {
+        let bytes = crate::extract::whole(req.into_body()).await?;
+        String::from_utf8(bytes.into()).map_err(|error| {
+            BodyRejection::new(
+                StatusCode::BAD_REQUEST,
+                format!("Request body didn't contain valid UTF-8: {}", error.utf8_error()),
+            )
+        })
     }
 }
 
@@ -182,6 +186,21 @@ impl<S: Send + Sync> FromRequest<S> for crate::answer::Body {
 
     async fn from_request(req: Request, _: &S) -> Result<Self, Infallible> {
         Ok(req.into_body())
+    }
+}
+
+/// A part of the routes' state `T` a handler takes (`State<Market>`), or that an extractor of the
+/// app's own reads ([`crate::extract`]): `#[derive(FromRef)]` writes it for each field, and every
+/// `Clone` state is a part of itself.
+pub trait FromRef<T> {
+    /// The part, out of the whole state.
+    fn from_ref(input: &T) -> Self;
+}
+
+impl<T: Clone> FromRef<T> for T {
+    #[inline]
+    fn from_ref(input: &T) -> Self {
+        input.clone()
     }
 }
 
