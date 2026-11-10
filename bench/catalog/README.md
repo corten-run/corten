@@ -72,7 +72,7 @@ node bench/catalog/report.mjs bench/catalog/results/c1/summary.json
 node bench/catalog/report.mjs bench/catalog/results/c1/summary.json --commit FULL_MEASURED_SHA --require-complete
 ```
 
-The second command exits unsuccessfully unless all eighteen apps, all requested 64-user passes,
+The second command exits unsuccessfully unless all twenty apps, all requested 64-user passes,
 the per-app correctness evidence, canonical fixture identity, measurement configuration,
 clean-tree provenance and cleanup succeeded. Supply the full measured
 commit, not a branch name. Reports include phase duration, warmup, fixed rate and CPU placement,
@@ -98,7 +98,7 @@ node --test bench/catalog/check.test.mjs
 node bench/catalog/run.mjs c1 --build --check-only
 ```
 
-The default inventory is all eighteen page apps in `fullstack/apps.mjs`, not its JSON-only
+The default inventory is all twenty page apps in `fullstack/apps.mjs`, not its JSON-only
 ASP.NET AOT app. `--apps corten,axum-maud` selects a subset for development. Each app is built
 in its existing production image, except Corten's standalone `corten/` app, which uses the
 local framework without the marketplace's localized model. Catalog image tags are
@@ -110,7 +110,7 @@ contract, and computed styles and element geometry with an independent static re
 Desktop and phone, light and dark, with and without JavaScript each submit the GET form and
 follow a related link. API probes change upstream records between requests, require exactly
 one read, reject a forwarded pre-serialized JSON body, and exercise upstream failures.
-`styles.mjs --check` checks all eighteen stylesheet copies byte-for-byte. After changing
+`styles.mjs --check` checks all twenty stylesheet copies byte-for-byte. After changing
 `catalog.css`, run `node bench/catalog/styles.mjs --write` and rebuild the images.
 
 On a quiet, dedicated Linux benchmark host, use a new round name and omit `--check-only`:

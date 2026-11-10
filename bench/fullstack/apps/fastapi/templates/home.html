@@ -1,0 +1,5 @@
+{% extends "base.html" %}
+{% block title %}Popular items | Card Market{% endblock %}
+{% block main %}<h1>Popular items</h1>
+{% if items %}<ul class="item-list__list">{% for item in items %}<li><a class="item-card__card" href="/items/{{ item.id }}"><strong>{{ item.title }}</strong>{% if item.subtitle %}<span class="item-card__set">{{ item.subtitle }}</span>{% endif %}{% if item.summary %}<span class="item-card__from">From {{ item.summary.lowest if item.summary.lowest is not none else "—" }}</span>{% else %}<span class="item-card__from">No listings yet</span>{% endif %}</a></li>{% endfor %}</ul>
+{% else %}<ul class="item-list__list item-list__ids">{% for n in numbers %}<li><a href="/items/item_{{ n }}">Item {{ n }}</a></li>{% endfor %}</ul>{% endif %}{% endblock %}

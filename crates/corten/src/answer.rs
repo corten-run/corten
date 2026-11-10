@@ -52,14 +52,14 @@ use std::{
     future::Future,
     marker::PhantomData,
     ops::{Deref, DerefMut},
-    pin::Pin,
-    task::{Context, Poll},
     time::Duration,
 };
 
-use axum::{
+use crate::{
     extract::{Request, State},
     handler::Handler,
+};
+use axum::{
     http::{Method, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
@@ -399,7 +399,8 @@ pub type JsonResult<T> = std::result::Result<crate::Json<T>, JsonError>;
 /// the client as written. A failure (`Err`) is answered as every failure of a JSON route is, a
 /// Problem Details document (`application/problem+json`, `{"title","status","detail"}`), except
 /// a refusal in the app's own shape, `Err(answer)?` ([`JsonError::Own`]), which is answered as
-/// written. A refusal (a 4xx or 5xx of the app's) is that `Err`; `Ok` is for the route's answers
+/// written, and a failure on a route that says `unstaged` outside an API's prefix, which has no
+/// stage to shape it and sends the status's reason as plain text. A refusal (a 4xx or 5xx of the app's) is that `Err`; `Ok` is for the route's answers
 /// and another server's passed on.
 ///
 /// ```
@@ -814,9 +815,14 @@ impl Answer for Relay {
 /// (`"image/png"`), never the one a client sent with the bytes: read an upload's type from its
 /// first bytes. What keeps a file that holds HTML from running as a page is the app's headers,
 /// which every `Media` gets: browsers do not guess another type
-/// (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script.
+/// (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script. A route that says
+/// `unstaged` has no stages, and its answer gets `nosniff` and `Content-Security-Policy:
+/// sandbox` instead, whatever its type. A PDF sent [`Media::inline`] from an unstaged route still
+/// shows in Chrome's, Edge's and Firefox's viewers (Safari's was not checked); a PDF that must
+/// open in every browser is sent from a route with stages or as an attachment.
 ///
-/// It is cached as anything the app answers is (`private, no-cache`). At a URL that names its
+/// It is cached as anything the app answers is (`private, no-cache`), except on an unstaged route,
+/// which sends no `Cache-Control` unless the handler says one. At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
 /// keep it for a year, as Corten's own versioned files are; its handler cannot read who is asking,
 /// as any `Public` handler cannot.
@@ -1676,7 +1682,6 @@ impl Unshared for AnyInputs {}
 )]
 pub trait Anonymous {}
 
-impl<T> Anonymous for axum::extract::Path<T> {}
 impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {}
 impl<T> Anonymous for crate::Form<T> {}
 impl<T> Anonymous for crate::form::Upload<T> {}
@@ -1696,6 +1701,31 @@ impl Anonymous for corten_feed::Since {}
 #[doc(hidden)]
 pub trait AllAnonymous {}
 
+/// An input a route that says `unstaged` may take: its URL. No stage runs there, so nothing gives
+/// the request its signal, its nonce or who is asking, and an extractor that reads one of those
+/// (`Req`, `Signal`, `Nonce`, `Caller`, `ClientIp`) does not compile. Nor does one that reads the
+/// headers (`HeaderMap`, the whole `Request`), which carry the visitor's cookies and credentials,
+/// since no stage keeps a shared cache from storing what an unstaged handler made of them; nor one
+/// that reads the body (`Bytes`, `String`, `Form`, `Json`, `Upload`): no deadline ends a client
+/// that sends it a byte at a time, and no same-origin check keeps another site from posting it.
+/// Implement it for an extractor of the app's own that reads none of these.
+#[diagnostic::on_unimplemented(
+    message = "a route that says `unstaged` runs no stage, so its handler cannot take `{Self}`",
+    label = "`{Self}` reads what a stage gives the request, its headers, or its body",
+    note = "take the request's method and URL (Params, Method, Uri) or the module's State, or leave unstaged out so the route gets every stage; an extractor of the app's own that reads none of those implements `corten::answer::Unstaged`"
+)]
+pub trait Unstaged {}
+
+impl<R: crate::route::FromUrl + ?Sized> Unstaged for crate::route::Params<R> {}
+impl<T> Unstaged for State<T> {}
+impl Unstaged for Method {}
+impl Unstaged for Uri {}
+
+/// Every argument is [`Unstaged`].
+#[doc(hidden)]
+pub trait AllUnstaged {}
+impl AllUnstaged for () {}
+
 /// Whether an answer's [`Answer::Inputs`] allows the handler's arguments.
 #[doc(hidden)]
 pub trait Accepts<Args> {
@@ -1707,7 +1737,7 @@ impl<A: AllAnonymous> Accepts<A> for AnonymousInputs {
     const SHARED: bool = true;
 }
 
-/// A handler's arguments and result, by the shapes axum's `Handler` uses.
+/// A handler's arguments and result, by the shapes Corten's `Handler` uses.
 #[doc(hidden)]
 pub trait Signature<T> {
     type Args;
@@ -1749,6 +1779,7 @@ macro_rules! arities {
         }
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {}
+        impl<$($ty: Unstaged,)*> AllUnstaged for ($($ty,)*) {}
 
         holds!([] [$($ty)*] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]);
     };
@@ -1811,40 +1842,25 @@ impl<H: Clone, O> Clone for Endpoint<H, O> {
     }
 }
 
-/// The handler's future, marking a JSON route's failures.
-#[doc(hidden)]
-pub struct Marked<F, O> {
-    inner: F,
-    answer: PhantomData<fn() -> O>,
-}
-
-impl<F: Future<Output = Response> + Unpin, O: Answer> Future for Marked<F, O> {
-    type Output = Response;
-
-    #[inline]
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Response> {
-        Pin::new(&mut self.inner).poll(cx).map(|mut res| {
-            // A constant: an HTML route's check compiles away.
-            if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
-                res.extensions_mut().insert(Answered);
-            }
-            res
-        })
+/// A JSON route's failure marked as one, which the stages leave as it is.
+#[inline]
+fn marked<O: Answer>(mut res: Response) -> Response {
+    // A constant: an HTML route's check compiles away.
+    if matches!(O::FORMAT, Format::Json) && (res.status().is_client_error() || res.status().is_server_error()) {
+        res.extensions_mut().insert(Answered);
     }
+    res
 }
 
 impl<H, T, S, O> Handler<T, S> for Endpoint<H, O>
 where
     H: Handler<T, S>,
-    H::Future: Unpin,
     O: Answer + 'static,
     S: Send + 'static,
     T: 'static,
 {
-    type Future = Marked<H::Future, O>;
-
     #[inline]
-    fn call(self, mut req: Request, state: S) -> Self::Future {
+    fn call(self, mut req: Request, state: S) -> impl Future<Output = Response> + Send + 'static {
         // A whole document's layout reads (`crate::LayoutRead`) start as its page route is called,
         // after the middleware, beside the handler's own reads.
         if let Some(here) = req.extensions().get::<crate::layout::StartHere>().cloned() {
@@ -1858,7 +1874,7 @@ where
                 signal.mark_for_everyone();
             }
         }
-        Marked { inner: self.handler.call(req, state), answer: PhantomData }
+        futures_util::FutureExt::map(self.handler.call(req, state), marked::<O>)
     }
 }
 
