@@ -1518,12 +1518,11 @@ rules something out.
     written.
 
     Stands on: measured (`tsc` 5.9.3 with each option alone over `jsconfig.json`'s files on
-    `c65c10ec`, the counts above, and on `900d7dc3` for `allowUnreachableCode`,
-    `noUncheckedSideEffectImports` and the three lint options, and the minified sizes before
+    `34138ae5`, the counts above, and the minified sizes before
     and after on `34138ae5`, one build each, the build being deterministic); measured (Chromium through Playwright 1.64.1 on a busy Windows workstation, `bench/browser/rows-ab.mjs` (run
     before it was committed), `rows()` with 1,000 rows, paired medians of 41 samples taking
     turns with `c65c10ec`'s `view.js`: with its loops rewritten not to index
-    (`bench/browser/view-unindexed.js` in `f6885eca`), keeping some rows and making the rest
+    (`bench/browser/view-unindexed.js` in `f6885eca`, tag `evidence/script-checks-1038`), keeping some rows and making the rest
     was 4.3% to 13.7% slower in seven of seven runs, where `c65c10ec` against itself was -3.0%
     to 4.7%; the noise is too large to time the cast loops, which minify to the code they were,
     `at()` aside); platform (Web IDL converts a dictionary member that is `undefined` as one
@@ -1538,7 +1537,7 @@ rules something out.
     timing on a quiet host shows the hot loops rewritten not to index cost nothing (their casts
     could then go).
 
-    Last checked: 2026-11-10, TypeScript 5.9.3 on `c65c10ec`, `900d7dc3` and the change, the
+    Last checked: 2026-11-10, TypeScript 5.9.3 on `34138ae5` and the change, the
     sizes against `34138ae5` (esbuild 0.28.2), and the timings in Chromium
     (Playwright 1.64.1) on 2026-11-08.
 

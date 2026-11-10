@@ -270,8 +270,9 @@ export function select(link, body) {
 }
 ```
 
-`rows()` has `at`, `get(key)`, `of`, `indexOf`, `push`, `remove`, `swap`, `clear` and keyed
-`replace` (pass the `<template>` holding one `<Row .. />` to make new rows). List the view in
+`rows()` has `at(i)` (none past either end; a negative `i` counts back from the last, as an
+array's `at()`, so check what it gives), `get(key)`, `of`, `indexOf`, `push`, `remove`, `swap`,
+`clear` and keyed `replace` (pass the `<template>` holding one `<Row .. />` to make new rows). List the view in
 `App::components`. Details: `docs/guide/scripts.md`, "Views".
 
 ## Widgets
