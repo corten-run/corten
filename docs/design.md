@@ -973,7 +973,7 @@ rules something out.
     `bcd31ffe`; 2026-11-09, the `unstaged` `compile_fail` doctests in
     `crates/corten/src/route.rs` (a stage's input, a header reader, a body reader, a
     `caller = T` module, a path that reaches Corten's own, a method other than `get`,
-    `prefetch`, `/health/live`, `/{*rest}`), at `COMMIT_CODE`.
+    `prefetch`, `/health/live`, `/{*rest}`), at `f703d3f8`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
