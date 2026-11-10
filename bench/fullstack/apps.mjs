@@ -4,7 +4,7 @@ import { maxConnections } from "./conformance.mjs";
 // app with `pages: false` serves only the item as JSON, so it takes part in the JSON steps alone.
 // `matched: true`: one of the matched tier's apps (README, "The matched tier"), set once the app
 // starts with the production profile under PROFILE=matched. The tier's membership (README, "The
-// matched tier") also names nextjs, django, aspnet (with aspnet-aot for the JSON) and spring;
+// matched tier") also names nextjs, aspnet (with aspnet-aot for the JSON), fastapi and express;
 // each joins with its profile.
 const catalog = {
   corten: { image: "cb-corten", port: 18410, label: "Corten 0.1 (Rust, axum, html! views)", matched: true },
@@ -25,6 +25,8 @@ const catalog = {
   "axum-maud": { image: "cb-axum-maud", port: 18427, label: "axum 0.8 + Maud 0.27 (Rust, htmx)", matched: true },
   gin: { image: "cb-gin", port: 18425, label: "Gin 1.12 (Go, templ, htmx)" },
   drogon: { image: "cb-drogon", port: 18426, label: "Drogon 1.9 (C++, CSP views, htmx)" },
+  fastapi: { image: "cb-fastapi", port: 18429, label: "FastAPI 0.162 (Python, uvicorn, Jinja2, htmx)" },
+  express: { image: "cb-express", port: 18430, label: "Express 5.3 (Node, EJS, htmx)" },
   "aspnet-aot": { image: "cb-aspnet-aot", port: 18428, label: "ASP.NET Core 10 minimal API, native AOT (C#, JSON only)", pages: false },
 };
 

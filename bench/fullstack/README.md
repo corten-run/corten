@@ -1,4 +1,4 @@
-# Full-stack comparison: one marketplace item page in eighteen apps
+# Full-stack comparison: one marketplace item page in twenty apps
 
 This is the historical marketplace workload with **non-equivalent localization work**:
 Corten formats values per request while the other implementations use stored strings
@@ -8,7 +8,7 @@ not valid general framework speed rankings. The separate
 strings-only page work without currency or number localization. Its results start a new
 baseline; they do not replace or form a before/after comparison with the tables here.
 [Marketplace v2](../marketplace/README.md) implements equivalent request-time locale formatting
-in eighteen adapters, with a whole-page conformance gate and its own repeated-pass runner.
+in twenty adapters, with a whole-page conformance gate and its own repeated-pass runner.
 It starts a separate baseline and becomes the nightly workload at official r17. See the
 [nightly procedure](../marketplace/nightly.md). Compare only compatible v2 rounds, never an
 r16 or catalog c1 delta. Catalog remains an optional separate diagnostic, not a nightly duplicate.
@@ -36,6 +36,8 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 | gin | Gin 1.12.0, Go 1.27, templ 0.3, htmx | [apps/gin](apps/gin) | not yet |
 | drogon | Drogon 1.9.14 (C++), CSP views, JsonCpp, htmx | [apps/drogon](apps/drogon) | not yet |
 | django | Django 6.1.2, Python 3.14, gunicorn 26 (3 sync workers), htmx | [apps/django](apps/django) | not yet |
+| fastapi | FastAPI 0.162.2, Python 3.14, Jinja2, `fastapi run` (uvicorn, one process), htmx | [apps/fastapi](apps/fastapi) | not yet |
+| express | Express 5.3.0, Node 24, EJS 7, htmx | [apps/express](apps/express) | not yet |
 | rails | Rails 8.1.4, Ruby 3.4 with YJIT, Puma (3 threads), Turbo and Stimulus | [apps/rails](apps/rails) | not yet |
 | laravel | Laravel 13.38, PHP 8.4, Octane on FrankenPHP (2 workers), Livewire 4.4 | [apps/laravel](apps/laravel) | not yet |
 | phoenix | Phoenix 1.8.16, LiveView 1.2, Elixir 1.19 on OTP 28, Bandit | [apps/phoenix](apps/phoenix) | not yet |
@@ -65,12 +67,12 @@ answers `GET /api/items/{id}` with the same JSON. A round runs parity and `look.
 server tests, with every app fetching items from the item API, so the home page they compare is
 the list of item links; `check-app.mjs`, which every app passes before it joins a round, runs
 both with items in memory, where the home page is Corten's cards, and compares the JSON. The
-tables below are from r16, with all eighteen page apps plus JSON-only aspnet-aot, each page app rendering Corten's markup
+tables below are from r16, with all eighteen page apps then plus JSON-only aspnet-aot (FastAPI and Express joined after it and have no rows yet), each page app rendering Corten's markup
 and stylesheets (caveat 12). Each app
 has the same interactions: a sort (in the browser, except where the framework renders again on
 the server: Phoenix's LiveView and Topcoat's shard, each a round trip), a form action that
 updates part of the page, and client-side navigation from the home page, each done the
-framework's usual way (htmx for Razor Pages, Spring, Django, Gin, Drogon and axum + Maud; Turbo
+framework's usual way (htmx for Razor Pages, Spring, Django, FastAPI, Express, Gin, Drogon and axum + Maud; Turbo
 for Rails; Livewire for Laravel; LiveView for Phoenix; shards, signals and a procedure for
 Topcoat).
 The item page's first response carries its first five offers in every app, and "Show all N
@@ -639,7 +641,8 @@ the commit it ran at: the first four phases at `d456063e` with local changes, th
 before the commit that adds it, and the clients that stop reading and the oversized requests run
 again at `330ff623` with none, each keeping its first pass in `earlier`; the first pass's `taken`
 is the file's header from then, marked `fromHeader`, whose time is when it was last written): Corten,
-axum-maud and the six other apps the matched tier names, ASP.NET Core as both its Razor Pages app
+axum-maud and the six other apps the matched tier then named (Next.js, Leptos, Django, Spring,
+Topcoat and ASP.NET Core), ASP.NET Core as both its Razor Pages app
 and aspnet-aot. Corten is card-market, with its own 10 s request deadline and its write limit
 raised for the probe (Method, The hardening step). The images
 were `cb-corten` and `cb-axum-maud` built at `720c8a88`, `cb-aspnet-aot` at this step's first
@@ -707,10 +710,13 @@ before its writes blocked. Where it falls short:
 
 1. A body sent a byte a second is closed by the request deadline (card-market's 10 s, with a 503;
    30 s by default), not by a rate: Kestrel closed it within 5.4 to 6.8 s, by its minimum request
-   rate as far as can be told (above). A route whose deadline is removed (`deadline(None)`, for a
-   long upload) has nothing that closes it until `Upload::idle`'s minute of silence, which a byte
-   a second never reaches (from the guide, not measured here):
-   [#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074).
+   rate as far as can be told (above). On a route whose deadline is removed (`deadline(None)`, for
+   a long upload), a body read as it arrives (`pieces_up_to`, `Upload`) is given up on with a 408
+   once it falls `Upload::idle`'s minute behind 240 bytes a second, Kestrel's minimum rate, which
+   a byte a second does after about 60 s (from the guide, not measured here; before
+   [#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074),
+   at `73e1c453`, nothing closed it). That is still about ten times Kestrel's time, by design: the
+   idle time is the allowance, so an upload that pauses is not cut off.
 2. A client that stops reading is closed by `App::send_timeout`'s 60 s (63 s from its connect,
    with the time the server took to fill the socket's buffers), nginx's send timeout, which Corten
    chose over Kestrel's minimum response rate ([Limit 14](../../docs/design.md#limit-http1)):
@@ -947,8 +953,9 @@ User instructions only (callgrind does not see the kernel's), on glibc's allocat
 crate bundles, where the rounds' image preloads jemalloc and links Debian's libzstd
 ([design Choice 23](../../docs/design.md#choice-jemalloc-image) puts this page at about 83,000
 under jemalloc against 87,000), so these are the rounds' request shape, not their configuration.
-Requests per CPU-second under load were not measured, which needs a droplet round ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)) ([cost-by-default.sh](cost-by-default.sh), split by [cost-by-default.mjs](cost-by-default.mjs);
-results and each build's answer headers in [results/defaults1](results/defaults1/)). The headers
+These counts are [cost-by-default.sh](cost-by-default.sh)'s, split by [cost-by-default.mjs](cost-by-default.mjs)
+(results and each build's answer headers in [results/defaults1](results/defaults1/)); requests per
+CPU-second under load are [below](#what-each-production-default-costs-under-load-c-8-droplet-2026-11-08). The headers
 show what four patches remove: the security headers patch seven headers on the page and five on
 the JSON, the `Cache-Control` patch that header, the `ETag` patch the page's tag for a browser
 (nothing else is tagged), and the compression patch `Vary: accept-encoding`, with
@@ -1005,6 +1012,88 @@ own framework's middleware, is not measured here. This runs outside rounds, Cort
 a default changes
 ([#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)).
 
+### What each production default costs under load (c-8 droplet, 2026-11-08)
+
+The same nine builds, as a round's image makes them (card-market's Dockerfile: release, jemalloc
+preloaded, Debian's libzstd), each served the item page and its JSON from memory on the app's one
+pinned CPU of a fresh c-8 droplet, with `ab.mjs` running them one after another, three rounds, each
+phase after a warmup: a fixed 300 requests a second and 64 users, with `Accept-Encoding: identity`
+and with a browser's. CPU is the app's cgroup's; no request failed. A default's cost is the CPU a
+request takes in the build as it is less in the build without it, round by round, median (range) of
+the three ([cost-under-load.sh](cost-under-load.sh), split by
+[cost-under-load.mjs](cost-under-load.mjs); [results/cost-under-load](results/cost-under-load/)).
+Round to round a build moves by about 3 microseconds (median) and up to 9 in either phase, so a row
+whose range crosses zero says no cost that can be seen. Each round ran the build as it is first and
+the others after it in one order, so a drift within a round reads as a cost (or, if later slots run
+faster, a saving) on every row: for a browser's page at 64 users the build as it is was the slowest
+of the nine in two rounds of three, and every default there shows a cost. `ab.mjs` now starts each
+round one image later, which would remove a cost on the first slot alone (when no image runs first
+in half the rounds or more) but not a drift across the round, which needs the build as it is beside
+each variant; this data shows neither clearly. k6 had four load CPUs (`BENCH_LOAD_CPUS=4-7`), not
+the six a round gives an app serving from memory (`BENCH_FIXTURE_LOAD_CPUS`, which `ab.mjs` uses
+now). What the run kept of its setting is the droplet's script and CPU (`run.sh` and `host.txt` in
+the results: a Xeon Platinum 8168, `BENCH_APP_CPUS=1`, `AB_ROUNDS=3`); its source was sent as a copy
+of a working tree, so the images and results carry no record of the commit (the tree's head was
+`e6d5b61c` by the operator's note, which nothing here can check). Beside them are every phase's k6
+and stats files (`raw.tar.xz`). `cost-under-load.sh` now labels the images and writes `source.txt`
+beside the results (a new run belongs in an `OUT` of its own, so it is not read with this one's
+`run.sh`). The page's 37.5 microseconds on `identity` are about a fifth below the r16 round's 47
+(21,195 a CPU-second), from the same cgroup counter and CPU model. r16's image preloaded no jemalloc
+(it came to card-market's Dockerfile after r16's commit), and
+[Choice 23](../../docs/design.md#choice-jemalloc-image) counts about 83,000 instructions a page with
+it against 87,000 without; the droplet, the commit, the round's settings and k6's phase and cores
+differ too, and which of them accounts for the gap was not measured.
+
+At 64 users, CPU microseconds a request (the app's CPU was 86-101% busy: k6, on its four CPUs,
+did not keep it saturated, so these are CPU a request, not the most it can serve):
+
+| Default removed | Page, `identity` | Page, browser | JSON, `identity` | JSON, browser |
+|---|---|---|---|---|
+| None: requests per CPU-second | 26,656 (25,385-26,693) | 11,722 (11,715-12,754) | 31,813 (29,817-32,015) | 17,604 (16,925-17,823) |
+| None: CPU microseconds a request | 37.5 | 85.3 | 31.4 | 56.8 |
+| Security headers and the CSP | 0.8 (-1.6 to 2.4) | 9.5 (-0.9 to 11.1) | 1.4 (-0.01 to 3.8) | 2.8 (2.1-3.4) |
+| The host check and the same-origin write check | 0.6 (-0.1 to 2.5) | 1.8 (-1.5 to 5.5) | 0.1 (-0.4 to 2.1) | -3.2 (-7.2 to 3.8) |
+| The deadline and the panic catch | -1.3 (-1.6 to -0.7) | 3.5 (-1.0 to 6.7) | -0.4 (-1.6 to 0.8) | -1.8 (-3.8 to -0.8) |
+| Compression | 1.8 (1.7-4.0) | 45.1 (36.5-45.3) | 0.7 (-1.9 to 2.2) | 25.2 (24.6-27.2) |
+| The `ETag` | 1.8 (-1.9 to 2.4) | 6.1 (4.3-6.5) | -0.5 (-0.9 to 1.2) | -3.9 (-4.0 to -0.1) |
+| Setting `Cache-Control` | 0.5 (-0.2 to 2.4) | 4.9 (-0.3 to 9.4) | 0.9 (-2.2 to 2.8) | -1.0 (-1.8 to -0.05) |
+| Error pages and problem+json (on a success) | 0.1 (-0.9 to 2.3) | 0.4 (-2.6 to 1.4) | -0.2 (-1.5 to 1.4) | -1.6 (-4.4 to 3.7) |
+| The header and send timeouts' connection watch | -0.2 (-3.0 to 0.7) | 5.6 (-4.2 to 8.0) | -1.0 (-3.7 to 2.3) | 0.5 (-0.4 to 2.1) |
+
+At a fixed 300 a second (the server is mostly idle, and waking for each request costs more than
+serving it, so these are what a lightly loaded server spends a request):
+
+| Default removed | Page, `identity` | Page, browser | JSON, `identity` | JSON, browser |
+|---|---|---|---|---|
+| None: requests per CPU-second | 7,124 (7,120-7,242) | 5,514 (5,327-5,606) | 8,083 (7,976-8,091) | 6,455 (6,437-6,628) |
+| None: CPU microseconds a request | 140.4 | 181.4 | 123.7 | 154.9 |
+| Security headers and the CSP | 3.3 (2.2-3.5) | 4.7 (-1.1 to 8.1) | 0.5 (-1.2 to 3.6) | -0.1 (-2.3 to 3.6) |
+| The host check and the same-origin write check | -0.6 (-0.9 to 0.3) | 0.5 (-2.3 to 8.7) | -0.4 (-1.4 to 2.5) | 3.0 (-2.5 to 3.2) |
+| The deadline and the panic catch | 1.0 (-0.7 to 1.4) | 3.7 (3.2-10.9) | -0.8 (-1.0 to 0.8) | -1.3 (-7.6 to 3.3) |
+| Compression | 3.0 (3.0-5.1) | 36.3 (35.1-45.1) | 1.6 (0.3-4.4) | 31.5 (30.5-34.2) |
+| The `ETag` | -2.9 (-4.7 to 1.2) | 7.6 (1.7-8.3) | -1.5 (-1.6 to -0.5) | -1.0 (-3.5 to 1.3) |
+| Setting `Cache-Control` | -0.1 (-0.4 to 4.3) | 3.2 (-6.6 to 7.5) | 1.6 (1.4-2.1) | 3.2 (-2.7 to 6.1) |
+| Error pages and problem+json (on a success) | 1.5 (-3.2 to 2.6) | 1.1 (-5.1 to 8.2) | -3.4 (-3.6 to -1.1) | 1.2 (-5.4 to 1.3) |
+| The header and send timeouts' connection watch | -0.9 (-4.1 to 2.5) | 1.0 (-7.7 to 7.7) | 0.3 (0.2-1.4) | 2.7 (-3.0 to 2.8) |
+
+Compression is the one default whose cost under load is larger than the run's noise and its order:
+for a browser it is 45 of the page's 85 microseconds at 64 users (53%, so the page serves 11,700
+requests a CPU-second compressed against 24,900 without) and 25 of the JSON's 57 (44%), less than
+the share callgrind counts above (68% and 72% of user instructions), likely in part because these
+include the kernel's part of a request, which callgrind does not count, though jemalloc and Debian's
+libzstd differ from the callgrind builds too and were not separated. The page's `ETag` for a browser
+measures 6.1 (4.3-6.5) microseconds at 64 users, but every other default in that column measures 0.4
+to 9.5, so this run does not separate it from the order; callgrind's 7.7% of the page's instructions
+is the evidence for it. Every other cell is under 10 microseconds. Of those 58 (the 64 less
+compression and the page's `ETag`, each for a browser), 14 have a range clear of zero, 6 of them
+below it, a saving that removing work cannot make, so a range clear of zero by a few microseconds is
+within these runs' drift. The instruction counts fit: callgrind gives the security headers 5.5% of
+an `identity` page and compression 3.2%, about 2 and 1.2 of its 37.5 microseconds, at the edge of
+what these runs resolve. On the rounds' `identity` requests no default is seen to cost more than a
+few microseconds of CPU. What the bytes compression saves are worth to a client is outside this
+measure; an app short of CPU behind a proxy that compresses can build without the `compress` feature
+([the defaults](../../docs/guide/app.md)).
+
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
 
 `ab.mjs` runs the image Corten's first r1 rows were measured with (`cb-corten`) and the current build
@@ -1027,6 +1116,30 @@ instead of tower-http's defaults (brotli 4 here), the runtime and assets compres
 11, the item page borrowing the cached item instead of cloning it (about 40-50 µs per request
 in `render_cost`), and the island scan looking for dashes instead of every tag (21 µs to 2.4 µs
 on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
+
+### The image's allocator (Docker Desktop, 2026-11-08)
+
+The evidence behind [design Choice 23](../../docs/design.md#choice-jemalloc-image), card-market
+built at `81f1f8ef` with only its allocator's environment changed, except the tuned image in
+`results/alloc-faults` and `alloc-idle` (`corten-card-market-p1011b`), a build of this change whose
+commit was not recorded, which matched the environment-only `cm-p1011-tc65536` in
+`results/alloc-faults-br`. The fault folders' JSON records every image's id and settings, the flood
+folders' the image's id and each variant's settings added to it; the table gives the `ab.mjs`
+folders':
+
+| Folder | What | Images |
+|---|---|---|
+| `results/flood-memory`, `-mmap`, `-tuned` | `flood-memory.mjs`: eight floods of 4,000 unfinished heads, three runs each | jemalloc unset, `background_thread:true`, and that with `tcache_max:65536`; glibc, with two arenas or one, and with a 16 KiB mmap threshold |
+| `results/alloc-faults` | `alloc-faults.mjs`: page faults and CPU a request, three encodings, three rounds | jemalloc unset (`cm-p1011-je`), the tuned image as committed (`corten-card-market-p1011b`), glibc (`cm-p1011-glibc`) |
+| `results/alloc-idle` | `alloc-faults.mjs` with `IDLE_SECONDS=60`: CPU and threads of an untouched app, three rounds | jemalloc unset, the tuned image, and that with `max_background_threads:1` (`jecap1`) |
+| `results/alloc-faults-br` | the same, brotli only | jemalloc unset, `background_thread:true` (`jebg`), no decay (`jenodecay`), `thp:never`, `retain:false`, `tcache_max` 64 KiB and 8 MiB, the tuned image, glibc |
+| `results/ab-jemalloc` | `ab.mjs`, three encodings, three rounds | jemalloc unset (`je`), `background_thread:true` (`jebg`), glibc |
+| `results/ab-jemalloc-br` | `ab.mjs`, brotli only | jemalloc unset, `oversize_threshold` 0 (`jeos0`) and 64 MiB (`jeos64`), glibc |
+| `results/ab-jemalloc-tuned` | `ab.mjs`, three encodings, three rounds | jemalloc unset, `background_thread:true,tcache_max:65536` (`jecand`), glibc |
+
+All ran on a desktop with other containers running, so the `ab.mjs` rounds moved by up to 2.4
+times between rounds of one image; the fault counts repeat to 0.1 a request. A quiet host has not
+run them.
 
 ### Build cost on a desktop (round local-2, 2026-11-03)
 
@@ -1107,6 +1220,76 @@ passes, a separate diagnostic build of card-market's crate run after it:
 4. What the macros write into card-market, as lines of code for rustc to check and compile, not
    time measured: `#[derive(Deserialize)]` 4,884 lines over 19 uses, `messages!` 1,762 in one,
    `#[component]` 1,088 over 12, `html!` 917 over 18.
+
+### The editor's server and the Docker build after an edit (Docker Desktop, 2026-11-08)
+
+`rust-analyzer.mjs` (`results/dev-loop`, at `9da8fb8d`; `results/dev-loop-default` with
+`RA_EXPERIMENTAL=off`) and `docker-rebuild.mjs dev-loop corten,axum-maud 3` (at `c65c10ec`, with
+only this folder's scripts changed), on Docker Desktop (WSL2, 8 CPUs, 11.7 GiB) with other work
+running, each pinned to cores 0-3 with a 9.7 GiB cap, one app at a time: once, kept for the
+record until a droplet round runs them (both run in a round's build step from now on, Method,
+item 10). This machine is slow and noisy for builds: axum + Maud's kept-builder Docker build
+took 38.7 s where r16's in-container rebuild on the droplet took 11.3 (not the same measurement,
+so the ratio is only a rough guide), and Corten's three kept-builder builds ranged from 125 to
+303 s and 175 to 366 CPU-seconds. Read the gaps between apps, not each figure.
+
+rust-analyzer 1.99.1, check on save off and its experimental diagnostics on, five edits each
+(median, with the completion's range in parentheses; after each edit a completion inside the item
+page's markup, then the file's errors asked for at once):
+
+| App | Ready, cold | Ready, warm | Completion after an edit | Unknown field shown | Cleared | Peak memory |
+|---|---|---|---|---|---|---|
+| axum-maud | 17.1 s | 8.5 s | 89 ms (77 to 842) | 72 ms (5 of 5) | 71 ms | 1,447 MiB |
+| **corten** | 42.3 s | 19.7 s | 87 ms (68 to 986) | 65 ms (5 of 5) | 59 ms | 2,568 MiB |
+| topcoat | 28.4 s | 8.6 s | 5,537 ms (4,914 to 6,934) | 5,298 ms (5 of 5) | 5,598 ms | 2,139 MiB |
+| leptos | 46.1 s | 27.8 s | 10,268 ms (8,186 to 15,105) | 9,721 ms (5 of 5) | 9,005 ms | 3,698 MiB |
+
+1. Inside `html!` the server answered in under a tenth of a second (medians of five edits; the
+   first completion after the file is opened took about a second), as it did inside Maud's
+   `html!`: a completion after an edit, and an unknown field in the markup reported as an error
+   and gone once fixed. Inside Topcoat's and Leptos's `view!` each took 5 to 10 seconds (medians;
+   4.8 to 15.1 s over every edit). The markup is not the same size: the macro call the completion
+   is in has 25 lines in Corten's `views/alert.rs` (60 lines, two `html!`), 121 in Maud's
+   `pages.rs` (249, six), 108 in Topcoat's `main.rs` (440, nine `view!`) and 119 in Leptos's
+   `app.rs` (401, thirty-three), and asking for a file's errors analyses all of it. Corten's call
+   is about a fifth the size of the others', so this shows the server is not slow inside a small
+   `html!`, not that it is as fast as inside Maud's on the same markup, which is not measured.
+2. Corten's server loads the whole workspace (its crates and every example app), against axum +
+   Maud's one crate; how much of its longer ready time and larger memory that accounts for, and
+   what an app with Corten from crates.io would take, is not measured here. Peak memory is the
+   warm server's processes' peaks summed (the server and the proc-macro server that expands the
+   markup), read after the five edits.
+3. With the experimental diagnostics off, as rust-analyzer ships (`results/dev-loop-default`),
+   the server reported the unknown field in none of the four, Maud's included, in any of the
+   five edits:
+   `cargo check` on save (Build) is what shows it then.
+
+The app's own `docker build`, seconds of wall time (CPU-seconds), each the median of its own
+three runs:
+
+| App | Cold | After the edit, builder kept | After the edit, layer cache imported |
+|---|---|---|---|
+| axum-maud | 147.7 (339.0) | 38.7 (74.7), its crate alone | 141.2 (299.8), 130 crates |
+| **corten** | 268.7 (440.2) | 149.1 (196.2), 3 crates | 228.2 (361.3), 106 crates |
+
+1. A hosted CI runner that restores BuildKit's layer cache rebuilds an app whose Dockerfile copies
+   its source before building, as both of these do, about as if from clean: the edit changes what
+   the build step copies, so that step runs again, and its `target/` cache mount is not in the
+   exported cache. A Dockerfile that builds the dependencies in a layer of their own first keeps
+   them (not measured here). Only a builder kept between builds (a runner of one's own, a
+   developer's machine) gets the incremental build with these Dockerfiles.
+2. With the builder kept, card-market's build compiles Corten's own crates (`corten-run` and
+   `corten-macros`, path dependencies in this repository) as well as the app: its Dockerfile
+   touches every file it copies, since cargo goes by file times. An app with Corten from
+   crates.io compiles its own crate alone, as axum + Maud's does, so Corten's 149 s is an upper
+   bound, not a like-for-like row (Build's "After the edit", which edits in place, compiles
+   card-market alone).
+3. The cold build's time includes exporting the layer cache; every build resolves the
+   Dockerfile's syntax image and base tags over the network, an imported build's new builder may
+   pull the base images again, and a build whose cargo registry cache mount is empty (the cold
+   one, and every imported one) downloads its crates, so the network is in those times too.
+4. `docker-rebuild.json` has no commit: the script recorded none when this ran (it does now). It
+   ran at `c65c10ec` with only this folder's scripts changed, as above.
 
 ## Method
 
@@ -1263,7 +1446,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
     - Build: the Dockerfile's build step on that tree. Clean is the two together: the Rust apps
       compile every crate in the build step, Phoenix, Rails and Drogon compile theirs in the
       dependency step, and npm, pip and Maven packages mostly arrive built, so only the two
-      together compare like for like, and that includes the downloads.
+      together compare like for like, and that includes the downloads. FastAPI and Express have
+      no build step, so their clean time is the dependency step alone and they have no rebuild.
     - Rebuild: the build step again after one edit, a `title` on the price-alert form's submit
       button in the file holding the item page's markup (touched in the container, so its time
       is newer than the build's by the container's clock), on the tree the clean build left, so
@@ -1275,7 +1459,13 @@ passes, a separate diagnostic build of card-market's crate run after it:
       same edit. The other apps' development servers compile what a request needs as it comes,
       which this does not time. Topcoat's is taken as `cargo build` alone. Drogon's starts with
       Drogon itself installed (a Release build, from the dependency step), so its clean debug
-      build compiles only the app, while the Rust and Go ones compile every dependency.
+      build compiles only the app, while the Rust and Go ones compile every dependency. The time
+      from a save to the open page showing it, under `corten dev` and each stack's own development
+      server, is not measured: it needs each app's development server running (Vite, `next dev`,
+      Phoenix's live reload, `dotnet watch`, Django's and Rails' reloaders, `corten dev`), told
+      apart from the build it starts, and a browser kept on its page to see the change, and the
+      round has no harness that does (this step's source images have each app's toolchain and
+      source, but start no server; `browser.mjs` times the production pages).
     - Editor and tests, for the Rust apps: `cargo check --all-targets` clean and again after the
       same edit, which is what rust-analyzer runs for its diagnostics when a file is saved (with
       the features Leptos's documentation has an editor set, `ssr`; Corten's checks card-market
@@ -1283,9 +1473,9 @@ passes, a separate diagnostic build of card-market's crate run after it:
       (`cargo test --no-run`) from the dependency step, then again after the edit; each says how
       many crates it compiled. Corten's card-market has tests; the other bench apps have none,
       so theirs is the app's crate compiled in test mode with nothing to run. The language
-      server's own analysis (completions, errors before a save) is not measured. These and the
-      other kinds of edit below run after the rest of the app's results are saved, and a failure
-      among them is recorded apart (`loopsFailed`), so it costs only them.
+      server's own analysis is measured apart (rust-analyzer, below). These and the other kinds
+      of edit below run after the rest of the app's results are saved, and a failure among them
+      is recorded apart (`loopsFailed`), so it costs only them.
     - Other kinds of edit, for Corten (`edits` in its recipe): the development build after a
       change to a handler's body, a derive on a type the item page, its JSON and the agent tool
       share, a `messages!` entry in the English catalog, and a route added to `routes`, each
@@ -1310,6 +1500,48 @@ passes, a separate diagnostic build of card-market's crate run after it:
       crate, flags rustc accepts on stable only with `RUSTC_BOOTSTRAP=1`, used for that report
       alone. Saved apart from the timings above, so a change to their format fails only them.
 
+    - The app's own `docker build` with BuildKit's cache warm (`docker-rebuild.mjs`,
+      `docker-rebuild.json`), for the apps in `BENCH_DOCKER_REBUILD_APPS` (Corten and axum +
+      Maud unless it names others), after the rest of the app's results are saved: its
+      Dockerfile, cache mounts and all, on a builder of its own (`docker buildx create --driver
+      docker-container`) pinned to the build cores with the same memory cap, since BuildKit
+      takes no core pinning. Cold (nothing cached, its base images pulled, so the network is in
+      it), then three builds after the edit, each with the run's number in the button's title
+      so none finds itself in the cache: on the builder that built it, with its layers and its
+      cache mounts (cargo's `target/`), as a CI runner that keeps its builder or a developer's
+      machine has them, and on a new builder given only the layer cache the cold build exported
+      (`--cache-to`/`--cache-from type=local`), as a hosted runner restoring a cache has it:
+      BuildKit exports no cache mount. Each build writes only to the cache (`--output
+      type=cacheonly`), so no image export is in its time; its CPU-seconds are the builder
+      container's cgroup counter, and for cargo it names the crates it compiled. A build after
+      the edit that ran no step fails rather than reporting a cache hit. Only the two anchors run
+      unless the variable names others, for time: on the desktop (below) they took 25.4 and 12.0
+      minutes, a cold build and six after the edit, out of a step budget every app's build shares.
+      What a restored cache does to the others is read from their Dockerfiles, not measured.
+      Leptos's and Topcoat's copy their source before building, with cargo's `target/` and
+      registry in cache mounts, as these two do, so a restored layer cache rebuilds them about as
+      if from clean too. The rest copy their dependency list first and install it in a layer of
+      its own (npm, pip, `dotnet restore`, `go mod download`, Maven, Mix, Bundler and Composer;
+      Drogon's builds Drogon in one), so a restored layer cache keeps their dependencies and only
+      the steps after the source's copy run again; Gin's keeps only its modules' downloads, since
+      with no cache mount for Go's build cache `go build` compiles them again, on a kept builder
+      too. Express's and FastAPI's have no `RUN` step after
+      it, so this script, which fails a build after the edit that runs no `RUN` step, cannot time
+      them.
+    - rust-analyzer's own latency (`rust-analyzer.mjs`, `rust-analyzer.json`), for the Rust apps,
+      with the language server driven over LSP from the host and its check on save off, so every
+      number is its own analysis with the apps' proc macros expanded: ready (first quiescent,
+      `experimental/serverStatus`) from a new container, which builds the build scripts and proc
+      macros, then again from a new server with those kept; then, five times, the page's edit
+      followed at once by a completion inside the item page's markup (`ra` in each recipe), timed
+      to its answer, with whether it offers the field there; then the field's name made unknown and
+      the time the server takes to answer the editor's request for the file's errors
+      (`textDocument/diagnostic`; this server pushes only syntax errors and gives type errors when
+      asked, and an unknown field is one of its experimental diagnostics, off by default, which an
+      editor can turn on and this does unless `RA_EXPERIMENTAL=off`), with whether the error is in
+      it, and the same once the text is back; and the server's peak memory. Corten's server loads
+      the whole workspace (the crates and every example), more than an app of one crate gives it.
+
     Each step runs in a container of its own and reports its wall time, its CPU-seconds (the
     container's cgroup counter, the work done whatever the core count) and the peak of its
     processes' anonymous memory, sampled five times a second by bash builtins (the cgroup's own
@@ -1318,10 +1550,14 @@ passes, a separate diagnostic build of card-market's crate run after it:
     step). A step that fails says when the kernel killed its processes for passing the memory
     cap. `build.json` is synced and written after every step, so a stopped build keeps what it
     finished (`complete` is false until every measured step has run; Corten's diagnostics come
-    after it). Each build call has a 90-minute limit and the
-    step a 240-minute budget, counted afresh at each start as the unit's hours are (r16's step
-    took 39.2 minutes, and its longest call, Leptos's, 12.1); a stopped or crashed build skips its
-    app alone, a droplet restart in the step goes on with the next app, and past the budget the
+    after it). Each build call has a 90-minute limit and the step a 240-minute budget, counted
+    afresh at each start as the unit's hours are (r16's step took 39.2 minutes, and its longest
+    call, Leptos's, 12.1). The two added here were measured on a desktop that built about three
+    times slower, roughly, so a round should take less: the Docker build took 25.4 minutes for
+    Corten and 12.0 for axum + Maud, and rust-analyzer's ready and timed probes 0.5 to 3.7 minutes
+    an app with the experimental diagnostics on, as a round runs it (its container's setup and the
+    untimed requests not counted). A stopped or crashed build skips
+    its app alone, a droplet restart in the step goes on with the next app, and past the budget the
     apps not built are named in `skipped.txt`.
 
 ### The matched tier
@@ -1414,8 +1650,10 @@ companion its documentation points to for it (tower-http for axum); a part that 
 write its own handler, error mapper or server loop is left out, as the defaults tier leaves it. The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
 rule (Corten; axum-maud, the anchor every tier shares; the three best on the tier's own measure
 and the four most used in the Stack Overflow survey, on r13 and the 2026 survey ASP.NET Core,
-Topcoat and Leptos, and Next.js, ASP.NET Core, Spring and Django; ASP.NET Core as its Razor Pages
-app in the page phases and its native AOT app in the JSON ones), are eight. An app takes part
+Topcoat and Leptos, and Next.js, ASP.NET Core, FastAPI and Express; ASP.NET Core as its Razor Pages
+app in the page phases and its native AOT app in the JSON ones), are eight. Spring Boot and Django,
+fifth and seventh in that survey, left the four when FastAPI and Express joined the bench
+([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)); they stay in the defaults tier. An app takes part
 (`matched: true` in `apps.mjs`) once it starts with its profile:
 
 1. `corten`: card-market's defaults are the profile's first two parts; `MAX_CONNECTIONS` sets
@@ -1457,8 +1695,8 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    header but not a 64 KiB one), and its error answers (a failed read as a 500 `text/plain`, a
    missing item as a 404 `text/plain`, an empty 405) are the app's and Topcoat's own, which the
    profile does not change.
-5. `nextjs`, `django`, `aspnet` (and `aspnet-aot`) and `spring` are not in it yet: each joins
-   with its profile.
+5. `nextjs`, `aspnet` (and `aspnet-aot`), `fastapi` and `express` are not in it yet: each
+   joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1601,26 +1839,34 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
    Rust service with Postgres and Redis, not in this repository).
-3. JavaScript dependencies are pinned in each `package.json` without lockfiles, so transitive
-   versions can drift between builds; the other apps have lockfiles.
+3. JavaScript dependencies are pinned in each `package.json` without lockfiles, and the Python
+   apps' (Django, FastAPI) in `requirements.txt`, which pins only the packages it names, so
+   transitive versions can drift between builds; the other apps have lockfiles.
 4. The page is small. Apps with large client-side state (a seller grid of live rows) are a
    different test; see [bench/live](../live/README.md) for pushing updates.
-5. Each framework runs its production defaults with the worker count its docs give for one CPU,
-   in one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or
-   cannot serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked
-   failed. Each could be tuned further (caching, streaming, more workers). None of the apps cache
-   rendered pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at
-   their default level. Drogon runs one IO thread per core, as its docs advise, and counts its
-   cores from its CPU affinity capped by the container's CPU quota, since its own count (`0`)
-   sees every core of the host. Two settings differ from a library's default so that the item
-   API source does the same work in every app: Gin keeps as many idle connections to the item API
-   as its transport allows (Go's default keeps two per host; reqwest, .NET and Node have no
-   per-host cap), and Drogon keeps one `HttpClient` (one connection) per request in flight on
-   each thread. Drogon also hands the fixture parser's freed memory back to the system after
-   loading (`malloc_trim`), so its memory with items in memory is the items' rather than the
-   parser's peak, which the Rust apps avoid by parsing one item at a time. Drogon's JSON is
-   JsonCpp's, Drogon's default, which writes 17 significant digits (`0.79000000000000004`), so
-   its item JSON is about 3% longer than the others' for the same values.
+5. Each framework runs its production defaults with the worker count its docs give for one CPU, in
+   one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or cannot
+   serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked failed.
+   Each could be tuned further (caching, streaming, more workers). None of the apps cache rendered
+   pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at their
+   default level and FastAPI does (`fastapi run` keeps uvicorn's access log). Drogon runs one IO
+   thread per core, as its docs advise, and counts its cores from its CPU affinity capped by the
+   container's CPU quota, since its own count (`0`) sees every core of the host. FastAPI runs
+   `fastapi run`, one uvicorn process: its container guide gives one process a container where the
+   container is given its CPUs, and the live stream needs every client in one process. Express runs
+   one Node process with `NODE_ENV=production`, as its production guide says, which caches compiled
+   views; FastAPI's templates are Starlette's `Jinja2Templates` as created, which checks each
+   template file's time on every render (Jinja's default, which FastAPI's docs do not change). Three
+   settings differ from a library's default so that the item API source does the same work in every
+   app: Gin keeps as many idle connections to the item API as its transport allows (Go's default
+   keeps two per host; reqwest, .NET and Node have no per-host cap), FastAPI's httpx clients have no
+   connection cap (httpx's default keeps 20 idle and allows 100 in all), and Drogon keeps one
+   `HttpClient` (one connection) per request in flight on each thread. Drogon also hands the fixture
+   parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
+   in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one
+   item at a time. Drogon's JSON is JsonCpp's, Drogon's default, which writes 17 significant digits
+   (`0.79000000000000004`), so its item JSON is about 3% longer than the others' for the same
+   values.
 6. The images include the live benchmark's routes (`/live/...`), which the item page does not
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r16. (r2's main run had raised it
@@ -1749,6 +1995,8 @@ node check-app.mjs <app>    # before adding an app: parity, look, JSON and 404s 
 node sync-styles.mjs        # after Corten's styles change (cb-corten rebuilt and running): copy them to every app
 node look.mjs [apps]        # every app's pages in Chromium against Corten's, box by box
 node build.mjs legacy1 [apps] [runs=3]   # build cost: clean, after a one-line change, and dev builds
+node docker-rebuild.mjs legacy1 [apps] [runs=3]   # the app's own docker build after the edit, BuildKit's cache warm
+node rust-analyzer.mjs legacy1 [apps] [runs=5]    # rust-analyzer's own latency (the Rust apps)
 # One request's instructions by stage and crate (callgrind), from the repository root, items in memory:
 docker run --rm -v "$PWD:/src" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/cg:/out -w /src \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash bench/fullstack/cost-by-crate.sh
@@ -1763,14 +2011,27 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
+# The same builds' requests per CPU-second under load (a round's image of each, ab.mjs on pinned
+# cores; on a c-8, the app on CPU 1 and k6 on 2-7; without them the app gets --cpus 1 unpinned),
+# then each cost; a new run goes in an OUT of its own, not the committed results/cost-under-load:
+OUT=results/cost-under-load-<date> BENCH_APP_CPUS=1 BENCH_FIXTURE_LOAD_CPUS=2-7 AB_ROUNDS=3 bash bench/fullstack/cost-under-load.sh
+node bench/fullstack/cost-under-load.mjs bench/fullstack/results/cost-under-load-<date>/summary.json
+# One app before and after, alternating (identity, a browser's encodings, brotli alone; AB_ROUNDS=3,
+# AB_ENCODINGS=br for some), and the memory floods of unfinished heads leave, by allocator setting
+# (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some); the committed
+# fault folders ran REQUESTS=2000, results/alloc-faults-br with ENCODINGS=br too:
+node bench/fullstack/ab.mjs results/ab-x cb-corten cb-corten-next
+node bench/fullstack/flood-memory.mjs results/flood-x cb-corten [runs=3] [floods=8]
+node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next   # page faults and CPU a request
 ```
 
 ## What the repository keeps
 
 1. A round keeps its summaries and its log as files: `summary.json`, which the tables above come
-   from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`, `bytes.json`,
-   `cold-start.json`, `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and, in a round
-   committed before this, `raw.txt` (below). Its raw output
+   from, and `run.log`, `commit.txt`, `host.txt`, `skipped.txt`, `build.json`,
+   `docker-rebuild.json`, `rust-analyzer.json`, `bytes.json`, `cold-start.json`,
+   `instructions.json`, `browser.json`, `conformance.json`, `hardening.json`, `trend.json` and, in
+   a round committed before this, `raw.txt` (below). Its raw output
    (each app's k6, CPU and startup files, every count) is one archive beside them, `raw.tar.xz`.
    `droplet.mjs` packs a finished full-stack round once it has downloaded it; after a round run by
    hand and summarized, `node bench/fullstack/pack.mjs <round>` does. It lists the archive back
