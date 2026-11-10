@@ -1558,7 +1558,7 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#573 Kit Card header has no slot for actions, so a card with a button in its header is an edit to the copied card](https://github.com/todd-skelton/corten/issues/573)),
     `CardPanel`, a card around one block of content on one element (the surface and its padding,
     no layout, so the element's own class or a `Stack` lays it out), and a denser card beside roomy
-    ones (`CardSize::Sm` on the card or panel since Changed 168; it was a `CardCompact` class beside
+    ones (`CardSize::Sm` on the card or panel since Changed 172; it was a `CardCompact` class beside
     it); a card inside a dense one is roomy again. The header's heading and
     description rules now weigh one class, where they weighed a class and an element: an element
     default (`h2 { .. }`) still does not change them, and an app class on the heading ties, so it
