@@ -5872,9 +5872,9 @@ Corten is pre-1.0, so any minor version may change the API.
     not scrolling sideways, and that a paragraph beside them still drops its margin; against the
     earlier stylesheet it fails in Chromium with the dialog at the top, touching both edges, and the
     popover at the top. No request or render cost: the rules make the ui-gallery's served
-    `components.css` 60,570 bytes where it was 60,471 (gzip 10,021 against 10,012, brotli 8,825
-    against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier size is the served
-    file with the old rules put back). Found by the Chase Sets pilot, which set `margin: auto` on
+    `components.css` 61,405 bytes where it was 61,306 (gzip 10,166 against 10,156, brotli 8,951
+    against 8,947, Node's zlib at gzip level 9 and brotli's default), served by the gallery built
+    from this change and from the commit it was merged onto, 71c0361a. Found by the Chase Sets pilot, which set `margin: auto` on
     its reviews page's dialog
     ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
 
