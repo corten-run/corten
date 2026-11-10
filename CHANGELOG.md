@@ -2650,8 +2650,8 @@ Corten is pre-1.0, so any minor version may change the API.
   parameter that is not its type says "Cannot parse `x` to a `u32`", where axum named the
   value's index in a route's parameters, and one after which the route writes text no longer
   adds serde's reason. axum's `matched-path` feature is off. An `unstaged` route's host check,
-  headers, panic catch and API JSON are a lane the router runs in place of its stages rather than
-  code wrapped around its handler, with nothing an app sees changed; it costs 71 instructions
+  headers, panic catch and API JSON are run by the router in place of its stages rather than by
+  code wrapped into its handler, with nothing an app sees changed; it costs 71 instructions
   more a request (7,003 against 6,932, callgrind, jemalloc; 67 with glibc; wall times did not
   differ beyond their runs), and a staged request about 10 fewer. The stages stay one boxed
   future: written as combinators on this router they cost 92 to 367 more a request.

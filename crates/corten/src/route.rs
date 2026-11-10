@@ -682,8 +682,8 @@ pub use corten_macros::UrlValue;
 /// who can reach it (a public figure a CDN fronts, a value clients poll), says `unstaged`: it goes through
 /// none of the app's stages ([`crate::middleware`]), so no same-origin check, no signal or
 /// deadline, no middleware (the app's, an area's or an API's), no error page, security headers,
-/// `Cache-Control`, tag or compression. What it keeps is done in its handler, as no stage: the
-/// host check every request meets (`421` for a name the app does not answer to), `X-Content-Type-Options:
+/// `Cache-Control`, tag or compression. The router runs what it keeps around its handler in their
+/// place: the host check every request meets (`421` for a name the app does not answer to), `X-Content-Type-Options:
 /// nosniff` and `Content-Security-Policy: sandbox` on its answer, a panic answered `500`, and,
 /// under an API's prefix, the API's JSON for a failure. Its handler's answer is otherwise sent as
 /// it made it, a raw [`axum::response::Response`] too, and every route beside it keeps every

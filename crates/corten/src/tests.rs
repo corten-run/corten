@@ -13070,6 +13070,22 @@ async fn an_app_logs_a_slow_prefetch_and_not_a_slow_click() {
     assert!(dropped.contains("/slow started the page ahead of a click, given up on after"), "{dropped}");
 }
 
+/// A panic in an unstaged route's handler is logged with the route's path as written.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn an_unstaged_route_s_panic_is_logged_with_its_path() {
+    use std::sync::Arc;
+    let router = App::new(unstaged_url::router()).router();
+    let lines = Lines(Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let (status, _, _) = call_with(router, "GET", "/boom", None, None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("corten: /boom (unstaged) panicked: unstaged and broken"), "{text}");
+}
+
 /// A debug build names a hover prefetch that took over half a second, drawn or given up on, and
 /// no other.
 #[cfg(all(debug_assertions, feature = "log"))]

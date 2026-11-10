@@ -41,8 +41,9 @@ pub(crate) type Answering = Pin<Box<dyn Future<Output = Response> + Send>>;
 pub(crate) trait Endpoint: Send + Sync + 'static {
     fn call(&self, req: Request) -> Answering;
 
-    /// The answer in an unstaged route's lane, which a handler's own future is wrapped in inside
-    /// the one box `call` would make.
+    /// The answer in an unstaged route's lane. A handler's ([`Handled`]) is its own future and
+    /// the lane's work in one box; the router's own answers (`404`, `405`) are boxed by `call` and
+    /// then again with the lane, as only a failure takes this.
     fn call_in(&self, req: Request, lane: Arc<crate::route::Lane>) -> Answering {
         Box::pin(crate::route::laned(lane, self.call(req)))
     }
