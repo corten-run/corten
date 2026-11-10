@@ -332,7 +332,7 @@ would then win over it, those included.
 
 The kit's CSS goes into `components.css` with the app's own, one cached file, compressed once with
 brotli at level 11 and gzip at level 9. An app that lists every component and the theme's tokens,
-nothing of its own, serves 59,156 bytes, 8,580 with brotli and 9,740 with gzip, what `corten ui add
+nothing of its own, serves 59,878 bytes, 8,691 with brotli and 9,863 with gzip, what `corten ui add
 --all` adds. The starter's counter adds about 140 bytes more. A test in the ui-gallery example
 (`the_kit_guide_states_what_every_component_costs`) serves it and fails when a number here is more
 than 3 percent off, naming the new ones. An app pays for the components it adds, and `corten ui add`
