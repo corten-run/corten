@@ -399,9 +399,10 @@ function closestRef(el, owner, name, event) {
  * @returns {(args: Record<string, string | number>) => string}
  */
 function message(parts) {
+  // `parts` alternates text and names and starts and ends with text, so each read is in range.
   return (args) => {
-    let text = parts[0];
-    for (let i = 1; i < parts.length; i += 2) text += String(args[parts[i]]) + parts[i + 1];
+    let text = /** @type {string} */ (parts[0]);
+    for (let i = 1; i < parts.length; i += 2) text += String(args[/** @type {string} */ (parts[i])]) + parts[i + 1];
     return text;
   };
 }
@@ -578,10 +579,11 @@ function scan(root, names, inside = false) {
   }
   // Rows cloned from one template carry the same refs, so a name is added once per run of them.
   if (!(inside && fewRefNames(root, names))) {
+    // Indexed, as it was: this runs for every element a change adds (rows a view makes too).
     const refs = root.querySelectorAll("[data-ref]");
     let last = null;
     for (let i = 0; i < refs.length; i += 1) {
-      const ref = attrOf(refs[i], "data-ref");
+      const ref = attrOf(/** @type {Element} */ (refs[i]), "data-ref");
       if (ref !== last && ref !== null) names.add(ref.slice(ref.indexOf("/") + 1));
       last = ref;
     }
@@ -1067,10 +1069,9 @@ const formCall = (form, name, ...args) => formProperty(form, name).call(form, ..
 
 /** A random UUID v4. `crypto.randomUUID` is only there in secure contexts. */
 function uuid() {
+  // The version (4) in byte 6 and the variant (10xx) in byte 8.
   const b = crypto.getRandomValues(new Uint8Array(16));
-  b[6] = (b[6] & 0x0f) | 0x40;
-  b[8] = (b[8] & 0x3f) | 0x80;
-  const hex = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  const hex = Array.from(b, (x, i) => (i === 6 ? (x & 0x0f) | 0x40 : i === 8 ? (x & 0x3f) | 0x80 : x).toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
@@ -1117,7 +1118,7 @@ function counterpart(root, fresh, el, exact, ids) {
   if (name) {
     const selector = named(el, name);
     const theirs = home.querySelectorAll(selector);
-    if (theirs.length === 1 && anchor.querySelectorAll(selector).length === 1) return theirs[0];
+    if (theirs.length === 1 && anchor.querySelectorAll(selector).length === 1) return theirs.item(0);
   }
   if (exact) return null;
   /** @type {Element | undefined} */
@@ -1555,12 +1556,13 @@ function layoutChanges(doc, notice) {
     const mine = Array.from(up.children).filter((el) => el === here || drawn.has(el));
     const theirs = Array.from(upThere.children);
     if (mine.length !== theirs.length || mine.indexOf(here) !== theirs.indexOf(there)) return null;
-    for (let i = 0; i < mine.length; i++) {
-      if (mine[i] === here) continue;
-      if (mine[i].localName !== theirs[i].localName) return null;
-      const was = drawn.get(mine[i]);
+    for (const [i, el] of mine.entries()) {
+      const their = theirs[i];
+      if (el === here) continue;
+      if (!their || el.localName !== their.localName) return null;
+      const was = drawn.get(el);
       const as = was === undefined ? "" : drawnAs(was);
-      if (as === null || comparable(as) !== markupOf(theirs[i]) || shows(theirs[i], said)) changed.push([mine[i], theirs[i], was]);
+      if (as === null || comparable(as) !== markupOf(their) || shows(their, said)) changed.push([el, their, was]);
     }
     here = up;
     there = upThere;
@@ -1653,10 +1655,12 @@ function drawLayout(old, fresh, before, said, inside = false) {
     return;
   }
   const [mine, theirs] = [Array.from(old.childNodes), Array.from(fresh.childNodes)];
-  if (mine.length !== theirs.length || mine.some((n, i) => n.nodeName !== theirs[i].nodeName)) return replaceKeeping(old, fresh, null);
+  if (mine.length !== theirs.length || mine.some((n, i) => n.nodeName !== theirs[i]?.nodeName)) return replaceKeeping(old, fresh, null);
   const then = before && before.childNodes.length === theirs.length ? before.childNodes : null;
   mine.forEach((n, i) => {
     const [there, was] = [theirs[i], then?.[i]];
+    // The same length as `mine`, checked above.
+    if (!there) return;
     if (!(n instanceof Element)) {
       if (was?.nodeValue !== there.nodeValue && n.nodeValue !== there.nodeValue) n.nodeValue = there.nodeValue;
       return;

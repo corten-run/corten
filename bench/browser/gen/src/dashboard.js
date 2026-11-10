@@ -20,7 +20,9 @@ export function tick(cards, sum, n) {
   const list = rows(cards, Card);
   for (const [i, p] of next(n)) {
     const card = list.at(i);
-    card.down = p < prices[i];
+    const was = prices[i];
+    if (!card || was === undefined) continue;
+    card.down = p < was;
     card.price = p.toFixed(2);
     prices[i] = p;
   }
