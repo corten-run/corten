@@ -317,9 +317,8 @@
 //! # mod app {
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String, qty: u32 }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String, qty: u32 }
 //!
 //! #[corten::routes(state = Feed<Level>)]
 //! pub mod url {
@@ -352,12 +351,10 @@
 //! ```compile_fail
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Stock { id: String }
-//! impl Row for Stock { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Stock { #[row(id)] id: String }
 //!
 //! #[corten::routes(state = Feed<Level>)]
 //! pub mod url {
@@ -375,12 +372,10 @@
 //! ```compile_fail
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Stock { id: String }
-//! impl Row for Stock { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Stock { #[row(id)] id: String }
 //!
 //! #[corten::routes(state = Feed<Level>)]
 //! pub mod url {
@@ -399,12 +394,10 @@
 //! ```compile_fail
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Stock { id: String }
-//! impl Row for Stock { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Stock { #[row(id)] id: String }
 //!
 //! #[corten::routes(state = Feed<Level>)]
 //! pub mod url {
@@ -431,13 +424,11 @@
 //! ```compile_fail
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String, qty: u32 }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String, qty: u32 }
 //! mod stock {
-//!     #[derive(Clone, serde::Serialize)]
-//!     pub struct Level { pub id: String, pub name: String }
-//!     impl corten::feed::Row for Level { fn id(&self) -> &str { &self.id } }
+//!     #[derive(Clone, serde::Serialize, corten::feed::Row)]
+//!     pub struct Level { #[row(id)] pub id: String, pub name: String }
 //! }
 //!
 //! #[corten::routes(state = Feed<stock::Level>)]
