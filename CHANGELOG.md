@@ -4077,6 +4077,12 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
 
 ### Fixed
+- The ui-gallery smoke's check that keyboard focus never lands under a dialog's or sheet's sticky
+  header now reads a focused row only after it has held its place for two animation frames (at
+  most 120). WebKit scrolls a focused row into view over a few frames, and a row read mid-scroll
+  sat up to 28 px under the header before settling 248 px below it, so the check failed about once
+  in 30 runs on a branch that did not touch it. It waits on frames, not a timer, and a row still
+  moving after 120 frames fails the check rather than being read as settled.
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
