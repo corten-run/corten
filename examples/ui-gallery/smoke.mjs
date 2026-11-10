@@ -1680,6 +1680,58 @@ async function run(browser) {
   await page.waitForFunction(() => document.querySelector("#rename [aria-invalid=true]") !== null);
   check("a refused patch keeps it modal, with the error", (await isModal()) && (await rename.textContent())?.includes("Give the draft a name."));
   check("focus is on the refused field", await page.evaluate(() => document.activeElement?.id === "rename-name"));
+  check("a field's error alone draws no form alert", (await rename.locator(".alert__alert[role=alert]").count()) === 0);
+  // The other draft's name: the form's own message is FormAlert, the kit's soft destructive
+  // alert, one live region with the tone's colors, above the marked field.
+  await page.locator("#rename-name").fill("Holiday lot");
+  await page.getByRole("button", { name: "Rename", exact: true }).click();
+  await page.waitForFunction(() => document.querySelector("#rename form > .alert__alert") !== null, null, { timeout: 5000 }).catch(() => {});
+  const formAlert = await rename.evaluate((d) => {
+    const alert = d.querySelector("form > .alert__alert");
+    if (!alert) return null;
+    const field = /** @type {Element} */ (d.querySelector("#rename-name"));
+    const look = getComputedStyle(alert);
+    // The soft destructive tone, from a probe with the same classes outside any form.
+    const probe = document.createElement("div");
+    probe.className = "alert__alert alert__destructive alert__soft";
+    document.body.append(probe);
+    const tone = getComputedStyle(probe);
+    const expected = { background: tone.backgroundColor, color: tone.color };
+    probe.remove();
+    return {
+      role: alert.getAttribute("role"),
+      regions: d.querySelectorAll("form [role=alert], form [role=status], form [aria-live]").length,
+      text: alert.textContent,
+      background: look.backgroundColor,
+      color: look.color,
+      expected,
+      above: !!(alert.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING),
+      invalid: field.getAttribute("aria-invalid"),
+    };
+  });
+  check(
+    "a form's own message is the kit's soft destructive alert, its one live region, above the marked field",
+    !!formAlert &&
+      formAlert.role === "alert" &&
+      formAlert.regions === 1 &&
+      formAlert.text === "Your other draft is named Holiday lot. Rename that one first, or choose another name." &&
+      formAlert.background === formAlert.expected.background &&
+      formAlert.color === formAlert.expected.color &&
+      !/^(transparent|rgba\(0, 0, 0, 0\))$/.test(formAlert.background) &&
+      formAlert.above &&
+      formAlert.invalid === "true",
+    JSON.stringify(formAlert),
+  );
+  // Refused again for an empty name, the dialog is drawn without the form's alert, and its only
+  // live region is FailedAlert's, which the checks below read.
+  await page.locator("#rename-name").fill("");
+  await page.getByRole("button", { name: "Rename", exact: true }).click();
+  check(
+    "refused for an empty name, the dialog is drawn without the form's alert",
+    await page
+      .waitForFunction(() => document.querySelector("#rename form > .alert__alert") === null && document.querySelector("#rename [aria-invalid=true]") !== null, null, { timeout: 5000 })
+      .then(() => true, () => false),
+  );
   await page.keyboard.press("Escape");
   check("Escape closes it", !(await rename.evaluate((d) => /** @type {HTMLDialogElement} */ (d).open)));
   // dialog::failed: a rename that gets no answer is said in the modal dialog, not by the toaster
@@ -4802,6 +4854,19 @@ async function run(browser) {
   check("no script: the button opens the dialog", await plain.locator("#rename").isVisible());
   await Promise.all([plain.waitForURL("**/rename"), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
   check("no script: refused, the dialog is open with the error", (await plain.locator("#rename").isVisible()) && ((await plain.locator("#rename").textContent()) ?? "").includes("Give the draft a name."));
+  // The other draft's name: the whole page drawn again has the dialog open with the form's alert.
+  await plain.locator("#rename-name").fill("Holiday lot");
+  await Promise.all([plain.waitForEvent("load"), plain.getByRole("button", { name: "Rename", exact: true }).click()]);
+  {
+    const alert = plain.locator("#rename form > .alert__alert[role=alert]");
+    check(
+      "no script: refused for a taken name, the dialog is open with the form's alert",
+      (await plain.locator("#rename").isVisible()) &&
+        (await alert.count()) === 1 &&
+        (await alert.textContent()) === "Your other draft is named Holiday lot. Rename that one first, or choose another name.",
+      String(await alert.first().textContent({ timeout: 1000 }).catch(() => null)),
+    );
+  }
   if (engine !== "webkit") {
     await plain.locator("#rename-name").fill("Winter draft");
     await Promise.all([plain.waitForURL(`${base}/`), plain.getByRole("button", { name: "Rename", exact: true }).click()]);

@@ -12,4 +12,5 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-corten = { package = "corten-run", path = "../../crates/corten", features = ["types"] }
+# compress: a test reads the kit's stylesheet as the server compresses it.
+corten = { package = "corten-run", path = "../../crates/corten", features = ["types", "compress"] }
