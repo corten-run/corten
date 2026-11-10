@@ -2617,6 +2617,19 @@ Corten is pre-1.0, so any minor version may change the API.
     unknown in a copy with no `.git`, as a droplet gets), which now keep the droplet's script and
     CPU (`run.sh`, `host.txt`)
     ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
+279. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
+    tokens, `choice-list-gap` and `choice-list-legend-gap` (.75rem each, the values the two
+    stylesheets printed and kept equal by hand), so a theme with tighter choice lists sets them once
+    and the copies stay the kit's. Nothing changes for an app that keeps its copies. One set up by an
+    older kit that takes the new copies adds the two tokens `corten ui add checkboxes --merge` (or
+    `radio_group`, or `--force` for a copy without edits) names, as the kit's theme has them,
+    before it starts. The kit theme's two declarations and the two `var()`s in each stylesheet make
+    the ui-gallery's served `components.css` 60,608 bytes where it was 60,471 (gzip 10,039 against
+    10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier
+    size is the served file with the literals put back). The ui-gallery's smoke test checks both
+    groups at the kit's values and at a theme's. Asked for by the Chase Sets pilot, which edited
+    both copies to .5rem
+    ([#1082 Kit RadioGroup and Checkboxes print their fieldset's gap and legend margin as literals kept equal by hand, so a theme with tighter choice lists edits both copies](https://github.com/corten-run/corten/issues/1082)).
 278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
     after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
     apps: how long it takes to be ready, cold and warm, and after an edit how long a completion
@@ -4311,6 +4324,19 @@ Corten is pre-1.0, so any minor version may change the API.
     and `corten ui add card --force` (an unedited copy) or `--merge` (an edited one) takes
     `card.rs` and `card.css`
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
+177. An integer of 100 or more that markup or a message writes (`{count}`) goes into the page two
+    digits at a time, one `push_str` of a pair from a table in place of one `push` a digit. The
+    text is unchanged. Measured with callgrind (release build, three alternated runs each, 500
+    items at 2 and 12 rounds, the difference over 5,000), one item through `render_cost`'s
+    first two loops (build the page's view; build it and render its main) takes 45,032-45,528
+    instructions (median 45,319) instead of 47,089-47,292 (median 47,160), about 1,840 fewer.
+    The standard library's `NumBuffer` would raise the minimum Rust to 1.98 for no measured gain
+    on the page: counted the same way in a second session, it takes 45,186-45,427 (median 45,301)
+    against this change's 45,249-45,492 (median 45,418), less than either's spread. Alone, it
+    writes a three- or four-digit number in as many instructions as this, a six-digit one in about
+    15% fewer, a nine- or ten-digit one in about a third fewer, and one of nineteen or twenty
+    digits in half
+    ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
 ### Fixed
 - A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
@@ -6507,6 +6533,13 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+77. [Design Choice 33](docs/design.md#choice-state-derives) records why shared state keeps
+    `#[derive(Clone, FromRef)]` rather than a `#[corten::state]` attribute that writes both: `Clone`
+    is what routing and a handler taking the whole state need, `FromRef` what a handler taking one
+    part needs, and the attribute would take one word off the three routed example state types that
+    derive both while giving three of the four that derive `Clone` alone (the fourth is an enum,
+    which `FromRef` does not take) a third way to write theirs
+    ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 78. Which tables sort in place is decided and measured: every table whose page has all its rows,
     also when other routes read its order. `bench/browser/sort-cost.mjs` times a sort click with
     `rows::sort` against a swap of the server-sorted table, fetched at the click or before it, and
