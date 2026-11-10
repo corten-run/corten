@@ -158,14 +158,14 @@ enum Why {
     Refusal {
         status: StatusCode,
         message: Option<std::sync::Arc<str>>,
-        header: Option<Sent>,
+        header: Option<RefusalHeader>,
     },
     Unavailable(std::sync::Arc<str>),
 }
 
 /// The header a refusal sends, named by what it is rather than by the status.
 #[derive(Clone, Debug)]
-enum Sent {
+enum RefusalHeader {
     /// A 401's `WWW-Authenticate`.
     Challenge(HeaderValue),
     /// A 429's `Retry-After`.
@@ -194,7 +194,7 @@ impl Refused {
     /// let _ = corten::Refused::unauthorized();
     /// ```
     pub fn unauthorized(challenge: Challenge) -> Self {
-        let header = Some(Sent::Challenge(challenge.0));
+        let header = Some(RefusalHeader::Challenge(challenge.0));
         Refused(Why::Refusal { status: StatusCode::UNAUTHORIZED, message: None, header })
     }
 
@@ -208,7 +208,7 @@ impl Refused {
     /// credentials tells a locked-out client nothing about them.
     pub fn too_many(retry_after: std::time::Duration) -> Self {
         let seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
-        let header = Some(Sent::RetryAfter(seconds.into()));
+        let header = Some(RefusalHeader::RetryAfter(seconds.into()));
         Refused(Why::Refusal { status: StatusCode::TOO_MANY_REQUESTS, message: None, header })
     }
 
@@ -253,13 +253,16 @@ impl Refused {
 ///
 /// impl<S: Sync> Identify<S> for Partner {
 ///     async fn identify(parts: &Parts, _state: &S) -> Result<Self, Refused> {
-///         match parts.headers.get("authorization").and_then(|v| v.to_str().ok()) {
+///         // The scheme is matched in any case (RFC 9110 11.1).
+///         let sent = parts.headers.get("authorization").and_then(|v| v.to_str().ok());
+///         let key = sent.and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"));
+///         match (sent, key.map(|(_, key)| key)) {
 ///             // No key: say how to send one.
-///             None => Err(Refused::unauthorized(Challenge::BEARER)),
+///             (None, _) => Err(Refused::unauthorized(Challenge::BEARER)),
 ///             // A real app looks the key up here.
-///             Some("Bearer dev-key") => Ok(Partner { name: "dev".into() }),
+///             (_, Some("dev-key")) => Ok(Partner { name: "dev".into() }),
 ///             // A key that is wrong (RFC 6750 3.1).
-///             Some(_) => Err(Refused::unauthorized(Challenge::BEARER.param("error", "invalid_token"))),
+///             _ => Err(Refused::unauthorized(Challenge::BEARER.param("error", "invalid_token"))),
 ///         }
 ///     }
 /// }
@@ -277,9 +280,6 @@ impl Challenge {
     /// `Bearer` (RFC 6750): a key or token sent in `Authorization`.
     pub const BEARER: Challenge = Challenge::new("Bearer");
 
-    /// `Basic` (RFC 7617), which a browser answers with its own sign-in prompt.
-    pub const BASIC: Challenge = Challenge::new("Basic");
-
     /// Another scheme the client knows, written as a `const` of the app's
     /// (`const NEGOTIATE: Challenge = Challenge::new("Negotiate");`), where one that is not a token
     /// (RFC 9110 5.6.2) does not compile; called at run time it panics.
@@ -294,8 +294,8 @@ impl Challenge {
     /// token (Digest's `algorithm`) is not written with it, and RFC 6750's own parameters must not
     /// hold `"` or `\` at all. Panics when `name` is not a token or the challenge has it already
     /// (RFC 9110 11.2, in any case), or `value` has a control character or a byte outside ASCII,
-    /// which RFC 9110 5.5 asks a sender not to send: a value from a request or a store is the app's
-    /// to clean first.
+    /// Corten's rule since the authentication framework has no reliable way to carry another
+    /// character set (RFC 7617 3): a value from a request or a store is the app's to clean first.
     #[track_caller]
     pub fn param(self, name: &str, value: &str) -> Self {
         assert!(is_token(name.as_bytes()), "corten: a challenge's parameter name is a token: {name:?}");
@@ -335,6 +335,13 @@ impl Challenge {
             at += 3;
             Some(&text[name])
         })
+    }
+
+    /// `Basic` (RFC 7617), with the `realm` it requires: a browser answers it with its own
+    /// sign-in prompt, naming the realm. Panics as [`Challenge::param`] does.
+    #[track_caller]
+    pub fn basic(realm: &str) -> Self {
+        Challenge::new("Basic").param("realm", realm)
     }
 
     /// The header's value.
@@ -553,15 +560,15 @@ fn unidentified(message: &str) -> Response {
 
 /// A 401, 403 or 429 for a request without the caller its handler reads, with what the client is
 /// told and the header its status needs (`WWW-Authenticate`, `Retry-After`).
-fn refused(status: StatusCode, message: Option<std::sync::Arc<str>>, header: Option<Sent>) -> Response {
+fn refused(status: StatusCode, message: Option<std::sync::Arc<str>>, header: Option<RefusalHeader>) -> Response {
     let mut res = status.into_response();
     res.extensions_mut().insert(crate::page::Cause::Refused);
     if let Some(message) = message {
         res.extensions_mut().insert(crate::Failed(message));
     }
     let header = match header {
-        Some(Sent::Challenge(value)) => Some((http::header::WWW_AUTHENTICATE, value)),
-        Some(Sent::RetryAfter(value)) => Some((http::header::RETRY_AFTER, value)),
+        Some(RefusalHeader::Challenge(value)) => Some((http::header::WWW_AUTHENTICATE, value)),
+        Some(RefusalHeader::RetryAfter(value)) => Some((http::header::RETRY_AFTER, value)),
         None => None,
     };
     if let Some((name, value)) = header {
@@ -600,7 +607,7 @@ mod tests {
         let challenge =
             Challenge::BEARER.param("error_description", "scope=x, realm=\"y\"").param("scope", "y").param("realm", "z");
         assert_eq!(challenge.0, r#"Bearer error_description="scope=x, realm=\"y\"", scope="y", realm="z""#);
-        assert_eq!(Challenge::BASIC.0, "Basic");
+        assert_eq!(Challenge::basic("shop").0, r#"Basic realm="shop""#);
     }
 
     #[test]

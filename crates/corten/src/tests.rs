@@ -8826,6 +8826,7 @@ async fn a_caller_with_nowhere_to_sign_in_is_a_401_page() {
     assert_eq!(res["www-authenticate"], "Bearer", "the error page keeps the challenge every 401 sends");
     let (status, res, _) = guarded(&router, "GET", "/partner", None, &[("corten", "action")]).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(res.contains_key("corten-page"), "a form patch gets the error page to swap in");
     assert_eq!(res["www-authenticate"], "Bearer", "and so does the page swapped in");
     let (status, _, body) = guarded(&router, "GET", "/partner", None, &[("authorization", "Bearer k1")]).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "acme"));

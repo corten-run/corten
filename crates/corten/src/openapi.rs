@@ -323,7 +323,7 @@ use crate::{
 ///
 /// impl Argument for ApiKey {
 ///     fn describe(operation: &mut Operation<'_>) {
-///         operation.api_key("x-api-key", "The partner's API key.");
+///         operation.bearer("The partner's API key.");
 ///     }
 /// }
 /// ```
@@ -392,7 +392,8 @@ impl Operation<'_> {
     /// a header has no HTTP authentication scheme for the 401's challenge to name
     /// ([`crate::Refused::unauthorized`]); a new API takes its key as a bearer token instead,
     /// described with [`Operation::bearer`]. This describes an API whose clients already send one;
-    /// it takes the key as a bearer token too, so its 401 challenges `Bearer`.
+    /// it takes the key as a bearer token too, so its 401 challenges `Bearer`, and calls both this and
+    /// [`Operation::bearer`] in its `describe`, which the document lists as alternatives.
     pub fn api_key(&mut self, header: &str, description: &str) {
         let mut scheme = json!({ "type": "apiKey", "in": "header", "name": header });
         if !description.is_empty() {

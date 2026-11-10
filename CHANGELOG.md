@@ -2646,7 +2646,7 @@ Corten is pre-1.0, so any minor version may change the API.
 - `Refused::unauthorized` takes the `Challenge` its 401 sends in `WWW-Authenticate`, which RFC
   9110 requires on a 401 and which it never sent: `Refused::unauthorized(Challenge::BEARER)`,
   with `.param("error", "invalid_token")` for a token that is wrong (RFC 6750). `corten::Challenge`
-  is in the prelude with `Challenge::BEARER` and `Challenge::BASIC`; another scheme is a `const`
+  is in the prelude with `Challenge::BEARER` and `Challenge::basic(realm)`; another scheme is a `const`
   of the app's (`Challenge::new` is a `const fn`), so one that is not a token does not compile.
   A parameter's value is sent quoted and must be ASCII. The JSON 401, the error page and the page
   swapped in all carry it. An app that called

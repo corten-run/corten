@@ -1160,8 +1160,9 @@ rules something out.
     or middleware reads it, once per request, and reading it makes the answer private. A 401 from
     `Refused::unauthorized` carries the app's `Challenge` in `WWW-Authenticate`, which RFC 9110
     (15.5.2) requires on every 401, so its constructor takes one and no `unauthorized` leaves it
-    out: a scheme in a `const` of its own (`Challenge::BEARER`, `Challenge::BASIC`, or the
-    app's `const`), checked as a token when the program compiles, and parameters always sent as
+    out: `Challenge::BEARER`, `Challenge::basic(realm)` with the realm RFC 7617 requires, or a
+    scheme in a `const` of the app's, checked as a token when the program compiles (a
+    `Challenge::new` outside a `const` is checked as it runs), with parameters always sent as
     quoted strings. Of the 401s `Refused` makes, `sign_in`'s to a data client is the one that
     falls short of it: it carries no challenge, since a session cookie has no HTTP authentication
     scheme to name (a 401 an app writes by hand, `Error::status`, is its own). A key sent in a
@@ -1232,7 +1233,9 @@ rules something out.
     `caller = T` module, a path that reaches Corten's own, a method other than `get`,
     `prefetch`, `/health/live`, `/{*rest}`), at `f703d3f8`; 2026-11-10, IANA's HTTP
     Authentication Scheme Registry (no scheme for a session cookie) and the tests that a 401
-    keeps its challenge as JSON and on the error page (`crates/corten/src/tests.rs`), at `96e2c907`, the commit that adds them.
+    keeps its challenge as JSON and on the error page (`crates/corten/src/tests.rs`), at
+    `96e2c907`, the commit that adds them; and that a handler's own 401, the page swapped in and
+    a middleware's refusal keep it, at `2d6b88d0`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are

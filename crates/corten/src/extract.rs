@@ -38,7 +38,7 @@
 //!
 //!     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, StatusCode> {
 //!         let _lists = Lists::from_ref(state);
-//!         let id = cookie::get(&parts.headers, "visitor").ok_or(StatusCode::FORBIDDEN)?;
+//!         let id = cookie::get(&parts.headers, "visitor").ok_or(StatusCode::BAD_REQUEST)?;
 //!         Ok(Visitor(id.to_string()))
 //!     }
 //! }

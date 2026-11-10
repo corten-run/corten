@@ -2102,10 +2102,11 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    A 401 says how to send credentials (RFC 9110 requires it): `Refused::unauthorized` takes the
    `Challenge` that goes in `WWW-Authenticate`, `Challenge::BEARER` for a key or token
    in `Authorization` (RFC 6750), with `.param("error", "invalid_token")` when the one sent is
-   wrong. `Basic` makes a browser show its own sign-in prompt. A key in a header of the app's own
+   wrong. `Challenge::basic(realm)` makes a browser show its own sign-in prompt. A key in a header of the app's own
    (`X-Api-Key`) has no scheme to name, so send it as a bearer token; an API whose clients
    already send that header takes the key as a bearer token too and challenges `Bearer`. Another
-   scheme is a `const` of the app's (`Challenge::new("Negotiate")`), so a typo does not compile;
+   scheme is a `const` of the app's (`const NEGOTIATE: Challenge = Challenge::new("Negotiate");`),
+   so one that is not a token does not compile (called elsewhere, `new` checks it as it runs);
    a parameter's value is always sent quoted and in ASCII. `Refused::sign_in`'s 401
    to a data client has no challenge: a session cookie has no HTTP authentication scheme. A lookup
    that also takes a token refuses a request that sent one with `unauthorized`.
