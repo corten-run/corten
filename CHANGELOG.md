@@ -4224,7 +4224,8 @@ Corten is pre-1.0, so any minor version may change the API.
   header now reads a focused row only after it has held its place for two animation frames (at
   most 120). WebKit scrolls a focused row into view over a few frames, and a row read mid-scroll
   sat up to 28 px under the header before settling 248 px below it, so the check failed about once
-  in 30 runs on a branch that did not touch it. It waits on frames, not a timer.
+  in 30 runs on a branch that did not touch it. It waits on frames, not a timer, and a row still
+  moving after 120 frames fails the check rather than being read as settled.
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
   flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
