@@ -934,7 +934,7 @@ rules something out.
     stages written as combinators, the variant [Choice 28](#choice-fixed-stages) measured on axum's
     router carried over: 92 to 367 instructions more a staged request with jemalloc, 16 to 298 with
     glibc); measured (callgrind, release, five runs each with jemalloc and three with glibc, every
-    run the same, an unstaged route through its lane at `LANE_COMMIT` against its checks in its
+    run the same, an unstaged route through its lane at `bfa20380` against its checks in its
     handler at `8ddeaea2`: 7,003 against 6,932 in the app's routes and 7,068 against 6,982 in an
     API's with jemalloc, 7,812 against 7,745 and 7,879 against 7,797 with glibc; an API request
     13,110 against 13,120, a page route 18,288 against 18,298, one with a middleware 18,573
@@ -978,7 +978,7 @@ rules something out.
     dispatch suite on axum 0.8.9, hyper 1.12.0 and matchit 0.8.4, at `599c302a`; 2026-11-09,
     Corten's router against axum's, at `373a10f9`, with the suite unchanged; 2026-11-09, the
     stages as combinators on Corten's router, on the uncommitted variant of `8ddeaea2`, and the
-    unstaged route's lane, at `LANE_COMMIT`, with the suite unchanged.
+    unstaged route's lane, at `bfa20380`, with the suite unchanged.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
     `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
@@ -1177,7 +1177,7 @@ rules something out.
     (callgrind, release, five runs each, the same handler on Corten's router at `373a10f9`:
     unstaged 6,932 with jemalloc and 7,745 with glibc in every run, against 7,099 and 8,117 for a
     plain axum router in the same build); measured (callgrind, release, five runs each, the same
-    handler through its lane at `LANE_COMMIT`: 7,003 with jemalloc in every run and 7,068 in an
+    handler through its lane at `bfa20380`: 7,003 with jemalloc in every run and 7,068 in an
     API's module, against 6,932 and 6,982 with its checks in its handler at `8ddeaea2`, and 7,085
     for a plain axum router in both builds; 7,812 and 7,879 with glibc, three runs, against 7,745
     and 7,797); measured (callgrind, release, three runs each, the stages written as combinators
@@ -1232,7 +1232,7 @@ rules something out.
     [WebKit bug 284594](https://bugs.webkit.org/show_bug.cgi?id=284594), fixed in December 2024,
     was read; 2026-11-09, the unstaged route on Corten's router at `373a10f9` against axum's
     plain router in the same build ([Choice 25](#choice-axum-router), step 2); 2026-11-09, the
-    unstaged route through its lane at `LANE_COMMIT` against its checks in its handler at
+    unstaged route through its lane at `bfa20380` against its checks in its handler at
     `8ddeaea2`; 2026-11-09, the stages as combinators on Corten's router, on an uncommitted
     variant of `8ddeaea2`.
 
