@@ -18,12 +18,12 @@ name = "corten"
 
 [dependencies]
 # Only the features Corten uses: its own `serve_on` loop on axum's `Listener` and `ConnectInfo`
-# (`tokio`, `http1`) and the matched route a middleware stage reads (`matched-path`); Corten's
-# `json` feature adds axum's, whose rejection `corten::Json` shares with `axum::Json`. Not
+# (`tokio`, `http1`). Not `matched-path`: Corten routes with its own router (`corten::Router`),
+# which names the matched route itself. Corten's `json` feature adds axum's, whose rejection `corten::Json` shares with `axum::Json`. Not
 # `original-uri`, which inserts a copy of every request's URI that nothing reads, nor `form` and
 # `query`, readers Corten has its own of (`Form`, `Params`), nor `tracing` and `tower-log`
 # (#761). corten-feed asks for none either, so an app with `feed` gets the same set.
-axum = { version = "0.8", default-features = false, features = ["http1", "matched-path", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 # Already in axum's tree, at the version axum 0.8.9 needs (keep it at axum's): the extractor traits
 # alone (`corten::extract`, and `FromRef` beside Corten's derive). axum's own paths also carry its
 # derives of the same names when its `macros` feature is on anywhere in the build.
@@ -45,6 +45,12 @@ hyper-util = { version = "0.1", default-features = false, features = ["tokio", "
 # Already in axum's tree: the traits App's middleware implements.
 tower-layer = "0.3"
 tower-service = "0.3"
+# Already in axum's tree, at the version its router uses: the path to its route, for Corten's own
+# router (`corten::Router`).
+matchit = "0.8.4"
+# Already in axum's tree (through form_urlencoded): a path parameter's percent-decoding, after
+# the path is matched.
+percent-encoding = "2"
 # Percent-decoding form bodies and query strings (Corten's own `Form` and `Params`; axum's
 # `form` and `query` features, which would also bring it, are off).
 form_urlencoded = "1"

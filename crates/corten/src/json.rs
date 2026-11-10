@@ -134,9 +134,10 @@ use std::{
     },
 };
 
+use crate::extract::{FromRequest, Request};
 use axum::{
     body::{Body, Bytes},
-    extract::{rejection::JsonRejection, FromRequest, Request},
+    extract::rejection::JsonRejection,
     http::{header, HeaderValue},
     response::{IntoResponse, Response},
 };
@@ -821,10 +822,10 @@ impl<T: FromJson, S: Send + Sync> FromRequest<S> for Json<T> {
         // Any other content type, `application/json` with parameters among them, is axum's to
         // judge: it parses the media type.
         if req.headers().get(header::CONTENT_TYPE).is_none_or(|ct| ct.as_bytes() != crate::api::JSON.as_bytes()) {
-            let axum::Json(value) = axum::Json::<T>::from_request(req, state).await?;
+            let axum::Json(value) = <axum::Json<T> as axum::extract::FromRequest<S>>::from_request(req, state).await?;
             return Ok(Json(value));
         }
-        let bytes = Bytes::from_request(req, state).await?;
+        let bytes = <Bytes as axum::extract::FromRequest<S>>::from_request(req, state).await?;
         if let Some(value) = std::str::from_utf8(&bytes).ok().and_then(read::fast) {
             return Ok(Json(value));
         }
@@ -1257,7 +1258,7 @@ mod tests {
         if let Some(ct) = ct {
             req = req.header(header::CONTENT_TYPE, ct);
         }
-        match axum::Json::<T>::from_request(req.body(Body::from(body)).unwrap(), &()).await {
+        match <axum::Json<T> as axum::extract::FromRequest<()>>::from_request(req.body(Body::from(body)).unwrap(), &()).await {
             Ok(axum::Json(v)) => ("ok".into(), format!("{v:?}")),
             Err(e) => (e.status().to_string(), e.body_text()),
         }
