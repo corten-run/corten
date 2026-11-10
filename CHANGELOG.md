@@ -4259,6 +4259,12 @@ Corten is pre-1.0, so any minor version may change the API.
   adds each source's message (`error.sources`): an HTTP client's "error sending request" now
   names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
   message.
+- `corten::listeners` (and so `serve`) listens with a queue of 511 finished connections on Linux
+  (Windows 11 held 200 in one run; macOS keeps its 128 unless raised), not mio's and the standard library's 128.
+  With 1,024 clients connecting at once to a page on one CPU (Docker Desktop's Linux VM), the
+  kernel counted 142 and 485 listen-queue overflows (two runs) and the slowest connect
+  took 1.27 and 2.08 s; with 511, no overflows and 0.28 and 0.24 s (design Choice 33)
+  ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
