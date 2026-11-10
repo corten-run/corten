@@ -1143,8 +1143,7 @@ rules something out.
     `what_an_event_stream_costs` at 2,000 and 12,000 events, three runs each, within 20
     instructions); reasoned (a sync flush ends deflate's output on a byte boundary with everything
     sent so far decodable, so a decoder has the whole event); value (an event on time at the
-    user's end before the bytes brotli saves, Values 1, and the issue's own ask: decline the
-    coding for streams until a WebKit is shown to take it on time).
+    user's end before the bytes brotli saves, Values 1).
 
     Revisit when: a WebKit that Playwright runs dispatches a flushed brotli event of more than
     16 KiB at once, or sends zstd (then check a flushed zstd event there); Safari is tried and
