@@ -14,7 +14,11 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const allowed = new Map([
   [
     "examples/card-market/src/app.rs",
-    ["use corten::{answer::Body, axum::Router, http::Request};", "let bare = corten::axum::routing::get(item_json);"],
+    [
+      "use corten::{answer::Body, axum::Router, http::Request};",
+      "use corten::axum::extract::{Path, State};",
+      "let bare = corten::axum::routing::get(|State(source): State<Source>, Path(id): Path<String>| async move {",
+    ],
   ],
 ]);
 

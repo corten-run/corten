@@ -1,6 +1,6 @@
 # Marketplace v2 adapter contract
 
-This is the implementation contract for the eighteen adapters. Existing item/catalog routes
+This is the implementation contract for the twenty adapters. Existing item/catalog routes
 remain unchanged. V2 is a separate workload, with a new baseline, not a rewrite of old results.
 
 ## Routes and data

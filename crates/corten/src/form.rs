@@ -310,8 +310,9 @@
 
 use std::fmt;
 
+use crate::extract::{FromRequest, Request};
 use axum::{
-    extract::{rejection::RawFormRejection, FromRequest, RawForm, Request},
+    extract::{rejection::RawFormRejection, RawForm},
     http::{header, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -345,7 +346,8 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Form<T> {
 
     async fn from_request(req: Request, state: &S) -> Result<Self, FormRejection> {
         let query = matches!(*req.method(), Method::GET | Method::HEAD);
-        let RawForm(bytes) = RawForm::from_request(req, state).await.map_err(FormRejection::Body)?;
+        let RawForm(bytes) =
+            <RawForm as axum::extract::FromRequest<S>>::from_request(req, state).await.map_err(FormRejection::Body)?;
         match from_bytes(&bytes) {
             Ok(value) => Ok(Form(value)),
             // As axum's `Form`: a query string that does not fit is a bad request, a body a 422.
