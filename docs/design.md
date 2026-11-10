@@ -973,8 +973,9 @@ rules something out.
 
     Revisit when: a serde release changes what its derive writes for these attributes, which the
     twin tests would show; or apps need an attribute this refuses often enough that a type of their
-    own is the second way; or generic form types are common enough that their serde_json read shows
-    in a measured page or API, which would ask for a reader that repeats serde's inferred bounds.
+    own is the second way; or generic `Fields` or `UrlValue` types, or `#[serde(other)]` enums, are
+    common enough that their serde_json read shows in a measured page or API, which would ask for a
+    reader that repeats serde's inferred bounds or reads past a word it does not know.
 
     Last checked: 2026-11-06, the form read at `8cd5934e`; 2026-11-08, the JSON read for `FromJson`
     at `a791d9ba` and `58b8c2f8`; 2026-11-09, serde_derive 1.0.229 at `b44bd54b` (the twin tests, on
