@@ -682,43 +682,43 @@ impl<T: FromJson> FromJson for Box<T> {
     }
 }
 
+/// Text, read as a `String` is and moved into place.
+impl FromJson for Box<str> {
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        String::__read(r).map(Box::from)
+    }
+}
+
+/// A list, read as a `Vec` is and moved into place.
+impl<T: FromJson> FromJson for Box<[T]> {
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        Vec::<T>::__read(r).map(Box::from)
+    }
+}
+
 /// Read as its item, as serde's `rc` feature reads it (an app turns that feature on to read one).
-impl<T: FromJson> FromJson for std::sync::Arc<T>
+impl<T: __private::Shared + ?Sized> FromJson for std::sync::Arc<T>
 where
     std::sync::Arc<T>: DeserializeOwned,
 {
     #[inline]
     fn __read(r: &mut Reader<'_>) -> R<Self> {
-        T::__read(r).map(std::sync::Arc::new)
+        T::__read_arc(r)
     }
 }
 
 /// Read as its item, as serde's `rc` feature reads it (an app turns that feature on to read one).
-impl<T: FromJson> FromJson for std::rc::Rc<T>
+impl<T: __private::Shared + ?Sized> FromJson for std::rc::Rc<T>
 where
     std::rc::Rc<T>: DeserializeOwned,
 {
     #[inline]
     fn __read(r: &mut Reader<'_>) -> R<Self> {
-        T::__read(r).map(std::rc::Rc::new)
+        T::__read_rc(r)
     }
 }
-
-macro_rules! shared_str {
-    ($($t:ty),*) => {$(
-        /// Text, read as a `String` is and moved into place.
-        impl FromJson for $t
-        where
-            $t: DeserializeOwned,
-        {
-            #[inline]
-            fn __read(r: &mut Reader<'_>) -> R<Self> {
-                String::__read(r).map(<$t>::from)
-            }
-        }
-    )*};
-}
-shared_str!(Box<str>, std::sync::Arc<str>, std::rc::Rc<str>);
 
 /// Read as its owned form, as serde reads a `Cow`.
 impl<T: ToOwned + ?Sized> FromJson for std::borrow::Cow<'_, T>
@@ -826,6 +826,32 @@ by_serde!(
 /// Read as `null`, as serde reads it.
 impl<T: ?Sized> FromJson for std::marker::PhantomData<T> {}
 
+/// Read by serde_json, as serde reads a 128-bit integer.
+impl FromJson for u128 {}
+
+/// Read by serde_json, as serde reads a 128-bit integer.
+impl FromJson for i128 {}
+
+/// Read by serde_json, as serde reads a set.
+impl<T: FromJson> FromJson for std::collections::BTreeSet<T> where Self: DeserializeOwned {}
+
+/// Read by serde_json, as serde reads a set.
+impl<T: FromJson, S> FromJson for std::collections::HashSet<T, S> where Self: DeserializeOwned {}
+
+/// Read by serde_json, as serde reads a list.
+impl<T: FromJson> FromJson for std::collections::VecDeque<T> where Self: DeserializeOwned {}
+
+/// Read by serde_json, as serde reads an array of exactly `N` items.
+impl<T: FromJson, const N: usize> FromJson for [T; N] where Self: DeserializeOwned {}
+
+macro_rules! tuples {
+    ($(($($n:ident),*)),*) => {$(
+        /// Read by serde_json, as serde reads a tuple: an array of exactly its items.
+        impl<$($n: FromJson),*> FromJson for ($($n,)*) {}
+    )*};
+}
+tuples!((A), (A, B), (A, B, C), (A, B, C, D), (A, B, C, D, E), (A, B, C, D, E, F));
+
 /// The value's JSON text, kept as it is.
 #[cfg(feature = "types")]
 impl FromJson for Box<serde_json::value::RawValue> {}
@@ -874,6 +900,48 @@ pub mod __private {
 
     pub use super::{Fallback, Reader};
     use super::{FromJson, R};
+
+    /// What an `Arc` or `Rc` of it is read through: a `FromJson`, text or a list. Not a public API.
+    pub trait Shared {
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>>;
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>>;
+    }
+
+    impl<T: FromJson> Shared for T {
+        #[inline]
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>> {
+            T::__read(r).map(std::sync::Arc::new)
+        }
+
+        #[inline]
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
+            T::__read(r).map(std::rc::Rc::new)
+        }
+    }
+
+    impl Shared for str {
+        #[inline]
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>> {
+            String::__read(r).map(std::sync::Arc::from)
+        }
+
+        #[inline]
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
+            String::__read(r).map(std::rc::Rc::from)
+        }
+    }
+
+    impl<T: FromJson> Shared for [T] {
+        #[inline]
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>> {
+            Vec::<T>::__read(r).map(std::sync::Arc::from)
+        }
+
+        #[inline]
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
+            Vec::<T>::__read(r).map(std::rc::Rc::from)
+        }
+    }
 
     /// `s` read by the reader alone, `None` where it gives up: for tests that show the reader
     /// read a type itself rather than hand it to serde_json.
@@ -1179,6 +1247,20 @@ mod tests {
         assert!(same::<Vec<Box<str>>>(r#"["a","\u00e9"]"#));
         assert!(same::<Arc<str>>(r#""a""#));
         assert!(same::<Rc<str>>(r#""a""#));
+        assert!(same::<Box<[u8]>>("[1,2]"));
+        assert!(same::<Arc<[String]>>(r#"["a"]"#));
+        assert!(same::<BTreeMap<String, Box<[u8]>>>(r#"{"x":[1]}"#));
+        same::<u128>("340282366920938463463374607431768211455");
+        same::<i128>("-170141183460469231731687303715884105728");
+        same::<BTreeMap<String, u128>>(r#"{"a":1}"#);
+        same::<std::collections::BTreeSet<String>>(r#"["b","a"]"#);
+        same::<std::collections::VecDeque<u8>>("[1,2]");
+        same::<[u8; 2]>("[1,2]");
+        same::<[u8; 2]>("[1]");
+        same::<(f64, String)>(r#"[1.5,"a"]"#);
+        same::<BTreeMap<String, (f64, f64)>>(r#"{"p":[1,2]}"#);
+        let sets: std::collections::HashSet<String> = from_str(r#"["a","b","a"]"#).unwrap();
+        assert_eq!(sets, serde_json::from_str(r#"["a","b","a"]"#).unwrap());
         assert!(same::<Vec<Cow<'static, [u8]>>>("[[1],[2,3]]"));
         assert!(same::<BTreeMap<String, Arc<Line>>>(&format!(r#"{{"x":{LINE}}}"#)));
         #[cfg(feature = "types")]

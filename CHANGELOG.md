@@ -4259,12 +4259,7 @@ Corten is pre-1.0, so any minor version may change the API.
     serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
     The answer is the same JSON (card-market's agent test checks its bytes against serde's for the
     item). No count isolates this change yet: one runs `tool_cost` on `217bce2c` (with `tool_cost`
-    added) against this change's last commit, under callgrind. For context only, an `items.get` call
-    in `examples/card-market` counted 211,330 and 211,236 instructions on `620bc298`, against 267,820
-    and 265,852 on `a791d9ba` with `tool_cost` added (callgrind, release build, 1,200 calls less 200
-    over 1,000, two runs each), but the commits between also carry review changes from
-    [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042),
-    so that drop is not this change's. No data-role attribute is added beside `ToJson` and
+    added) against this change's last commit, under callgrind. No data-role attribute is added beside `ToJson` and
     `FromJson`, which already name each type's direction ([design Choice
     35](docs/design.md#choice-json-derives)). **Breaking:** the type a tool returns must be a `ToJson` and the
     type it takes a `FromJson`, as must any container around them (a derived struct's own fields
@@ -4278,8 +4273,9 @@ Corten is pre-1.0, so any minor version may change the API.
     `String` (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types Corten gives a schema
     for are both, written and read as serde does (`Duration`, `SystemTime`, IP and socket
     addresses, paths, the `NonZero` integers, `PhantomData`, `serde_json::Number` and, with
-    the `types` feature, `RawValue`), as are `Cow<T>`, `Box<str>`, and `Arc` and `Rc` of a
-    `FromJson` with serde's `rc` feature. Derive `ToJson` or `FromJson`; a `Serialize` or
+    the `types` feature, `RawValue`), as are `Cow<T>`, `Box<str>` and `Box<[T]>`, the 128-bit
+    integers, sets, `VecDeque`, arrays and tuples, and, with serde's `rc` feature, `Arc` and `Rc`
+    of a `FromJson`, of `str` or of `[T]`. Derive `ToJson` or `FromJson`; a `Serialize` or
     `Deserialize` type that has a schema but is not one (another crate's, or a map of one) goes
     in a `#[serde(transparent)]` newtype that derives it; only a type whose output schema is
     written by hand implements `ToJson` by hand beside it
@@ -4291,8 +4287,9 @@ Corten is pre-1.0, so any minor version may change the API.
     `Serialize` fails (a map with a key JSON cannot hold, inside another crate's type) now panics,
     as in any `ToJson` answer: the request ends as a handler's panic does, logged and answered with
     the app's 500 (in an `Api`, its JSON failure), where the call answered an internal error as the
-    tool's result with the call's `id`; a test holds it, and a log line names the tool. A test or
-    `corten dev` stops at a hand-written output `ToJson` that writes anything but one JSON object;
+    tool's result with the call's `id`; a test holds it, and a log line names the tool. A debug
+    build (`corten dev`, tests without `--release`) answers a call whose hand-written output
+    `ToJson` writes anything but one JSON object with the app's 500 and a log line naming the tool;
     a release build sends it as written, so a broken one breaks the JSON-RPC answer around it.
     A tool's output can hold `Raw`, a `ToJson` with any JSON value as its schema; the app guide said
     it needed `Box<RawValue>`, which only a feed row still does

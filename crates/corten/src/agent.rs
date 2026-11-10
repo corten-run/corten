@@ -109,8 +109,9 @@
 //! crate's type, in a newtype of the app's) writes its `ToJson` by hand too, beside its
 //! `ToJsonSchema`, two impls you keep in step (deriving `ToJson` beside a hand-written schema is
 //! E0119). A hand-written one writes exactly one
-//! JSON object, which goes into the response as written: a test or `corten dev` stops at one
-//! that does not, and a release build sends it as it is, so a broken one breaks the JSON-RPC
+//! JSON object, which goes into the response as written: a debug build (`corten dev`, tests
+//! without `--release`) answers a call whose output is not one with the app's 500 and a log line
+//! naming the tool, and a release build sends it as it is, so a broken one breaks the JSON-RPC
 //! answer around it:
 //!
 //! ```compile_fail,E0277
@@ -824,9 +825,9 @@ impl<A: Send + 'static> Tools<A> {
         drop(naming);
         match result {
             Ok(output) => {
-                // A hand-written `ToJson` goes into the envelope as written, so a test or
-                // `corten dev` stops at one that is not one JSON object; a release build sends it as
-                // written.
+                // A hand-written `ToJson` goes into the envelope as written, so a debug build
+                // answers a call whose output is not one JSON object with a 500 (the panic, logged
+                // with the tool's name); a release build sends it as written.
                 debug_assert!(
                     output.trim_start().starts_with('{') && serde_json::from_str::<serde::de::IgnoredAny>(&output).is_ok(),
                     "corten: tool {name}'s output ToJson must write one JSON object, not {}",

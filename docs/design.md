@@ -1349,8 +1349,8 @@ rules something out.
     value fails for every client the same way, the derive refuses what it cannot write, and a
     fallible write on this one path would be a second way to write an answer. It also gives up the
     guarantee that a release build's answer parses: a hand-written `ToJson` that writes broken
-    JSON breaks the JSON-RPC answer around it, where serde could not (a test or `corten dev` stops
-    at an output that is not one object):
+    JSON breaks the JSON-RPC answer around it, where serde could not (a debug build answers a call
+    whose output is not one object with a 500 and logs the tool):
 
     ```rust,ignore
     // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
