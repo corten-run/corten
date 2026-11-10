@@ -2573,7 +2573,7 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
-277. `bench/fullstack` measures what each production default costs in CPU a request under load:
+288. `bench/fullstack` measures what each production default costs in CPU a request under load:
     `cost-under-load.sh` builds card-market's round image as it is and with each `ablate/` patch,
     and `ab.mjs` loads the page and the JSON at a fixed 300 a second and with 64 users, alternating,
     on a droplet's pinned CPU; `cost-under-load.mjs` gives each default's microseconds a request.
