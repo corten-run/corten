@@ -2696,6 +2696,10 @@ Corten is pre-1.0, so any minor version may change the API.
     one of eighteen. Neither has a build step, so build-cost rows say so.
     They take Spring Boot's and Django's places among the matched tier's four most used frameworks
     ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
+284. Leptos joins `bench/fullstack`'s matched tier: under `PROFILE=matched` it adds axum-maud's
+    tower-http layers and a page CSP whose scripts run by the nonce Leptos makes for each
+    response, and its matched matrix meets the same 12 of 24 columns as axum-maud's
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
