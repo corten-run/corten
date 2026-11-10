@@ -83,6 +83,9 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * about 2 minutes an app, so about 105 with eighteen (estimated). conform.mjs, new after r14, took about 2.8 minutes an app locally (two apps in
  * 340 s, Docker Desktop on a busy machine), so nineteen about 55 (estimated): it has 120. A build
  * call that is stopped skips only its app.
+ * With twenty apps (FastAPI and Express, added after r16), the same per-app estimates put the
+ * fixture page call at about 74 of its 140 minutes (1.9 times, not twice) and the others within
+ * their limits.
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps that render the pages (they serve the JSON too)
