@@ -2573,6 +2573,23 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+277. The kit's `status_dot` has `LiveDot { tone }`, the dot of a live view's badge: its opacity
+    pulses while the `<corten-live>` around it is live, so a glance tells a live view from a frozen
+    one, and is still while it connects, reconnects or has closed or ended, before the runtime
+    runs, without JavaScript and outside a `<corten-live>`. It is still under
+    `prefers-reduced-motion: reduce`, pulses in the system's text color under forced colors as
+    `Progress`'s sweep moves. The guides give the rules that make the words beside it follow the
+    stream too ("Live" only while it is live, "Not live" otherwise and without JavaScript).
+    Not breaking: `StatusDot` is unchanged (its doc test no longer names a class a live form
+    could have), and `corten ui add status_dot --merge` takes `LiveDot`. The kit's new rules
+    add 195 bytes to the stylesheet of every app that draws a `StatusDot`, as the two share one:
+    measured on the ui-gallery's served `components.css`, 60,666 bytes with them where it was
+    60,471 (gzip 10,056 against 10,012, brotli 8,856 against 8,814, Node's zlib at gzip level 9
+    and brotli's default; the earlier size is the served file without the new rules). The
+    ui-gallery's orders page has a live badge with those words, whose own three rules bring the
+    served file to 60,833 bytes (gzip 10,081, brotli 8,876), and the smoke test puts it inside a
+    `<corten-live>` and checks it in each state
+    ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
     apps are: the item page, the catalog page, the localized marketplace page and the live price
@@ -2587,6 +2604,21 @@ Corten is pre-1.0, so any minor version may change the API.
     one of eighteen. Neither has a build step, so build-cost rows say so.
     They take Spring Boot's and Django's places among the matched tier's four most used frameworks
     ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
+284. The kit's `StatusTone` has `Text`, the color of the text around the dot: in a badge, the
+    badge's, so `<span class={Badge { tone, .. }}><StatusDot tone={StatusTone::Text} />"Open"</span>`
+    writes a computed tone once, on the badge, and a dot that takes it cannot disagree with it. It
+    shows on a `Solid` badge's fill too, where a dot in the badge's own tone was the fill's color
+    and could not be seen; the kit doc and guide say a dot in a badge takes it. `LiveDot` takes it
+    as well. Under forced colors it is `CanvasText`, as every tone is.
+    A dot in another tone in a badge still compiles: kit files are copied into an app one by one,
+    so the dot has no badge type to check against. Not
+    breaking: the other tones are unchanged, and `corten ui add status_dot --merge` takes `Text`.
+    The kit's rule adds 42 bytes to the stylesheet (measured on the ui-gallery's served
+    `components.css`: 60,920 bytes against 60,878, gzip 10,099 against 10,089, brotli 8,900
+    against 8,884, with the rule taken out for the earlier size). The ui-gallery's badges use it,
+    and its smoke test checks the dot is the badge's text color in a soft badge and a solid one, and
+    that a `Success` dot beside plain text is the theme's success color
+    ([#1092 Kit StatusDot and Badge take separate tone enums, so a badge with a computed tone writes it twice and a mismatched pair compiles](https://github.com/corten-run/corten/issues/1092)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -6321,6 +6353,20 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+78. Which tables sort in place is decided and measured: every table whose page has all its rows,
+    also when other routes read its order. `bench/browser/sort-cost.mjs` times a sort click with
+    `rows::sort` against a swap of the server-sorted table, fetched at the click or before it, and
+    writes each case's median and range with the engine's version. With no network the three cases'
+    ranges overlap in Chromium, Firefox and WebKit from 50 to 2,000 rows, the lowest median changing
+    with size and engine; with 40 ms of latency, in Chromium, in place is faster on the text columns
+    by 59 to 63 ms up to 500 rows (15 ms against 77 at 50 rows). A swap fetched ahead matches it
+    only when the answer is in before the click (a hover that rests through the fetch, or a tap, not
+    measured; not a key press or a quick click). The UI guide has the tables. Design Rule 3's
+    `rows::sort` exception says its search of the page is closed and that any other reader, a link
+    or a `GET` form in the part or anything outside it (a kit pager through its `on:link`), names
+    the table with `sorted(&Id)`; new design Limit 24 says one that does not sends the order the
+    page was drawn with, which nothing notices, and what would lift that
+    ([#960 Design Rule 3's rows::sort exception grows with each kind of form or link that reads the order: decide which tables sort in place and which ask the server](https://github.com/corten-run/corten/issues/960)).
 79. `corten-ui`'s `CheckboxGroup` doc and the UI guide's row say the group checks again on a box's
     `change`, which the browser does not send when a script sets `checked`, so a "Select all" or
     "Clear" button dispatches `input` and `change` on each box it set, as the kit's own scripts do;
