@@ -16,7 +16,8 @@ use std::{collections::BTreeMap, fmt};
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-/// A row a feed can hold: serializable, with a stable id.
+/// A row a feed can hold: serializable, with a stable id. Corten's `#[derive(Row)]`
+/// (`corten::feed::Row`) writes this impl from the field marked `#[row(id)]`.
 pub trait Row: Serialize + Clone + Send + Sync + 'static {
     fn id(&self) -> &str;
 }

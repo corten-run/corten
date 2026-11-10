@@ -70,9 +70,30 @@ macro_rules! row {
 }
 row!(Made, code);
 
+/// A row a `macro_rules!` declares with the id's visibility and attributes passed in, each
+/// reaching the derive in an invisible group.
+macro_rules! row_with {
+    ($(#[$m:meta])* $v:vis $name:ident, $id:ident) => {
+        #[derive(Clone, Serialize, Row)]
+        struct $name {
+            $(#[$m])*
+            $v $id: String,
+        }
+    };
+}
+row_with!(#[row(id)] pub(crate) Passed, code);
+row_with!(
+    #[row(id)]
+    #[serde(rename = "key")]
+    Renamed,
+    code
+);
+
 #[test]
 fn the_id_is_the_marked_field() {
     assert_eq!(Made { code: "m".into() }.id(), "m");
+    assert_eq!(Passed { code: "v".into() }.id(), "v");
+    assert_eq!(Renamed { code: "r".into() }.id(), "r");
     assert_eq!(Level { sku: "a".into(), qty: 1 }.id(), "a");
     assert_eq!(Listing { price_cents: 5, listing_id: "l1".into() }.id(), "l1");
     assert_eq!(Pair(3, "p".into()).id(), "p");

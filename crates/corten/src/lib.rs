@@ -196,6 +196,27 @@ pub mod feed {
     /// struct Stock { #[row(id)] ticker: String, views: std::cell::Cell<u32> }
     /// ```
     ///
+    /// An id serde leaves out of the JSON, where a script and a replica read the key:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(skip)] ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// A row that is not `Serialize`:
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(Clone, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// A row that borrows, so is not `'static`:
+    ///
+    /// ```compile_fail,E0478
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock<'a> { #[row(id)] ticker: &'a str }
+    /// ```
+    ///
     /// A row that is not `Clone`:
     ///
     /// ```compile_fail,E0277
