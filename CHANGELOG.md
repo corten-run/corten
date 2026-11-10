@@ -4257,14 +4257,15 @@ Corten is pre-1.0, so any minor version may change the API.
 173. An agent tool's output (`Tools::tool`, `idempotent_tool`, `read_tool`) is a `ToJson` and is
     written by it, so it derives `ToJson` alone, as every other JSON answer does, where it needed
     serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
-    The answer is the same JSON (card-market's agent test checks its bytes against serde's), and an
-    `items.get` call in `examples/card-market` costs a fifth fewer instructions: 211,330 and 211,236
-    a call on `620bc298`, against 267,820 and 265,852 on `a791d9ba` with `tool_cost` added
-    (callgrind, release build, `tool_cost`, each answer checked to be the tool's output, 1,200 calls
-    less 200 over 1,000, two runs each; the commits between also carry review changes to the derived
-    `Deserialize` that reads the input, from
+    The answer is the same JSON (card-market's agent test checks its bytes against serde's for the
+    item). An `items.get` call in `examples/card-market` counted 211,330 and 211,236 instructions on
+    `620bc298`, against 267,820 and 265,852 on `a791d9ba` with `tool_cost` added (callgrind, release
+    build, `tool_cost`, each answer checked to be the tool's output, 1,200 calls less 200 over 1,000,
+    two runs each); the commits between also carry review changes to the derived `Deserialize` that
+    reads the input, from
     [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042),
-    so the count does not separate the two). No data-role attribute is added beside `ToJson` and
+    and `620bc298` predates the panic log that names the tool, so the count does not isolate this
+    change. No data-role attribute is added beside `ToJson` and
     `FromJson`, which already name each type's direction ([design Choice
     35](docs/design.md#choice-json-derives)). **Breaking:** an output that implements `Serialize`
     and `ToJsonSchema` by hand and not `ToJson`, a derived generic output whose type argument is not
@@ -4276,7 +4277,8 @@ Corten is pre-1.0, so any minor version may change the API.
     as in any `ToJson` answer: the request ends as a handler's panic does, logged and answered with
     the app's 500 (in an `Api`, its JSON failure), where the call answered an internal error as the
     tool's result with the call's `id`; a test holds it, and a log line names the tool. A test or
-    `corten dev` stops at a hand-written output `ToJson` that writes anything but one JSON object.
+    `corten dev` stops at a hand-written output `ToJson` that writes anything but one JSON object;
+    a release build sends it as written, so a broken one breaks the JSON-RPC answer around it.
     A tool's output can hold `Raw`, a `ToJson` with any JSON value as its schema; the app guide said
     it needed `Box<RawValue>`, which only a feed row still does
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).

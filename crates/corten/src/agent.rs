@@ -105,8 +105,9 @@
 //! hand, does not compile as one: derive `ToJson`, which writes the schema and the bytes from one
 //! reading of the type, or, for a type the derive refuses, write `ToJson` by hand with its
 //! `ToJsonSchema` beside it, two impls you keep in step. A hand-written one writes exactly one
-//! JSON object, which goes into the response as written (a test or `corten dev` stops at one
-//! that does not):
+//! JSON object, which goes into the response as written: a test or `corten dev` stops at one
+//! that does not, and a release build sends it as it is, so a broken one breaks the JSON-RPC
+//! answer around it:
 //!
 //! ```compile_fail,E0277
 //! use corten::{agent::Tools, json::schema::{Generator, ToJsonSchema}};
@@ -815,10 +816,12 @@ impl<A: Send + 'static> Tools<A> {
         match result {
             Ok(output) => {
                 // A hand-written `ToJson` goes into the envelope as written, so a test or
-                // `corten dev` stops at one that is not one JSON object.
+                // `corten dev` stops at one that is not one JSON object; a release build sends it as
+                // written.
                 debug_assert!(
-                    serde_json::from_str::<serde_json::Map<String, Value>>(&output).is_ok(),
-                    "corten: tool {name}'s output ToJson must write one JSON object, not {output}"
+                    output.starts_with('{') && serde_json::from_str::<serde::de::IgnoredAny>(&output).is_ok(),
+                    "corten: tool {name}'s output ToJson must write one JSON object, not {}",
+                    output.char_indices().nth(80).map_or(&output[..], |(end, _)| &output[..end])
                 );
                 // The output as written, and once more as a JSON string for the text block, into
                 // one string sized for both: a large result is not copied as it grows.
@@ -1074,6 +1077,61 @@ mod tests {
         let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
         let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "broken", "arguments": {} } });
         let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        let ((status, _, body), text) = logging(send(&app, req)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert!(body.get("jsonrpc").is_none() && body.get("result").is_none(), "{body}");
+        assert!(
+            text.lines().any(|line| line.contains("agent tool panicked") && line.contains("tool=") && line.contains("broken")),
+            "the log names the tool: {text}"
+        );
+    }
+
+    /// A hand-written output `ToJson` that writes something other than one JSON object stops a
+    /// test at the call, naming the tool, rather than sending a broken answer.
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn a_hand_written_output_that_is_not_one_object_stops_a_test() {
+        struct Listed;
+        impl ToJson for Listed {
+            fn write_json(&self, out: &mut Vec<u8>) {
+                out.extend_from_slice(b"[1]");
+            }
+        }
+        impl ToJsonSchema for Listed {
+            fn json_schema(_: &mut Generator) -> Value {
+                json!({ "type": "object" })
+            }
+        }
+        let tools = Tools::new("test", "1.0").read_tool("listed", "Writes an array", |(), _: Nothing| async { Ok(Listed) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "listed", "arguments": {} } });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        let ((status, _, body), text) = logging(send(&app, req)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert!(text.contains("tool listed's output ToJson must write one JSON object, not [1]"), "{text}");
+    }
+
+    /// A tool's output can hold text the app wrote (`Raw`), sent as it is.
+    #[tokio::test]
+    async fn an_output_can_hold_raw_json() {
+        #[derive(crate::json::ToJson)]
+        struct Quoted {
+            quote: crate::json::Raw,
+        }
+        let tools = Tools::new("test", "1.0").read_tool("quote", "Quotes", |(), _: Nothing| async {
+            Ok(Quoted { quote: crate::json::Raw::new(r#"{"price":2.50,"at":[1, 2]}"#).unwrap() })
+        });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "quote", "arguments": {} } });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        let (status, _, body) = send(&app, req).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#""structuredContent":{"quote":{"price":2.50,"at":[1, 2]}}"#), "{body}");
+    }
+
+    /// `answer`'s result, with what the app logged on this thread while it ran.
+    async fn logging<T>(answer: impl Future<Output = T>) -> (T, String) {
         #[derive(Clone, Default)]
         struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
         impl std::io::Write for Lines {
@@ -1088,17 +1146,11 @@ mod tests {
         let lines = Lines::default();
         let writer = lines.clone();
         let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
-        let logging = tracing::subscriber::set_default(subscriber);
-        let (status, _, body) = send(&app, req).await;
-        drop(logging);
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-        let body: Value = serde_json::from_str(&body).unwrap();
-        assert!(body.get("jsonrpc").is_none() && body.get("result").is_none(), "{body}");
+        let guard = tracing::subscriber::set_default(subscriber);
+        let out = answer.await;
+        drop(guard);
         let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
-        assert!(
-            text.lines().any(|line| line.contains("agent tool panicked") && line.contains("tool=") && line.contains("broken")),
-            "the log names the tool: {text}"
-        );
+        (out, text)
     }
 
     /// An app whose agents get tokens from an authorization server: `reader` may read, `writer`

@@ -580,6 +580,12 @@ mod tests {
     }
 
     fn app() -> App {
+        super::app_with(fixture(), Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" }, WRITES_PER_MINUTE)
+            .test()
+    }
+
+    /// The items `app` serves.
+    fn fixture() -> Source {
         let offers: Vec<_> = (1..=7)
             .map(|n| json!({ "offer_id": format!("o{n}"), "buyer_display_name": format!("Buyer {n}"), "product_summary": "NM", "quantity_requested": 1, "price_amount": "1.00", "price_currency_code": "USD" }))
             .collect();
@@ -595,8 +601,7 @@ mod tests {
             "offer_demand_matches": offers
         });
         let bare = json!({ "catalog_item_id": "item_10", "title": "Bare", "market_summary": null });
-        let source = Source::fixture(&json!({ "item_9": item, "item_10": bare }).to_string()).unwrap();
-        super::app_with(source, Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" }, WRITES_PER_MINUTE).test()
+        Source::fixture(&json!({ "item_9": item, "item_10": bare }).to_string()).unwrap()
     }
 
     /// The alert form on `item`, posted from the page: the title, the address and the price.
@@ -1329,11 +1334,11 @@ mod tests {
         let (_, _, body) = send(call(Some("dev-token"), read)).await;
         let res: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(res["result"]["structuredContent"]["listings"].as_array().unwrap().len(), 2);
-        // The output is written by its ToJson: serde's bytes, in the text block and as is in
-        // structuredContent.
+        // The output is written by its ToJson: serde's bytes for the item, in the text block and
+        // as is in structuredContent.
         let text = res["result"]["content"][0]["text"].as_str().unwrap();
-        let view: ItemView = serde_json::from_str(text).unwrap();
-        assert_eq!(text, serde_json::to_string(&view).unwrap());
+        let item = fixture().item("item_9").await.unwrap().unwrap();
+        assert_eq!(text, serde_json::to_string(&*item).unwrap());
         assert!(body.contains(&format!(r#""structuredContent":{text}"#)), "{body}");
     }
 
