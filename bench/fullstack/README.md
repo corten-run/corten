@@ -1587,12 +1587,14 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    container is given its CPUs, and the live stream needs every client in one process. Express runs
    one Node process with `NODE_ENV=production`, as its production guide says, which caches compiled
    views; FastAPI's templates are Starlette's `Jinja2Templates` as created, which checks each
-   template file's time on every render (Jinja's default, which FastAPI's docs do not change). Three
+   template file's time on every render (Jinja's default, which FastAPI's docs do not change). Four
    settings differ from a library's default so that the item API source does the same work in every
    app: Gin keeps as many idle connections to the item API as its transport allows (Go's default
    keeps two per host; reqwest, .NET and Node have no per-host cap), FastAPI's httpx clients have no
-   connection cap (httpx's default keeps 20 idle and allows 100 in all), and Drogon keeps one
-   `HttpClient` (one connection) per request in flight on each thread. Drogon also hands the fixture
+   connection cap (httpx's default keeps 20 idle and allows 100 in all), Phoenix's Req client uses
+   a Finch pool of 1,024 connections to the item API, opened as needed (Req's own pool holds Finch's
+   50 per host), and Drogon keeps one `HttpClient` (one connection) per request in flight on each
+   thread. Drogon also hands the fixture
    parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
    in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one
    item at a time. Drogon's JSON is JsonCpp's, Drogon's default, which writes 17 significant digits

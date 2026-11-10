@@ -16,6 +16,10 @@ defmodule ItemPage.Application do
       ItemPageWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:item_page, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ItemPage.PubSub},
+      # The item API's client pool. Req's own starts with Finch's 50 connections per host; the
+      # other apps' clients have no per-host cap, so this one holds more than the profile's 256
+      # users can ask for at once. Finch opens them only as they are needed.
+      {Finch, name: ItemPage.Finch, pools: %{default: [size: 1024]}},
       # Start a worker by calling: ItemPage.Worker.start_link(arg)
       # {ItemPage.Worker, arg},
       # Start to serve requests, typically the last entry

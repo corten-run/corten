@@ -4186,6 +4186,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
 
 ### Fixed
+- `bench/fullstack`'s Phoenix app reads the item API through a Finch pool of 1,024 connections
+  (opened as needed) started in its supervision tree, where Req's own pool held Finch's 50 per host,
+  so under the 256-user phases its item API source no longer waits for a pooled connection where
+  the other apps open another; the README names it beside Gin's, FastAPI's and Drogon's settings
+  ([#1152 bench/fullstack Phoenix's item API client is capped at Finch's default 50 connections per host, against the README's rule that no app's client is capped](https://github.com/corten-run/corten/issues/1152)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
