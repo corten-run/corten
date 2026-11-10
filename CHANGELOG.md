@@ -4188,8 +4188,9 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Fixed
 - `bench/fullstack`'s Phoenix app reads the item API through a Finch pool of 1,024 connections
   (opened as needed) started in its supervision tree, where Req's own pool held Finch's 50 per host,
-  so under the 256-user phases its item API source no longer waits for a pooled connection where
-  the other apps open another; the README names it beside Gin's, FastAPI's and Drogon's settings
+  so with more than 50 requests in flight (the 256-user phases, the open phases' bursts) its item
+  API source no longer waits for a pooled connection where the other apps open another; Phoenix's
+  results from earlier rounds in those phases were measured under the 50-connection cap; the README names it beside Gin's, FastAPI's and Drogon's settings
   ([#1152 bench/fullstack Phoenix's item API client is capped at Finch's default 50 connections per host, against the README's rule that no app's client is capped](https://github.com/corten-run/corten/issues/1152)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.

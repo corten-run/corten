@@ -17,8 +17,10 @@ defmodule ItemPage.Application do
       {DNSCluster, query: Application.get_env(:item_page, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ItemPage.PubSub},
       # The item API's client pool. Req's own starts with Finch's 50 connections per host; the
-      # other apps' clients have no per-host cap, so this one holds more than the profile's 256
-      # users can ask for at once. Finch opens them only as they are needed.
+      # other apps' clients have no per-host cap, so this one holds more than the profile has in
+      # flight (256 users in the closed phases, up to 1,000 in the fixed phase); only an app more
+      # than 1,024 requests behind in the mixed phase, already a failed phase, could reach it.
+      # Finch opens them only as they are needed.
       {Finch, name: ItemPage.Finch, pools: %{default: [size: 1024]}},
       # Start a worker by calling: ItemPage.Worker.start_link(arg)
       # {ItemPage.Worker, arg},
