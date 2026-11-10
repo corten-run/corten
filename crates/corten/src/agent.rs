@@ -91,7 +91,9 @@
 //! app's 500 (in an [`Api`](crate::Api), its JSON failure), not as the tool's result.
 //!
 //! An output needs `ToJson` and no `Serialize`. One written by serde, with a schema written by
-//! hand, does not compile as one, since its schema and its bytes could drift apart:
+//! hand, does not compile as one: derive `ToJson`, which writes the schema and the bytes from one
+//! reading of the type, or, for a type the derive refuses, write `ToJson` by hand with its
+//! `ToJsonSchema` beside it, two impls you keep in step:
 //!
 //! ```compile_fail,E0277
 //! use corten::{agent::Tools, json::schema::{Generator, ToJsonSchema}};
@@ -101,6 +103,26 @@
 //! struct Done { ok: bool }
 //! impl ToJsonSchema for Done {
 //!     fn json_schema(_: &mut Generator) -> serde_json::Value { serde_json::json!({ "type": "object" }) }
+//! }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
+//! Written by hand, it does:
+//!
+//! ```
+//! use corten::{agent::Tools, json::schema::{Generator, ToJsonSchema}, ToJson};
+//! #[derive(corten::FromJson)]
+//! struct Adjust { id: String }
+//! struct Done { ok: bool }
+//! impl ToJson for Done {
+//!     fn write_json(&self, out: &mut Vec<u8>) {
+//!         out.extend_from_slice(if self.ok { br#"{"ok":true}"# } else { br#"{"ok":false}"# });
+//!     }
+//! }
+//! impl ToJsonSchema for Done {
+//!     fn json_schema(_: &mut Generator) -> serde_json::Value {
+//!         serde_json::json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } })
+//!     }
 //! }
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```

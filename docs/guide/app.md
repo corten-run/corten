@@ -1378,8 +1378,9 @@ Under the prefix:
    an `application/json` body, and axum (`serde_json`) any other JSON content type and any body
    the reader gives up on. What it writes is a `ToJson`: derive it
    (`#[derive(ToJson)]`, also in the prelude) on the response type. It needs no `Serialize`
-   unless the app's own code writes the type with serde; an agent tool's output is a `ToJson`
-   too. The derive lays the JSON out when the crate compiles, so a response
+   unless the app's own code writes the type with serde or it is a feed row; an agent tool's
+   output is a `ToJson` too, and its input a `FromJson`. The derive lays the JSON out when the
+   crate compiles, so a response
    copies one byte string between each pair of values instead of writing every key, quote and
    comma, into a `Vec` sized from the type's last response that the body keeps. It reads
    `#[serde(...)]` and writes the bytes `serde_json` would. A `#[serde(flatten)]` field whose type

@@ -1330,19 +1330,21 @@ rules something out.
     of another module or crate is exposed by it. An agent tool's output was the one place a
     response type still needed serde's `Serialize` beside `ToJson`: its `outputSchema` came from
     `ToJson`'s schema while its bytes came from `Serialize`, so a hand-written `Serialize` could
-    drift from the schema with nothing failing to compile (Value 4). Tool outputs are now bounded
-    on `ToJson`, so the one `ToJson` impl, derived or written by hand, writes both (a field of
-    another crate's type inside it is still
-    written by serde under a schema written for it, as in any `ToJson` answer) and a tool's output
-    is written by the code every other response is (tool inputs are bounded on `FromJson` the same
-    way, so an input that derives serde's `Deserialize` beside a schema written by hand does not
-    compile, short of the deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson`
-    cannot write takes: written by hand, or serde's for an attribute it refuses). What this gives
-    up: a tool output whose `ToJson` falls back to a field's own `Serialize` and fails (another
-    crate's map with a key JSON cannot hold) panics, and the call ends with the app's 500 rather
-    than a JSON-RPC error carrying its `id`, as every other `ToJson` answer already does. It
-    stands because such a value fails for every client the same way, the derive refuses what it
-    cannot write, and a fallible write on this one path would be a second way to write an answer:
+    drift from the schema with nothing failing to compile (Value 4). Tool outputs are now bounded on
+    `ToJson`, so a derived `ToJson` writes both the schema and the bytes (a field of another crate's
+    type inside it is still written by serde under a schema written for it, as in any `ToJson`
+    answer), and a tool's output is written by the code every other response is. A `ToJson` written
+    by hand, for a type the derive refuses, comes with a `ToJsonSchema` written beside it, two impls
+    its author keeps in step, as before. Tool inputs are bounded on `FromJson` the same way, so an
+    input that derives serde's `Deserialize` beside a schema written by hand does not compile, short
+    of the deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson` cannot write
+    takes (written by hand, or serde's for an attribute it refuses), which again leaves two impls in
+    its author's hands. What this gives up: a tool output whose `ToJson` falls back to a field's own
+    `Serialize` and fails (another crate's map with a key JSON cannot hold) panics, and the call
+    ends with the app's 500, as every other `ToJson` answer already does, where it used to be
+    answered as the tool's failed result (`isError`, "internal error"). It stands because such a
+    value fails for every client the same way, the derive refuses what it cannot write, and a
+    fallible write on this one path would be a second way to write an answer:
 
     ```rust,ignore
     // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
@@ -1370,8 +1372,11 @@ rules something out.
     Stands on: measured (callgrind, release build, card-market's `tool_cost`: an agent's `items.get`
     call through `/mcp`, each answer checked to be the tool's output, 1,200 calls less 200 over
     1,000, two runs each: 267,820 and 265,852 instructions a call on `a791d9ba` with `tool_cost`
-    added, 211,330 and 211,236 on `620bc298`, outputs written by `ToJson`); reasoned (one impl
-    writes a tool output's schema and its bytes, and one a tool input's schema and what it reads;
+    added, 211,330 and 211,236 on `620bc298`, outputs written by `ToJson`; the commits between also
+    carry review changes to the derived `Deserialize` that reads the tool's input, from
+    [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042),
+    so the count does not separate the two); reasoned (a derived `ToJson` writes a tool output's
+    schema and its bytes, and a derived `FromJson` a tool input's schema and what it reads;
     card-market's agent test checks a tool answer's bytes equal serde's); value (one declaration per
     direction, Values 4, 5 and 6).
 

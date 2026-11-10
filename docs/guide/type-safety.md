@@ -84,5 +84,7 @@ that serde writes have one (strings, numbers, `NonZero*`, lists, sets, maps, tup
 `Box`/`Rc`/`Arc`/`Cow`, `Duration`, `SystemTime`, paths and addresses, `serde_json`'s values and
 `RawValue`, Corten's `Raw` and `Day`). The read side describes what `FromJson` reads, so an enum
 with data in a tool's input, which `FromJson` does not take, has no read schema: implement
-`FromJsonSchema` for it by hand. A declaration is named after the Rust type; a
+`FromJsonSchema` for it by hand (and, when it is the whole input, which a tool bounds on
+`FromJson`, add `impl corten::FromJson for T {}` beside its `Deserialize`). A declaration is
+named after the Rust type; a
 `#[serde(rename)]` on the type does not change its JSON, and does not change the name.

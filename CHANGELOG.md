@@ -4261,19 +4261,21 @@ Corten is pre-1.0, so any minor version may change the API.
     `items.get` call in `examples/card-market` costs a fifth fewer instructions: 211,330 and 211,236
     a call on `620bc298`, against 267,820 and 265,852 on `a791d9ba` with `tool_cost` added
     (callgrind, release build, `tool_cost`, each answer checked to be the tool's output, 1,200 calls
-    less 200 over 1,000, two runs each). No data-role attribute is added beside `ToJson` and
+    less 200 over 1,000, two runs each; the commits between also carry review changes to the derived
+    `Deserialize` that reads the input, from
+    [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042),
+    so the count does not separate the two). No data-role attribute is added beside `ToJson` and
     `FromJson`, which already name each type's direction ([design Choice
-    35](docs/design.md#choice-json-derives)). **Breaking:** an output
-    that implements `Serialize` and `ToJsonSchema` by hand and not `ToJson`, a derived generic
-    output whose type argument is not `ToJson`, or an input that is a `Deserialize` (derived by
-    serde or written by hand) with a `FromJsonSchema` written by hand and not a `FromJson`, no
-    longer compiles as one; derive `ToJson` (or implement it, for a type the derive refuses) or
-    `FromJson`, or, for an input whose `Deserialize` is not `FromJson`'s, add
-    `impl corten::FromJson for T {}`. A field whose own `Serialize` fails (a map with a key JSON
-    cannot hold, inside another crate's type) now panics, as in any `ToJson` answer: the request
-    ends as a handler's panic does, logged and answered with the app's 500 (in an `Api`, its JSON
-    failure), where the call answered an internal error as the tool's result with the call's `id`; a
-    test holds it
+    35](docs/design.md#choice-json-derives)). **Breaking:** an output that implements `Serialize`
+    and `ToJsonSchema` by hand and not `ToJson`, a derived generic output whose type argument is not
+    `ToJson`, or an input that is a `Deserialize` (derived by serde or written by hand) with a
+    `FromJsonSchema` written by hand and not a `FromJson`, no longer compiles as one; derive
+    `ToJson` (or implement it, for a type the derive refuses) or `FromJson`, or, for an input whose
+    `Deserialize` is not `FromJson`'s, add `impl corten::FromJson for T {}`. A field whose own
+    `Serialize` fails (a map with a key JSON cannot hold, inside another crate's type) now panics,
+    as in any `ToJson` answer: the request ends as a handler's panic does, logged and answered with
+    the app's 500 (in an `Api`, its JSON failure), where the call answered an internal error as the
+    tool's result with the call's `id`; a test holds it
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 176. The runtime and its modules are minified by terser after esbuild minifies them, so every page
     ships fewer bytes: the runtime is 14,318 bytes with gzip (level 9), 533 fewer, and 12,955 with
