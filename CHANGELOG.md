@@ -4082,7 +4082,11 @@ Corten is pre-1.0, so any minor version may change the API.
     handler, so such a page drew its own pager. Breaking for a copy's callers: every
     `<Pagination>` and `<PreviousNext>` writes `on:link`, `None::<Handler>` for none (take the
     kit's file with `corten ui add pagination --merge`). `ordered::link` takes an `HTMLElement`,
-    as a prop's handler gets one
+    as a prop's handler gets one, so the compiler no longer refuses another element; one that is
+    not an `<a>` or `<area>` is reported in the console and left. `ordered.js` as served (its
+    comments removed) grows from 3,182 to 3,384 bytes (gzip 1,188 to 1,269, brotli 1,003 to
+    1,074), loaded only by a page that calls it. A pager step that writes is a form the app draws
+    in place of the pager, which the guides now say
     ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
 
 ### Fixed

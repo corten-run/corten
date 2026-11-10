@@ -466,7 +466,11 @@ pub fn Gallery<'a>(
                             <Table layout={TableLayout::Scroll}>
                                 <table id={LastSalesId}>
                                     <caption>
-                                        if earlier { "This month's earlier sales" } else { "This month's last sales" }
+                                        if earlier {
+                                            "This month's earlier sales, sorted among themselves"
+                                        } else {
+                                            "This month's last sales, sorted among themselves"
+                                        }
                                     </caption>
                                     // Each sorts the rows in place, by the day and price each
                                     // cell sorts by and the buyer's name; without the script, the

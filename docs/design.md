@@ -1326,7 +1326,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
     arguments the call passes (a column, as a Rust type) are checked either way. A handler meant
     for such a prop takes the wide type too (corten-ui's `rows::sort` and `ordered::link`, which
     the kit's pagers take as `on:link`), so written on an element of its own it accepts any
-    element: `ordered::link` on a `<button>` compiles and, with no `href` to keep, does nothing.
+    element: `ordered::link` on a `<button>` compiles, is reported in the console, and does nothing.
 19. <a id="limit-permissions-policy"></a>The `Permissions-Policy` a document is sent (`Feature`) is enforced by Chromium-based browsers
     (measured in Chromium 156: with the location granted, `geolocation=()` refuses it). Firefox 157
     and WebKit 27.2 gave the location under the same header (probed), so in them the features it
