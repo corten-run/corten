@@ -539,22 +539,35 @@ impl<T: ToJsonMembers + ?Sized> ToJsonMembers for Box<T> {
 /// assert_eq!(counts.to_json(), r#"{"in_stock":1,"sold_out":2}"#);
 /// ```
 ///
-/// One that is internally tagged or untagged writes an object or `null`, and one with a variant that
-/// holds data writes an object for it, none of which is a key, so as a key it does not compile:
+/// One that is internally or adjacently tagged or untagged writes an object or `null`, and one with a
+/// variant that holds data writes an object for it, none of which is a key, so as a key it does not
+/// compile:
 ///
 /// ```compile_fail,E0277
-/// use corten::json::ToJson;
-/// #[derive(ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// #[derive(corten::ToJson, PartialEq, Eq, PartialOrd, Ord)]
 /// #[serde(tag = "kind")]
 /// enum Stock { InStock, SoldOut }
-/// let _ = std::collections::BTreeMap::from([(Stock::InStock, 1)]).to_json();
+/// let _ = corten::json::to_vec(&std::collections::BTreeMap::from([(Stock::InStock, 1)]));
 /// ```
 ///
 /// ```compile_fail,E0277
-/// use corten::json::ToJson;
-/// #[derive(ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// #[derive(corten::ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// #[serde(tag = "kind", content = "data")]
+/// enum Stock { InStock, SoldOut }
+/// let _ = corten::json::to_vec(&std::collections::BTreeMap::from([(Stock::InStock, 1)]));
+/// ```
+///
+/// ```compile_fail,E0277
+/// #[derive(corten::ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// #[serde(untagged)]
+/// enum Stock { InStock, SoldOut }
+/// let _ = corten::json::to_vec(&std::collections::BTreeMap::from([(Stock::InStock, 1)]));
+/// ```
+///
+/// ```compile_fail,E0277
+/// #[derive(corten::ToJson, PartialEq, Eq, PartialOrd, Ord)]
 /// enum Stock { InStock, Held(u32) }
-/// let _ = std::collections::BTreeMap::from([(Stock::InStock, 1)]).to_json();
+/// let _ = corten::json::to_vec(&std::collections::BTreeMap::from([(Stock::InStock, 1)]));
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a map key ToJson can write (JsonKey)",

@@ -1351,13 +1351,16 @@ rules something out.
     serde could not. A debug build answers a call whose output is not one object with a 500 and logs
     the tool; a release build checks only that the output starts with `{` and ends with `}`,
     answering the tool's internal error otherwise, because parsing it there measured about 92,700
-    more instructions a call (303,500 against 210,762, 44%, on `tool_cost`). A tool output whose
-    `ToJson` falls back to a field's own `Serialize` and fails (another crate's map with a key JSON
-    cannot hold, or a std type serde refuses: a path that is not UTF-8, a `SystemTime` before the
-    epoch) panics where it is written, as in every other `ToJson` answer; the call catches that
-    panic and answers the tool's internal error (`isError`, "internal error"), as it did when serde
-    wrote outputs, so `ToJson` stays the one writer (an app built with `panic = "abort"` ends
-    instead):
+    more instructions a call (303,500 against 210,762, 44%, on `tool_cost`). Parsing only outputs
+    that are not derived would not make the guarantee: a derived struct writes what its fields'
+    `ToJson` write, hand-written ones included, so a derived output is no proof either; and every
+    `Json` answer sends a hand-written `ToJson` as written, so a tool asks no more of one than they
+    do. A tool output whose `ToJson` falls back to a field's own `Serialize` and fails (another
+    crate's map with a key JSON cannot hold, or a std type serde refuses: a path that is not UTF-8,
+    a `SystemTime` before the epoch) panics where it is written, as in every other `ToJson` answer;
+    the call catches that panic and answers the tool's internal error (`isError`, "internal error"),
+    as it did when serde wrote outputs, so `ToJson` stays the one writer (an app built with `panic =
+    "abort"` ends instead):
 
     ```rust,ignore
     // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.

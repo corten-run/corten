@@ -107,15 +107,18 @@
 //! hand, does not compile as one: derive `ToJson`, which writes the schema and the bytes from one
 //! reading of the type. A `Serialize` type that has a schema but is not a `ToJson` (another
 //! crate's, or a map of one) goes in a `#[serde(transparent)]` newtype that derives `ToJson`, one
-//! impl that writes it by serde. A type whose schema is written by hand (one the derive refuses, or
-//! another crate's type, in a newtype of the app's) writes its `ToJson` by hand too, beside its
-//! `ToJsonSchema`, two impls you keep in step (deriving `ToJson` beside a hand-written schema is
-//! E0119). A hand-written one writes exactly one JSON object, which goes into the response as
-//! written: a debug build (`corten dev`, tests without `--release`) answers a call whose output is
-//! not one with the app's 500 and a log line naming the tool. A release build answers one that does
-//! not start with `{` and end with `}` as the tool's internal error, logged with its name, and
-//! sends any other as written, so a broken object breaks the JSON-RPC answer around it (parsing it
-//! there would add about 44% to a call):
+//! impl that writes it by serde; serde's bytes then go out under the inner type's schema, whichever
+//! crate it is from, so that schema is the one to keep in step. A type whose schema is written by
+//! hand (one the derive refuses, or another crate's type, in a newtype of the app's) writes its
+//! `ToJson` by hand too, beside its `ToJsonSchema`, two impls you keep in step (deriving `ToJson`
+//! beside a hand-written schema is E0119). A hand-written one writes exactly one JSON object, which
+//! goes into the response as written: a debug build (`corten dev`, tests without `--release`)
+//! answers a call whose output is not one with the app's 500 and a log line naming the tool. A
+//! release build answers one that does not start with `{` and end with `}` as the tool's internal
+//! error, logged with its name, and sends any other as written, so a broken object breaks the
+//! JSON-RPC answer around it, as a broken hand-written `ToJson` breaks any `Json` answer (parsing
+//! it there would add about 44% to a call, and a derived output is no proof either, since it writes
+//! what its fields' `ToJson` write):
 //!
 //! ```compile_fail,E0277
 //! use corten::{agent::Tools, json::schema::{Generator, ToJsonSchema}};
@@ -823,15 +826,20 @@ impl<A: Send + 'static> Tools<A> {
                 // tool's name). Parsing it in a release build would add about 44% to a call (card-
                 // market's `tool_cost`), so there only its ends are checked: one that is not an object
                 // at all is the tool's internal error, and a broken object is sent as written.
-                let shown = || output.char_indices().nth(80).map_or(&output[..], |(end, _)| &output[..end]);
+                // JSON's whitespace, not Rust's (`trim_ascii` also takes a form feed).
+                let ends = output.trim_matches([' ', '\t', '\n', '\r']);
                 debug_assert!(
-                    output.trim_start().starts_with('{') && serde_json::from_str::<serde::de::IgnoredAny>(&output).is_ok(),
+                    ends.starts_with('{') && serde_json::from_str::<serde::de::IgnoredAny>(&output).is_ok(),
                     "corten: tool {name}'s output ToJson must write one JSON object, not {}",
-                    shown()
+                    output.char_indices().nth(80).map_or(&output[..], |(end, _)| &output[..end])
                 );
-                let ends = output.trim_ascii();
                 if !(ends.starts_with('{') && ends.ends_with('}')) {
-                    let error = format!("its output ToJson must write one JSON object, not {}", shown());
+                    // The log names the output's size and first character, not its data.
+                    let error = format!(
+                        "its output ToJson must write one JSON object; it wrote {} bytes starting {:?}",
+                        output.len(),
+                        ends.chars().next()
+                    );
                     return Ok(self.failed(name, ToolError::internal(error)));
                 }
                 // The output as written, and once more as a JSON string for the text block, into
@@ -1156,17 +1164,21 @@ mod tests {
         assert_eq!(body["id"], 7, "{body}");
         assert_eq!(body["result"]["isError"], true, "{body}");
         assert_eq!(body["result"]["content"][0]["text"], "internal error", "{body}");
-        assert!(text.contains("listed") && text.contains("must write one JSON object, not [1]"), "{text}");
+        assert!(
+            text.contains("listed") && text.contains("must write one JSON object; it wrote 3 bytes starting Some('[')"),
+            "{text}"
+        );
+        assert!(!text.contains("[1]"), "the log does not hold the output: {text}");
         let (status, _, body) = send(&app, call("spaced")).await;
         assert_eq!(status, StatusCode::OK, "{body}");
         assert!(body.contains(r#""structuredContent": {"a":1} ,"isError":false"#), "{body}");
     }
 
-    /// Another crate's `Serialize` type with a schema is a tool's whole output in a
-    /// `#[serde(transparent)]` newtype that derives `ToJson`: serde writes its bytes, and its
-    /// schema is the output's.
+    /// A `Serialize` type with a schema (here the app's own, standing for another crate's) is a
+    /// tool's whole output in a `#[serde(transparent)]` newtype that derives `ToJson`: serde
+    /// writes its bytes, and its schema is the output's.
     #[tokio::test]
-    async fn an_output_can_be_another_crates_type_in_a_transparent_newtype() {
+    async fn an_output_can_be_a_serialize_type_in_a_transparent_newtype() {
         #[derive(serde::Serialize)]
         struct Theirs {
             ok: bool,

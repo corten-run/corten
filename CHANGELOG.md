@@ -4272,18 +4272,19 @@ Corten is pre-1.0, so any minor version may change the API.
     is one of those or another crate's type; a derived generic type, output or input, whose type
     argument is not `ToJson` or `FromJson`; an output map whose key is not a `JsonKey` (an app's key
     type implements `corten::json::JsonKey`, writing the text serde writes for it; an externally
-    tagged enum of unit variants that derives `ToJson` gets one from the derive); and an input map
-    whose key is not `String` (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types Corten
-    gives a schema for are `ToJson`, and `FromJson` in their owned forms (`str`, `[T]`, `Path` and
-    `RawValue` boxed or shared), written and read as serde does (`Duration`, `SystemTime`, IP and
-    socket addresses, paths, the `NonZero` integers, `PhantomData`, `serde_json::Number` and, with
-    the `types` feature, `RawValue`), as are `Cow<T>`, `Box<str>`, `Box<Path>` and `Box<[T]>`, the
-    128-bit integers, sets, `VecDeque`, arrays (read up to 32 items, as serde reads them) and
-    tuples, and `Arc` and `Rc` of a `FromJson`, of `str`, of `Path`, of `[T]` or (with `types`) of
-    `RawValue`, which are read with serde's `rc` feature. Derive `ToJson` or `FromJson`; a
-    `Serialize` or `Deserialize` type that has a schema but is not one (another crate's, or a map of
-    one) goes in a `#[serde(transparent)]` newtype that derives it; only a type whose output schema
-    is written by hand implements `ToJson` by hand beside it (`serde_json::to_writer(&mut *out,
+    tagged enum of unit variants that derives `ToJson` gets one from the derive, so an app's own
+    `impl JsonKey` for one is E0119 and is removed); and an input map whose key is not `String`
+    (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types Corten gives a schema for are
+    `ToJson`, and `FromJson` in their owned forms (`str`, `[T]`, `Path` and `RawValue` boxed or
+    shared), written and read as serde does (`Duration`, `SystemTime`, IP and socket addresses,
+    paths, the `NonZero` integers, `PhantomData`, `serde_json::Number` and, with the `types`
+    feature, `RawValue`), as are `Cow<T>`, `Box<str>`, `Box<Path>` and `Box<[T]>`, the 128-bit
+    integers, sets, `VecDeque`, arrays (read up to 32 items, as serde reads them) and tuples, and
+    `Arc` and `Rc` of a `FromJson`, of `str`, of `Path`, of `[T]` or (with `types`) of `RawValue`,
+    which are read with serde's `rc` feature. Derive `ToJson` or `FromJson`; a `Serialize` or
+    `Deserialize` type that has a schema but is not one (another crate's, or a map of one) goes in a
+    `#[serde(transparent)]` newtype that derives it; only a type whose output schema is written by
+    hand implements `ToJson` by hand beside it (`serde_json::to_writer(&mut *out,
     &self.0).expect(..)` in a newtype, for another crate's type); an input whose `Deserialize` is
     not `FromJson`'s takes `impl corten::FromJson for T {}`; an input type the orphan rule keeps an
     app from implementing it for (a map with other keys) goes in a `#[serde(transparent)]` newtype
