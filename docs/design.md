@@ -1333,8 +1333,8 @@ rules something out.
 
     Last checked: 2026-11-10, the derive, its `compile_fail` examples, each compiled for its own
     message, `tests/derived_row.rs`, and the rows of the four example apps and `corten-cluster` by
-    `cargo clippy --workspace --all-targets`, on `e4e6f870`, the derive's last change; 2026-11-10,
-    the live benchmark's row, outside the workspace, by reading it on `e4e6f870` (it has no serde
+    `cargo clippy --workspace --all-targets`, on `76247120`, the derive's last change; 2026-11-10,
+    the live benchmark's row, outside the workspace, by reading it on `76247120` (it has no serde
     attribute).
 
 ## Rules
