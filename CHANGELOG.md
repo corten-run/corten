@@ -2573,6 +2573,22 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+277. `bench/fullstack` measures what each production default costs in CPU a request under load:
+    `cost-under-load.sh` builds card-market's round image as it is and with each `ablate/` patch,
+    and `ab.mjs` loads the page and the JSON at a fixed 300 a second and with 64 users, alternating,
+    on a droplet's pinned CPU; `cost-under-load.mjs` gives each default's microseconds a request.
+    Three rounds on a c-8 (the README's "What each production default costs under load"): for a
+    browser, compression is 45 of the page's 85 microseconds at 64 users (53%) and 25 of the JSON's
+    57 (44%); no other default is separated from the run's order and noise: the page's `ETag`,
+    7.7% of its instructions under callgrind, measures 6 microseconds there, as do defaults with
+    almost no instructions. `ab.mjs` now starts each round one image later, gives k6 the load CPUs
+    a round gives an app serving from memory (`BENCH_FIXTURE_LOAD_CPUS`), never reads an earlier
+    run's file, writes the rows so far to `summary.partial.json` after each one, and on a failed k6
+    run stops and removes the app; `cost-under-load.sh` reuses a `cbd-*` image only when its label
+    says it was built from the same source, and writes `source.txt` beside the results (its commit
+    unknown in a copy with no `.git`, as a droplet gets), which now keep the droplet's script and
+    CPU (`run.sh`, `host.txt`)
+    ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
     apps are: the item page, the catalog page, the localized marketplace page and the live price
