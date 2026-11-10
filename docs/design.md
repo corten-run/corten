@@ -1021,8 +1021,8 @@ rules something out.
     dispatch suite on axum 0.8.9, hyper 1.12.0 and matchit 0.8.4, at `599c302a`; 2026-11-09,
     Corten's router against axum's, at `373a10f9`, with the suite unchanged; 2026-11-09, the
     stages as combinators on Corten's router, on the uncommitted variant of `8ddeaea2`, and the
-    unstaged route's lane, at `bfa20380`, with the suite unchanged; 2026-11-09, Corten's handler
-    traits (step 3) against step 2 at `7bba1e2b`, with the suite unchanged; 2026-11-09, the lane boxed
+    unstaged route's lane, at `bfa20380`, with the suite unchanged; 2026-11-10, Corten's handler
+    traits (step 3) at `6d78a069` against step 2 at `7bba1e2b`, with the suite unchanged; 2026-11-09, the lane boxed
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
     the `laned` variant of `fa0b1525`.
 
