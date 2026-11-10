@@ -5867,15 +5867,15 @@ Corten is pre-1.0, so any minor version may change the API.
     reached it, so a modal with a long line touched the screen's edges. Both rules now leave a
     dialog or popover child alone, still with no specificity; its long words still break, as the
     column's do, and every other child is as before. A non-modal dialog opens where it is written,
-    over the content after it, as the browser places it. The ui-gallery's smoke test opens a modal with a long word and a popover in
-    a `StackStart` column at 320px and checks both are centered, the dialog clear of the edges and
-    not scrolling sideways, and that a paragraph beside them still drops its margin; against the
-    earlier stylesheet it fails in Chromium with the dialog at the top, touching both edges, and the
-    popover at the top. No request or render cost: the rules make the ui-gallery's served
-    `components.css` 61,405 bytes where it was 61,306 (gzip 10,166 against 10,156, brotli 8,951
-    against 8,947, Node's zlib at gzip level 9 and brotli's default), served by the gallery built
-    from this change and from the commit it was merged onto, 71c0361a. Found by the Chase Sets pilot, which set `margin: auto` on
-    its reviews page's dialog
+    over the content after it, as the browser places it. The ui-gallery's smoke test opens a modal
+    with a long word and a popover in a `StackStart` column at 320px and checks both are centered,
+    the dialog clear of the edges and not scrolling sideways, and that a paragraph beside them still
+    drops its margin; against the earlier stylesheet it fails in Chromium with the dialog at the
+    top, touching both edges, and the popover at the top. No request or render cost: the rules make
+    the ui-gallery's served `components.css` 61,405 bytes where it was 61,306 (gzip 10,166 against
+    10,156, brotli 8,951 against 8,947, Node's zlib at gzip level 9 and brotli's default), served by
+    the gallery built from this change and from the commit it was merged onto, 71c0361a. Found by
+    the Chase Sets pilot, which set `margin: auto` on its reviews page's dialog
     ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
 
 ### Documentation
