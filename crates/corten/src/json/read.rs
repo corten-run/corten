@@ -690,6 +690,14 @@ impl FromJson for Box<str> {
     }
 }
 
+/// A path, read as a `PathBuf` is and moved into place.
+impl FromJson for Box<std::path::Path> {
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        std::path::PathBuf::__read(r).map(std::path::PathBuf::into_boxed_path)
+    }
+}
+
 /// A list, read as a `Vec` is and moved into place.
 impl<T: FromJson> FromJson for Box<[T]> {
     #[inline]
@@ -901,7 +909,8 @@ pub mod __private {
     pub use super::{Fallback, Reader};
     use super::{FromJson, R};
 
-    /// What an `Arc` or `Rc` of it is read through: a `FromJson`, text or a list. Not a public API.
+    /// What an `Arc` or `Rc` of it is read through: a `FromJson`, text, a path or a list. Not a
+    /// public API.
     pub trait Shared {
         fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>>;
         fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>>;
@@ -928,6 +937,18 @@ pub mod __private {
         #[inline]
         fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
             String::__read(r).map(std::rc::Rc::from)
+        }
+    }
+
+    impl Shared for std::path::Path {
+        #[inline]
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>> {
+            std::path::PathBuf::__read(r).map(std::sync::Arc::from)
+        }
+
+        #[inline]
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
+            std::path::PathBuf::__read(r).map(std::rc::Rc::from)
         }
     }
 
@@ -1248,6 +1269,10 @@ mod tests {
         assert!(same::<Arc<str>>(r#""a""#));
         assert!(same::<Rc<str>>(r#""a""#));
         assert!(same::<Box<[u8]>>("[1,2]"));
+        same::<Box<std::path::Path>>(r#""a/b""#);
+        same::<Arc<std::path::Path>>(r#""a/b""#);
+        same::<Rc<std::path::Path>>(r#""a""#);
+        same::<BTreeMap<String, Box<std::path::Path>>>(r#"{"x":"c"}"#);
         assert!(same::<Arc<[String]>>(r#"["a"]"#));
         assert!(same::<BTreeMap<String, Box<[u8]>>>(r#"{"x":[1]}"#));
         same::<u128>("340282366920938463463374607431768211455");

@@ -4283,7 +4283,8 @@ Corten is pre-1.0, so any minor version may change the API.
     whose `Deserialize` is not `FromJson`'s takes `impl corten::FromJson for T {}`; an input type
     the orphan rule keeps an app from implementing it for (a map with other keys) goes in a
     `#[serde(transparent)]` newtype that derives `FromJson`. `serde_json::Map<String, Value>` is now a `FromJson`, so an input read as
-    any object compiles as before. A field whose own
+    any object compiles as before. CI and the Checks build `corten-run` with `agent` and `feed` alone, as an app
+    takes them, since the workspace turns on serde's `rc` and an app need not. A field whose own
     `Serialize` fails (a map with a key JSON cannot hold, inside another crate's type) now panics,
     as in any `ToJson` answer: the request ends as a handler's panic does, logged and answered with
     the app's 500 (in an `Api`, its JSON failure), where the call answered an internal error as the

@@ -290,7 +290,7 @@ pub fn to_vec<T: ToJson + ?Sized>(value: &T) -> Vec<u8> {
 /// response holds. A hand-written impl appends exactly one JSON value to `out`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not write itself as JSON (ToJson)",
-    note = "derive ToJson on it (it needs no Serialize); a Serialize type that has a schema but is not ToJson (another crate's, or a map of one) goes in a #[serde(transparent)] newtype that derives ToJson; only a type whose schema is written by hand implements ToJson by hand, beside its ToJsonSchema (serde_json::to_writer(&mut *out, &self.0) in a newtype, for another crate's type)"
+    note = "derive ToJson on it (it needs no Serialize); another crate's Serialize type, or a map of one, goes in a #[serde(transparent)] newtype that derives ToJson; where a schema is asked for (an agent tool's output, feature types) and the derive cannot give one, implement ToJson by hand on the newtype (serde_json::to_writer(&mut *out, &self.0)) beside a hand-written ToJsonSchema"
 )]
 pub trait ToJson {
     /// Appends the value's JSON to `out`.
