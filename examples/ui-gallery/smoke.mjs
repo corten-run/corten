@@ -3848,11 +3848,22 @@ async function run(browser) {
       let reached = 0;
       for (let i = 0; i < 39; i++) {
         await page.keyboard.press("Shift+Tab");
-        const [row, under] = await page.locator(selector).evaluate((box) => {
+        // Read once the row has stopped moving: WebKit scrolls a focused row into view over a few
+        // frames, and a row read mid-scroll can sit under the header it ends well below (one read at
+        // 28 px under it settled 248 px below it). Read once it has kept its place for two frames.
+        const [row, under] = await page.locator(selector).evaluate(async (box) => {
           const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
           const now = document.activeElement;
-          const row = !!now?.hasAttribute("data-smoke-row");
-          return [row, row && /** @type {Element} */ (now).getBoundingClientRect().top < header.getBoundingClientRect().bottom - 1];
+          if (!now?.hasAttribute("data-smoke-row")) return [false, false];
+          const gap = () => now.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
+          let last = gap();
+          for (let same = 0, frames = 0; same < 2 && frames < 120; frames++) {
+            await new Promise((done) => requestAnimationFrame(() => done(undefined)));
+            const next = gap();
+            same = next === last ? same + 1 : 0;
+            last = next;
+          }
+          return [true, last < -1];
         });
         if (row) reached += 1;
         if (under) covered += 1;
