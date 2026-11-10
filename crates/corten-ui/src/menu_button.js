@@ -79,7 +79,8 @@ export function toggled(event, trigger, menu) {
 /** @param {KeyboardEvent} event @param {HTMLDivElement} menu */
 export function step(event, menu) {
   const items = reachable(menu);
-  const at = items.indexOf(/** @type {any} */ (document.activeElement));
+  const now = document.activeElement;
+  const at = now instanceof HTMLElement ? items.indexOf(now) : -1;
   /** @type {number} */
   let to;
   if (event.key === "ArrowDown") to = (at + 1) % items.length;

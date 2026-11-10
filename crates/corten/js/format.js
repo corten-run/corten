@@ -25,16 +25,18 @@
  */
 
 /**
- * The function a format argument is.
+ * The function a format argument is. Which one `spec` makes is the server's choice, so the type
+ * says only that it gives text: the script's own JSDoc names the format it takes (corten.js's
+ * `MoneyFormat` and the rest), which `#[component(js)]` checks against the argument.
  * @param {Spec} spec
- * @returns {(value: any, options?: { offset?: number }) => string}
+ * @returns {(value: never, options?: { offset?: number }) => string}
  */
 export function formatter(spec) {
   if (spec.m) return plural(spec, /** @type {string} */ (spec.c), spec.m);
-  if (spec.f) return (at, options) => date(spec, at, options?.offset);
+  if (spec.f) return (/** @type {Date | number | string} */ at, /** @type {{ offset?: number } | undefined} */ options) => date(spec, at, options?.offset);
   if (spec.d !== undefined) {
     const d = spec.d;
-    return (minor) => {
+    return (/** @type {number} */ minor) => {
       // Rounded half away from zero, as the server rounds: 19.99 * 100 is 1998.9999999999998.
       const text = String(Math.round(Math.abs(minor))).padStart(d + 1, "0");
       const negative = minor < 0 || Object.is(minor, -0);
@@ -43,6 +45,11 @@ export function formatter(spec) {
       return number(spec, at, text.slice(0, text.length - d), text.slice(text.length - d));
     };
   }
+  return decimal(spec);
+}
+
+/** A number or percentage format. @param {Spec} spec @returns {(n: number | string) => string} */
+function decimal(spec) {
   const p = spec.p;
   return (n) => {
     const [, sign, int = "", frac = ""] = /^([-+]?)(\d*)(?:\.(\d+))?$/.exec(typeof n === "number" ? plain(n) : n) ?? [];
@@ -117,7 +124,7 @@ function number(spec, at, int, frac) {
  * @returns {(args: Record<string, string | number>) => string}
  */
 function plural(spec, table, forms) {
-  const write = formatter({ z: spec.z, s: spec.s, t: spec.t });
+  const write = decimal({ z: spec.z, s: spec.s, t: spec.t });
   return (args) => {
     // No count is not a number, as Number(undefined) is: the `other` form.
     const count = args.count ?? NaN;

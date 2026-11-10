@@ -4290,6 +4290,19 @@ Corten is pre-1.0, so any minor version may change the API.
     `ComboBox` with no options threw on Enter after Arrow Down; it closes now.
     `exactOptionalPropertyTypes` is not used (design Choice 33)
     ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)).
+171. `subscribe()` checks the envelope of what a feed sends: a snapshot's `epoch`, `seq` and
+    `rows`, and a patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An
+    answer that is not a snapshot is a failed snapshot, logged and fetched again after a backoff,
+    where it reached `snapshot` with no rows; a patch that is not one (not JSON, say) closes the
+    stream and loads the snapshot again after a backoff that doubles from 1 s, where it threw in
+    the listener and its write was missed until the next patch. Rows are trusted as the server's
+    `Row`. The runtime, the kit, the template and the examples have no explicit `any` (the
+    Navigation API and a service worker's global are declared where they are used), and
+    `npm run check` fails on an explicit `any` or a `@ts-ignore` in them. card-market's push
+    worker shows a message with no title as an empty title, where it showed "undefined", and opens
+    `/` for a `url` that is not text. The runtime's gzip size grows by 200 bytes, 121 of them the
+    feed's checks (design Choice 34)
+    ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
