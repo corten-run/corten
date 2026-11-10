@@ -11,7 +11,7 @@ your routes. Each default can be replaced in one line.
 | Names it answers to | `localhost`, IP addresses; any other `Host` gets `421` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
-| What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; `#[derive(Clone, FromRef)]` on `Shared` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out) |
+| What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; on `Shared`, `#[derive(Clone, FromRef)]`: `Clone` lets each route have a copy and a handler take the whole state, and `FromRef` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out; [design Choice 33](../design.md#choice-state-derives)) |
 | What a route answers | its handler's return type: `HtmlResult` (a page, a patch, a redirect; failures are the error page) or `JsonResult<T>` (failures are JSON too; `Result<JsonResponse, JsonError>` for a status or cookie of the handler's own, or another server's answer passed on) | `Public<..>` around either for an answer that is the same for everyone, `NoStore<..>` (or `no_store` on the route) for one nothing may keep ([below](#caching)) |
 | The client's address | the connection's peer; no `X-Forwarded-For` is read | a handler takes `ClientIp`; behind a proxy, `PROXIES=10.0.0.0/8` in the environment or `Policy::proxy("10.0.0.0/8")` ([below](#the-clients-address)) |
 | Who is asking | nothing: no lookup runs | a handler takes `Caller<Viewer>` (`Viewer: Identify`), looked up only then, once per request ([below](#who-is-asking)) |
@@ -683,7 +683,7 @@ that implements `corten::Listener`, with `serve`'s shutdown across all of them
 socket, or a socket a supervisor hands over, is a listener of the app's own.
 Each of `listeners`' sockets asks the system to hold up to 511 connections that finished their
 handshake but are not yet accepted (Node's default, and nginx's on Linux), not the standard library's
-128 ([design Choice 33](../design.md#choice-listen-backlog)).
+128 ([design Choice 34](../design.md#choice-listen-backlog)).
 On Linux, which caps it at `net.core.somaxconn` (4096 since 5.4), a burst of clients faster than
 the server accepts them then waits in that queue rather than a second or more for a resent SYN.
 macOS caps it at `kern.ipc.somaxconn`, 128 by default, so there the change takes a raised
