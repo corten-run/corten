@@ -4262,7 +4262,7 @@ Corten is pre-1.0, so any minor version may change the API.
     a call on `620bc298`, against 267,820 and 265,852 on `a791d9ba` with `tool_cost` added
     (callgrind, release build, `tool_cost`, each answer checked to be the tool's output, 1,200 calls
     less 200 over 1,000, two runs each). No data-role attribute is added beside `ToJson` and
-    `FromJson`, which already name each type's direction (design Choice 35). **Breaking:** an output
+    `FromJson`, which already name each type's direction (design Choice 36). **Breaking:** an output
     that implements `Serialize` and `ToJsonSchema` by hand and not `ToJson`, a derived generic
     output whose type argument is not `ToJson`, or an input that is a `Deserialize` (derived by
     serde or written by hand) with a `FromJsonSchema` written by hand and not a `FromJson`, no
@@ -4276,6 +4276,12 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 
 ### Fixed
+- The ui-gallery smoke's check that keyboard focus never lands under a dialog's or sheet's sticky
+  header now reads a focused row only after it has held its place for two animation frames (at
+  most 120). WebKit scrolls a focused row into view over a few frames, and a row read mid-scroll
+  sat up to 28 px under the header before settling 248 px below it, so the check failed about once
+  in 30 runs on a branch that did not touch it. It waits on frames, not a timer, and a row still
+  moving after 120 frames fails the check rather than being read as settled.
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
   flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
@@ -4299,6 +4305,22 @@ Corten is pre-1.0, so any minor version may change the API.
   layer, is about 286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470;
   callgrind, three runs each, within 20 instructions)
   ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
+- A `data-patch` submit that is abandoned, by a newer submit of the form (another button, other
+  values) or by a navigation, drops its `aria-busy` marks at once, as the guide says, rather than
+  when its own code next ran (after its fetch rejected, or once what it waited on to draw had loaded),
+  so a replaced button is never shown working; the runtime grows 15 bytes gzip (14,872 to 14,887)
+  ([#1108 The smoke's busy-mark check failed once in WebKit: the replaced button A was still marked busy while B's submit was on its way](https://github.com/corten-run/corten/issues/1108)).
+- A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
+  feed load, relay or JetStream consumer, is logged as the error itself, so Corten's log line
+  adds each source's message (`error.sources`): an HTTP client's "error sending request" now
+  names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
+  message.
+- `corten::listeners` (and so `serve`) listens with a queue of 511 finished connections on Linux
+  (Windows 11 held 200 in one run; macOS keeps its 128 unless raised), not mio's and the standard library's 128.
+  With 1,024 clients connecting at once to a page on one CPU (Docker Desktop's Linux VM), the
+  kernel counted 142 and 485 listen-queue overflows (two runs) and the slowest connect
+  took 1.27 and 2.08 s; with 511, no overflows and 0.28 and 0.24 s (design Choice 33)
+  ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
@@ -5781,7 +5803,20 @@ Corten is pre-1.0, so any minor version may change the API.
     and Firefox). The prefetch check's one-off failure in Firefox (an extra request) matches this.
     The two Firefox checks that failed now and then say what they counted when they fail: each
     request with its purpose, and the timed requests and console errors of the module that is
-    imported again
+    imported again. The prefetch checks read each count once the request it counts is seen: each
+    of the nine hovers waits for its prefetch, the oldest page's click for its fetch (or its
+    hover's), and the `data-no-prefetch` control for its own prefetch. The opt-out and the
+    held-page check, which look for a request that must not come, pause on the page's own timer,
+    set after the dwell. The held-page check holds every request for its page, a prefetch too,
+    until that timer has outlasted the re-hover's dwell, instead of for 600 ms from the click,
+    which a slow hover could outlast so the check passed untested; it fails if the address changed
+    first, and is skipped where the address changes at the click (no `precommitHandler`), where it
+    could not fail. Each count's own request must have been seen, not only the total.
+    The reuse of the oldest page kept and of the newest is read from the requests themselves (no
+    visit asked for either), so a cache of fewer than 8 now fails the check, where one of 7 passed
+    it, and its failure says how old the oldest kept prefetch was at its click, since one past the
+    runtime's 10 s is fetched again however large the cache. The module check already waited for
+    the event it counts; why its third request once did not come is not known
     ([#1053 Two Firefox watchlist smoke checks (prefetch's newest 8, a script module imported again) each fail now and then on a branch that does not touch them](https://github.com/corten-run/corten/issues/1053)).
 186. A page upload whose client stopped sending was answered at the deadline as the server's
     timeout (503, `Failure::TimedOut`) and logged as a deadline, never as the stalled client it
@@ -5916,6 +5951,40 @@ Corten is pre-1.0, so any minor version may change the API.
     fetch draws the error page rather than its plain text, and an error page keeps the `Vary` of
     the failure it replaces beside its own
     ([#1034 A page fetched whole after a write that redirects to a place loses its #id: the fetch sends no corten header, so the redirect is a 303 that fetch follows without the fragment](https://github.com/corten-run/corten/issues/1034)).
+197. A `#[derive(UrlValue)]` enum is an attribute's value (`AttrValue`), so
+    `data-finish={Some(finish)}` writes its word and `None` leaves the attribute out, as an
+    `Option<&str>` does; before, the enum was written alone through `Display` and an `Option` of
+    it did not compile. The word is escaped as before. An `Option` of a type that implements only
+    `Display` still needs `.map(|v| v.to_string())` (`Option<T>` is an `AttrValue` when `T`
+    is), which the `AttrValue` doc now says, and the compiler's message for it says what an
+    `Option` takes there (tested by building an app). Breaking for an app that implemented
+    `AttrValue` on its own `UrlValue` enum, or that implements a trait of its own for every
+    `AttrValue` and again for such an enum: both now conflict with the derive's impl.
+    **Migration:** delete the hand-written impl; the derive's writes the same word. A direct
+    `UrlValue` attribute now goes through `AttrValue` for `str` rather than the `Display` escaper,
+    and callgrind resolves no difference: counting only the loop that renders the 500 benchmark item
+    pages once (271 of them have more than five offers and so draw one, `value={Shown::All}`), three
+    runs of each build, alternated, gave 22,256,152 to 22,322,895 instructions before (median
+    22,258,651) and 22,238,287 to 22,383,606 after (median 22,296,593), about 44,500 a page, and the
+    same 3,677,304 bytes
+    ([#1111 Optional UrlValue enum attributes fail where direct enum attributes compile](https://github.com/corten-run/corten/issues/1111)).
+198. A `<dialog>` or `[popover]` written as a direct child of a kit `Stack` or `Cluster` (beside the
+    button that opens it) lost the browser's `margin: auto` to the kit's margin reset, so a modal
+    opened pinned to the top of a phone's screen and a popover without an anchor at the top; one in
+    a `StackStart` column also lost the browser's width, as the column's `max-width: 100%` cap
+    reached it, so a modal with a long line touched the screen's edges. Both rules now leave a
+    dialog or popover child alone, still with no specificity; its long words still break, as the
+    column's do, and every other child is as before. A non-modal dialog opens where it is written,
+    over the content after it, as the browser places it. The ui-gallery's smoke test opens a modal
+    with a long word and a popover in a `StackStart` column at 320px and checks both are centered,
+    the dialog clear of the edges and not scrolling sideways, and that a paragraph beside them still
+    drops its margin; against the earlier stylesheet it fails in Chromium with the dialog at the
+    top, touching both edges, and the popover at the top. No request or render cost: the rules make
+    the ui-gallery's served `components.css` 61,405 bytes where it was 61,306 (gzip 10,166 against
+    10,156, brotli 8,951 against 8,947, Node's zlib at gzip level 9 and brotli's default), served by
+    the gallery built from this change and from the commit it was merged onto, 71c0361a. Found by
+    the Chase Sets pilot, which set `margin: auto` on its reviews page's dialog
+    ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
 
 ### Documentation
 
@@ -6443,6 +6512,17 @@ Corten is pre-1.0, so any minor version may change the API.
     the browser has the Navigation API, and the watchlist's checks that a value set with them is
     put back
     ([#1098 CheckboxGroup docs do not say a script that sets checked must dispatch change, so the group keeps its old validity](https://github.com/corten-run/corten/issues/1098)).
+80. The kit guide's Size states what every component costs now: 59,878 bytes of `components.css`,
+    8,691 with brotli at level 11 and 9,863 with gzip at level 9 (the kit at 5ba4e476), where it
+    said 35,239, 5,331 and 6,050 from before the kit grew from 34 stylesheets to 42. A test in the
+    ui-gallery example (`the_kit_guide_states_what_every_component_costs`) serves the stylesheet of
+    an app listing every component and the theme's tokens, waits for its stored brotli and gzip
+    forms, and fails when the guide is more than 3 percent off, naming the new numbers. The guide's
+    browser list is Chromium, Firefox and WebKit, as the gallery's smoke runs, and `FormAlert` is
+    drawn in the gallery (a rename refused because the other draft has that name, above the form)
+    with a smoke check of its role, its one live region and its tone's colors, so every kit
+    component is again in the gallery and its browser test
+    ([#1125 The kit guide says corten ui add --all serves 35,239 bytes of CSS; it serves 59,299 now (8,615 brotli, not 5,331), and two lines beside it are stale](https://github.com/corten-run/corten/issues/1125)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

@@ -29,7 +29,8 @@ pub(crate) fn subject(options: &Options, feed: &str) -> String {
 pub(crate) async fn run(pool: PgPool, js: jetstream::Context, options: Arc<Options>, active: Arc<AtomicBool>) {
     loop {
         if let Err(e) = lead(&pool, &js, &options, &active).await {
-            tracing::warn!(target: "corten::feed", instance = %options.instance, error = %e, "relay standing by");
+            let error: &(dyn std::error::Error + 'static) = &*e;
+            tracing::warn!(target: "corten::feed", instance = %options.instance, error, "relay standing by");
         }
         active.store(false, Ordering::Relaxed);
         tokio::time::sleep(options.lease / 4).await;
