@@ -2674,10 +2674,10 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 285. Topcoat joins `bench/fullstack`'s matched tier: under `PROFILE=matched` it runs axum-maud's
     tower-http header layers and timeout through Topcoat's `TowerLayer` (its body limit, origin
-    check and compression are Topcoat's defaults), with `'unsafe-eval'` in its CSP (on every answer,
-    since the layer runs around every request) because its runtime compiles the page's expressions
-    with `new Function`. Answers Topcoat makes from an error go without the profile's headers. Its
-    matched matrix meets 13 of 24 columns
+    check and compression are Topcoat's defaults), with `'unsafe-eval'` in its CSP (on every answer
+    the layer sets headers on) because its runtime compiles the page's expressions with `new
+    Function`. Answers Topcoat makes from an error go without the profile's headers. Its matched
+    matrix meets 13 of 24 columns
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
