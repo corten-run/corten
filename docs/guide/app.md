@@ -671,7 +671,7 @@ that implements `corten::Listener`, with `serve`'s shutdown across all of them
 socket, or a socket a supervisor hands over, is a listener of the app's own.
 Each of `listeners`' sockets asks the system to hold up to 511 connections that finished their
 handshake but are not yet accepted (Node's default, and nginx's on Linux), not the standard library's
-128 ([design Choice 34](../design.md#choice-listen-backlog)).
+128 ([design Choice 33](../design.md#choice-listen-backlog)).
 On Linux, which caps it at `net.core.somaxconn` (4096 since 5.4), a burst of clients faster than
 the server accepts them then waits in that queue rather than a second or more for a resent SYN.
 macOS caps it at `kern.ipc.somaxconn`, 128 by default, so there the change takes a raised
@@ -2549,10 +2549,16 @@ go on the answer as a header (which the error page keeps), but the page's body c
 When the lookup itself fails, an optional caller is `None` there, so the page is drawn signed
 out rather than not at all. Keeping the credentials for it is measured below.
 
-`failure.detail()` is what went wrong, under `corten dev` only; in production it is logged. A
-debug build's error about the app's own code (a component it does not serve, a `Refresh`
-header, a write redirected outside `form-action`) is the exception: it is set in every debug
-build, so a router test's error page names it.
+`failure.detail()` is what went wrong, under `corten dev` only; in production it is logged as
+the error itself, so Corten's log line names each error under the message as `error.sources`
+(the reset connection under an HTTP client's "error sending request"). A subscriber of the
+app's own decides how to show them: `tracing-subscriber`'s text format does the same, its JSON
+format writes the message alone. Each source's message is its library's own and can quote what it
+read (a JSON error names the value it could not parse, so part of an upstream answer), as the
+message above it could already (an HTTP client's names the URL); none of it reaches the client.
+A debug build's error about the app's own code (a component it
+does not serve, a `Refresh` header, a write redirected outside `form-action`) is the exception:
+it is set in every debug build, so a router test's error page names it.
 The error page `corten new` writes names every case without `_`, so when Corten adds one the
 app stops compiling instead of showing the wrong text. A JSON route's failures, a data
 client's and every failure under `App::api` are a JSON Problem Details document instead

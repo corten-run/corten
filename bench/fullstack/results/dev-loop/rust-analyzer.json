@@ -1,0 +1,383 @@
+{
+ "corten": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "hostCores": 8,
+  "experimental": true,
+  "commit": "9da8fb8d",
+  "dirty": false,
+  "measuredAt": "2026-11-08T10:23:52.878Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 42250,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 19684,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 87,
+   "errorMs": 65,
+   "clearedMs": 59,
+   "offered": 5,
+   "errorShown": 5,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 986,
+     "items": 11,
+     "offered": true,
+     "errorMs": 70,
+     "errors": [
+      "E0559: no field `nope_errors` on type `&AlertFormView<'_>`"
+     ],
+     "errorShown": true,
+     "clearedMs": 70,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 100,
+     "items": 11,
+     "offered": true,
+     "errorMs": 65,
+     "errors": [
+      "E0559: no field `nope_errors` on type `&AlertFormView<'_>`"
+     ],
+     "errorShown": true,
+     "clearedMs": 56,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 76,
+     "items": 11,
+     "offered": true,
+     "errorMs": 65,
+     "errors": [
+      "E0559: no field `nope_errors` on type `&AlertFormView<'_>`"
+     ],
+     "errorShown": true,
+     "clearedMs": 67,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 87,
+     "items": 11,
+     "offered": true,
+     "errorMs": 60,
+     "errors": [
+      "E0559: no field `nope_errors` on type `&AlertFormView<'_>`"
+     ],
+     "errorShown": true,
+     "clearedMs": 59,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 68,
+     "items": 11,
+     "offered": true,
+     "errorMs": 57,
+     "errors": [
+      "E0559: no field `nope_errors` on type `&AlertFormView<'_>`"
+     ],
+     "errorShown": true,
+     "clearedMs": 52,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 2568
+ },
+ "leptos": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "hostCores": 8,
+  "experimental": true,
+  "commit": "9da8fb8d",
+  "dirty": false,
+  "measuredAt": "2026-11-08T10:25:13.098Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 46110,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 27771,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 10268,
+   "errorMs": 9721,
+   "clearedMs": 9005,
+   "offered": 5,
+   "errorShown": 5,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 15105,
+     "items": 25,
+     "offered": true,
+     "errorMs": 10445,
+     "errors": [
+      "E0559: no field `nope_title` on type `ItemView`",
+      "E0282: type annotations needed\nfull type: `fn to_children<Box<dyn FnOnce() -> AnyView + Send, Global>, impl Fn() -> (HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, String>), ()>, HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, {unknown}>), ()>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Button, (Attr<Type, &str>, Attr<Title, &str>), (&str,)>)>(impl Fn() -> (HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, String>), ()>, HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, {unknown}>), ()>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Button, (Attr<Type, &str>, Attr<Title, &str>), (&str,)>)) -> Box<dyn FnOnce() -> AnyView + Send, Global>`\n"
+     ],
+     "errorShown": true,
+     "clearedMs": 8776,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 11197,
+     "items": 25,
+     "offered": true,
+     "errorMs": 11825,
+     "errors": [
+      "E0559: no field `nope_title` on type `ItemView`",
+      "E0282: type annotations needed\nfull type: `fn to_children<Box<dyn FnOnce() -> AnyView + Send, Global>, impl Fn() -> (HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, String>), ()>, HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, {unknown}>), ()>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Button, (Attr<Type, &str>, Attr<Title, &str>), (&str,)>)>(impl Fn() -> (HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, String>), ()>, HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, {unknown}>), ()>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Button, (Attr<Type, &str>, Attr<Title, &str>), (&str,)>)) -> Box<dyn FnOnce() -> AnyView + Send, Global>`\n"
+     ],
+     "errorShown": true,
+     "clearedMs": 9210,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 8994,
+     "items": 25,
+     "offered": true,
+     "errorMs": 9247,
+     "errors": [
+      "E0559: no field `nope_title` on type `ItemView`",
+      "E0282: type annotations needed\nfull type: `fn to_children<Box<dyn FnOnce() -> AnyView + Send, Global>, impl Fn() -> (HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, String>), ()>, HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, {unknown}>), ()>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Button, (Attr<Type, &str>, Attr<Title, &str>), (&str,)>)>(impl Fn() -> (HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, String>), ()>, HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, {unknown}>), ()>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Button, (Attr<Type, &str>, Attr<Title, &str>), (&str,)>)) -> Box<dyn FnOnce() -> AnyView + Send, Global>`\n"
+     ],
+     "errorShown": true,
+     "clearedMs": 9005,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 10268,
+     "items": 25,
+     "offered": true,
+     "errorMs": 9721,
+     "errors": [
+      "E0559: no field `nope_title` on type `ItemView`",
+      "E0282: type annotations needed\nfull type: `fn to_children<Box<dyn FnOnce() -> AnyView + Send, Global>, impl Fn() -> (HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, String>), ()>, HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, {unknown}>), ()>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Button, (Attr<Type, &str>, Attr<Title, &str>), (&str,)>)>(impl Fn() -> (HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, String>), ()>, HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, {unknown}>), ()>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Button, (Attr<Type, &str>, Attr<Title, &str>), (&str,)>)) -> Box<dyn FnOnce() -> AnyView + Send, Global>`\n"
+     ],
+     "errorShown": true,
+     "clearedMs": 7288,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 8186,
+     "items": 25,
+     "offered": true,
+     "errorMs": 9557,
+     "errors": [
+      "E0559: no field `nope_title` on type `ItemView`",
+      "E0282: type annotations needed\nfull type: `fn to_children<Box<dyn FnOnce() -> AnyView + Send, Global>, impl Fn() -> (HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, String>), ()>, HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, {unknown}>), ()>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Button, (Attr<Type, &str>, Attr<Title, &str>), (&str,)>)>(impl Fn() -> (HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, String>), ()>, HtmlElement<Input, (Attr<Type, &str>, Attr<Name, &str>, Attr<Value, {unknown}>), ()>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Label, (), ((&str, InertElement),)>, HtmlElement<Button, (Attr<Type, &str>, Attr<Title, &str>), (&str,)>)) -> Box<dyn FnOnce() -> AnyView + Send, Global>`\n"
+     ],
+     "errorShown": true,
+     "clearedMs": 9815,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 3698
+ },
+ "topcoat": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "hostCores": 8,
+  "experimental": true,
+  "commit": "9da8fb8d",
+  "dirty": false,
+  "measuredAt": "2026-11-08T10:29:15.043Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 28414,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 8635,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 5537,
+   "errorMs": 5298,
+   "clearedMs": 5598,
+   "offered": 5,
+   "errorShown": 5,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 6924,
+     "items": 22,
+     "offered": true,
+     "errorMs": 5730,
+     "errors": [
+      "E0559: no field `nope_title` on type `&ItemView`"
+     ],
+     "errorShown": true,
+     "clearedMs": 6798,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 5537,
+     "items": 22,
+     "offered": true,
+     "errorMs": 4845,
+     "errors": [
+      "E0559: no field `nope_title` on type `&ItemView`"
+     ],
+     "errorShown": true,
+     "clearedMs": 5598,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 6934,
+     "items": 22,
+     "offered": true,
+     "errorMs": 7060,
+     "errors": [
+      "E0559: no field `nope_title` on type `&ItemView`"
+     ],
+     "errorShown": true,
+     "clearedMs": 5936,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 4914,
+     "items": 22,
+     "offered": true,
+     "errorMs": 5083,
+     "errors": [
+      "E0559: no field `nope_title` on type `&ItemView`"
+     ],
+     "errorShown": true,
+     "clearedMs": 4801,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 5030,
+     "items": 22,
+     "offered": true,
+     "errorMs": 5298,
+     "errors": [
+      "E0559: no field `nope_title` on type `&ItemView`"
+     ],
+     "errorShown": true,
+     "clearedMs": 5283,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 2139
+ },
+ "axum-maud": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "hostCores": 8,
+  "experimental": true,
+  "commit": "9da8fb8d",
+  "dirty": false,
+  "measuredAt": "2026-11-08T10:31:37.966Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 17059,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 8530,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 89,
+   "errorMs": 72,
+   "clearedMs": 71,
+   "offered": 5,
+   "errorShown": 5,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 842,
+     "items": 25,
+     "offered": true,
+     "errorMs": 75,
+     "errors": [
+      "E0559: no field `nope_title` on type `&ItemView`"
+     ],
+     "errorShown": true,
+     "clearedMs": 67,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 77,
+     "items": 25,
+     "offered": true,
+     "errorMs": 70,
+     "errors": [
+      "E0559: no field `nope_title` on type `&ItemView`"
+     ],
+     "errorShown": true,
+     "clearedMs": 71,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 89,
+     "items": 25,
+     "offered": true,
+     "errorMs": 72,
+     "errors": [
+      "E0559: no field `nope_title` on type `&ItemView`"
+     ],
+     "errorShown": true,
+     "clearedMs": 79,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 77,
+     "items": 25,
+     "offered": true,
+     "errorMs": 72,
+     "errors": [
+      "E0559: no field `nope_title` on type `&ItemView`"
+     ],
+     "errorShown": true,
+     "clearedMs": 72,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 94,
+     "items": 25,
+     "offered": true,
+     "errorMs": 62,
+     "errors": [
+      "E0559: no field `nope_title` on type `&ItemView`"
+     ],
+     "errorShown": true,
+     "clearedMs": 66,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 1447
+ }
+}
