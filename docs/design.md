@@ -1340,7 +1340,54 @@ rules something out.
     the live benchmark's row, outside the workspace, by reading it on `76247120` (it has no serde
     attribute).
 
-36. <a id="choice-asset-ranges"></a>**A static file answers one range of its bytes at any
+36. <a id="choice-state-derives"></a>**An app's shared state derives `Clone` and `FromRef`, two
+    derives that each say one thing, not a state attribute that writes both.** `Clone` says the
+    state can be copied, which routing and a handler that takes the whole state both need:
+    `#[corten::routes(state = Shared)]` gives each route its own copy
+    (`Methods::with_state(.., state.clone())`, which takes an `S: Clone`, as axum's
+    `MethodRouter::with_state` it calls does), and a handler's `State<Shared>` goes through
+    axum-core's `impl<T: Clone> FromRef<T> for T`. `FromRef` says each field can be taken alone:
+    it gives each field its own extractor (`State<Market>`), which clones that field and needs no
+    `Clone` of the containing type. The six examples with shared state route seven state types:
+    three derive both (watchlist's `Shared`, card-market's `ApiState` and listings-feed's
+    `Shared`) and four derive `Clone` alone, their handlers taking the whole state (card-market's
+    `Source` (the state of its pages), auction-room's `Auction`, deck-builder's `Builder` and
+    seller-desk's `Desk`). A test's state in watchlist's `account.rs` derives both too, but no
+    route takes it, so it is not counted. A `#[corten::state]` attribute would take one word off
+    each of the three that derive both (the `Clone` in `#[derive(Clone, FromRef)]`) and give
+    three of the other four (`Auction`, `Builder`, `Desk`) a choice between it and the derive
+    they write now; `Source`, an enum, could not take it, since `FromRef` is derived only for a
+    struct with named fields. That is a third way to write state, and a concept to learn that one
+    word a type does not earn (Values 5 and 6). The generated code would be the same. `FromRef`
+    deriving `Clone` itself is not chosen either: a type that writes its own `impl Clone` and
+    derives `FromRef` would get a second, conflicting impl (no routed state does both today, but
+    the shape is real: `corten_cluster::Cluster<S>`, routed as a state by
+    `#[corten::routes(state = Cluster<Items>)]` in its tests, writes its own `Clone` because its
+    fields are behind an `Arc` and `#[derive(Clone)]` would bound it on its parameter), and the
+    derive list would no longer say that the type is `Clone`. Not chosen: the attribute; an option
+    on `FromRef` (`#[from_ref(clone)]`), the same second spelling in another place
+    ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
+
+    Stands on: reasoned (each route takes its own copy of the state, in `routes.rs`'s
+    `Methods::with_state(.., state.clone())`; an impl the derive wrote would conflict with a
+    hand-written `Clone`; and the attribute saves one word on three types while adding a way to
+    write six of the seven, counts that move with the examples); platform (axum 0.8.9's
+    `MethodRouter::with_state`, like its other `MethodRouter` methods, requires `S: Clone`, and
+    axum-core 0.5.6's `impl<T: Clone> FromRef<T> for T` is how a handler takes the whole state,
+    both from `Cargo.lock`; Corten routes on axum's router, [Choice 25](#choice-axum-router));
+    value (one way to do each thing and a small surface, Values 5 and 6).
+
+    Revisit when: a third mechanical impl is derived beside the pair on two or more of the
+    examples' routed state types, so an attribute would carry more than two derives' worth; or
+    Corten stops giving each route its own copy of the state, and neither axum's `MethodRouter`
+    nor axum-core's `impl<T: Clone> FromRef<T> for T`, through which a handler takes the whole
+    state, requires `S: Clone`, so state no longer needs `Clone`.
+
+    Last checked: 2026-11-10, the examples' state types, `from_ref.rs`, `routes.rs`,
+    `Methods::with_state`, `corten-cluster`'s tests, and axum 0.8.9 and axum-core 0.5.6 from
+    `Cargo.lock`, at `97a63a92`.
+
+37. <a id="choice-asset-ranges"></a>**A static file answers one range of its bytes at any
     version's URL, only as it is stored, and never sends `Accept-Ranges`.** A `<video>` asks for
     ranges to seek, so a file sent only whole makes a player download what it skips, and Safari on
     iOS plays media only from a server that answers ranges. A `GET` of a versioned URL, this
@@ -1509,7 +1556,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
    in before `DOMContentLoaded`, and this needs a person faster than the network.
 5. <a id="limit-offline-fallback"></a>Offline is a fallback page plus cached versioned files, not offline data.
    A video does not play offline: the worker leaves a range, and the video or audio a player
-   loads, to the network ([Choice 36](#choice-asset-ranges)).
+   loads, to the network ([Choice 37](#choice-asset-ranges)).
 6. <a id="limit-prefetch-reuse"></a>Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
    post). It keeps the 8 newest and aborts the rest (the request, or the body once it answered),
    so hovering does not hold pages for the whole session; with the browser's data saver on it
