@@ -300,7 +300,7 @@ JSON) is a failed snapshot: logged and fetched
 again after a backoff. A patch that is not one has lost its write, so the stream is closed and the
 snapshot loaded again, after a backoff that doubles from 1 s while the patches after it are bad
 too; neither reaches the script. The rows themselves are not checked: each is the feed's `Row`,
-the server's own type, whose JSDoc the browser never sees ([design Choice 34](../design.md#choice-script-boundaries)).
+the server's own type, whose JSDoc the browser never sees ([design Choice 35](../design.md#choice-script-boundaries)).
 A page left open across a deploy that changes `Row` keeps the script it loaded, and the new
 server's snapshot gives that script rows of the new shape: if its `patch` throws on one, that
 write is lost until the next snapshot (the stream's `seq` has moved on), and if its `snapshot`
