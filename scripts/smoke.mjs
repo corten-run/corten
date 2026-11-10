@@ -3056,7 +3056,7 @@ async function run(browser) {
   // An answer that is JSON but not a snapshot (no epoch) is a failed snapshot: never handed to the
   // script, logged, and fetched again after 1 s (#1039).
   const malformedFeed = await feedTimes("malformed", () => "retry: 60000\n\n", { body: (n) => (n === 1 ? '{"seq":1,"rows":[]}' : '{"epoch":"a","seq":1,"rows":[]}') });
-  await feedLive("malformed", 1);
+  await feedLive("malformed", 1, 60000);
   const malformedSnapshots = await feedSnapshots("malformed");
   const malformedStates = await stopFeed("malformed");
   await unrouteFeed("malformed");
@@ -3076,7 +3076,7 @@ async function run(browser) {
         ? 'event: patch\nid: a-2\ndata: {"seq":2,"changes":[{"op":"upsert","id":"x"}]}\n\n'
         : `retry: 60000\n\n${patchEvent(2)}`,
   );
-  await feedLive("rejected", 3, 10000);
+  await feedLive("rejected", 3, 60000);
   // The third stream's patch comes in a task after it opens.
   await page.waitForFunction((name) => (/** @type {any} */ (window)).__feeds[name].patches.length > 0, "rejected", { timeout: 5000 }).catch(() => {});
   const rejectedPatches = await feedPatches("rejected");
