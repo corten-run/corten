@@ -229,10 +229,11 @@ use std::fmt;
 /// Derives [`Route`](trait@Route) for a struct: `#[derive(Route)] #[route("/items/{id}")]`.
 pub use corten_macros::Route;
 
-/// Derives `Display` and `AsRef<str>` for an enum of unit variants as the words serde reads for
-/// them, so a route field of that type (a tab, a sort, a filter, what a redirect says happened)
-/// writes the word its handler reads back, and the words are written once, in
-/// `#[serde(rename_all)]` and `#[serde(rename)]`. A form field of that type works the same way:
+/// Derives `Display`, `AsRef<str>` and [`AttrValue`](crate::view::AttrValue) for an enum of unit
+/// variants as the words serde reads for them, so a route field of that type (a tab, a sort, a
+/// filter, what a redirect says happened) writes the word its handler reads back, and the words are
+/// written once, in `#[serde(rename_all)]` and `#[serde(rename)]`. A form field of that type
+/// works the same way:
 /// an `<option value={Condition::NearMint}>` (or corten-ui's `Choice`) posts the word its
 /// handler's `condition: Condition` reads, and a form with any other word is refused (422), as one
 /// with a value of the wrong kind is. It implements the enum's `Deserialize`, and with the `json`
@@ -254,6 +255,22 @@ pub use corten_macros::Route;
 /// assert_eq!(Orders { tab: Some(Tab::AwaitingLabel) }.href(), "/orders?tab=awaiting-label");
 /// assert_eq!(Orders { tab: Some(Tab::Shipped) }.href(), "/orders?tab=done");
 /// assert_eq!(Tab::Open.as_ref(), "open");
+/// ```
+///
+/// It is an attribute's value too, so an `Option` of it writes the word or leaves the attribute
+/// out:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Clone, Copy, UrlValue)]
+/// #[serde(rename_all = "kebab-case")]
+/// enum Finish { Weathered, CharcoalGray }
+///
+/// let shown = |finish: Option<Finish>| html! { <div data-finish={finish}></div> }.to_html();
+/// assert_eq!(shown(Some(Finish::CharcoalGray)), r#"<div data-finish="charcoal-gray"></div>"#);
+/// assert_eq!(shown(None), "<div></div>");
+/// assert_eq!(html! { <div data-finish={Finish::Weathered}></div> }.to_html(), r#"<div data-finish="weathered"></div>"#);
 /// ```
 ///
 /// A variant with fields is not one word, and one serde does not read would make a link its
@@ -4352,6 +4369,21 @@ mod tests {
         }
         assert_eq!(r#str::r#type.as_ref(), "type");
         assert_eq!(r#str::Sand.to_string(), "Sand");
+    }
+
+    /// A word written in an attribute is escaped as text is, whichever way it gets there.
+    #[test]
+    fn a_url_value_in_an_attribute_is_escaped() {
+        use crate::prelude::*;
+        #[derive(corten::UrlValue, Clone, Copy)]
+        enum Odd {
+            #[serde(rename = "a\"b&c")]
+            Quoted,
+        }
+        let direct = html! { <i title={Odd::Quoted}></i> }.to_html();
+        let some = html! { <i title={Some(Odd::Quoted)}></i> }.to_html();
+        assert_eq!(direct, r#"<i title="a&quot;b&amp;c"></i>"#);
+        assert_eq!(some, direct);
     }
 
     /// Each word `UrlValue` writes is the one serde reads back as the same variant, under every
