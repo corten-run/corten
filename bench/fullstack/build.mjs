@@ -31,6 +31,10 @@
 // 9. For Corten's card-market: cargo's per-crate timings of the clean build, and rustc's passes
 //    and macro expansion statistics for the app's crate alone (-Ztime-passes and -Zmacro-stats,
 //    nightly-only flags allowed on stable with RUSTC_BOOTSTRAP=1, for this diagnosis only).
+// 10. After the app's results are saved: docker-rebuild.mjs (its own `docker build` after the edit
+//    with BuildKit's cache warm) for the apps in BENCH_DOCKER_REBUILD_APPS (default corten and
+//    axum-maud), and rust-analyzer.mjs (the language server's own latency) for the Rust apps, each
+//    writing a file of its own in the round's folder.
 // Each step runs in a container of its own, so its CPU time and memory are its own: wall time,
 // CPU-seconds (the container's cgroup counter: the work, whatever the core count) and the peak of
 // its processes' memory (sampled five times a second, without the page cache).
@@ -46,7 +50,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, rea
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cargoBuilds, changeOf, contextOf, crateCost, median, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, median, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..");
@@ -64,6 +68,7 @@ const cpusLabel = `cores ${cores}`;
 const storage = spawnSync("docker", ["info", "--format", "{{.Driver}}"], { encoding: "utf8" }).stdout.trim() || "unknown";
 const scaleCores = (process.env.BENCH_BUILD_SCALE ?? "").split(",").map((c) => c.trim()).filter(Boolean);
 const scaleApps = (process.env.BENCH_BUILD_SCALE_APPS ?? "corten,axum-maud").split(",");
+const dockerRebuildApps = (process.env.BENCH_DOCKER_REBUILD_APPS ?? "corten,axum-maud").split(",");
 const hour = 3_600_000;
 const docker = (/** @type {string[]} */ args, /** @type {{ input?: string, timeout?: number }=} */ options = {}) =>
   spawnSync("docker", args, { encoding: "utf8", maxBuffer: 256 * 2 ** 20, timeout: options.timeout ?? hour, input: options.input });
@@ -181,15 +186,18 @@ for (const name of appsArg.split(",")) {
     must(["build", "-q", "-t", tag("src"), "-f", "-", context], { input: sourceDockerfile(name) });
     const d = keep("deps", step(`${name}-deps`, tag("src"), r.deps, { commit: tag("deps") }));
     const timingsFile = join(scratch, `${name}-timings.html`);
-    const b = keep("build", step(`${name}-build`, tag("deps"), r.timings ? `${r.build} --timings` : r.build, {
+    // An app with no build step (builds.mjs) records none: its server runs the source as written.
+    const command = r.build;
+    const b = command === undefined ? keep("build", null) : keep("build", step(`${name}-build`, tag("deps"), r.timings ? `${command} --timings` : command, {
       commit: tag("built"),
       take: r.timings ? { [`${r.workdir}/target/cargo-timings/cargo-timing.html`]: timingsFile } : {},
     }));
     // Dependencies and build together: what a clean checkout costs, the network included.
-    keep("clean", { ms: d.ms + b.ms, cpuS: +(d.cpuS + b.cpuS).toFixed(1) });
+    keep("clean", b ? { ms: d.ms + b.ms, cpuS: +(d.cpuS + b.cpuS).toFixed(1) } : { ms: d.ms, cpuS: d.cpuS });
     const rebuilds = [];
-    for (let i = 0; i < runs; i += 1) {
-      rebuilds.push(rebuilt(step(`${name}-rebuild-${i + 1}`, tag("built"), again(r.build), { files: edited }), "the rebuild"));
+    if (command === undefined) keep("rebuild", null);
+    else for (let i = 0; i < runs; i += 1) {
+      rebuilds.push(rebuilt(step(`${name}-rebuild-${i + 1}`, tag("built"), again(command), { files: edited }), "the rebuild"));
       keep("rebuild", summary(rebuilds));
     }
     if (r.dev) {
@@ -201,7 +209,7 @@ for (const name of appsArg.split(",")) {
       }
     }
     // What the dependency step, the production build and the development build each wrote.
-    keep("disk", { depsBytes: d.diskBytes ?? null, buildBytes: b.diskBytes ?? null, devBytes: entry.dev?.clean.diskBytes ?? null });
+    keep("disk", { depsBytes: d.diskBytes ?? null, buildBytes: b?.diskBytes ?? null, devBytes: entry.dev?.clean.diskBytes ?? null });
     keep("complete", true);
     // The editor's and the tests' loops and the other kinds of edit, after the rest is saved, each
     // group apart, so a failure costs only its own group (`loopsFailed` says which and why).
@@ -242,9 +250,9 @@ for (const name of appsArg.split(",")) {
         keep("check", { ...clean, again: summary(list) });
       }
     });
-    if (scaleCores.length && scaleApps.includes(name)) try {
+    if (scaleCores.length && scaleApps.includes(name) && r.build !== undefined) try {
       // The clean build on other core sets, and for cargo the development loop linked by mold.
-      for (const on of scaleCores) keep("scale", { ...entry.scale, [on]: step(`${name}-build-on-${on}`, tag("deps"), r.build, { cores: on }) });
+      for (const on of scaleCores) keep("scale", { ...entry.scale, [on]: step(`${name}-build-on-${on}`, tag("deps"), /** @type {string} */ (r.build), { cores: on }) });
       if (r.dev && cargoBuilds(r)) {
         // Installing mold is not timed: it is a step in the image, before the measured ones. Since
         // Rust 1.90 the default linker here is rust-lld, which `linker-features=-lld` turns off.
@@ -292,12 +300,13 @@ for (const name of appsArg.split(",")) {
     for (const what of images) docker(["rmi", "-f", tag(what)]);
   }
   save();
+  // The Docker and editor loops, scripts of their own run after this app's results are saved, so
+  // a failure there costs none of them: its own `docker build` with BuildKit's cache warm, for the
+  // apps in BENCH_DOCKER_REBUILD_APPS (default the anchors, corten and axum-maud), and
+  // rust-analyzer's latency for the Rust apps.
+  // An app whose own build failed would fail these too.
+  if (!entry.failed && dockerRebuildApps.includes(name)) spawnSync(process.execPath, [join(here, "docker-rebuild.mjs"), round, name, String(runs)], { stdio: "inherit" });
+  if (!entry.failed && r.ra) spawnSync(process.execPath, [join(here, "rust-analyzer.mjs"), round, name], { stdio: "inherit" });
 }
 rmSync(scratch, { recursive: true, force: true });
-const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
-for (const [name, e] of Object.entries(out)) {
-  // Entries written before `complete` was recorded have none, and finished.
-  if (e.failed || e.complete === false) { console.log(`| ${name} | FAILED: ${(e.failed ?? "stopped before it finished").split("\n")[0]} |`); continue; }
-  const dev = e.dev ? `dev ${s(e.dev.clean.ms)}, after the edit ${s(e.dev.rebuild.ms)}` : "";
-  console.log(`| ${name} | deps ${s(e.deps.ms)} | build ${s(e.build.ms)}, ${e.build.cpuS} CPU-s, ${e.build.peakMiB} MiB | clean ${s(e.clean.ms)}, ${e.clean.cpuS} CPU-s | rebuild ${s(e.rebuild.ms)}, ${e.rebuild.cpuS} CPU-s | ${dev} |`);
-}
+for (const [name, e] of Object.entries(out)) console.log(buildRow(name, e));
