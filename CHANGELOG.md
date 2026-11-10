@@ -4281,7 +4281,9 @@ Corten is pre-1.0, so any minor version may change the API.
 - The kit's `CardSize::Sm` card's padding is two thirds of the theme's `--card-padding` and its
   content's gap half of it, where both were fixed numbers (1rem and .75rem, what the kit's theme
   still gives), so a theme whose `--card-padding` is 1rem or less no longer gets a small card as
-  large as its default one. No token is added: a copied `card.css` takes it from
+  large as its default one. A theme that sets its own `--card-padding` sees its small cards follow
+  it once the kit's `card.css` is merged: larger than before above 1.5rem (a 2rem theme's go from 1rem
+  to about 1.33rem). No token is added: a copied `card.css` takes it from
   `corten ui add card --merge`. The ui-gallery smoke checks a small card under a theme with tight
   cards
   ([#1151 Kit CardSize::Sm is a fixed 1rem while the default card is the theme's --card-padding, so a theme at or below 1rem gets a small card no smaller than the default](https://github.com/corten-run/corten/issues/1151)).

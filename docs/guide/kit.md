@@ -67,8 +67,8 @@ large button), `--control-padding` (the inline padding of a field, a small butto
 button and a default or large button, not a small one's, which stays .8125rem; .875rem),
 `--control-width-sm`, `--control-width-md` and `--control-width-lg` (`ControlWidth`'s widths; 8, 16
 and 24rem), `--card-padding` (a card's
-padding and the gap between its parts; 1.5rem, a `CardSize::Sm` card's two thirds of it and its
-gap half), `--card-heading-font-size` (a card's heading; 1rem),
+padding and the gap between its parts; 1.5rem; a `CardSize::Sm` card's padding and gap two thirds
+of it, its content's gap half), `--card-heading-font-size` (a card's heading; 1rem),
 a `Stats` figure's type (below) and `--toasts-inset-bottom` (how far `Toasts` sits above the bottom of the window; 1rem, plus the
 home indicator's inset on a page whose viewport meta has `viewport-fit=cover`). A layout with a
 fixed bar along the bottom (a phone's tab bar) sets it on `body` where the bar shows, so a toast

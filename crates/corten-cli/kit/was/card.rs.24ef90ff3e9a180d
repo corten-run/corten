@@ -32,8 +32,8 @@ use corten::prelude::*;
 pub enum CardSize {
     /// The theme's `--card-padding`.
     Md,
-    /// Two thirds of the theme's `--card-padding` and a gap half of it, for a dense card on a page
-    /// with roomy ones.
+    /// Padding and a gap between its parts two thirds of the theme's `--card-padding`, and a gap in
+    /// its content half of it, for a dense card on a page with roomy ones.
     Sm,
 }
 
