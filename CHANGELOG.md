@@ -2601,6 +2601,19 @@ Corten is pre-1.0, so any minor version may change the API.
     served file to 60,833 bytes (gzip 10,081, brotli 8,876), and the smoke test puts it inside a
     `<corten-live>` and checks it in each state
     ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
+279. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
+    tokens, `choice-list-gap` and `choice-list-legend-gap` (.75rem each, the values the two
+    stylesheets printed and kept equal by hand), so a theme with tighter choice lists sets them once
+    and the copies stay the kit's. Nothing changes for an app that keeps its copies. One set up by an
+    older kit that takes the new copies adds the two tokens `corten ui add checkboxes --merge` (or
+    `radio_group`, or `--force` for a copy without edits) names, as the kit's theme has them,
+    before it starts. The kit theme's two declarations and the two `var()`s in each stylesheet make
+    the ui-gallery's served `components.css` 60,608 bytes where it was 60,471 (gzip 10,039 against
+    10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier
+    size is the served file with the literals put back). The ui-gallery's smoke test checks both
+    groups at the kit's values and at a theme's. Asked for by the Chase Sets pilot, which edited
+    both copies to .5rem
+    ([#1082 Kit RadioGroup and Checkboxes print their fieldset's gap and legend margin as literals kept equal by hand, so a theme with tighter choice lists edits both copies](https://github.com/corten-run/corten/issues/1082)).
 278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
     after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
     apps: how long it takes to be ready, cold and warm, and after an edit how long a completion
