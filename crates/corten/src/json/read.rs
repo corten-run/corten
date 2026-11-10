@@ -732,6 +732,17 @@ impl<V: FromJson, S: BuildHasher + Default> FromJson for HashMap<String, V, S> {
     }
 }
 
+/// An object read whole, as `Value`'s object: a map whose values are any JSON.
+impl FromJson for serde_json::Map<String, Value> {
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        let mut out = serde_json::Map::new();
+        map(r, |k, v| {
+            out.insert(k, v);
+        })?;
+        Ok(out)
+    }
+}
+
 impl FromJson for Value {
     /// Scalars are made here; an array or an object (rarer in a field typed `Value`) by serde_json.
     fn __read(r: &mut Reader<'_>) -> R<Self> {
@@ -1108,6 +1119,10 @@ mod tests {
         same::<char>(r#""ab""#);
         same::<Value>(&("[".repeat(127) + &"]".repeat(127)));
         same::<Value>(&("[".repeat(129) + &"]".repeat(129)));
+        // An object read whole, a key written twice keeping its last value.
+        assert!(same::<serde_json::Map<String, Value>>(r#"{"a":1,"b":[true,null],"a":"x"}"#));
+        same::<serde_json::Map<String, Value>>(r#"[1]"#);
+        same::<serde_json::Map<String, Value>>(r#"{"a":}"#);
         same::<Line>(
             &LINE.replace(r#""unknown":[{"x":"\u0041"}]"#, &format!(r#""unknown":{}"#, "[".repeat(130) + &"]".repeat(130))),
         );

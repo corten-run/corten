@@ -1370,14 +1370,15 @@ rules something out.
 
     Stands on: reasoned (a derived `ToJson` writes a tool output's schema and its bytes, and a
     derived `FromJson` a tool input's schema and what it reads; card-market's agent test checks a
-    tool answer's bytes equal serde's for the item); measured, as a bound only (callgrind, release build, card-market's `tool_cost`: an
+    tool answer's bytes equal serde's for the item); measured, as context only, since no count yet
+    isolates this change (callgrind, release build, card-market's `tool_cost`: an
     agent's `items.get` call through `/mcp`, each answer checked to be the tool's output, 1,200
     calls less 200 over 1,000, two runs each: 267,820 and 265,852 instructions a call on
     `a791d9ba` with `tool_cost` added, 211,330 and 211,236 on `620bc298`; the commits between also
     carry review changes to the derived `Deserialize` that reads the tool's input, from
     [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042),
-    and `620bc298` predates the panic log that names the tool, so the count does not isolate this
-    change and is not of its last commit); value (one declaration per direction, Values 4, 5 and 6).
+    and `620bc298` predates the panic log that names the tool, so the drop is not this change's; the
+    isolating pair is `217bce2c` with `tool_cost` added against this change's last commit); value (one declaration per direction, Values 4, 5 and 6).
 
     Revisit when: an example app needs, because the derives refuse its type, a hand-written
     `ToJson` with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in

@@ -819,7 +819,7 @@ impl<A: Send + 'static> Tools<A> {
                 // `corten dev` stops at one that is not one JSON object; a release build sends it as
                 // written.
                 debug_assert!(
-                    output.starts_with('{') && serde_json::from_str::<serde::de::IgnoredAny>(&output).is_ok(),
+                    output.trim_start().starts_with('{') && serde_json::from_str::<serde::de::IgnoredAny>(&output).is_ok(),
                     "corten: tool {name}'s output ToJson must write one JSON object, not {}",
                     output.char_indices().nth(80).map_or(&output[..], |(end, _)| &output[..end])
                 );
@@ -1110,6 +1110,36 @@ mod tests {
         let ((status, _, body), text) = logging(send(&app, req)).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
         assert!(text.contains("tool listed's output ToJson must write one JSON object, not [1]"), "{text}");
+    }
+
+    /// A tool's input can be any object, read whole (`serde_json::Map`), and an integer-keyed map
+    /// is one inside a newtype that derives `FromJson`.
+    #[tokio::test]
+    async fn an_input_can_be_any_object_or_a_map_in_a_newtype() {
+        #[derive(crate::json::FromJson)]
+        #[serde(transparent)]
+        struct Counts(std::collections::BTreeMap<u32, u32>);
+        #[derive(crate::json::ToJson)]
+        struct Size {
+            n: usize,
+        }
+        let tools = Tools::new("test", "1.0")
+            .read_tool(
+                "any",
+                "Any object",
+                |(), input: serde_json::Map<String, Value>| async move { Ok(Size { n: input.len() }) },
+            )
+            .read_tool("counts", "Counts by id", |(), input: Counts| async move { Ok(Size { n: input.0.len() }) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        for (tool, arguments) in [("any", json!({ "a": 1, "b": [2] })), ("counts", json!({ "1": 2, "7": 3 }))] {
+            let call =
+                json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": tool, "arguments": arguments } });
+            let req =
+                Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+            let (status, _, body) = send(&app, req).await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            assert!(body.contains(r#""structuredContent":{"n":2}"#), "{tool}: {body}");
+        }
     }
 
     /// A tool's output can hold text the app wrote (`Raw`), sent as it is.
