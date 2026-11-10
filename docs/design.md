@@ -1207,6 +1207,7 @@ rules something out.
     (one run, all passed; Chromium and Firefox got zstd, WebKit gzip, the large event in 7 to
     17 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
     test's thread (352,232 bytes, the same).
+
 36. <a id="choice-runtime-terser"></a>**The runtime and its modules are minified by esbuild and then by
     terser.** Every page of every app loads the runtime, so its bytes are paid on each first
     visit. esbuild bundles each file (the runtime takes in `on.js`), lowers it to ES2022 and
