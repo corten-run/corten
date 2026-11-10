@@ -157,7 +157,7 @@ the `compress` feature). Chromium's also lists a `<corten-live>` stream's events
 only while it is open, and a stream opens with the page, so open it and reload. The runtime has no
 diagnostics hook, so it does no work for one and opens no second stream, and its own fields are
 not an API to read (`source` on a `<corten-live>`, say;
-[design Limit 24](../design.md#limit-wire-diagnostics)). What an app wants to know about its own
+[design Limit 25](../design.md#limit-wire-diagnostics)). What an app wants to know about its own
 outcomes is a typed event its markup dispatches ([Typed events](scripts.md#typed-events)), from a
 submit's patch or a live fragment alike, and a submit that got no answer it can draw is
 `corten:error` (below).
