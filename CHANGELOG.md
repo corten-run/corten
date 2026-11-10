@@ -6,6 +6,15 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- `Policy::frame_ancestors` and `Sources::frame_ancestors` let the sites they name show the
+  pages in a frame, the app's or an area's only, which no site may by default; such a page is sent
+  no `X-Frame-Options`, or `SAMEORIGIN` for `'self'` alone, and keeps its `frame-ancestors`
+  enforced under `Policy::report_only`; a relayed answer's own CSP no longer decides who may frame
+  it, whatever the policy. As the policy already decided every page's `X-Frame-Options`, one a
+  handler sets is removed from a page another origin may frame. The card market's item card at
+  `/embed/items/{id}` may be framed by the sites `EMBED_ORIGINS` names
+  ([#1129 Allow an explicit frame-ancestor policy for read-only HTML embeds](https://github.com/corten-run/corten/issues/1129)).
+
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent
   pre-load gate checks full pages, native forms, layout, escaping, JSON and uncached upstream
