@@ -696,11 +696,11 @@ struct Refusal {
 async fn api_call(errors: bool, req: Request) -> (StatusCode, String, String) {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
-    let router = crate::App::new(crate::Routes::from(axum::Router::new()))
+    let router = crate::App::new(crate::Routes::from(crate::router::Table::new()))
         .api::<ImportRoot>(|api| {
             let api = api
-                .route::<Import>(crate::Methods::writes(axum::routing::post(import)))
-                .route::<Listings>(crate::Methods::writes(axum::routing::post(list)));
+                .route::<Import>(crate::Methods::writes(crate::router::post(import)))
+                .route::<Listings>(crate::Methods::writes(crate::router::post(list)));
             #[cfg(feature = "json")]
             let api = if errors { api.errors(|_, message| Refusal { error: message.to_string() }) } else { api };
             #[cfg(not(feature = "json"))]
@@ -995,7 +995,7 @@ async fn a_stalled_upload_over_a_socket_is_a_408_and_its_connection_is_closed() 
         upload.idle(std::time::Duration::from_millis(200));
         Ok(upload.fields().await?.title)
     }
-    let routes = axum::Router::new().route("/up", axum::routing::put(title));
+    let routes = crate::router::Table::new().route("/up", crate::router::put(title));
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
@@ -1063,7 +1063,7 @@ async fn a_stalled_upload_at_the_default_deadline_is_the_clients_408() {
     async fn title(upload: Upload<Listing>) -> crate::Result<String> {
         Ok(upload.fields().await?.title)
     }
-    let app = || crate::App::new(crate::Routes::from(axum::Router::new().route("/up", axum::routing::post(title))));
+    let app = || crate::App::new(crate::Routes::from(crate::router::Table::new().route("/up", crate::router::post(title))));
     let bytes = body(&[("title", None, None, &[b'a'; 4000])]);
     let (page, took) = stalled_over_a_socket(
         app(),
@@ -1101,8 +1101,9 @@ async fn the_deadline_is_the_servers_503_when_the_handler_is_not_waiting_for_the
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
         "late"
     }
-    let routes =
-        axum::Router::new().route("/after", axum::routing::post(slow_after)).route("/never", axum::routing::post(never_reads));
+    let routes = crate::router::Table::new()
+        .route("/after", crate::router::post(slow_after))
+        .route("/never", crate::router::post(never_reads));
     let app = || crate::App::new(crate::Routes::from(routes.clone()));
     let bytes = body(&[("title", None, None, b"Lamp")]);
     let (after, took) = stalled_over_a_socket(
@@ -1146,7 +1147,7 @@ async fn a_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413() {
         while pieces.chunk().await?.is_some() {}
         Ok("stored".into())
     }
-    let app = || crate::App::new(crate::Routes::from(axum::Router::new().route("/up", axum::routing::post(store))));
+    let app = || crate::App::new(crate::Routes::from(crate::router::Table::new().route("/up", crate::router::post(store))));
     let bytes = vec![7u8; 4000];
     let (page, took) = stalled_over_a_socket(
         app(),
@@ -1169,7 +1170,7 @@ async fn a_chunked_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413
         while pieces.chunk().await?.is_some() {}
         Ok("stored".into())
     }
-    let app = crate::App::new(crate::Routes::from(axum::Router::new().route("/up", axum::routing::post(store))));
+    let app = crate::App::new(crate::Routes::from(crate::router::Table::new().route("/up", crate::router::post(store))));
     // One chunk of 3000 bytes and no last chunk: the client stops sending inside the body.
     let mut sent = format!("{:x}\r\n", 3000).into_bytes();
     sent.extend_from_slice(&[7u8; 3000]);
@@ -1190,7 +1191,7 @@ async fn a_body_bytes_up_to_reads_past_at_the_deadline_is_the_clients_408() {
             None => (crate::http::StatusCode::UNPROCESSABLE_ENTITY, "too long"),
         })
     }
-    let app = crate::App::new(crate::Routes::from(axum::Router::new().route("/up", axum::routing::post(own))));
+    let app = crate::App::new(crate::Routes::from(crate::router::Table::new().route("/up", crate::router::post(own))));
     let bytes = vec![7u8; 4000];
     let (page, took) = stalled_over_a_socket(
         app,
@@ -1212,7 +1213,7 @@ async fn a_body_read_past_its_limit_at_the_deadline_is_the_413() {
         upload.limit(1024);
         Ok(upload.fields().await?.title)
     }
-    let app = || crate::App::new(crate::Routes::from(axum::Router::new().route("/up", axum::routing::post(small))));
+    let app = || crate::App::new(crate::Routes::from(crate::router::Table::new().route("/up", crate::router::post(small))));
     let bytes = body(&[("title", None, None, &[b'a'; 4000])]);
     let (page, took) = stalled_over_a_socket(
         app(),

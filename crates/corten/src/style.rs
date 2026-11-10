@@ -1096,7 +1096,7 @@ mod tests {
         let assets = crate::assets::Assets::build(None, &[aliased::TOKENS, WideList], "/assets").unwrap();
         let url = assets.stylesheet().unwrap().to_string();
         let res = tower::ServiceExt::oneshot(
-            std::sync::Arc::new(assets).routes(),
+            crate::Router::from(std::sync::Arc::new(assets).routes()),
             axum::http::Request::get(url).body(axum::body::Body::empty()).unwrap(),
         )
         .await
@@ -1115,10 +1115,12 @@ mod tests {
         assert_eq!(style.media, [(42, "md")]);
         let assets = std::sync::Arc::new(crate::assets::Assets::build(None, &[theme::TOKENS, PhoneList], "/assets").unwrap());
         let url = assets.stylesheet().unwrap().to_string();
-        let res =
-            tower::ServiceExt::oneshot(assets.routes(), axum::http::Request::get(url).body(axum::body::Body::empty()).unwrap())
-                .await
-                .unwrap();
+        let res = tower::ServiceExt::oneshot(
+            crate::Router::from(assets.routes()),
+            axum::http::Request::get(url).body(axum::body::Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap();
         let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
         let css = std::str::from_utf8(&body).unwrap();
         assert!(
@@ -1165,12 +1167,16 @@ mod tests {
     #[cfg(debug_assertions)]
     #[tokio::test]
     async fn in_a_debug_build_a_page_with_an_unlisted_styled_component_fails_and_names_it() {
-        use axum::{body::Body, http::Request, routing::get, Router};
+        use crate::{
+            router::{get, Table},
+            Router,
+        };
+        use axum::{body::Body, http::Request};
         use http_body_util::BodyExt;
         use tower::ServiceExt;
 
         let page = |req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Badges", BadgeCount { n: 1 }) };
-        let routes = || Router::new().route("/", get(page));
+        let routes = || Table::new().route("/", get(page));
         let get_page = |app: Router| async move {
             let res = app.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
             let status = res.status();
@@ -1206,7 +1212,11 @@ mod tests {
 
     #[tokio::test]
     async fn an_area_links_its_stylesheet_from_its_pages_only() {
-        use axum::{body::Body, http::Request, routing::get, Router};
+        use crate::{
+            router::{get, Table},
+            Router,
+        };
+        use axum::{body::Body, http::Request};
         use http_body_util::BodyExt;
         use tower::ServiceExt;
 
@@ -1229,7 +1239,7 @@ mod tests {
         let plain = |req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Plain", "No badges") };
         let app = |dev: bool| {
             App::new(Routes::from(
-                Router::new().route("/", get(plain)).route("/administrator", get(plain)).route("/badges", get(page)),
+                Table::new().route("/", get(plain)).route("/administrator", get(plain)).route("/badges", get(page)),
             ))
             .dev(dev)
             .components(&[theme::TOKENS])
@@ -1300,7 +1310,8 @@ mod tests {
     /// same components: their rules are in a file the two share, linked from their pages only.
     #[tokio::test]
     async fn areas_that_list_the_same_component_share_its_stylesheet() {
-        use axum::{body::Body, http::Request, routing::get};
+        use crate::router::get;
+        use axum::{body::Body, http::Request};
         use http_body_util::BodyExt;
         use tower::ServiceExt;
 
@@ -1321,7 +1332,7 @@ mod tests {
         };
         let page = |req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Badges", BadgeCount { n: 1 }) };
         let app = || {
-            App::new(Routes::from(axum::Router::new().route("/", get(|| async { "home" }))))
+            App::new(Routes::from(crate::router::Table::new().route("/", get(|| async { "home" }))))
                 .dev(true)
                 .components(&[theme::TOKENS])
                 .area::<Admin>(|admin| admin.route::<Admin>(crate::Methods::reads(get(page))).components(&[BadgeList]))
