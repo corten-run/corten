@@ -499,16 +499,11 @@ mod tests {
     use super::{Hub, Message};
     use crate::{Error, Options, Source};
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Row)]
     struct Item {
+        #[row(id)]
         id: String,
         n: i64,
-    }
-
-    impl Row for Item {
-        fn id(&self) -> &str {
-            &self.id
-        }
     }
 
     /// No rows are read: the test applies patches to a feed it built.

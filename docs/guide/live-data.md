@@ -205,6 +205,55 @@ For scripts that keep state (a table of live prices, a grid), a `corten::feed::F
 (feature `feed`) holds keyed rows and serves a snapshot plus ordered patches; an `on:connect`
 handler calls `subscribe(feed, { snapshot, patch, status }, { signal })`.
 
+A row derives `Row` beside `Clone` and `Serialize`, and marks the field that keys it, the id its
+upserts and removes name: a `String` or another type that derefs to `str` (`Box<str>`, `&'static
+str`). The feed sends what `Serialize` writes, so `#[serde(..)]` on the row, the id included,
+changes the JSON and not the key; a script reads the key under the id's serde name, so the derive
+refuses a serde attribute that leaves the id out or writes or reads it as other text than `id()`
+returns (`skip` and its variants, `with`, `serialize_with`, `deserialize_with`, `flatten`), an id
+read under another name than it is written under or under an `alias` too, another field written or read under the id's
+key (a `rename`, an `alias`, the row's `rename_all` or `tag`; a flattened field's members are not
+checked), and
+`into`, `transparent`, `from` or `try_from` on the row. It reads the row's attributes, not the
+id type's own `Serialize` and `Deserialize`, so an id type that writes or reads other than the
+text it derefs to is not checked, nor is a row whose `Serialize` or `Deserialize` is not serde's
+derive. `Row` is the derive and the trait at once (`use corten::feed::Row`); a struct row with
+named fields, keyed by one of them, derives it, and only a row the derive cannot express (such as
+an enum, a tuple struct, whose fields serde writes without names, a key made of several fields, or
+an `id` that does more than return a field) implements it by hand. A generic row needs no bounds on its parameters: it is a row for each type argument that
+makes it `Clone`, `Serialize`, `Send`, `Sync` and `'static`. An `Arc<str>` id needs serde's `rc`
+feature.
+
+```rust
+use corten::feed::Row;
+
+#[derive(Clone, serde::Serialize, Row)]
+pub struct Stock {
+    #[row(id)]
+    pub ticker: String,
+    pub price_cents: u32,
+}
+
+// By hand, for a row that is an enum.
+#[derive(Clone, serde::Serialize)]
+#[serde(tag = "kind")]
+pub enum Entry { Note { key: String, text: String }, Tag { key: String } }
+impl Row for Entry {
+    fn id(&self) -> &str {
+        match self {
+            Entry::Note { key, .. } | Entry::Tag { key } => key,
+        }
+    }
+}
+```
+
+A row with no field marked, two marked, a field marked twice, an id that is not text, an enum,
+a tuple struct, a unit struct, a `row` attribute on the struct, a `row` attribute that is not
+`#[row(id)]` on a field, or another member serde writes or reads under the id's key does not
+compile, and neither does a row that is not `Clone`, `Serialize`, `Send`, `Sync` and `'static`,
+the trait's bounds (a generic row, where a feed of it is built; each case is a `compile_fail` example in the documentation of
+`corten::feed::Row`).
+
 ```rust,ignore
 let stocks = Feed::new(rows);
 // in the routes module: each feed route names its rows
@@ -294,7 +343,8 @@ a worker thread like any request's work, so on a runtime of one worker a large l
 up other requests while its rows are read.
 
 Native apps and agents follow the same feed with `corten-protocol`'s `Replica`; see
-[Surfaces](../architecture.md).
+[Surfaces](../architecture.md). The derive is `corten`'s, so a client on `corten-protocol` alone
+implements `Row` for its rows by hand.
 
 ## Which one
 

@@ -209,7 +209,8 @@ element (a bubbling event on each change) and reads the attributes; never a `Mut
 ## Live rows (feature `feed`)
 
 ```rust
-// a Feed<Stock> where Stock: Row (has an id). In the routes module, each feed route names its rows:
+// a Feed<Stock>: #[derive(Clone, Serialize, ToJson, Row)] struct Stock { #[row(id)] ticker: String, .. }
+// (an enum row implements Row by hand). In the routes module, each feed route names its rows:
 //   #[route("/feed/stocks", get = stocks, rows = Stock)] pub struct Stocks;
 //   #[route("/feed/stocks/live", get = stocks_live, rows = Stock)] pub struct StocksLive;
 async fn stocks(State(m): State<Market>) -> FeedResponse<Stock> { m.stocks.snapshot() }

@@ -1397,6 +1397,54 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
+32. <a id="choice-derived-row"></a>**A feed row's key is the field marked `#[row(id)]`, which `#[derive(Row)]` reads; the
+    row's `Clone` and `Serialize` stay in its derive list.** The impl every row wrote by hand
+    (`fn id(&self) -> &str { &self.id }`) is one attribute on the field, so the key is named where
+    the field is and moves with it when it is renamed. The derive writes nothing else. A derive adds
+    impls, not other derives, and writing the row's `Serialize` itself would be a second
+    serializer beside serde's to keep in step, to save one word in a derive list; `Clone` is the
+    compiler's own derive. So a row still lists `Clone` and `Serialize` (and `ToJson` where a
+    script reads its type), and Rust checks each with the trait's `Send`, `Sync` and `'static`
+    bounds. Not chosen: an attribute macro (`#[corten::row(id = id)]`) that adds the derives to the
+    item, which hides standard derives behind a spelling of Corten's and names the field in an
+    argument rather than on it; taking a field named `id` without a mark, since a row's key is
+    better said (`sku`, `ticker`) than guessed. So a struct row with named fields, keyed by one of
+    them, derives `Row`, and only a row the derive cannot express (such as an enum, a tuple struct,
+    whose fields serde writes without names, a key made of several fields) implements the trait by
+    hand:
+    the hand-written impl is what is left for those, not a second way for the rest. Beyond the impl,
+    the derive refuses what makes a script or a replica read the key as something other than
+    `id()`, as far as the row's own serde attributes say: one that leaves the id out, writes or
+    reads it as other text or under two names, reads or writes the row as another value, or has
+    another member that serde writes or reads under the id's key. An id type's own `Serialize` and `Deserialize`, a row's
+    that are not serde's derive, and a flattened field's members are not known when the derive
+    runs, so they are not checked
+    ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
+
+    The derive is `corten::feed::Row`, beside the trait, and not in `corten-feed` itself: its impl
+    names `::corten::feed::Row`, so `corten-feed` and `corten-protocol`, which do not depend on
+    `corten`, keep writing their test rows by hand, as does a row whose `id` does more than
+    return a field (`corten-cluster`'s `Gated`). That is a cost: a native or agent client built on
+    `corten-protocol` alone, which a replica's read-side checks are for, writes its rows' `impl Row`
+    by hand too, since taking the derive there would bring in `corten` and its server
+    dependencies. No such client is in the repository or has been reported.
+
+    Stands on: reasoned (the generated impl is the one written by hand and the feed's path is
+    unchanged, which `crates/corten/tests/derived_row.rs` checks by comparing a derived row's
+    snapshot and replayed patch with a hand-written one's); value (one declaration for the key,
+    and no second way to derive `Clone` or `Serialize`, Values 5 and 6).
+
+    Revisit when: an example app, or an app that reports it, implements `Row` by hand for a key
+    made from more than one field, which a mark on one field cannot say; or a native or agent
+    client on `corten-protocol` alone keeps rows it would derive (the derive would then take a path
+    to the trait, such as `#[row(crate = corten_protocol)]`).
+
+    Last checked: 2026-11-10, the derive, its `compile_fail` examples, each compiled for its own
+    message, `tests/derived_row.rs`, and the rows of the four example apps and `corten-cluster` by
+    `cargo clippy --workspace --all-targets`, on `76247120`, the derive's last change; 2026-11-10,
+    the live benchmark's row, outside the workspace, by reading it on `76247120` (it has no serde
+    attribute).
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
