@@ -1673,7 +1673,10 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    page's CSP lets its scripts run by the nonce Leptos makes for each response and writes on the
    hydration scripts (its `nonce` feature, which leptos_axum turns on), set by the shell through
    Leptos's `ResponseOptions`; the page hydrates under it (checked in Chromium: the sort button
-   works, no CSP violation, every inline script has the nonce). It misses what axum-maud misses,
+   works, no CSP violation, every inline script has the nonce). Its `script-src` also lists
+   `'wasm-unsafe-eval'`, which lets the page compile its WebAssembly and runs no text as script, so
+   the matrix counts the policy strict, where Topcoat's `'unsafe-eval'` (item 4) does run text as
+   script. It misses what axum-maud misses,
    but its page for a failed read is its own 200 with the error in it, the app's code as before.
 4. `topcoat`: Topcoat runs tower middleware as one of its own layers (`TowerLayer`, its `tower`
    feature; tower-http is what Topcoat itself compresses with), so it takes axum-maud's tower-http
