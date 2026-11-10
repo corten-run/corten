@@ -19,8 +19,8 @@
 //!
 //! Nor does one that derives serde's `Deserialize` beside a schema written by hand, since its
 //! schema and what it reads could drift apart (the opt-in `impl corten::FromJson for Adjust {}`
-//! would compile it, as a deliberate second reader, for a type whose `Deserialize` cannot be
-//! derived):
+//! would compile it, for a type whose `Deserialize` `FromJson` cannot write: written by hand, or
+//! serde's for an attribute it refuses):
 //!
 //! ```compile_fail,E0277
 //! use corten::{agent::Tools, json::schema::{FromJsonSchema, Generator}};

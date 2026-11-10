@@ -1253,8 +1253,8 @@ rules something out.
     written by serde under a schema written for it, as in any `ToJson` answer) and a tool's output
     is written by the code every other response is (tool inputs are bounded on `FromJson` the same
     way, so an input that derives serde's `Deserialize` beside a schema written by hand does not
-    compile, short of the deliberate `impl FromJson for T {}` a type whose `Deserialize` cannot be
-    derived takes):
+    compile, short of the deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson`
+    cannot write takes: written by hand, or serde's for an attribute it refuses):
 
     ```rust,ignore
     // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
