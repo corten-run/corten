@@ -910,7 +910,7 @@ rules something out.
     `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
     Stands on: measured (callgrind, release, jemalloc and glibc, five runs each in process and
-    three over one keep-alive socket for card-market, Corten's router at `ROUTER_COMMIT` against
+    three over one keep-alive socket for card-market, Corten's router at `373a10f9` against
     axum's at `7e897bd6`: every request above costs less, by 1,547 to 3,254 instructions with
     jemalloc and 1,791 to 4,135 with glibc); measured (callgrind, release, five runs each: an `unstaged` route in the app's
     routes with its host check in a `route_layer` 9,230 (9,229 to 9,233) instructions a request against 8,479 with its checks in the handler, both
@@ -945,7 +945,7 @@ rules something out.
     the prototype at `7cea4970`; 2026-11-09, the `route_layer` runs, on an uncommitted variant of
     `3452790a` with the host check and the API's JSON in a `route_layer`; 2026-11-09, the
     dispatch suite on axum 0.8.9, hyper 1.12.0 and matchit 0.8.4, at `599c302a`; 2026-11-09,
-    Corten's router against axum's, at `ROUTER_COMMIT`, with the suite unchanged.
+    Corten's router against axum's, at `373a10f9`, with the suite unchanged.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
     `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
@@ -1134,7 +1134,7 @@ rules something out.
     to 7,986) with jemalloc and 9,040 with glibc, and with the host check and the API's JSON in
     a `route_layer` 9,230; the 494 the host check adds is mostly its read of `Host` and the
     match against the app's names (`security::named`, about 400 in the profile)); measured
-    (callgrind, release, five runs each, the same handler on Corten's router at `ROUTER_COMMIT`:
+    (callgrind, release, five runs each, the same handler on Corten's router at `373a10f9`:
     unstaged 6,932 with jemalloc and 7,745 with glibc in every run, against 7,099 and 8,117 for a
     plain axum router in the same build); measured
     (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
@@ -1183,7 +1183,7 @@ rules something out.
     PDF viewer turned on) as one sent without it (Playwright's WebKit 27.2 has no PDF viewer and
     downloads both, so Safari was not run), and
     [WebKit bug 284594](https://bugs.webkit.org/show_bug.cgi?id=284594), fixed in December 2024,
-    was read; 2026-11-09, the unstaged route on Corten's router at `ROUTER_COMMIT` against axum's
+    was read; 2026-11-09, the unstaged route on Corten's router at `373a10f9` against axum's
     plain router in the same build ([Choice 25](#choice-axum-router), step 2).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
