@@ -710,10 +710,13 @@ before its writes blocked. Where it falls short:
 
 1. A body sent a byte a second is closed by the request deadline (card-market's 10 s, with a 503;
    30 s by default), not by a rate: Kestrel closed it within 5.4 to 6.8 s, by its minimum request
-   rate as far as can be told (above). A route whose deadline is removed (`deadline(None)`, for a
-   long upload) has nothing that closes it until `Upload::idle`'s minute of silence, which a byte
-   a second never reaches (from the guide, not measured here):
-   [#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074).
+   rate as far as can be told (above). On a route whose deadline is removed (`deadline(None)`, for
+   a long upload), a body read as it arrives (`pieces_up_to`, `Upload`) is given up on with a 408
+   once it falls `Upload::idle`'s minute behind 240 bytes a second, Kestrel's minimum rate, which
+   a byte a second does after about 60 s (from the guide, not measured here; before
+   [#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074),
+   at `73e1c453`, nothing closed it). That is still about ten times Kestrel's time, by design: the
+   idle time is the allowance, so an upload that pauses is not cut off.
 2. A client that stops reading is closed by `App::send_timeout`'s 60 s (63 s from its connect,
    with the time the server took to fill the socket's buffers), nginx's send timeout, which Corten
    chose over Kestrel's minimum response rate ([Limit 14](../../docs/design.md#limit-http1)):
@@ -1030,6 +1033,30 @@ instead of tower-http's defaults (brotli 4 here), the runtime and assets compres
 11, the item page borrowing the cached item instead of cloning it (about 40-50 µs per request
 in `render_cost`), and the island scan looking for dashes instead of every tag (21 µs to 2.4 µs
 on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
+
+### The image's allocator (Docker Desktop, 2026-11-08)
+
+The evidence behind [design Choice 23](../../docs/design.md#choice-jemalloc-image), card-market
+built at `81f1f8ef` with only its allocator's environment changed, except the tuned image in
+`results/alloc-faults` and `alloc-idle` (`corten-card-market-p1011b`), a build of this change whose
+commit was not recorded, which matched the environment-only `cm-p1011-tc65536` in
+`results/alloc-faults-br`. The fault folders' JSON records every image's id and settings, the flood
+folders' the image's id and each variant's settings added to it; the table gives the `ab.mjs`
+folders':
+
+| Folder | What | Images |
+|---|---|---|
+| `results/flood-memory`, `-mmap`, `-tuned` | `flood-memory.mjs`: eight floods of 4,000 unfinished heads, three runs each | jemalloc unset, `background_thread:true`, and that with `tcache_max:65536`; glibc, with two arenas or one, and with a 16 KiB mmap threshold |
+| `results/alloc-faults` | `alloc-faults.mjs`: page faults and CPU a request, three encodings, three rounds | jemalloc unset (`cm-p1011-je`), the tuned image as committed (`corten-card-market-p1011b`), glibc (`cm-p1011-glibc`) |
+| `results/alloc-idle` | `alloc-faults.mjs` with `IDLE_SECONDS=60`: CPU and threads of an untouched app, three rounds | jemalloc unset, the tuned image, and that with `max_background_threads:1` (`jecap1`) |
+| `results/alloc-faults-br` | the same, brotli only | jemalloc unset, `background_thread:true` (`jebg`), no decay (`jenodecay`), `thp:never`, `retain:false`, `tcache_max` 64 KiB and 8 MiB, the tuned image, glibc |
+| `results/ab-jemalloc` | `ab.mjs`, three encodings, three rounds | jemalloc unset (`je`), `background_thread:true` (`jebg`), glibc |
+| `results/ab-jemalloc-br` | `ab.mjs`, brotli only | jemalloc unset, `oversize_threshold` 0 (`jeos0`) and 64 MiB (`jeos64`), glibc |
+| `results/ab-jemalloc-tuned` | `ab.mjs`, three encodings, three rounds | jemalloc unset, `background_thread:true,tcache_max:65536` (`jecand`), glibc |
+
+All ran on a desktop with other containers running, so the `ab.mjs` rounds moved by up to 2.4
+times between rounds of one image; the fault counts repeat to 0.1 a request. A quiet host has not
+run them.
 
 ### Build cost on a desktop (round local-2, 2026-11-03)
 
@@ -1918,6 +1945,13 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
+# One app before and after, alternating (identity, a browser's encodings, brotli alone; AB_ROUNDS=3,
+# AB_ENCODINGS=br for some), and the memory floods of unfinished heads leave, by allocator setting
+# (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some); the committed
+# fault folders ran REQUESTS=2000, results/alloc-faults-br with ENCODINGS=br too:
+node bench/fullstack/ab.mjs results/ab-x cb-corten cb-corten-next
+node bench/fullstack/flood-memory.mjs results/flood-x cb-corten [runs=3] [floods=8]
+node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next   # page faults and CPU a request
 ```
 
 ## What the repository keeps

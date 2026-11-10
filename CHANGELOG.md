@@ -4271,6 +4271,17 @@ Corten is pre-1.0, so any minor version may change the API.
     in place of the pager, which the guides now say
     ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
 
+169. The image `corten new` writes (and card-market's) runs jemalloc with
+    `MALLOC_CONF=background_thread:true,tcache_max:65536`, a third line beside the two that preload
+    it. The background thread returns a flood's memory while the app is idle (eight floods of
+    unfinished heads left 13 to 16 MiB of `memory.current`, against 118 to 139 without it and 406 to
+    455 on glibc's allocator, three runs each). The larger thread cache keeps brotli's buffers:
+    brotli responses took 19.3 to 19.4 page faults each on average before, and none now. glibc's own
+    tunables were tried: fewer arenas changed nothing, and a lower mmap threshold left about 180
+    MiB, still growing. `bench/fullstack/flood-memory.mjs` drives the floods, `alloc-faults.mjs`
+    counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
+    every row and removes its app however the run ends
+    ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 172. The kit's `Card` and `CardPanel` take a `size` (`CardSize::Md`, the theme's `--card-padding`,
     or `Sm`, denser), as `Button`, `Dialog` and `Progress` do, and `CardCompact` is gone: it was a
     class written beside a card (`(Card {}, CardCompact {})`) that compiled alone or beside any
