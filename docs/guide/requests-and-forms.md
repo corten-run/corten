@@ -1284,11 +1284,13 @@ so memory stays at a few chunks. When the client leaves, the stream is dropped, 
 makes it: a cursor closes, a channel's sender fails. Read what can fail before returning it (the
 first page of rows, the file being there), since that error is still an error page; once the
 stream starts, the status and headers are sent, and an `Err` chunk ends the connection without
-the body's end, so the browser reports the download failed, and the error is logged as a
-handler's is, each cause under its message. It cannot become an error page or a redirect. `E` is
-anything `Error::new` takes: an error type (`std::io::Error`, a client's or a store's), or a
-`String` or `&str` message, which is logged alone; a type of the app's that only implements
-`Display` implements `std::error::Error` to be one. `Media::stream_sized(type, length, chunks)` sends a
+the body's end, so the browser reports the download failed, and the error is logged with each
+cause under its message, as a handler's error is. It cannot become an error page or a redirect.
+`E` is anything `Error::new` takes: an error type (`std::io::Error`, a client's or a store's), a
+`String` or `&str` message, which is logged alone, or a `corten::Error`, so a stream made with
+the app's own `?` (of `corten::Result<Bytes>`) logs the error it holds; a type of the app's that
+only implements `Display` implements `std::error::Error` to be one.
+`Media::stream_sized(type, length, chunks)` sends a
 `Content-Length` so the browser shows progress; the stream must make exactly that many bytes, or
 the connection ends there as for a failure. A text type is compressed a chunk at a time (zstd,
 else gzip, never brotli, ended when the stream ends; uncompressed for a client that takes neither

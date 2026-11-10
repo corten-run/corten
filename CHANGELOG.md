@@ -4263,10 +4263,11 @@ Corten is pre-1.0, so any minor version may change the API.
 - A streamed download's failed chunk (`Media::stream`, `Media::stream_sized`) is logged as the
   error itself too, each cause under its message, where it was logged by its message alone. A
   chunk's error is now anything `Error::new` takes, `Into<Box<dyn std::error::Error + Send +
-  Sync>>`, where it was any `Display + Send`: an error type, a `String` or a `&str` compiles as
-  before. Breaking: a chunk error that only implements `Display`, or is not `Sync`, does not
-  compile; implement `std::error::Error` for it, or map it with `.map_err(|e| e.to_string())`,
-  which logs the message alone
+  Sync>>`, where it was any `Display + Send`: an error type, a `String`, a `&str` or a
+  `corten::Error` compiles as before, the last now logged as the error it holds (`corten::Error`
+  converts into that box). Breaking: a chunk error of the app's that only implements `Display`, or
+  is not `Sync`, does not compile; implement `std::error::Error` for it, or map it with
+  `.map_err(|e| e.to_string())`, which logs the message alone
   ([#1153 A streamed download's failure is logged by its message alone: Media::stream takes E: Display, not E: Error](https://github.com/corten-run/corten/issues/1153)).
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,

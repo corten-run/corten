@@ -13401,9 +13401,19 @@ async fn a_failed_stream_is_logged_with_each_cause_under_it() {
                 let chunks = futures_util::stream::iter([Ok(crate::Bytes::from_static(b"a,1\n")), Err("the store went away")]);
                 crate::Media::stream("application/octet-stream", chunks)
             }),
+        )
+        // A stream of `corten::Result`, as one made with the app's own `?` is: logged as the error
+        // it holds, causes too.
+        .route(
+            "/corten",
+            get(|| async {
+                let gone = Failed("the cursor closed", Some(Box::new(Failed("connection reset", None))));
+                let chunks = futures_util::stream::iter([Ok(crate::Bytes::from_static(b"a,1\n")), Err(Error::from(gone))]);
+                crate::Media::stream("application/octet-stream", chunks)
+            }),
         );
     let router = app(routes, None);
-    for path in ["/error", "/message"] {
+    for path in ["/error", "/message", "/corten"] {
         let res = router.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         assert!(res.into_body().collect().await.is_err(), "{path}: the body ends as a failure");
@@ -13413,6 +13423,8 @@ async fn a_failed_stream_is_logged_with_each_cause_under_it() {
     let error = line("error=error reading rows");
     assert!(error.contains("error.sources=[connection reset]"), "{error}");
     assert!(error.contains("corten: a streamed application/octet-stream answer stopped after its headers were sent"), "{error}");
+    let corten = line("error=the cursor closed");
+    assert!(corten.contains("error.sources=[connection reset]"), "{corten}");
     let message = line("error=the store went away");
     assert!(!message.contains("error.sources"), "a message has no cause under it: {message}");
 }
