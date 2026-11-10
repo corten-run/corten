@@ -1216,15 +1216,16 @@ rules something out.
     which clones that field and needs nothing of the containing type. The six examples with shared
     state have eight state types: four derive both (watchlist's `Shared`, card-market's `ApiState`,
     listings-feed's `Shared`, and a test's state in watchlist's `account.rs`) and four derive
-    `Clone` alone, their handlers taking the whole state (card-market's `Source`, the state of its
-    pages, auction-room's `Auction`, deck-builder's `Builder` and seller-desk's `Desk`). A
+    `Clone` alone, their handlers taking the whole state (card-market's `Source` (the state of its
+    pages), auction-room's `Auction`, deck-builder's `Builder` and seller-desk's `Desk`). A
     `#[corten::state]` attribute would take one word off each of the four that derive both (the
     `Clone` in `#[derive(Clone, FromRef)]`) and give the other four a choice between it and the
     derive they write now: a third way to write state, and a concept to learn that one word a type
     does not earn (Values 5 and 6). The generated code would be the same. `FromRef` deriving `Clone`
-    itself is not chosen either: a type that writes its own `impl Clone` (to share a field behind an
-    `Arc` it builds, say) would get a second, conflicting impl, and the derive list would no longer
-    say that the type is `Clone`. Not chosen: the attribute; an option on `FromRef`
+    itself is not chosen either: a type that writes its own `impl Clone` (a generic state whose
+    fields are behind an `Arc`, which `#[derive(Clone)]` would bound on its parameter, as
+    `corten_cluster::Cluster<S>` does) would get a second, conflicting impl, and the derive list
+    would no longer say that the type is `Clone`. Not chosen: the attribute; an option on `FromRef`
     (`#[from_ref(clone)]`), the same second spelling in another place
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 
