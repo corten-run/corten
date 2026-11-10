@@ -4224,7 +4224,7 @@ Corten is pre-1.0, so any minor version may change the API.
     bytes smaller compressed, `format.js` 8 and 18, and `upload.js` and `keys.js` within 11 bytes
     either way. terser (5.51.2) is a development dependency of the repository's tooling; apps
     install nothing new
-    ([design Choice 36](docs/design.md#choice-runtime-terser),
+    ([design Choice 33](docs/design.md#choice-runtime-terser),
     [#1047 Benchmark round r16: item-page JavaScript grew 9.1% (13,187 to 14,392 gzip bytes)](https://github.com/corten-run/corten/issues/1047)).
 
 ### Fixed
