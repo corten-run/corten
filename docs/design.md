@@ -1301,8 +1301,12 @@ rules something out.
     bounds. Not chosen: an attribute macro (`#[corten::row(id = id)]`) that adds the derives to the
     item, which hides standard derives behind a spelling of Corten's and names the field in an
     argument rather than on it; taking a field named `id` without a mark, since a row's key is
-    better said (`sku`, `ticker`) than guessed. A row that is an enum, or keeps its key inside another
-    field, implements the trait by hand
+    better said (`sku`, `ticker`) than guessed. So a struct row keyed by one field derives `Row`,
+    and only a row the derive cannot express (an enum, a key made of several fields) implements the
+    trait by hand: the hand-written impl is what is left for those, not a second way for the rest.
+    Beyond the impl, the derive refuses what makes a script or a replica read the key as something
+    other than `id()`: a serde attribute that leaves the id out, writes or reads it as other text,
+    reads or writes the row as another value, or puts another member under the id's key
     ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
 
     The derive is `corten::feed::Row`, beside the trait, and not in `corten-feed` itself: its impl
@@ -1319,8 +1323,9 @@ rules something out.
     made from more than one field, which a mark on one field cannot say.
 
     Last checked: 2026-11-10, the derive, its `compile_fail` examples, `tests/derived_row.rs` and
-    the rows of the four example apps, the live benchmark and `corten-cluster`, on `5710383f`,
-    the derive's last change.
+    the rows of the four example apps, the live benchmark and `corten-cluster`, on `5710383f`;
+    2026-11-10, the serde attributes it refuses and its generic rows, by their `compile_fail` examples, on top of
+    `955a8ecb`.
 
 ## Rules
 

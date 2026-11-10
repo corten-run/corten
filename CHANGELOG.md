@@ -2659,16 +2659,20 @@ Corten is pre-1.0, so any minor version may change the API.
     key field moves the key with it. The row's `Clone` and `Serialize` stay in its derive list
     ([design Choice 35](docs/design.md#choice-derived-row)). A row with no field marked or two, a
     field marked twice, an id that is not text (a type that derefs to `str`: `String`, `Box<str>`,
-    `Arc<str>`, `&'static str`, `Cow<'static, str>`), an enum, a unit struct, a `row` attribute on
-    the struct, or one other than `#[row(id)]` on a field does not compile, nor does an id serde
-    leaves out of the JSON, where a script reads the key, or writes or reads as other text than
-    `id()` returns (`skip` and its variants, `with`, `serialize_with`, `deserialize_with`,
-    `flatten`), or a row serde writes as another value (`into`, `transparent`); the trait's bounds
+    `&'static str`, `Cow<'static, str>`, `Arc<str>` with serde's `rc` feature), an enum, a unit
+    struct, a `row` attribute on the struct, or one other than `#[row(id)]` on a field does not
+    compile, nor does an id serde leaves out of the JSON, where a script reads the key, or writes or
+    reads as other text than `id()` returns (`skip` and its variants, `with`, `serialize_with`,
+    `deserialize_with`, `flatten`), another field serde writes under the id's key (a `rename`, the
+    row's `rename_all` or `tag`; a flattened field's members are not checked), or a row serde
+    writes or reads as another value (`into`, `transparent`, `from`, `try_from`); the trait's bounds
     (`Serialize`, `Clone`, `Send`, `Sync`, `'static`) still hold, each with a `compile_fail` example
     on the derive. A row a `macro_rules!` declares with the id's visibility or attributes passed in
-    derives it too, and a generic row bounds its own parameters. The listings-feed, watchlist,
-    seller-desk and deck-builder rows, the live benchmark's and `corten-cluster`'s take it; an `impl
-    Row` written by hand still works. `corten::feed` is now a module that re-exports `corten-feed`
+    derives it too, and a generic row needs no bounds on its parameters: it is a row for each type
+    argument that makes it one, and a feed of one that is not does not compile. The listings-feed,
+    watchlist, seller-desk and deck-builder rows, the live benchmark's and `corten-cluster`'s take
+    it; an `impl Row` written by hand still works, for a row the derive cannot express (an enum, a
+    key made of several fields). `corten::feed` is now a module that re-exports `corten-feed`
     and the derive, so every `corten::feed::..` path still resolves. The feed sends the same bytes
     (`tests/derived_row.rs` compares a snapshot and a replayed patch with a hand-written row's), so
     nothing on the request path changed to measure
