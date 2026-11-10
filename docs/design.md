@@ -1503,6 +1503,7 @@ rules something out.
     (one run, all passed; Chromium and Firefox got zstd, WebKit gzip, the large event in 7 to
     17 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
     test's thread (352,232 bytes, the same).
+
 33. <a id="choice-json-derives"></a>**A type's JSON role is the derive that names its direction,
     `ToJson` to write and `FromJson` to read, not a data-role attribute.** Each derive is already
     the one thing a type declares for its direction: `ToJson` lays out the JSON a response, a
