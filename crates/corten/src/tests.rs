@@ -8034,6 +8034,31 @@ fn has_ipv6_loopback() -> bool {
     std::net::TcpListener::bind("[::1]:0").is_ok()
 }
 
+/// A burst of clients larger than the standard library's backlog of 128 all finish connecting
+/// before the server accepts one, on each listener `HOST` gives and on the loopback pair: none
+/// waits for its SYN to be sent again. Linux admits one more than the backlog and drops the next
+/// SYN, so with 128 the 130th connection would wait a second.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit() {
+    const BURST: usize = 200;
+    let somaxconn: usize = std::fs::read_to_string("/proc/sys/net/core/somaxconn").unwrap().trim().parse().unwrap();
+    if somaxconn <= BURST {
+        eprintln!("skipped: net.core.somaxconn is {somaxconn}, which caps the backlog below the burst");
+        return;
+    }
+    for listeners in [crate::app::bind(Some("127.0.0.1"), 0).await.unwrap(), crate::app::bind(None, 0).await.unwrap()] {
+        for listener in &listeners {
+            let addr = listener.local_addr().unwrap();
+            let mut held = Vec::new();
+            for n in 1..=BURST {
+                let connected = tokio::time::timeout(Duration::from_millis(900), tokio::net::TcpStream::connect(addr)).await;
+                held.push(connected.unwrap_or_else(|_| panic!("{addr}: connection {n} waited for a resent SYN")).unwrap());
+            }
+        }
+    }
+}
+
 /// Without `HOST`, `localhost` is both loopback addresses on one port, so a browser that tries
 /// `::1` first is answered at once, not after a fallback; stopping ends both.
 #[tokio::test]
