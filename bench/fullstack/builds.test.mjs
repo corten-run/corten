@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { allApps } from "./apps.mjs";
-import { cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -168,7 +168,7 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
     // Packaging after the build (copying the output aside) and the shared cache's touch, which this
     // benchmark has no use for; every other command of the deps and build stages is the recipe's.
     const packaging = [/^mkdir -p \/out$/, /^cp (-r )?\S+ \/out\/\S+$/, /^chmod 644 /, /^find \. -name target -prune -o -type f -exec touch \{\} \+$/, /^npm prune --omit=dev$/];
-    const mine = [...parts(r.deps), ...parts(r.build)];
+    const mine = [...parts(r.deps), ...(r.build ? parts(r.build) : [])];
     for (const stage of stages.filter((s) => s.run.some((c) => mine.some((m) => c.includes(m))))) {
       for (const command of stage.run.flatMap((c) => c.split(" && ").map((x) => x.trim()))) {
         assert.ok(mine.includes(command) || packaging.some((p) => p.test(command)), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
@@ -176,8 +176,12 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
       if (r.stage) assert.equal(stage.from, "tools", `${name}: its build stage starts from its tools stage`);
     }
     const run = stages.flatMap((s) => s.run).join(" && ");
-    for (const part of [...parts(r.deps), ...parts(r.build)]) assert.ok(run.includes(part), `${name}: its Dockerfile does not run ${part}`);
-    const build = stages.find((s) => s.run.some((c) => c.includes(parts(r.build)[0])));
+    for (const part of mine) assert.ok(run.includes(part), `${name}: its Dockerfile does not run ${part}`);
+    // An app with no build step: its Dockerfile runs nothing after the dependency step, and what
+    // that stage sets and fetches is checked as a build stage's is.
+    const last = parts(r.build ?? r.deps)[0];
+    const build = stages.find((s) => s.run.some((c) => c.includes(last)));
+    if (!r.build) assert.ok(build && build.run.at(-1)?.includes(parts(r.deps).at(-1) ?? ""), `${name}: it has no build, but its Dockerfile runs something after its dependencies`);
     assert.ok(build, `${name}: no stage runs its build`);
     if (!r.stage) assert.equal(stages[0].from, r.tools, `${name}: its toolchain is its Dockerfile's first image`);
     assert.ok(stages.some((s) => s.workdir.includes(r.workdir)), `${name}: its Dockerfile has no WORKDIR ${r.workdir}`);
@@ -223,4 +227,66 @@ test("rustc's passes and macro statistics are read from its output", () => {
   assert.deepEqual(macros.map((m) => m.macro), ["#[derive(Deserialize)]", "html!", "#[derive(Id)]", "::core::include_bytes!", "::schemars::_private::serde_json::json!"]);
   assert.deepEqual(macros[1], { macro: "html!", uses: 18, lines: 917, bytes: 44913 });
   assert.equal(macros[4].uses, 10);
+});
+
+test("each Rust app's completion point is in its file once, and every app that checks has one", () => {
+  for (const [name, r] of Object.entries(recipes)) {
+    assert.equal(!!r.ra, !!r.check, `${name}: an app the editor's loop checks has a completion point, and only one`);
+    if (!r.ra) continue;
+    assert.equal(r.ra.at.split("|").length, 2, `${name}: one | in ${r.ra.at}`);
+    // The probe types `nope_` at the point and looks for an error naming `nope_<expect>`.
+    assert.ok(r.ra.at.split("|")[1].startsWith(r.ra.expect), `${name}: ${r.ra.at} has ${r.ra.expect} right after the |`);
+    const text = readFileSync(join(repo, contextOf(name), r.edit), "utf8");
+    assert.equal(text.split(r.ra.at.replace("|", "")).length, 2, `${name}: ${r.edit} needs exactly one ${r.ra.at}`);
+  }
+});
+
+test("a Docker rebuild's edit numbers its run, so no two runs write the same file", () => {
+  for (const name of Object.keys(recipes)) {
+    const seen = new Set();
+    for (let run = 1; run <= 6; run += 1) {
+      const { from, to } = runChange(name, run);
+      assert.equal(from, changeOf(name).from);
+      assert.ok(to.includes(`Set the price alert (${run})`), `${name}: ${to}`);
+      seen.add(to);
+    }
+    assert.equal(seen.size, 6, name);
+  }
+});
+
+test("the steps a BuildKit build ran are the ones its plain output did not mark CACHED", () => {
+  const output = [
+    "#1 [internal] load build definition from Dockerfile",
+    "#1 DONE 0.0s",
+    "#5 [build 1/4] FROM docker.io/library/rust:1-bookworm@sha256:abc",
+    "#5 CACHED",
+    "#6 [build 2/4] COPY . .",
+    "#6 DONE 0.4s",
+    "#7 [build 4/4] RUN --mount=type=cache,target=/src/target cargo build --release",
+    "#7 12.1    Compiling card-market v0.1.0 (/src/examples/card-market)",
+    "#7 DONE 40.2s",
+    "#8 [stage-1 3/3] COPY --from=build /out/server /app/server",
+    "#8 CACHED",
+  ].join("\r\n");
+  assert.deepEqual(ranSteps(output), [
+    "[internal] load build definition from Dockerfile",
+    "[build 2/4] COPY . .",
+    "[build 4/4] RUN --mount=type=cache,target=/src/target cargo build --release",
+  ]);
+  assert.deepEqual(ranSteps("#5 [build 4/4] RUN make\n#5 CACHED\n"), []);
+  assert.equal(ranARun(ranSteps(output)), true);
+  // A build after the edit that only copied (the build step cached) did not build.
+  assert.equal(ranARun(["[internal] load build definition from Dockerfile", "[build 2/4] COPY . ."]), false);
+  assert.equal(ranARun(["[build 2/4] COPY ./RUN /src"]), false);
+  assert.deepEqual(compiledIn(output.replace("#7 DONE", "#7 30.5    Compiling card-market-two v0.2.0\r\n#7 DONE")), ["card-market", "card-market-two"]);
+});
+
+test("build.mjs's table has a row for an app with no build step, a built app and a failed one", () => {
+  const step = { ms: 2500, cpuS: 3.1, peakMiB: 120 };
+  assert.equal(buildRow("express", { deps: step, build: null, clean: { ms: 2500, cpuS: 3.1 }, rebuild: null, complete: true }),
+    "| express | deps 2.5 s | no build step | clean 2.5 s, 3.1 CPU-s | nothing to rebuild |  |");
+  assert.equal(buildRow("gin", { deps: step, build: step, clean: { ms: 5000, cpuS: 6.2 }, rebuild: step, complete: true }),
+    "| gin | deps 2.5 s | build 2.5 s, 3.1 CPU-s, 120 MiB | clean 5.0 s, 6.2 CPU-s | rebuild 2.5 s, 3.1 CPU-s |  |");
+  assert.equal(buildRow("leptos", { failed: "exit 1\nmore", deps: step }), "| leptos | FAILED: exit 1 |");
+  assert.equal(buildRow("nuxt", { deps: step, complete: false }), "| nuxt | FAILED: stopped before it finished |");
 });
