@@ -46,7 +46,7 @@ import { closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, rea
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cargoBuilds, changeOf, contextOf, crateCost, median, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, median, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..");
@@ -181,15 +181,18 @@ for (const name of appsArg.split(",")) {
     must(["build", "-q", "-t", tag("src"), "-f", "-", context], { input: sourceDockerfile(name) });
     const d = keep("deps", step(`${name}-deps`, tag("src"), r.deps, { commit: tag("deps") }));
     const timingsFile = join(scratch, `${name}-timings.html`);
-    const b = keep("build", step(`${name}-build`, tag("deps"), r.timings ? `${r.build} --timings` : r.build, {
+    // An app with no build step (builds.mjs) records none: its server runs the source as written.
+    const command = r.build;
+    const b = command === undefined ? keep("build", null) : keep("build", step(`${name}-build`, tag("deps"), r.timings ? `${command} --timings` : command, {
       commit: tag("built"),
       take: r.timings ? { [`${r.workdir}/target/cargo-timings/cargo-timing.html`]: timingsFile } : {},
     }));
     // Dependencies and build together: what a clean checkout costs, the network included.
-    keep("clean", { ms: d.ms + b.ms, cpuS: +(d.cpuS + b.cpuS).toFixed(1) });
+    keep("clean", b ? { ms: d.ms + b.ms, cpuS: +(d.cpuS + b.cpuS).toFixed(1) } : { ms: d.ms, cpuS: d.cpuS });
     const rebuilds = [];
-    for (let i = 0; i < runs; i += 1) {
-      rebuilds.push(rebuilt(step(`${name}-rebuild-${i + 1}`, tag("built"), again(r.build), { files: edited }), "the rebuild"));
+    if (command === undefined) keep("rebuild", null);
+    else for (let i = 0; i < runs; i += 1) {
+      rebuilds.push(rebuilt(step(`${name}-rebuild-${i + 1}`, tag("built"), again(command), { files: edited }), "the rebuild"));
       keep("rebuild", summary(rebuilds));
     }
     if (r.dev) {
@@ -201,7 +204,7 @@ for (const name of appsArg.split(",")) {
       }
     }
     // What the dependency step, the production build and the development build each wrote.
-    keep("disk", { depsBytes: d.diskBytes ?? null, buildBytes: b.diskBytes ?? null, devBytes: entry.dev?.clean.diskBytes ?? null });
+    keep("disk", { depsBytes: d.diskBytes ?? null, buildBytes: b?.diskBytes ?? null, devBytes: entry.dev?.clean.diskBytes ?? null });
     keep("complete", true);
     // The editor's and the tests' loops and the other kinds of edit, after the rest is saved, each
     // group apart, so a failure costs only its own group (`loopsFailed` says which and why).
@@ -242,9 +245,9 @@ for (const name of appsArg.split(",")) {
         keep("check", { ...clean, again: summary(list) });
       }
     });
-    if (scaleCores.length && scaleApps.includes(name)) try {
+    if (scaleCores.length && scaleApps.includes(name) && r.build !== undefined) try {
       // The clean build on other core sets, and for cargo the development loop linked by mold.
-      for (const on of scaleCores) keep("scale", { ...entry.scale, [on]: step(`${name}-build-on-${on}`, tag("deps"), r.build, { cores: on }) });
+      for (const on of scaleCores) keep("scale", { ...entry.scale, [on]: step(`${name}-build-on-${on}`, tag("deps"), /** @type {string} */ (r.build), { cores: on }) });
       if (r.dev && cargoBuilds(r)) {
         // Installing mold is not timed: it is a step in the image, before the measured ones. Since
         // Rust 1.90 the default linker here is rust-lld, which `linker-features=-lld` turns off.
@@ -294,10 +297,4 @@ for (const name of appsArg.split(",")) {
   save();
 }
 rmSync(scratch, { recursive: true, force: true });
-const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
-for (const [name, e] of Object.entries(out)) {
-  // Entries written before `complete` was recorded have none, and finished.
-  if (e.failed || e.complete === false) { console.log(`| ${name} | FAILED: ${(e.failed ?? "stopped before it finished").split("\n")[0]} |`); continue; }
-  const dev = e.dev ? `dev ${s(e.dev.clean.ms)}, after the edit ${s(e.dev.rebuild.ms)}` : "";
-  console.log(`| ${name} | deps ${s(e.deps.ms)} | build ${s(e.build.ms)}, ${e.build.cpuS} CPU-s, ${e.build.peakMiB} MiB | clean ${s(e.clean.ms)}, ${e.clean.cpuS} CPU-s | rebuild ${s(e.rebuild.ms)}, ${e.rebuild.cpuS} CPU-s | ${dev} |`);
-}
+for (const [name, e] of Object.entries(out)) console.log(buildRow(name, e));

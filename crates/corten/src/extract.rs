@@ -74,10 +74,111 @@
 //! # fn main() { let _ = App::new(url::router(Shared { lists: Lists })); }
 //! ```
 //!
-//! These are the traits of axum, the server library under Corten, named here so an app's code
-//! names Corten alone (`docs/design.md#choice-own-extractors`). The traits come from `axum-core`, where
-//! axum's own paths would also carry axum's derives of the same names when its `macros` feature is
-//! on anywhere in the build.
+//! These are Corten's own traits, with the names, the `Rejection` and the
+//! `from_request_parts(parts, state)` signature they had when they were axum's
+//! (`docs/design.md#choice-own-extractors`), so an extractor written against axum's compiles
+//! against them as it is. axum's own extractors (its `Path`, `Query`, `Extension`) implement
+//! axum's traits, not these, so a handler cannot take one: a route's path and query are its
+//! [`crate::Params`]. A handler that takes one of axum's does not compile:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/items", get = items)]
+//!     pub struct Items;
+//! }
+//!
+//! async fn items(corten::axum::Extension(n): corten::axum::Extension<u32>) -> String {
+//!     n.to_string()
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Nor does axum's `State`, under `no_store` too, which reads its arguments the same way:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/items", get = items, no_store)]
+//!     pub struct Items;
+//! }
+//!
+//! async fn items(_: corten::axum::extract::State<()>) -> String {
+//!     String::new()
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! The same handler with Corten's `State` compiles:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/items", get = items, no_store)]
+//!     pub struct Items;
+//! }
+//!
+//! async fn items(_: State<()>) -> String {
+//!     String::new()
+//! }
+//! # fn main() { let _ = App::new(url::router()); }
+//! ```
+//!
+//! Only a handler's last argument reads the body, so one that reads it before another argument,
+//! or reads it twice, does not compile:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/notes", get = notes)]
+//!     pub struct Notes;
+//! }
+//!
+//! async fn notes(text: String, _: corten::http::Method) -> String {
+//!     text
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/notes", get = notes)]
+//!     pub struct Notes;
+//! }
+//!
+//! async fn notes(_: corten::Bytes, text: String) -> String {
+//!     text
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Last, it does:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/notes", get = notes)]
+//!     pub struct Notes;
+//! }
+//!
+//! async fn notes(_: corten::http::Method, text: String) -> String {
+//!     text
+//! }
+//! # fn main() { let _ = App::new(url::router()); }
+//! ```
 //!
 //! A handler that takes the whole [`Request`] reads its body with [`bytes_up_to`], up to a limit
 //! of the route's own, and answers a body over it itself.
@@ -87,9 +188,8 @@
 
 use std::{future::Future, pin::Pin, task::Poll, time::Duration};
 
+pub use crate::handler::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request, State};
 use axum::body::{BodyDataStream, HttpBody};
-pub use axum::extract::State;
-pub use axum_core::extract::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use tokio::time::Sleep;

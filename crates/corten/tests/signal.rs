@@ -2,8 +2,8 @@
 //! and a request that is answered.
 use std::{io::Write, time::Duration};
 
-use axum::{body::Body, extract::State, http::Request, Router};
-use corten::{Abort, App, Signal};
+use axum::{body::Body, http::Request};
+use corten::{extract::State, Abort, App, Router, Signal};
 use http_body_util::BodyExt;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
@@ -29,6 +29,9 @@ mod url {
 
     #[route("/quick", get = quick)]
     pub struct Quick;
+
+    #[route("/unstaged", get = unstaged, unstaged)]
+    pub struct Unstaged;
 }
 
 async fn slow(signal: Signal, State(tx): State<Tx>) -> &'static str {
@@ -41,6 +44,23 @@ async fn quick(req: corten::Req, State(tx): State<Tx>) -> &'static str {
     "done"
 }
 
+/// An unstaged route takes the module's state too.
+async fn unstaged(State(tx): State<Tx>) -> &'static str {
+    if tx.is_closed() {
+        "closed"
+    } else {
+        "open"
+    }
+}
+
+#[tokio::test]
+async fn an_unstaged_route_takes_the_module_s_state() {
+    let (router, _rx) = app(Duration::from_secs(60));
+    let res = router.oneshot(Request::get("/unstaged").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(res.into_body().collect().await.unwrap().to_bytes(), "open");
+}
+
 async fn next(rx: &mut mpsc::UnboundedReceiver<Abort>) -> Abort {
     tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.expect("the signal never aborted").unwrap()
 }
@@ -50,7 +70,7 @@ async fn a_client_that_closes_the_connection_aborts_the_request() {
     let (router, mut rx) = app(Duration::from_secs(60));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, router).await });
+    tokio::spawn(async move { axum::serve(listener, axum::ServiceExt::<Request<Body>>::into_make_service(router)).await });
     let started = std::time::Instant::now();
     tokio::task::spawn_blocking(move || {
         let mut socket = std::net::TcpStream::connect(addr).unwrap();

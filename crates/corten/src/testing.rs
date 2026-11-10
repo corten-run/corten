@@ -104,7 +104,9 @@ use std::{
     pin::Pin,
 };
 
-use axum::{body::Body, extract::connect_info::ConnectInfo, Router};
+use axum::{body::Body, extract::connect_info::ConnectInfo};
+
+use crate::Router;
 use bytes::Bytes;
 use http::{header, HeaderMap, HeaderName, HeaderValue, Method, Request, Response, StatusCode};
 use tower_service::Service;

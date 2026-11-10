@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}{{ record.title }}{% endblock %}
+{% block head %}<link rel="stylesheet" href="/static/catalog.css">{% endblock %}
+{% block main %}
+<article aria-label="Catalog record">
+  <h1>{{ record.title }}</h1>
+  <p>{{ record.subtitle }}</p>
+  <p>{{ record.description }}</p>
+  <ul aria-label="Tags">{% for tag in record.tags %}<li>{{ tag }}</li>{% endfor %}</ul>
+  <form method="get" action="{{ catalog_path(record.id) }}">
+    <label>Field name <input name="field" value="{{ prefix }}"></label>
+    <button type="submit">Filter</button>
+  </form>
+  <table>
+    <caption>Record fields</caption>
+    <thead><tr><th scope="col">Name</th><th scope="col">Value</th></tr></thead>
+    <tbody>{% for field in fields %}<tr><th scope="row">{{ field.name }}</th><td>{{ field.value }}</td></tr>{% endfor %}</tbody>
+  </table>
+  <nav aria-label="Related records"><ul>{% for row in record.related %}<li><a href="{{ catalog_path(row.id) }}">{{ row.title }}</a></li>{% endfor %}</ul></nav>
+</article>
+{% endblock %}
