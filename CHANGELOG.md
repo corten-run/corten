@@ -6494,6 +6494,13 @@ Corten is pre-1.0, so any minor version may change the API.
     opens no second stream), and that its own fields are not an API; an app's outcomes are its typed
     events. New design Limit 25 says why and what would lift it
     ([#1130 Expose opt-in browser diagnostics for action responses and live HTML patches](https://github.com/corten-run/corten/issues/1130)).
+82. Component scripts stay JavaScript with JSDoc, not TypeScript source: design Choice 5 says why,
+    from deck-builder's and seller-desk's largest scripts converted to TypeScript and measured, and
+    when to revisit it. The scripts guide has a table of what each check covers (the call, the
+    body, a Rust type's declaration, data read at run time) and what TypeScript source refuses that
+    checked JavaScript infers, and how to write each check in JavaScript; its advice on sort
+    handlers no longer says a union of strings takes any value, since such a call does not compile
+    ([#1040 Reassess JSDoc versus TypeScript for component scripts using measured safety and authoring tradeoffs](https://github.com/corten-run/corten/issues/1040)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
