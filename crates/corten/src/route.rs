@@ -3274,17 +3274,31 @@ impl ParamsRejection {
     fn query(error: crate::form::FormError) -> Self {
         use axum::response::IntoResponse as _;
         let status = axum::http::StatusCode::BAD_REQUEST;
-        // A parameter followed by text is read here rather than by axum's `Path`: said as axum says it.
+        // A path parameter is said as axum's `Path` said it, a query one as its `Query` did.
         let what = if error.is_in_path() { "Invalid URL" } else { "Failed to deserialize query string" };
         let rejection = crate::form::FormRejection::invalid(status, what, error);
         ParamsRejection(Box::new(rejection.into_response()))
     }
 
+    /// The route's parameters cannot be read from the request as it now is: the app's fault.
     #[cold]
-    fn path(rejection: axum::extract::rejection::PathRejection) -> Self {
+    fn unreadable(why: String) -> Self {
         use axum::response::IntoResponse as _;
-        ParamsRejection(Box::new(rejection.into_response()))
+        tracing::error!("corten: {why}");
+        let status = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+        ParamsRejection(Box::new((status, format!("corten: {why}")).into_response()))
     }
+}
+
+/// A route's path parameters as `T`, a tuple in the order its path names them, from what the
+/// router matched ([`crate::middleware::MatchedPath`]): each percent-decoded, then read as its
+/// type (a 400 when it is not one).
+pub(crate) fn read_path<T: serde::de::DeserializeOwned>(parts: &axum::http::request::Parts) -> Result<T, ParamsRejection> {
+    let matched = parts.extensions.get::<crate::router::MatchedPath>();
+    crate::router::path_params(matched).map_err(|error| match error {
+        crate::router::PathError::Invalid(error) => ParamsRejection::query(error),
+        crate::router::PathError::Unreadable(why) => ParamsRejection::unreadable(why),
+    })
 }
 
 impl axum::response::IntoResponse for ParamsRejection {
@@ -3362,15 +3376,13 @@ pub trait FromUrl {
 ///
 /// It also knows whether one of its handlers is for `GET`, so [`crate::Req::serves`] counts only
 /// routes a redirect can land on.
-pub struct Methods<S = ()>(pub(crate) axum::routing::MethodRouter<S>, pub(crate) bool, pub(crate) Option<Companion>);
+pub struct Methods<S = ()>(pub(crate) crate::router::MethodSet<S>, pub(crate) bool, pub(crate) Option<Companion>);
 
 /// A route Corten serves with one an app mounts, at a path made from that route's: an MCP
 /// endpoint's protected-resource metadata (`agent::Authorization`). Given the
 /// route's path, it answers the companion's path and handlers.
 #[derive(Clone)]
-pub(crate) struct Companion(
-    pub(crate) std::sync::Arc<dyn Fn(&'static str) -> (String, axum::routing::MethodRouter) + Send + Sync>,
-);
+pub(crate) struct Companion(pub(crate) std::sync::Arc<dyn Fn(&'static str) -> (String, crate::router::MethodSet) + Send + Sync>);
 
 impl<S: Clone + Send + Sync + 'static> Methods<S> {
     /// The handlers with the state they take (`State<S>`), for a router without it:
@@ -3389,19 +3401,19 @@ impl<S: Clone + Send + Sync + 'static> Methods<S> {
     /// gives itself, so none of them is started for it. Not a public API.
     #[doc(hidden)]
     pub fn __gives(self, gives: &'static [fn() -> std::any::TypeId]) -> Self {
-        Methods(self.0.layer(Giving { gives, inner: () }), self.1, self.2)
+        Methods(self.0.gives(gives), self.1, self.2)
     }
 
     /// Handlers built here by hand, among them one for `GET`.
     #[cfg(test)]
-    pub(crate) fn reads(router: axum::routing::MethodRouter<S>) -> Self {
-        Methods(router, true, None)
+    pub(crate) fn reads(methods: crate::router::MethodSet<S>) -> Self {
+        Methods(methods, true, None)
     }
 
     /// Handlers built here by hand, none of them for `GET`.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn writes(router: axum::routing::MethodRouter<S>) -> Self {
-        Methods(router, false, None)
+    pub(crate) fn writes(methods: crate::router::MethodSet<S>) -> Self {
+        Methods(methods, false, None)
     }
 }
 
@@ -3421,7 +3433,7 @@ macro_rules! methods {
                 T: 'static,
                 S: Clone + Send + Sync + 'static,
             {
-                Methods(axum::routing::$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), stringify!($method) == "get", None)
+                Methods(crate::router::$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), stringify!($method) == "get", None)
             }
         )*
 
@@ -3463,7 +3475,7 @@ methods!(get, post, put, delete, patch, head, options, trace);
 /// let app = App::new(corten::axum::Router::new().route("/", corten::axum::routing::get(home)));
 /// ```
 #[derive(Default)]
-pub struct Routes(pub(crate) axum::Router, pub(crate) Vec<(&'static str, bool)>, pub(crate) UnstagedRoutes);
+pub struct Routes(pub(crate) crate::router::Table, pub(crate) Vec<(&'static str, bool)>, pub(crate) UnstagedRoutes);
 
 /// The routes that say `unstaged`, which `App` serves outside its stages: each one's path as
 /// written, the path it is routed at, its handlers, made once `App::router` knows the route's
@@ -3502,7 +3514,7 @@ impl Routes {
     pub fn __route<R: Route>(self, methods: Methods) -> Self {
         let mut paths = self.1;
         paths.push((R::WRITTEN, methods.1));
-        Routes(self.0.route(R::PATH, with_suffixes::<R, ()>(methods.0)), paths, self.2)
+        Routes(written::<R, ()>(self.0, methods.0), paths, self.2)
     }
 
     /// Used by `#[corten::routes]`: `R`'s handlers at its path, a route that says `unstaged`,
@@ -3657,11 +3669,11 @@ fn refuse(a: &str, b: &str) -> ! {
     )
 }
 
-/// `methods` for `R`'s path: when a parameter of it is followed by text (`{page}.xml`), a request
-/// whose segment does not end in that text is a 404 before a handler runs, whatever its method. The
-/// route still takes every path of its shape from the router, so another route (a `/{*page}`
-/// catch-all) does not answer `/sitemap/about` either, and the 404 has the route's `MatchedPath`.
-/// A route with none is `methods` as it is.
+/// `methods` at `R`'s path in `table`: when a parameter of it is followed by text (`{page}.xml`),
+/// a request whose segment does not end in that text is a 404 before a handler runs, whatever its
+/// method. The route still takes every path of its shape from the router, so another route (a
+/// `/{*page}` catch-all) does not answer `/sitemap/about` either, and the 404 has the route's
+/// [`crate::middleware::MatchedPath`].
 ///
 /// A `WRITTEN` path that is not `PATH` with text after some parameters does not build:
 ///
@@ -3704,14 +3716,12 @@ fn refuse(a: &str, b: &str) -> ! {
 /// let app = App::new(Routes::new()).area::<Feeds>(|feeds| feeds.route::<Feed>(get(|| async { "feed" })));
 /// # let _ = app.router();
 /// ```
-pub(crate) fn with_suffixes<R: Route + ?Sized, S: Clone + Send + Sync + 'static>(
-    methods: axum::routing::MethodRouter<S>,
-) -> axum::routing::MethodRouter<S> {
+pub(crate) fn written<R: Route + ?Sized, S: Clone + Send + Sync + 'static>(
+    table: crate::router::Table<S>,
+    methods: crate::router::MethodSet<S>,
+) -> crate::router::Table<S> {
     written_checked::<R>();
-    if R::WRITTEN == R::PATH {
-        return methods;
-    }
-    methods.layer(Suffixed { written: R::WRITTEN, inner: () })
+    table.written(R::PATH, R::WRITTEN, methods)
 }
 
 /// Holds `R`'s written path to its routed one, when the app compiles.
@@ -3735,84 +3745,11 @@ pub(crate) struct Lane {
     pub(crate) json: Option<(Option<crate::api::ErrorShape>, bool)>,
 }
 
-/// [`with_suffixes`]'s layer and service: a 404 unless the path ends each segment as `written`
-/// does. A service of its own rather than `middleware::from_fn`, which boxes a `Next` and a future
-/// of its own on each request (the router still boxes the layered route, as it does any layer).
-#[derive(Clone)]
-struct Suffixed<S> {
-    written: &'static str,
-    inner: S,
-}
-
-impl<S> tower_layer::Layer<S> for Suffixed<()> {
-    type Service = Suffixed<S>;
-
-    fn layer(&self, inner: S) -> Suffixed<S> {
-        Suffixed { written: self.written, inner }
-    }
-}
-
-impl<S> tower_service::Service<axum::extract::Request> for Suffixed<S>
-where
-    S: tower_service::Service<axum::extract::Request, Response = axum::response::Response>,
-{
-    type Response = axum::response::Response;
-    type Error = S::Error;
-    type Future = futures_util::future::Either<std::future::Ready<Result<Self::Response, S::Error>>, S::Future>;
-
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), S::Error>> {
-        self.inner.poll_ready(cx)
-    }
-
-    fn call(&mut self, req: axum::extract::Request) -> Self::Future {
-        if routes_path(self.written, req.uri().path()) {
-            futures_util::future::Either::Right(self.inner.call(req))
-        } else {
-            let missing = axum::response::IntoResponse::into_response(axum::http::StatusCode::NOT_FOUND);
-            futures_util::future::Either::Left(std::future::ready(Ok(missing)))
-        }
-    }
-}
-
-/// [`Methods::__gives`]'s layer and service: marks the request with the reads its page gives, for
-/// [`crate::layout`] to leave unstarted. A service of its own, as [`Suffixed`] is.
-#[derive(Clone)]
-struct Giving<S> {
-    gives: &'static [fn() -> std::any::TypeId],
-    inner: S,
-}
-
-impl<S> tower_layer::Layer<S> for Giving<()> {
-    type Service = Giving<S>;
-
-    fn layer(&self, inner: S) -> Giving<S> {
-        Giving { gives: self.gives, inner }
-    }
-}
-
-impl<S> tower_service::Service<axum::extract::Request> for Giving<S>
-where
-    S: tower_service::Service<axum::extract::Request>,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), S::Error>> {
-        self.inner.poll_ready(cx)
-    }
-
-    fn call(&mut self, mut req: axum::extract::Request) -> Self::Future {
-        req.extensions_mut().insert(crate::layout::Gives(self.gives));
-        self.inner.call(req)
-    }
-}
-
-/// The crate's tests build routers by hand, to test what `App` does with any response.
+/// The crate's tests build routes by hand, to test what `App` does with any response.
 #[cfg(test)]
-impl From<axum::Router> for Routes {
-    fn from(router: axum::Router) -> Self {
-        Routes(router, Vec::new(), UnstagedRoutes::default())
+impl From<crate::router::Table> for Routes {
+    fn from(table: crate::router::Table) -> Self {
+        Routes(table, Vec::new(), UnstagedRoutes::default())
     }
 }
 
@@ -3852,7 +3789,7 @@ pub mod __private {
                     T: 'static,
                     S: Clone + Send + Sync + 'static,
                 {
-                    Methods(axum::routing::$method(endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), matches!(stringify!($method), "get" | "any"), None)
+                    Methods(crate::router::$method(endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), matches!(stringify!($method), "get" | "any"), None)
                 }
             )*
 
@@ -3881,13 +3818,14 @@ pub mod __private {
                     T: 'static,
                     S: Clone + Send + Sync + 'static,
                 {
+                    refuse_axum_routing::<T>();
                     let endpoint: crate::answer::Endpoint<_, crate::NoStore<<H as crate::answer::Signature<T>>::Out>> = crate::answer::Endpoint {
                         handler: super::NoStoreHandler(handler.into_handler()),
                         answer: std::marker::PhantomData,
                         // Never `Public`: the bound above refuses it.
                         shared: false,
                     };
-                    Methods(axum::routing::$method(endpoint), matches!(stringify!($method), "get" | "any"), None)
+                    Methods(crate::router::$method(endpoint), matches!(stringify!($method), "get" | "any"), None)
                 }
             )*
         };
@@ -3916,7 +3854,7 @@ pub mod __private {
     pub struct UnstagedMethods<S = ()>(pub(crate) MakeUnstaged<S>);
 
     pub(crate) type MakeUnstaged<S> =
-        Box<dyn FnOnce(std::sync::Arc<super::Lane>, bool) -> axum::routing::MethodRouter<S> + Send + Sync>;
+        Box<dyn FnOnce(std::sync::Arc<super::Lane>, bool) -> crate::router::MethodSet<S> + Send + Sync>;
 
     impl<S: Clone + Send + Sync + 'static> UnstagedMethods<S> {
         /// The handlers with the state they take, as [`Methods::with_state`].
@@ -4091,7 +4029,7 @@ pub mod __private {
         let handler = handler.into_handler();
         UnstagedMethods(Box::new(move |lane, suffixed| {
             let not_allowed = UnstagedHandler { inner: NotAllowed, written: path, suffixed, lane: lane.clone() };
-            axum::routing::get(UnstagedHandler { inner: handler, written: path, suffixed, lane }).fallback(not_allowed)
+            crate::router::get(UnstagedHandler { inner: handler, written: path, suffixed, lane }).fallback(not_allowed)
         }))
     }
 
@@ -4138,15 +4076,7 @@ pub mod __private {
     fn unsuffixed<T: serde::de::DeserializeOwned>(text: &str, suffix: &str) -> Result<T, FormError> {
         let value =
             text.strip_suffix(suffix).ok_or_else(|| FormError::in_path(format!("`{text}` does not end in `{suffix}`")))?;
-        crate::form::de::in_path(value).map_err(|e| {
-            // As axum says it: a primitive's name, never the app's own type path.
-            let ty = std::any::type_name::<T>();
-            FormError::in_path(if ty.contains("::") {
-                format!("{e}")
-            } else {
-                format!("Cannot parse `{value}` to a `{ty}`: {e}")
-            })
-        })
+        crate::form::de::in_path(value).map_err(|e| crate::form::de::not_in_path(value, std::any::type_name::<T>(), e))
     }
 
     /// `T`, named with a lifetime of the `FromUrl` impl, so a bound on it (that a field reads
@@ -4605,12 +4535,10 @@ pub mod __private {
 
     impl<T: serde::de::DeserializeOwned + Send> ReadPath for InPath<T> {
         #[inline]
-        async fn read(parts: &mut axum::http::request::Parts) -> Result<Self, super::ParamsRejection> {
-            use axum::extract::FromRequestParts as _;
-            match axum::extract::Path::<T>::from_request_parts(parts, &()).await {
-                Ok(axum::extract::Path(value)) => Ok(InPath(value)),
-                Err(rejection) => Err(super::ParamsRejection::path(rejection)),
-            }
+        fn read(
+            parts: &mut axum::http::request::Parts,
+        ) -> impl std::future::Future<Output = Result<Self, super::ParamsRejection>> + Send {
+            std::future::ready(super::read_path(parts).map(InPath))
         }
     }
 
@@ -4631,7 +4559,28 @@ pub mod __private {
     where
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
     {
+        refuse_axum_routing::<T>();
         crate::answer::Endpoint { handler: handler.into_handler(), answer: std::marker::PhantomData, shared }
+    }
+
+    /// Stops the app at startup when a handler takes one of axum's readers of what axum's router
+    /// stored, which Corten's router does not store, so it would answer `500` to every request.
+    /// They are axum's `FromRequestParts` impls, which no bound can leave out, so the check reads
+    /// the arguments' type names, once, as the route is made.
+    pub(crate) fn refuse_axum_routing<T>() {
+        let args = std::any::type_name::<T>();
+        for (axum, instead) in [
+            ("axum::extract::path::Path<", "its `Params`"),
+            ("axum::extract::path::RawPathParams", "its `Params`"),
+            ("axum::extract::matched_path::MatchedPath", "`corten::middleware::MatchedPath` from the request's extensions"),
+        ] {
+            if args.contains(axum) {
+                let name = axum.rsplit("::").next().unwrap_or(axum).trim_end_matches('<');
+                panic!(
+                    "corten: a route's handler takes axum's `{name}` ({args}), which Corten's router does not fill: read {instead} instead"
+                );
+            }
+        }
     }
 
     /// A handler a route names: an async function whose arguments a request fills (extractors,

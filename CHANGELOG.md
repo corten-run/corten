@@ -25,8 +25,8 @@ Corten is pre-1.0, so any minor version may change the API.
   the module of the innermost area or API whose prefix holds it, whose parameter can reach an
   area's or API's prefix, or whose path is routed again in another module (a parameter's name or
   the text after it, `{n}.xml`, does not make it another). The listings-feed example's
-  sequence route uses it. Measured with callgrind (jemalloc): 8,479 instructions a request
-  unstaged against 21,220 through the stages, and 7,559 for a plain axum router.
+  sequence route uses it. Measured with callgrind (jemalloc), on Corten's own router: 6,932
+  instructions a request unstaged against 18,288 through the stages, and 7,099 for a plain axum router.
 
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent
@@ -2624,6 +2624,32 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 
 ### Changed
+
+- Corten routes with a router of its own on matchit, `corten::Router`, in place of axum's `Router`
+  and `MethodRouter` (design Choice 25, step 2), and passes the dispatch suite unchanged. Every
+  request measured costs less (callgrind, release, jemalloc): card-market's item page 79,731
+  instructions against 82,792 and its JSON 59,754 against 63,008, an API request 13,112 against
+  15,726, and an `unstaged` route 6,932 against 8,479. Breaking for an app that named axum's
+  router through Corten: `App::router()` (and `Router::from(app)`) gives `corten::Router`, a
+  tower `Service<Request>` that is `Clone`, served by `serve` (or by axum's `serve` through
+  `into_make_service`), and no longer an `axum::Router` to add routes to; and `corten::routes()`,
+  `corten::health`, `Assets::routes` and `Pwa::routes`, which gave axum routers for an app to
+  merge, are gone, since `App` serves them. axum's extractors that read what axum's router stored,
+  `axum::extract::Path`, `RawPathParams` and `MatchedPath`, still compile in a handler, and stop
+  the app at startup, naming the argument, as its route is made (`corten::axum` no longer has
+  `MatchedPath`; read from the extensions, axum's finds nothing, with no error, as does an
+  extractor of the app's own that calls axum's `Path` inside): read a route's
+  parameters with `Params`, and the route a middleware is on with the new
+  `corten::middleware::MatchedPath` (`as_str()`). `App::layer` takes a
+  `tower::Layer<corten::Router>` and is made once around the whole app, where axum made it once
+  per route and method: a layer that keeps state (a concurrency limit) now counts the whole
+  app, and it sees the request before its route is matched, with no `MatchedPath`; the router
+  still sets `Content-Length` and empties a `HEAD`'s body after it. Two routes the router cannot
+  hold side by side stop the app at startup with Corten's message, naming the path. An answer of
+  known length, an error page included, carries `Content-Length` from the router. A path
+  parameter that is not its type says "Cannot parse `x` to a `u32`", where axum named the
+  value's index in a route's parameters, and one after which the route writes text no longer
+  adds serde's reason. axum's `matched-path` feature is off.
 
 - Nightly benchmarking moves to equivalent-localization marketplace v2 from official r17,
   with a new baseline, detached launch/collection and three short-window CPU, memory, load

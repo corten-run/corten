@@ -941,20 +941,32 @@ mod tests {
         // Against axum alone too (`bare-json`), so through the router, not the test client.
         use corten::{answer::Body, axum::Router, http::Request};
         use http_body_util::BodyExt;
-        use tower::ServiceExt;
+        use tower::{ServiceExt, util::BoxCloneService};
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
         let source = Source::fixture(&std::fs::read_to_string(path).unwrap()).unwrap();
+        // Corten's router and axum's are different types: each is boxed the same way.
+        type Boxed = BoxCloneService<Request<Body>, corten::middleware::Response, std::convert::Infallible>;
+        fn boxed<S>(service: S) -> Boxed
+        where
+            S: tower::Service<Request<Body>, Response = corten::middleware::Response, Error = std::convert::Infallible>
+                + Clone
+                + Send
+                + 'static,
+            S::Future: Send + 'static,
+        {
+            BoxCloneService::new(service)
+        }
         let target = std::env::var("LOOP_TARGET").unwrap_or_else(|_| "json".into());
         let seconds: u64 = std::env::var("LOOP_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
         let (router, prefix, mode) = match target.as_str() {
-            "json" => (super::app(source.clone()).router(), "/api/items/", None),
+            "json" => (boxed(super::app(source.clone()).router()), "/api/items/", None),
             "bare-json" => {
                 // Axum alone, without Corten around the handler: what Corten's layer costs.
                 let bare = corten::axum::routing::get(item_json);
-                (Router::new().route(api::ItemJson::PATH, bare).with_state(source.clone()), "/api/items/", None)
+                (boxed(Router::new().route(api::ItemJson::PATH, bare).with_state(source.clone())), "/api/items/", None)
             }
-            "page" => (super::app(source.clone()).router(), "/items/", Some("nav")),
-            "document" => (super::app(source.clone()).router(), "/items/", None),
+            "page" => (boxed(super::app(source.clone()).router()), "/items/", Some("nav")),
+            "document" => (boxed(super::app(source.clone()).router()), "/items/", None),
             other => panic!("unknown LOOP_TARGET {other}"),
         };
         // What the client sends: `curl`'s `identity` by default. A browser's names its compressions

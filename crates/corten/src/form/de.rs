@@ -165,6 +165,18 @@ pub(crate) fn in_path<T: de::DeserializeOwned>(text: &str) -> Result<T, FormErro
     T::deserialize(PathText(&[(Cow::Borrowed(""), Cow::Borrowed(text))]))
 }
 
+/// [`in_path`] for one of a route's parameters, read in a sequence of them.
+pub(crate) fn path_value<'de, T: de::DeserializeSeed<'de>>(seed: T, text: &str) -> Result<T::Value, FormError> {
+    seed.deserialize(PathText(&[(Cow::Borrowed(""), Cow::Borrowed(text))]))
+}
+
+/// A path parameter `value` that is not a `ty`: Cannot parse `x` to a `u32` for a primitive (axum's
+/// `Path` said that for one value, and named the value's index in a route's tuple), and as serde
+/// says it for the app's own type, whose path is never shown.
+pub(crate) fn not_in_path(value: &str, ty: &str, error: FormError) -> FormError {
+    FormError::in_path(if ty.contains("::") { format!("{error}") } else { format!("Cannot parse `{value}` to a `{ty}`") })
+}
+
 /// A key the query does not have: `None`, an empty list, or the error serde gives a missing field.
 struct Missing<'b>(&'b str);
 

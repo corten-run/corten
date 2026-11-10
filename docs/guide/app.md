@@ -773,6 +773,28 @@ is that insert: the extension map's allocation, growth and free, about 550 a req
 failed response from a JSON route pays it. The other differences, a few hundred either way,
 were not profiled; the cross-site post among them never reaches a route.
 
+When Corten's own router on matchit replaced axum's `Router` and `MethodRouter`
+([design Choice 25](../design.md#choice-axum-router), step 2), the same kinds of request were
+measured against axum's router (callgrind, release build, jemalloc, in-process `oneshot`, the
+difference between 1,200 and 200 requests over 1,000, median of five runs; card-market over one
+keep-alive connection, 1,300 less 300 requests, median of three):
+
+| Request | axum's router | Corten's |
+|---|---|---|
+| card-market's item page | 82,792 (82,790-83,098) | 79,731 (79,618-79,752) |
+| card-market's item JSON | 63,008 (62,662-63,203) | 59,754 (59,618-59,862) |
+| JSON under `App::api` | 15,726 (15,725-15,726) | 13,112 |
+| the same answer from a page route | 21,222 (21,215-21,229) | 18,277 |
+| the same with one middleware that only passes it on | 21,466 (21,465-21,472) | 18,562 |
+| unknown URL under `App::api` (JSON 404) | 14,094 (14,093-14,094) | 12,171 |
+| unknown URL, HTML 404 page | 19,980 (19,979-19,980) | 18,091 |
+| an `unstaged` route | 8,479 (8,478-8,479) | 6,932 |
+
+In process the runs of Corten's router did not differ. On the API request most of the difference
+is fewer copies of the request and fewer allocations (`memcpy`, `malloc` and `free`, about 1,100
+fewer), and the rest is axum's route lookup by id and its futures around the stages. With glibc's
+allocator every request in process costs 1,791 to 4,135 less.
+
 ## Your own middleware
 
 Every request goes through the same stages in the same order, outside in, each needing the one
@@ -784,8 +806,8 @@ before it (a route that says `unstaged` goes through none;
    with the request's `Signal` made for it as in stage 3; its layout reads are not started.
 3. The request gets its `Signal`, its nonce and the app.
 4. The deadline and the panic catch start (`Failure::TimedOut`, `Failure::Panicked`).
-5. The app's middleware, in the order given. The route has been matched, so axum's
-   `MatchedPath` names it (it is absent for an unknown URL, and for a path under an API's prefix
+5. The app's middleware, in the order given. The route has been matched, so
+   `corten::middleware::MatchedPath` names it (it is absent for an unknown URL, and for a path under an API's prefix
    that a route outside the API matched, which answers with an empty `Allow` whatever its method). Then, for a request under an area's or an API's prefix, its own
    middleware: the areas' (outer first), then the APIs' (outer first), each in the order given.
 6. The handler's extractors (a `Caller` is looked up here, only when read), then the handler.
@@ -887,8 +909,10 @@ request on). In an app where no area or API has any, the request runs the same c
 where some do, a request outside them pays a scan of their prefixes. card-market limits writes
 this way.
 
-A tower layer still goes around the whole app (`.layer(l)`), outside every stage, for what must
-see the raw request first: a cap on body size.
+A tower layer still goes around the whole app (`.layer(l)`), outside the router and every stage, for
+what must see the raw request first: a cap on body size. It sees the request before its route is
+matched, so with no `MatchedPath`, and is made once for the whole app, so a limit it keeps counts
+every route's requests together.
 There is no layer for one route: what a route needs is in its handler's arguments (an
 extractor) and its return type.
 
@@ -1025,14 +1049,14 @@ shutdown, which lets an unstaged route's request run for the longer of the shutd
 app's longest deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(median of five runs, range in parentheses where the runs differed): 8,479 instructions a request
-unstaged (8,537 in an API's module) against 21,220 (21,218-21,228) through the stages with
-jemalloc, where a plain axum router takes 7,559, and 9,537 (9,531-9,539) unstaged with glibc's
-allocator (9,589, 9,588-9,589, in an API's module; axum: 8,635). The host check, with what
+(median of five runs, which did not differ): 6,932 instructions a request unstaged (6,982 in an
+API's module) against 18,288 through the stages beside it with jemalloc, where a plain axum router
+takes 7,099, and 7,745 unstaged with glibc's allocator (7,797 in an API's module; axum: 8,117).
+The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
-check's read of `Host` and its match against the app's names. An app with no unstaged route costs what it did
-before: the same JSON through the stages and an API request within about 90 instructions of main's, and
-their 404s within 25 (jemalloc; no rendered page was measured).
+check's read of `Host` and its match against the app's names. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+1,547 of these from an unstaged request and about 2,900 from one through the stages, against
+axum's router in the same app.
 
 ## Static files
 

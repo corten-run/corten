@@ -410,16 +410,17 @@ fn a_view_number_javascript_cannot_hold_exactly_stops_debug_builds() {
 
 #[tokio::test]
 async fn a_page_loads_its_handler_modules_as_module_scripts_and_the_views_only_for_one_that_imports_them() {
-    use axum::{body::Body, http::Request, routing::get, Router};
+    use crate::router::{get, Table};
+    use axum::{body::Body, http::Request};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    let get_page = |app: Router| async move {
+    let get_page = |app: crate::Router| async move {
         let res = app.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
         String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
     };
     let handlers =
-        Router::new().route(
+        Table::new().route(
             "/",
             get(|req: crate::Req| async move {
                 crate::tests::TestPage::test_page(&req, "Cart", LineItem { name: "Lamp", quantity: 2 })
@@ -454,7 +455,7 @@ async fn a_page_loads_its_handler_modules_as_module_scripts_and_the_views_only_f
         "{source}"
     );
     // A page whose handlers need no module has nothing to import the views.
-    let plain = Router::new()
+    let plain = Table::new()
         .route("/", get(|req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Badge", Badge { n: 1 }) }));
     let body = get_page(crate::App::new(Routes::from(plain)).components(&[LineItem, Badge]).router()).await;
     assert!(!body.contains("modulepreload") && !body.contains(r#"src="/assets/"#), "{body}");
@@ -464,15 +465,16 @@ async fn a_page_loads_its_handler_modules_as_module_scripts_and_the_views_only_f
 /// whose handlers are in it maps `corten/events` and fetches it with the script, not after it.
 #[tokio::test]
 async fn a_script_brings_the_events_it_imports_and_its_page_fetches_them_with_it() {
-    use axum::{body::Body, http::Request, routing::get, Router};
+    use crate::router::{get, Table};
+    use axum::{body::Body, http::Request};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    let get_page = |app: Router| async move {
+    let get_page = |app: crate::Router| async move {
         let res = app.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
         String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
     };
-    let grid = Router::new().route(
+    let grid = Table::new().route(
         "/",
         get(|req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Stock", StockGrid { rows: &[("a", 1)] }) }),
     );
@@ -486,7 +488,7 @@ async fn a_script_brings_the_events_it_imports_and_its_page_fetches_them_with_it
     assert!(source.contains("export const RowToggled = event(\"row-toggled\");"), "{source}");
     // A page whose handlers are in a script that imports no event does not fetch them.
     let lines =
-        Router::new().route(
+        Table::new().route(
             "/",
             get(|req: crate::Req| async move {
                 crate::tests::TestPage::test_page(&req, "Cart", LineItem { name: "Lamp", quantity: 2 })
@@ -505,16 +507,17 @@ fn KeyPause() -> impl Render {
 /// then, and a page whose handlers are in that script fetches it with the script, not after it.
 #[tokio::test]
 async fn a_script_that_imports_corten_keys_brings_it_and_its_page_fetches_it_with_it() {
-    use axum::{body::Body, http::Request, routing::get, Router};
+    use crate::router::{get, Table};
+    use axum::{body::Body, http::Request};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    let fetch = |app: Router, uri: String| async move {
+    let fetch = |app: crate::Router, uri: String| async move {
         let res = app.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
         String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
     };
     let routes = || {
-        Router::new()
+        Table::new()
             .route("/", get(|req: crate::Req| async move { crate::tests::TestPage::test_page(&req, "Prices", KeyPause {}) }))
             .route(
                 "/cart",
@@ -550,15 +553,16 @@ async fn a_script_that_imports_corten_keys_brings_it_and_its_page_fetches_it_wit
 /// format loads it with theirs, and a page whose handlers take none does not.
 #[tokio::test]
 async fn a_page_loads_the_format_module_only_when_its_handlers_take_a_format() {
-    use axum::{body::Body, http::Request, routing::get, Router};
+    use crate::router::{get, Table};
+    use axum::{body::Body, http::Request};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
-    let fetch = |app: Router, uri: String| async move {
+    let fetch = |app: crate::Router, uri: String| async move {
         let res = app.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
         String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
     };
-    let routes = Router::new()
+    let routes = Table::new()
         .route(
             "/priced",
             get(|req: crate::Req| async move {
@@ -598,12 +602,13 @@ script::script!(mod chained = "chain.js");
 /// runtime imports, and nothing for a page whose modules import nothing.
 #[tokio::test]
 async fn a_swapped_in_page_preloads_what_its_handler_modules_import() {
-    use axum::{body::Body, http::Request, routing::get, Router};
+    use crate::router::{get, Table};
+    use axum::{body::Body, http::Request};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
     let routes =
-        Router::new()
+        Table::new()
             .route(
                 "/relay",
                 get(|req: crate::Req| async move {
@@ -670,12 +675,13 @@ async fn a_swapped_in_page_preloads_what_its_handler_modules_import() {
 #[cfg(debug_assertions)]
 #[tokio::test]
 async fn a_page_whose_handlers_call_an_unserved_module_fails_in_debug_builds() {
-    use axum::{body::Body, http::Request, routing::get, Router};
+    use crate::router::{get, Table};
+    use axum::{body::Body, http::Request};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
     let page = || {
-        Router::new().route(
+        Table::new().route(
             "/",
             get(|req: crate::Req| async move {
                 crate::tests::TestPage::test_page(&req, "Cart", LineItem { name: "Lamp", quantity: 2 })

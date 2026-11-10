@@ -1,14 +1,6 @@
 //! [`App`]: an app's routes with the production pieces around them, configured by defaults.
 
-use std::{
-    convert::Infallible,
-    future::Future,
-    marker::PhantomData,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::{convert::Infallible, future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use axum::{
     extract::Request,
@@ -17,8 +9,6 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         Response,
     },
-    routing::{get, Route},
-    Router,
 };
 use futures_util::{stream, StreamExt};
 
@@ -31,6 +21,7 @@ use crate::{
     page::{self, default_error_page, error_page_fn, Asked, Credentials, ErrorPageFn, Failure, Shared},
     pwa::Pwa,
     route::{Methods, Prefix, Route as TypedRoute, Routes},
+    router::{get, Route, Router, Table},
     security::{Applied, NonceSlot, Policy},
     signal::{self, Watch},
     task::{Finishing, Running, Task},
@@ -72,7 +63,7 @@ type ReadyFn = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send
 /// A library that ships an area is a function, `pub fn admin(area: Area<Admin>) -> Area<Admin>`,
 /// that the app passes to [`App::area`].
 pub struct Area<P> {
-    routes: Router,
+    routes: Table,
     pages: Vec<(&'static str, bool)>,
     /// Its routes with text after a parameter, for [`crate::route::assert_no_clash_with`].
     with_text: Vec<&'static str>,
@@ -82,7 +73,7 @@ pub struct Area<P> {
     middleware: Vec<Arc<dyn crate::middleware::Erased>>,
     /// Corten's own routes served with its routes (an MCP endpoint's metadata), outside its
     /// prefix, so neither its stylesheet nor its middleware applies to them.
-    companions: Vec<(String, axum::routing::MethodRouter)>,
+    companions: Vec<(String, crate::router::MethodSet)>,
     /// Its routes that say `unstaged`, which the app serves outside its stages.
     unstaged: crate::route::UnstagedRoutes,
     types: PhantomData<fn() -> P>,
@@ -135,7 +126,7 @@ impl<P: Prefix> Area<P> {
         if let Some(companion) = methods.2 {
             self.companions.push((companion.0)(R::PATH));
         }
-        self.routes = self.routes.route(R::PATH, crate::route::with_suffixes::<R, _>(methods.0));
+        self.routes = crate::route::written::<R, ()>(self.routes, methods.0);
         self
     }
 
@@ -284,7 +275,7 @@ impl<P: Prefix> Area<P> {
 /// An [`Area`] given to [`App::area`], without its type.
 struct Placed {
     prefix: &'static str,
-    routes: Router,
+    routes: Table,
     pages: Vec<(&'static str, bool)>,
     /// The paths of Corten's own routes served with its routes ([`Area`]'s `companions`).
     companions: Vec<String>,
@@ -324,7 +315,7 @@ struct Placed {
 ///     .pwa(Pwa::new(Manifest::new("Shop", "Shop").icon(Static::ICONS_192_PNG, "192x192")))
 /// ```
 pub struct App<M = ()> {
-    routes: Router,
+    routes: Table,
     /// The app's route patterns and whether each has a `GET` handler ([`crate::Req::serves`]);
     /// the areas' are added in `router`.
     pages: Vec<(&'static str, bool)>,
@@ -346,7 +337,7 @@ pub struct App<M = ()> {
     components: Vec<crate::Component>,
     areas: Vec<Placed>,
     deadline: Option<Duration>,
-    apis: Vec<(Mount, Router)>,
+    apis: Vec<(Mount, Table)>,
     /// The APIs' route paths as written, checked with the pages' when the router is built.
     api_paths: Vec<&'static str>,
     tasks: Vec<Task>,
@@ -567,7 +558,7 @@ impl<M: Middleware> App<M> {
         let prefix = P::PREFIX;
         assert!(!self.areas.iter().any(|placed| placed.prefix == prefix), "corten: the area {prefix:?} is given twice");
         let mut area = build(Area {
-            routes: Router::new(),
+            routes: Table::new(),
             pages: Vec::new(),
             with_text: Vec::new(),
             components: Vec::new(),
@@ -1002,17 +993,21 @@ impl<M: Middleware> App<M> {
         self
     }
 
-    /// A tower layer around the whole app, outside every stage of [`crate::middleware`], for what
-    /// must see the raw request first: a cap on body size, a limit per address, a trace span.
-    /// Layers added later go outside earlier ones. A step inside Corten's order (after its
-    /// checks, with the error page around it) is a [`Middleware`] ([`App::middleware`]). In an app
+    /// A tower layer around the whole app, outside the router and every stage of
+    /// [`crate::middleware`], for what must see the raw request first: a cap on body size, a limit
+    /// per address, a trace span. It sees the request before its route is matched (so with no
+    /// [`crate::middleware::MatchedPath`]), and the route's answer with its body: the router sets
+    /// the answer's `Content-Length` and empties a `HEAD`'s body after every layer, so a layer may
+    /// change the body. It is made once, around the whole app, so what it keeps (a concurrency
+    /// limit's count) is the app's, not a route's. Layers added later go outside earlier ones. A step inside Corten's order
+    /// (after its checks, with the error page around it) is a [`Middleware`] ([`App::middleware`]). In an app
     /// whose areas or APIs set deadlines of their own, a request a layer holds or answers itself,
     /// or runs on a task of its own, has not told its connection its deadline when shutdown
     /// begins: the connection has the grace, then the longest deadline
     /// ([`App::shutdown_grace`]).
     pub fn layer<L>(mut self, layer: L) -> Self
     where
-        L: tower_layer::Layer<Route> + Clone + Send + Sync + 'static,
+        L: tower_layer::Layer<Router> + Send + 'static,
         L::Service: tower_service::Service<Request> + Clone + Send + Sync + 'static,
         <L::Service as tower_service::Service<Request>>::Response: axum::response::IntoResponse + 'static,
         <L::Service as tower_service::Service<Request>>::Error: Into<Infallible> + 'static,
@@ -1164,7 +1159,7 @@ impl<M: Middleware> App<M> {
                 .chain(self.areas.iter().flat_map(|area| area.companions.iter().cloned()))
                 .collect(),
         };
-        routes = routes.merge(crate::routes());
+        routes = routes.merge(crate::runtime_routes());
         let mut offline = None;
         if let Some(pwa) = self.pwa {
             let pwa = pwa.resolve(assets.as_deref());
@@ -1382,7 +1377,7 @@ impl<M: Middleware> App<M> {
         // none.
         let unstaged = (!self.unstaged.0.is_empty()).then(|| {
             let mut lanes: Vec<(Option<usize>, Arc<crate::route::Lane>)> = Vec::new();
-            let mut unstaged = Router::new();
+            let mut unstaged = Table::new();
             for crate::route::UnstagedRoute { written, path, make, .. } in self.unstaged.0 {
                 let at = mounts.iter().position(|mount| mount.contains(path));
                 let lane = match lanes.iter().find(|(lane, _)| *lane == at) {
@@ -1394,23 +1389,29 @@ impl<M: Middleware> App<M> {
                         lane
                     }
                 };
-                unstaged = unstaged.route(path, make(lane, written != path));
+                unstaged = unstaged.unstaged(path, make(lane, written != path));
             }
             unstaged
         });
         owned.extend(self.areas.into_iter().map(|area| area.routes));
-        // The app's own routes are merged last: when two routers both have axum's default
-        // fallback, a merge keeps the one merged in, and the app's answers unknown URLs.
-        let mut router = Router::new();
+        // One table: a path routed in two of them (the app's routes and an area's) is one route
+        // with the methods of both. The unstaged routes are beside the others, outside the stages
+        // (a wrong method at an unstaged route's path, or a segment without its suffix, is
+        // answered by the route's own handler, in its lane); an unknown URL is the app's 404
+        // inside them.
+        let mut table = Table::new();
         for routes in owned {
-            router = router.merge(routes);
+            table = table.merge(routes);
         }
-        let router = router.merge(routes);
+        let mut table = table.merge(routes);
+        if let Some(unstaged) = unstaged {
+            table = table.merge(unstaged);
+        }
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = area_middleware.is_empty() && mounts.iter().all(|mount| mount.middleware.is_empty());
-        macro_rules! wrap {
+        macro_rules! stages {
             ($steps:expr) => {
-                router.layer(Wrap(Arc::new(Layer {
+                Arc::new(Layer {
                     shared: Arc::new(shared),
                     deadline: self.deadline,
                     area_deadlines,
@@ -1419,19 +1420,15 @@ impl<M: Middleware> App<M> {
                     mounts,
                     own,
                     steps: $steps,
-                })))
+                }) as Arc<dyn crate::router::Stages>
             };
         }
-        let router =
-            if plain { wrap!(Plain(self.middleware)) } else { wrap!(Scoped { app: self.middleware, areas: area_middleware }) };
-        // The unstaged routes, beside the others and outside the stages. They are merged into, not
-        // onto: of two default fallbacks a merge keeps the one merged in, so an unknown URL is
-        // still the app's 404 inside its stages. (A wrong method at an unstaged route's path, or a
-        // segment without its suffix, is answered by the route's own handler, in its lane.)
-        let mut router = match unstaged {
-            Some(unstaged) => unstaged.merge(router),
-            None => router,
+        let stages = if plain {
+            stages!(Plain(self.middleware))
+        } else {
+            stages!(Scoped { app: self.middleware, areas: area_middleware })
         };
+        let mut router = Router::new(table, Some(stages));
         for wrap in self.layers {
             router = wrap(router);
         }
@@ -1842,15 +1839,6 @@ impl Own {
     }
 }
 
-/// Whether the route axum matched (`matched`) is outside `mount`. Under `Router::nest` the
-/// matched path carries the outer router's prefix and the request's path does not: it is taken
-/// off first.
-fn outside(mount: &crate::api::Mount, matched: &str, req: &Request) -> bool {
-    let nested = req.extensions().get::<axum::extract::NestedPath>();
-    let matched = nested.and_then(|nested| matched.strip_prefix(nested.as_str().trim_end_matches('/'))).unwrap_or(matched);
-    !mount.contains(matched)
-}
-
 /// Paths no page is at, however the app's routes match them: Corten's own and the APIs'.
 #[derive(Default)]
 pub(crate) struct NotPages {
@@ -1864,48 +1852,12 @@ impl NotPages {
     }
 }
 
-/// Puts [`Layer`] around each route. A tower layer of its own rather than axum's `from_fn`, which
-/// boxes the rest of the stack again for every request (`Next`) on top of the future.
-struct Wrap<S>(Arc<Layer<S>>);
-
-impl<S> Clone for Wrap<S> {
-    fn clone(&self) -> Self {
-        Wrap(self.0.clone())
-    }
-}
-
-impl<S: Steps> tower_layer::Layer<Route> for Wrap<S> {
-    type Service = Wrapped<S>;
-
-    fn layer(&self, route: Route) -> Wrapped<S> {
-        Wrapped { layer: self.0.clone(), route }
-    }
-}
-
-struct Wrapped<S> {
-    layer: Arc<Layer<S>>,
-    route: Route,
-}
-
-impl<S> Clone for Wrapped<S> {
-    fn clone(&self) -> Self {
-        Wrapped { layer: self.layer.clone(), route: self.route.clone() }
-    }
-}
-
-impl<S: Steps> tower_service::Service<Request> for Wrapped<S> {
-    type Response = Response;
-    type Error = Infallible;
-    type Future = Pin<Box<dyn Future<Output = Result<Response, Infallible>> + Send>>;
-
-    // A route is always ready: it clones its service for each call.
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: Request) -> Self::Future {
-        let (layer, route) = (self.layer.clone(), self.route.clone());
-        Box::pin(async move { Ok(layer.handle(req, route).await) })
+/// The stages around each staged route, as the router runs them: one boxed future per request,
+/// beside the handler's own. Not axum's `from_fn`, which boxes the rest of the stack again for
+/// every request (`Next`) on top of the future.
+impl<S: Steps> crate::router::Stages for Layer<S> {
+    fn run(self: Arc<Self>, req: Request, route: Route) -> crate::router::Answering {
+        Box::pin(async move { self.handle(req, route).await })
     }
 }
 
@@ -2097,15 +2049,12 @@ impl<S: Steps> Layer<S> {
         // Only an API such a route can reach pays for the check.
         let foreign = mount.is_some_and(|mount| {
             mount.exposed
-                && req
-                    .extensions()
-                    .get::<axum::extract::MatchedPath>()
-                    .is_some_and(|matched| outside(mount, matched.as_str(), &req))
+                && req.extensions().get::<crate::router::MatchedPath>().is_some_and(|matched| !mount.contains(matched.as_str()))
         });
         let route = (!foreign).then_some(route);
         if foreign {
             // It is an unknown URL of the API's, for middleware that reads the route too.
-            req.extensions_mut().remove::<axum::extract::MatchedPath>();
+            req.extensions_mut().remove::<crate::router::MatchedPath>();
         }
         let cors = mount.and_then(|mount| mount.allowed_origin(req.headers()));
         let credentials = cache::credentials(req.headers());
@@ -2132,8 +2081,8 @@ impl<S: Steps> Layer<S> {
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;
         }
-        // The outer route's `Allow` (axum adds it to a method that route lacks) would list methods
-        // the path does not have: none has any here, whatever answered.
+        // The outer route's `Allow` (the router adds it to a method that route lacks) would list
+        // methods the path does not have: none has any here, whatever answered.
         if foreign {
             res.headers_mut().insert(header::ALLOW, axum::http::HeaderValue::from_static(""));
         }

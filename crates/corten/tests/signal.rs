@@ -2,8 +2,8 @@
 //! and a request that is answered.
 use std::{io::Write, time::Duration};
 
-use axum::{body::Body, extract::State, http::Request, Router};
-use corten::{Abort, App, Signal};
+use axum::{body::Body, extract::State, http::Request};
+use corten::{Abort, App, Router, Signal};
 use http_body_util::BodyExt;
 use tokio::sync::mpsc;
 use tower::ServiceExt;
@@ -70,7 +70,7 @@ async fn a_client_that_closes_the_connection_aborts_the_request() {
     let (router, mut rx) = app(Duration::from_secs(60));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, router).await });
+    tokio::spawn(async move { axum::serve(listener, axum::ServiceExt::<Request<Body>>::into_make_service(router)).await });
     let started = std::time::Instant::now();
     tokio::task::spawn_blocking(move || {
         let mut socket = std::net::TcpStream::connect(addr).unwrap();

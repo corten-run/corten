@@ -66,7 +66,6 @@ use axum::{
     body::Bytes,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -248,7 +247,7 @@ impl Authorization {
     }
 
     /// The metadata's route for an endpoint at `path`, and the 401's challenge into `challenge`.
-    fn serve(&self, path: &'static str, challenge: &OnceLock<Challenge>) -> (String, axum::routing::MethodRouter) {
+    fn serve(&self, path: &'static str, challenge: &OnceLock<Challenge>) -> (String, crate::router::MethodSet) {
         assert!(
             path == self.path,
             "corten: the MCP endpoint is mounted at {path:?}, but its Authorization was made for the route at {:?}, the resource its tokens name",
@@ -274,7 +273,7 @@ impl Authorization {
         let document = Bytes::from(document.to_string());
         // Public and read without credentials, so a client in a browser on any site may read it,
         // with the headers it sends (its preflight answered).
-        let route = get(move || {
+        let route = crate::router::get(move || {
             let document = document.clone();
             async move {
                 let headers = [
@@ -547,7 +546,7 @@ impl<A: Send + 'static> Tools<A> {
         });
         let tools = Arc::new(tools);
         // Corten's own handler: it answers JSON-RPC errors in the protocol's shape itself.
-        let methods = crate::Methods::writes(post(move |headers: HeaderMap, body: Bytes| {
+        let methods = crate::Methods::writes(crate::router::post(move |headers: HeaderMap, body: Bytes| {
             let tools = tools.clone();
             async move { tools.handle(headers, &body).await }
         }));
@@ -780,7 +779,8 @@ fn json_response(body: String) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::Request, Router};
+    use crate::{router::Table, Router};
+    use axum::{body::Body, http::Request};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
@@ -838,7 +838,7 @@ mod tests {
                 Ok(Adjusted { id: input.id, quantity: 10 + input.delta })
             })
             .read_tool("ping", "Answers pong", |_: Agent, _: Nothing| async { Ok(Pong { pong: true }) });
-        Router::new().route("/mcp", tools.route().0)
+        Router::from(Table::new().route("/mcp", tools.route().0))
     }
 
     async fn rpc(body: Value, auth: bool) -> (StatusCode, Value) {
@@ -1316,7 +1316,7 @@ mod tests {
                 Ok(Placed { key: order.submit.map_or(order.sku, |key| key.as_str().to_string()) })
             })
             .idempotent_tool("stock.set", "Set the quantity", |(), _: Nothing| async { Ok(Pong { pong: true }) });
-        let app = Router::new().route("/mcp", tools.route().0);
+        let app = Router::from(Table::new().route("/mcp", tools.route().0));
         let rpc = |body: Value| {
             let app = app.clone();
             async move {

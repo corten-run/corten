@@ -46,7 +46,6 @@ use axum::{
     body::{Body, HttpBody},
     http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
-    Router,
 };
 
 use crate::{
@@ -57,7 +56,7 @@ use crate::{
 /// Routes that answer only JSON, with their settings, under the prefix `P`: what
 /// [`crate::App::api`] gives its function to fill in.
 pub struct Api<P> {
-    pub(crate) routes: Router,
+    pub(crate) routes: crate::router::Table,
     /// Its routes' paths as written, for [`crate::route::assert_no_clash`].
     pub(crate) written: Vec<&'static str>,
     /// Those with text after a parameter, for [`crate::route::assert_no_clash_with`].
@@ -67,7 +66,7 @@ pub struct Api<P> {
     errors: Option<ErrorShape>,
     middleware: Vec<std::sync::Arc<dyn crate::middleware::Erased>>,
     /// Routes Corten serves outside the prefix with one of these (`route::Companion`).
-    pub(crate) companions: Vec<(String, axum::routing::MethodRouter)>,
+    pub(crate) companions: Vec<(String, crate::router::MethodSet)>,
     /// Its routes that say `unstaged`, which the app serves outside its stages, with the API's
     /// failures.
     pub(crate) unstaged: crate::route::UnstagedRoutes,
@@ -87,7 +86,7 @@ type WriteError = dyn Fn(StatusCode, &str) -> Vec<u8> + Send + Sync;
 impl<P: Prefix> Api<P> {
     pub(crate) fn new() -> Self {
         Api {
-            routes: Router::new(),
+            routes: crate::router::Table::new(),
             written: Vec::new(),
             with_text: Vec::new(),
             origins: Vec::new(),
@@ -110,7 +109,7 @@ impl<P: Prefix> Api<P> {
         assert!(self.openapi.is_none(), "corten: an API has one OpenAPI document");
         let served = crate::openapi::Served::new(document);
         self.openapi = Some(served.clone());
-        let serve = axum::routing::get(move || {
+        let serve = crate::router::get(move || {
             let json = served.json();
             async move { ([(header::CONTENT_TYPE, HeaderValue::from_static(JSON))], json) }
         });
@@ -171,7 +170,7 @@ impl<P: Prefix> Api<P> {
     /// ```
     pub fn route<R: TypedRoute>(mut self, methods: crate::Methods) -> Self {
         self.place::<R>();
-        self.routes = self.routes.route(R::PATH, crate::route::with_suffixes::<R, _>(methods.0));
+        self.routes = crate::route::written::<R, ()>(self.routes, methods.0);
         if let Some(companion) = methods.2 {
             self.companions.push((companion.0)(R::PATH));
         }

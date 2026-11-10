@@ -133,6 +133,7 @@ pub mod openapi;
 mod page;
 pub mod pwa;
 pub mod route;
+mod router;
 pub mod script;
 pub mod security;
 pub mod seo;
@@ -157,8 +158,6 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::get,
-    Router,
 };
 use futures_util::{Stream, StreamExt};
 
@@ -379,6 +378,7 @@ pub use page::{
     ReadAgainFrom, ReadAgainWithoutJavaScript, Req, MODE_HEADER,
 };
 pub use route::{routes, Elsewhere, Href, Local, Methods, OnSite, Params, ParamsRejection, Prefix, Route, Routes, UrlValue};
+pub use router::Router;
 pub use script::{event, Handler, Ref, Script};
 pub use signal::{Abort, Shutdown, Signal};
 pub use style::Style;
@@ -659,10 +659,9 @@ async fn draining() {
     let _ = DRAINING.subscribe().wait_for(|draining| *draining).await;
 }
 
-/// Routes the runtime at [`runtime_path`], versioned and cached forever. Merge into the app
-/// router.
-pub fn routes<St: Clone + Send + Sync + 'static>() -> Router<St> {
-    Router::new().route(runtime_path(), get(|headers: HeaderMap| async move { RUNTIME.respond(&headers) }))
+/// The runtime's route, at [`runtime_path`], versioned and cached forever.
+pub(crate) fn runtime_routes() -> router::Table {
+    router::Table::new().route(runtime_path(), router::get(|headers: HeaderMap| async move { RUNTIME.respond(&headers) }))
 }
 
 const JS: &str = "text/javascript; charset=utf-8";
@@ -705,9 +704,8 @@ impl Served {
 
 /// `GET /health/live` (the process answers) and `GET /health/ready` (`ready` says it can serve:
 /// database reachable, feeds loaded). Both answer `no-store` plain text.
-pub fn health<St, F, Fut>(ready: F) -> Router<St>
+pub(crate) fn health<F, Fut>(ready: F) -> router::Table
 where
-    St: Clone + Send + Sync + 'static,
     F: Fn() -> Fut + Clone + Send + Sync + 'static,
     Fut: std::future::Future<Output = bool> + Send,
 {
@@ -716,9 +714,9 @@ where
         (status, [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], if ok { "ok" } else { "unavailable" })
             .into_response()
     };
-    Router::new().route("/health/live", get(move || async move { answer(true) })).route(
+    router::Table::new().route("/health/live", router::get(move || async move { answer(true) })).route(
         "/health/ready",
-        get(move || {
+        router::get(move || {
             let ready = ready.clone();
             async move { answer(ready().await) }
         }),

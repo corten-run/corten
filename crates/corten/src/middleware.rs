@@ -13,9 +13,8 @@
 //! 4. The deadline and the panic catch start ([`crate::Failure::TimedOut`],
 //!    [`crate::Failure::Panicked`]).
 //! 5. The app's middleware, in the order given ([`crate::App::middleware`]). The route has been
-//!    matched, so axum's `MatchedPath` names it (none for an unknown URL, nor for a path under an
-//!    API's prefix that a route outside the API matched, whose axum path parameters are still
-//!    that route's, which the API answers 404). Then, for a request
+//!    matched, so [`MatchedPath`] names it (none for an unknown URL, nor for a path under an
+//!    API's prefix that a route outside the API matched, which the API answers 404). Then, for a request
 //!    under an area's or an API's prefix, its own middleware ([`crate::Area::middleware`],
 //!    [`crate::Api::middleware`]): the areas' (outer first), then the APIs' (outer first), each in
 //!    the order given. A request anywhere else never meets it.
@@ -103,8 +102,9 @@
 //! A tower layer still goes around the whole app ([`crate::App::layer`]), outside every stage,
 //! for what must see the raw request first.
 
-use std::{convert::Infallible, future::Future, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
+pub use crate::router::MatchedPath;
 use axum::extract::Request;
 /// What a middleware answers, and how it makes one of anything else
 /// (`Refused::too_many(wait).into_response()`, `StatusCode::FORBIDDEN.into_response()`). It takes
@@ -217,7 +217,7 @@ pub(crate) type Stack = Arc<[Arc<dyn Erased>]>;
 /// run (none for most routes), then the route.
 pub(crate) struct Rest<'a> {
     pub(crate) stack: &'a [Arc<dyn Erased>],
-    pub(crate) route: Option<axum::routing::Route>,
+    pub(crate) route: Option<crate::router::Route>,
 }
 
 impl Next for Rest<'_> {
@@ -231,7 +231,7 @@ impl Next for Rest<'_> {
 }
 
 /// The route alone, after the app's middleware, for a request in no area or API with middleware.
-pub(crate) struct Handle(pub(crate) Option<axum::routing::Route>);
+pub(crate) struct Handle(pub(crate) Option<crate::router::Route>);
 
 impl Next for Handle {
     #[inline]
@@ -244,18 +244,12 @@ impl Next for Handle {
 /// No route: a path under a nested API that a route outside it matched, answered with a 404 that
 /// the API writes as its own.
 #[inline]
-fn handle(route: Option<axum::routing::Route>, req: Request) -> impl Future<Output = Response> + Send {
+fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Output = Response> + Send {
     // A whole document in an app with layout reads: the route's page is filled before the app's
     // middleware sees it.
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let answer = match route {
-        Some(mut route) => Either::Left(futures_util::FutureExt::map(
-            tower_service::Service::call(&mut route, req),
-            |res: Result<Response, Infallible>| match res {
-                Ok(res) => res,
-                Err(never) => match never {},
-            },
-        )),
+        Some(route) => Either::Left(route.call(req)),
         None => Either::Right(std::future::ready(axum::response::IntoResponse::into_response(axum::http::StatusCode::NOT_FOUND))),
     };
     match here {

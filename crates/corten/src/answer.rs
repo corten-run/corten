@@ -1682,6 +1682,8 @@ impl Unshared for AnyInputs {}
 )]
 pub trait Anonymous {}
 
+// Says nothing of who is asking; refused when its route is made instead, since Corten's router does
+// not fill it (`route::__private::refuse_axum_routing`).
 impl<T> Anonymous for axum::extract::Path<T> {}
 impl<R: crate::route::FromUrl + ?Sized> Anonymous for crate::route::Params<R> {}
 impl<T> Anonymous for crate::Form<T> {}
