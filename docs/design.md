@@ -1291,44 +1291,50 @@ rules something out.
     5.51.2, and the smoke tests on `10cd394d`.
 
 35. <a id="choice-state-derives"></a>**An app's shared state derives `Clone` and `FromRef`, two
-    derives that each say one thing, not a state attribute that writes both.** `Clone` is what
-    routing needs of the state: `#[corten::routes(state = Shared)]` gives each route its own copy
-    (`Methods::with_state(.., state.clone())`), `Methods::with_state` takes an `S: Clone`, and
-    the axum `MethodRouter<S>` it wraps requires one too, so the type needs it whatever else it
-    derives. `FromRef` gives each field its own extractor (`State<Market>`), which clones that
-    field and needs no `Clone` of the containing type. The six examples with shared state route
-    seven state types: three derive both (watchlist's `Shared`, card-market's `ApiState` and
-    listings-feed's `Shared`) and four derive `Clone` alone, their handlers taking the whole state
-    (card-market's `Source` (the state of its pages), auction-room's `Auction`, deck-builder's
-    `Builder` and seller-desk's `Desk`). A test's state in watchlist's `account.rs` derives both
-    too, but no route takes it, so its `Clone` is not counted. A `#[corten::state]` attribute would
-    take one word off each of the three that derive both (the `Clone` in
-    `#[derive(Clone, FromRef)]`) and give three of the other four (`Auction`, `Builder`, `Desk`) a
-    choice between it and the derive they write now; `Source`, an enum, could not take it, since
-    `FromRef` is derived only for a struct with named fields. That is a third way to write state,
-    and a concept to learn that one word a type does not earn (Values 5 and 6). The generated code
-    would be the same. `FromRef` deriving `Clone` itself is not chosen either: a type that writes
-    its own `impl Clone` (a generic state whose fields are behind an `Arc`, which
-    `#[derive(Clone)]` would bound on its parameter, as `corten_cluster::Cluster<S>`, a part of
-    listings-feed's state, does) would get a second, conflicting impl, and the derive list would no
-    longer say that the type is `Clone`. Not chosen: the attribute; an option on `FromRef`
-    (`#[from_ref(clone)]`), the same second spelling in another place
+    derives that each say one thing, not a state attribute that writes both.** `Clone` says the
+    state can be copied, which routing and a handler that takes the whole state both need:
+    `#[corten::routes(state = Shared)]` gives each route its own copy
+    (`Methods::with_state(.., state.clone())`, which takes an `S: Clone`, as axum's
+    `MethodRouter::with_state` it calls does), and a handler's `State<Shared>` goes through
+    axum-core's `impl<T: Clone> FromRef<T> for T`. `FromRef` says each field can be taken alone:
+    it gives each field its own extractor (`State<Market>`), which clones that field and needs no
+    `Clone` of the containing type. The six examples with shared state route seven state types:
+    three derive both (watchlist's `Shared`, card-market's `ApiState` and listings-feed's
+    `Shared`) and four derive `Clone` alone, their handlers taking the whole state (card-market's
+    `Source` (the state of its pages), auction-room's `Auction`, deck-builder's `Builder` and
+    seller-desk's `Desk`). A test's state in watchlist's `account.rs` derives both too, but no
+    route takes it, so it is not counted. A `#[corten::state]` attribute would take one word off
+    each of the three that derive both (the `Clone` in `#[derive(Clone, FromRef)]`) and give
+    three of the other four (`Auction`, `Builder`, `Desk`) a choice between it and the derive
+    they write now; `Source`, an enum, could not take it, since `FromRef` is derived only for a
+    struct with named fields. That is a third way to write state, and a concept to learn that one
+    word a type does not earn (Values 5 and 6). The generated code would be the same. `FromRef`
+    deriving `Clone` itself is not chosen either: a type that writes its own `impl Clone` (a
+    generic state whose fields are behind an `Arc`, which `#[derive(Clone)]` would bound on its
+    parameter, as `corten_cluster::Cluster<S>` does, routed as a state by
+    `#[corten::routes(state = Cluster<Items>)]` in its tests and a part of listings-feed's state)
+    would get a second, conflicting impl, and the derive list would no longer say that the type is
+    `Clone`. Not chosen: the attribute; an option on `FromRef` (`#[from_ref(clone)]`), the same
+    second spelling in another place
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 
-    Stands on: platform (axum 0.8.9's `MethodRouter<S>` requires `S: Clone`, `Cargo.lock`; Corten
-    routes on axum's router, [Choice 25](#choice-axum-router)); reasoned (each route takes its own
-    copy of the state, in `routes.rs`'s `Methods::with_state(.., state.clone())`; an impl the
-    derive wrote would conflict with a hand-written `Clone`; and the attribute saves one word on
-    three types while adding a way to write six of the seven); value (one way to do each thing and
-    a small surface, Values 5 and 6).
+    Stands on: platform (axum 0.8.9's `MethodRouter::with_state`, like its other `MethodRouter`
+    methods, requires `S: Clone`, and axum-core 0.5.6's `impl<T: Clone> FromRef<T> for T` is how a
+    handler takes the whole state, both from `Cargo.lock`; Corten routes on axum's router,
+    [Choice 25](#choice-axum-router)); reasoned (each route takes its own copy of the state, in
+    `routes.rs`'s `Methods::with_state(.., state.clone())`; an impl the derive wrote would
+    conflict with a hand-written `Clone`; and the attribute saves one word on three types while
+    adding a way to write six of the seven); value (one way to do each thing and a small surface,
+    Values 5 and 6).
 
-    Revisit when: a third mechanical impl routinely goes with the pair on an app's state, so an
-    attribute would carry more than two derives' worth; or Corten stops giving each route its own
-    copy of the state and axum's `MethodRouter` stops requiring `S: Clone`, so state no longer
-    needs `Clone`.
+    Revisit when: a third mechanical impl is derived beside the pair on two or more of the
+    examples' routed state types, so an attribute would carry more than two derives' worth; or
+    Corten stops giving each route its own copy of the state, and neither axum's `MethodRouter`
+    nor its whole-state `State<S>` requires `S: Clone`, so state no longer needs `Clone`.
 
     Last checked: 2026-11-10, the examples' state types, `from_ref.rs`, `routes.rs`,
-    `Methods::with_state` and axum 0.8.9 from `Cargo.lock`, at `97a63a92`.
+    `Methods::with_state`, `corten-cluster`'s tests, and axum 0.8.9 and axum-core 0.5.6 from
+    `Cargo.lock`, at `97a63a92`.
 
 ## Rules
 
