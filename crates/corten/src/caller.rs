@@ -67,7 +67,7 @@
 //!
 //! impl<S: Sync> Identify<S> for Partner {
 //!     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-//!         Err(Refused::unauthorized(Challenge::new("Bearer")))
+//!         Err(Refused::unauthorized(Challenge::BEARER))
 //!     }
 //! }
 //!
@@ -113,7 +113,7 @@ use crate::{route::Href, Error, Signal};
 ///
 /// impl<S: Sync> Identify<S> for Viewer {
 ///     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-///         Err(Refused::unauthorized(Challenge::new("Bearer")))
+///         Err(Refused::unauthorized(Challenge::BEARER))
 ///     }
 /// }
 ///
@@ -154,14 +154,22 @@ pub struct Refused(Why);
 #[derive(Clone, Debug)]
 enum Why {
     SignIn(HeaderValue, Option<std::sync::Arc<str>>),
-    /// A 401, 403 or 429, with what the client is told and the header its status needs, named by
-    /// the status: a 401's `WWW-Authenticate`, a 429's `Retry-After`.
+    /// A 401, 403 or 429, with what the client is told and the header its status needs.
     Refusal {
         status: StatusCode,
         message: Option<std::sync::Arc<str>>,
-        header: Option<HeaderValue>,
+        header: Option<Sent>,
     },
     Unavailable(std::sync::Arc<str>),
+}
+
+/// The header a refusal sends, named by what it is rather than by the status.
+#[derive(Clone, Debug)]
+enum Sent {
+    /// A 401's `WWW-Authenticate`.
+    Challenge(HeaderValue),
+    /// A 429's `Retry-After`.
+    RetryAfter(HeaderValue),
 }
 
 impl Refused {
@@ -180,13 +188,13 @@ impl Refused {
 
     /// No credentials, and nowhere to sign in (an API key that is missing or wrong): a 401 with
     /// `challenge` in `WWW-Authenticate` (RFC 9110 15.5.2), saying how the client should send
-    /// them: `Refused::unauthorized(Challenge::new("Bearer"))`. It takes one, so none is left out:
+    /// them: `Refused::unauthorized(Challenge::BEARER)`. It takes one, so none is left out:
     ///
     /// ```compile_fail,E0061
     /// let _ = corten::Refused::unauthorized();
     /// ```
     pub fn unauthorized(challenge: Challenge) -> Self {
-        let header = Some(challenge.0);
+        let header = Some(Sent::Challenge(challenge.0));
         Refused(Why::Refusal { status: StatusCode::UNAUTHORIZED, message: None, header })
     }
 
@@ -200,7 +208,7 @@ impl Refused {
     /// credentials tells a locked-out client nothing about them.
     pub fn too_many(retry_after: std::time::Duration) -> Self {
         let seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
-        let header = Some(seconds.into());
+        let header = Some(Sent::RetryAfter(seconds.into()));
         Refused(Why::Refusal { status: StatusCode::TOO_MANY_REQUESTS, message: None, header })
     }
 
@@ -243,52 +251,58 @@ impl Refused {
 /// #[derive(Clone, Hash)]
 /// struct Partner { name: String }
 ///
-/// /// The scheme, checked as the program compiles.
-/// const BEARER: Challenge = Challenge::new("Bearer");
-///
 /// impl<S: Sync> Identify<S> for Partner {
 ///     async fn identify(parts: &Parts, _state: &S) -> Result<Self, Refused> {
 ///         match parts.headers.get("authorization").and_then(|v| v.to_str().ok()) {
 ///             // No key: say how to send one.
-///             None => Err(Refused::unauthorized(BEARER)),
+///             None => Err(Refused::unauthorized(Challenge::BEARER)),
 ///             // A real app looks the key up here.
 ///             Some("Bearer dev-key") => Ok(Partner { name: "dev".into() }),
 ///             // A key that is wrong (RFC 6750 3.1).
-///             Some(_) => Err(Refused::unauthorized(BEARER.param("error", "invalid_token"))),
+///             Some(_) => Err(Refused::unauthorized(Challenge::BEARER.param("error", "invalid_token"))),
 ///         }
 ///     }
 /// }
 /// ```
 ///
-/// A scheme that is not a token does not compile in a `const`:
+/// Another scheme is a `const` of the app's, so one that is not a token does not compile:
 ///
 /// ```compile_fail,E0080
-/// const BEARER: corten::Challenge = corten::Challenge::new("Bearer realm");
+/// const NEGOTIATE: corten::Challenge = corten::Challenge::new("Negotiate realm");
 /// ```
 #[derive(Clone, Debug)]
 pub struct Challenge(HeaderValue);
 
 impl Challenge {
-    /// The scheme alone: `Bearer` (RFC 6750), `Basic` (RFC 7617, which a browser answers with
-    /// its own sign-in prompt), or another the client knows. A scheme is the app's literal: in a
-    /// `const` one that is not a token (RFC 9110 5.6.2) does not compile, and elsewhere it panics.
+    /// `Bearer` (RFC 6750): a key or token sent in `Authorization`.
+    pub const BEARER: Challenge = Challenge::new("Bearer");
+
+    /// `Basic` (RFC 7617), which a browser answers with its own sign-in prompt.
+    pub const BASIC: Challenge = Challenge::new("Basic");
+
+    /// Another scheme the client knows, written as a `const` of the app's
+    /// (`const NEGOTIATE: Challenge = Challenge::new("Negotiate");`), where one that is not a token
+    /// (RFC 9110 5.6.2) does not compile; called at run time it panics.
+    #[track_caller]
     pub const fn new(scheme: &'static str) -> Self {
         assert!(is_token(scheme.as_bytes()), "corten: an authentication scheme is a token (RFC 9110 5.6.2)");
         Challenge(HeaderValue::from_static(scheme))
     }
 
-    /// A parameter of the scheme's (`realm`, RFC 6750's `error` or `scope`), its value sent
-    /// quoted, with `"` and `\` escaped (RFC 6750's own parameters never hold either). Panics
-    /// when `name` is not a token or the challenge has it already (RFC 9110 11.2, in any case),
-    /// or `value` has a control character, which no quoted string carries: a value from a request
-    /// or a store is the app's to clean first.
+    /// A parameter of the scheme's (`realm`, RFC 6750's `error` or `scope`), its value always sent
+    /// as a quoted string, with `"` and `\` escaped: a scheme with a parameter that must be a bare
+    /// token (Digest's `algorithm`) is not written with it, and RFC 6750's own parameters must not
+    /// hold `"` or `\` at all. Panics when `name` is not a token or the challenge has it already
+    /// (RFC 9110 11.2, in any case), or `value` has a control character or a byte outside ASCII,
+    /// which RFC 9110 5.5 asks a sender not to send: a value from a request or a store is the app's
+    /// to clean first.
     #[track_caller]
     pub fn param(self, name: &str, value: &str) -> Self {
         assert!(is_token(name.as_bytes()), "corten: a challenge's parameter name is a token: {name:?}");
         assert!(!self.names().any(|had| had.eq_ignore_ascii_case(name.as_bytes())), "corten: a challenge names {name:?} twice");
         assert!(
-            !value.bytes().any(|b| b.is_ascii_control() && b != b'\t'),
-            "corten: a challenge's parameter value has no control character"
+            value.bytes().all(|b| b == b'\t' || (b.is_ascii() && !b.is_ascii_control())),
+            "corten: a challenge's parameter value has no control character and is ASCII"
         );
         let mut text = Vec::with_capacity(self.0.len() + name.len() + value.len() + 5);
         text.extend_from_slice(self.0.as_bytes());
@@ -303,7 +317,7 @@ impl Challenge {
             text.push(b);
         }
         text.push(b'"');
-        Challenge(HeaderValue::from_bytes(&text).expect("checked: no control character"))
+        Challenge(HeaderValue::from_bytes(&text).expect("checked: visible ASCII"))
     }
 
     /// The names of its parameters, read back from the text `param` wrote: after the scheme, each
@@ -508,7 +522,7 @@ impl<S: Send + Sync, T: Identify<S>> FromRequestParts<S> for Caller<T> {
 /// A refusal as an answer, for a [`crate::Middleware`] that turns a request away:
 /// `return Refused::too_many(wait).into_response();`. It is answered in the request's mode as a
 /// [`Caller`]'s refusal is: the error page for a browser (a sign-in is a redirect), JSON for an
-/// API or a data client, with `Retry-After` on a 429.
+/// API or a data client, with `WWW-Authenticate` on a 401 and `Retry-After` on a 429.
 impl IntoResponse for Refused {
     fn into_response(self) -> Response {
         match self.0 {
@@ -539,17 +553,18 @@ fn unidentified(message: &str) -> Response {
 
 /// A 401, 403 or 429 for a request without the caller its handler reads, with what the client is
 /// told and the header its status needs (`WWW-Authenticate`, `Retry-After`).
-fn refused(status: StatusCode, message: Option<std::sync::Arc<str>>, header: Option<HeaderValue>) -> Response {
+fn refused(status: StatusCode, message: Option<std::sync::Arc<str>>, header: Option<Sent>) -> Response {
     let mut res = status.into_response();
     res.extensions_mut().insert(crate::page::Cause::Refused);
     if let Some(message) = message {
         res.extensions_mut().insert(crate::Failed(message));
     }
-    if let Some(value) = header {
-        let name = match status {
-            StatusCode::UNAUTHORIZED => http::header::WWW_AUTHENTICATE,
-            _ => http::header::RETRY_AFTER,
-        };
+    let header = match header {
+        Some(Sent::Challenge(value)) => Some((http::header::WWW_AUTHENTICATE, value)),
+        Some(Sent::RetryAfter(value)) => Some((http::header::RETRY_AFTER, value)),
+        None => None,
+    };
+    if let Some((name, value)) = header {
         res.headers_mut().insert(name, value);
     }
     res
@@ -574,16 +589,30 @@ mod tests {
 
     #[test]
     fn a_challenge_is_its_scheme_then_its_parameters_quoted() {
-        assert_eq!(Challenge::new("Bearer").0, "Bearer");
-        let challenge = Challenge::new("Bearer").param("realm", "partners").param("error", "invalid_token");
+        assert_eq!(Challenge::BEARER.0, "Bearer");
+        let challenge = Challenge::BEARER.param("realm", "partners").param("error", "invalid_token");
         assert_eq!(challenge.0, r#"Bearer realm="partners", error="invalid_token""#);
         assert_eq!(Challenge::new("Basic").param("realm", r#"say "hi" \ go"#).0, r#"Basic realm="say \"hi\" \\ go""#);
     }
 
     #[test]
+    fn a_name_inside_a_quoted_value_is_not_a_parameter() {
+        let challenge =
+            Challenge::BEARER.param("error_description", "scope=x, realm=\"y\"").param("scope", "y").param("realm", "z");
+        assert_eq!(challenge.0, r#"Bearer error_description="scope=x, realm=\"y\"", scope="y", realm="z""#);
+        assert_eq!(Challenge::BASIC.0, "Basic");
+    }
+
+    #[test]
+    #[should_panic(expected = "is ASCII")]
+    fn a_parameter_value_outside_ascii_panics() {
+        let _ = Challenge::BEARER.param("realm", "caf\u{e9}");
+    }
+
+    #[test]
     #[should_panic(expected = "names \"REALM\" twice")]
     fn a_parameter_named_twice_panics() {
-        let _ = Challenge::new("Bearer").param("realm", "a \"quoted\", realm=").param("scope", "x").param("REALM", "b");
+        let _ = Challenge::BEARER.param("realm", "a \"quoted\", realm=").param("scope", "x").param("REALM", "b");
     }
 
     #[test]
@@ -595,12 +624,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "parameter name is a token")]
     fn a_parameter_name_with_a_quote_panics() {
-        let _ = Challenge::new("Bearer").param("re\"alm", "x");
+        let _ = Challenge::BEARER.param("re\"alm", "x");
     }
 
     #[test]
-    #[should_panic(expected = "no control character")]
+    #[should_panic(expected = "no control character and is ASCII")]
     fn a_parameter_value_with_a_line_break_panics() {
-        let _ = Challenge::new("Bearer").param("realm", "a\r\nSet-Cookie: x=1");
+        let _ = Challenge::BEARER.param("realm", "a\r\nSet-Cookie: x=1");
     }
 }

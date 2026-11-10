@@ -1910,7 +1910,8 @@ async fn vendor_event(request: Request) -> corten::Result<StatusCode> {
         .await?
         .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
     if !signature.is_some_and(|signature| verify(&body, signature.as_bytes())) {
-        return Err(Error::status(StatusCode::UNAUTHORIZED));
+        // Not a 401: no HTTP authentication scheme would let the vendor send it another way.
+        return Err(Error::status(StatusCode::FORBIDDEN));
     }
     let event: serde_json::Value = serde_json::from_slice(&body).map_err(|_| Error::status(StatusCode::BAD_REQUEST))?;
     // The event's id is recorded, so a repeat is answered as done; slow work goes to a task.
@@ -2041,7 +2042,7 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
 |---|---|---|---|
 | `Ok(caller)` | the handler runs | the handler runs | the handler runs |
 | `Refused::sign_in(&route)` | 303 to the route (`corten-location` to the runtime's fetch when the route is on another site or names a place) | `corten-location`, and the runtime goes there | JSON 401 |
-| `Refused::unauthorized(challenge)` | the error page, `Failure::Refused` (401), with `WWW-Authenticate` | the error page, swapped in | JSON 401, with `WWW-Authenticate` |
+| `Refused::unauthorized(challenge)` | the error page, `Failure::Refused` (401), with `WWW-Authenticate` | the error page, swapped in, with `WWW-Authenticate` | JSON 401, with `WWW-Authenticate` |
 | `Refused::forbidden()` | the error page, `Failure::Refused` (403) | the error page, swapped in | JSON 403 |
 | `Refused::too_many(wait)` | the error page, `Failure::Refused` (429), with `Retry-After` | the error page, swapped in | JSON 429, with `Retry-After` |
 | `Refused::unavailable(error)` | the error page, `Failure::Unidentified` (503) | the error page, swapped in | JSON 503 |
@@ -2099,10 +2100,13 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    is how the lookup says the count is reached, checked before the credentials so a locked-out
    client learns nothing about them.
    A 401 says how to send credentials (RFC 9110 requires it): `Refused::unauthorized` takes the
-   `Challenge` that goes in `WWW-Authenticate`, `Challenge::new("Bearer")` for a key or token
+   `Challenge` that goes in `WWW-Authenticate`, `Challenge::BEARER` for a key or token
    in `Authorization` (RFC 6750), with `.param("error", "invalid_token")` when the one sent is
    wrong. `Basic` makes a browser show its own sign-in prompt. A key in a header of the app's own
-   (`X-Api-Key`) has no scheme to name, so send it as a bearer token. `Refused::sign_in`'s 401
+   (`X-Api-Key`) has no scheme to name, so send it as a bearer token; an API whose clients
+   already send that header takes the key as a bearer token too and challenges `Bearer`. Another
+   scheme is a `const` of the app's (`Challenge::new("Negotiate")`), so a typo does not compile;
+   a parameter's value is always sent quoted and in ASCII. `Refused::sign_in`'s 401
    to a data client has no challenge: a session cookie has no HTTP authentication scheme. A lookup
    that also takes a token refuses a request that sent one with `unauthorized`.
 8. A check that depends on the record (only the author may edit a draft) stays in the handler,

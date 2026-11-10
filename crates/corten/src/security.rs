@@ -422,7 +422,7 @@ impl Policy {
     ///
     /// impl<S: Sync> Identify<S> for Staff {
     ///     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-    ///         Err(Refused::unauthorized(Challenge::new("Bearer")))
+    ///         Err(Refused::unauthorized(Challenge::BEARER))
     ///     }
     /// }
     ///

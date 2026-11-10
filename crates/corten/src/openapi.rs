@@ -62,7 +62,7 @@
 //!
 //! impl<S: Sync> Identify<S> for Partner {
 //!     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-//!         Err(Refused::unauthorized(Challenge::new("Bearer")))
+//!         Err(Refused::unauthorized(Challenge::BEARER))
 //!     }
 //! }
 //!
@@ -98,7 +98,7 @@
 //!
 //! impl<S: Sync> Identify<S> for Partner {
 //!     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-//!         Err(Refused::unauthorized(Challenge::new("Bearer")))
+//!         Err(Refused::unauthorized(Challenge::BEARER))
 //!     }
 //! }
 //!
@@ -391,7 +391,8 @@ impl Operation<'_> {
     /// `describe` (a caller type's); an answer's credentials would join the last argument's. Such
     /// a header has no HTTP authentication scheme for the 401's challenge to name
     /// ([`crate::Refused::unauthorized`]); a new API takes its key as a bearer token instead,
-    /// described with [`Operation::bearer`]. This describes an API whose clients already send one.
+    /// described with [`Operation::bearer`]. This describes an API whose clients already send one;
+    /// it takes the key as a bearer token too, so its 401 challenges `Bearer`.
     pub fn api_key(&mut self, header: &str, description: &str) {
         let mut scheme = json!({ "type": "apiKey", "in": "header", "name": header });
         if !description.is_empty() {
@@ -1045,7 +1046,7 @@ mod tests {
 
     impl<S: Sync> crate::Identify<S> for Partner {
         async fn identify(_: &crate::http::request::Parts, _: &S) -> Result<Self, crate::Refused> {
-            Err(crate::Refused::unauthorized(crate::Challenge::new("Bearer")))
+            Err(crate::Refused::unauthorized(crate::Challenge::BEARER))
         }
     }
 

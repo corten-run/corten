@@ -4402,10 +4402,7 @@ impl<S: Sync> crate::Identify<S> for Keyed {
             Some(b"Bearer k1") => Ok(Keyed),
             Some(b"Bearer locked") => Err(crate::Refused::too_many(std::time::Duration::from_millis(1500))
                 .message("Too many failed attempts; try again later")),
-            _ => {
-                Err(crate::Refused::unauthorized(crate::Challenge::new("Bearer").param("realm", "keys"))
-                    .message("Invalid API key"))
-            }
+            _ => Err(crate::Refused::unauthorized(crate::Challenge::BEARER.param("realm", "keys")).message("Invalid API key")),
         }
     }
 }
@@ -4466,6 +4463,9 @@ async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
             Some(b"forbid") => crate::Refused::forbidden().message("Not your item"),
             Some(b"lock") => crate::Refused::too_many(std::time::Duration::from_millis(1500)).message("Slow down"),
             Some(b"down") => crate::Refused::unavailable("the session store is down"),
+            Some(b"key") => {
+                crate::Refused::unauthorized(crate::Challenge::BEARER.param("error", "invalid_token")).message("Bad key")
+            }
             _ => return Ok("ok"),
         };
         Err(refused.into())
@@ -4480,11 +4480,15 @@ async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
         ("forbid", 403, None, "Not your item"),
         ("lock", 429, Some("2"), "Slow down"),
         ("down", 503, None, "Service Unavailable"),
+        ("key", 401, None, "Bad key"),
     ] {
         let req = Request::get("/api/refuses").header("x-case", case).body(Body::empty()).unwrap();
         let res = router.clone().oneshot(req).await.unwrap();
         let got = (res.status().as_u16(), res.headers().get("retry-after").map(|v| v.to_str().unwrap().to_owned()));
         assert_eq!(got, (status, retry.map(str::to_owned)), "{case}");
+        let challenge = res.headers().get("www-authenticate").map(|v| v.to_str().unwrap().to_owned());
+        let want = (status == 401).then(|| r#"Bearer error="invalid_token""#.to_owned());
+        assert_eq!(challenge, want, "a handler's own 401 keeps its challenge: {case}");
         let body = res.into_body().collect().await.unwrap().to_bytes();
         let want = format!(r#"{{"type":"error","error":{{"code":{status},"message":{message:?}}}}}"#);
         assert_eq!(String::from_utf8(body.to_vec()).unwrap(), want, "{case}");
@@ -8326,7 +8330,7 @@ impl<S: Sync> crate::Identify<S> for Partner {
     async fn identify(parts: &http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
         match parts.headers.get("authorization").map(|v| v.as_bytes()) {
             Some(b"Bearer k1") => Ok(Partner("acme")),
-            _ => Err(crate::Refused::unauthorized(crate::Challenge::new("Bearer"))),
+            _ => Err(crate::Refused::unauthorized(crate::Challenge::BEARER)),
         }
     }
 }
@@ -8820,6 +8824,9 @@ async fn a_caller_with_nowhere_to_sign_in_is_a_401_page() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!res.contains_key("location") && body.contains("Something went wrong"), "{body}");
     assert_eq!(res["www-authenticate"], "Bearer", "the error page keeps the challenge every 401 sends");
+    let (status, res, _) = guarded(&router, "GET", "/partner", None, &[("corten", "action")]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(res["www-authenticate"], "Bearer", "and so does the page swapped in");
     let (status, _, body) = guarded(&router, "GET", "/partner", None, &[("authorization", "Bearer k1")]).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "acme"));
 }

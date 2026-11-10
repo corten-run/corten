@@ -174,11 +174,10 @@ impl corten::openapi::Argument for Partner {
 
 impl Identify<ApiState> for Partner {
     async fn identify(parts: &Parts, state: &ApiState) -> Result<Self, Refused> {
-        const BEARER: Challenge = Challenge::new("Bearer");
         let refused = match (state.partners.named(&parts.headers), Partners::sent(&parts.headers)) {
             (Some(name), _) => return Ok(Partner { name: name.clone() }),
-            (None, None) => Refused::unauthorized(BEARER),
-            (None, Some(_)) => Refused::unauthorized(BEARER.param("error", "invalid_token")),
+            (None, None) => Refused::unauthorized(Challenge::BEARER),
+            (None, Some(_)) => Refused::unauthorized(Challenge::BEARER.param("error", "invalid_token")),
         };
         Err(refused.message("Send a valid partner API key as a bearer token."))
     }

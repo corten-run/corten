@@ -2644,10 +2644,12 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Changed
 
 - `Refused::unauthorized` takes the `Challenge` its 401 sends in `WWW-Authenticate`, which RFC
-  9110 requires on a 401 and which it never sent: `Refused::unauthorized(Challenge::new("Bearer"))`,
+  9110 requires on a 401 and which it never sent: `Refused::unauthorized(Challenge::BEARER)`,
   with `.param("error", "invalid_token")` for a token that is wrong (RFC 6750). `corten::Challenge`
-  is in the prelude; `Challenge::new` is a `const fn`, so a scheme that is not a token does not
-  compile in a `const`. The JSON 401 and the error page both carry it. An app that called
+  is in the prelude with `Challenge::BEARER` and `Challenge::BASIC`; another scheme is a `const`
+  of the app's (`Challenge::new` is a `const fn`), so one that is not a token does not compile.
+  A parameter's value is sent quoted and must be ASCII. The JSON 401, the error page and the page
+  swapped in all carry it. An app that called
   `Refused::unauthorized()` passes the scheme its clients send credentials in.
   `Refused::sign_in`'s 401 to a data client still has none, since a session cookie has no
   scheme (design Choice 27). The MCP endpoint builds its challenges with `Challenge` too, and
