@@ -46,7 +46,6 @@ use axum::{
     body::{Body, HttpBody},
     http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
-    Router,
 };
 
 use crate::{
@@ -57,7 +56,7 @@ use crate::{
 /// Routes that answer only JSON, with their settings, under the prefix `P`: what
 /// [`crate::App::api`] gives its function to fill in.
 pub struct Api<P> {
-    pub(crate) routes: Router,
+    pub(crate) routes: crate::router::Table,
     /// Its routes' paths as written, for [`crate::route::assert_no_clash`].
     pub(crate) written: Vec<&'static str>,
     /// Those with text after a parameter, for [`crate::route::assert_no_clash_with`].
@@ -67,7 +66,10 @@ pub struct Api<P> {
     errors: Option<ErrorShape>,
     middleware: Vec<std::sync::Arc<dyn crate::middleware::Erased>>,
     /// Routes Corten serves outside the prefix with one of these (`route::Companion`).
-    pub(crate) companions: Vec<(String, axum::routing::MethodRouter)>,
+    pub(crate) companions: Vec<(String, crate::router::MethodSet)>,
+    /// Its routes that say `unstaged`, which the app serves outside its stages, with the API's
+    /// failures.
+    pub(crate) unstaged: crate::route::UnstagedRoutes,
     /// Its OpenAPI document, served at the route its module names (`openapi = ApiDoc`).
     #[cfg(feature = "types")]
     openapi: Option<std::sync::Arc<crate::openapi::Served>>,
@@ -84,7 +86,7 @@ type WriteError = dyn Fn(StatusCode, &str) -> Vec<u8> + Send + Sync;
 impl<P: Prefix> Api<P> {
     pub(crate) fn new() -> Self {
         Api {
-            routes: Router::new(),
+            routes: crate::router::Table::new(),
             written: Vec::new(),
             with_text: Vec::new(),
             origins: Vec::new(),
@@ -92,6 +94,7 @@ impl<P: Prefix> Api<P> {
             errors: None,
             middleware: Vec::new(),
             companions: Vec::new(),
+            unstaged: Default::default(),
             #[cfg(feature = "types")]
             openapi: None,
             types: PhantomData,
@@ -106,7 +109,7 @@ impl<P: Prefix> Api<P> {
         assert!(self.openapi.is_none(), "corten: an API has one OpenAPI document");
         let served = crate::openapi::Served::new(document);
         self.openapi = Some(served.clone());
-        let serve = axum::routing::get(move || {
+        let serve = crate::router::get(move || {
             let json = served.json();
             async move { ([(header::CONTENT_TYPE, HeaderValue::from_static(JSON))], json) }
         });
@@ -166,6 +169,27 @@ impl<P: Prefix> Api<P> {
     /// # let _ = app.router();
     /// ```
     pub fn route<R: TypedRoute>(mut self, methods: crate::Methods) -> Self {
+        self.place::<R>();
+        self.routes = crate::route::written::<R, ()>(self.routes, methods.0);
+        if let Some(companion) = methods.2 {
+            self.companions.push((companion.0)(R::PATH));
+        }
+        self
+    }
+
+    /// Used by `#[corten::routes(api = ..)]`: `R`'s handlers at its path, a route that says
+    /// `unstaged`, which the app serves outside its stages, the API's middleware, deadline and
+    /// allowed origins among them, answering a failure as the API does. Not a public API.
+    #[doc(hidden)]
+    pub fn __unstaged_route<R: TypedRoute>(mut self, methods: crate::route::__private::UnstagedMethods) -> Self {
+        self.place::<R>();
+        self.unstaged.add::<R>(methods, Some(P::PREFIX));
+        self
+    }
+
+    /// Holds `R` to the API's prefix and the shape of a route's path, and adds it to the API's
+    /// paths.
+    fn place<R: TypedRoute>(&mut self) {
         const {
             assert!(
                 under_const(P::PREFIX, R::PATH),
@@ -181,19 +205,15 @@ impl<P: Prefix> Api<P> {
         if R::WRITTEN != R::PATH {
             self.with_text.push(R::WRITTEN);
         }
-        self.routes = self.routes.route(R::PATH, crate::route::with_suffixes::<R, _>(methods.0));
         self.written.push(R::WRITTEN);
-        if let Some(companion) = methods.2 {
-            self.companions.push((companion.0)(R::PATH));
-        }
-        self
     }
 
     /// A step of the API's own in each request under its prefix (a partner's rate limit, a usage
     /// count), after the app's middleware ([`crate::App::middleware`]) and before the handler:
     /// `.middleware(PartnerLimit::new(600))`, or a tuple run in order. Given again, it runs after
-    /// what was given before. A request anywhere else never meets it. It refuses with a
-    /// [`crate::Refused`], which is JSON here like every failure; see [`crate::middleware`].
+    /// what was given before. A request anywhere else never meets it, nor does a route of the
+    /// API's that says `unstaged`. It refuses with a [`crate::Refused`], which is JSON here like
+    /// every failure; see [`crate::middleware`].
     pub fn middleware<M: crate::Middleware>(mut self, middleware: M) -> Self {
         self.middleware.push(std::sync::Arc::new(middleware));
         self
@@ -205,7 +225,7 @@ impl<P: Prefix> Api<P> {
     /// waits on a slow upstream (a model, a report), so the rest of the app keeps its shorter one.
     /// Past it the answer is the JSON 503 and the request's [`crate::Signal`] aborts with
     /// [`crate::Abort::Deadline`], as at the app's. `None` removes it, for routes that bound
-    /// themselves.
+    /// themselves. A route that says `unstaged` has no deadline.
     pub fn deadline(mut self, deadline: impl Into<Option<std::time::Duration>>) -> Self {
         self.deadline = Some(deadline.into());
         self
@@ -262,7 +282,9 @@ impl<P: Prefix> Api<P> {
     /// A site whose pages may call these routes from the browser (CORS), like
     /// `https://partner.example`. Corten answers its preflight requests, adds
     /// `Access-Control-Allow-Origin` to the responses, and lets its writes through the same-origin
-    /// check, for these routes only: the app's pages still refuse writes from it. The site
+    /// check, for these routes only (not one that says `unstaged`, whose handler sends
+    /// `Access-Control-Allow-Origin` itself if a site reads it): the app's pages still refuse
+    /// writes from it. The site
     /// authenticates with a token: a write from it that carries cookies is refused, and no
     /// `Access-Control-Allow-Credentials` is sent.
     pub fn allow_origin(mut self, origin: &str) -> Self {

@@ -19,7 +19,7 @@ your routes. Each default can be replaced in one line.
 | Error pages | every [`Failure`](#error-pages) in a plain document, in the request's mode (page, swap or JSON), sent with `X-Robots-Tag: noindex`; the error is logged, and shown only under `corten dev`; right for an API or a first sketch; an app with a layout sets one, and a debug build warns once at startup when an app with a stylesheet has none | `.error_page(page, state)`: `async fn(Failure, Req, ..extractors) -> HtmlResult`, in the app's layout and for who is asking; `corten new` writes one that names each case |
 | JSON-only routes | none | `.api(api::api)` for a `#[corten::routes(api = ApiRoot)]` module: every failure under the prefix is JSON, unknown URLs included, with no document ([below](#json-only-routes)) |
 | WebSockets and relays | none | a handler takes `Upgrade` and returns its `websocket(..)` or `switch(..)`; `Relay` passes another server's answer on as it came ([below](#websockets-and-relays)) |
-| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies 16 powerful features (camera, microphone, screen recording, location, motion sensors, installed fonts, idle detection, window placement, payment, and devices: USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
+| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies 16 powerful features (camera, microphone, screen recording, location, motion sensors, installed fonts, idle detection, window placement, payment, and devices: USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses, `.frame_ancestors("https://partner.example")` for a site that may show the pages in a frame; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
 | Caching | static files and the runtime cached forever; everything rendered `private, no-cache` ([below](#caching)) | return `Public<HtmlResult>` (or `Public<JsonResult<T>>`) for an answer that is the same for everyone |
 | Static files | component scripts and the components' stylesheets (one file, plus one per area that lists components and one per set of areas that list the same components) at content-hashed, immutable URLs; each script loaded by the pages whose handlers use it | `.assets(Static)`: `static/`, compiled into the program by `corten::assets::embed!` (a constant per file, `req.asset(Static::STYLE_CSS)`) and served the same way ([below](#static-files)); `/favicon.ico` answers the directory's `favicon.ico`, else its `favicon.svg`, cached a day, unless a route of the app's matches the path; `.components(&[..])`, `Area::components(&[..])` ([styles](styles.md#areas)) |
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
@@ -28,8 +28,9 @@ your routes. Each default can be replaced in one line.
 | Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, warnings and other `tracing` events at `INFO` and above to stdout, one line each, as `tracing-subscriber`'s `fmt()` writes them without targets (`2026-11-06T21:20:29.018154Z  WARN corten: ...`), in its colors when stdout is a terminal and `NO_COLOR` is unset; control characters other than a tab are escaped in every field, so request text cannot start a line of its own or send the terminal a command; spans are not printed (feature `log`, a subscriber of Corten's own with no dependency) | set your own `tracing` subscriber first (`tracing_subscriber::fmt().init()` for spans, filters such as `RUST_LOG` or JSON lines); `serve` then leaves it alone |
-| Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd or brotli; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
+| Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page |
+| A route outside all of the above | none: every route gets every default here | `unstaged` on one route's `#[route(..)]`: no same-origin check, middleware, security headers, cache rule, deadline or error page, for an answer the same for everyone who can reach it; the host check stays ([below](#a-route-outside-the-stages)) |
 | Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language`, or the locale a page's URL names (a `Locale<Msg>` route field the handler gives `req.set_locale`, [Views](views.md#a-locale-in-the-url)); each page says its locale in `Content-Language` |
 | Visitors' time zones | not known: dates are UTC unless a zone is given | `.client_zone()`: the runtime keeps the browser's zone in a `corten-zone` cookie, `Option<ClientZone>` reads its name and, with the `zones` feature, `req.zone()` gives it with its rules; `.zoned_dates()` (`zones` feature) also writes dates in it ([Views](views.md)) |
 | Dev mode | when `CORTEN_DEV` is set (`corten dev` sets it): errors shown on the page, open pages reload after a rebuild, and the browser's console names a form control drawn with a value its own attributes refuse (a stored `250` under `step="100"`), which stops its form being sent, and a live region drawn inside another (`errors.form_message()` inside the kit's destructive `Alert`), which a screen reader may announce twice, and it warns of a closed `<dialog>` or popover that a rule inside `@media` or `@container` gives a `display` (a filters rail drawn in place from a breakpoint, or an open look written without `[open]`), which the components' stylesheet keeps hidden, with the rule for each, from `/corten/dev.js`, a module only a dev server serves | `.dev(bool)` |
@@ -134,7 +135,8 @@ document, so the layout is never stale.
 An app answers a request only when its `Host` is `localhost` (or a name under it, such as
 `app.localhost`), an IP address, missing (HTTP/1.0, a test's `app().test()`), or a name the app lists.
 Any other name gets `421 Misdirected Request` before routing: no handler, middleware, caller
-lookup or error page runs. Otherwise a page on a name someone else controls could point that
+lookup or error page runs (at a route that says `unstaged` too;
+[below](#a-route-outside-the-stages)). Otherwise a page on a name someone else controls could point that
 name at this machine (DNS rebinding) and then use every route as its own origin, writes
 included, since the browser treats the rebound page as same-origin. On loopback, where only this
 machine can reach the app, that is the access model it would break, so the check is the default
@@ -771,18 +773,42 @@ is that insert: the extension map's allocation, growth and free, about 550 a req
 failed response from a JSON route pays it. The other differences, a few hundred either way,
 were not profiled; the cross-site post among them never reaches a route.
 
+When Corten's own router on matchit replaced axum's `Router` and `MethodRouter`
+([design Choice 25](../design.md#choice-axum-router), step 2), the same kinds of request were
+measured against axum's router (callgrind, release build, jemalloc, in-process `oneshot`, the
+difference between 1,200 and 200 requests over 1,000, median of five runs; card-market over one
+keep-alive connection, 1,300 less 300 requests, median of three):
+
+| Request | axum's router | Corten's |
+|---|---|---|
+| card-market's item page | 82,792 (82,790-83,098) | 79,731 (79,618-79,752) |
+| card-market's item JSON | 63,008 (62,662-63,203) | 59,754 (59,618-59,862) |
+| JSON under `App::api` | 15,726 (15,725-15,726) | 13,112 |
+| the same answer from a page route | 21,222 (21,215-21,229) | 18,277 |
+| the same with one middleware that only passes it on | 21,466 (21,465-21,472) | 18,562 |
+| unknown URL under `App::api` (JSON 404) | 14,094 (14,093-14,094) | 12,171 |
+| unknown URL, HTML 404 page | 19,980 (19,979-19,980) | 18,091 |
+| an `unstaged` route | 8,479 (8,478-8,479) | 6,932 |
+
+In process the runs of Corten's router did not differ. On the API request most of the difference
+is fewer copies of the request and fewer allocations (`memcpy`, `malloc` and `free`, about 1,100
+fewer), and the rest is axum's route lookup by id and its futures around the stages. With glibc's
+allocator every request in process costs 1,791 to 4,135 less. An unstaged route's checks have
+since moved from its handler to the router, which runs them around it, costing 71 to 86 more ([below](#a-route-outside-the-stages)).
+
 ## Your own middleware
 
 Every request goes through the same stages in the same order, outside in, each needing the one
-before it:
+before it (a route that says `unstaged` goes through none;
+[below](#a-route-outside-the-stages)):
 
 1. Compression is negotiated (`Accept-Encoding`); it is applied last.
 2. A write another site sent is refused (`Failure::CrossSite`). A browser's gets the error page,
    with the request's `Signal` made for it as in stage 3; its layout reads are not started.
 3. The request gets its `Signal`, its nonce and the app.
 4. The deadline and the panic catch start (`Failure::TimedOut`, `Failure::Panicked`).
-5. The app's middleware, in the order given. The route has been matched, so axum's
-   `MatchedPath` names it (it is absent for an unknown URL, and for a path under an API's prefix
+5. The app's middleware, in the order given. The route has been matched, so
+   `corten::middleware::MatchedPath` names it (it is absent for an unknown URL, and for a path under an API's prefix
    that a route outside the API matched, which answers with an empty `Allow` whatever its method). Then, for a request under an area's or an API's prefix, its own
    middleware: the areas' (outer first), then the APIs' (outer first), each in the order given.
 6. The handler's extractors (a `Caller` is looked up here, only when read), then the handler.
@@ -884,10 +910,158 @@ request on). In an app where no area or API has any, the request runs the same c
 where some do, a request outside them pays a scan of their prefixes. card-market limits writes
 this way.
 
-A tower layer still goes around the whole app (`.layer(l)`), outside every stage, for what must
-see the raw request first: a cap on body size.
+A tower layer still goes around the whole app (`.layer(l)`), outside the router and every stage, for
+what must see the raw request first: a cap on body size. It sees the request before its route is
+matched, so with no `MatchedPath`, and is made once for the whole app, so a limit it keeps counts
+every route's requests together.
 There is no layer for one route: what a route needs is in its handler's arguments (an
 extractor) and its return type.
+
+### A route outside the stages
+
+A route whose answer must cost as little as the server allows, and is the same for everyone who
+can reach it (a public figure behind a CDN, a value every client polls), says `unstaged` in its
+routes module, the app's, an area's or an API's; the probes a load balancer sends are Corten's own
+`/health/live` and `/health/ready`. It goes through none of the stages above: no same-origin
+check, signal or deadline, no middleware (the app's, its area's or its API's), no error page,
+security headers, `Cache-Control`, tag, compression or allowed origins. What it keeps adds no
+stage: the host check every request meets (a name the app does not answer to gets `421`),
+`X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` on its answer (below),
+a panic answered `500`, and, under an API's prefix, the API's JSON for a failure. Its handler's
+answer is otherwise sent as it made it, a raw `Response` too, and every other route keeps every
+stage, so the fast route and a page that needs all of them sit side by side:
+
+```rust
+use corten::{axum::response::Response, prelude::*};
+
+#[corten::routes]
+mod url {
+    #[route("/ping", get = ping, unstaged)]
+    pub struct Ping;
+
+    #[route("/", get = home)]
+    pub struct Home;
+}
+
+#[corten::routes(api = ApiRoot)]
+mod api {
+    #[route("/api")]
+    pub struct ApiRoot;
+
+    #[route("/api/figure", get = figure, unstaged)]
+    pub struct Figure;
+}
+
+async fn ping() -> Response {
+    let text = "text/plain; charset=utf-8";
+    Response::builder().header("content-type", text).body("pong".into()).unwrap()
+}
+
+async fn figure() -> NoStore<JsonResult<u32>> {
+    NoStore(Ok(Json(42)))
+}
+
+async fn home(req: Req) -> HtmlResult {
+    req.page(html! { <html><head><title>"Home"</title><Corten /></head><body><main></main></body></html> })
+}
+
+let app = App::new(url::router()).api(api::api);
+# let _ = app.router();
+```
+
+The listings-feed example serves the sequence its failover benchmark reads this way, bounding its
+own wait for Postgres.
+
+The route says it where it is declared, so a reader of the routes module sees which routes skip
+the stages. What the compiler can check, it does:
+
+1. The handler takes only the request's method and URL (`Params`, `Method`, `Uri`) and the module's
+   `State`
+   (`corten::answer::Unstaged`). `Req`, `Signal`, `Nonce`, `Caller` and `ClientIp` read what a stage
+   gives; `HeaderMap` and the whole `Request` read the visitor's cookies and credentials, which no
+   stage would keep a shared cache from storing; and `Form`, `Json`, `Bytes`, `String` and
+   `Upload` read the body, which no deadline there bounds. None compiles there.
+2. It answers reads only: `get` (which `HEAD` takes too), never `post` or another method, since
+   no same-origin check keeps another site from sending it a write (a form posted to it needs no
+   preflight).
+3. A routes module with `caller = ..` cannot have one, since every route there takes the caller.
+   Nor can a route whose path can answer at a path of Corten's own, as far as the path shows: a
+   first segment that is a parameter or a catch-all (`/{section}/ping`, `/{*rest}`, which can
+   stand at `/corten/`), a path under `/corten`, or a parameter after `/health`
+   (`/health/{check}`). When it starts, the app refuses the rest: one that can match a path the
+   app adds (under its assets, the PWA's files and offline page, an API's or area's companion
+   routes), one declared outside the module of the innermost area or API whose prefix holds its
+   path (`/docs/ping` in the app's routes beside a `/docs` area), whose settings it would skip
+   where a reader of that module would not see it, one whose parameter can reach an area's or
+   API's prefix (`/pay/{step}` beside an API at `/pay/api`), and one whose path another module
+   routes too (`/feeds/{id}.json` beside an unstaged `/feeds/{n}.xml` is the same path to the
+   router), where the methods it lacks would answer with no stage.
+4. `no_store`, `rows` and `gives(..)` are applied by stages, so an unstaged route does not say
+   them; an unstaged handler that must not be kept returns `NoStore<..>` itself.
+5. It is not a page: `Req::serves` does not send a visitor there after sign-in, and a link to it
+   is never prefetched (it does not say `prefetch = ..`). A link a visitor follows to it takes
+   `download` or `data-reload`, as one to a `Media` does: without them the runtime fetches it as a
+   page, finds it is not one, and loads it again, so the handler runs twice. A link carries
+   only what its route says about prefetching, not that it is not a page, so Corten does not add
+   `data-reload` for it, as it does not for a link to any route that answers data.
+
+What it gives up is the app's to weigh. Nothing ends its handler at a deadline: one that waits on
+another service bounds the wait itself (a pool's acquire timeout, a client's). A middleware of
+the app's, its area's or its API's does not cover it, so neither does a rate limit or a check of
+theirs, and an API's allowed origins are not sent: a partner's page reads it only if its handler
+sends `Access-Control-Allow-Origin` itself, and only with a request that needs no preflight (a
+preflight's `OPTIONS` gets the route's 405). A handler that panics is logged and answered `500`
+(plain, or the API's JSON under an API's prefix). A 5xx it answers is logged when it is a
+`corten::Error`, which logs itself, and under an API's prefix when it is plain text, which the
+API's JSON reads and logs as it does for any route there. Under an
+API's prefix a failure (the handler's, a path that does not parse, a method it has no handler for)
+is the API's Problem Details document, or its `Api::errors` shape, as every failure there is;
+anywhere else a failure is sent as the handler made it: a `JsonResult`'s `Err` is the status's
+reason as plain text, and a path that does not parse is the extractor's plain-text rejection.
+No stage gives its answer a CSP or `frame-ancestors`; a document it builds from what the request
+says (HTML, SVG) would run script on the app's origin, where it can read every other page with
+the visitor's cookies, but for the sandbox below. An unstaged answer is data (text, JSON, a file)
+with its `Content-Type` set, as `&'static str` and `String` set it and a raw `Response` does not
+until the handler says. Every unstaged answer gets `X-Content-Type-Options: nosniff`, which keeps
+a browser from taking it as another type and a page of the app's from loading it as a script, and
+a `Content-Security-Policy: sandbox` header of its own beside any policy the handler set: a
+browser enforces every policy it is sent, so whatever type the answer says, a document it sends
+(an uploaded SVG a `Media` sends) runs no script on the app's origin. The sandbox leaves data
+alone, and a PDF the browser opens (a `Media::inline`, or one with no `Content-Disposition`)
+still shows in its viewer in Chrome, Edge and Firefox (checked in Chrome 156, Edge 157 and Firefox
+157). Safari was not run: WebKit's bug tracker records that its viewer showed nothing for one
+until a fix in December 2024. A PDF that must open in every browser is sent from a route with
+stages, or as a `Media::attachment`, which a download saves without making a document. Neither
+header reads the answer's type or policy, so no type or policy a handler writes gets past them; an
+answer whose own script must run is a page, not an unstaged route's. Its answer has no
+`Cache-Control` unless the handler sets one, so a shared cache may keep it by its own rules
+([Caching](#caching) describes the stages' rules, which it does not meet): an answer that changes
+says so (`NoStore`, `Public`), as the figure above does. One that sets a cookie is `private,
+no-cache` (`no-store` when it says one), whatever caching it says, and loses a CDN's own
+`CDN-Cache-Control`, `Cloudflare-CDN-Cache-Control` and `Surrogate-Control`, so no shared cache
+hands one visitor's cookie to another.
+A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
+and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
+each with the headers every unstaged answer gets, not the app's error page (the API's JSON under
+an API's prefix); any other unknown URL is still the app's 404, inside its
+stages. A tower layer the app puts around the whole app (`.layer(l)`) still goes around it, and
+so does `serve`'s handling of connections: the head's size and time, connection limits, and
+shutdown, which lets an unstaged route's request run for the longer of the shutdown grace and the
+app's longest deadline, since it records none of its own.
+
+What it saves, measured with callgrind on a release build answering the same JSON in process
+(five runs with jemalloc and three with glibc, which did not differ): 7,003 instructions a request
+unstaged (7,068 in an API's module) against 18,299 through the stages beside it with jemalloc,
+where a plain axum router takes 7,085, and 7,812 unstaged with glibc's allocator (7,879 in an
+API's module; axum: 8,099). What the route keeps (the host check, the headers above, the panic
+catch and an API's JSON) the router runs around its handler in place of the stages, so its 404
+and 405 meet it as its handler's answer does; it costs 71 of those instructions (86 in an API's module; 67 and 82 with glibc)
+over the same checks written into the handler, and wall times did not tell them apart.
+The host check, with what
+carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
+check's read of `Host` and its match against the app's names. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
+1,547 of these from an unstaged request (1,476 since its checks moved to the router) and about 2,900 from one
+through the stages, against axum's router in the same app.
 
 ## Static files
 
@@ -944,7 +1118,9 @@ forms become ready; versioned files retain their encoding-specific tags.
 Static files, component scripts, the components' stylesheet and the runtime have content-hashed
 URLs and are sent `public, max-age=31536000, immutable`; the PWA's worker keeps them. The icon at
 `/favicon.ico`, a fixed path, is sent `public, max-age=86400` ([above](#static-files)). Everything
-else `App` serves that does not set `Cache-Control` is sent `private, no-cache`: the browser
+else `App` serves that does not set `Cache-Control` is sent `private, no-cache`, except a route
+that says `unstaged`, whose answer is sent as its handler made it
+([above](#a-route-outside-the-stages)): the browser
 may keep it but asks again before using it, and no shared cache (a CDN, a proxy) stores it. A
 page's layout may show who is asking, so a shared copy could show one user's page to another.
 
@@ -992,7 +1168,8 @@ Public::new(Duration::from_secs(60), page)
 Both stale directives stay on an answer sent privately, for any private cache that implements
 them (Chromium and Firefox implement `stale-while-revalidate`, not `stale-if-error`).
 
-`App` still checks what it can see before it lets a shared cache keep the answer:
+`App` still checks what it can see before it lets a shared cache keep the answer (on every route
+but an unstaged one):
 
 | The request or response | Sent |
 |---|---|
@@ -1557,21 +1734,23 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
 6. Only HTTP/1.1 connections served by `corten::serve` switch; an HTTP/2 request (no extended
    `CONNECT`) and a test's `app().test()` get a 426.
 
-`corten::Relay::new(status, headers, body)` is another server's answer passed on as it came,
-for a gateway or a backend for a frontend: its status, its headers less the hop-by-hop ones, and
-its body as it arrives (`Body::from_stream(res.bytes_stream())` from reqwest). A failure status
-keeps the upstream's body, never the error page or the JSON error. The app's security and cache
-rules still apply, except that a `Content-Security-Policy` the upstream sent replaces the app's:
-a relayed page's scripts were written for its own policy (their nonces and hosts), which the app's
-would block. Without one, the app's applies. A `Permissions-Policy` the upstream sent is kept the
-same way, and a relayed page without one gets the app's
-([below](#a-policy-for-part-of-the-app)). A streamed body is passed on as each piece arrives.
-Corten compresses no relayed body, buffered or streamed, an event stream included, so a long
-relayed stream holds no compression context: the encoding is the upstream's. A relay that should
-be compressed forwards the client's `Accept-Encoding`, and the upstream's encoded body goes on as
-it is, as long as the HTTP client does not decode it (for reqwest, leave its `gzip`, `brotli` and
-`zstd` features off). When the client leaves, the body is dropped, and
-the upstream request with it. What else to drop (`Set-Cookie`) is the route's to decide.
+`corten::Relay::new(status, headers, body)` is another server's answer passed on as it came, for a
+gateway or a backend for a frontend: its status, its headers less the hop-by-hop ones, and its body
+as it arrives (`Body::from_stream(res.bytes_stream())` from reqwest). A failure status keeps the
+upstream's body, never the error page or the JSON error. The app's security and cache rules still
+apply, except that a `Content-Security-Policy` the upstream sent replaces the app's: a relayed
+page's scripts were written for its own policy (their nonces and hosts), which the app's would
+block. Who may frame it stays the app's: its `frame-ancestors` is enforced beside the upstream's
+policy, and its `X-Frame-Options` (none, for a page another origin may frame) replaces the
+upstream's ([below](#a-policy-for-part-of-the-app)).
+Without an upstream policy, the app's applies. A `Permissions-Policy` the upstream sent is kept the
+same way, and a relayed page without one gets the app's. A streamed body is passed on as each piece
+arrives. Corten compresses no relayed body, buffered or streamed, an event stream included, so a
+long relayed stream holds no compression context: the encoding is the upstream's. A relay that
+should be compressed forwards the client's `Accept-Encoding`, and the upstream's encoded body goes
+on as it is, as long as the HTTP client does not decode it (for reqwest, leave its `gzip`, `brotli`
+and `zstd` features off). When the client leaves, the body is dropped, and the upstream request with
+it. What else to drop (`Set-Cookie`) is the route's to decide.
 
 A route that answers some requests itself and passes the rest on (by method, body or tenant,
 while it moves off another service; a cache in front of an upstream) names one answer for both.
@@ -2051,6 +2230,28 @@ loads the current page again rather than swap it in: answer such a form with a p
 An area that adds only sources the app already has keeps the app's policy and shell key. A policy for a single route is an area of one page. An `App::api` keeps its
 own `default-src 'none'`.
 
+No site may show a page in a frame (`frame-ancestors 'none'`, and `X-Frame-Options: DENY` for
+browsers that do not read it), so another site cannot lay its own page over one of the app's to
+steer a click. An unstaged route's answer is sent with neither unless its handler sets one: it
+is data, not a page, and runs no script ([A route outside the stages](#a-route-outside-the-stages)).
+A widget other sites embed (an item's card, a chart) is an area whose policy names them,
+`p.frame_ancestors("https://partner.example")`, and every other page keeps the denial; the card
+market's `/embed` area takes them from `EMBED_ORIGINS`. A source is a host or a scheme, or
+`'self'` for the app's own pages; `*` or a bare scheme (`https:`) lets any site frame them. On
+a staged route the policy decides `X-Frame-Options`, whatever a handler, middleware or relayed
+upstream sets: pages another origin may frame are sent none (it cannot name one) and pages only
+the app may frame `SAMEORIGIN`. Who may frame a page stays enforced where the app's CSP is not: a
+relayed answer that brings its own CSP, and under `Policy::report_only` a page another origin may
+frame, are also sent an enforced `Content-Security-Policy` of their `frame-ancestors` alone.
+Frame read-only pages: a
+parent on another site gets none of the app's `SameSite` cookies (Corten's cookie helper makes them
+`Lax`), so the page is drawn signed out there, but a parent on the same site (`blog.example.com`
+framing `app.example.com`) gets them, so the page is signed in and a write from it carries the
+session while the parent can lay its page over the button. A link meant to leave the frame (to a
+page that may not be framed) opens in the parent's tab: `<base target="_top">` in the framed page's
+head, with `data-no-prefetch` around its links, since a hover's prefetch would fetch a page the
+frame never shows.
+
 Every page requires [Trusted Types](https://developer.mozilla.org/en-US/docs/Web/API/Trusted_Types_API)
 (`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rule-html-macro):
 markup reaches the page from a string (`innerHTML`, `insertAdjacentHTML`, `DOMParser`, the
@@ -2139,7 +2340,7 @@ their own shell key:
 .area(|area| settings::url::area(area).policy(|p| p.script_src("https://connect-js.stripe.com").allow_cross_origin_opener()))
 ```
 
-Every answer is sent with `Referrer-Policy: strict-origin-when-cross-origin`: other sites get the
+Every answer but an unstaged route's is sent with `Referrer-Policy: strict-origin-when-cross-origin`: other sites get the
 origin only. A page whose address carries a secret (an OAuth consent's `?token=`, a password reset,
 an invitation, a magic link) should not send it even to the app's own logs with the stylesheet and
 font requests it makes, so its area makes the policy stricter with `referrer(Referrer::StrictOrigin)`

@@ -1,5 +1,7 @@
 //! [`Middleware`]: a step of the app's own in every request (a request id, a rate limit, a trace
-//! span), at one place in Corten's order.
+//! span), at one place in Corten's order. A route that says `unstaged` goes through none of it,
+//! the app's, its area's or its API's ([`crate::routes`]), so a rate limit or a check of the
+//! app's does not cover it.
 //!
 //! The order is fixed, outside in, and each stage needs the one before it:
 //!
@@ -11,9 +13,8 @@
 //! 4. The deadline and the panic catch start ([`crate::Failure::TimedOut`],
 //!    [`crate::Failure::Panicked`]).
 //! 5. The app's middleware, in the order given ([`crate::App::middleware`]). The route has been
-//!    matched, so axum's `MatchedPath` names it (none for an unknown URL, nor for a path under an
-//!    API's prefix that a route outside the API matched, whose axum path parameters are still
-//!    that route's, which the API answers 404). Then, for a request
+//!    matched, so [`MatchedPath`] names it (none for an unknown URL, nor for a path under an
+//!    API's prefix that a route outside the API matched, which the API answers 404). Then, for a request
 //!    under an area's or an API's prefix, its own middleware ([`crate::Area::middleware`],
 //!    [`crate::Api::middleware`]): the areas' (outer first), then the APIs' (outer first), each in
 //!    the order given. A request anywhere else never meets it.
@@ -71,8 +72,8 @@
 //! ```
 //!
 //! Middleware that belongs to part of the app is given to that part, an area or an API, and runs
-//! for each request at its prefix (its routes, nested areas and APIs, an unknown URL there),
-//! never by a path compared in the middleware:
+//! for each request at its prefix (its routes, nested areas and APIs, an unknown URL there; not
+//! a route that says `unstaged`, which meets none), never by a path compared in the middleware:
 //!
 //! ```
 //! # use corten::{extract::Request, middleware::{IntoResponse, Response}, prelude::*};
@@ -101,8 +102,9 @@
 //! A tower layer still goes around the whole app ([`crate::App::layer`]), outside every stage,
 //! for what must see the raw request first.
 
-use std::{convert::Infallible, future::Future, pin::Pin, sync::Arc};
+use std::{future::Future, pin::Pin, sync::Arc};
 
+pub use crate::router::MatchedPath;
 use axum::extract::Request;
 /// What a middleware answers, and how it makes one of anything else
 /// (`Refused::too_many(wait).into_response()`, `StatusCode::FORBIDDEN.into_response()`). It takes
@@ -117,7 +119,7 @@ pub trait Next: Send {
 }
 
 /// A step of the app's own in every request, or of an area's or an API's in each request at its
-/// prefix; see [`crate::middleware`]. Several are a tuple,
+/// prefix, but a route's that says `unstaged`; see [`crate::middleware`]. Several are a tuple,
 /// run in order: `(RequestId, RateLimit)`.
 pub trait Middleware: Send + Sync + 'static {
     /// Answers the request, usually by running `next` and changing what it gives.
@@ -215,7 +217,7 @@ pub(crate) type Stack = Arc<[Arc<dyn Erased>]>;
 /// run (none for most routes), then the route.
 pub(crate) struct Rest<'a> {
     pub(crate) stack: &'a [Arc<dyn Erased>],
-    pub(crate) route: Option<axum::routing::Route>,
+    pub(crate) route: Option<crate::router::Route>,
 }
 
 impl Next for Rest<'_> {
@@ -229,7 +231,7 @@ impl Next for Rest<'_> {
 }
 
 /// The route alone, after the app's middleware, for a request in no area or API with middleware.
-pub(crate) struct Handle(pub(crate) Option<axum::routing::Route>);
+pub(crate) struct Handle(pub(crate) Option<crate::router::Route>);
 
 impl Next for Handle {
     #[inline]
@@ -242,18 +244,12 @@ impl Next for Handle {
 /// No route: a path under a nested API that a route outside it matched, answered with a 404 that
 /// the API writes as its own.
 #[inline]
-fn handle(route: Option<axum::routing::Route>, req: Request) -> impl Future<Output = Response> + Send {
+fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Output = Response> + Send {
     // A whole document in an app with layout reads: the route's page is filled before the app's
     // middleware sees it.
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let answer = match route {
-        Some(mut route) => Either::Left(futures_util::FutureExt::map(
-            tower_service::Service::call(&mut route, req),
-            |res: Result<Response, Infallible>| match res {
-                Ok(res) => res,
-                Err(never) => match never {},
-            },
-        )),
+        Some(route) => Either::Left(route.call(req)),
         None => Either::Right(std::future::ready(axum::response::IntoResponse::into_response(axum::http::StatusCode::NOT_FOUND))),
     };
     match here {

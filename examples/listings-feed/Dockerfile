@@ -17,4 +17,6 @@ WORKDIR /app
 COPY --from=build /out/server /app/server
 ENV HOST=0.0.0.0 PORT=8080
 EXPOSE 8080
+# Not root, by number (the template's Dockerfile says why).
+USER 10001:10001
 CMD ["/app/server"]
