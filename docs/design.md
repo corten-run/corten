@@ -1352,9 +1352,9 @@ rules something out.
     app needs a `Media` answer, not a static file, to seek.
 
     Last checked: 2026-11-10, Apple's guide read and the crate's asset tests on `112422cb`;
-    2026-11-10, card-market's smoke on Linux in Playwright 1.64.1's
-    image against a build of `b370d79f`, Chromium, Firefox and WebKit each playing and seeking the
-    clip; 2026-11-10, the count on `97a63a92` and `92d38464`; 2026-11-10, the count on `84719c0f`
+    2026-11-10, card-market's smoke in Playwright 1.64.1 against a build of `4ec25ef4`, on Linux
+    with Chromium, Firefox and WebKit each playing and seeking the clip, and on Windows with
+    Chromium and Firefox; 2026-11-10, the count on `97a63a92` and `92d38464`; 2026-11-10, the count on `84719c0f`
     and `a7b1c808`.
 
 ## Rules
