@@ -2609,6 +2609,17 @@ Corten is pre-1.0, so any minor version may change the API.
   source per pass. Catalog remains an optional separate diagnostic. Historical results and
   labels are preserved, but unequal legacy localization no longer supports general speed
   rankings; v2 comparisons require compatible rounds, not r16 or catalog c1 deltas.
+- The image `corten new` writes, and each example's, runs the server as user 10001 instead of
+  root (`USER 10001:10001`, by number, so a cluster that requires non-root containers starts it),
+  and `/app/server` stays root's. The server listens on 8080 and writes no file; an app whose
+  server writes files gives that user a directory, and auction-room's `/app/data` is its (a bind
+  mount needs a host directory 10001 owns, a Kubernetes volume `fsGroup: 10001`). Migration: an app made by an earlier
+  `corten new` adds `USER 10001:10001` before its `CMD`, after any `RUN` that needs root; a
+  volume an earlier auction-room image wrote as root is given to 10001 once, as its Dockerfile
+  shows. `scripts/images.test.mjs` (in `npm run check`) holds every image's last stage to a
+  numeric non-root `USER`, and card-market's run stage to the template's, since nothing builds
+  the template's image and card-market's smoke stands in for it
+  ([#1136 The image corten new writes runs the server as root, so a pod that requires non-root containers will not start it, and nothing builds that image](https://github.com/corten-run/corten/issues/1136)).
 
 1. A handler never runs after its event: markup a navigation or patch inserts waits for the
    modules its handlers name, and an event that comes before its module on the first page gets
