@@ -22,7 +22,10 @@ axum's compiles against them with its `use` changed; `Request`, `Response` and `
 `http` crate's and axum's types, named from Corten so the app imports one crate
 ([design Choice 21](../design.md#choice-own-extractors)). axum's own extractors (`Path`,
 `Query`, `Json`, `Extension`, `ConnectInfo`, `Parts`) are not handler arguments: a route's path
-and query are its `Params`, a body its `Json` or `Form`, and the whole head its `Req`. A handler that takes the whole `Request` and answers
+and query are its `Params`, a body its `Json` or `Form`, and the whole head its `Req`. A handler
+that answers a refusal itself takes `Result<T, T::Rejection>`, as `Option<T>` goes without a
+value; an extractor of the app's own that needs two others reads each in turn, since a tuple of
+them is not one. A handler that takes the whole `Request` and answers
 a body over a limit of its own itself (a route that keeps another server's error shape) reads it
 with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A body too
 large to hold (a file `PUT` as `application/octet-stream`) is passed on as it arrives instead:

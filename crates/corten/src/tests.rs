@@ -5487,6 +5487,10 @@ async fn an_unstaged_route_in_an_api_answers_its_failures_as_the_api_does() {
     assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_FOUND, problem));
     assert!(body.contains(r#""status":404"#), "{body}");
     assert_eq!(headers["content-security-policy"], "sandbox", "with the headers an unstaged answer gets");
+    // `HEAD` meets the same failure, without its body.
+    let (status, headers, body) = call_with_any(router.clone(), "HEAD", "/lane/items/0", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap(), body.as_str()), (StatusCode::NOT_FOUND, problem, ""));
+    assert_eq!(headers["content-security-policy"], "sandbox");
     let (status, headers, _) = call_with_any(router.clone(), "GET", "/lane/items/seven", &[]).await;
     assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::BAD_REQUEST, problem));
     let (status, headers, _) = call_with_any(router.clone(), "PUT", "/lane/items/7", &[]).await;
@@ -8467,6 +8471,94 @@ async fn a_sixteen_argument_handler_takes_its_caller_and_address_last() {
     }
     let (status, _, _) = guarded(&router, "GET", "/admin/wide/7", Some("carol"), &[]).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// What a handler's arguments read, in the order they read it.
+#[derive(Clone, Default)]
+struct Reads(std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>);
+
+impl Reads {
+    fn add(&self, read: &'static str) {
+        self.0.lock().unwrap().push(read);
+    }
+
+    fn take(&self) -> Vec<&'static str> {
+        std::mem::take(&mut self.0.lock().unwrap())
+    }
+}
+
+struct ReadsFirst;
+struct Refuses;
+struct ReadsSecond;
+
+impl crate::extract::FromRequestParts<Reads> for ReadsFirst {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(_: &mut axum::http::request::Parts, reads: &Reads) -> Result<Self, Self::Rejection> {
+        reads.add("first");
+        Ok(ReadsFirst)
+    }
+}
+
+impl crate::extract::FromRequestParts<Reads> for Refuses {
+    type Rejection = StatusCode;
+
+    async fn from_request_parts(_: &mut axum::http::request::Parts, reads: &Reads) -> Result<Self, StatusCode> {
+        reads.add("refuses");
+        Err(StatusCode::IM_A_TEAPOT)
+    }
+}
+
+impl crate::extract::FromRequestParts<Reads> for ReadsSecond {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(_: &mut axum::http::request::Parts, reads: &Reads) -> Result<Self, Self::Rejection> {
+        reads.add("second");
+        Ok(ReadsSecond)
+    }
+}
+
+/// A handler's arguments are read in order, the head's first and the body last, and the first
+/// refusal answers the request: nothing after it is read, the body included. An argument that
+/// takes the refusal as a `Result` goes on to the next.
+#[tokio::test]
+async fn a_handlers_arguments_are_read_in_order_and_the_first_refusal_answers() {
+    use crate::handler::Handler;
+    let reads = Reads::default();
+    let request = |reads: &Reads| {
+        let reads = reads.clone();
+        let body = futures_util::stream::once(async move {
+            reads.add("body");
+            Ok::<_, std::convert::Infallible>(bytes::Bytes::from_static(b"text"))
+        });
+        Request::new(Body::from_stream(body))
+    };
+    let answer = |response: crate::middleware::Response| async move {
+        let (parts, body) = response.into_parts();
+        (parts.status, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+    };
+
+    let all = |_: ReadsFirst, _: ReadsSecond, text: String| async move { text };
+    let response = Handler::call(all, request(&reads), reads.clone()).await;
+    assert_eq!(answer(response).await, (StatusCode::OK, "text".to_string()));
+    assert_eq!(reads.take(), ["first", "second", "body"]);
+
+    let refused = |_: ReadsFirst, _: Refuses, _: ReadsSecond, text: String| async move { text };
+    let response = Handler::call(refused, request(&reads), reads.clone()).await;
+    assert_eq!(answer(response).await.0, StatusCode::IM_A_TEAPOT);
+    assert_eq!(reads.take(), ["first", "refuses"], "nothing after the refusal is read, the body included");
+
+    let taken = |_: ReadsFirst, refusal: Result<Refuses, StatusCode>, text: String| async move {
+        format!("{} {text}", refusal.err().unwrap().as_u16())
+    };
+    let response = Handler::call(taken, request(&reads), reads.clone()).await;
+    assert_eq!(answer(response).await, (StatusCode::OK, "418 text".to_string()));
+    assert_eq!(reads.take(), ["first", "refuses", "body"]);
+
+    let raw = |body: Body| async move { body.collect().await.unwrap().to_bytes() };
+    let response = Handler::call(raw, request(&reads), reads.clone()).await;
+    assert_eq!(answer(response).await, (StatusCode::OK, "text".to_string()));
+    assert_eq!(reads.take(), ["body"], "a `Body` is read by the handler, not before it");
 }
 
 async fn guarded(

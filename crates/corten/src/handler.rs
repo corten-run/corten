@@ -86,6 +86,29 @@ impl<S: Send + Sync, T: OptionalFromRequestParts<S>> FromRequestParts<S> for Opt
     }
 }
 
+/// The value, or the refusal that would have answered the request, for a handler that answers
+/// it itself.
+impl<S: Send + Sync, T: FromRequestParts<S>> FromRequestParts<S> for Result<T, T::Rejection> {
+    type Rejection = Infallible;
+
+    #[inline]
+    fn from_request_parts(parts: &mut Parts, state: &S) -> impl Future<Output = Result<Self, Infallible>> + Send {
+        let read = T::from_request_parts(parts, state);
+        async move { Ok(read.await) }
+    }
+}
+
+/// The value read from the whole request, or the refusal that would have answered it.
+impl<S: Send + Sync, T: FromRequest<S>> FromRequest<S> for Result<T, T::Rejection> {
+    type Rejection = Infallible;
+
+    #[inline]
+    fn from_request(req: Request, state: &S) -> impl Future<Output = Result<Self, Infallible>> + Send {
+        let read = T::from_request(req, state);
+        async move { Ok(read.await) }
+    }
+}
+
 impl<S: Send + Sync> FromRequestParts<S> for Method {
     type Rejection = Infallible;
 
@@ -138,6 +161,27 @@ impl<S: Send + Sync> FromRequest<S> for bytes::Bytes {
     #[inline]
     fn from_request(req: Request, state: &S) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
         <bytes::Bytes as axum::extract::FromRequest<S>>::from_request(req, state)
+    }
+}
+
+/// The whole body as text, refused with a `400` when it is not UTF-8 and a `413` over 2 MiB, by
+/// axum's reader until step 4, as [`bytes::Bytes`] is.
+impl<S: Send + Sync> FromRequest<S> for String {
+    type Rejection = axum::extract::rejection::StringRejection;
+
+    #[inline]
+    fn from_request(req: Request, state: &S) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        <String as axum::extract::FromRequest<S>>::from_request(req, state)
+    }
+}
+
+/// The body as it comes, unread, for a handler that reads it itself
+/// ([`crate::extract::pieces_up_to`]).
+impl<S: Send + Sync> FromRequest<S> for crate::answer::Body {
+    type Rejection = Infallible;
+
+    async fn from_request(req: Request, _: &S) -> Result<Self, Infallible> {
+        Ok(req.into_body())
     }
 }
 

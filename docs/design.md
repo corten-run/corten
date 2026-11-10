@@ -669,7 +669,11 @@ rules something out.
     with the names, the `type Rejection: IntoResponse` and the
     `from_request_parts(parts: &mut Parts, state: &S)` signature they had as axum's 0.8 traits. An
     extractor written against `corten::extract` compiles as it was, and one written against axum's
-    paths compiles with its `use` changed. Before, these were re-exports of axum's (axum's
+    paths compiles with its `use` changed. `Option<T>` and `Result<T, T::Rejection>` read as they
+    did, and so do `String`, `Bytes`, `Body` and the whole `Request` as a handler's last argument.
+    A tuple of extractors no longer reads as one: axum's impls for tuples were a second way to
+    read two values, which an extractor does by reading each in turn, so one that delegated to a
+    tuple changes. Before, these were re-exports of axum's (axum's
     handlers needed every argument to implement axum's trait, and Rust's orphan rule forbade a
     trait of Corten's bridged to it), so an axum release that changed the trait changed every
     app's extractors with it; now the shape is Corten's and changes only with a Corten release
@@ -688,8 +692,8 @@ rules something out.
     with `corten::extract::bytes_up_to`, as an upload's file is read with `File::bytes_up_to`, not
     axum's `to_bytes`, whose one error is both a body over the limit and one that broke, and which
     leaves the rest of a body over it unread, so a client still sending can miss the answer; a
-    body too large to hold is read piece by piece with `pieces_up_to`. `Bytes` and Corten's `Json`
-    and `Form` still read the body through axum's readers until step 4, so their limit (2 MiB),
+    body too large to hold is read piece by piece with `pieces_up_to`. `Bytes`, `String` and Corten's
+    `Json` and `Form` still read the body through axum's readers until step 4, so their limit (2 MiB),
     refusals and texts are unchanged. `corten::axum` stays for a stand-in server in a test (its
     `Router` and `serve`): the stand-in is another server the app calls, not the app, so a Corten
     name for it would be a second server API for tests alone. This lasts while axum is a
@@ -888,8 +892,8 @@ rules something out.
        the host check, the headers every unstaged answer gets, the panic catch and, under an API's
        prefix, the API's JSON, and that its `404` for a segment without the text after its
        parameter and its `405`, the router's own, meet as its handler's answer does. Its handler
-       is the app's; the lane wraps the handler's boxed future in a box of its own (one box until
-       step 3, below). It costs 71 to 86 instructions more than those checks written into the handler: 7,003
+       is the app's; the lane wraps the handler's boxed future in a box of its own (two boxes, since axum's
+       handler boxed its own future; step 3, below, keeps two). It costs 71 to 86 instructions more than those checks written into the handler: 7,003
        against 6,932 in the app's routes and 7,068 against 6,982 in an API's module (67 and 82
        with glibc), within the about 100 [Choice 28](#choice-fixed-stages) allows, which says why
        it is taken. Staged requests moved by 24 fewer to 8 more, within what two builds differ by.
@@ -928,7 +932,8 @@ rules something out.
        7,085 (8,099) in both. Two other shapes were measured once each and not
        taken: the request split into its head and body inside the handler's future rather than
        before it, 62 more an unstaged request and about 60 more a staged one; and an unstaged
-       route's handler boxed once with its lane (step 2's `call_in`) rather than boxed by itself
+       route's handler boxed once with its lane (step 2's `call_in`, which makes one box of the two
+       now that the handler's future is not boxed by axum) rather than boxed by itself
        and again by the lane, 29 more an unstaged request, though staged requests, which it does
        not touch, moved by 18 too, so the two are within what layout moves and the simpler one,
        with no `call_in`, is taken. `Bytes`, `Json` and `Form` still read a body with

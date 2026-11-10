@@ -130,6 +130,56 @@
 //! # fn main() { let _ = App::new(url::router()); }
 //! ```
 //!
+//! Only a handler's last argument reads the body, so one that reads it before another argument,
+//! or reads it twice, does not compile:
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/notes", get = notes)]
+//!     pub struct Notes;
+//! }
+//!
+//! async fn notes(text: String, _: corten::http::Method) -> String {
+//!     text
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/notes", get = notes)]
+//!     pub struct Notes;
+//! }
+//!
+//! async fn notes(_: corten::Bytes, text: String) -> String {
+//!     text
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Last, it does:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[corten::routes]
+//! mod url {
+//!     #[route("/notes", get = notes)]
+//!     pub struct Notes;
+//! }
+//!
+//! async fn notes(_: corten::http::Method, text: String) -> String {
+//!     text
+//! }
+//! # fn main() { let _ = App::new(url::router()); }
+//! ```
+//!
 //! A handler that takes the whole [`Request`] reads its body with [`bytes_up_to`], up to a limit
 //! of the route's own, and answers a body over it itself.
 //!
