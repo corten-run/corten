@@ -6443,6 +6443,14 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+76. `bench/browser`'s README links the view app's code to `gen/src/bench.js`, where its handlers
+    are, not `apps/view/app.js`, which never existed; `npm run check` (`scripts/docs.mjs`, tested by
+    `docs.test.mjs`) now fails on a link in the repository's Markdown to a file or folder a commit
+    would not hold: an inline link, spaces around its target allowed, and an HTML tag's `src`,
+    `srcset` or `href` (the README's logo), outside code (a span that wraps onto the next line
+    too; a backtick with no partner in its paragraph is text), comments and escapes (reference
+    definitions are not read), and that link was the only one it found
+    ([#1083 bench/browser README links the view app's code to apps/view/app.js, which never existed; its handlers are gen/src/bench.js](https://github.com/corten-run/corten/issues/1083)).
 78. Which tables sort in place is decided and measured: every table whose page has all its rows,
     also when other routes read its order. `bench/browser/sort-cost.mjs` times a sort click with
     `rows::sort` against a swap of the server-sorted table, fetched at the click or before it, and
