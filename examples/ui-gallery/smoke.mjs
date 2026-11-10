@@ -109,6 +109,79 @@ const besideText = (el) => {
 };
 /** @param {{ gap: number, rem: number, off: number }} b */
 const spacedLikeButton = (b) => Math.abs(b.gap - b.rem) <= 0.5 && Math.abs(b.off) <= 1;
+// Kit Tabs and Segmented: each choice's weight and the chosen one's color are the theme's
+// tab-font-weight and tab-selected-color (500 and --foreground), so a theme whose chosen tab is its
+// primary color, or whose choices are semibold, sets two tokens (#1123). For each [chosen, other]
+// selector pair: "chosen's weight, other's weight, chosen's color", with the kit's theme and with one
+// that sets both, read with transitions off so the color is the end value, not a frame of its fade.
+const tabType = (/** @type {string[][]} */ pairs) => {
+  const probe = (/** @type {string} */ value) => {
+    const el = document.createElement("span");
+    el.style.color = value;
+    document.body.append(el);
+    const color = getComputedStyle(el).color;
+    el.remove();
+    return color;
+  };
+  const read = () =>
+    pairs.map(([chosen, other]) => {
+      const [c, o] = [document.querySelector(chosen), document.querySelector(other)];
+      return c && o ? `${getComputedStyle(c).fontWeight} ${getComputedStyle(o).fontWeight} ${getComputedStyle(c).color}` : `missing ${c ? other : chosen}`;
+    });
+  const still = new CSSStyleSheet();
+  still.replaceSync("* { transition: none !important; }");
+  const theme = new CSSStyleSheet();
+  theme.replaceSync(":root { --tab-font-weight: 600; --tab-selected-color: var(--primary); }");
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, still];
+  const kit = read();
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme];
+  const themed = read();
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
+  // Read once more so the kit's values are computed while transitions are still off, and removing
+  // that sheet starts no fade.
+  read();
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== still);
+  return { kit, themed, foreground: probe("var(--foreground)"), primary: probe("var(--primary)") };
+};
+// Hovers each chosen choice under a theme whose chosen color is its primary, with transitions off,
+// and reads whether it is hovered, its color and the primary's: a chosen choice under the pointer
+// keeps the theme's chosen color (#1123).
+const chosenUnderPointer = async (/** @type {import("@playwright/test").Page} */ pg, /** @type {string[]} */ selectors) => {
+  const hoverTheme = await pg.evaluateHandle(() => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(":root { --tab-selected-color: var(--primary); } * { transition: none !important; }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    return sheet;
+  });
+  /** @type {{ hovered: boolean, color: string, primary: string }[]} */
+  const hoveredChoices = [];
+  try {
+    for (const chosen of selectors) {
+      const choice = pg.locator(chosen);
+      await choice.hover();
+      hoveredChoices.push(
+        await choice.evaluate((el) => {
+          const probe = document.createElement("span");
+          probe.style.color = "var(--primary)";
+          document.body.append(probe);
+          const out = { hovered: el.matches(":hover"), color: getComputedStyle(el).color, primary: getComputedStyle(probe).color };
+          probe.remove();
+          return out;
+        }),
+      );
+    }
+  } finally {
+    await pg.evaluate((sheet) => {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+    }, hoverTheme);
+    await hoverTheme.dispose();
+    await pg.mouse.move(0, 0);
+  }
+  return hoveredChoices;
+};
+/** @param {{ kit: string[], themed: string[], foreground: string, primary: string }} t */
+const tabTypeIsTheThemes = (t) =>
+  t.primary !== t.foreground && t.kit.every((s) => s === `500 500 ${t.foreground}`) && t.themed.every((s) => s === `600 600 ${t.primary}`);
 
 for (engine of names) {
   const browser = steady(await engines[engine].launch({ headless: true }));
@@ -401,6 +474,78 @@ async function run(browser) {
     return result;
   });
   check("Checkbox: drawn as a checkbox, but not an input whose role is switch", drawnBox.box === "none" && drawnBox.asSwitch === "auto", JSON.stringify(drawnBox));
+  // A script that sets checked sends no change, so the group keeps its answer until the script
+  // dispatches input and change on each box it set, as the CheckboxGroup doc says. The filled step
+  // sets only the last box, so the group answers a change from a box other than its first.
+  const scripted = await page.evaluate(() => {
+    const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
+    const was = boxes.map((b) => b.checked);
+    const valid = () => boxes.every((b) => b.checkValidity());
+    /** @param {HTMLInputElement[]} set */
+    const tell = (set) => {
+      for (const b of set) {
+        b.dispatchEvent(new Event("input", { bubbles: true }));
+        b.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    };
+    for (const b of boxes) b.checked = false;
+    const cleared = valid();
+    tell(boxes);
+    const clearedTold = valid();
+    const last = /** @type {HTMLInputElement} */ (boxes.at(-1));
+    last.checked = true;
+    const filled = valid();
+    const message = boxes[0].validationMessage;
+    tell([last]);
+    const filledTold = valid();
+    for (const [i, b] of boxes.entries()) b.checked = was[i];
+    tell(boxes);
+    return { count: boxes.length, cleared, clearedTold, filled, message, filledTold, back: valid() };
+  });
+  check(
+    "CheckboxGroup: boxes a script sets keep the group's old answer until it dispatches input and change on them (cleared: valid, then refused; last box filled: refused with the app's message, then valid)",
+    scripted.count > 1 && scripted.cleared && !scripted.clearedTold && !scripted.filled && scripted.message === "Choose where you ship." && scripted.filledTold && scripted.back,
+    JSON.stringify(scripted),
+  );
+  // Back to a page the runtime swapped in brings back a box a script set with input and change,
+  // and one it set without them as drawn (the runtime keeps only fields it saw an event on). On a
+  // page of its own, so the form above keeps its state; only where the Navigation API is, which
+  // the runtime's back/forward needs.
+  const navContext = await browser.newContext();
+  const nav = await navContext.newPage();
+  nav.on("console", (m) => m.type() === "error" && !bug(m.text()) && errors.push(m.text()));
+  nav.on("pageerror", (e) => errors.push(e.message));
+  await nav.goto(`${base}/`);
+  const galleryTitle = await nav.title();
+  const backCheck = "CheckboxGroup: back to a swapped page keeps a box a script set with input and change, and brings one set without them back as drawn";
+  if (await nav.evaluate(() => "navigation" in window)) {
+    const set = await nav.evaluate(() => {
+      const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
+      const [told, untold] = boxes.filter((b) => !b.defaultChecked);
+      told.checked = true;
+      told.dispatchEvent(new Event("input", { bubbles: true }));
+      told.dispatchEvent(new Event("change", { bubbles: true }));
+      untold.checked = true;
+      (/** @type {any} */ (window)).__sameDocument = 1;
+      return { told: told.value, untold: untold.value };
+    });
+    // Wait for each page's title, not its address: without NavigationPrecommitController the
+    // runtime moves the address at the click, before the page is drawn, and a Back taken then, or
+    // read before the page it brings back is in, reads the old <main>.
+    const drawn = (/** @type {string} */ title) => !!document.querySelector("main") && document.title === title && !document.querySelector("main[aria-busy]");
+    await nav.getByRole("link", { name: "Orders", exact: true }).first().click();
+    const left = await nav.waitForFunction(drawn, "Orders | corten-ui", { timeout: 10000 }).then(() => true, () => false);
+    // Back from the page, as the runtime's smoke takes it: Playwright's Linux WebKit loses the page
+    // when it drives a traverse the runtime intercepts.
+    await nav.evaluate(() => history.back());
+    const back = left && (await nav.waitForFunction(drawn, galleryTitle, { timeout: 10000 }).then(() => true, () => false));
+    const after = await nav.evaluate(({ told, untold }) => {
+      const box = (/** @type {string} */ value) => /** @type {HTMLInputElement | null} */ (document.querySelector(`form[action$="/sell"] fieldset input[type="checkbox"][value="${value}"]`));
+      return { swapped: (/** @type {any} */ (window)).__sameDocument === 1, told: box(told)?.checked, untold: box(untold)?.checked };
+    }, set);
+    check(backCheck, left && back && after.swapped && after.told === true && after.untold === false, JSON.stringify({ left, back, set, after }));
+  } else skip(backCheck, "no Navigation API: a navigation is a full page load");
+  await navContext.close();
   await us.uncheck();
   const shipMessage = await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
   await page.getByRole("button", { name: "List for sale" }).click();
@@ -792,6 +937,9 @@ async function run(browser) {
   // a control the user sees sends is left to it.
   {
     const outside = await page.context().newPage();
+    /** @type {string[]} */
+    const outsideErrors = [];
+    outside.on("console", (m) => m.type() === "error" && outsideErrors.push(m.text()));
     await outside.route(
       (url) => url.href === unsorted,
       async (route) => {
@@ -822,7 +970,11 @@ async function run(browser) {
           `<a id="back" href="/sales-back?shop=a&amp;sold=day&amp;src=2#rows" ${linked(["other-table", "sales-box"])}>Previous</a> ` +
           `<a id="mid" href="/sales-back?src=3" ${linked(["sales-box"])}>Middle</a> ` +
           `<form id="far" method="get" action="https://example.com/far" ${on("submit", ["sales-box"])}><input type="hidden" name="sold" value="day"><button>Far</button></form>` +
-          `<a id="away" href="/sales-back?sold=day" ${linked(["find"])}>Away</a> <a id="bare" ${linked(["sales-box"])}>Bare</a>`;
+          `<a id="away" href="/sales-back?sold=day" ${linked(["find"])}>Away</a> <a id="bare" ${linked(["sales-box"])}>Bare</a>` +
+          // An image map's link is a link too.
+          `<map name="sales-map"><area id="mapped" shape="rect" coords="0,0,10,10" href="/sales-back?src=4" alt="Mapped" ${linked(["sales-box"])}></map>` +
+          // An element that is not a link, which the compiler cannot refuse to a pager's handler.
+          `<span id="unlinked" ${linked(["sales-box"])}>Not a link</span>`;
         // The wrapper holds a table without sort links first: the sorted one is still found.
         body = `${body.slice(0, at)}${forms}<div id="sales-box"><table><thead><tr><th>Plain</th></tr></thead></table>${body.slice(at, end)}</div>${body.slice(end)}`;
         await route.fulfill({ status: res.status(), headers, body });
@@ -874,6 +1026,11 @@ async function run(browser) {
     await outside.getByText("Middle", { exact: true }).click({ button: "middle" });
     const middle = (await seen()).slice(sortedSeen.length);
     const bare = await outside.evaluate(() => document.getElementById("bare")?.hasAttribute("href"));
+    const mapped = await outside.evaluate(() => {
+      const area = document.getElementById("mapped");
+      area?.dispatchEvent(new PointerEvent("pointerover"));
+      return area?.getAttribute("href");
+    });
     // Each submit above was cancelled: a GET form's listener ended with its submit's task, so a
     // list of its fields made later reads its hidden input as drawn.
     const later = await outside.evaluate(() => new FormData(/** @type {HTMLFormElement} */ (document.getElementById("source"))).get("sold"));
@@ -898,9 +1055,10 @@ async function run(browser) {
             null,
           ]) &&
         bare === false &&
+        mapped === "/sales-back?src=4&sold=price" &&
         middle.length > 0 &&
         middle.every((to) => to === "/sales-back?src=3&sold=price"),
-      `${JSON.stringify(unsortedSeen)} ${JSON.stringify(sortedSeen)} bare href ${bare} middle ${JSON.stringify(middle)}`,
+      `${JSON.stringify(unsortedSeen)} ${JSON.stringify(sortedSeen)} bare href ${bare} area ${mapped} middle ${JSON.stringify(middle)}`,
     );
     // Drawn again after the sort (as a patch does), the form still sends the order, and the
     // browser goes there. (The runtime may have fetched a link above as a navigation.)
@@ -981,6 +1139,12 @@ async function run(browser) {
       JSON.stringify(posted) === JSON.stringify(["/sales-supply?shop=a&sold=price"]) && sentTo[0] === "/sales-back?shop=a&src=2&sold=price",
       `${posted.join(" ")} ${sentTo.join(" ")}`,
     );
+    check(
+      // Once each time the element joins the page, and this page is loaded several times.
+      "ordered::link on an element that is not a link says so in the console",
+      outsideErrors.some((text) => text.includes("corten-ui: ordered::link keeps the order in a link's href; this element is not a link")),
+      JSON.stringify(outsideErrors),
+    );
     await outside.close();
   }
   await sales.getByRole("link", { name: "Price" }).click();
@@ -994,6 +1158,36 @@ async function run(browser) {
   const shownBeforeReload = await sortedBy();
   await page.reload();
   check("a reload after a sort in place shows the order on screen", JSON.stringify(await sortedBy()) === JSON.stringify(shownBeforeReload), `${JSON.stringify(shownBeforeReload)} -> ${JSON.stringify(await sortedBy())}`);
+  // The kit's pager under the table takes the same call as `on:link`, on each link it draws
+  // (#1107): after a sort in place, its Earlier sales link opens the earlier page in the order on
+  // screen, and after another sort in place there, that page's Later sales link comes back in it.
+  {
+    const salesTable = (/** @type {string} */ caption) => page.locator("table", { has: page.locator("caption", { hasText: caption }) });
+    await salesTable("This month's last sales").getByRole("link", { name: "Buyer" }).click();
+    const pager = page.getByRole("navigation", { name: "Sales pages" });
+    const marks = await pager.evaluate((nav) => Array.from(nav.querySelectorAll("li > *"), (el) => `${el.localName} ${el.hasAttribute("data-on")}`).join(", "));
+    const earlier = pager.getByRole("link", { name: "Earlier sales" });
+    await earlier.hover();
+    const href = await earlier.getAttribute("href");
+    await earlier.click();
+    await page.getByText("This month's earlier sales, sorted among themselves", { exact: true }).waitFor();
+    const there = new URL(page.url()).searchParams;
+    const buyers = await salesTable("This month's earlier sales").locator("tbody tr td:nth-child(2)").allTextContents();
+    check(
+      "a kit pager's link that calls ordered::link (on:link) opens its page in the order a sort in place gave, and its disabled end has no handler",
+      marks === "span false, a true" &&
+        new URL(href ?? "", page.url()).searchParams.get("sold") === "buyer" &&
+        there.get("sold") === "buyer" &&
+        there.get("sales") === "earlier" &&
+        JSON.stringify(buyers) === JSON.stringify(["Barbara Liskov", "Edsger Dijkstra", "Katherine Johnson"]),
+      `${marks} ${href} ${page.url()} ${JSON.stringify(buyers)}`,
+    );
+    await salesTable("This month's earlier sales").getByRole("link", { name: "Price" }).click();
+    await page.getByRole("navigation", { name: "Sales pages" }).getByRole("link", { name: "Later sales" }).click();
+    await page.getByText("This month's last sales, sorted among themselves", { exact: true }).waitFor();
+    const back = new URL(page.url()).searchParams;
+    check("the earlier page's Later sales link (PreviousNext's previous) takes a sort in place there too", back.get("sold") === "price" && !back.has("sales"), page.url());
+  }
   await page.goto(unsorted);
   // A tab chosen in place since the page came in, and the fragment, stay in the address and the
   // header links: only the key the sort links differ in (`sold`) is taken from them.
@@ -1152,6 +1346,45 @@ async function run(browser) {
     "Segmented, Stepper and Checkboxes: corten-ui's ChoiceGroup, NumberField and CheckboxGroup drawn by the kit",
     kitLooks.group === "true true" && kitLooks.chosen !== kitLooks.other && kitLooks.other === "rgba(0, 0, 0, 0)" && kitLooks.stepper === "2.25 2.25 2.25" && kitLooks.fieldset === "grid none",
     JSON.stringify(kitLooks),
+  );
+  // Checkboxes and RadioGroup space their choices and their legend from two theme tokens
+  // (choice-list-gap, choice-list-legend-gap; .75rem each), so a theme that sets them moves both groups.
+  const choiceSpacing = await page.evaluate(() => {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const measure = () =>
+      ["[class*='checkboxes__checkboxes'] > fieldset", "fieldset[class*='radio-group__group']"].map((sel) => {
+        const set = /** @type {HTMLElement} */ (document.querySelector(sel));
+        const legend = /** @type {HTMLElement} */ (set.querySelector(":scope > legend"));
+        return [getComputedStyle(set).rowGap, getComputedStyle(legend).marginBottom].map((v) => parseFloat(v) / rem).join(" ");
+      });
+    const kit = measure();
+    const theme = new CSSStyleSheet();
+    theme.replaceSync(":root { --choice-list-gap: .5rem; --choice-list-legend-gap: .25rem; }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme];
+    const themed = measure();
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
+    return { kit, themed };
+  });
+  check(
+    "Checkboxes and RadioGroup: the gap between choices and under the legend are the theme's choice-list-gap and choice-list-legend-gap",
+    choiceSpacing.kit.every((s) => s === "0.75 0.75") && choiceSpacing.themed.every((s) => s === "0.5 0.25"),
+    JSON.stringify(choiceSpacing),
+  );
+  const tabsType = await page.evaluate(tabType, [
+    ["[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"true\"]", "[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"false\"]"],
+    ["[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"true\"]", "[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"false\"]"],
+  ]);
+  check("Tabs and Segmented: each choice's weight and the chosen one's color are the theme's tab-font-weight and tab-selected-color", tabTypeIsTheThemes(tabsType), JSON.stringify(tabsType));
+  // The selected tab and the checked Segmented choice keep it under the pointer too: their chosen
+  // rules come after their hover rules at the same weight.
+  const hoveredTabs = await chosenUnderPointer(page, [
+    "[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"true\"]",
+    "[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"true\"]",
+  ]);
+  check(
+    "Tabs and Segmented: the chosen choice keeps the theme's chosen color under the pointer",
+    hoveredTabs.length === 2 && hoveredTabs.every((c) => c.hovered && c.color === c.primary),
+    JSON.stringify(hoveredTabs),
   );
   await period("Week").click();
   check("a click chooses in place, and every part of the group follows", (await period("Week").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $12.10 this week.|Sold 3 this week.", await showing());
@@ -2621,6 +2854,20 @@ async function run(browser) {
     links.current === "Newest" && links.fits && links.fills[0] !== clear && links.fills[0] !== links.track && links.fills.slice(1).every((c) => c === clear),
     JSON.stringify(links),
   );
+  const linksType = await orders.evaluate(tabType, [
+    ["nav[class*='segmented__links'] > a[aria-current='page']", "nav[class*='segmented__links'] > a:not([aria-current])"],
+    ["[class*='segmented__track'] > label:has(> input:checked)", "[class*='segmented__track'] > label:not(:has(> input:checked))"],
+  ]);
+  check("SegmentedLinks and SegmentedRadios: each choice's weight and the chosen one's color are the theme's", tabTypeIsTheThemes(linksType), JSON.stringify(linksType));
+  // Under the pointer the checked SegmentedRadio and the current SegmentedLinks link keep the
+  // theme's chosen color: the radio's hover rule, which weighs more than its checked one, leaves a
+  // checked choice alone, and the link's chosen rule comes after its hover rule.
+  const hoveredChoices = await chosenUnderPointer(orders, ["[class*='segmented__track'] > label:has(> input:checked)", "nav[class*='segmented__links'] > a[aria-current='page']"]);
+  check(
+    "SegmentedRadios and SegmentedLinks: the chosen choice keeps the theme's chosen color under the pointer",
+    hoveredChoices.length === 2 && hoveredChoices.every((c) => c.hovered && c.color === c.primary),
+    JSON.stringify(hoveredChoices),
+  );
   // StackStart: a column whose children keep their own width, a link as wide as its words and a
   // badge, each at most the column's; at 320px a word wider than the column breaks inside its link,
   // and a picture wider than the column narrows in its shape (#1119).
@@ -2661,7 +2908,41 @@ async function run(browser) {
     img.remove();
     return { ...word, picture: { width: Math.round(pic.width), height: Math.round(pic.height), column: Math.round(box.width) } };
   });
+  // On the phone too: a dialog or popover written in the column (beside the button that opens it)
+  // keeps the browser's margin: auto and width, so a modal with a long word opens in the middle of
+  // the screen, clear of its edges, the word broken inside it, and a popover without an anchor in
+  // the middle (#1124). A paragraph there still drops its margin.
+  const topLayer = await orders.getByRole("link", { name: "How selling limits work" }).evaluate((a) => {
+    const column = /** @type {HTMLElement} */ (a.parentElement);
+    const [dialog, popover, para] = [document.createElement("dialog"), document.createElement("div"), document.createElement("p")];
+    const line = document.createElement("p");
+    line.textContent = "W".repeat(100);
+    dialog.append(line);
+    popover.popover = "manual";
+    popover.textContent = "Saved";
+    para.textContent = "Saved";
+    column.append(dialog, popover, para);
+    dialog.showModal();
+    popover.showPopover();
+    const place = (/** @type {HTMLElement} */ el) => {
+      // Against the viewport without a classic scrollbar, where the top layer lays them out.
+      const r = el.getBoundingClientRect();
+      const { clientWidth, clientHeight } = document.documentElement;
+      return [r.top, clientHeight - r.bottom, r.left, clientWidth - r.right].map(Math.round);
+    };
+    const at = { dialog: place(dialog), sideways: dialog.scrollWidth > dialog.clientWidth + 1, popover: place(popover), para: getComputedStyle(para).marginBlockStart };
+    popover.hidePopover();
+    dialog.close();
+    for (const el of [dialog, popover, para]) el.remove();
+    return at;
+  });
   if (startSize) await orders.setViewportSize(startSize);
+  const middle = (/** @type {number[]} */ [top, bottom, left, right]) => Math.abs(top - bottom) <= 1 && Math.abs(left - right) <= 1 && top > 0;
+  check(
+    "Stack: a dialog or popover in it opens in the middle of a phone's screen, a dialog with a long word clear of the edges and breaking it, and a paragraph drops its margin",
+    middle(topLayer.dialog) && topLayer.dialog[2] >= 16 && !topLayer.sideways && middle(topLayer.popover) && topLayer.para === "0px",
+    JSON.stringify(topLayer),
+  );
   check(
     "StackStart: a column's link and badge keep their own width at its start; on a phone a word wider than it breaks inside its link and a picture narrows in its shape",
     startWide.widths.every((w) => w < startWide.column - 8) && startWide.atStart && startWide.inside && startLong.inside && !startLong.overflow && startLong.wrapped && Math.abs(startLong.picture.width - startLong.picture.column) <= 1 && Math.abs(startLong.picture.height - startLong.picture.width) <= 1,
@@ -3592,30 +3873,47 @@ async function run(browser) {
     /**
      * Moves focus up the long box from its last row with Shift+Tab, as a user does (WebKit does
      * not scroll a dialog for a script's focus()), counting the rows that land under the held
-     * header and those it reached; then removes the rows.
+     * header and those it reached; then removes the rows. Returns the covered count, or -1 when a
+     * Shift+Tab did not land on a row and -2 when a row never held its place, so neither passes.
      * @param {import("@playwright/test").Page} page
      * @param {string} selector The dialog or sheet.
      */
     const focusUp = async (page, selector) => {
       let covered = 0;
       let reached = 0;
+      let unsettled = 0;
       for (let i = 0; i < 39; i++) {
         await page.keyboard.press("Shift+Tab");
-        const [row, under] = await page.locator(selector).evaluate((box) => {
+        // Read once the row has stopped moving: WebKit scrolls a focused row into view over a few
+        // frames, and a row read mid-scroll can sit under the header it ends well below (one read at
+        // 28 px under it settled 248 px below it). Read once it has kept its place for two frames; one
+        // still moving after 120 frames is not read as settled.
+        const [row, under, settled] = await page.locator(selector).evaluate(async (box) => {
           const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
           const now = document.activeElement;
-          const row = !!now?.hasAttribute("data-smoke-row");
-          return [row, row && /** @type {Element} */ (now).getBoundingClientRect().top < header.getBoundingClientRect().bottom - 1];
+          if (!now?.hasAttribute("data-smoke-row")) return [false, false, true];
+          const gap = () => now.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
+          let last = gap();
+          let same = 0;
+          for (let frames = 0; same < 2 && frames < 120; frames++) {
+            await new Promise((done) => requestAnimationFrame(() => done(undefined)));
+            const next = gap();
+            same = next === last ? same + 1 : 0;
+            last = next;
+          }
+          return [true, last < -1, same >= 2];
         });
         if (row) reached += 1;
         if (under) covered += 1;
+        if (!settled) unsettled += 1;
       }
       await page.locator(selector).evaluate((box) => {
         box.querySelectorAll("[data-smoke-row]").forEach((row) => row.remove());
         box.scrollTop = 0;
       });
-      // Every Shift+Tab lands on a row, so a covered count of 0 is a measurement.
-      return reached === 39 ? covered : -1;
+      // Every Shift+Tab lands on a row and every row settles, so a covered count of 0 is a measurement.
+      if (reached !== 39) return -1;
+      return unsettled === 0 ? covered : -2;
     };
     for (const width of [1280, 390]) {
       const at = await (await browser.newContext({ viewport: { width, height: 600 } })).newPage();
@@ -4067,6 +4365,90 @@ async function run(browser) {
     };
   });
   check("StatusDot and Stack: the dot is not read, and a stack's gap is its only space", spacing.dot && spacing.gap === 1.5 && spacing.paragraph === 1 && spacing.margins === 0, JSON.stringify(spacing));
+  // StatusTone::Text: a dot in a badge is the badge's text color, in a soft badge and a solid one,
+  // where a dot in the badge's own tone would be the color of the fill.
+  const dotInBadge = await orders.evaluate(() => {
+    const dot = /** @type {HTMLElement | null} */ (document.querySelector("[class*='status-dot__text']"));
+    if (!dot?.parentElement) return { missing: true };
+    const badge = dot.parentElement;
+    const drawn = () => ({ dot: getComputedStyle(dot).backgroundColor, text: getComputedStyle(badge).color, fill: getComputedStyle(badge).backgroundColor });
+    const soft = drawn();
+    const was = badge.className;
+    badge.className = was.replace(/badge__soft/, "badge__solid");
+    const solid = drawn();
+    badge.className = was;
+    // Beside plain text, a dot in a status's own tone is the theme's color for it.
+    const own = document.querySelector("[class*='orders__schedule'] > [class*='status-dot__success']");
+    const probe = document.createElement("span");
+    probe.style.setProperty("background", "var(--success)");
+    document.body.append(probe);
+    const success = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return { soft, solid, swapped: was.includes("badge__soft"), own: own && getComputedStyle(own).backgroundColor, success };
+  });
+  check(
+    "StatusDot: StatusTone::Text draws the dot in its badge's text color, so it shows on a solid badge's fill, and a Success dot beside text is the theme's success color",
+    !("missing" in dotInBadge) &&
+      dotInBadge.swapped &&
+      dotInBadge.soft.dot === dotInBadge.soft.text &&
+      dotInBadge.solid.dot === dotInBadge.solid.text &&
+      dotInBadge.solid.dot !== dotInBadge.solid.fill &&
+      dotInBadge.own === dotInBadge.success &&
+      dotInBadge.own !== "rgba(0, 0, 0, 0)",
+    JSON.stringify(dotInBadge),
+  );
+  // LiveDot: inside a <corten-live> whose stream is live it pulses (an opacity animation that
+  // runs), and is still while the stream is not live, outside one, for a user who asks for less
+  // motion; under forced colors it pulses as Progress's sweep moves. The element is made, read and
+  // removed in one task, so its stream is closed before it is fetched (a 204 if it is).
+  await orders.route("**/live-dot-check", (route) => route.fulfill({ status: 204 }).catch(() => {}));
+  const dotPulse = () =>
+    orders.evaluate(() => {
+      const dot = /** @type {HTMLElement} */ (document.querySelector("[class*='status-dot__live']"));
+      const running = () => dot.getAnimations().filter((a) => a instanceof CSSAnimation && a.animationName === "status-dot-live" && a.playState === "running").length;
+      const badge = /** @type {HTMLElement} */ (dot.parentElement);
+      const said = () => badge.innerText.trim();
+      const alone = running();
+      const aloneSaid = said();
+      const live = document.createElement("corten-live");
+      live.setAttribute("src", "/live-dot-check");
+      badge.replaceWith(live);
+      live.append(badge);
+      /** @type {Record<string, number>} */
+      const by = {};
+      /** @type {Record<string, string>} */
+      const words = {};
+      let opacity = false;
+      for (const status of ["connecting", "live", "reconnecting", "closed", "ended"]) {
+        live.setAttribute("status", status);
+        by[status] = running();
+        words[status] = said();
+        const pulse = dot.getAnimations().find((a) => a instanceof CSSAnimation && a.animationName === "status-dot-live");
+        opacity ||= !!pulse?.effect && /** @type {KeyframeEffect} */ (pulse.effect).getKeyframes().some((k) => "opacity" in k);
+      }
+      live.replaceWith(badge);
+      return { alone, by, opacity, aloneSaid, words };
+    });
+  // Asked for, since the default follows the machine's own setting.
+  await orders.emulateMedia({ reducedMotion: "no-preference" });
+  const dotMoving = await dotPulse();
+  await orders.emulateMedia({ reducedMotion: "reduce" });
+  const dotReduced = await dotPulse();
+  await orders.emulateMedia({ reducedMotion: "no-preference" });
+  const dotForced = engine === "webkit" ? null : (await orders.emulateMedia({ forcedColors: "active" }), await dotPulse());
+  await orders.emulateMedia({ reducedMotion: null, forcedColors: engine === "webkit" ? undefined : "none" });
+  const onlyLive = (/** @type {{ alone: number, by: Record<string, number> }} */ p) =>
+    p.alone === 0 && p.by.live === 1 && ["connecting", "reconnecting", "closed", "ended"].every((s) => p.by[s] === 0);
+  check(
+    "LiveDot: the badge's words say Live only inside a live stream, and Not live outside one and in every other state",
+    dotMoving.aloneSaid === "Not live" && Object.entries(dotMoving.words).every(([s, w]) => w === (s === "live" ? "Live" : "Not live")),
+    JSON.stringify({ alone: dotMoving.aloneSaid, words: dotMoving.words }),
+  );
+  check(
+    "LiveDot: it pulses only inside a live stream, not for reduced motion, and under forced colors as Progress does",
+    dotMoving.opacity && onlyLive(dotMoving) && dotReduced.alone === 0 && Object.values(dotReduced.by).every((n) => n === 0) && (dotForced === null || onlyLive(dotForced)),
+    JSON.stringify({ moving: dotMoving, reduced: dotReduced, forced: dotForced }),
+  );
   // Gap::App: the payout row is a cluster with no gap class of the kit's, so the page's .75rem is its gap.
   const appGap = await orders.evaluate(() => {
     const row = document.querySelector("[class*='orders__payout']");

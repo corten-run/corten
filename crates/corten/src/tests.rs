@@ -6210,18 +6210,19 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
     {
         use std::io::Read;
         // Decoded by readers that check for the coding's end: a body without zstd's frame end or
-        // brotli's last block is an error, not a short file.
+        // gzip's trailer is an error, not a short file.
         let decoded = |coding: &str, body: &[u8]| -> std::io::Result<Vec<u8>> {
             let mut out = Vec::new();
             match coding {
                 "zstd" => zstd::stream::read::Decoder::new(body)?.read_to_end(&mut out)?,
-                _ => brotli::Decompressor::new(body, 4096).read_to_end(&mut out)?,
+                _ => flate2::read::GzDecoder::new(body).read_to_end(&mut out)?,
             };
             Ok(out)
         };
-        for coding in ["zstd", "br"] {
+        for coding in ["zstd", "gzip"] {
+            let accept = if coding == "gzip" { "gzip".to_owned() } else { format!("gzip, {coding}") };
             for path in ["/export", "/sized"] {
-                let (_, headers, body) = get_with(path, Some(&format!("gzip, {coding}"))).await;
+                let (_, headers, body) = get_with(path, Some(&accept)).await;
                 assert_eq!(headers[header::CONTENT_ENCODING], coding, "{path}");
                 assert_eq!(headers[header::VARY], "accept-encoding");
                 assert!(!headers.contains_key(header::CONTENT_LENGTH), "the length is the uncompressed one: {path}");
@@ -6241,8 +6242,16 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
             assert_eq!((headers[header::CONTENT_LENGTH].to_str().unwrap(), &body[..]), ("8", &b"a,1\nb,2\n"[..]));
             assert_eq!(headers[header::VARY], "accept-encoding");
         }
-        // A client that takes only gzip gets it as it is, with its length.
-        let (_, headers, body) = get_with("/sized", Some("gzip")).await;
+        // A client that takes brotli and gzip, as WebKit asks, gets gzip, where a buffered body
+        // would be brotli: the stream's own coding, not the page's.
+        for path in ["/export", "/sized"] {
+            let (_, headers, body) = get_with(path, Some("gzip, deflate, br")).await;
+            assert_eq!(headers[header::CONTENT_ENCODING], "gzip", "{path}");
+            assert_eq!(decoded("gzip", &body).unwrap(), csv.as_bytes(), "{path}");
+        }
+        // A client that takes only brotli gets it as it is, with its length: a stream is never
+        // brotli (`compress::StreamCoder`).
+        let (_, headers, body) = get_with("/sized", Some("br")).await;
         assert!(!headers.contains_key(header::CONTENT_ENCODING));
         assert_eq!(headers[header::CONTENT_LENGTH], length.to_string());
         assert_eq!(body, csv.as_bytes());
@@ -6682,7 +6691,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
     let long = read_all(request("/long").await).await;
     assert!(long.contains("content-length: 5") && long.ends_with("\r\n\r\nabc"), "{long}");
     #[cfg(feature = "compress")]
-    for (coding, accept) in [("zstd", "accept-encoding: zstd\r\n"), ("br", "accept-encoding: br\r\n")] {
+    for (coding, accept) in [("zstd", "accept-encoding: zstd\r\n"), ("gzip", "accept-encoding: gzip\r\n")] {
         use std::io::Read;
         let mut stream = request_with("/broken-text", accept).await;
         let mut raw = Vec::new();
@@ -6707,7 +6716,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
         let mut out = Vec::new();
         let decoded = match coding {
             "zstd" => zstd::stream::read::Decoder::new(&body[..]).unwrap().read_to_end(&mut out),
-            _ => brotli::Decompressor::new(&body[..], 4096).read_to_end(&mut out),
+            _ => flate2::read::GzDecoder::new(&body[..]).read_to_end(&mut out),
         };
         assert!(decoded.is_err(), "{coding}: a failed stream does not end its coding: {out:?}");
     }
@@ -8023,6 +8032,31 @@ async fn the_app_answers_unknown_urls_under_an_area_or_api() {
 /// Whether this system has an IPv6 loopback address to listen on.
 fn has_ipv6_loopback() -> bool {
     std::net::TcpListener::bind("[::1]:0").is_ok()
+}
+
+/// A burst of clients larger than the standard library's backlog of 128 all finish connecting
+/// before the server accepts one, on each listener `HOST` gives and on the loopback pair: none
+/// waits for its SYN to be sent again. Linux admits one more than the backlog and drops the next
+/// SYN, so with 128 the 130th connection would wait a second.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit() {
+    const BURST: usize = 200;
+    let somaxconn: usize = std::fs::read_to_string("/proc/sys/net/core/somaxconn").unwrap().trim().parse().unwrap();
+    if somaxconn <= BURST {
+        eprintln!("skipped: net.core.somaxconn is {somaxconn}, which caps the backlog below the burst");
+        return;
+    }
+    for listeners in [crate::app::bind(Some("127.0.0.1"), 0).await.unwrap(), crate::app::bind(None, 0).await.unwrap()] {
+        for listener in &listeners {
+            let addr = listener.local_addr().unwrap();
+            let mut held = Vec::new();
+            for n in 1..=BURST {
+                let connected = tokio::time::timeout(Duration::from_millis(900), tokio::net::TcpStream::connect(addr)).await;
+                held.push(connected.unwrap_or_else(|_| panic!("{addr}: connection {n} waited for a resent SYN")).unwrap());
+            }
+        }
+    }
 }
 
 /// Without `HOST`, `localhost` is both loopback addresses on one port, so a browser that tries
@@ -12385,6 +12419,36 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
             .collect()
     ));
     assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
+}
+
+/// A failure is logged with each cause under its message (a reset connection under a client's
+/// "error sending request"), not its message alone.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[test]
+fn a_failure_is_logged_with_each_cause_under_it() {
+    #[derive(Debug)]
+    struct Failed(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
+    impl std::fmt::Display for Failed {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Failed {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|source| source as _)
+        }
+    }
+    let lines = Lines(std::sync::Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let status = tracing::subscriber::with_default(subscriber, || {
+        let reset = Failed("client error (SendRequest)", Some(Box::new(Failed("connection reset", None))));
+        Error::new(Failed("error sending request", Some(Box::new(reset)))).into_response().status()
+    });
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("error=error sending request"), "{text}");
+    assert!(text.contains("error.sources=[client error (SendRequest), connection reset]"), "{text}");
 }
 
 /// An error's message (`Display`) is its source's, what the log says, and `status_code` the

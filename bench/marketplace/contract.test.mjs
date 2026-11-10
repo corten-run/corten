@@ -5,8 +5,8 @@ import { apps, cases, checkFormattingCapture, expected, fixtureSha256, locales, 
 function capture(locale = "en-US", input = cases()) {
   return { workload, app: "corten", source: "fixture", locale, fixtureSha256: fixtureSha256(input), ...expected(locale, input) };
 }
-test("the contract covers all eighteen page frameworks, never the JSON-only entry", () => {
-  assert.equal(apps.length, 18);
+test("the contract covers all twenty page frameworks, never the JSON-only entry", () => {
+  assert.equal(apps.length, 20);
   assert.ok(!apps.includes("aspnet-aot"));
   assert.deepEqual(locales, ["en-US", "fr-FR", "de-DE"]);
 });

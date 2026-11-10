@@ -93,7 +93,7 @@ export function report(s) {
     `Commit: \`${s.commit}\`. Schema: \`${s.schema}\`. CPU: ${s.host.cpu} (online CPUs ${s.host.onlineCpus}).`,
     "A new localized baseline, not a change from marketplace r16 or catalog c1.", "",
     "Every number is the median [min-max] of three measured passes, not a confidence interval. Overlapping ranges do not establish a speed difference.",
-    "Pages cover all three locales; JSON is locale-neutral and timed once per source/pass. All eighteen apps pass both sources and twelve browser profiles before any load.",
+    "Pages cover all three locales; JSON is locale-neutral and timed once per source/pass. All twenty apps pass both sources and twelve browser profiles before any load.",
     `Fixed load asks for ${s.options.rate} requests/second. Closed-loop 64/256-user results are observed throughput and latency, not proven maximum capacity. Warmup ${s.options.warmup}s; each phase ${s.options.duration}s; identity encoding.`,
     "CPU % is sampled app-container usage (100% = one core). CPU us/request and requests/CPU-second use counted whole-container cgroup CPU, not instructions or handler-only time. CPU % and steady memory average the central 15%-95% of samples; peak memory is the sampled maximum, not an unsampled high-water mark.",
     "These load results do not measure browser interactivity, bytes, build cost or instructions."];
