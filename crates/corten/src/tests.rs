@@ -13385,7 +13385,7 @@ async fn a_failed_stream_is_logged_with_each_cause_under_it() {
     let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
     // A test runs on one thread, so the stream is pulled, and logs, under this subscriber.
     let _logged = tracing::subscriber::set_default(subscriber);
-    let routes = Router::new()
+    let routes = Table::new()
         .route(
             "/error",
             get(|| async {
