@@ -40,7 +40,19 @@ pub struct Listing {
 }
 
 #[derive(Clone, Serialize, Row)]
-struct Pair(u32, #[row(id)] Cow<'static, str>);
+struct Coded {
+    rank: u32,
+    #[row(id)]
+    code: Cow<'static, str>,
+}
+
+/// A generic row with no bounds of its own: a row for each argument that makes it one.
+#[derive(Clone, Serialize, Row)]
+struct Quote<P> {
+    #[row(id)]
+    ticker: String,
+    price: P,
+}
 
 #[derive(Clone, Serialize, Row)]
 struct Fixed {
@@ -96,7 +108,9 @@ fn the_id_is_the_marked_field() {
     assert_eq!(Renamed { code: "r".into() }.id(), "r");
     assert_eq!(Level { sku: "a".into(), qty: 1 }.id(), "a");
     assert_eq!(Listing { price_cents: 5, listing_id: "l1".into() }.id(), "l1");
-    assert_eq!(Pair(3, "p".into()).id(), "p");
+    assert_eq!(Coded { rank: 3, code: "p".into() }.id(), "p");
+    assert_eq!(Quote { ticker: "q".into(), price: 1.5_f64 }.id(), "q");
+    let _feed = Feed::new([Quote { ticker: "q".into(), price: 1_u32 }]);
     assert_eq!(Fixed { id: "f" }.id(), "f");
     assert_eq!(Tagged { key: "t".into(), value: vec![1u8] }.id(), "t");
 }

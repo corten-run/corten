@@ -1301,12 +1301,15 @@ rules something out.
     bounds. Not chosen: an attribute macro (`#[corten::row(id = id)]`) that adds the derives to the
     item, which hides standard derives behind a spelling of Corten's and names the field in an
     argument rather than on it; taking a field named `id` without a mark, since a row's key is
-    better said (`sku`, `ticker`) than guessed. So a struct row keyed by one field derives `Row`,
-    and only a row the derive cannot express (an enum, a key made of several fields) implements the
-    trait by hand: the hand-written impl is what is left for those, not a second way for the rest.
-    Beyond the impl, the derive refuses what makes a script or a replica read the key as something
-    other than `id()`: a serde attribute that leaves the id out, writes or reads it as other text,
-    reads or writes the row as another value, or puts another member under the id's key
+    better said (`sku`, `ticker`) than guessed. So a struct row with named fields, keyed by one of
+    them, derives `Row`, and only a row the derive cannot express (an enum, a tuple struct, whose
+    fields serde writes without names, a key made of several fields) implements the trait by hand:
+    the hand-written impl is what is left for those, not a second way for the rest. Beyond the impl,
+    the derive refuses what makes a script or a replica read the key as something other than
+    `id()`, as far as the row's own serde attributes say: one that leaves the id out, writes or
+    reads it as other text or under two names, reads or writes the row as another value, or puts
+    another member under the id's key. An id type's own `Serialize` and a flattened field's
+    members are not known when the derive runs, so they are not checked
     ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
 
     The derive is `corten::feed::Row`, beside the trait, and not in `corten-feed` itself: its impl

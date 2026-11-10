@@ -110,9 +110,11 @@ pub mod feed {
     /// `String`, `Box<str>`, `&'static str`, `Cow<'static, str>`, `Arc<str>` with serde's `rc`
     /// feature, or another type that derefs to `str`), so `Row` is the derive and the trait at
     /// once, as serde's `Serialize` is. The row's `Clone` and `Serialize` stay in its derive list,
-    /// where Rust checks them and the trait's bounds. A struct row keyed by one field derives it;
-    /// only a row the derive cannot express (an enum, a key made of several fields) implements the
-    /// trait by hand. A generic row needs no bounds on its parameters: it is a `Row` for each type
+    /// where Rust checks them and the trait's bounds. A struct row with named fields, keyed by one
+    /// of them, derives it; only a row the derive cannot express (an enum, a tuple struct, a key
+    /// made of several fields) implements the trait by hand. The derive reads the row's serde
+    /// attributes, not the id type's own `Serialize`: an id type that writes other than the text it
+    /// derefs to is not checked. A generic row needs no bounds on its parameters: it is a `Row` for each type
     /// argument that makes it `Clone`, `Serialize`, `Send`, `Sync` and `'static`, and a feed of
     /// one that is not does not compile where it is built:
     ///
@@ -189,11 +191,12 @@ pub mod feed {
     /// struct Stock;
     /// ```
     ///
-    /// A tuple struct with no field marked:
+    /// A tuple struct, whose fields serde writes without names, so a script has no key to read
+    /// (one implements the trait by hand):
     ///
     /// ```compile_fail
     /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
-    /// struct Stock(String, u32);
+    /// struct Stock(#[row(id)] String, u32);
     /// ```
     ///
     /// A `row` attribute other than `#[row(id)]` on a field:
@@ -303,6 +306,26 @@ pub mod feed {
     /// struct Stock { #[row(id)] ticker: String }
     /// ```
     ///
+    /// An id serde reads under another name than it writes it, which a replica would key the row
+    /// by:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     #[serde(rename(deserialize = "name"))]
+    ///     ticker: String,
+    ///     #[serde(default)]
+    ///     name: String,
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// #[serde(rename_all(deserialize = "UPPERCASE"))]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
     /// Or reads as another value converted (`from`, `try_from`), so a replica's row can hold an id
     /// other than the one its patches name:
     ///
@@ -330,8 +353,9 @@ pub mod feed {
     /// ```
     ///
     /// Another member written under the id's key (a `rename`, the struct's `rename_all`, or its
-    /// `tag`), which a script would read in the id's place; a flattened field's members are not
-    /// known when the derive runs, so one is not checked:
+    /// `tag`), which a script would read in the id's place, a `rename` a `macro_rules!` passes in
+    /// included; a flattened field's members are not known when the derive runs, so one is not
+    /// checked:
     ///
     /// ```compile_fail
     /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
@@ -348,6 +372,16 @@ pub mod feed {
     /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
     /// #[serde(tag = "ticker")]
     /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// macro_rules! stock {
+    ///     ($m:meta) => {
+    ///         #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    ///         struct Stock { #[row(id)] ticker: String, #[serde($m)] symbol: String }
+    ///     };
+    /// }
+    /// stock!(rename = "ticker");
     /// ```
     ///
     /// The same rows with distinct keys compile:

@@ -3,7 +3,7 @@
 //! stay in its derive list, where Rust checks them and the trait's `Send`, `Sync` and
 //! `'static` bounds.
 
-use proc_macro::{Delimiter, Group, Ident, Literal, Punct, Spacing, Span, TokenStream, TokenTree};
+use proc_macro::{Delimiter, Group, Ident, Punct, Spacing, Span, TokenStream, TokenTree};
 
 use crate::{
     component::split,
@@ -46,25 +46,41 @@ const ID_SERDE: [&str; 8] = [
 /// have the id the patches name.
 const ROW_SERDE: [&str; 4] = ["into", "transparent", "from", "try_from"];
 
-/// An attribute's contents with its invisible groups opened, as a `#[..]`'s brackets again.
+/// An attribute's contents with its invisible groups opened, those a `macro_rules!` passes into
+/// `serde(..)`'s arguments too (`#[serde($m)]`), as a `#[..]`'s brackets again.
 fn opened_attr(attr: &Group) -> Group {
-    Group::new(Delimiter::Bracket, opened(attr.stream().into_iter().collect()).into_iter().collect())
+    let mut tokens = opened(attr.stream().into_iter().collect());
+    if let Some(TokenTree::Group(args)) = tokens.get_mut(1) {
+        if args.delimiter() == Delimiter::Parenthesis {
+            let mut open = Group::new(Delimiter::Parenthesis, opened(args.stream().into_iter().collect()).into_iter().collect());
+            open.set_span(args.span());
+            *args = open;
+        }
+    }
+    Group::new(Delimiter::Bracket, tokens.into_iter().collect())
 }
 
-/// What a `rename` or `rename_all` names for writing: `key = "x"` or `key(serialize = "x")`.
-fn written(arg: &Arg) -> Option<String> {
+/// What a `rename` or `rename_all` names for one side, `serialize` or `deserialize`:
+/// `key = "x"` names both, `key(serialize = "x")` one.
+fn named(arg: &Arg, side: &str) -> Option<String> {
     match &arg.value {
         Value::Str(s) => Some(s.clone()),
         Value::Group(inner) => split(inner.clone(), ',').into_iter().map(opened).find_map(|part| match part.as_slice() {
-            [TokenTree::Ident(k), TokenTree::Punct(p), TokenTree::Literal(l)]
-                if k.to_string() == "serialize" && p.as_char() == '=' =>
-            {
+            [TokenTree::Ident(k), TokenTree::Punct(p), TokenTree::Literal(l)] if k.to_string() == side && p.as_char() == '=' => {
                 string_value(l)
             }
             _ => None,
         }),
         Value::Bare => None,
     }
+}
+
+/// A named field's JSON key on one side: its `rename`, else its name under the struct's rule.
+fn key_on(args: &[Arg], name: &str, rule: Option<&String>, side: &str) -> String {
+    args.iter().filter(|a| a.key == "rename").find_map(|a| named(a, side)).unwrap_or_else(|| match rule {
+        Some(rule) => field_rule(name, rule),
+        None => name.to_string(),
+    })
 }
 
 /// The first of `keys` a `#[serde(..)]` attribute's contents name, if any.
@@ -78,9 +94,14 @@ fn serde_key(inner: &[TokenTree], keys: &[&'static str]) -> Option<&'static str>
 
 pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let item = parse_item(input, "Row", true)?;
-    let (fields, named) = match (&item.body, &item.tuple, item.is_enum) {
-        (Some(body), _, false) => (body, true),
-        (_, Some(tuple), false) => (tuple, false),
+    let fields = match (&item.body, &item.tuple, item.is_enum) {
+        (Some(body), _, false) => body,
+        (_, Some(_), false) => {
+            return err(
+                item.name.span(),
+                "Row is derived for a struct with named fields: a script reads a row's key under the id's name, and serde writes a tuple struct's fields without names (implement Row by hand for one)",
+            )
+        }
         (None, None, false) => {
             return err(
                 item.name.span(),
@@ -104,15 +125,17 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             None => {}
         }
     }
-    // The struct's `rename_all` and `tag` as serde writes them; a malformed one is serde's to report.
-    let container: Vec<Arg> = serde_args_for(&item.attrs.iter().map(opened_attr).collect::<Vec<_>>(), "Row").unwrap_or_default();
-    let rule = container.iter().filter(|a| a.key == "rename_all").find_map(written).filter(|r| RULES.contains(&r.as_str()));
-    let tag = container.iter().find(|a| a.key == "tag").and_then(written);
+    // The struct's `rename_all`, for each side, and `tag`, as serde reads and writes them.
+    let container: Vec<Arg> = serde_args_for(&item.attrs.iter().map(opened_attr).collect::<Vec<_>>(), "Row")?;
+    let rule = |side: &str| {
+        container.iter().filter(|a| a.key == "rename_all").find_map(|a| named(a, side)).filter(|r| RULES.contains(&r.as_str()))
+    };
+    let (write_rule, read_rule) = (rule("serialize"), rule("deserialize"));
+    let tag = container.iter().find(|a| a.key == "tag").and_then(|a| named(a, "serialize"));
     // Each other written field's JSON key, to find one that takes the id's place.
     let mut keys: Vec<(String, Span)> = Vec::new();
-    let mut id_key: Option<(String, Span)> = None;
-    let mut id: Option<(TokenTree, String)> = None;
-    for (index, field) in split(fields.stream(), ',').into_iter().enumerate() {
+    let mut id: Option<(Ident, String)> = None;
+    for field in split(fields.stream(), ',') {
         let field = opened(field);
         let mut j = 0;
         let mut marked: Option<Span> = None;
@@ -151,57 +174,44 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                 _ => break,
             }
         }
-        // The field's JSON key, when it has one of its own (named, written, not flattened).
-        let key = match (named, field.get(j)) {
-            (true, Some(TokenTree::Ident(name))) => {
-                let args = serde_args_for(&attrs, "Row").unwrap_or_default();
-                let left_out = args.iter().any(|a| matches!(a.key.as_str(), "skip" | "skip_serializing" | "flatten"));
-                let name = name.to_string();
-                let name = name.strip_prefix("r#").unwrap_or(&name);
-                let key = args.iter().filter(|a| a.key == "rename").find_map(written).unwrap_or_else(|| match &rule {
-                    Some(rule) => field_rule(name, rule),
-                    None => name.to_string(),
-                });
-                (!left_out).then(|| (key, field.get(j).map_or_else(Span::call_site, TokenTree::span)))
-            }
-            _ => None,
+        let ident = match (field.get(j), is_punct(field.get(j + 1), ':')) {
+            (Some(TokenTree::Ident(ident)), true) => ident.clone(),
+            _ => return err(marked.unwrap_or_else(|| fields.span()), "expected a named field"),
         };
+        // The field's JSON key as serde writes it, and, for the id, as serde reads it.
+        let args = serde_args_for(&attrs, "Row")?;
+        let left_out = args.iter().any(|a| matches!(a.key.as_str(), "skip" | "skip_serializing" | "flatten"));
+        let name = ident.to_string();
+        let name = name.strip_prefix("r#").unwrap_or(&name);
+        let key = key_on(&args, name, write_rule.as_ref(), "serialize");
         let Some(span) = marked else {
-            keys.extend(key);
+            if !left_out {
+                keys.push((key, ident.span()));
+            }
             continue;
         };
-        id_key = key;
         if let Some((at, key)) = skipped {
             return err(at, format!("#[serde({key})] on the id: the id is the key a script and a replica read from the row's JSON, as the text `id()` returns, so serde writes and reads it as it is"));
         }
-        // The member as the code names it, spanned at the field so a wrong type is reported there.
-        let member = if named {
-            match (field.get(j), is_punct(field.get(j + 1), ':')) {
-                (Some(TokenTree::Ident(name)), true) => TokenTree::Ident(name.clone()),
-                _ => return err(span, "expected a named field after #[row(id)]"),
-            }
-        } else {
-            let mut index = Literal::usize_unsuffixed(index);
-            index.set_span(field.get(j).map_or(span, TokenTree::span));
-            TokenTree::Literal(index)
-        };
-        let name = member.to_string();
-        if let Some((_, first)) = &id {
+        let read = key_on(&args, name, read_rule.as_ref(), "deserialize");
+        if read != key {
+            return err(ident.span(), format!("the id is written as \"{key}\" and read as \"{read}\": a replica keys the row by what it reads there, so serde reads the id under the name it writes it"));
+        }
+        if let Some((first, _)) = &id {
             return err(span, format!("a row has one id, and `{first}` is already marked #[row(id)]"));
         }
-        id = Some((member, name));
+        id = Some((ident, key));
     }
-    let Some((member, _)) = id else {
+    let Some((ident, id_key)) = id else {
         return err(item.name.span(), "mark the field that identifies a row #[row(id)]: the key its upserts and removes name");
     };
-    if let Some((id_key, _)) = &id_key {
-        if let Some((_, at)) = keys.iter().find(|(key, _)| key == id_key) {
-            return err(*at, format!("this field is written as \"{id_key}\" too, the id's key, so a script reads it in the id's place: rename one of them"));
-        }
-        if tag.as_ref() == Some(id_key) {
-            return err(item.name.span(), format!("#[serde(tag = \"{id_key}\")] writes the struct's name as \"{id_key}\", the id's key, so a script reads it in the id's place: rename one of them"));
-        }
+    if let Some((_, at)) = keys.iter().find(|(key, _)| *key == id_key) {
+        return err(*at, format!("this field is written as \"{id_key}\" too, the id's key, so a script reads it in the id's place: rename one of them"));
     }
+    if tag.as_ref() == Some(&id_key) {
+        return err(item.name.span(), format!("#[serde(tag = \"{id_key}\")] writes the struct's name as \"{id_key}\", the id's key, so a script reads it in the id's place: rename one of them"));
+    }
+    let member = TokenTree::Ident(ident);
     let mut body = q("#[inline] fn id(&self) -> &str", &[]);
     // `&self.<field>`, at the field, so an id that is not text is reported there; `self` has the
     // method's hygiene (located at the field), so a row a `macro_rules!` declares reads it too.
