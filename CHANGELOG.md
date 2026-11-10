@@ -4304,13 +4304,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `--release`, parses every output and answers a bad one with the app's 500 and a log line
     naming the tool). Parsing every output in a release build measured about 92,700 more
     instructions a call (medians 303,500 against 210,762 over three runs, 44% of `tool_cost`'s),
-    which a derived output does not pay; whether to parse is decided once, when the tool is added. An enum whose `Serialize` is not serde's derive (written
-    by hand, or `serde_repr`'s number) and that derives `ToJson` writes what its `#[serde(..)]`
-    attributes say, its variant's name for a unit variant, as a value and as a map key, not what
-    that `Serialize` writes. To keep what its `Serialize` writes, do not derive `ToJson` on it: as
-    a field it is then written by serde, and as a map key it takes a hand-written `JsonKey` that
-    writes the text serde writes. A tool's output can hold
-    `Raw`, a `ToJson` with any JSON value as its schema; the app guide said it needed
+    which a derived output does not pay; whether to parse is decided once, when the tool is added.
+    An enum whose `Serialize` is not serde's derive (written by hand, or `serde_repr`'s number) and
+    that derives `ToJson` writes what its `#[serde(..)]` attributes say, its variant's name for a
+    unit variant, as a value and as a map key, not what that `Serialize` writes. To keep what its
+    `Serialize` writes, do not derive `ToJson` on it: as a field it is then written by serde, and as
+    a map key it takes a hand-written `JsonKey` that writes the text serde writes. A tool's output
+    can hold `Raw`, a `ToJson` with any JSON value as its schema; the app guide said it needed
     `Box<RawValue>`, which only a feed row still does
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 176. The runtime and its modules are minified by terser after esbuild minifies them, so every page

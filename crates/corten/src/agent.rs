@@ -1366,6 +1366,42 @@ mod tests {
         assert!(!<HandNode>::__well_formed());
         assert!(!<Ping>::__well_formed());
         assert!(!<Pong>::__well_formed());
+        // Each type expanded once per question: twelve types that all hold each other, which a
+        // walk per path asks about 12! times, and a ladder of 26 each holding the next two.
+        macro_rules! dense {
+            ($all:tt $($t:ident)*) => {$( dense!(@one $t $all); )*};
+            (@one $t:ident [$($f:ident)*]) => {
+                #[allow(non_snake_case)]
+                #[derive(crate::json::ToJson)]
+                struct $t { $($f: Vec<$f>,)* }
+            };
+        }
+        dense!([D0 D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D11] D0 D1 D2 D3 D4 D5 D6 D7 D8 D9 D10 D11);
+        macro_rules! ladder {
+            ($last:ident $hand:ty) => {
+                #[derive(crate::json::ToJson)]
+                struct $last { hand: Vec<$hand> }
+            };
+            ($t:ident $a:ident $($rest:ident)+ ; $hand:ty) => {
+                #[derive(crate::json::ToJson)]
+                struct $t { a: Vec<$a>, b: Option<Box<ladder!(@second $($rest)+)>> }
+                ladder!($a $($rest)+ ; $hand);
+            };
+            ($t:ident $a:ident ; $hand:ty) => {
+                #[derive(crate::json::ToJson)]
+                struct $t { a: Vec<$a> }
+                ladder!($a $hand);
+            };
+            (@second $b:ident $($rest:ident)*) => { $b };
+        }
+        ladder!(L0 L1 L2 L3 L4 L5 L6 L7 L8 L9 L10 L11 L12 L13 L14 L15 L16 L17 L18 L19 L20 L21 L22 L23 L24 L25; u8);
+        ladder!(H0 H1 H2 H3 H4 H5 H6 H7 H8 H9 H10 H11 H12 H13 H14 H15 H16 H17 H18 H19 H20 H21 H22 H23 H24 H25; Hand);
+        let started = std::time::Instant::now();
+        assert!(<D0>::__well_formed());
+        assert!(<D11>::__well_formed());
+        assert!(<L0>::__well_formed());
+        assert!(!<H0>::__well_formed());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "{:?}", started.elapsed());
         assert!(<Derived<'static, u8>>::__well_formed());
         assert!(<Box<[Derived<'static, Tone>]>>::__well_formed());
         assert!(!<Derived<'static, Hand>>::__well_formed());

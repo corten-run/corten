@@ -103,12 +103,17 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         &schema,
     );
     // `true && ..` over its fields, each resolved as `value` writes it (ToJson, else serde),
-    // asked once per type even when a field holds the type again (a tree).
+    // each type expanded once per question even when a field holds it again (a tree, a cycle).
+    // The key is the type's name and this definition's own static, as names are not unique.
     let mut fields = q("true", &[]);
     for ty in types {
         fields.extend(q("&& (&::corten::json::__private::Type::<__A0>(::core::marker::PhantomData)).__well_formed()", &[ty]));
     }
-    let well = q("::corten::json::__private::well_formed(::core::any::type_name::<Self>(), || __A0)", &[fields]);
+    let well = q(
+        "static MARK: ::core::sync::atomic::AtomicU8 = ::core::sync::atomic::AtomicU8::new(0);
+        ::corten::json::__private::well_formed(&MARK, ::core::any::type_name::<Self>(), || __A0)",
+        &[fields],
+    );
     let mut out = q("#[automatically_derived] impl", &[]);
     out.extend(item.impl_generics.clone());
     out.extend(q("::corten::json::ToJson for", &[]));

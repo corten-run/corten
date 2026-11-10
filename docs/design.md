@@ -1346,20 +1346,20 @@ rules something out.
     derives serde's `Deserialize` beside a schema written by hand does not compile, short of the
     deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson` cannot write takes
     (written by hand, or serde's for an attribute it refuses), which again leaves two impls in its
-    author's hands. A hand-written `ToJson` can write what serde could not, broken JSON, which
-    would break the JSON-RPC answer around a tool's output, so whether an output is parsed before it
-    is sent follows from its type: `ToJson::__well_formed` (hidden) is true for Corten's own impls,
-    for `Raw` (parsed when it is made) and for what serde writes, the AND of its fields' for the
-    derive (each type asked once, so a type that holds itself answers), and false for an impl
-    written by hand (`JsonKey` likewise, for a map's keys). serde_json writes well-formed JSON for a
-    `Serialize` that follows serde's protocol, as every derived one does; it does not check a
-    hand-written one that calls a map's `serialize_key` twice, which a debug build's parse catches
-    and a release build sends as written, as before this Choice. An output derived over well-formed
-    types, the common case, goes out unparsed; one that is or holds a
-    hand-written `ToJson` is parsed in every build, and one that is not one JSON object is the
+    author's hands. A hand-written `ToJson` can write what serde could not, broken JSON, which would
+    break the JSON-RPC answer around a tool's output, so whether an output is parsed before it is
+    sent follows from its type: `ToJson::__well_formed` (hidden) is true for Corten's own impls, for
+    `Raw` (parsed when it is made) and for what serde writes, the AND of its fields' for the derive
+    (each type expanded once in a question, so a tree, a cycle or a type many others hold answers at
+    once), and false for an impl written by hand (`JsonKey` likewise, for a map's keys). serde_json
+    writes well-formed JSON for a `Serialize` that follows serde's protocol, as every derived one
+    does; it does not check a hand-written one that calls a map's `serialize_key` twice, which a
+    debug build's parse catches and a release build sends as written, as before this Choice. An
+    output derived over well-formed types, the common case, goes out unparsed; one that is or holds
+    a hand-written `ToJson` is parsed in every build, and one that is not one JSON object is the
     tool's internal error, logged with the tool's name, the output's size and the fault, not its
-    data. A debug build parses every output and answers a bad one with a 500, so a test stops at
-    it. Not chosen: parsing every output in a release build, about 92,700 more instructions a call
+    data. A debug build parses every output and answers a bad one with a 500, so a test stops at it.
+    Not chosen: parsing every output in a release build, about 92,700 more instructions a call
     (303,500 against 210,762, 44% of `tool_cost`, and 14% over the serde path this replaced) for
     outputs Corten's and the derives' impls cannot break; and checking only an output's ends, which
     sent a broken object as written. `Json` answers are unchanged: they send a hand-written `ToJson`
@@ -1404,7 +1404,9 @@ rules something out.
     compare a tool answer's bytes with serde's for the item, and each std type's with serde's, and
     check which outputs are parsed); reasoned (serde_json writes well-formed JSON for a `Serialize`
     that follows serde's protocol, not checked for one that does not, where a debug build's parse is
-    the net; a derived `ToJson` writes a tool output's schema and its bytes, and a derived
+    the net; a type asked again in one question is known by its derive's static and its `type_name`,
+    which can coincide only for one generic type over two arguments of the same printed name, with
+    the same net; a derived `ToJson` writes a tool output's schema and its bytes, and a derived
     `FromJson` a tool input's schema and what it reads); value (one declaration per direction,
     Values 4, 5 and 6).
 
@@ -1421,7 +1423,9 @@ rules something out.
     values (`json` tests, and `corten-run` built with `json` alone and with `agent,feed`, serde
     1.0.229 and serde_json 1.0.154), at `479f3f0e`; 2026-11-10, the `tool_cost` count, on `217bce2c`
     with `tool_cost` added and on `6d04bbe6`, which parses only an output that is or holds a
-    hand-written `ToJson`, and the release parse's cost on `19fd761c`.
+    hand-written `ToJson`, and the release parse's cost on `19fd761c`; 2026-11-10, which outputs are
+    parsed, trees, cycles and twelve types that all hold each other included
+    (`an_output_is_parsed_only_where_a_to_json_is_written_by_hand`), on the commit this line lands in.
 
 ## Rules
 

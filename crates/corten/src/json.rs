@@ -1222,25 +1222,50 @@ pub mod __private {
     // only a debug build's parse catches it.
     pub struct Type<T: ?Sized>(pub core::marker::PhantomData<T>);
 
-    /// A derived type's `__well_formed`: its fields' answer, or true for a type already being
-    /// asked on this thread, so a type that holds itself (`children: Vec<Node>`) is asked once.
-    /// The outer question still ANDs every field of that type, so the answer is the same. Keyed by
-    /// the type's name, which differs for each generic instance.
-    pub fn well_formed(name: &'static str, fields: impl FnOnce() -> bool) -> bool {
+    /// A derived type's `__well_formed`: its fields' answer, or true for a type already met in
+    /// this question (the outermost call on this thread), so each type is expanded once however
+    /// many fields reach it: a tree (`children: Vec<Node>`), a cycle, or a type many others hold.
+    /// That is sound because every answer is an AND (fields, `Vec`, `Option`, maps, tuples): a
+    /// `false` ends the whole question at once, so a type met again is either still being asked,
+    /// and its own fields decide it there, or answered `true`.
+    ///
+    /// A type is keyed by its derive's own static (`mark`, one per definition, so two versions of
+    /// a crate or two types of one name differ) and its `type_name` (one per generic instance,
+    /// lifetimes left out, which do not change the answer). Two instances of one generic type
+    /// share a key only if their type arguments print the same name, which `type_name` allows for
+    /// types defined inside function bodies; a debug build parses every output, so a test still
+    /// stops at a bad one there.
+    pub fn well_formed(mark: &'static core::sync::atomic::AtomicU8, name: &'static str, fields: impl FnOnce() -> bool) -> bool {
         use std::cell::RefCell;
         thread_local! {
-            static ASKING: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+            // The types met in the current question, and how deep it is.
+            static MET: RefCell<(Vec<(usize, &'static str)>, usize)> = const { RefCell::new((Vec::new(), 0)) };
         }
         struct Done;
         impl Drop for Done {
             fn drop(&mut self) {
-                ASKING.with(|asking| asking.borrow_mut().pop());
+                MET.with(|met| {
+                    let mut met = met.borrow_mut();
+                    met.1 -= 1;
+                    if met.1 == 0 {
+                        met.0.clear();
+                    }
+                });
             }
         }
-        if ASKING.with(|asking| asking.borrow().contains(&name)) {
+        let key = (mark as *const _ as usize, name);
+        let new = MET.with(|met| {
+            let mut met = met.borrow_mut();
+            if met.0.contains(&key) {
+                return false;
+            }
+            met.0.push(key);
+            met.1 += 1;
+            true
+        });
+        if !new {
             return true;
         }
-        ASKING.with(|asking| asking.borrow_mut().push(name));
         let _done = Done;
         fields()
     }
