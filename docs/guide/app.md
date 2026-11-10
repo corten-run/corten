@@ -966,21 +966,20 @@ forms become ready; versioned files retain their encoding-specific tags.
 
 A file is sent with the type its extension names: scripts, styles, HTML, JSON and source maps,
 web manifests, images, fonts, `wasm`, video (`mp4`, `webm`), captions (`vtt`), text
-and XML; any other is `application/octet-stream`. A
-`GET` of the current version's URL for a file sent as it is stored (a video, a font or a raster
-image, which are never compressed; a file too small to compress; or any file sent unencoded)
-answers a `Range`, so a
-`<video>` seeks without downloading what it skips: one range of bytes is a `206 Partial
-Content` with its `Content-Range`, a range that starts past the end is a bare `416` naming the
-file's length (never the app's error page), and several ranges or another unit get the whole file,
-as RFC 9110 allows. `If-Range` keeps the range only while it names the file's own strong ETag,
-and a `HEAD` is answered whole. A file sent compressed is sent whole, since the compressed bytes'
-offsets are not the file's, and so is an old version's URL or the favicon's, whose bytes may change
-in a deploy between two ranges. No answer sends `Accept-Ranges`: browsers ask for a range without it,
-and the header would cost every file's answer
-([design Choice 35](../design.md#choice-asset-ranges)). The PWA's service worker leaves a range
-to the network, since its cache holds whole files, so a video does not play offline. A video is compiled into the program like every
-static file ([design Choice 8](../design.md#choice-compiled-static-files)), so a short clip fits;
+and XML; any other is `application/octet-stream`. A `GET` of the current version's URL for a file sent as it is stored (a video, a font or a
+raster image, which are never compressed; a file too small to compress; or any file sent
+unencoded) answers a `Range`, so a `<video>` seeks without downloading what it skips: one range
+of bytes is a `206 Partial Content` with its `Content-Range`, a range that starts past the end is
+a bare `416` naming the file's length (never the app's error page), and several ranges or another
+unit get the whole file, as RFC 9110 allows. `If-Range` keeps the range only while it names the
+file's own strong ETag, and a `HEAD` is answered whole. A file sent compressed is sent whole,
+since the compressed bytes' offsets are not the file's, and so is an old version's URL or the
+favicon's, whose bytes may change in a deploy between two ranges: a page left open across a
+deploy plays its clip from the whole file, without seeking, until it is reloaded. No answer sends
+`Accept-Ranges`: browsers ask for a range without it, and the header would cost every file's
+answer ([design Choice 35](../design.md#choice-asset-ranges)). The PWA's service worker leaves a
+range to the network, since its cache holds whole files, so a video does not play offline. A
+video is compiled into the program like every static file ([design Choice 8](../design.md#choice-compiled-static-files)), so a short clip fits;
 serve long or many videos from storage of their own.
 
 ## Caching
