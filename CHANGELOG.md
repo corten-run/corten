@@ -239,20 +239,21 @@ Corten is pre-1.0, so any minor version may change the API.
     call; this checks its body. An app with scripts needs `tsc` (Changed 158). Asked for by the
     Chase Sets pilot
     ([#20 corten check does not type-check an app's scripts](https://github.com/todd-skelton/corten/issues/20)).
-34. `#[derive(FromJson)]`, `corten::json::from_slice` and `from_str` (feature `json`, the derive in the
-    prelude): JSON read by Corten's reader, which matches each key against the type's fields, makes
-    each value straight from the text and skips (validating) the rest. Where it meets anything it
-    does not follow (an escaped key, a missing or duplicate field, a number it does not parse
+34. `#[derive(FromJson)]`, `corten::json::from_slice` and `from_str` (feature `json`, the derive
+    in the prelude): JSON read by Corten's reader, which matches each key against the type's fields,
+    makes each value straight from the text and skips (validating) the rest. Where it meets anything
+    it does not follow (an escaped key, a missing or duplicate field, a number it does not parse
     itself) serde_json reads the text instead, so the value and every error are serde_json's; it
-    needs `Deserialize` next to it for that. It reads `rename`, `rename_all`, `alias`, `default`,
-    `skip`, `skip_deserializing`, `deny_unknown_fields` and `transparent`; one it cannot follow, or
-    an enum with data, does not compile, and a field of a type with only `Deserialize` is read by
-    serde_json from its own text. `examples/item-page` reads its item API's response with it:
-    measured in process (`perf_event`, user-mode instructions, release build, the 500 benchmark
-    responses of 55 KB), 878,078 instructions a response through serde_json and 698,733 through
-    `FromJson` (-20.4%), 913,151 and 733,130 with the conversion into the view model;
-    `render_cost` (median of 3) reads one in 304.8 µs through serde_json and 185.5 µs. Its
-    `render_cost` checks the 500 responses read the same both ways.
+    needs `Deserialize` next to it for that (it writes the `Deserialize` itself since Changed 172).
+    It reads `rename`, `rename_all`, `alias`, `default`, `skip`, `skip_deserializing`,
+    `deny_unknown_fields` and `transparent`; one it cannot follow, or an enum with data, does not
+    compile, and a field of a type with only `Deserialize` is read by serde_json from its own text.
+    `examples/item-page` reads its item API's response with it: measured in process (`perf_event`,
+    user-mode instructions, release build, the 500 benchmark responses of 55 KB), 878,078
+    instructions a response through serde_json and 698,733 through `FromJson` (-20.4%), 913,151 and
+    733,130 with the conversion into the view model; `render_cost` (median of 3) reads one in 304.8
+    µs through serde_json and 185.5 µs. Its `render_cost` checks the 500 responses read the same
+    both ways.
 35. Live streams are compressed (feature `compress`). A `corten::live` or feed response to a client
     that accepts zstd or gzip is one compressed stream per connection, flushed after every event,
     with the context kept between events; never brotli
@@ -2891,15 +2892,16 @@ Corten is pre-1.0, so any minor version may change the API.
     16.0 µs after).
 35. The JSON a request reads or answers with goes through Corten's own JSON code where it still
     went through `serde_json`: the `Json` extractor needs `T: FromJson` (derive it next to
-    `Deserialize`) and reads an `application/json` body with Corten's reader, leaving any other
-    JSON content type, and any body the reader gives up on, to axum, so the value and every
-    rejection are axum's; `req.screen`'s data, `Meta::json_ld` and a handler argument of a JSDoc
-    type Corten does not check need `ToJson` instead of `Serialize`, with the same bytes out.
-    Measured on the benchmark's 500 items (`perf_event`, user-mode instructions, release build,
-    lowest of each run's passes, three runs within 0.5%): reading an item API response (55 KB)
-    through the extractor 1,616,862 before and 725,531 after (-55%; axum's `Json` tracks the path
-    to an error as it reads), `json_ld` of the item's view model 106,164 and 50,265 (-53%), and a
-    whole `Accept: application/json` request for a `req.screen` of it 123,664 and 69,200 (-44%).
+    `Deserialize`; since Changed 172, `FromJson` alone) and reads an `application/json` body with
+    Corten's reader, leaving any other JSON content type, and any body the reader gives up on, to
+    axum, so the value and every rejection are axum's; `req.screen`'s data, `Meta::json_ld` and a
+    handler argument of a JSDoc type Corten does not check need `ToJson` instead of `Serialize`,
+    with the same bytes out. Measured on the benchmark's 500 items (`perf_event`, user-mode
+    instructions, release build, lowest of each run's passes, three runs within 0.5%): reading an
+    item API response (55 KB) through the extractor 1,616,862 before and 725,531 after (-55%; axum's
+    `Json` tracks the path to an error as it reads), `json_ld` of the item's view model 106,164 and
+    50,265 (-53%), and a whole `Accept: application/json` request for a `req.screen` of it 123,664
+    and 69,200 (-44%).
 36. `FromJson` reads with less work per value: skipping a value tests for whitespace with one
     compare where it tested four, a number no longer skips whitespace its caller already skipped,
     and a struct with a container `#[serde(default)]` is read over that default (each field written
@@ -4218,40 +4220,40 @@ Corten is pre-1.0, so any minor version may change the API.
     counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
     every row and removes its app however the run ends
     ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
-172. `#[derive(FromJson)]` writes the type's serde `Deserialize` too, from the same `#[serde(..)]`
-    its reader reads, so a type read from JSON derives one thing. The impl is serde_derive's for the
-    shapes and attributes `FromJson` reads (named, tuple, newtype and unit structs, `transparent`,
-    enums of unit variants; names, aliases, defaults, `skip`, `deny_unknown_fields`, `expecting`,
-    `bound`): `tests/derived_deserialize.rs` reads each shape with it and with serde's derive and
-    compares values, errors and the names passed to the deserializer, and through Corten's reader
-    too. A type whose `Deserialize` is written by hand, or derived by serde for an attribute
-    `FromJson` refuses (`flatten`), becomes a `FromJson` with an empty `impl corten::FromJson for T
-    {}`, read by serde_json: alone, in serde_json's one pass; inside a derived type or a `Vec`, from
-    its own text, which the reader finds first. `#[derive(Fields)]` and `#[derive(UrlValue)]`, which
-    write the type's `Deserialize` already, now write its `FromJson` (feature `json`) and schema
-    (`types`) too, so a form's input is read from JSON, and is an agent tool's input, as it is, and
-    a query's list of a `UrlValue` is described by its words. A generic one is a `FromJson` wherever
-    its `Deserialize` applies, read by serde_json rather than Corten's reader (nested in another
-    value, read twice: the reader finds its text and serde_json reads it), so a generic form that
-    derived `FromJson` beside `Fields` before, and was read by the reader, is now read by
-    serde_json; a `UrlValue` enum with `#[serde(other)]` reads any other word as that variant (the
-    reader gives up on the whole text there, and serde_json reads it again) and is described as any
-    string; a form input whose fields borrow from the input cannot be a `FromJson`, which reads
-    owned values. A generic `#[derive(FromJson)]` type is a `FromJson` wherever its `Deserialize`
-    applies, so one with a defaulted field holding its parameter (`Vec<T>`), which failed to
-    compile beside serde's derive, compiles and is read by Corten's reader; a defaulted bare `T` is
-    still refused. `#[serde(other)]` on `#[derive(FromJson)]` names `UrlValue` as the derive that
-    reads it. A type that needs `FromJson` and lacks it is told the ways to get one in the
-    compiler's note. An enum with a shift in a discriminant (`B = 1 << 1`) is read whole by
-    `UrlValue` and `FromJson` (and `ToJson` splits its variants the same way): the shift hid the
-    variants after it. **Migration:** take `Deserialize` out of a derive list that
-    has `FromJson`, and `FromJson` out of one that has `Fields` or `UrlValue`, and remove a
-    hand-written `impl FromJson` or `impl FromJsonSchema` for a `Fields` or `UrlValue` type: each is
-    now a second impl (E0119). Reading the benchmark's 500 item API responses costs the same:
-    265,550,044 instructions through `FromJson` and 438,766,522 through serde_json alone, before and
-    after (callgrind, release build, `read_cost` in `examples/card-market`, two runs each) ([#1042
-    Let FromJson generate its required Deserialize
-    implementation](https://github.com/corten-run/corten/issues/1042)).
+172. `#[derive(FromJson)]` writes the type's serde `Deserialize` too, from the same
+    `#[serde(..)]` its reader reads, so a type read from JSON derives one thing. The impl is
+    serde_derive's for the shapes and attributes `FromJson` reads (named, tuple, newtype and unit
+    structs, `transparent`, enums of unit variants; names, aliases, defaults, `skip`,
+    `deny_unknown_fields`, `expecting`, `bound`): `tests/derived_deserialize.rs` reads each shape
+    with it and with serde's derive and compares values, errors and the names passed to the
+    deserializer, and through Corten's reader too. A type whose `Deserialize` is written by hand, or
+    derived by serde for an attribute `FromJson` refuses (`flatten`), becomes a `FromJson` with an
+    empty `impl corten::FromJson for T {}`, read by serde_json: alone, in serde_json's one pass;
+    inside a derived type or a `Vec`, from its own text, which the reader finds first.
+    `#[derive(Fields)]` and `#[derive(UrlValue)]`, which write the type's `Deserialize` already, now
+    write its `FromJson` (feature `json`) and schema (`types`) too, so a form's input is read from
+    JSON, and is an agent tool's input, as it is, and a query's list of a `UrlValue` is described by
+    its words. A generic one is a `FromJson` wherever its `Deserialize` applies, read by serde_json
+    rather than Corten's reader (nested in another value, read twice: the reader finds its text and
+    serde_json reads it), so a generic form that derived `FromJson` beside `Fields` before, and was
+    read by the reader, is now read by serde_json; a `UrlValue` enum with `#[serde(other)]` reads
+    any other word as that variant (the reader gives up on the whole text there, and serde_json
+    reads it again) and is described as any string; a form input whose fields borrow from the input
+    cannot be a `FromJson`, which reads owned values. A generic `#[derive(FromJson)]` type is a
+    `FromJson` wherever its `Deserialize` applies, so one with a defaulted field holding its
+    parameter (`Vec<T>`), which failed to compile beside serde's derive, compiles and is read by
+    Corten's reader; a defaulted bare `T` is still refused. `#[serde(other)]` on
+    `#[derive(FromJson)]` names `UrlValue` as the derive that reads it. A type that needs `FromJson`
+    and lacks it is told the ways to get one in the compiler's note. An enum with a shift in a
+    discriminant (`B = 1 << 1`) is read whole by `UrlValue` and `FromJson` (and `ToJson` splits its
+    variants the same way): the shift hid the variants after it. **Migration:** take `Deserialize`
+    out of a derive list that has `FromJson`, and `FromJson` out of one that has `Fields` or
+    `UrlValue`, and remove a hand-written `impl FromJson` or `impl FromJsonSchema` for a `Fields` or
+    `UrlValue` type: each is now a second impl (E0119). Reading the benchmark's 500 item API
+    responses costs the same: 265,550,044 instructions through `FromJson` and 438,766,522 through
+    serde_json alone, before and after (callgrind, release build, `read_cost` in
+    `examples/card-market`, two runs each)
+    ([#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
 173. An agent tool's output (`Tools::tool`, `idempotent_tool`, `read_tool`) is a `ToJson` and is
     written by it, so it derives `ToJson` alone, as every other JSON answer does, where it needed
     serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
