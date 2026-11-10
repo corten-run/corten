@@ -13,7 +13,7 @@ use crate::glyphs;
 use crate::ui::{
     alert::{AlertEmphasis, FailedAlert},
     button::{Button, ButtonSize, ButtonVariant},
-    card::{Card, CardContent, CardFooter, CardHeader},
+    card::{Card, CardContent, CardFooter, CardHeader, CardSize},
     checkbox::Checkbox,
     checkboxes::Checkboxes,
     combobox::Combobox,
@@ -303,7 +303,7 @@ pub fn Gallery<'a>(
             />
         </div>
         <div class={Grid}>
-            <section class={Card {}}>
+            <section class={Card { size: CardSize::Md }}>
                 <header class={CardHeader {}}><h2>"List for sale"</h2></header>
                 <div class={CardContent {}}>
                     <form class={Order} method="post" action={url::Sell} data-patch>
@@ -367,7 +367,7 @@ pub fn Gallery<'a>(
             </section>
             <div class={Aside}>
                 // Built in the markup, so the panels' views live until the group has rendered them.
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}><h2>"Market"</h2></header>
                     <div class={CardContent {}}>
                         <Tabs>
@@ -396,7 +396,7 @@ pub fn Gallery<'a>(
                         </div>
                     </div>
                 </section>
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}><h2>"Sales"</h2></header>
                     <div class={CardContent {}}>
                         <Segmented width={SegmentedWidth::Fit}>
@@ -491,7 +491,7 @@ pub fn Gallery<'a>(
                         </div>
                     </div>
                 </section>
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}><h2>"Activity"</h2></header>
                     <div class={CardContent {}}>
                         <div class={Facts}>
@@ -512,7 +512,7 @@ pub fn Gallery<'a>(
                         </div>
                     </div>
                 </section>
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}><h2>"Draft"</h2></header>
                     <div class={CardContent {}}>
                         <div class={Buttons}>
@@ -570,7 +570,7 @@ pub fn Gallery<'a>(
                         </a>
                     </footer>
                 </section>
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}><h2>"Stock"</h2></header>
                     <div class={CardContent {}}>
                         <Sku sku="ASH-DRAKE-NM" />

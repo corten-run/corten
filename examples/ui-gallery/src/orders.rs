@@ -15,7 +15,7 @@ use crate::ui::{
     badge::{Badge, BadgeEmphasis, BadgeTone},
     breadcrumb::{Breadcrumb, Crumb},
     button::{Button, ButtonSize, ButtonVariant},
-    card::{Card, CardAction, CardCompact, CardContent, CardFooter, CardHeader, CardPanel},
+    card::{Card, CardAction, CardContent, CardFooter, CardHeader, CardPanel, CardSize},
     dropdown_menu::{DropdownMenu, MenuTrigger},
     field::Field,
     icon::{self, Icon},
@@ -331,7 +331,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                 <Stat label="Late" value={late} note="Past the ship-by date" tone={StatTone::Destructive} />
             </dl>
             <div class={Grid}>
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}>
                         <h2>"Recent orders"</h2>
                         <div class={CardAction {}}>
@@ -462,7 +462,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                     </footer>
                 </section>
                 <div class={Stack { gap: Gap::Md }}>
-                    <section class={(Card {}, CardCompact {})}>
+                    <section class={Card { size: CardSize::Sm }}>
                         <header class={CardHeader {}}><h2>"Selling limit"</h2></header>
                         <div class={CardContent {}}>
                             <Field
@@ -496,7 +496,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                             </div>
                         </div>
                     </section>
-                    <section class={Card {}}>
+                    <section class={Card { size: CardSize::Md }}>
                         <header class={CardHeader {}}><h2>"Returns"</h2></header>
                         <div class={CardContent {}}>
                             // A summary inside a card: figures on the card's surface, not cards of their own.
@@ -514,7 +514,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                             </Alert>
                         </div>
                     </section>
-                    <section class={Card {}}>
+                    <section class={Card { size: CardSize::Md }}>
                         <header class={CardHeader {}}><h2>"Payout of "{shown_payout.day}</h2></header>
                         <div class={CardContent {}}>
                             // What happened to the payout, in order: each step's time or reason
@@ -535,7 +535,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                             />
                         </footer>
                     </section>
-                    <section class={Card {}}>
+                    <section class={Card { size: CardSize::Md }}>
                         <header class={CardHeader {}}><h2>"Printing labels"</h2></header>
                         <div class={CardContent {}}>
                             // Progress: how far the run is, and, nested under it, a step whose size is not known yet;
@@ -574,7 +574,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                         </div>
                     </section>
                     // One block of content, so one element: a panel, which a Stack lays out.
-                    <section class={(CardPanel {}, Stack { gap: Gap::Md })} aria-labelledby={PayoutTitle}>
+                    <section class={(CardPanel { size: CardSize::Md }, Stack { gap: Gap::Md })} aria-labelledby={PayoutTitle}>
                         <h2 class={Title} id={PayoutTitle}>"Next payout"</h2>
                         // The shape the payout's live region shows before its first value.
                         // A gap off the kit's scale: `Gap::App` sets none, so the page's `.payout` is the one.
@@ -587,7 +587,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                             </div>
                         </div>
                     </section>
-                    <section class={Card {}}>
+                    <section class={Card { size: CardSize::Md }}>
                         <header class={CardHeader {}}><h2>"Shipping"</h2></header>
                         <div class={CardContent {}}>
                             <form class={Stack { gap: Gap::Lg }} method="post" action={url::Settings}>
@@ -646,7 +646,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                             </form>
                         </div>
                     </section>
-                    <section class={Card {}}>
+                    <section class={Card { size: CardSize::Md }}>
                         <header class={CardHeader {}}><h2>"Questions"</h2></header>
                         <div class={CardContent {}}>
                             <div>

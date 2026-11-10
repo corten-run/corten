@@ -1535,13 +1535,14 @@ Corten is pre-1.0, so any minor version may change the API.
     The card has `CardAction`, controls at the end of the header's heading row that wrap under it
     ([#573 Kit Card header has no slot for actions, so a card with a button in its header is an edit to the copied card](https://github.com/todd-skelton/corten/issues/573)),
     `CardPanel`, a card around one block of content on one element (the surface and its padding,
-    no layout, so the element's own class or a `Stack` lays it out), and `CardCompact`, a denser
-    card beside roomy ones; a card inside a compact one is roomy again. The header's heading and
+    no layout, so the element's own class or a `Stack` lays it out), and a denser card beside roomy
+    ones (`CardSize::Sm` on the card or panel since Changed 168; it was a `CardCompact` class beside
+    it); a card inside a dense one is roomy again. The header's heading and
     description rules now weigh one class, where they weighed a class and an element: an element
     default (`h2 { .. }`) still does not change them, and an app class on the heading ties, so it
     wins when its rule comes later. An image or icon in the header keeps its own size and sits on
     the heading's row (before the heading, at its start; after it, at the row's end), where it had
-    a row of its own. `CardCompact` weighs two classes, so it wins over the card's spaces in
+    a row of its own. The dense size weighs two classes, so it wins over the card's spaces in
     whatever order the rules come, and the kit's own custom properties start `--kit-` (a card's
     `--kit-card-inset`, a badge's `--kit-tone`), so an app's property of the same name neither
     reaches a kit component nor is hidden inside one
@@ -4075,6 +4076,21 @@ Corten is pre-1.0, so any minor version may change the API.
     again (a `chunk()` inside a `timeout` or `select!`) no longer starts the idle time again, so a
     client that went quiet is given up on after the idle time however the handler reads
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
+
+172. The kit's `Card` and `CardPanel` take a `size` (`CardSize::Md`, the theme's `--card-padding`,
+    or `Sm`, denser), as `Button`, `Dialog` and `Progress` do, and `CardCompact` is gone: it was a
+    class written beside a card (`(Card {}, CardCompact {})`) that compiled alone or beside any
+    other look and did nothing there. A dense card is now one look, and `Card {}` without a size
+    does not compile (E0063, the missing `size`), so a copied kit's every card is found by the
+    compiler. The class `compact` is `sm`: an `Md` card writes the same class as before and an `Sm`
+    one 5 bytes fewer (`card__sm` for `card__compact`), as does its rule in `card.css`.
+    **Migration:** write `Card { size: CardSize::Md }` for `Card {}`, `CardPanel { size: CardSize::Md }`
+    for `CardPanel {}`, and `Card { size: CardSize::Sm }` (or the panel's) for a card with
+    `CardCompact {}` beside it, importing `CardSize`; remove a `CardCompact {}` written alone or
+    beside another look, which did nothing there. `corten ui diff card` shows the kit's change,
+    and `corten ui add card --force` (an unedited copy) or `--merge` (an edited one) takes
+    `card.rs` and `card.css`
+    ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
 
 ### Fixed
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
