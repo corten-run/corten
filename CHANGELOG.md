@@ -4082,7 +4082,8 @@ Corten is pre-1.0, so any minor version may change the API.
   most 120). WebKit scrolls a focused row into view over a few frames, and a row read mid-scroll
   sat up to 28 px under the header before settling 248 px below it, so the check failed about once
   in 30 runs on a branch that did not touch it. It waits on frames, not a timer, and a row still
-  moving after 120 frames fails the check rather than being read as settled.
+  moving after 120 frames fails the check rather than being read as settled
+  ([#1150 The ui-gallery smoke's WebKit 'focus never under it' check fails now and then on a change that does not touch the kit](https://github.com/corten-run/corten/issues/1150)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
