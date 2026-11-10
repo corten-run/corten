@@ -2875,7 +2875,7 @@ async function run(browser) {
     JSON.stringify({ startWide, startLong }),
   );
   // Card: an action on the heading's row at its end, the description under them; a panel is one
-  // element with the card's padding on every side; a compact card is denser (#573, #605).
+  // element with the card's padding on every side; a CardSize::Sm card is denser (#573, #605, #1132).
   const cards = await orders.evaluate(() => {
     const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
     const box = (/** @type {Element | null | undefined} */ e) => e?.getBoundingClientRect();
@@ -2884,7 +2884,7 @@ async function run(browser) {
     const [heading, note] = [header?.querySelector("h2"), header?.querySelector(":scope > p")];
     const mid = (/** @type {DOMRect | undefined} */ r) => (r ? r.top + r.height / 2 : NaN);
     const panel = document.querySelector("[class*='card__panel']");
-    const compact = document.querySelector("[class*='card__compact']");
+    const compact = document.querySelector("[class~='card__card'][class~='card__sm']");
     const pad = (/** @type {Element | null} */ e) => (e ? [getComputedStyle(e).paddingTop, getComputedStyle(e).paddingLeft].map((p) => parseFloat(p) / rem) : []);
     return {
       row: Math.abs(mid(box(heading)) - mid(box(action))) <= 2,

@@ -147,6 +147,23 @@ answer that is not a page, or after a reload) draws the page as the server does,
 second Back past an entry a script pushed on the same page. Without the Navigation API every
 navigation is a full load, and the browser fills the page itself.
 
+### Seeing what went over the wire
+
+What the runtime sent and what the server answered are the browser's to show, not Corten's: its
+network panel lists each navigation and submit the runtime sends with its `corten` header
+(`nav`, `page`, `action`), the form fields a `data-patch` submit sent, and the fragments the
+answer carried, as received after content decoding (answers and live streams are compressed with
+the `compress` feature). Chromium's also lists a `<corten-live>` stream's events as they arrive
+(its EventStream tab), each with its `id` when its fragment has a cursor
+([Resuming](live-data.md#resuming)); the other engines' panels were not checked. A panel records
+only while it is open, and a stream opens with the page, so open it and reload. The runtime has no
+diagnostics hook, so it does no work for one and opens no second stream, and its own fields are
+not an API to read (`source` on a `<corten-live>`, say;
+[design Limit 25](../design.md#limit-wire-diagnostics)). What an app wants to know about its own
+outcomes is a typed event its markup dispatches ([Typed events](scripts.md#typed-events)), from a
+submit's patch or a live fragment alike, and a submit that got no answer it can draw is
+`corten:error` (below).
+
 ## Forms
 
 A form is for what the server has to answer: a write, or data the page does not have. Sorting,
@@ -1289,12 +1306,12 @@ stream starts, the status and headers are sent, and an `Err` chunk ends the conn
 the body's end, so the browser reports the download failed, and the error is logged. It cannot
 become an error page or a redirect. `Media::stream_sized(type, length, chunks)` sends a
 `Content-Length` so the browser shows progress; the stream must make exactly that many bytes, or
-the connection ends there as for a failure. A text type is compressed a chunk at a time (zstd or
-brotli, ended when the stream ends; uncompressed for a client that takes only gzip, as a script
-whose HTTP library has neither may), so make chunks of some kilobytes, a few hundred rows, not a
-row each. No `ETag` is made for a stream, and the request's deadline bounds the handler, not the
-download: `App::send_timeout` closes the connection of a client that stops reading, but nothing
-bounds a source that stops making chunks while the client waits, so give each page's read a time
+the connection ends there as for a failure. A text type is compressed a chunk at a time (zstd,
+else gzip, never brotli, ended when the stream ends; uncompressed for a client that takes neither
+zstd nor gzip), so make chunks of some kilobytes, a few hundred rows, not a row each. No `ETag`
+is made for a stream, and the request's deadline bounds the handler, not the download:
+`App::send_timeout` closes the connection of a client that stops reading, but nothing bounds a
+source that stops making chunks while the client waits, so give each page's read a time
 limit (a query timeout). A failed chunk is logged with the media type only, so its error should
 say which export it was.
 auction-room's bid history (`examples/auction-room/src/app.rs`, `history`) reads a lot's bids a

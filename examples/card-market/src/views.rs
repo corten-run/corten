@@ -68,6 +68,29 @@ pub fn category<'a>(req: &'a Req, t: Msg, title: &'a str, items: &'a [Arc<ItemVi
     }
 }
 
+/// The document around a page another site frames: the app's stylesheet and the page alone, with
+/// no header, and its links open in the framing page's tab (`<base target="_top">`), so a hover
+/// does not prefetch them (`data-no-prefetch`).
+#[component]
+pub fn Framed(req: &Req, title: &str, children: impl Render) -> impl Document {
+    html! {
+        <!DOCTYPE html>
+        <html lang={req.lang()}>
+            <head>
+                <meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <base target="_top">
+                <link rel="stylesheet" href={req.asset(Static::STYLE_CSS)}>
+                <title>{title}" | Card Market"</title>
+                <Corten />
+            </head>
+            <body>
+                <main data-no-prefetch>{children}</main>
+            </body>
+        </html>
+    }
+}
+
 /// The document around every page: `title`, the page's own `head` tags and the page itself
 /// (`children`). A client navigation gets only the title, the head tags and `<main>`'s children.
 /// The app's stylesheet comes before `<Corten />`, which links the components' stylesheet, so a

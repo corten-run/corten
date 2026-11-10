@@ -1397,6 +1397,85 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
+32. <a id="choice-stream-coding"></a>**A compressed stream is zstd, else gzip, never brotli.** A
+    live stream, a feed and a streamed `Media` are compressed as one stream per connection,
+    flushed after each event or chunk with the context kept, so the client decodes each at once
+    and a redraw costs about what changed. Playwright's WebKit (27.2, on Windows) dispatches a
+    flushed brotli event that decodes to more than 16 KiB only once more of the body arrives, so the
+    last change before a quiet spell showed one event late: an event of 16,385 bytes showed only
+    when the next chunk came, with Corten's encoder and with Node's at quality 4 and 11, and with
+    empty blocks after it (the issue saw a 17 KB event from Node's encoder on time; that was not
+    seen again). Replaying a stream's captured chunks one a second from a Node server, gzip and
+    identity were on time at every size tried, to 200 KB, in all three engines
+    ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
+    The watchlist smoke holds the fix: an event that decodes to 52,395 bytes with nothing after it
+    must be dispatched within 5 s in each engine (Chromium and Firefox get zstd there, WebKit
+    gzip), and a build whose streams are brotli fails it in Playwright's WebKit on Windows; CI's
+    Linux WebKit takes no brotli, so there the rule is held by the negotiation tests and the smoke's
+    HTTP checks, which ask for each coding themselves.
+    So a client that accepts zstd gets zstd 1 as before, any other that accepts gzip gets gzip 3
+    (sync-flushed, its window kept), and one that accepts only brotli gets the stream as it is, even
+    if it says `identity;q=0` (RFC 9110 section 12.4.1 lets a server disregard the field when nothing
+    it has is acceptable, as a stream past the budget already does, rather than answer 406). A
+    streamed `Media` follows the same rule though a download ends, so its tail is never held for
+    long: one rule for every stream, at the cost of gzip's bytes for a client without zstd.
+    Gzip sends more than brotli 4 did, most for a large region (`what_a_redraw_sends`, ten redraws
+    of a list with one row changed): of 40 rows (2.7 KB) 60 to 69 bytes against 20 to 40, of 250 (17
+    KB) 477 to 524 against 23 to 91, and of 640 (45 KB, past deflate's 32 KiB window, so most of the
+    event before is out of reach) 6,203 to 6,214 against 44 to 2,029. Level 3, not 1: at 1 the
+    redraws are 129 to 453 bytes, 2,188 to 2,684 and 7,238 to 7,330. A gzip stream holds 352,232 bytes and reserves 360
+    KiB (`tests/stream_memory.rs`, the bytes asked of the system allocator; jemalloc, which the
+    template's image preloads, rounds them up to its size classes, which is not measured), where
+    brotli reserved 1,000 KiB. It costs more CPU: an event of the 2.7 KB redraw, made and sent
+    through the compression layer, is about 286,650 instructions against brotli's 213,720 (zstd 1:
+    100,470, unchanged).
+    Not chosen: brotli with an empty block or a keepalive after each event (WebKit held the event
+    back with empty blocks after it); a gzip-only client getting the stream as it is, as before (a
+    redraw's saved bytes are why streams are compressed).
+
+    Stands on: platform (Playwright's WebKit on Windows holds back a flushed brotli event of more
+    than 16 KiB and sends `deflate, gzip, br`, no zstd; its Linux build, which CI's smoke runs,
+    takes no brotli at all, so the smoke there cannot see the holdback and the rule is held by
+    `compress.rs`'s and `tests.rs`'s tests; the 16 KiB edge matches libcurl's write size, the
+    Windows build's network stack, which suggests the holdback is that stack's, not measured;
+    Chromium and Firefox send zstd, which arrives at once there; no WebKit that accepts zstd was
+    tried, and Safari, whose network stack is not Playwright's and which caniuse lists as sending
+    zstd over HTTPS from 26.3, was not tried at all); measured (bytes a redraw by `what_a_redraw_sends`, one run, the counts fixed
+    by the encoders; a gzip stream's memory by `tests/stream_memory.rs`; the large event on a
+    quiet stream by the watchlist smoke; instructions an event by callgrind,
+    `what_an_event_stream_costs` at 2,000 and 12,000 events, three runs each, within 20
+    instructions); reasoned (a sync flush ends deflate's output on a byte boundary with everything
+    sent so far decodable, so a decoder has the whole event); value (an event on time at the
+    user's end before the bytes brotli saves, Values 1).
+
+    Revisit when: a WebKit that Playwright runs dispatches a flushed brotli event of more than
+    16 KiB at once, or sends zstd (then check a flushed zstd event there); Safari is tried and
+    shows a large event on time under brotli (then the holdback is the Windows build's own, and
+    brotli can come back for a client without zstd), or late under zstd or gzip; or apps send redraws
+    over 32 KB to clients without zstd often enough that gzip's bytes show in a round.
+
+    Last checked: 2026-11-08, WebKit 27.2, Chromium 156 and Firefox 157: the late brotli event
+    against `c65c10ec`'s streams and Node's encoder, by replaying a stream's captured chunks one a
+    second from a Node server (the issue's Isolation), and each engine's `Accept-Encoding`;
+    2026-11-08, the callgrind counts on `c65c10ec` (brotli 4, zstd) and `541fc59b` (gzip 3, zstd);
+    2026-11-08, the bytes, miniz_oxide 0.9.1 and brotli 9.0.0, on `202f6427` with
+    `what_a_redraw_sends`; 2026-11-08, the memory on `a4958acb` with `tests/stream_memory.rs` (test
+    profile, printed with `--nocapture`, the same in two runs); 2026-11-09, the watchlist smoke's
+    large event, against a server built from `0b9a134c`, in Chromium, Firefox and WebKit (two
+    runs, all on time, 10 to 22 ms; the second, which reads the route's answer, saw 200 with zstd,
+    zstd and gzip, and failed only WebKit's busy-mark check, the flake of
+    [#1108 The smoke's busy-mark check failed once in WebKit: the replaced button A was still marked busy while B's submit was on its way](https://github.com/corten-run/corten/issues/1108)),
+    and in WebKit again with the check's bounded fetch (`228dba80`, gzip, 32 ms),
+    all on Windows; 2026-11-09, the smoke against `022c3282` with `c65c10ec`'s `compress.rs`
+    and `answer.rs`, whose streams are brotli, in WebKit on Windows (one run: the route
+    answered 200 with `br`, and no event came in 5 s), and the same build on `535b22f9` in
+    Playwright 1.64.1's Linux image, as CI runs it (one run: the route answered 200 uncompressed,
+    so that WebKit did not ask for brotli or zstd, its header not logged, and the event came in
+    18 ms); 2026-11-09, the whole smoke against a server built from `0b9a134c` in that Linux image
+    (one run, all passed; Chromium and Firefox got zstd, WebKit gzip, the large event in 7 to
+    17 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
+    test's thread (352,232 bytes, the same).
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -1730,3 +1809,19 @@ by design; where it is known, a limit says what would lift it or why it is so.
     header would close this at the cost of a round trip on every sort ([UI guide](guide/ui.md)). It
     lifts when a route's type says it reads a table's order, so markup that sends to it on a page
     that draws that table without the call does not build.
+
+25. <a id="limit-wire-diagnostics"></a>A page cannot see what the runtime sent or received: no
+    hook hands a script a submit's answer or a live stream's fragments as they came, so an in-page
+    inspector of the payload a page received has no supported way in (a script that wraps `fetch`
+    or `EventSource` before the runtime calls them is outside its contract). The browser's network panel shows
+    each navigation and submit and its answer, after content decoding and only while it is open,
+    and Chromium's shows an event stream's messages, the other engines' not checked
+    ([Requests and forms](guide/requests-and-forms.md#seeing-what-went-over-the-wire)). An app
+    learns its own outcomes from typed events its markup dispatches, from a submit's patch or a
+    live fragment. So by design: a hook would cost every page a check on each patch and runtime
+    bytes for an inspector few apps would show (Value 1), would have to define its own order,
+    cancellation and redaction of the private HTML and form data it carries, and would be a second
+    way to hear an outcome (Value 5), where the network panel already shows the wire (Value 2;
+    [#1130 Expose opt-in browser diagnostics for action responses and live HTML patches](https://github.com/corten-run/corten/issues/1130)).
+    It lifts when apps need the received payload in the page for their users, not their
+    developers, or when Chromium's panel stops showing an event stream's messages.
