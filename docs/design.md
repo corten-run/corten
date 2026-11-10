@@ -1475,6 +1475,7 @@ rules something out.
     (one run, all passed; Chromium and Firefox got zstd, WebKit gzip, the large event in 7 to
     17 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
     test's thread (352,232 bytes, the same).
+
 33. <a id="choice-state-derives"></a>**An app's shared state derives `Clone` and `FromRef`, two
     derives that each say one thing, not a state attribute that writes both.** `Clone` says the
     state can be copied, which routing and a handler that takes the whole state both need:
