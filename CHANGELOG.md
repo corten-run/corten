@@ -4262,7 +4262,7 @@ Corten is pre-1.0, so any minor version may change the API.
     a call on `620bc298`, against 267,820 and 265,852 on `a791d9ba` with `tool_cost` added
     (callgrind, release build, `tool_cost`, each answer checked to be the tool's output, 1,200 calls
     less 200 over 1,000, two runs each). No data-role attribute is added beside `ToJson` and
-    `FromJson`, which already name each type's direction (design Choice 34). **Breaking:** an output
+    `FromJson`, which already name each type's direction (design Choice 35). **Breaking:** an output
     that implements `Serialize` and `ToJsonSchema` by hand and not `ToJson`, a derived generic
     output whose type argument is not `ToJson`, or an input that is a `Deserialize` (derived by
     serde or written by hand) with a `FromJsonSchema` written by hand and not a `FromJson`, no
@@ -4274,6 +4274,14 @@ Corten is pre-1.0, so any minor version may change the API.
     failure), where the call answered an internal error as the tool's result with the call's `id`; a
     test holds it
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
+176. The runtime and its modules are minified by terser after esbuild minifies them, so every page
+    ships fewer bytes: the runtime is 14,318 bytes with gzip (level 9), 533 fewer, and 12,955 with
+    brotli (level 11), 532 fewer (3.6% and 3.9%), and 105 fewer uncompressed (against `4de159ab`); `view.js` is 75 and 60
+    bytes smaller compressed, `format.js` 8 and 18, and `upload.js` and `keys.js` within 11 bytes
+    either way. terser (5.51.2) is a development dependency of the repository's tooling; apps
+    install nothing new
+    ([design Choice 34](docs/design.md#choice-runtime-terser),
+    [#1047 Benchmark round r16: item-page JavaScript grew 9.1% (13,187 to 14,392 gzip bytes)](https://github.com/corten-run/corten/issues/1047)).
 
 ### Fixed
 - The ui-gallery smoke's check that keyboard focus never lands under a dialog's or sheet's sticky
