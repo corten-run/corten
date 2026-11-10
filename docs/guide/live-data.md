@@ -360,7 +360,8 @@ a worker thread like any request's work, so on a runtime of one worker a large l
 up other requests while its rows are read.
 
 Native apps and agents follow the same feed with `corten-protocol`'s `Replica`; see
-[Surfaces](../architecture.md).
+[Surfaces](../architecture.md). The derive is `corten`'s, so a client on `corten-protocol` alone
+implements `Row` for its rows by hand.
 
 ## Which one
 
