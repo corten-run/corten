@@ -1377,7 +1377,9 @@ mod tests {
             let req = Request::get(&url).header(header::RANGE, "bytes=0-9").header(header::ACCEPT_ENCODING, encodings);
             app.clone().oneshot(req.body(Body::empty()).unwrap())
         };
-        get("br").await.unwrap();
+        let cold = get("br").await.unwrap();
+        assert_eq!(cold.status(), StatusCode::PARTIAL_CONTENT, "before its compressed forms exist, the file is sent as stored");
+        assert!(!cold.headers().contains_key(header::CONTENT_ENCODING));
         assets.files["en.vtt"].body.wait();
         let encoded = get("br").await.unwrap();
         assert_eq!(
