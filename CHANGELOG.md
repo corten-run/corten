@@ -2601,6 +2601,26 @@ Corten is pre-1.0, so any minor version may change the API.
     served file to 60,833 bytes (gzip 10,081, brotli 8,876), and the smoke test puts it inside a
     `<corten-live>` and checks it in each state
     ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
+278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
+    after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
+    apps: how long it takes to be ready, cold and warm, and after an edit how long a completion
+    inside the item page's markup and the errors for an unknown field there take. In one run on a
+    desktop, with rust-analyzer's experimental diagnostics on (off by default, when only `cargo
+    check` on save shows the error), both had medians under 0.1 s inside Corten's `html!` and
+    Maud's, against 5 to 10 s inside Topcoat's and Leptos's `view!`; Corten's macro call there
+    is about a fifth the size of the others', so this is not a like-for-like comparison with
+    Maud's, and the errors' times partly measure each file. `results/dev-loop-default` has the
+    same run with those diagnostics off. `docker-rebuild.mjs` times each
+    anchor app's own `docker build` after the edit with BuildKit's cache warm, both on the builder
+    that built it and on a new builder given only the exported layer cache. That second case is
+    what a hosted CI runner restoring a cache gets. Since BuildKit exports no cache mount, it
+    rebuilds an app whose Dockerfile copies its source before building, as both of these do, about
+    as if from clean. Only those two apps run by default, for time, and the README says what the
+    others' Dockerfiles do instead. The results are in `results/dev-loop`, and `summarize.mjs`
+    prints both.
+    The time from a save to the page showing it under each stack's development server is not
+    measured, and the bench README says why
+    ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
     apps are: the item page, the catalog page, the localized marketplace page and the live price
