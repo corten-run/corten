@@ -2643,6 +2643,17 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- `Refused::unauthorized` takes the `Challenge` its 401 sends in `WWW-Authenticate`, which RFC
+  9110 requires on a 401 and which it never sent: `Refused::unauthorized(Challenge::new("Bearer"))`,
+  with `.param("error", "invalid_token")` for a token that is wrong (RFC 6750). `corten::Challenge`
+  is in the prelude; `Challenge::new` is a `const fn`, so a scheme that is not a token does not
+  compile in a `const`. The JSON 401 and the error page both carry it. An app that called
+  `Refused::unauthorized()` passes the scheme its clients send credentials in.
+  `Refused::sign_in`'s 401 to a data client still has none, since a session cookie has no
+  scheme (design Choice 27). The MCP endpoint builds its challenges with `Challenge` too, and
+  sends the same headers. card-market's partners send their key as a bearer token
+  (`Authorization: Bearer <key>`) rather than in `X-Api-Key`, so its 401 names a registered scheme.
+
 - axum is no longer one of Corten's dependencies (design Choice 25, step 4, and Choice 21). The
   body (`corten::answer::Body`), `IntoResponse`, `IntoResponseParts`, the readers of a whole
   body, the server-sent events writer and `Listener` are Corten's own, with axum's names and

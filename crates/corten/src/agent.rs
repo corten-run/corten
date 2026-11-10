@@ -249,7 +249,7 @@ impl Authorization {
     }
 
     /// The metadata's route for an endpoint at `path`, and the 401's challenge into `challenge`.
-    fn serve(&self, path: &'static str, challenge: &OnceLock<Challenge>) -> (String, crate::router::MethodSet) {
+    fn serve(&self, path: &'static str, challenge: &OnceLock<Protected>) -> (String, crate::router::MethodSet) {
         assert!(
             path == self.path,
             "corten: the MCP endpoint is mounted at {path:?}, but its Authorization was made for the route at {:?}, the resource its tokens name",
@@ -258,12 +258,11 @@ impl Authorization {
         // RFC 9728 3.1: the well-known path goes between the host and the resource's path.
         let well_known = format!("/.well-known/oauth-protected-resource{}", path.trim_end_matches('/'));
         let metadata = format!("{}{well_known}", self.origin);
-        let mut unauthorized = format!("Bearer resource_metadata=\"{metadata}\"");
+        let mut unauthorized = crate::Challenge::new("Bearer").param("resource_metadata", &metadata);
         if !self.scopes.is_empty() {
-            unauthorized.push_str(&format!(", scope=\"{}\"", self.scopes.join(" ")));
+            unauthorized = unauthorized.param("scope", &self.scopes.join(" "));
         }
-        let unauthorized = HeaderValue::from_str(&unauthorized).expect("checked when given");
-        assert!(challenge.set(Challenge { metadata, unauthorized }).is_ok(), "corten: an MCP endpoint is mounted once");
+        assert!(challenge.set(Protected { metadata, unauthorized }).is_ok(), "corten: an MCP endpoint is mounted once");
         let mut document = json!({
             "resource": self.resource,
             "authorization_servers": self.servers,
@@ -361,12 +360,13 @@ fn scope_token(scope: &str) -> bool {
     !scope.is_empty() && scope.bytes().all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\')
 }
 
-/// What a refusal names, once the endpoint is mounted with an [`Authorization`].
-struct Challenge {
+/// What a refusal names, once the endpoint is mounted with an [`Authorization`]: the protected
+/// resource's metadata (RFC 9728).
+struct Protected {
     /// The metadata document's URL.
     metadata: String,
     /// The 401's `WWW-Authenticate`.
-    unauthorized: HeaderValue,
+    unauthorized: crate::Challenge,
 }
 
 struct Tool<A> {
@@ -388,7 +388,7 @@ pub struct Tools<A = ()> {
     auth: Auth<A>,
     tools: Arc<BTreeMap<String, Tool<A>>>,
     authorization: Option<Arc<Authorization>>,
-    challenge: Arc<OnceLock<Challenge>>,
+    challenge: Arc<OnceLock<Protected>>,
 }
 
 impl<A> Clone for Tools<A> {
@@ -617,8 +617,8 @@ impl<A: Send + 'static> Tools<A> {
             ToolError::Invalid(message) => {
                 let mut res = reply(id, Err((-32600, format!("invalid request: {message}"))));
                 *res.status_mut() = StatusCode::BAD_REQUEST;
-                let challenge = HeaderValue::from_static(r#"Bearer error="invalid_request""#);
-                res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge);
+                let challenge = crate::Challenge::new("Bearer").param("error", "invalid_request");
+                res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.value().clone());
                 return res;
             }
             ToolError::Forbidden(message) | ToolError::Refused(message) => {
@@ -642,13 +642,11 @@ impl<A: Send + 'static> Tools<A> {
     fn unauthorized(&self, id: Value, sent: bool) -> Response {
         let mut res = reply(id, Err((-32001, "unauthorized".into())));
         *res.status_mut() = StatusCode::UNAUTHORIZED;
-        let mut challenge = self.challenge.get().map_or(HeaderValue::from_static("Bearer"), |c| c.unauthorized.clone());
+        let mut challenge = self.challenge.get().map_or(crate::Challenge::new("Bearer"), |c| c.unauthorized.clone());
         if sent {
-            let text =
-                [challenge.as_bytes(), if challenge.len() > 6 { b", " } else { b" " }, br#"error="invalid_token""#].concat();
-            challenge = HeaderValue::from_bytes(&text).expect("made of a header value and ASCII");
+            challenge = challenge.param("error", "invalid_token");
         }
-        res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge);
+        res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.value().clone());
         res
     }
 
@@ -662,18 +660,18 @@ impl<A: Send + 'static> Tools<A> {
 
     /// The 403's `WWW-Authenticate` for a call that needs `scope`.
     fn insufficient_scope(&self, scope: &str) -> HeaderValue {
-        let mut value = String::from("Bearer error=\"insufficient_scope\"");
+        let mut value = crate::Challenge::new("Bearer").param("error", "insufficient_scope");
         if scope.split(' ').all(scope_token) {
-            value.push_str(&format!(", scope=\"{scope}\""));
+            value = value.param("scope", scope);
         } else {
             // A test or `corten dev` stops at it; a release build sends the 403 without it.
             debug_assert!(false, "corten: ToolError::InsufficientScope names scopes separated by single spaces, not {scope:?}");
             tracing::error!(scope, "corten: ToolError::InsufficientScope names scopes separated by single spaces");
         }
         if let Some(challenge) = self.challenge.get() {
-            value.push_str(&format!(", resource_metadata=\"{}\"", challenge.metadata));
+            value = value.param("resource_metadata", &challenge.metadata);
         }
-        HeaderValue::from_str(&value).expect("every part is printable ASCII")
+        value.value().clone()
     }
 
     fn list(&self) -> Vec<Value> {
@@ -1173,7 +1171,7 @@ mod tests {
 
     impl crate::Middleware for Deny {
         async fn call(&self, _: crate::extract::Request, _: impl crate::middleware::Next) -> Response {
-            crate::Refused::unauthorized().into_response()
+            crate::Refused::unauthorized(crate::Challenge::new("Bearer")).into_response()
         }
     }
 

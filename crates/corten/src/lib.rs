@@ -176,7 +176,7 @@ pub use app::{listeners, serve, serve_on, serve_wrapped, App, Area};
 /// The bytes of a body or an upload, shared rather than copied: what
 /// [`form::File::bytes_up_to`] gives and [`Media::new`] takes.
 pub use bytes::Bytes;
-pub use caller::{Caller, Identify, Refused};
+pub use caller::{Caller, Challenge, Identify, Refused};
 pub use client::{ClientIp, ClientZone, PeerAddr};
 /// Form field names as constants: `#[derive(Fields)] struct AlertInput { email: String }`
 /// gives `AlertInput::FIELDS.email`, the [`FieldName`] `"email"` (serde `rename` and `rename_all`
@@ -418,9 +418,9 @@ pub mod prelude {
         script::{el, refs, Handler, Ref},
         style::ClassList,
         view::Id,
-        Api, App, Area, Bounds, Caller, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files, Form, FromRef,
-        HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Public, ReadAgain, Refused,
-        Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
+        Api, App, Area, Bounds, Caller, Challenge, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files, Form,
+        FromRef, HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Public, ReadAgain,
+        Refused, Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
     };
     #[cfg(feature = "json")]
     pub use crate::{FromJson, Json, JsonLd, JsonResult, ToJson};

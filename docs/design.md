@@ -1157,7 +1157,19 @@ rules something out.
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or
     refuses (sign in, 401, 403, 503), and a routes module's `caller = T` holds every handler in it
     to that at compile time, so a route added later is covered. The lookup runs only when a handler
-    or middleware reads it, once per request, and reading it makes the answer private. A route's
+    or middleware reads it, once per request, and reading it makes the answer private. A 401 from
+    `Refused::unauthorized` carries the app's `Challenge` in `WWW-Authenticate`, which RFC 9110
+    (15.5.2) requires on every 401, so its constructor takes one and no `unauthorized` leaves it
+    out. `Refused::sign_in`'s 401 to a data client is the one 401 that falls short of it: it
+    carries no challenge, since a session cookie has no HTTP authentication scheme to name. Not
+    chosen there: a scheme of Corten's own (`Cookie`), which no client reads and which
+    [Rule 10](#rule-standard-formats) would hold to a reason it lacks; `Basic`, which a browser
+    answers with its own prompt for a password the app never asked for; a 403 in its place (as
+    Django REST framework answers a session API), which tells a client that its credentials were
+    refused when it sent none, so a native app cannot tell "sign in" from "not allowed"; nor a
+    challenge `sign_in` would carry, a second way to say what `unauthorized` says for a client
+    that sends a token, which a lookup that takes both refuses with `unauthorized` when the
+    request sent one. A route's
     answer type says how it fails (`HtmlResult`: the error page; `JsonResult<T>`: JSON) and
     whether a shared cache may keep it (`Public<..>`, whose handler may only take `Anonymous`
     inputs and whose page cannot set a cookie). A route that says `no_store` is checked as
@@ -1199,14 +1211,17 @@ rules something out.
 
     Revisit when: an app needs an access rule a type cannot name and a handler cannot check
     without repeating it in every handler of a module; or a way to give the `App` a route is
-    found that does not pass `Routes` or `Methods`.
+    found that does not pass `Routes` or `Methods`; or an HTTP authentication scheme for a
+    session cookie is registered, which `Refused::sign_in`'s 401 would then name.
 
     Last checked: 2026-11-06, the `compile_fail` doctests that hold `caller = T`
     (`crates/corten/src/route.rs`) and the caller's own (`crates/corten/src/caller.rs`) at
     `bcd31ffe`; 2026-11-09, the `unstaged` `compile_fail` doctests in
     `crates/corten/src/route.rs` (a stage's input, a header reader, a body reader, a
     `caller = T` module, a path that reaches Corten's own, a method other than `get`,
-    `prefetch`, `/health/live`, `/{*rest}`), at `f703d3f8`.
+    `prefetch`, `/health/live`, `/{*rest}`), at `f703d3f8`; 2026-11-10, IANA's HTTP
+    Authentication Scheme Registry (no scheme for a session cookie) and the tests that a 401
+    keeps its challenge as JSON and on the error page (`crates/corten/src/tests.rs`), at `9653c20c`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are

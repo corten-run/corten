@@ -3,7 +3,7 @@
 //! push, head tags, an i18n catalog, robots/sitemap, compression, the home and category pages
 //! cached by CDNs (`Public`), an item as JSON for other services and the price-alert
 //! action as an MCP tool for agents, both mounted as JSON-only routes (`App::api`). Partners'
-//! services set alerts with an API key (`Caller<Partner>`), and writes are limited per client
+//! services set alerts with an API key sent as a bearer token (`Caller<Partner>`), and writes are limited per client
 //! address by a middleware on the routes that take them, the item pages' area and the partner
 //! API (`WriteLimit`, `ClientIp`; `PROXIES` behind a load balancer).
 use std::{
@@ -18,7 +18,7 @@ use corten::{
     agent::{ToolError, Tools},
     answer::XRobotsTag,
     extract::Request,
-    http::{HeaderMap, HeaderValue, Method, StatusCode, request::Parts},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header, request::Parts},
     middleware::{IntoResponse, Response},
     prelude::*,
     pwa::{FormFactor, Manifest, Pwa, Screenshot, Shortcut},
@@ -144,17 +144,22 @@ impl Partners {
         Partners(Arc::new(pairs.map(|(name, key)| (key.to_string(), Arc::from(name))).collect()))
     }
 
-    /// The header a partner sends its key in, read here and named in the API's document.
-    const HEADER: &'static str = "x-api-key";
+    /// The key the request sends as a bearer token (`Authorization: Bearer <key>`, RFC 6750),
+    /// whose scheme is matched in any case.
+    fn sent(headers: &HeaderMap) -> Option<&str> {
+        let (scheme, key) = headers.get(header::AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
+        scheme.eq_ignore_ascii_case("bearer").then_some(key.trim())
+    }
 
-    /// The partner whose key the request sends (`X-Api-Key`).
+    /// The partner whose key the request sends.
     fn named(&self, headers: &HeaderMap) -> Option<&Arc<str>> {
-        self.0.get(headers.get(Self::HEADER)?.to_str().ok()?)
+        self.0.get(Self::sent(headers)?)
     }
 }
 
-/// A service that sets alerts for its users, known by the API key it sends (`X-Api-Key`). A
-/// handler that takes `Caller<Partner>` never runs without one: the request is a JSON 401.
+/// A service that sets alerts for its users, known by the API key it sends as a bearer token. A
+/// handler that takes `Caller<Partner>` never runs without one: the request is a JSON 401 whose
+/// `WWW-Authenticate` says to send one, and that the one sent is wrong (RFC 6750 3.1).
 #[derive(Clone, Hash)]
 pub(crate) struct Partner {
     pub name: Arc<str>,
@@ -163,16 +168,19 @@ pub(crate) struct Partner {
 /// In the API's OpenAPI document, the key it is known by and the header it is read from.
 impl corten::openapi::Argument for Partner {
     fn describe(operation: &mut corten::openapi::Operation<'_>) {
-        operation.api_key(Partners::HEADER, "The partner's API key.");
+        operation.bearer("The partner's API key.");
     }
 }
 
 impl Identify<ApiState> for Partner {
     async fn identify(parts: &Parts, state: &ApiState) -> Result<Self, Refused> {
-        match state.partners.named(&parts.headers) {
-            Some(name) => Ok(Partner { name: name.clone() }),
-            None => Err(Refused::unauthorized().message("Send a valid partner API key in X-Api-Key.")),
-        }
+        const BEARER: Challenge = Challenge::new("Bearer");
+        let refused = match (state.partners.named(&parts.headers), Partners::sent(&parts.headers)) {
+            (Some(name), _) => return Ok(Partner { name: name.clone() }),
+            (None, None) => Refused::unauthorized(BEARER),
+            (None, Some(_)) => Refused::unauthorized(BEARER.param("error", "invalid_token")),
+        };
+        Err(refused.message("Send a valid partner API key as a bearer token."))
     }
 }
 
@@ -1376,11 +1384,11 @@ mod tests {
         assert_eq!(deadline.error.code, -32603, "the deadline's 503 is the server's failure");
     }
 
-    /// A partner's JSON write, with the key `key`.
+    /// A partner's JSON write, with the key `key` as a bearer token.
     fn partner<'c>(app: &'c App, key: Option<&str>, body: &'static str) -> Call<'c, NoForm> {
         let call = app.call(Method::POST, &api::AlertsJson).body("application/json", body);
         match key {
-            Some(key) => call.header(HeaderName::from_static("x-api-key"), key),
+            Some(key) => call.header(header::AUTHORIZATION, &format!("Bearer {key}")),
             None => call,
         }
     }
@@ -1389,15 +1397,17 @@ mod tests {
     async fn a_partner_sets_an_alert_with_its_api_key() {
         let app = app();
         let alert = r#"{"id":"item_9","email":"ada@example.com","target_price":"0.40"}"#;
-        for key in [None, Some("wrong")] {
+        // No key: send one; a wrong one: it is not valid (RFC 6750 3.1).
+        for (key, challenge) in [(None, "Bearer"), (Some("wrong"), r#"Bearer error="invalid_token""#)] {
             let res = partner(&app, key, alert).await;
             assert_eq!(
                 (res.status(), res.text()),
                 (
                     StatusCode::UNAUTHORIZED,
-                    r#"{"title":"Unauthorized","status":401,"detail":"Send a valid partner API key in X-Api-Key."}"#
+                    r#"{"title":"Unauthorized","status":401,"detail":"Send a valid partner API key as a bearer token."}"#
                 )
             );
+            assert_eq!(res.headers()[header::WWW_AUTHENTICATE], challenge, "{key:?}");
         }
         let res = partner(&app, Some("dev-key"), alert).await;
         let (status, headers, body) = read(&res);
