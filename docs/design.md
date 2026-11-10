@@ -1387,13 +1387,14 @@ rules something out.
     Stands on: platform (the std types' `ToJson` and `FromJson` write and read what serde and
     serde_json do for them, some by Corten's own code: serde 1.0.229 and serde_json 1.0.154);
     measured (an agent's `items.get` call in card-market's `tool_cost` runs about 21% fewer
-    instructions, 266,970 and 266,083 before and 210,563 and 210,136 after: callgrind, release,
-    1,200 calls less 200 over 1,000, two alternating runs each, 14,464 bytes an answer on average
-    over the calls counted; parsing each output in a release build would add about 92,700 a call,
-    three runs each); reasoned (a derived `ToJson` writes a tool output's schema and its bytes, and
-    a derived `FromJson` a tool input's schema and what it reads; card-market's agent test checks a
-    tool answer's bytes equal serde's for the item); value (one declaration per direction, Values 4,
-    5 and 6).
+    instructions, a median of 266,735 before (265,585 to 267,508) and 211,213 after (210,919 to
+    212,058): callgrind, release, 1,200 calls less 200 over 1,000, three alternating runs each,
+    14,464 bytes an answer on average over the calls counted; parsing each output in a release build
+    would add about 92,700 a call, a median of 303,500 (302,705 to 303,650) against 210,762 (210,433
+    to 211,420), three runs each); reasoned (a derived `ToJson` writes a tool output's schema and
+    its bytes, and a derived `FromJson` a tool input's schema and what it reads; card-market's agent
+    test checks a tool answer's bytes equal serde's for the item); value (one declaration per
+    direction, Values 4, 5 and 6).
 
     Revisit when: an example app needs, because the derives refuse its type, a hand-written `ToJson`
     with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in `impl FromJson for T {}`
@@ -1407,7 +1408,7 @@ rules something out.
     2026-11-10, the std types' and pointers' `ToJson` and `FromJson` against serde's bytes and
     values (`json` tests, and `corten-run` built with `json` alone and with `agent,feed`, serde
     1.0.229 and serde_json 1.0.154), at `479f3f0e`; 2026-11-10, the `tool_cost` count, on `217bce2c`
-    with `tool_cost` added and on `2e64d275`, and the release parse's cost on `19fd761c`.
+    with `tool_cost` added and on `016fc6a1`, and the release parse's cost on `19fd761c`.
 
 ## Rules
 
