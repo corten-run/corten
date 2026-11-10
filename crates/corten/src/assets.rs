@@ -58,7 +58,8 @@
 //! (`sections/search+categories.css`).
 //!
 //! During a rolling deploy a page from the old version can ask a new server for an old URL. It
-//! gets the current file with `Cache-Control: no-cache`, so nothing caches the mismatch.
+//! gets the current file with `Cache-Control: no-cache`, so nothing caches the mismatch, under
+//! the current file's strong tag, so a range of it is answered as this version's is.
 
 use std::{
     collections::HashMap,
@@ -835,18 +836,21 @@ impl Assets {
         }
         // A range of the file as it is stored, to a GET sent it unencoded (a video seeking): an
         // encoded body's offsets are not the file's, so it is sent whole, and RFC 9110 has every
-        // other method ignore `Range`. Only a URL of this version names these exact bytes: an old
-        // version's URL or the favicon's may name other bytes across a deploy, and a player that
-        // joined ranges of two would play neither, so those are sent whole (a fleet partway through
-        // a deploy can still answer one URL from two versions, and a client that sends `If-Range`
-        // then gets the whole file). `If-Range` holds for this version's own tag, which is strong,
-        // compared byte for byte, so a weak tag or a date never matches (RFC 9110's strong
-        // comparison; the files have no date). No `Accept-Ranges`: a browser asks for a range unprompted, and the
-        // header would cost every file's answer (#1133).
+        // other method ignore `Range`. A versioned URL, this version's or an old one's, is
+        // answered in part under the strong tag of the bytes it sends: Safari plays a video only
+        // from ranges, and every deploy renames every file, so refusing an old URL would stop a
+        // cached page's clip for every Safari visitor until it reloads. A deploy between two
+        // ranges changes that tag, so a client that sends `If-Range` gets the whole file; one that
+        // does not may join ranges of two versions, the risk a fleet partway through a deploy
+        // already carries. The favicon's URL outlives every deploy under a weak tag, so it is sent
+        // whole. `If-Range` holds for the strong tag compared byte for byte, so a weak tag or a
+        // date never matches (RFC 9110's strong comparison; the files have no date). No
+        // `Accept-Ranges`: a browser asks for a range unprompted, and the header would cost every
+        // file's answer (#1133).
         #[cfg(feature = "compress")]
-        let ranged = url == Url::Current && coding.is_none() && method == Method::GET;
+        let ranged = url != Url::Fixed && coding.is_none() && method == Method::GET;
         #[cfg(not(feature = "compress"))]
-        let ranged = url == Url::Current && method == Method::GET;
+        let ranged = url != Url::Fixed && method == Method::GET;
         let range = match ranged.then(|| headers.get(header::RANGE)).flatten() {
             Some(value) => {
                 let holds = headers.get(header::IF_RANGE).is_none_or(|tag| *tag == etag);
@@ -881,7 +885,8 @@ impl Assets {
 enum Url {
     /// This version's URL: these exact bytes, under a strong tag, sent in ranges.
     Current,
-    /// An older version's URL: maybe other bytes after a deploy, so sent whole.
+    /// An older version's URL: this version's bytes, never cached, under their strong tag, sent in
+    /// ranges.
     Old,
     /// A URL that outlives a deploy (the favicon's): revalidated under a weak tag, sent whole.
     Fixed,
@@ -1348,8 +1353,26 @@ mod tests {
             .oneshot(Request::get(&old).header(header::RANGE, "bytes=10-19").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(old.status(), StatusCode::OK, "an old version's URL may name other bytes, so it is sent whole");
-        assert_eq!(body(old).await.len(), 100);
+        assert_eq!(
+            (old.status(), &old.headers()[header::CONTENT_RANGE], &old.headers()[header::CACHE_CONTROL]),
+            (StatusCode::PARTIAL_CONTENT, &HeaderValue::from_static("bytes 10-19/100"), &HeaderValue::from_static("no-cache")),
+            "an old version's URL is answered in part from these bytes, never cached (Safari plays a video only from ranges)"
+        );
+        assert_eq!(body(old).await, video.as_bytes()[10..20]);
+        let moved = url.replacen(assets.version(), "000000000000", 1);
+        let moved = app
+            .clone()
+            .oneshot(
+                Request::get(&moved)
+                    .header(header::RANGE, "bytes=10-19")
+                    .header(header::IF_RANGE, "\"0000000000000000\"")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(moved.status(), StatusCode::OK, "bytes that changed under an old URL are sent whole to If-Range");
+        assert_eq!(body(moved).await.len(), 100);
         let kept = get(&[(header::RANGE, "bytes=10-19"), (header::IF_NONE_MATCH, tag.to_str().unwrap())]).await.unwrap();
         assert_eq!(kept.status(), StatusCode::NOT_MODIFIED);
         let head = app

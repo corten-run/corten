@@ -1292,46 +1292,54 @@ rules something out.
     Last checked: 2026-11-09, sizes on `c65c10ec` and `4de159ab` with esbuild 0.28.2 and terser
     5.51.2, and the smoke tests on `10cd394d`.
 
-35. <a id="choice-asset-ranges"></a>**A static file answers one range of its bytes, only at the
-    current version's URL and only as it is stored, and never sends `Accept-Ranges`.** A
-    `<video>` asks for ranges to seek, so a file sent only whole makes a player download what it
-    skips. A `GET` of the current version's URL for a file sent unencoded answers one range as a
-    `206` with its `Content-Range`, a range past the end as a bare `416`, and `If-Range` keeps the
-    range only for the file's own tag compared byte for byte (RFC 9110). Sent whole instead: several
-    ranges or another unit (RFC 9110 lets a server ignore `Range`); a compressed body, whose offsets
-    are not the file's; and an old version's URL or the favicon's, whose bytes may change in a
-    deploy between two ranges, so a player would join two files. The cost: a page still holding an
-    old version's URLs after a deploy (a tab left open, a page a cache kept) gets its clip whole,
-    which a browser plays without seeking, and a player that needs ranges to play at all may not
-    play it until the page is reloaded. No answer advertises ranges: the
-    header is optional, browsers send `Range` without it, and it cost every file's answer. The
-    PWA's worker leaves a range to the network, since its cache holds whole files and cannot hold a
-    `206`. Not chosen: `Accept-Ranges: bytes` on every file (above); multipart ranges (no browser
-    player asks for them, and each would be a body Corten writes); slicing an encoded body (the
-    client's offsets name the file, not the encoding); the worker cutting a range from a whole file
-    it cached and answering the `206` itself (code in every app's worker for offline video, which
-    no app here needs; [Limit 5](#limit-offline-fallback) stays, and a whole video the worker stored from a request without a
-    range is not read back by a player); a range at an old version's URL when `If-Range` names the
-    current tag (a player's first request carries no `If-Range`, so it would not help there).
+35. <a id="choice-asset-ranges"></a>**A static file answers one range of its bytes at any
+    version's URL, only as it is stored, and never sends `Accept-Ranges`.** A `<video>` asks for
+    ranges to seek, so a file sent only whole makes a player download what it skips, and Safari on
+    iOS plays media only from a server that answers ranges. A `GET` of a versioned URL, this
+    version's or an old one's, for a file sent unencoded answers one range as a `206` with its
+    `Content-Range`, a range past the end as a bare `416`, and `If-Range` keeps the range only for
+    the tag of the bytes sent, compared byte for byte (RFC 9110). An old version's URL is answered
+    from this version's file, `no-cache`, under that file's strong tag, so a page still holding an
+    old version's URLs after a deploy (a tab left open, a page a cache kept) still plays and seeks
+    its clip: every deploy renames every file, so refusing those ranges would stop the clip for
+    every Safari visitor until the page is reloaded, even when its bytes did not change. Sent whole
+    instead: several ranges or another unit (RFC 9110 lets a server ignore `Range`); a compressed
+    body, whose offsets are not the file's; and the favicon, whose URL outlives every deploy under
+    a weak tag. The cost: a deploy between two ranges of one playback changes the tag, so a client
+    that sends `If-Range` gets the whole file, and one that does not may join ranges of two
+    versions, the risk a fleet partway through a deploy carries at the current URL too. No answer
+    advertises ranges: the header is optional, browsers send `Range` without it, and it cost every
+    file's answer. The PWA's worker leaves a range to the network, since its cache holds whole
+    files and cannot hold a `206`. Not chosen: `Accept-Ranges: bytes` on every file (above); an
+    old version's URL sent whole (Safari on iOS would not play it, above); multipart ranges (no
+    browser player asks for them, and each would be a body Corten writes); slicing an encoded body
+    (the client's offsets name the file, not the encoding); the worker cutting a range from a whole
+    file it cached and answering the `206` itself (code in every app's worker for offline video,
+    which no app here needs; [Limit 5](#limit-offline-fallback) stays, and a whole video the worker
+    stored from a request without a range is not read back by a player).
 
-    Stands on: platform (with no `Accept-Ranges`, Chromium, Firefox and WebKit each send a `Range`
-    for the clip and play it from the `206` and seek, as card-market's smoke shows; the smoke does
-    not check which range a seek asks for, since the 8 KB clip comes whole in the first); measured (callgrind,
-    `what_serving_a_file_costs`, 1,200 requests less 200 over 1,000, five runs each taking turns:
-    11,826.69 (11,825.27 to 11,826.73) instructions a request on `97a63a92` with the test added
-    and 12,024.05 (12,024.05 to 12,025.49) with ranges, +197 (+1.7%), nearly all of it on a
-    request that sends no `Range`; a draft that sent `Accept-Ranges` measured 12,182, one
-    figure from three runs on `c65c10ec`); reasoned (one range and one version
-    per answer keep a player from joining bytes of two files).
+    Stands on: platform (Apple's Safari Web Content Guide, "Creating Video", says a server hosting
+    media for iOS must answer byte ranges, which iOS uses for random access; with no
+    `Accept-Ranges`, Chromium, Firefox and WebKit each send a `Range` for the clip and play it from
+    the `206` and seek, as card-market's smoke shows in Chromium and Firefox on Windows and in all
+    three on Linux, below; the smoke does not check which range a seek asks for, since the 8 KB
+    clip comes whole in the first); measured (callgrind, `what_serving_a_file_costs`, 1,200
+    requests less 200 over 1,000, five runs each taking turns: 11,826.69 (11,825.27 to 11,826.73)
+    instructions a request on `97a63a92` with the test added and 12,024.05 (12,024.05 to
+    12,025.49) with ranges, +197 (+1.7%), nearly all of it on a request that sends no `Range`; a
+    draft that sent `Accept-Ranges` measured 12,182, one figure from three runs on `c65c10ec`);
+    reasoned (one range per answer and a tag naming the bytes sent keep a client that sends
+    `If-Range` from joining bytes of two files).
 
-    Revisit when: a client that matters will not seek without `Accept-Ranges` (Safari or iOS on
-    real hardware are not tested here), or will not play a whole answer (an old version's URL
-    after a deploy); a player asks for several ranges; or an app needs a
-    `Media` answer, not a static file, to seek.
+    Revisit when: Safari or iOS on real hardware, not tested here, will not play or seek a clip
+    served this way, or a client that matters will not seek without `Accept-Ranges`; a player is
+    seen joining ranges of two versions after a deploy; a player asks for several ranges; or an
+    app needs a `Media` answer, not a static file, to seek.
 
-    Last checked: 2026-11-10, the crate's tests on `3d88dd67` and card-market's smoke in
-    Playwright 1.64.1's Chromium, Firefox and WebKit (WebKit's seek on Linux only), the count on
-    `97a63a92` and `92d38464`.
+    Last checked: 2026-11-10, Apple's guide read; the crate's tests on this branch; card-market's
+    smoke in Playwright 1.64.1, Chromium and Firefox on Windows on `3a6f8a3c` (WebKit skipped
+    there), and Chromium, Firefox and WebKit on Linux on 2026-11-09 against a build of `32cd2ce6`,
+    when the clip was on the home page; the count on `97a63a92` and `92d38464`.
 
 ## Rules
 

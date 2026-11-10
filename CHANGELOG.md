@@ -7,9 +7,10 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Added
 
 - Static files with `mp4`, `webm` and `vtt` names are sent as `video/mp4`, `video/webm` and
-  `text/vtt`, and a `GET` of the current version's URL for a file sent as it is stored answers a
+  `text/vtt`, and a `GET` of a versioned URL, this version's or an old one's, for a file sent as it
+  is stored answers a
   single byte `Range` with a `206` (a bare `416` past its end, the whole file for several ranges, a
-  `HEAD` or an old version's URL), honoring
+  `HEAD` or the favicon), honoring
   `If-Range` for its strong ETag, so a native `<video>` with captions plays and seeks from
   `embed!`; the PWA's service worker leaves a range to the network. Card market's `/grading` page
   shows a captioned clip, linked from each category; it is an area with its own stylesheet, so the
