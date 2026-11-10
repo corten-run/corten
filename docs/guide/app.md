@@ -1375,19 +1375,19 @@ Under the prefix:
    that carries the user's cookies is refused, and no `Access-Control-Allow-Credentials` is sent.
 6. `Json` in the prelude is `corten::Json` (feature `json`). It reads a request body into a
    `FromJson` (item 8) with the value and the rejections axum's `Json` gives: Corten's reader takes
-   an `application/json` body, and axum (`serde_json`) any other JSON content type and any body
-   the reader gives up on. What it writes is a `ToJson`: derive it
-   (`#[derive(ToJson)]`, also in the prelude) on the response type. It needs no `Serialize`
-   unless the app's own code writes the type with serde or it is a feed row; an agent tool's
-   output is a `ToJson` too, and its input a `FromJson`. The derive lays the JSON out when the
-   crate compiles, so a response
-   copies one byte string between each pair of values instead of writing every key, quote and
-   comma, into a `Vec` sized from the type's last response that the body keeps. It reads
-   `#[serde(...)]` and writes the bytes `serde_json` would. A `#[serde(flatten)]` field whose type
-   is a struct that derives `ToJson` is written in place, its members laid out the same way; an
-   attribute it cannot follow (`flatten` of a map or an enum, `serialize_with`) does not compile. A field whose type has only `Serialize` (an id or a
-   date from another crate) is written by `serde_json`. `serde_json::Value` is a `ToJson`, as above.
-   axum's `Json` works too, and writes any `Serialize` through `serde_json` and a `BytesMut`.
+   an `application/json` body, and axum (`serde_json`) any other JSON content type and any body the
+   reader gives up on. What it writes is a `ToJson`: derive it (`#[derive(ToJson)]`, also in the
+   prelude) on the response type. It needs no `Serialize` unless the app's own code writes the type
+   with serde or it is a feed row; an agent tool's output is a `ToJson` too, and its input a
+   `FromJson`. The derive lays the JSON out when the crate compiles, so a response copies one byte
+   string between each pair of values instead of writing every key, quote and comma, into a `Vec`
+   sized from the type's last response that the body keeps. It reads `#[serde(...)]` and writes the
+   bytes `serde_json` would. A `#[serde(flatten)]` field whose type is a struct that derives
+   `ToJson` is written in place, its members laid out the same way; an attribute it cannot follow
+   (`flatten` of a map or an enum, `serialize_with`) does not compile. A field whose type has only
+   `Serialize` (an id or a date from another crate) is written by `serde_json`. `serde_json::Value`
+   is a `ToJson`, as above. axum's `Json` works too, and writes any `Serialize` through `serde_json`
+   and a `BytesMut`.
 7. Numbers are written as serde_json writes them, a whole float as `2.0`
    ([Numbers in JSON](#numbers-in-json)).
 8. To read JSON another service answers, derive `FromJson` (in the prelude) and read it with

@@ -26,6 +26,8 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     use crate::schema::Body as Schema;
     // A struct with named fields: what writes its members alone, for a struct that flattens it.
     let mut members_body = None;
+    // An externally tagged enum of unit variants writes each as its name, a JSON string: a key.
+    let mut key = false;
     let schema;
     let body = if item.is_enum {
         let Some(body) = &item.body else { return err(item.name.span(), "ToJson: expected the enum's variants") };
@@ -36,6 +38,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             (Some(t), None, _) => crate::schema::Tagging::Internal(t.clone()),
             (None, _, false) => crate::schema::Tagging::External,
         };
+        key = matches!(tagging, crate::schema::Tagging::External)
+            && !variants.is_empty()
+            && variants.iter().all(|v| matches!(v.shape, crate::schema::VShape::Unit));
         schema = Schema::Enum { tagging, variants };
         code
     } else if let Some(fields) = &item.tuple {
@@ -114,6 +119,24 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             &[body],
         ),
     ))]);
+    if key {
+        out.extend(q("#[automatically_derived] impl", &[]));
+        out.extend(item.impl_generics.clone());
+        out.extend(q("::corten::json::JsonKey for", &[]));
+        out.extend([TokenTree::Ident(item.name.clone())]);
+        out.extend(item.type_generics.clone());
+        out.extend(where_clause.clone());
+        out.extend([TokenTree::Group(Group::new(
+            Delimiter::Brace,
+            q(
+                "#[inline]
+                fn write_key(&self, __OUT: &mut ::std::vec::Vec<u8>) {
+                    ::corten::json::ToJson::write_json(self, __OUT)
+                }",
+                &[],
+            ),
+        ))]);
+    }
     if let Some(members_body) = members_body {
         out.extend(q("#[automatically_derived] impl", &[]));
         out.extend(item.impl_generics.clone());

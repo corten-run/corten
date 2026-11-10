@@ -527,26 +527,38 @@ impl<T: ToJsonMembers + ?Sized> ToJsonMembers for Box<T> {
 /// A key must be the text serde writes for it, or a derived type's map field changes when the key
 /// gains this impl (that field is written by `ToJson` from then on, not by serde). An enum of unit
 /// variants that derives `ToJson` and is externally tagged (serde's default) writes its name as a
-/// JSON string already, renames included, so its key is that (an internally tagged or untagged one
-/// writes an object or `null`, which is no key):
+/// JSON string, renames included, so the derive makes it a key too:
 ///
 /// ```
-/// use corten::json::{JsonKey, ToJson};
+/// use corten::json::ToJson;
 /// #[derive(serde::Serialize, ToJson, PartialEq, Eq, PartialOrd, Ord)]
 /// #[serde(rename_all = "snake_case")]
 /// enum Stock { InStock, SoldOut }
-/// impl JsonKey for Stock {
-///     fn write_key(&self, out: &mut Vec<u8>) {
-///         self.write_json(out)
-///     }
-/// }
 /// let counts = std::collections::BTreeMap::from([(Stock::InStock, 1), (Stock::SoldOut, 2)]);
 /// assert_eq!(counts.to_json(), serde_json::to_string(&counts).unwrap());
 /// assert_eq!(counts.to_json(), r#"{"in_stock":1,"sold_out":2}"#);
 /// ```
+///
+/// One that is internally tagged or untagged writes an object or `null`, and one with a variant that
+/// holds data writes an object for it, none of which is a key, so as a key it does not compile:
+///
+/// ```compile_fail,E0277
+/// use corten::json::ToJson;
+/// #[derive(ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// #[serde(tag = "kind")]
+/// enum Stock { InStock, SoldOut }
+/// let _ = std::collections::BTreeMap::from([(Stock::InStock, 1)]).to_json();
+/// ```
+///
+/// ```compile_fail,E0277
+/// use corten::json::ToJson;
+/// #[derive(ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// enum Stock { InStock, Held(u32) }
+/// let _ = std::collections::BTreeMap::from([(Stock::InStock, 1)]).to_json();
+/// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a map key ToJson can write (JsonKey)",
-    note = "a key is text, a number, bool or char; for an app's own key type, implement corten::json::JsonKey for it, writing the text serde writes for it (for an externally tagged enum of unit variants, serde's default, that derives ToJson, `self.write_json(out)`, so its renames hold)"
+    note = "a key is text, a number, bool or char; for an app's own key type, implement corten::json::JsonKey for it, writing the text serde writes for it (an externally tagged enum of unit variants, serde's default, that derives ToJson is one already; a tagged or untagged one, or one with a variant that holds data, is not written as text)"
 )]
 pub trait JsonKey {
     /// Appends the key as one JSON string, quotes included.
@@ -637,6 +649,10 @@ impl<T: ToJson + ToOwned + ?Sized> ToJson for Cow<'_, T> {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
         (**self).write_json(out)
+    }
+
+    fn __json_size() -> Option<&'static AtomicUsize> {
+        T::__json_size()
     }
 }
 
