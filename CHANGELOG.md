@@ -4277,8 +4277,8 @@ Corten is pre-1.0, so any minor version may change the API.
     for are both, written and read as serde does (`Duration`, `SystemTime`, IP and socket
     addresses, paths, the `NonZero` integers, `PhantomData`, `serde_json::Number` and, with
     the `types` feature, `RawValue`), as are `Cow<T>`, `Box<str>`, `Box<Path>` and `Box<[T]>`, the 128-bit
-    integers, sets, `VecDeque`, arrays and tuples, and, with serde's `rc` feature, `Arc` and `Rc`
-    of a `FromJson`, of `str`, of `Path` or of `[T]`. Derive `ToJson` or `FromJson`; a `Serialize` or
+    integers, sets, `VecDeque`, arrays and tuples, and `Arc` and `Rc` of a `FromJson`, of `str`, of `Path`,
+    of `[T]` or (with `types`) of `RawValue`, which are read with serde's `rc` feature. Derive `ToJson` or `FromJson`; a `Serialize` or
     `Deserialize` type that has a schema but is not one (another crate's, or a map of one) goes
     in a `#[serde(transparent)]` newtype that derives it; only a type whose output schema is
     written by hand implements `ToJson` by hand beside it
@@ -4288,7 +4288,8 @@ Corten is pre-1.0, so any minor version may change the API.
     `#[serde(transparent)]` newtype that derives `FromJson`. `serde_json::Map<String, Value>` is now a `FromJson`, so an input read as
     any object compiles as before. CI and the Checks build `corten-run` with `agent` and `feed` alone, as an app
     takes them, since the workspace turns on serde's `rc` and an app need not. A field whose own
-    `Serialize` fails (a map with a key JSON cannot hold, inside another crate's type) now panics,
+    `Serialize` fails (a map with a key JSON cannot hold, inside another crate's type, or a std type
+    serde refuses: a path that is not UTF-8, a `SystemTime` before the epoch) now panics,
     as in any `ToJson` answer: the request ends as a handler's panic does, logged and answered with
     the app's 500 (in an `Api`, its JSON failure), where the call answered an internal error as the
     tool's result with the call's `id`; a test holds it, and a log line names the tool. A debug

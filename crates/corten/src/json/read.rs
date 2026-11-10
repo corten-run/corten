@@ -909,8 +909,8 @@ pub mod __private {
     pub use super::{Fallback, Reader};
     use super::{FromJson, R};
 
-    /// What an `Arc` or `Rc` of it is read through: a `FromJson`, text, a path or a list. Not a
-    /// public API.
+    /// What an `Arc` or `Rc` of it is read through: a `FromJson`, text, a path, a list or (feature
+    /// `types`) a `RawValue`. Not a public API.
     pub trait Shared {
         fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>>;
         fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>>;
@@ -949,6 +949,20 @@ pub mod __private {
         #[inline]
         fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
             std::path::PathBuf::__read(r).map(std::rc::Rc::from)
+        }
+    }
+
+    /// Read as a `Box<RawValue>` and moved behind the pointer, as serde's `rc` reads one.
+    #[cfg(feature = "types")]
+    impl Shared for serde_json::value::RawValue {
+        #[inline]
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>> {
+            Box::<serde_json::value::RawValue>::__read(r).map(std::sync::Arc::from)
+        }
+
+        #[inline]
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
+            Box::<serde_json::value::RawValue>::__read(r).map(std::rc::Rc::from)
         }
     }
 
@@ -1292,6 +1306,11 @@ mod tests {
         {
             let raw: BTreeMap<String, Box<serde_json::value::RawValue>> = from_str(r#"{"x": [1, {"a": 2}]}"#).unwrap();
             assert_eq!(raw["x"].get(), r#"[1, {"a": 2}]"#);
+            let shared: Vec<Arc<serde_json::value::RawValue>> = from_str(r#"[ {"a": 1}, 2]"#).unwrap();
+            let theirs: Vec<Arc<serde_json::value::RawValue>> = serde_json::from_str(r#"[ {"a": 1}, 2]"#).unwrap();
+            assert_eq!(shared.iter().map(|v| v.get()).collect::<Vec<_>>(), theirs.iter().map(|v| v.get()).collect::<Vec<_>>());
+            let one: Rc<serde_json::value::RawValue> = from_str("[1]").unwrap();
+            assert_eq!(one.get(), "[1]");
         }
     }
 

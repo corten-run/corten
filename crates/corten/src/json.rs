@@ -1467,6 +1467,15 @@ mod tests {
         }
     }
 
+    /// A std type serde cannot always write panics as serde's error says, as any field whose own
+    /// `Serialize` fails: a `SystemTime` before the epoch (a path that is not UTF-8 is the other).
+    #[test]
+    #[should_panic(expected = "SystemTime must be later than UNIX_EPOCH")]
+    fn a_std_type_serde_refuses_panics() {
+        let before = std::time::SystemTime::UNIX_EPOCH - std::time::Duration::from_secs(1);
+        let _ = before.to_json();
+    }
+
     #[derive(Clone, Serialize, ToJson)]
     struct Inner {
         a: u8,

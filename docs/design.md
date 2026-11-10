@@ -1334,8 +1334,8 @@ rules something out.
     `ToJson`, so a derived `ToJson` writes both the schema and the bytes (a field of another crate's
     type inside it is still written by serde under a schema written for it, as in any `ToJson`
     answer), and a tool's output is written by the code every other response is. The std types
-    Corten gives a schema for are `ToJson` and `FromJson` too, written and read as serde does
-    (but for a map whose key is not a `JsonKey`, which is not written, or not `String`, which is not
+    Corten gives a schema for are `ToJson` too, and `FromJson` in their owned forms (`str`, `[T]`,
+    `Path` and `RawValue` boxed or shared), written and read as serde does (but for a map whose key is not a `JsonKey`, which is not written, or not `String`, which is not
     read, and an `Arc` or `Rc` read without serde's `rc`), and
     another crate's type that has a schema goes in a `#[serde(transparent)]` newtype that derives
     `ToJson`, one impl. A `ToJson` written by hand, for a type whose schema is written by hand (one
@@ -1345,10 +1345,12 @@ rules something out.
     of the deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson` cannot write
     takes (written by hand, or serde's for an attribute it refuses), which again leaves two impls in
     its author's hands. What this gives up: a tool output whose `ToJson` falls back to a field's own
-    `Serialize` and fails (another crate's map with a key JSON cannot hold) panics, and the call
-    ends with the app's 500, as every other `ToJson` answer already does, where it used to be
+    `Serialize` and fails (another crate's map with a key JSON cannot hold, or a std type serde
+    refuses: a path that is not UTF-8, a `SystemTime` before the epoch) panics, and the call ends
+    with the app's 500 (an app built with `panic = "abort"` ends instead), as every other `ToJson` answer already does, where it used to be
     answered as the tool's failed result (`isError`, "internal error"). It stands because such a
-    value fails for every client the same way, the derive refuses what it cannot write, and a
+    value fails for every client the same way, the derive refuses what it cannot write and Corten's own impls refuse only what serde refuses,
+    and a
     fallible write on this one path would be a second way to write an answer. It also gives up the
     guarantee that a release build's answer parses: a hand-written `ToJson` that writes broken
     JSON breaks the JSON-RPC answer around it, where serde could not (a debug build answers a call
@@ -1392,7 +1394,7 @@ rules something out.
     Last checked: 2026-11-09, the
     derives and the agent endpoint's bounds, inputs and outputs, at `7965aeab`, the bounds' last
     change; 2026-11-10, no such impl in `examples/`, at `7197604f`; 2026-11-10, the std types' and
-    pointers' `ToJson` and `FromJson` against serde's bytes and values (`json` tests, and `corten-run` built with `json` alone), at `fcecee41`; 2026-11-10, the
+    pointers' `ToJson` and `FromJson` against serde's bytes and values (`json` tests, and `corten-run` built with `json` alone and with `agent,feed`), at `fcecee41`; 2026-11-10, the
     `tool_cost` count, on `217bce2c` with `tool_cost` added and on `fcecee41`.
 
 ## Rules

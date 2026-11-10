@@ -97,7 +97,7 @@
 //! writes the JSON serde's `Serialize` would, laid out when the crate compiles), into the response
 //! as is, so a tool returning a large shared value (`Arc<T>`) costs one write and no copy. As in
 //! any `ToJson` answer, a field whose own `Serialize` fails (another crate's map with a key JSON
-//! cannot hold) panics: the request ends as a handler's panic does, logged and answered with the
+//! cannot hold, a path that is not UTF-8, a `SystemTime` before the epoch) panics: the request ends as a handler's panic does, logged and answered with the
 //! app's 500 (in an [`Api`](crate::Api), its JSON failure), not as the tool's result, with a log
 //! line that names the tool.
 //!
