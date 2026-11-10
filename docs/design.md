@@ -676,8 +676,8 @@ rules something out.
    Corten alone. What this does not buy is independence from axum's versions: the traits' shape
    is still axum's, and an axum major version that changes it (0.8 dropped `#[async_trait]` and
    added `OptionalFromRequestParts`) changes an app's extractors with the Corten release that moves to it.
-   That would wait on Corten owning the handler traits, which [Choice 25](#choice-axum-router) declines for now; if
-   Corten ever owns them, they should keep these names, the `Rejection` that makes a response and the
+   That waits on Corten owning the handler traits, step 3 of [Choice 25](#choice-axum-router)'s order;
+   when Corten owns them, they keep these names, the `Rejection` that makes a response and the
    `from_request_parts(parts, state)` signature, so impls written against these paths keep
    compiling. The traits come from `axum-core` (already in axum's tree, kept at axum's version),
    since axum's own paths also carry axum's derives of the same names when its `macros` feature
@@ -694,18 +694,20 @@ rules something out.
    for a stand-in server in a test (its `Router` and `serve`): the stand-in is another server
    the app calls, not the app, so a Corten name for it would be a second server API for tests
    alone, and `serve_on` would give the stand-in the app's defaults (its security headers, its
-   shutdown) that the server it stands in for does not have.
+   shutdown) that the server it stands in for does not have. This lasts while axum is a
+   dependency: when it leaves ([Choice 25](#choice-axum-router), step 4) the re-export goes with
+   it, and a test that wants a stand-in depends on axum itself.
 
    Stands on: platform (handlers are axum's `Handler`, and Rust's orphan rule forbids bridging a
    trait of Corten's to axum's); value (a second trait beside axum's for each type would be a second
    concept, Values 6).
 
    Revisit when: Corten owns extraction and dispatch (`FromRequestParts` and the `Handler` impls
-   that call a handler, not only the `RouteHandler` bound it owns now), which [Choice 25](#choice-axum-router) declines for
-   now and says what would reopen it: the orphan rule then no longer stands between them, and these
+   that call a handler, not only the `RouteHandler` bound it owns now), steps 2 and 3 of
+   [Choice 25](#choice-axum-router)'s order: the orphan rule then no longer stands between them, and these
    names stay as Corten's own. An axum release that changes `FromRequestParts` reaches apps'
    extractors with the Corten release that moves to it, a cost this Choice accepts, and is
-   [Choice 25](#choice-axum-router)'s first condition.
+   one of [Choice 25](#choice-axum-router)'s Revisit-when conditions.
 
    Last checked: 2026-11-06, axum 0.8.9 (`axum-core` 0.5.6) and rustc 1.99.1, at `62eb57f7`.
 
@@ -804,94 +806,121 @@ rules something out.
    Last checked: 2026-11-06, OpenAPI 3.1.1, which the document declares, as written at `93a16d2b`;
    2026-11-06, OpenAPI 3.2.0's `in: querystring`, as written at `92df8899`.
 
-25. <a id="choice-axum-router"></a>**Matching a path to its route, calling the handler and framing server-sent events stay
-   axum's; the handler bound and axum's features are Corten's.** Corten owns the layer around
-   them: the accept loop and connection limits, its middleware stages, typed routes and
-   `Params`, the readers (`Form`, `Json`, `Upload`), `Upgrade`, and the checks every route
-   passes (a route that says `unstaged`, [Choice 28](#choice-fixed-stages), passes the check
-   of its arguments and no stage). What stays axum's is `Router`, `MethodRouter` and matchit,
-   axum's `Handler` impls that read each argument and call the function, and `Sse`.
+25. <a id="choice-axum-router"></a>**Corten's request path is built from parts of its own on hyper, `http`, tokio and
+    matchit: a connection loop, stages, a router, handlers and the readers they take. axum and
+    tower leave it in steps, each measured; until a step lands, the part it replaces stays
+    axum's.** Each part is one of these, and each is built on the one before it:
 
-    Owning them was weighed against correctness first (the order in the README's Values): a router
-    of Corten's would write again what axum's tests already hold it to, `HEAD`, `405` with
-    `Allow`, percent-decoding, nesting and fallbacks, about 4,600 lines of axum 0.8.9's routing,
-    method routing, handler, boxing, matched-path and nested-path modules without their tests, and
-    that risk outranks the speed it could buy. The speed is small: from memory, functions named
-    for axum, tower or matchit are 1.7% of the item page's user instructions and their code
-    inside Corten's is 0.7% more, 2.5% in all, 3.6% counting all of `http::Extensions`, where
-    axum puts the matched path and parameters; on the item's JSON the same rows are 3.8% and
-    about 5%, and on the item-API page 0.2% (bench/fullstack, split by crate). A router of
-    Corten's would still match paths and hand over parameters, so it would save less than that.
-    No prototype router was measured: allocations and copies axum causes are counted in other
-    rows, so these shares are not a ceiling, but a gain of their size would not outweigh the risk
-    above, and only a measured share well past it would (below).
-    Clashes between the routes of one module need no dispatch of Corten's either:
-    `#[corten::routes]` sees every path in its module, and clashes across areas and APIs stay a
-    startup check.
+    1. Transport: tokio's TCP listeners, and the app's own (`corten::Listener`, a TLS step in
+       `serve_wrapped`). UDP is only HTTP/3's, which [Limit 14](#limit-http1) leaves to the proxy.
+    2. Protocol: hyper's HTTP/1.1 reads and writes the connection. It stays: framing is where a
+       server's worst bugs live (request smuggling, chunked bodies, pipelining), hyper is tested
+       for them as Corten could not be, and nothing measured here points at it.
+    3. Vocabulary: the `http` crate's `Request`, `Response` and `HeaderMap`, which hyper, HTTP
+       clients and HTTP/3 libraries share (`corten::http`). Nothing above names the connection's
+       protocol.
+    4. Stages: what goes around a route ([Choice 28](#choice-fixed-stages)), each one a future that
+       wraps the route's, in Corten's one order. A route goes through all of them or says
+       `unstaged` and goes through none; nothing reorders them.
+    5. Router: the method and path to a route (matchit), boxing once per request.
+    6. Handlers: a function whose arguments are read from the request and its stages, and whose
+       answer is any `IntoResponse`, a raw `Response` included.
+    7. Typed routes, `#[corten::routes]`, areas, APIs and `App`, which say what each route gets.
 
-    Server-sent events stay axum's for the same reason on a smaller scale: `text/event-stream` is
-    a standard format (multi-line data, comments, retry and keep-alive), axum's encoder writes it,
-    and an encoder of Corten's would be a second copy of it with nothing measured to gain.
+    Today 2 and 3 are hyper's and the `http` crate's, Corten's own code is 1, 4 and 7 (the
+    accept loop and connection limits, the stages, `Params`, the readers `Form`, `Json` and
+    `Upload`, `Upgrade`), 5 and 6 are still axum's (`Router`, `MethodRouter`, the `Handler`
+    impls, `FromRequestParts`, `Sse`), and the stages sit on tower's `Layer` and `Service`
+    because axum's router takes them. That seam is what an app pays for: axum boxes every layered
+    route again and clones that box on each request, so what goes around one route has to be
+    written into its handler to cost nothing more. An `unstaged` route's host check and its API's
+    JSON, written first as a `route_layer` around those routes, cost 9,230 instructions a request
+    against 8,479 written into the route's handler. A prototype pipeline of Corten's own (`prototypes/pipeline` at `7cea4970`, on the branch
+    `codex/pipeline-prototype`, which is not yet pushed or merged, so these numbers cannot yet be
+    checked from the repository) took 5,393 instructions for one JSON request through its router
+    against axum's 8,508, and 9,493 with every default stage against Corten's 17,336. tower's
+    `Service` (`poll_ready`, `&mut self`, a clone per call) is a shape for backpressure that
+    a request's route does not have; it stays only at the app's edge, where `App::layer` takes
+    a tower layer ([Limit 12](#limit-fixed-stages)).
 
-    Two things were Corten's to take without owning dispatch, and it took them:
-    1. **The handler bound.** `#[corten::routes]` names each handler through Corten's
-       `RouteHandler`, whose message is Corten's (`.. cannot serve this route`). It was one impl
-       over every axum `Handler`, so a handler argument no request can fill reported axum's
-       unmet `Handler<_, ()>`, with a hint to use `#[axum::debug_handler]`, at the handler's name,
-       and named no argument; `#[diagnostic::do_not_recommend]` on that impl and moving the bound
-       to the trait did not change that. It is now one impl per arity with axum's own bounds
-       written out (`FromRequestParts` for each argument, `FromRequest` for the last,
-       `IntoResponse` for the result), so the same handler fails Corten's trait, in its words, and
-       a second error names the argument (`Name: FromRequestParts<()>` is not satisfied). The
-       handler is still the same function with axum's `Handler` impl, so nothing on the request
-       path changes (`tests/handler_message.rs` builds such an app and reads both messages).
-    2. **axum's features.** Corten turns on only `http1`, `tokio` (its `serve_on` loop on
-       axum's `Listener`, `ConnectInfo`) and `matched-path`, and `json` with Corten's own
-       `json` (`corten::Json` shares `axum::Json`'s rejection); corten-feed asks for none, so an
-       app with a feed gets the same set. `original-uri` copied every request's URI into its
-       extensions for nothing to read (about 150 of card-market's item page's 83,400
-       instructions at fa597483), and `form`, `query`, `tracing` and `tower-log` serve readers
-       Corten has its own of; without them `log`, `ryu` and `serde_urlencoded` leave the tree.
-       matchit, mime, sync_wrapper and tower are still in it only for axum, and
-       serde_path_to_error with `json`.
+    The steps, in order, each landing only when the one before it has:
+    1. The dispatch suite (`crates/corten/tests/dispatch.rs`): raw HTTP/1.1 to `serve_on` and the
+       answer's bytes, naming no router type, for matching (a segment of text chosen over a
+       parameter, the path before the method, nothing decoded before matching, an empty segment
+       standing for an empty parameter before another segment and for none at the end), `HEAD`, `405` with `Allow` for any
+       method, percent-decoding of parameters, catch-alls, text after a parameter, an area's and
+       an API's prefix, every path under an API's prefix being its own, an API's failures, the
+       host check, and an unstaged route's. It passes on axum now, and every later step passes it
+       unchanged; a case the next step finds missing is added to it first, on axum.
+    2. A router of Corten's on matchit in place of axum's `Router` and `MethodRouter`, and
+       `unstaged` as a route whose stages are left out rather than checks written into its
+       handler. The stages keep the shape they have unless callgrind counts fewer for another:
+       rewritten as combinators on axum's router they cost about 200 to 263 instructions more with
+       jemalloc ([Choice 28](#choice-fixed-stages), Not chosen), so the prototype's one future with
+       no `async` block per stage is measured again on the new router before it replaces them.
+       It lands when the suite passes and callgrind (CONTRIBUTING.md, Pull requests) counts no
+       more on card-market's item page, its JSON and an API request than axum's router does.
+    3. The handler and reader traits Corten's own, keeping axum's names, `Rejection` and
+       `from_request_parts(parts, state)` ([Choice 21](#choice-own-extractors)), so an app's own
+       extractors keep compiling, with a note for each change an app sees.
+    4. Server-sent events written by Corten (`text/event-stream`, a standard format) and
+       `corten::Listener` a trait of its own; then axum leaves Corten's dependencies, which
+       reopens [Choice 21](#choice-own-extractors)'s `corten::axum` for a test's stand-in server:
+       an app's test that wants one then depends on axum itself.
 
-    What staying costs: an axum major version that changes `Handler`, `FromRequestParts` or
-    `IntoResponse` changes the bounds above and an app's own extractors ([Choice 21](#choice-own-extractors)) with the
-    Corten release that moves to it, and the second error's note is still axum's ("not a valid
-    axum extractor"). This changes if an axum release changes those traits in a way apps see, if
-    axum's share of the item page from memory grows past about 5% (functions named for axum,
-    tower or matchit and their code inside Corten's, 2.5% now; the JSON's 3.8%), or if owning dispatch would catch a
-    mistake that now compiles
-    ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
+    Not chosen: keeping axum's router and handlers, which this Choice held until the seam above
+    was measured (functions named for axum, tower or matchit were 2.5% of the item page's user
+    instructions, which undercounts what owning dispatch saves, since allocations and copies axum
+    causes are counted in other rows); its reason was correctness, that a router of Corten's
+    would write again what axum's tests hold it to (`HEAD`, `405` with `Allow`,
+    percent-decoding, nesting, fallbacks), and in the prototype four review rounds in a row each
+    found a `HEAD` fault. The suite in step 1 is that risk's answer: those cases are now Corten's
+    tests, read on the wire, before anything replaces axum. Nor stages an app orders itself, as
+    the prototype has them, where nothing checks that the host check comes before an app's
+    middleware; nor replacing hyper, whose reasons are in 2 above; nor a transport of Corten's
+    for UDP or QUIC before HTTP/3 is ([Limit 14](#limit-http1)); nor the server-sent events
+    encoder first, which saves nothing measured and is the smallest of the parts.
 
-    Stands on: bet (axum keeps `Handler`, `FromRequestParts` and `IntoResponse` as apps see them
-    across the releases Corten moves to); measured, one pair of runs, a floor and no prototype
-    (callgrind on card-market's item page from memory, split by crate on main `b79a6b23`: functions
-    named for axum, tower or matchit are 1.7% of its user instructions, 2.5% with their code inside
-    Corten's, and the item's JSON 3.8% by the same measure; allocations and copies axum causes are
-    counted in other rows); measured, three runs each, at the function level only (on `fa597483`,
-    the functions that copy, insert and drop a request's URI ran 339 instructions a request without
-    `original-uri` against 492 with it, 153 fewer, about 0.2% of the item page's 83,400; the whole
-    request's count does not resolve it, with runs differing by up to 450); platform (rustc names
-    the argument no request can fill for one impl per arity with axum's bounds written out, where
-    one impl over every axum `Handler`, with `#[diagnostic::do_not_recommend]` or the bound moved to
-    the trait, did not; `crates/corten/tests/handler_message.rs` checks that today's error names the
-    route in Corten's words and names the argument); platform (`text/event-stream` is a standard
-    format axum's encoder already writes); reasoned (a router of Corten's would write again what
-    axum's tests hold it to, `HEAD`, `405` with `Allow`, percent-decoding, nesting and fallbacks,
-    and `#[corten::routes]` sees every path in its module, so route clashes need no dispatch of
-    Corten's); value (correctness before speed, the order the README's Values give).
+    The handler bound and axum's features are Corten's already. `#[corten::routes]` names each
+    handler through Corten's `RouteHandler`, one impl per arity with axum's bounds written out,
+    so a handler argument no request can fill fails Corten's trait in its words and a second
+    error names the argument (`tests/handler_message.rs`); one impl over every axum `Handler`
+    reported axum's unmet `Handler<_, ()>` and named no argument. axum's features are only
+    `http1`, `tokio` and `matched-path` (and `json` with Corten's `json`): `original-uri`
+    copied every request's URI for nothing to read (153 instructions a request at `fa597483`),
+    and `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
-    Revisit when: an axum release changes `Handler`, `FromRequestParts` or `IntoResponse` in a way
-    apps see; axum's share of the item page from memory grows past about 5% (functions named for
-    axum, tower or matchit and their code inside Corten's: 2.5% now, the JSON's 3.8%); or owning
-    dispatch would catch a mistake that now compiles.
+    Stands on: measured (callgrind, release, five runs each: an `unstaged` route in the app's
+    routes with its host check in a `route_layer` 9,230 (9,229 to 9,233) instructions a request against 8,479 with its checks in the handler, both
+    with jemalloc, against main `c65c10ec`); measured (callgrind, release, five runs each, the
+    prototype at `7cea4970` on the branch `codex/pipeline-prototype`, not yet pushed or merged, its
+    result files in `prototypes/pipeline/results` there, against axum 0.8.9 and Corten at `f4d340c3`: 5,393 against axum's
+    8,508 for one JSON request in process through a router with no stages, 9,493 with every
+    default stage against Corten's 17,336, and over a loopback socket 12,485 against 15,904;
+    whole pipelines, not the router alone, and the prototype's defaults do less than Corten's: no
+    error page, tag, compression or layout reads); measured, one pair of runs (functions named for
+    axum, tower or matchit 1.7% of the item page's user instructions, 2.5% with their code inside
+    Corten's, the item's JSON 3.8%, on `b79a6b23`); platform (hyper 1.12 reads and writes
+    HTTP/1.1, matchit 0.8 matches paths, and `http` 1 is the type hyper and its clients share);
+    platform (rustc names the argument no request can fill for one impl per arity, where one impl
+    over every axum `Handler` did not); reasoned (the dispatch suite reads only the wire, so it
+    holds a router of Corten's to what axum does without naming either); value (fast and proven
+    fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed, the
+    order the Values give, which is why the suite comes first).
 
-    Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`, and axum's
-    own share at `15e81290`; 2026-11-06, the `original-uri` runs on `fa597483`; 2026-11-06, rustc
-    1.99.1's error for an argument no request fills, held by
-    `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-06, axum 0.8.9's event stream
-    encoder at `62eb57f7`.
+    Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case, or
+    counts more than axum's on any request measured in step 2 (that step then waits, and this
+    Choice says why); an axum release changes `Handler`, `FromRequestParts` or `IntoResponse`
+    in a way apps see before step 3 lands; or Corten serves HTTP/2 or HTTP/3 itself
+    ([Limit 14](#limit-http1)), which adds a protocol under 3 and must leave 4 to 7 as they are.
+
+    Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
+    the `original-uri` runs on `fa597483`; 2026-11-06, rustc 1.99.1's error for an argument no
+    request fills, held by `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-08,
+    the prototype's runs (`prototypes/pipeline/results/round4.tsv` and `round4-socket.tsv`),
+    the prototype at `7cea4970`; 2026-11-09, the `route_layer` runs, on an uncommitted variant of
+    `3452790a` with the host check and the API's JSON in a `route_layer`; 2026-11-09, the
+    dispatch suite on axum 0.8.9, hyper 1.12.0 and matchit 0.8.4, at `COMMIT_SUITE`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
     `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
@@ -1057,7 +1086,7 @@ rules something out.
     the check (8,479 against 7,559): a change that adds more than the about 100 instructions two
     builds of the same code differ by (measured on the pipeline prototype, which the repository
     does not hold) reopens this. What would
-    take it under is a router of Corten's own, which [Choice 25](#choice-axum-router) weighs,
+    take it under is the router of Corten's own that [Choice 25](#choice-axum-router) now plans,
     not dropping the check.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
