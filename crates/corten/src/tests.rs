@@ -13011,11 +13011,11 @@ mod layout_reads {
 }
 
 /// Log lines written to memory, for a test that reads what was logged.
-#[cfg(all(debug_assertions, feature = "log"))]
+#[cfg(feature = "log")]
 #[derive(Clone)]
 struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
-#[cfg(all(debug_assertions, feature = "log"))]
+#[cfg(feature = "log")]
 impl std::io::Write for Lines {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.0.lock().unwrap().extend_from_slice(bytes);
@@ -13070,8 +13070,9 @@ async fn an_app_logs_a_slow_prefetch_and_not_a_slow_click() {
     assert!(dropped.contains("/slow started the page ahead of a click, given up on after"), "{dropped}");
 }
 
-/// A panic in an unstaged route's handler is logged with the route's path as written.
-#[cfg(all(debug_assertions, feature = "log"))]
+/// A panic in an unstaged route's handler is logged with the route's path as written, in every
+/// build.
+#[cfg(feature = "log")]
 #[tokio::test]
 async fn an_unstaged_route_s_panic_is_logged_with_its_path() {
     use std::sync::Arc;

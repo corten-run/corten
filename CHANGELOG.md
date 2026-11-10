@@ -2652,9 +2652,11 @@ Corten is pre-1.0, so any minor version may change the API.
   adds serde's reason. axum's `matched-path` feature is off. An `unstaged` route's host check,
   headers, panic catch and API JSON are run by the router in place of its stages rather than by
   code wrapped into its handler, with nothing an app sees changed; it costs 71 instructions
-  more a request (7,003 against 6,932, callgrind, jemalloc; 67 with glibc; wall times did not
-  differ beyond their runs), and a staged request about 10 fewer. The stages stay one boxed
-  future: written as combinators on this router they cost 92 to 367 more a request.
+  more a request (7,003 against 6,932, callgrind, jemalloc; 67 with glibc), 86 in an API's
+  module (7,068 against 6,982; 82 with glibc), and wall times did not differ beyond their runs;
+  staged requests moved by less than two builds differ. The stages stay one boxed future:
+  written as combinators on this router they cost 92 to 367 more a request with jemalloc (16 to
+  298 with glibc).
 
 - Nightly benchmarking moves to equivalent-localization marketplace v2 from official r17,
   with a new baseline, detached launch/collection and three short-window CPU, memory, load

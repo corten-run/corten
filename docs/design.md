@@ -881,16 +881,17 @@ rules something out.
        prefix, the API's JSON, and that its `404` for a segment without the text after its
        parameter and its `405`, the router's own, meet as its handler's answer does. Its handler
        is the app's; the lane wraps the handler's future inside the one box the router makes for
-       it. It costs 71 instructions more than those checks written into the handler: 7,003
-       against 6,932 (7,068 against 6,982 in an API's module; 7,812 against 7,745 with glibc),
-       71 of the about 100 [Choice 28](#choice-fixed-stages) allows, which says why it is taken.
-       Every staged request costs about 10 fewer, likely from the route handed to the stages by
-       reference (reasoned, not measured apart); an unstaged route with its checks in its handler
-       never met the stages, so that change would not have lowered its 6,932. Two other shapes
-       were measured, one run each, and not taken: the lane boxed as a second future of its own,
-       110 more than the checks in the handler; and the lane held by the router's future, outside
-       `Stages`, 55 fewer for an unstaged route but 19 to 60 more for every staged one, which are most of an
-       app's requests. Wall times (in process, seven runs of 200,000 requests) differ by less than
+       it. It costs 71 to 86 instructions more than those checks written into the handler: 7,003
+       against 6,932 in the app's routes and 7,068 against 6,982 in an API's module (67 and 82
+       with glibc), within the about 100 [Choice 28](#choice-fixed-stages) allows, which says why
+       it is taken. Staged requests moved by 24 fewer to 8 more, within what two builds differ by.
+       Three other shapes were measured and not taken, each on one build with no control of its
+       own, so the differences are within what two builds can differ by and the choice between
+       them is tentative: the lane boxed as a second future of its own, 110 more than the checks
+       in the handler; a `laned` that moves its answer less, 19 more than the lane; and the lane
+       held by the router's future, outside `Stages`, 55 fewer than the checks in the handler (126
+       fewer than the lane) for an unstaged route but 16 to 60 more for each of six staged
+       requests, all in the same direction, and staged requests are most of an app's. Wall times (in process, seven runs of 200,000 requests) differ by less than
        their runs do: 859 ns against 839 for an unstaged route, with runs from 768 to 1,064. Until
        step 3, a handler that takes one of axum's readers of what axum's router stored (`Path`,
        `RawPathParams`, `MatchedPath`), which compiles and would answer `500` to every request, is
@@ -943,7 +944,7 @@ rules something out.
     against 18,583, a staged route beside an unstaged one 18,299 against 18,323, and the 404s
     12,167 and 18,099 against 12,171 and 18,091; on uncommitted variants, one run each, the lane
     as a second boxed future 7,042 and the lane held by the router's future 6,877, with staged
-    requests 19 to 60 more; wall times, seven runs each in process with jemalloc, medians 859 ns
+    requests 16 to 60 more; wall times, seven runs each in process with jemalloc, medians 859 ns
     against 839 unstaged, 882 against 942 in an API's module and 1,989 against 2,066 for an API
     request, every pair's runs overlapping by more than the difference); measured (callgrind, release, five runs each: an `unstaged` route in the app's
     routes with its host check in a `route_layer` 9,230 (9,229 to 9,233) instructions a request against 8,479 with its checks in the handler, both
@@ -980,7 +981,9 @@ rules something out.
     dispatch suite on axum 0.8.9, hyper 1.12.0 and matchit 0.8.4, at `599c302a`; 2026-11-09,
     Corten's router against axum's, at `373a10f9`, with the suite unchanged; 2026-11-09, the
     stages as combinators on Corten's router, on the uncommitted variant of `8ddeaea2`, and the
-    unstaged route's lane, at `bfa20380`, with the suite unchanged.
+    unstaged route's lane, at `bfa20380`, with the suite unchanged; 2026-11-09, the lane boxed
+    as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
+    the `laned` variant of `fa0b1525`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
     `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
@@ -1085,12 +1088,12 @@ rules something out.
     every failure under its prefix as JSON; only a failure boxes anything for that. A tower layer
     around those routes alone (axum's `route_layer`) was built first and measured at 751
     instructions a request more than the same checks in the handler (jemalloc), since axum boxes a
-    layered route again and clones that box on each request; the lane costs 71 more than the same
-    checks in the handler (about 1%, which wall times did not show), taken for one place that says
-    what goes around a route, and for a handler's future that need not be `Unpin`: the checks
-    written around it needed one that was, as axum's boxed futures are and Corten's own handlers'
-    ([Choice 25](#choice-axum-router), step 3) are not, so they would box it a second time; a
-    `laned` that moves its answer less counted 19 more, not fewer
+    layered route again and clones that box on each request; the lane costs 71 to 86 more than
+    the same checks in the handler (about 1%, which wall times did not show), taken for one place
+    that says what goes around a route: the router holds the app's stages or the route's lane for
+    each path, and its own `404` and `405` meet the lane as the handler's answer does, with no
+    handler of their own. Value 1 still holds with it: the route stays under axum's plain router
+    in the same build and inside the bound below, which is what this Choice holds it to
     ([Choice 25](#choice-axum-router), step 2, has the shapes measured). Its answer gets `X-Content-Type-Options: nosniff` and its own
     `Content-Security-Policy: sandbox` beside any the handler set, whatever its type, both
     added as the lane takes its answer: a browser takes it only as the type it
@@ -1159,9 +1162,11 @@ rules something out.
     step 2) took it under, not dropping the check: an unstaged route then cost 6,932 instructions
     against 7,099 for a plain axum router in the same build (jemalloc; 7,745 against 8,117 with
     glibc). Its checks then left its handler for a lane the router runs in place of its stages,
-    71 more (7,003; 7,812 with glibc). The bound stays about 100 over 6,932, below: the plain
-    axum router counted the same in both builds (7,085), so the 71 is the lane's own cost and not
-    a difference between builds, and the next change to an unstaged route has about 29 left.
+    71 more in the app's routes (7,003; 7,812 with glibc) and 86 in an API's module (7,068; 7,879).
+    The bound stays where it was, below: the plain axum router counted the same in both builds
+    (7,085; 8,099 with glibc), so these are the lane's own cost and not a difference between
+    builds, and the next change to an unstaged route has about 29 left in the app's routes and 14
+    in an API's module.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -1188,7 +1193,7 @@ rules something out.
     handler through its lane at `bfa20380`: 7,003 with jemalloc in every run and 7,068 in an
     API's module, against 6,932 and 6,982 with its checks in its handler at `8ddeaea2`, and 7,085
     for a plain axum router in both builds; 7,812 and 7,879 with glibc, three runs, against 7,745
-    and 7,797); measured (callgrind, release, three runs each, every run the same, an uncommitted
+    and 7,797, and 8,099 for a plain axum router in both); measured (callgrind, release, three runs each, every run the same, an uncommitted
     variant of `fa0b1525` whose `laned` adds the headers as it takes the handler's answer: 7,022
     and 7,083 against 7,003 and 7,068); measured (callgrind, release, three runs each, the stages written as combinators
     on Corten's router, an uncommitted variant of `8ddeaea2`: 92 to 367 instructions more a
@@ -1209,7 +1214,8 @@ rules something out.
     sequence route, which its failover benchmark reads, is the first use, and no app's in
     production is yet); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
-    Value 7).
+    Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
+    for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
     layer around the app cannot serve it; or a route needs some stages and not others, which
@@ -1218,9 +1224,10 @@ rules something out.
     browser the runtime supports shows a PDF sent with a sandbox differently from one sent without
     it; or no
     app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
-    than about 100 instructions over the 6,932 measured with its checks in its handler at
-    `8ddeaea2` with jemalloc (7,003 through its lane since), against a plain axum router in the
-    same build (7,085 in both), the control that shows whether two builds differ; or a request outside every area costs more than twice
+    than about 100 instructions over what it cost with its checks in its handler at `8ddeaea2`
+    with jemalloc, 6,932 in the app's routes and 6,982 in an API's module (7,003 and 7,068
+    through its lane since), against a plain axum router in the same build (7,085 in both), the
+    control that shows whether two builds differ; or a request outside every area costs more than twice
     the about 200 instructions measured here over the build before area middleware (the lookup
     and any layout effect together; layout alone moved a whole request by about 280). Area
     middleware has no switch, so the next check builds current main with the prefix lookup taken

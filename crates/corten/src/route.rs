@@ -3795,10 +3795,9 @@ where
     });
     let res = unstaged_headers(res);
     match &lane.json {
+        // Boxed: a failure is rare, and its future would make every answer's larger.
         Some((shape, dev)) if res.status().is_client_error() || res.status().is_server_error() => {
-            let (shape, dev) = (shape.clone(), *dev);
-            // Boxed: a failure is rare, and its future would make every answer's larger.
-            Box::pin(crate::api::json_failure(res, dev, shape.as_ref())).await
+            Box::pin(crate::api::json_failure(res, *dev, shape.as_ref())).await
         }
         _ => res,
     }

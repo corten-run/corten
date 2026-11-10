@@ -794,7 +794,7 @@ In process the runs of Corten's router did not differ. On the API request most o
 is fewer copies of the request and fewer allocations (`memcpy`, `malloc` and `free`, about 1,100
 fewer), and the rest is axum's route lookup by id and its futures around the stages. With glibc's
 allocator every request in process costs 1,791 to 4,135 less. An unstaged route's checks have
-since moved from its handler to the router, which runs them around it, costing 71 more ([below](#a-route-outside-the-stages)).
+since moved from its handler to the router, which runs them around it, costing 71 to 86 more ([below](#a-route-outside-the-stages)).
 
 ## Your own middleware
 
@@ -1055,7 +1055,7 @@ unstaged (7,068 in an API's module) against 18,299 through the stages beside it 
 where a plain axum router takes 7,085, and 7,812 unstaged with glibc's allocator (7,879 in an
 API's module; axum: 8,099). What the route keeps (the host check, the headers above, the panic
 catch and an API's JSON) the router runs around its handler in place of the stages, so its 404
-and 405 meet it as its handler's answer does; it costs 71 of those instructions (67 with glibc)
+and 405 meet it as its handler's answer does; it costs 71 of those instructions (86 in an API's module; 67 and 82 with glibc)
 over the same checks written into the handler, and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
