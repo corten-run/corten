@@ -1336,10 +1336,11 @@ rules something out.
     seen joining ranges of two versions after a deploy; a player asks for several ranges; or an
     app needs a `Media` answer, not a static file, to seek.
 
-    Last checked: 2026-11-10, Apple's guide read; the crate's tests on this branch; card-market's
-    smoke in Playwright 1.64.1, Chromium and Firefox on Windows on `3a6f8a3c` (WebKit skipped
-    there), and Chromium, Firefox and WebKit on Linux on 2026-11-09 against a build of `32cd2ce6`,
-    when the clip was on the home page; the count on `97a63a92` and `92d38464`.
+    Last checked: 2026-11-10, Apple's guide read and the crate's asset tests on `112422cb`;
+    2026-11-10, card-market's smoke in Playwright 1.64.1 on Windows on `3a6f8a3c`, Chromium and
+    Firefox (WebKit skipped there); 2026-11-09, the same smoke on Linux against a build of
+    `32cd2ce6`, Chromium, Firefox and WebKit, when the clip was on the home page; 2026-11-10, the
+    count on `97a63a92` and `92d38464`.
 
 ## Rules
 
