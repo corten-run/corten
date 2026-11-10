@@ -1,6 +1,9 @@
 // How each app is built, for build.mjs: the image its toolchain is in, its build context, the
 // commands of its Dockerfile's dependency layer and build step, and one edit to its item page's
-// view. Kept apart from build.mjs so builds.test.mjs can check it without Docker. No side effects.
+// view. Kept apart from build.mjs so builds.test.mjs can check it without Docker. No side effects
+// beyond apps.mjs's, which refuses a BENCH_TIER, BENCH_EDGE or BENCH_APPS it cannot read.
+import { allApps, tier } from "./apps.mjs";
+import { edgeBase } from "./edge.mjs";
 import { quote } from "./round.mjs";
 
 /**
@@ -182,7 +185,9 @@ export const recipes = {
     dev: 'cmake -S . -B debug -DCMAKE_BUILD_TYPE=Debug && cmake --build debug -j"$(nproc)"',
     edit: "views/ItemPage.csp",
   },
-  nextjs: node("app/items/[id]/interactive.tsx", { NEXT_TELEMETRY_DISABLED: "1" }),
+  // A matched round (BENCH_TIER=matched) builds Next.js as the tier's image is built: with the
+  // profile (apps.mjs, buildArgs; the Dockerfile's PROFILE and EDGE_HOST arguments).
+  nextjs: node("app/items/[id]/interactive.tsx", { NEXT_TELEMETRY_DISABLED: "1", ...(tier === "matched" && { PROFILE: "matched", EDGE_HOST: new URL(edgeBase(allApps.nextjs, "outside")).host }) }),
   "tanstack-start": node("src/routes/items.$id.tsx"),
   sveltekit: node("src/routes/items/[id]/+page.svelte"),
   "react-router": node("app/routes/item.tsx"),

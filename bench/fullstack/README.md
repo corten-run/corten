@@ -1202,9 +1202,11 @@ passes, a separate diagnostic build of card-market's crate run after it:
      kind of request its median and p99 latency and its answers by class (2xx and 3xx, 429, other
      4xx, 5xx, none), with the app's CPU and peak memory over the phase (`mixed.mjs`;
      `<app>-mixed.json`, and `-cpu`, `-stats` and `-form` beside it). It adds about 2 minutes
-     an app a pass (estimated). It runs in both tiers; only in the matched tier has every app a
-     deadline, and the deadlines differ (card-market's and axum-maud's are 10 s), so the late
-     items' latency is each app's own deadline, not a comparison of speed. The matched profile has
+     an app a pass (estimated). It runs in both tiers; only in the matched tier is a deadline part
+     of every app's profile, though not every app meets it (Next.js has no setting for one and
+     holds a hung read past 45 s), and the deadlines differ (card-market's and axum-maud's are
+     10 s), so the late items' latency is each app's own deadline, or the item API's 40 s delay
+     where it has none, not a comparison of speed. The matched profile has
      no write limit, so only an app with one of its own answers 429, and k6 keeps no cache, so the
      phase does not see a `Cache-Control` policy at work (the feature matrix checks each app's).
      Late items come from `item-api/server.mjs`, the bench host's item API; the Rust item API a
@@ -1417,7 +1419,12 @@ column reads the headers on an error answer, so an app that sends its error answ
 profile's headers shows that only in its item below and in the measured paragraph after the list), and no app is tuned beyond
 the profile. "Provides" is a middleware, a setting or a builder option of the framework or of the
 companion its documentation points to for it (tower-http for axum); a part that needs the app to
-write its own handler, error mapper or server loop is left out, as the defaults tier leaves it. The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
+write its own handler, error mapper or server loop is left out, as the defaults tier leaves it;
+code the framework's own documentation gives for a part, written as it gives it, counts as provided
+(Next.js's Proxy for a nonce CSP). Topcoat's documentation gives such code for headers on its error
+answers (a layer that queues them with `response_headers`), which its app does not use yet; no
+counted column reads those headers, so its row is the same either way.
+The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
 rule (Corten; axum-maud, the anchor every tier shares; the three best on the tier's own measure
 and the four most used in the Stack Overflow survey, on r13 and the 2026 survey ASP.NET Core,
 Topcoat and Leptos, and Next.js, ASP.NET Core, FastAPI and Express; ASP.NET Core as its Razor Pages
@@ -1476,8 +1483,35 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    which Topcoat's prefetch reads as usable for 0 ms: under the profile a prefetched link is
    rendered again when it is followed after the prefetch's headers arrived (the browser phases click
    without hovering, so they do not prefetch).
-5. `nextjs`, `aspnet` (and `aspnet-aot`), `fastapi` and `express` are not in it yet: each
-   joins with its profile.
+5. `nextjs`: Next.js fixes its config when it builds, so the tier runs an image of its own,
+   `cb-nextjs-matched`, built with `--build-arg PROFILE=matched` (`buildArgs` in `apps.mjs`, which
+   `droplet.mjs` builds from, and the build step's recipe in a matched round, `builds.mjs`); the
+   defaults tier's `cb-nextjs` is built from the same config as before. That build adds axum-maud's
+   security headers to every answer, and its CSP and `Cache-Control: private, no-cache` to the
+   JSON, from `next.config.mjs`'s `headers()`, and the pages' CSP from a Proxy (`proxy.matched.ts`,
+   Next.js's file for code that runs before a route, which only that build takes, through
+   `pageExtensions`), the code Next.js's Content Security Policy guide gives: a nonce for each
+   response, which Next.js writes on the scripts of a page it renders for the request, so the item
+   page hydrates under a strict policy (checked in Chromium through the edge: all 11 scripts have
+   the nonce, no violation, and the sort, "show all" and the alert work). The App Router's pages
+   were already rendered for each request, as a nonce needs; the Proxy leaves out the JSON, the
+   static files, bench/live's stream and the Pages Router's marketplace pages, which are not in the
+   tier and would need `_document` to write the nonce. The 404 page Next.js prerenders
+   (`/_not-found`, for an unknown path) gets the policy but not the nonce, which needs a page
+   rendered for the request, so its 10 scripts are blocked (measured); its text and links work
+   without them, and the tier measures no script there. Next.js refuses a server action whose
+   Origin is not the request's host, and the edge sends the app its container name as Host, so the
+   build lists the edge's host in `serverActions.allowedOrigins` (the Dockerfile's `EDGE_HOST`,
+   which `edge.test.mjs` checks against the edge's port and the built config), as a deploy names
+   its own domain; that refusal and the 1 MB body limit on a server action were already defaults (a
+   500, counted as refused). Next.js's own compression (`compress`, on by default) gzips the pages
+   but not the route handler's JSON, and its ETag (`generateEtags`) is on no page rendered for the
+   request; it has no setting for a JSON 405 or 500 (a route handler's are empty), a host list,
+   liveness or readiness, a deadline, or the Node server's header timeout (Node's `headersTimeout`
+   is 60 s, and the standalone server sets only `keepAliveTimeout`) or connection cap
+   (`server.maxConnections`, which it does not set), so those columns stay unmet.
+6. `aspnet` (and `aspnet-aot`), `fastapi` and `express` are not in it yet: each joins with its
+   profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1500,6 +1534,11 @@ axum-maud, three are answered differently: its failed reads are a 500 `text/plai
 502) and its JSON 404 is `text/plain` (axum-maud's is empty). Not counted: its six error answers
 (the JSON 404, the 405, both failed reads, the 403 and the 413) go without the profile's headers,
 where axum-maud's answers to the same four carry them.
+Next.js, from `cb-nextjs-matched` built at `eedbcc2a`
+(`results/conform-matched-nextjs1/conformance.json`), met 14 and missed 10: the ETag, the JSON's
+compression (none), 405 and failed read (empty), the unknown Host (200), liveness and readiness,
+the item API's deadline and the unfinished head (each held 45 s), and the cap (served with 1,050
+held).
 No load phase has run in the tier yet.
 
 ### The hardening step
@@ -1772,6 +1811,8 @@ docker build -f examples/card-market/Dockerfile -t cb-corten .
 for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud gin drogon django rails laravel aspnet aspnet-aot spring phoenix astro nuxt; do
   docker build -t cb-$app bench/fullstack/apps/$app
 done
+# The matched tier builds Next.js again, as `buildArgs` in apps.mjs says:
+docker build --build-arg PROFILE=matched -t cb-nextjs-matched bench/fullstack/apps/nextjs
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file
 cd bench/fullstack && node run-all.mjs legacy1 10   # BENCH_APPS=corten,aspnet-aot for only those
 node conform.mjs [apps] [round]   # the feature matrix above (on the bench network; removes its containers when done)
