@@ -1255,7 +1255,7 @@ rules something out.
     without skipping) and a socket probe on Linux in which a backlog of 128 timed out at the 130th
     connection and 511 admitted 200 on each loopback address.
 
-35. <a id="choice-state-derives"></a>**An app's shared state derives `Clone` and `FromRef`, two
+34. <a id="choice-state-derives"></a>**An app's shared state derives `Clone` and `FromRef`, two
     derives that each say one thing, not a state attribute that writes both.** `Clone` is what a
     router needs of its state: axum's `Router<S>` requires `S: Clone`, and
     `#[corten::routes(state = Shared)]` clones the state for each route it adds, so the type needs
