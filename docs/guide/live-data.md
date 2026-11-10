@@ -269,7 +269,7 @@ A row with no field marked, two marked, a field marked twice, an id that is not 
 a tuple struct, a unit struct, a `row` attribute on the struct, a `row` attribute that is not
 `#[row(id)]` on a field, or another member serde writes or reads under the id's key does not
 compile, and neither does a row that is not `Clone`, `Serialize`, `Send`, `Sync` and `'static`,
-the trait's bounds (each case is a `compile_fail` example in the documentation of
+the trait's bounds (a generic row, where a feed of it is built; each case is a `compile_fail` example in the documentation of
 `corten::feed::Row`).
 
 ```rust,ignore
