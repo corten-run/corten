@@ -14,7 +14,7 @@ import { quote } from "./round.mjs";
  *   setup?: string,
  *   add?: string,
  *   deps: string,
- *   build: string,
+ *   build?: string,
  *   dev?: string,
  *   check?: string,
  *   test?: string,
@@ -66,6 +66,10 @@ const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */
  * repository root, when it is not in its context. `timings` asks for cargo's per-crate
  * timings and rustc's passes and macro expansion for one binary, whose own crates' names start
  * with one of `own`.
+ *
+ * An app whose server runs its source as written has no `build`: FastAPI's Python and Express's
+ * EJS templates are compiled by the server as it first uses them, so its Dockerfile has nothing
+ * after the dependency step, and a round records its build and rebuild as none rather than a time.
  *
  * For the Rust apps, the editor's and the tests' loops too: `check` is what an editor runs for its
  * diagnostics after a save (rust-analyzer's check on save is `cargo check --all-targets`, with the
@@ -212,6 +216,24 @@ export const recipes = {
     build: "python -m django collectstatic --noinput -v 0",
     edit: "templates/item.html",
   },
+  express: {
+    tools: "node:24-bookworm-slim",
+    context: "",
+    workdir: "/app",
+    env: { NODE_ENV: "production" },
+    add: htmx("static/htmx.min.js"),
+    deps: "npm install --no-audit --no-fund",
+    edit: "views/item.ejs",
+  },
+  fastapi: {
+    tools: "python:3.14-slim",
+    context: "",
+    workdir: "/app",
+    env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1" },
+    add: htmx("static/htmx.min.js"),
+    deps: "pip install --no-cache-dir -r requirements.txt",
+    edit: "templates/item.html",
+  },
   rails: {
     tools: "bb-tools-rails",
     stage: "bench/fullstack/apps/rails",
@@ -254,7 +276,7 @@ export const recipes = {
 export const touchThen = (/** @type {string} */ path, /** @type {string} */ command) => `touch ${quote(path)} && ${command}`;
 
 /** Whether an app's builds are cargo's, whose output names each crate it compiles. */
-export const cargoBuilds = (/** @type {Recipe} */ r) => /\bcargo\b/.test(r.build);
+export const cargoBuilds = (/** @type {Recipe} */ r) => /\bcargo\b/.test(r.build ?? "");
 
 /** The edit an app's rebuilds make. */
 export const changeOf = (/** @type {string} */ name) => recipes[name].change ?? button;
@@ -402,3 +424,19 @@ export function rustcPasses(output) {
 
 /** The median of some numbers. */
 export const median = (/** @type {number[]} */ xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+
+/**
+ * One app's row of the table `build.mjs` prints after a run, from its `build.json` entry. An app
+ * with no build step (no `build` in its recipe) has no build or rebuild to time.
+ * @param {string} name @param {any} e
+ */
+export function buildRow(name, e) {
+  const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
+  // Entries written before `complete` was recorded have none, and finished.
+  if (e.failed || e.complete === false) return `| ${name} | FAILED: ${(e.failed ?? "stopped before it finished").split("\n")[0]} |`;
+  const dev = e.dev ? `dev ${s(e.dev.clean.ms)}, after the edit ${s(e.dev.rebuild.ms)}` : "";
+  const built = e.build
+    ? [`build ${s(e.build.ms)}, ${e.build.cpuS} CPU-s, ${e.build.peakMiB} MiB`, `rebuild ${s(e.rebuild.ms)}, ${e.rebuild.cpuS} CPU-s`]
+    : ["no build step", "nothing to rebuild"];
+  return `| ${name} | deps ${s(e.deps.ms)} | ${built[0]} | clean ${s(e.clean.ms)}, ${e.clean.cpuS} CPU-s | ${built[1]} | ${dev} |`;
+}

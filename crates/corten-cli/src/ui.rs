@@ -3544,8 +3544,8 @@ mod tests {
 
     /// A stack's children take its width whatever the app's element rules say (a new app's
     /// `form { align-items: end }`): `.stack` is one class, which beats an element. Its margin rule
-    /// has no specificity, so the app's own margin rules win. And a figure is the same surface as a
-    /// card (and a panel).
+    /// has no specificity, so the app's own margin rules win, and leaves a dialog or popover alone.
+    /// And a figure is the same surface as a card (and a panel).
     #[test]
     fn a_stack_stretches_and_a_figure_is_a_card() {
         let block = |css: &'static str, start: &str| {
@@ -3555,14 +3555,17 @@ mod tests {
         };
         let stack = include_str!("../kit/stack.css");
         assert!(stack.lines().any(|l| l.starts_with(".stack {") && l.contains("align-items: stretch;")));
-        assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > * { margin-block: 0; }"));
+        // A dialog or popover child keeps the browser's margin: auto and width, which center it in
+        // the top layer (#1124).
+        assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > :where(:not(dialog, [popover])) { margin-block: 0; }"));
         // StackStart keeps a stack's children their own width: two classes, so it beats .stack and does
         // nothing beside a Cluster or alone; its cap on a child's width, the word break and a picture's
         // shape have no specificity, so an app's rule on a child wins.
         assert!(stack.contains(".stack.start { align-items: flex-start; }"), "StackStart's rule");
         assert!(
-            stack.contains(":where(.stack.start) > * { max-width: 100%; overflow-wrap: anywhere; }"),
-            "a child is at most the stack's width"
+            stack.contains(":where(.stack.start) > * { overflow-wrap: anywhere; }")
+                && stack.contains(":where(.stack.start) > :where(:not(dialog, [popover])) { max-width: 100%; }"),
+            "a child is at most the stack's width, a dialog's or popover's long words break too"
         );
         assert!(
             stack.contains(":where(.stack.start) > :where(img, video, canvas) { height: auto; }"),

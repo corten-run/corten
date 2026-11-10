@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { allApps } from "./apps.mjs";
-import { cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -168,7 +168,7 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
     // Packaging after the build (copying the output aside) and the shared cache's touch, which this
     // benchmark has no use for; every other command of the deps and build stages is the recipe's.
     const packaging = [/^mkdir -p \/out$/, /^cp (-r )?\S+ \/out\/\S+$/, /^chmod 644 /, /^find \. -name target -prune -o -type f -exec touch \{\} \+$/, /^npm prune --omit=dev$/];
-    const mine = [...parts(r.deps), ...parts(r.build)];
+    const mine = [...parts(r.deps), ...(r.build ? parts(r.build) : [])];
     for (const stage of stages.filter((s) => s.run.some((c) => mine.some((m) => c.includes(m))))) {
       for (const command of stage.run.flatMap((c) => c.split(" && ").map((x) => x.trim()))) {
         assert.ok(mine.includes(command) || packaging.some((p) => p.test(command)), `${name}: its Dockerfile runs ${command}, which its recipe does not`);
@@ -176,8 +176,12 @@ test("each recipe runs its Dockerfile's commands, from its image, in its directo
       if (r.stage) assert.equal(stage.from, "tools", `${name}: its build stage starts from its tools stage`);
     }
     const run = stages.flatMap((s) => s.run).join(" && ");
-    for (const part of [...parts(r.deps), ...parts(r.build)]) assert.ok(run.includes(part), `${name}: its Dockerfile does not run ${part}`);
-    const build = stages.find((s) => s.run.some((c) => c.includes(parts(r.build)[0])));
+    for (const part of mine) assert.ok(run.includes(part), `${name}: its Dockerfile does not run ${part}`);
+    // An app with no build step: its Dockerfile runs nothing after the dependency step, and what
+    // that stage sets and fetches is checked as a build stage's is.
+    const last = parts(r.build ?? r.deps)[0];
+    const build = stages.find((s) => s.run.some((c) => c.includes(last)));
+    if (!r.build) assert.ok(build && build.run.at(-1)?.includes(parts(r.deps).at(-1) ?? ""), `${name}: it has no build, but its Dockerfile runs something after its dependencies`);
     assert.ok(build, `${name}: no stage runs its build`);
     if (!r.stage) assert.equal(stages[0].from, r.tools, `${name}: its toolchain is its Dockerfile's first image`);
     assert.ok(stages.some((s) => s.workdir.includes(r.workdir)), `${name}: its Dockerfile has no WORKDIR ${r.workdir}`);
@@ -223,4 +227,14 @@ test("rustc's passes and macro statistics are read from its output", () => {
   assert.deepEqual(macros.map((m) => m.macro), ["#[derive(Deserialize)]", "html!", "#[derive(Id)]", "::core::include_bytes!", "::schemars::_private::serde_json::json!"]);
   assert.deepEqual(macros[1], { macro: "html!", uses: 18, lines: 917, bytes: 44913 });
   assert.equal(macros[4].uses, 10);
+});
+
+test("build.mjs's table has a row for an app with no build step, a built app and a failed one", () => {
+  const step = { ms: 2500, cpuS: 3.1, peakMiB: 120 };
+  assert.equal(buildRow("express", { deps: step, build: null, clean: { ms: 2500, cpuS: 3.1 }, rebuild: null, complete: true }),
+    "| express | deps 2.5 s | no build step | clean 2.5 s, 3.1 CPU-s | nothing to rebuild |  |");
+  assert.equal(buildRow("gin", { deps: step, build: step, clean: { ms: 5000, cpuS: 6.2 }, rebuild: step, complete: true }),
+    "| gin | deps 2.5 s | build 2.5 s, 3.1 CPU-s, 120 MiB | clean 5.0 s, 6.2 CPU-s | rebuild 2.5 s, 3.1 CPU-s |  |");
+  assert.equal(buildRow("leptos", { failed: "exit 1\nmore", deps: step }), "| leptos | FAILED: exit 1 |");
+  assert.equal(buildRow("nuxt", { deps: step, complete: false }), "| nuxt | FAILED: stopped before it finished |");
 });
