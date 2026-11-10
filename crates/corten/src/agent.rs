@@ -17,8 +17,10 @@
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
 //!
-//! Nor does one read by serde with a schema written by hand, since its schema and what it reads
-//! could drift apart:
+//! Nor does one that derives serde's `Deserialize` beside a schema written by hand, since its
+//! schema and what it reads could drift apart (the opt-in `impl corten::FromJson for Adjust {}`
+//! would compile it, as a deliberate second reader, for a type whose `Deserialize` cannot be
+//! derived):
 //!
 //! ```compile_fail,E0277
 //! use corten::{agent::Tools, json::schema::{FromJsonSchema, Generator}};

@@ -4264,13 +4264,14 @@ Corten is pre-1.0, so any minor version may change the API.
     less 200 over 1,000, two runs each). No data-role attribute is added beside `ToJson` and
     `FromJson`, which already name each type's direction (design Choice 35). **Breaking:** an output
     that implements `Serialize` and `ToJsonSchema` by hand and not `ToJson`, a derived generic
-    output whose type argument is not `ToJson`, or an input that implements `Deserialize` and
-    `FromJsonSchema` by hand and not `FromJson`, no longer compiles as one; derive `ToJson` or
-    `FromJson` (or implement it). A field whose own `Serialize` fails (a map with a key JSON cannot
-    hold, inside another crate's type) now panics, as in any `ToJson` answer: the request ends as a
-    handler's panic does, logged and answered with the app's 500 (in an `Api`, its JSON failure),
-    where the call answered an internal error as the tool's result with the call's `id`; a test
-    holds it
+    output whose type argument is not `ToJson`, or an input that is a `Deserialize` (derived by
+    serde or written by hand) with a `FromJsonSchema` written by hand and not a `FromJson`, no
+    longer compiles as one; derive `ToJson` or `FromJson`, or, for an input whose `Deserialize`
+    serde must write, add `impl corten::FromJson for T {}`. A field whose own `Serialize` fails (a
+    map with a key JSON cannot hold, inside another crate's type) now panics, as in any `ToJson`
+    answer: the request ends as a handler's panic does, logged and answered with the app's 500 (in
+    an `Api`, its JSON failure), where the call answered an internal error as the tool's result with
+    the call's `id`; a test holds it
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 
 ### Fixed
