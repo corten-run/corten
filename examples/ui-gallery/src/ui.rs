@@ -379,6 +379,7 @@ pub(crate) mod tests {
                 pages={3}
                 current={2}
                 link={page_link}
+                on:link={None::<corten::script::Handler>}
             />
         }
     }
@@ -388,7 +389,7 @@ pub(crate) mod tests {
     #[test]
     fn previous_next_links_the_neighbours_it_is_given_and_disables_the_others() {
         use super::pagination::PreviousNext;
-        use corten::{Href, route::Local, view::Render};
+        use corten::{Href, route::Local, script::Handler, view::Render};
         let older = Local::parse("/payouts?before=p2").unwrap();
         let html = PreviousNext {
             label: "Payouts",
@@ -396,6 +397,7 @@ pub(crate) mod tests {
             next_label: "Older",
             previous: None,
             next: Some(&older as &dyn Href),
+            on_link: &None::<Handler>,
         }
         .to_html();
         assert!(html.starts_with(r#"<nav class="pagination__pagination" aria-label="Payouts"><ul>"#), "{html}");
@@ -416,10 +418,61 @@ pub(crate) mod tests {
             next_label: "Older",
             previous: Some(&newer as &dyn Href),
             next: None,
+            on_link: &None::<Handler>,
         }
         .to_html();
         assert!(html.contains(r#"href="/payouts" rel="prev">Newer</a>"#), "{html}");
         assert!(html.contains(r#"pagination__next" aria-disabled="true">Older</span>"#), "{html}");
+    }
+
+    /// A table the pagers' pages read the order of.
+    #[derive(corten::prelude::Id)]
+    struct PagedId;
+
+    /// Pagers under a table sorted in place, whose pages read its order (#1107).
+    #[corten::component]
+    fn OrderedPagers() -> impl corten::view::Render {
+        use super::pagination::{Pagination, PreviousNext};
+        use corten::{Href, html};
+        use corten_ui::{ordered, sorted};
+        let after = crate::app::url::Orders { page: Some(3), sort: None, payout: None };
+        html! {
+            <Pagination
+                label="Pages"
+                previous_label="Previous"
+                next_label="Next"
+                pages={3}
+                current={3}
+                link={|page| crate::app::url::Orders { page: Some(page), sort: None, payout: None }}
+                on:link={ordered::link(target, [sorted(&PagedId)], signal)}
+            />
+            <PreviousNext
+                label="Payouts"
+                previous_label="Newer"
+                next_label="Older"
+                previous={None}
+                next={Some(&after as &dyn Href)}
+                on:link={ordered::link(target, [sorted(&PagedId)], signal)}
+            />
+        }
+    }
+
+    /// `on:link` is every link's `on:connect`, and a disabled end, which is not a link, has none.
+    #[test]
+    fn a_pager_puts_its_link_handler_on_every_link_it_draws() {
+        use corten::view::Render;
+        let html = OrderedPagers {}.to_html();
+        let on = r#"data-on="connect:ui.ordered.link($t,[&quot;paged&quot;],$s)""#;
+        // Pagination: Previous, pages 1 to 3, and none on its disabled Next; PreviousNext: Older.
+        assert_eq!(html.matches(on).count(), 5, "{html}");
+        assert!(html.contains(&format!(r#"href="/orders?page=2" rel="prev" {on}>Previous</a>"#)), "{html}");
+        assert!(html.contains(&format!(r#"href="/orders?page=3" aria-current="page" {on}>"#)), "{html}");
+        assert!(html.contains(r#"<span class="pagination__step pagination__next" aria-disabled="true">Next</span>"#), "{html}");
+        assert!(
+            html.contains(r#"<span class="pagination__step pagination__previous" aria-disabled="true">Newer</span>"#),
+            "{html}"
+        );
+        assert!(html.contains(&format!(r#"rel="next" {on}>Older</a>"#)), "{html}");
     }
 
     #[test]
@@ -592,13 +645,18 @@ pub(crate) mod tests {
         );
     }
 
-    /// The dot is drawn, not read: the status is in the text beside it.
+    /// The dot is drawn, not read: the status is in the text beside it. A live one is the same dot
+    /// with the class that pulses it.
     #[test]
     fn a_status_dot_is_not_read() {
-        use super::status_dot::{StatusDot, StatusTone};
+        use super::status_dot::{LiveDot, StatusDot, StatusTone};
         use corten::view::Render;
         let html = StatusDot { tone: StatusTone::Success }.to_html();
         assert_eq!(html, r#"<span class="status-dot__dot status-dot__success" aria-hidden="true"></span>"#);
+        let live = LiveDot { tone: StatusTone::Info }.to_html();
+        assert_eq!(live, r#"<span class="status-dot__dot status-dot__live status-dot__info" aria-hidden="true"></span>"#);
+        let text = StatusDot { tone: StatusTone::Text }.to_html();
+        assert_eq!(text, r#"<span class="status-dot__dot status-dot__text" aria-hidden="true"></span>"#);
     }
 
     /// A hidden legend is still the fieldset's legend, which names the group, with the class that
