@@ -4202,6 +4202,12 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
 
 ### Fixed
+- The kit's `CardSize::Sm` reads its padding from the theme's new `--card-padding-sm` (1rem in the
+  kit's theme, as before) and its content's gap as three quarters of that, where both were fixed
+  numbers, so a theme whose `--card-padding` is 1rem or less no longer gets a small card as large as
+  its default one. An app's theme from an earlier kit adds the token (`corten ui add card --merge`
+  names it). The ui-gallery smoke checks a small card under a theme with tight cards
+  ([#1151 Kit CardSize::Sm is a fixed 1rem while the default card is the theme's --card-padding, so a theme at or below 1rem gets a small card no smaller than the default](https://github.com/corten-run/corten/issues/1151)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

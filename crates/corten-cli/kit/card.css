@@ -12,8 +12,9 @@
 /* A card around one block of content, on one element: the surface and its padding, no layout, so
    the element's own class (a row of filters) or a Stack lays its children out. */
 .panel { padding: var(--kit-card-inset); }
-/* A denser card or panel (CardSize::Sm), beside roomy ones on the same page. */
-:is(.card, .panel).sm { --kit-card-inset: 1rem; --kit-card-gap: .75rem; }
+/* A denser card or panel (CardSize::Sm), beside roomy ones on the same page: the theme's
+   --card-padding-sm, with its gap three quarters of that. */
+:is(.card, .panel).sm { --kit-card-inset: var(--card-padding-sm); --kit-card-gap: calc(var(--card-padding-sm) * .75); }
 /* The heading's row: the heading, then any action at its end, wrapping under it when there is no
    room; anything else (a description) on its own line, an image or icon at its own size. The
    heading's and description's rules weigh one class: an element default (h2 { .. }) does not
