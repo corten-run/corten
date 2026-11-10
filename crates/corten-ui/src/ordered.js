@@ -43,10 +43,18 @@ export function send(event, el, tables) {
  * `ordered::link(target, [sorted(&SalesId)], signal)`. Its `href` takes the tables' order keys
  * from the page's address, as `send` does a form's, whenever the link is about to be read: the
  * pointer over it (before the runtime prefetches it), focus (before Enter follows it), a click, a
- * middle click and its menu ("Copy link", "Open in new tab"). A link to another origin or without `href` is left.
- * @param {HTMLAnchorElement} a @param {ElementId[]} tables @param {AbortSignal} signal
+ * middle click and its menu ("Copy link", "Open in new tab"). A link to another origin or without
+ * `href` is left. A component's links take it as a prop (the kit's `Pagination` and
+ * `PreviousNext`, `on:link`), whose handler gets an `HTMLElement`, so that is what it takes.
+ * An element that is not a link (an `<a>` or `<area>`) has no address to keep: it is reported
+ * in the console and left.
+ * @param {HTMLElement} a the link @param {ElementId[]} tables @param {AbortSignal} signal
  */
 export function link(a, tables, signal) {
+  if (!(a instanceof HTMLAnchorElement || a instanceof HTMLAreaElement)) {
+    console.error("corten-ui: ordered::link keeps the order in a link's href; this element is not a link", a);
+    return;
+  }
   const keep = () => {
     const links = tableLinks(tables);
     if (links.length) taken(a, "href", links);
