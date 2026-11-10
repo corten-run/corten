@@ -1,0 +1,338 @@
+{
+ "corten": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "hostCores": 8,
+  "experimental": false,
+  "commit": "9da8fb8d",
+  "dirty": false,
+  "measuredAt": "2026-11-08T10:32:35.469Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 41079,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 18330,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 114,
+   "errorMs": 78,
+   "clearedMs": 78,
+   "offered": 5,
+   "errorShown": 0,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 1401,
+     "items": 11,
+     "offered": true,
+     "errorMs": 113,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 112,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 124,
+     "items": 11,
+     "offered": true,
+     "errorMs": 80,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 92,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 114,
+     "items": 11,
+     "offered": true,
+     "errorMs": 69,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 70,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 85,
+     "items": 11,
+     "offered": true,
+     "errorMs": 78,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 78,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 100,
+     "items": 11,
+     "offered": true,
+     "errorMs": 72,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 73,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 2595
+ },
+ "leptos": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "hostCores": 8,
+  "experimental": false,
+  "commit": "9da8fb8d",
+  "dirty": false,
+  "measuredAt": "2026-11-08T10:33:52.752Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 51360,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 26803,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 14984,
+   "errorMs": 16610,
+   "clearedMs": 16268,
+   "offered": 5,
+   "errorShown": 0,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 14984,
+     "items": 25,
+     "offered": true,
+     "errorMs": 11448,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 15890,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 18474,
+     "items": 25,
+     "offered": true,
+     "errorMs": 37865,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 30719,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 21928,
+     "items": 25,
+     "offered": true,
+     "errorMs": 17620,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 16268,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 12031,
+     "items": 25,
+     "offered": true,
+     "errorMs": 14271,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 12181,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 14666,
+     "items": 25,
+     "offered": true,
+     "errorMs": 16610,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 16795,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 3779
+ },
+ "topcoat": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "hostCores": 8,
+  "experimental": false,
+  "commit": "9da8fb8d",
+  "dirty": false,
+  "measuredAt": "2026-11-08T10:40:05.728Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 38153,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 9636,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 7724,
+   "errorMs": 8794,
+   "clearedMs": 11801,
+   "offered": 5,
+   "errorShown": 0,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 7301,
+     "items": 22,
+     "offered": true,
+     "errorMs": 8794,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 12409,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 12914,
+     "items": 22,
+     "offered": true,
+     "errorMs": 12521,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 8277,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 7165,
+     "items": 22,
+     "offered": true,
+     "errorMs": 6635,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 13275,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 13285,
+     "items": 22,
+     "offered": true,
+     "errorMs": 13037,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 11801,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 7724,
+     "items": 22,
+     "offered": true,
+     "errorMs": 7142,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 8246,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 2056
+ },
+ "axum-maud": {
+  "cores": "0-3",
+  "memoryCap": 10397343744,
+  "hostCores": 8,
+  "experimental": false,
+  "commit": "9da8fb8d",
+  "dirty": false,
+  "measuredAt": "2026-11-08T10:43:50.001Z",
+  "complete": true,
+  "version": "rust-analyzer 1.99.1 (58cf8f9 2026-10-13)",
+  "readyCold": {
+   "ms": 19788,
+   "health": "ok"
+  },
+  "readyWarm": {
+   "ms": 8303,
+   "health": "ok"
+  },
+  "probes": {
+   "completionMs": 142,
+   "errorMs": 111,
+   "clearedMs": 123,
+   "offered": 5,
+   "errorShown": 0,
+   "runs": [
+    {
+     "run": 1,
+     "completionMs": 1065,
+     "items": 25,
+     "offered": true,
+     "errorMs": 111,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 130,
+     "cleared": true
+    },
+    {
+     "run": 2,
+     "completionMs": 124,
+     "items": 25,
+     "offered": true,
+     "errorMs": 107,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 112,
+     "cleared": true
+    },
+    {
+     "run": 3,
+     "completionMs": 142,
+     "items": 25,
+     "offered": true,
+     "errorMs": 134,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 128,
+     "cleared": true
+    },
+    {
+     "run": 4,
+     "completionMs": 149,
+     "items": 25,
+     "offered": true,
+     "errorMs": 118,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 123,
+     "cleared": true
+    },
+    {
+     "run": 5,
+     "completionMs": 105,
+     "items": 25,
+     "offered": true,
+     "errorMs": 88,
+     "errors": [],
+     "errorShown": false,
+     "clearedMs": 94,
+     "cleared": true
+    }
+   ]
+  },
+  "peakMiB": 1459
+ }
+}
