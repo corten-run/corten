@@ -52,7 +52,7 @@ export function inspectCatalog(summary, expectedCommit) {
   const allAppsPresent = Array.isArray(selected) && selected.length === inventory.length && new Set(selected).size === inventory.length
     && inventory.every((app) => selected.includes(app))
     && Object.keys(summary.apps).length === inventory.length && inventory.every((app) => Object.hasOwn(summary.apps, app));
-  if (!allAppsPresent) warnings.push("Not all eighteen page apps are present; this is not a full catalog baseline.");
+  if (!allAppsPresent) warnings.push("Not all twenty page apps are present; this is not a full catalog baseline.");
   if (summary.dirty !== false) warnings.push("The measured tree was dirty or its cleanliness was not recorded.");
   if (summary.checksPassed !== true) warnings.push("The suite's correctness checks did not all pass.");
   const fixtureMatches = summary.fixtureSha256 === canonicalFixtureSha256;
