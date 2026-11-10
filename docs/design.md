@@ -1629,9 +1629,10 @@ rules something out.
     not type (a feed relayed from another service); or open pages reload when a feed's generation
     changes, which ends the limit above.
 
-    Last checked: 2026-11-09, TypeScript 5.9.3 on `c65c10ec` and the change (and 6.0.3 on the
-    change, which checks clean, on 2026-11-08), the timings in Chromium 156 (Playwright 1.64.1)
-    on 2026-11-08 and 2026-11-09.
+    Last checked: 2026-11-10, TypeScript 5.9.3 on `560c4cf7` and the change (the explicit-`any`
+    count, 26 and 0) and the sizes against `560c4cf7` (esbuild 0.28.2); 2026-11-08, TypeScript
+    6.0.3 on the change, which checks clean, and the timings in Chromium 156 (Playwright 1.64.1),
+    again on 2026-11-09.
 
 ## Rules
 

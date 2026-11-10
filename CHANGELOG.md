@@ -4300,7 +4300,7 @@ Corten is pre-1.0, so any minor version may change the API.
     Navigation API and a service worker's global are declared where they are used), and
     `npm run check` fails on an explicit `any` or a `@ts-ignore` in them. card-market's push
     worker shows a message with no title as an empty title, where it showed "undefined", and opens
-    `/` for a `url` that is not text. The runtime's gzip size grows by 200 bytes, 121 of them the
+    `/` for a `url` that is not text. The runtime's gzip size grows by 215 bytes, 132 of them the
     feed's checks (design Choice 34)
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 

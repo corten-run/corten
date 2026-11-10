@@ -3062,8 +3062,8 @@ async function run(browser) {
   await unrouteFeed("malformed");
   const malformedGap = malformedFeed.snapshots.length === 2 ? malformedFeed.snapshots[1] - malformedFeed.snapshots[0] : NaN;
   check(
-    "a snapshot that is not one is not handed to the script, and is fetched again after 1 s",
-    malformedFeed.snapshots.length === 2 && malformedSnapshots === 1 && malformedGap >= 900 && malformedGap < 1900 && malformedFeed.streams === 1 && malformedStates.startsWith("syncing live"),
+    "a snapshot that is not one is not handed to the script, and is fetched again no sooner than 1 s",
+    malformedFeed.snapshots.length === 2 && malformedSnapshots === 1 && malformedGap >= 900 && malformedFeed.streams === 1 && malformedStates.startsWith("syncing live"),
     `${malformedFeed.snapshots.length} fetched, ${malformedSnapshots} handed on, +${malformedGap} ms, ${malformedFeed.streams} streams; ${malformedStates}`,
   );
   // A patch that is not one (not JSON, then an upsert with no value) lost its write: the snapshot
@@ -3083,14 +3083,13 @@ async function run(browser) {
   const rejectedStates = await stopFeed("rejected");
   await unrouteFeed("rejected");
   const rejectedGaps = rejectedFeed.snapshots.slice(1).map((at, i) => at - rejectedFeed.snapshots[i]);
+  // Each wait is bounded below only: a loaded browser runs a timer late, as #1102 found.
   check(
-    "a patch that is not one is not handed to the script: the snapshot loads again after 1 s, then 2 s, and the next good patch applies",
+    "a patch that is not one is not handed to the script: the snapshot loads again no sooner than 1 s, then 2 s, and the next good patch applies",
     rejectedFeed.snapshots.length === 3 &&
       rejectedFeed.streams === 3 &&
       rejectedGaps[0] >= 900 &&
-      rejectedGaps[0] < 1900 &&
       rejectedGaps[1] >= 1900 &&
-      rejectedGaps[1] < 3500 &&
       rejectedPatches.join() === "2" &&
       rejectedStates.startsWith("syncing live syncing live syncing live"),
     `${rejectedFeed.snapshots.length} snapshots, ${rejectedFeed.streams} streams, ${rejectedGaps.map((g) => `+${g} ms`).join(", ")}, patches ${rejectedPatches.join(",")}; ${rejectedStates}`,
