@@ -1475,6 +1475,7 @@ rules something out.
     (one run, all passed; Chromium and Firefox got zstd, WebKit gzip, the large event in 7 to
     17 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
     test's thread (352,232 bytes, the same).
+
 33. <a id="choice-derived-row"></a>**A feed row's key is the field marked `#[row(id)]`, which `#[derive(Row)]` reads; the
     row's `Clone` and `Serialize` stay in its derive list.** The impl every row wrote by hand
     (`fn id(&self) -> &str { &self.id }`) is one attribute on the field, so the key is named where
