@@ -125,7 +125,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         ));
     }
     // The word as `AsRef<str>` (where a list of words is taken: a script's `string[]`, a
-    // `RequiredWhen`'s values), as `Display` (a URL, markup) and as a form row's key.
+    // `RequiredWhen`'s values), as `Display` (a URL, markup), as an attribute's value (so an
+    // `Option` of it leaves the attribute out when `None`, as an `Option<&str>` does) and as a
+    // form row's key.
     let mut out = TokenStream::new();
     for (header, body) in [
         (
@@ -140,6 +142,13 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             "#[inline]
             fn key_text<'__a>(&'__a self, _: &'__a mut ::corten::form::KeyBuf) -> &'__a ::core::primitive::str {
                 ::core::convert::AsRef::<::core::primitive::str>::as_ref(self)
+            }",
+        ),
+        (
+            "::corten::view::AttrValue for",
+            "#[inline]
+            fn write_attr(&self, __name: &::core::primitive::str, __out: &mut ::std::string::String) {
+                ::corten::view::AttrValue::write_attr(::core::convert::AsRef::<::core::primitive::str>::as_ref(self), __name, __out)
             }",
         ),
         (
