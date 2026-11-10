@@ -143,19 +143,41 @@ struct Inner {
     /// The app's, for a request it serves: carried here rather than as a request extension of
     /// its own, so the request's extensions stay within their first allocation.
     shared: Option<Arc<crate::page::Shared>>,
+    /// The body limit of the request's app, area or API where it is not the default
+    /// ([`crate::App::body_limit`]), here for the same reason; 0 for the default.
+    body_limit: usize,
 }
 
 impl Signal {
     /// A request's signal in an app.
-    pub(crate) fn for_app(shared: Arc<crate::page::Shared>) -> Signal {
-        Signal(Arc::new(Inner { shared: Some(shared), ..Inner::default() }))
+    pub(crate) fn for_app(shared: Arc<crate::page::Shared>, body_limit: usize) -> Signal {
+        Signal(Arc::new(Inner { shared: Some(shared), body_limit, ..Inner::default() }))
+    }
+
+    /// The most of the request's body the readers take ([`crate::App::body_limit`]).
+    #[inline]
+    pub(crate) fn body_limit(&self) -> usize {
+        match self.0.body_limit {
+            0 => crate::extract::BODY_LIMIT,
+            limit => limit,
+        }
+    }
+
+    /// A signal with a body limit and nothing else, for a test of a reader.
+    #[cfg(test)]
+    pub(crate) fn with_body_limit(limit: usize) -> Signal {
+        Signal(Arc::new(Inner { body_limit: limit, ..Inner::default() }))
     }
 
     /// A request's signal in an app that learns its visitors' zones, with the one the browser
     /// reported.
     #[cfg(feature = "zones")]
-    pub(crate) fn for_app_in(shared: Arc<crate::page::Shared>, zone: Option<crate::client::ZoneName>) -> Signal {
-        Signal(Arc::new(Inner { shared: Some(shared), zone, ..Inner::default() }))
+    pub(crate) fn for_app_in(
+        shared: Arc<crate::page::Shared>,
+        zone: Option<crate::client::ZoneName>,
+        body_limit: usize,
+    ) -> Signal {
+        Signal(Arc::new(Inner { shared: Some(shared), zone, body_limit, ..Inner::default() }))
     }
 
     /// A task's signal and the handle that begins its shutdown, for a test of an app's task: the

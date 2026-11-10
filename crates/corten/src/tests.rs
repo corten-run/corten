@@ -3449,6 +3449,68 @@ async fn an_area_or_an_api_sets_its_own_deadline() {
     assert_eq!(status("/api/slow").await, StatusCode::OK, "None removes it for the API");
 }
 
+paths! {
+    AdminApi = "/admin/api",
+    AdminApiTake = "/admin/api/take",
+    AdminSmall = "/admin/small",
+    AdminSmallTake = "/admin/small/take",
+    ApiInner = "/api/inner",
+    ApiInnerTake = "/api/inner/take",
+}
+
+/// An area or an API with a body limit of its own: its routes' readers take it, and every other
+/// route keeps the app's. In nested areas the innermost that sets one decides; an area or an API
+/// that sets none takes the one around it.
+#[tokio::test]
+async fn an_area_or_an_api_sets_its_own_body_limit() {
+    let take = || crate::Methods::writes(crate::router::post(|body: crate::Bytes| async move { body.len().to_string() }));
+    let router = App::new(Routes::from(Table::new().route("/take", take().0)))
+        .body_limit(1 << 10)
+        .area::<Admin>(|admin| admin.route::<AdminSlow>(take()).body_limit(4 << 10))
+        .area::<AdminQuick>(|quick| quick.route::<AdminQuickSlow>(take()).body_limit(512))
+        .area::<AdminOther>(|other| other.route::<AdminOtherSlow>(take()))
+        .api::<AdminApi>(|api| api.route::<AdminApiTake>(take()))
+        .api::<AdminSmall>(|api| api.route::<AdminSmallTake>(take()).body_limit(512))
+        .api::<ApiRoot>(|api| api.route::<ApiSlow>(take()).body_limit(8 << 10))
+        .api::<ApiInner>(|api| api.route::<ApiInnerTake>(take()))
+        .router();
+    let post = |path: &'static str, len: usize| {
+        let router = router.clone();
+        async move {
+            let req = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from(vec![b'a'; len]))
+                .unwrap();
+            router.oneshot(req).await.unwrap().status()
+        }
+    };
+    assert_eq!(post("/take", 1 << 10).await, StatusCode::OK, "the app's limit is the readers'");
+    assert_eq!(post("/take", 2 << 10).await, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(post("/admin/slow", 3 << 10).await, StatusCode::OK, "the area's own");
+    assert_eq!(post("/admin/slow", 5 << 10).await, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(post("/admin/other/slow", 3 << 10).await, StatusCode::OK, "a nested area without one takes its parent's");
+    assert_eq!(post("/admin/quick/slow", 1 << 10).await, StatusCode::PAYLOAD_TOO_LARGE, "the innermost decides");
+    assert_eq!(post("/admin/api/take", 3 << 10).await, StatusCode::OK, "an API in an area takes the area's");
+    assert_eq!(post("/api/slow", 6 << 10).await, StatusCode::OK, "the API's own");
+    assert_eq!(post("/api/slow", 9 << 10).await, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(post("/admin/small/take", 1 << 10).await, StatusCode::PAYLOAD_TOO_LARGE, "an API's own over its area's");
+    assert_eq!(post("/api/inner/take", 6 << 10).await, StatusCode::OK, "an inner API takes the outer API's");
+    assert_eq!(post("/api/inner/take", 9 << 10).await, StatusCode::PAYLOAD_TOO_LARGE);
+    let default = App::new(Routes::from(Table::new().route("/take", take().0))).router();
+    let req = |len: usize| {
+        Request::builder()
+            .method("POST")
+            .uri("/take")
+            .header("sec-fetch-site", "same-origin")
+            .body(Body::from(vec![b'a'; len]))
+            .unwrap()
+    };
+    assert_eq!(default.clone().oneshot(req(2 << 20)).await.unwrap().status(), StatusCode::OK, "2 MiB unless set");
+    assert_eq!(default.oneshot(req((2 << 20) + 1)).await.unwrap().status(), StatusCode::PAYLOAD_TOO_LARGE);
+}
+
 #[cfg(feature = "json")]
 paths! {
     Zone = "/zone",

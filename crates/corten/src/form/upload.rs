@@ -19,10 +19,6 @@ use crate::{
     Error,
 };
 
-/// What a request keeps of the body unless the handler sets another ([`Upload::limit`]): the limit
-/// of a body read whole ([`crate::extract::BODY_LIMIT`]).
-const DEFAULT_LIMIT: usize = crate::extract::BODY_LIMIT;
-
 /// How much of a body past its limit is read past (not kept) before the answer, so the browser,
 /// still sending, reads the answer instead of a broken connection. Past this the connection is
 /// closed.
@@ -156,8 +152,9 @@ const HEAD_LIMIT: usize = 8 * 1024;
 /// what is left. A file input left empty is no file: the browser sends a part with an empty file
 /// name and no bytes (which `FormData` keeps as an empty `File`), and [`Upload::next_file`] passes
 /// over it (design.md, Limits). A part with bytes is a file, with an empty name if it came with
-/// none. The request may take 2 MiB of the body (fields, and files it reads or passes on) unless the
-/// handler sets [`Upload::limit`] before reading; past it the request is a 413. A file it passes
+/// none. The request may take the route's body limit (fields, and files it reads or passes on;
+/// [`crate::App::body_limit`], 2 MiB unless set) unless the handler sets [`Upload::limit`]
+/// before reading; past it the request is a 413. A file it passes
 /// over does not count, and one over its [`File::bytes_up_to`] needs room for that `max` as it
 /// goes over, then counts nothing (the rest is read past). A client that sends nothing for a
 /// minute ([`Upload::idle`]), or trickles the body in until it is that minute behind 240 bytes a
@@ -217,7 +214,8 @@ impl<'de> serde::Deserialize<'de> for Files {
 
 impl<T> Upload<T> {
     /// The most the request takes of the body, fields and the files it reads or passes on with
-    /// [`File::chunk`] together (2 MiB unless set); set it before reading. A file the handler
+    /// [`File::chunk`] together, in place of the route's limit ([`crate::App::body_limit`],
+    /// 2 MiB unless the app, an area or an API sets another); set it before reading. A file the handler
     /// passes over is read past and does not count, and one over its [`File::bytes_up_to`] (the
     /// limit for one file, the handler's) needs room for that `max` as it goes over, then counts
     /// nothing: the rest is read past and what was read of it is let go. A body is
@@ -295,6 +293,9 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
         };
         let mut delimiter = b"\r\n--".to_vec();
         delimiter.extend_from_slice(boundary.as_bytes());
+        // What it keeps unless the handler sets another (`Upload::limit`): the limit of a body read
+        // whole at this route (`App::body_limit`).
+        let limit = crate::extract::body_limit(req.extensions());
         let parts = Parts {
             body: req.into_body().into_data_stream(),
             // The first boundary has no line break before it: one is put there, and what comes
@@ -305,7 +306,7 @@ impl<T, S: Send + Sync> FromRequest<S> for Upload<T> {
             ends_part: memchr::memmem::Finder::new(&delimiter).into_owned(),
             delimiter: delimiter.into(),
             read: 0,
-            limit: DEFAULT_LIMIT,
+            limit,
             past: 0,
             idle: Idle::new(Some(IDLE)),
             refused: false,

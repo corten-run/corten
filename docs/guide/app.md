@@ -107,7 +107,7 @@ and the answer is the client's 408 (`Failure::Failed`, as a stalled upload's `?`
 client that stops sending a form is not told the server was slow. With the defaults the deadline
 (30 seconds) comes before an upload's idle time (`Upload::idle`, a minute), so it is the deadline
 that answers a stalled upload, with that 408. A deadline that passes while a body over an
-`Upload`'s or a `pieces_up_to` limit, or over the 2 MiB of `Json`, `Form`, `String` or `Bytes`,
+`Upload`'s or a `pieces_up_to` limit, or over the limit of `Json`, `Form`, `String` or `Bytes` (`App::body_limit`, 2 MiB unless set),
 is read past is the 413 that read gives. Only a request
 `corten::serve` reads from its connection is marked as waiting for its body; through
 `app.router()` served another way that deadline is the 503 (the 413 still holds). A connection
@@ -1480,7 +1480,7 @@ fn app(pages: Routes) -> App {
 ```
 
 The inner API keeps its routes, their checks and its `state`, and its own settings; what it leaves
-unset (`deadline`, `errors`) it takes from the API around it, whose middleware runs before its
+unset (`deadline`, `body_limit`, `errors`) it takes from the API around it, whose middleware runs before its
 own. A setting the inner API gives replaces the outer one; `deadline(None)` removes an inherited
 deadline, but nothing turns an inherited `errors` off: an inner API under an outer API with
 `errors` writes its failures that way, not as Problem Details. Partner sites are the exception: an inner API allows only the origins it names itself
