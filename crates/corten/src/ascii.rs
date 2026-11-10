@@ -73,6 +73,19 @@ pub(crate) const PAIRS: &[u8; 200] = b"0001020304050607080910111213141516171819\
     6061626364656667686970717273747576777879\
     8081828384858687888990919293949596979899";
 
+/// `PAIRS` as text, for a writer that appends to a `String`.
+const PAIRS_TEXT: &str = match std::str::from_utf8(PAIRS) {
+    Ok(text) => text,
+    Err(_) => panic!("PAIRS is ASCII digits"),
+};
+
+/// The two digits of `n` (below 100), `"07"` for 7.
+#[inline]
+pub(crate) fn pair(n: u8) -> &'static str {
+    let at = usize::from(n) * 2;
+    &PAIRS_TEXT[at..at + 2]
+}
+
 /// The decimal digits of `n`, written at the end of `buf`, two per division.
 #[inline]
 pub(crate) fn digits(mut n: u64, buf: &mut [u8; 20]) -> &[u8] {
@@ -152,6 +165,13 @@ mod tests {
         let mut buf = [0; 20];
         for n in (0..2000).chain([9_999, 10_000, 99_999, 123_456_789, u32::MAX as u64, u64::MAX - 1, u64::MAX]) {
             assert_eq!(digits(n, &mut buf), n.to_string().as_bytes());
+        }
+    }
+
+    #[test]
+    fn pairs_are_two_digits() {
+        for n in 0..100u8 {
+            assert_eq!(pair(n), format!("{n:02}"));
         }
     }
 
