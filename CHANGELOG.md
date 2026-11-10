@@ -4258,8 +4258,10 @@ Corten is pre-1.0, so any minor version may change the API.
     written by it, so it derives `ToJson` alone, as every other JSON answer does, where it needed
     serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
     The answer is the same JSON (card-market's agent test checks its bytes against serde's for the
-    item). No count isolates this change yet: one runs `tool_cost` on `217bce2c` (with `tool_cost`
-    added) against this change's last commit, under callgrind. No data-role attribute is added beside `ToJson` and
+    item). An `items.get` call costs about 21% fewer instructions: 265,017 and
+    267,984 a call before, 210,598 and 211,269 after, with the same 16,800-byte answer on average
+    (callgrind, release build, card-market's `tool_cost`, 1,200 calls less 200 over 1,000, two
+    alternating runs each). No data-role attribute is added beside `ToJson` and
     `FromJson`, which already name each type's direction ([design Choice
     35](docs/design.md#choice-json-derives)). **Breaking:** the type a tool returns must be a `ToJson` and the
     type it takes a `FromJson`, as must any container around them (a derived struct's own fields

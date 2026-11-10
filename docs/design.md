@@ -1376,8 +1376,10 @@ rules something out.
 
     Stands on: reasoned (a derived `ToJson` writes a tool output's schema and its bytes, and a
     derived `FromJson` a tool input's schema and what it reads; card-market's agent test checks a
-    tool answer's bytes equal serde's for the item; no count isolates the change's cost yet, and
-    the CHANGELOG names the pair to count); value (one declaration per direction, Values 4, 5 and
+    tool answer's bytes equal serde's for the item); measured (an agent's `items.get` call in
+    card-market's `tool_cost` runs about 21% fewer instructions, 265,017 and 267,984 before and
+    210,598 and 211,269 after: callgrind, release, 1,200 calls less 200 over 1,000, two
+    alternating runs each); value (one declaration per direction, Values 4, 5 and
     6).
 
     Revisit when: an example app needs, because the derives refuse its type, a hand-written
@@ -1388,7 +1390,8 @@ rules something out.
     Last checked: 2026-11-09, the
     derives and the agent endpoint's bounds, inputs and outputs, at `7965aeab`, the bounds' last
     change; 2026-11-10, no such impl in `examples/`, at `7197604f`; 2026-11-10, the std types' and
-    pointers' `ToJson` and `FromJson` against serde's bytes and values (`json` tests, and `corten-run` built with `json` alone), at `22263bfc`.
+    pointers' `ToJson` and `FromJson` against serde's bytes and values (`json` tests, and `corten-run` built with `json` alone), at `22263bfc`; 2026-11-10, the
+    `tool_cost` count, on `217bce2c` with `tool_cost` added and on `fcecee41`.
 
 ## Rules
 
