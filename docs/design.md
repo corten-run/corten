@@ -1302,8 +1302,9 @@ rules something out.
     item, which hides standard derives behind a spelling of Corten's and names the field in an
     argument rather than on it; taking a field named `id` without a mark, since a row's key is
     better said (`sku`, `ticker`) than guessed. So a struct row with named fields, keyed by one of
-    them, derives `Row`, and only a row the derive cannot express (an enum, a tuple struct, whose
-    fields serde writes without names, a key made of several fields) implements the trait by hand:
+    them, derives `Row`, and only a row the derive cannot express (such as an enum, a tuple struct,
+    whose fields serde writes without names, a key made of several fields) implements the trait by
+    hand:
     the hand-written impl is what is left for those, not a second way for the rest. Beyond the impl,
     the derive refuses what makes a script or a replica read the key as something other than
     `id()`, as far as the row's own serde attributes say: one that leaves the id out, writes or

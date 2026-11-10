@@ -30,7 +30,8 @@ fn opened(tokens: Vec<TokenTree>) -> Vec<TokenTree> {
 /// The serde attribute keys on the id field that leave it out of the JSON a script reads the key
 /// from, write it as something other than the text `id()` returns, or read it back as something
 /// else in a replica.
-const ID_SERDE: [&str; 8] = [
+const ID_SERDE: [&str; 9] = [
+    "alias",
     "skip",
     "skip_serializing",
     "skip_serializing_if",

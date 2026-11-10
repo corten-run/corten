@@ -111,8 +111,9 @@ pub mod feed {
     /// feature, or another type that derefs to `str`), so `Row` is the derive and the trait at
     /// once, as serde's `Serialize` is. The row's `Clone` and `Serialize` stay in its derive list,
     /// where Rust checks them and the trait's bounds. A struct row with named fields, keyed by one
-    /// of them, derives it; only a row the derive cannot express (an enum, a tuple struct, a key
-    /// made of several fields) implements the trait by hand. The derive reads the row's serde
+    /// of them, derives it; only a row the derive cannot express (such as an enum, a tuple struct,
+    /// a key made of several fields, or an `id` that does more than return a field) implements the
+    /// trait by hand. The derive reads the row's serde
     /// attributes, not the id type's own `Serialize`: an id type that writes other than the text it
     /// derefs to is not checked. A generic row needs no bounds on its parameters: it is a `Row` for each type
     /// argument that makes it `Clone`, `Serialize`, `Send`, `Sync` and `'static`, and a feed of
@@ -324,6 +325,13 @@ pub mod feed {
     /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
     /// #[serde(rename_all(deserialize = "UPPERCASE"))]
     /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// Or also under an `alias`, where a replica can find another member's value:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(alias = "symbol")] ticker: String, symbol: String }
     /// ```
     ///
     /// Or reads as another value converted (`from`, `try_from`), so a replica's row can hold an id

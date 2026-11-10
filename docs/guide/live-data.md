@@ -229,15 +229,15 @@ str`). The feed sends what `Serialize` writes, so `#[serde(..)]` on the row, the
 changes the JSON and not the key; a script reads the key under the id's serde name, so the derive
 refuses a serde attribute that leaves the id out or writes or reads it as other text than `id()`
 returns (`skip` and its variants, `with`, `serialize_with`, `deserialize_with`, `flatten`), an id
-read under another name than it is written under, another field written or read under the id's
+read under another name than it is written under or under an `alias` too, another field written or read under the id's
 key (a `rename`, an `alias`, the row's `rename_all` or `tag`; a flattened field's members are not
 checked), and
 `into`, `transparent`, `from` or `try_from` on the row. It reads the row's attributes, not the
 id type's own `Serialize`, so an id type that writes other than the text it derefs to is not
 checked. `Row` is the derive and the trait at once (`use corten::feed::Row`); a struct row with
-named fields, keyed by one of them, derives it, and only a row the derive cannot express (an enum,
-a tuple struct, whose fields serde writes without names, a key made of several fields) implements
-it by hand. A generic row needs no bounds on its parameters: it is a row for each type argument that
+named fields, keyed by one of them, derives it, and only a row the derive cannot express (such as
+an enum, a tuple struct, whose fields serde writes without names, a key made of several fields, or
+an `id` that does more than return a field) implements it by hand. A generic row needs no bounds on its parameters: it is a row for each type argument that
 makes it `Clone`, `Serialize`, `Send`, `Sync` and `'static`. An `Arc<str>` id needs serde's `rc`
 feature.
 
