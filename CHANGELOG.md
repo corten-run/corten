@@ -2573,6 +2573,20 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
+    `apps/express`), each written its framework's usual way with htmx as the other server-rendered
+    apps are: the item page, the catalog page, the localized marketplace page and the live price
+    stream. Each app's own tests (`python -m unittest`, `node --test`) cover the marketplace page
+    (formatting, rows, links, the cross-site check, both sources); the catalog and item pages are
+    covered by the shared gates, and the live stream only by the live benchmark. FastAPI's records are Pydantic models, so a
+    record that is not one is a 502, and its item API clients have no connection cap, as the
+    README's item API rule asks. Neither framework has
+    CSRF protection of its own, so each refuses a cross-site post by its `Sec-Fetch-Site` or
+    `Origin`, as the Gin and Drogon apps do. Both join the catalog and marketplace gates, CI's matrix
+    and official rounds, which now need all twenty apps, so no marketplace round is compared with
+    one of eighteen. Neither has a build step, so build-cost rows say so.
+    They take Spring Boot's and Django's places among the matched tier's four most used frameworks
+    ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
