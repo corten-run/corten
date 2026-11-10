@@ -255,60 +255,8 @@ impl Row for Entry {
 
 A row with no field marked, two marked, a field marked twice, an id that is not text, an enum,
 a unit struct, a `row` attribute on the struct, or a `row` attribute that is not `#[row(id)]` on
-a field does not compile:
-
-```compile_fail
-#[derive(Clone, serde::Serialize, corten::feed::Row)]
-struct Stock { ticker: String, price_cents: u32 }
-```
-
-```compile_fail
-#[derive(Clone, serde::Serialize, corten::feed::Row)]
-struct Stock { #[row(id)] ticker: String, #[row(id)] isin: String }
-```
-
-```compile_fail
-#[derive(Clone, serde::Serialize, corten::feed::Row)]
-struct Stock { #[row(id)] #[row(id)] ticker: String }
-```
-
-```compile_fail,E0308
-#[derive(Clone, serde::Serialize, corten::feed::Row)]
-struct Stock { #[row(id)] number: u64 }
-```
-
-```compile_fail
-#[derive(Clone, serde::Serialize, corten::feed::Row)]
-enum Stock { Open { #[row(id)] ticker: String } }
-```
-
-```compile_fail
-#[derive(Clone, serde::Serialize, corten::feed::Row)]
-struct Stock;
-```
-
-```compile_fail
-#[derive(Clone, serde::Serialize, corten::feed::Row)]
-struct Stock(String, u32);
-```
-
-```compile_fail
-#[derive(Clone, serde::Serialize, corten::feed::Row)]
-struct Stock { #[row(id)] ticker: String, #[row(key)] isin: String }
-```
-
-```compile_fail
-#[derive(Clone, serde::Serialize, corten::feed::Row)]
-#[row(id)]
-struct Stock { #[row(id)] ticker: String }
-```
-
-The trait's bounds hold too: a row that is not `Sync` (a `Cell` in it) does not compile.
-
-```compile_fail,E0277
-#[derive(Clone, serde::Serialize, corten::feed::Row)]
-struct Stock { #[row(id)] ticker: String, views: std::cell::Cell<u32> }
-```
+a field does not compile, and neither does a row that is not `Clone`, `Send` and `Sync`, the
+trait's bounds (each case is a `compile_fail` example in the documentation of `corten::feed::Row`).
 
 ```rust,ignore
 let stocks = Feed::new(rows);

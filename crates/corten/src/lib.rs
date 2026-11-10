@@ -122,6 +122,97 @@ pub mod feed {
     /// # use corten::feed::Row as _;
     /// assert_eq!(Stock { ticker: "ACME".into(), price_cents: 1 }.id(), "ACME");
     /// ```
+    ///
+    /// What does not compile, each for its own reason.
+    ///
+    /// No field marked:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// Two fields marked:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[row(id)] isin: String }
+    /// ```
+    ///
+    /// A field marked twice:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// An id that is not text:
+    ///
+    /// ```compile_fail,E0308
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] number: u64 }
+    /// ```
+    ///
+    /// An enum:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// enum Stock { Open { #[row(id)] ticker: String } }
+    /// ```
+    ///
+    /// A unit struct:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock;
+    /// ```
+    ///
+    /// A tuple struct with no field marked:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock(String, u32);
+    /// ```
+    ///
+    /// A `row` attribute other than `#[row(id)]` on a field:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[row(key)] isin: String }
+    /// ```
+    ///
+    /// A `row` attribute on the struct:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[row(id)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// A row that is not `Sync` (a `Cell` in it):
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, views: std::cell::Cell<u32> }
+    /// ```
+    ///
+    /// A row that is not `Clone`:
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// A row that is not `Send` (a `MutexGuard` is `Sync` but not `Send`):
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     ticker: String,
+    ///     held: std::marker::PhantomData<std::sync::MutexGuard<'static, ()>>,
+    /// }
+    /// ```
     pub use corten_macros::Row;
 }
 #[cfg(feature = "agent")]
@@ -1037,7 +1128,7 @@ mod doc_examples {
     struct GettingStarted;
     #[doc = include_str!("../../../docs/guide/scripts.md")]
     struct Scripts;
-    // Its examples are feeds, and its compile errors name what a feed refuses.
+    // Its examples are feeds.
     #[cfg(feature = "feed")]
     #[doc = include_str!("../../../docs/guide/live-data.md")]
     struct LiveData;
