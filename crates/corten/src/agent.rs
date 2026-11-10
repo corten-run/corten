@@ -103,8 +103,10 @@
 //!
 //! An output needs `ToJson` and no `Serialize`. One written by serde, with a schema written by
 //! hand, does not compile as one: derive `ToJson`, which writes the schema and the bytes from one
-//! reading of the type, or, for a type the derive refuses, write `ToJson` by hand with its
-//! `ToJsonSchema` beside it, two impls you keep in step. A hand-written one writes exactly one
+//! reading of the type. A type whose schema is written by hand (one the derive refuses, or another
+//! crate's type, in a newtype of the app's) writes its `ToJson` by hand too, beside its
+//! `ToJsonSchema`, two impls you keep in step (deriving `ToJson` beside a hand-written schema is
+//! E0119). A hand-written one writes exactly one
 //! JSON object, which goes into the response as written: a test or `corten dev` stops at one
 //! that does not, and a release build sends it as it is, so a broken one breaks the JSON-RPC
 //! answer around it:
@@ -121,16 +123,21 @@
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
 //!
-//! Written by hand, it does:
+//! Written by hand, it does. Here the output is another crate's type, which serde writes, in a
+//! newtype of the app's:
 //!
 //! ```
 //! use corten::{agent::Tools, json::schema::{Generator, ToJsonSchema}, ToJson};
+//! mod other_crate {
+//!     #[derive(serde::Serialize)]
+//!     pub struct Done { pub ok: bool }
+//! }
 //! #[derive(corten::FromJson)]
 //! struct Adjust { id: String }
-//! struct Done { ok: bool }
+//! struct Done(other_crate::Done);
 //! impl ToJson for Done {
 //!     fn write_json(&self, out: &mut Vec<u8>) {
-//!         out.extend_from_slice(if self.ok { br#"{"ok":true}"# } else { br#"{"ok":false}"# });
+//!         serde_json::to_writer(&mut *out, &self.0).expect("Done is written as JSON");
 //!     }
 //! }
 //! impl ToJsonSchema for Done {
@@ -138,7 +145,7 @@
 //!         serde_json::json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } })
 //!     }
 //! }
-//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done(other_crate::Done { ok: true })) });
 //! ```
 
 use std::{

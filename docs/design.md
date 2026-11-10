@@ -1334,8 +1334,9 @@ rules something out.
     `ToJson`, so a derived `ToJson` writes both the schema and the bytes (a field of another crate's
     type inside it is still written by serde under a schema written for it, as in any `ToJson`
     answer), and a tool's output is written by the code every other response is. A `ToJson` written
-    by hand, for a type the derive refuses, comes with a `ToJsonSchema` written beside it, two impls
-    its author keeps in step, as before. Tool inputs are bounded on `FromJson` the same way, so an
+    by hand, for a type whose schema is written by hand (one the derive refuses, or another crate's
+    type in a newtype of the app's), comes with that `ToJsonSchema` beside it, two impls its author
+    keeps in step, as before. Tool inputs are bounded on `FromJson` the same way, so an
     input that derives serde's `Deserialize` beside a schema written by hand does not compile, short
     of the deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson` cannot write
     takes (written by hand, or serde's for an attribute it refuses), which again leaves two impls in
@@ -1344,7 +1345,10 @@ rules something out.
     ends with the app's 500, as every other `ToJson` answer already does, where it used to be
     answered as the tool's failed result (`isError`, "internal error"). It stands because such a
     value fails for every client the same way, the derive refuses what it cannot write, and a
-    fallible write on this one path would be a second way to write an answer:
+    fallible write on this one path would be a second way to write an answer. It also gives up the
+    guarantee that a release build's answer parses: a hand-written `ToJson` that writes broken
+    JSON breaks the JSON-RPC answer around it, where serde could not (a test or `corten dev` stops
+    at an output that is not one object):
 
     ```rust,ignore
     // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
@@ -1370,22 +1374,16 @@ rules something out.
 
     Stands on: reasoned (a derived `ToJson` writes a tool output's schema and its bytes, and a
     derived `FromJson` a tool input's schema and what it reads; card-market's agent test checks a
-    tool answer's bytes equal serde's for the item); measured, as context only, since no count yet
-    isolates this change (callgrind, release build, card-market's `tool_cost`: an
-    agent's `items.get` call through `/mcp`, each answer checked to be the tool's output, 1,200
-    calls less 200 over 1,000, two runs each: 267,820 and 265,852 instructions a call on
-    `a791d9ba` with `tool_cost` added, 211,330 and 211,236 on `620bc298`; the commits between also
-    carry review changes to the derived `Deserialize` that reads the tool's input, from
-    [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042),
-    and `620bc298` predates the panic log that names the tool, so the drop is not this change's; the
-    isolating pair is `217bce2c` with `tool_cost` added against this change's last commit); value (one declaration per direction, Values 4, 5 and 6).
+    tool answer's bytes equal serde's for the item; no count isolates the change's cost yet, and
+    the CHANGELOG names the pair to count); value (one declaration per direction, Values 4, 5 and
+    6).
 
     Revisit when: an example app needs, because the derives refuse its type, a hand-written
     `ToJson` with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in
-    `impl FromJson for T {}` (none in `examples/` at the last check), or a seam other than the feed
-    is bounded on serde's `Serialize` or `Deserialize` again.
+    `impl FromJson for T {}` (none in `examples/` at the last check), or a JSON seam other than the
+    feed is bounded on serde's `Serialize` or `Deserialize` again.
 
-    Last checked: 2026-11-08, the callgrind count on `a791d9ba` and `620bc298`; 2026-11-09, the
+    Last checked: 2026-11-09, the
     derives and the agent endpoint's bounds, inputs and outputs, at `7965aeab`, the bounds' last
     change; 2026-11-10, no such impl in `examples/`, at `7197604f`.
 

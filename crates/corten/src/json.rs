@@ -290,7 +290,7 @@ pub fn to_vec<T: ToJson + ?Sized>(value: &T) -> Vec<u8> {
 /// response holds. A hand-written impl appends exactly one JSON value to `out`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not write itself as JSON (ToJson)",
-    note = "derive ToJson on it (it needs no Serialize); for another crate's type, derive it on a #[serde(transparent)] newtype around it; for a type the derive refuses, implement ToJson by hand, with ToJsonSchema beside it where a schema is asked for"
+    note = "derive ToJson on it (it needs no Serialize); for another crate's type, or one whose schema is written by hand, implement ToJson by hand on a newtype around it (serde_json::to_writer(&mut *out, &self.0)), with ToJsonSchema beside it where a schema is asked for"
 )]
 pub trait ToJson {
     /// Appends the value's JSON to `out`.
@@ -508,7 +508,27 @@ impl<T: ToJsonMembers + ?Sized> ToJsonMembers for Box<T> {
 }
 
 /// A map key: written as a JSON string (numbers, `bool` and `char` in quotes, as serde_json does).
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a map key ToJson can write (JsonKey)",
+    note = "a key is text, a number, bool or char; for an app's own key type, implement corten::json::JsonKey for it"
+)]
+///
+/// An app's key type implements it by writing the text it stands for:
+///
+/// ```
+/// use corten::json::{JsonKey, ToJson};
+/// #[derive(PartialEq, Eq, PartialOrd, Ord)]
+/// struct Sku(String);
+/// impl JsonKey for Sku {
+///     fn write_key(&self, out: &mut Vec<u8>) {
+///         self.0.write_key(out)
+///     }
+/// }
+/// let stock = std::collections::BTreeMap::from([(Sku("a\"1".into()), 3)]);
+/// assert_eq!(stock.to_json(), r#"{"a\"1":3}"#);
+/// ```
 pub trait JsonKey {
+    /// Appends the key as one JSON string, quotes included.
     fn write_key(&self, out: &mut Vec<u8>);
 }
 
