@@ -53,7 +53,7 @@ says nothing for a new tag or branch. A path dependency (a checkout of corten) i
 | `src/click_counter.js`, `.css` | the `ClickCounter` component's handlers and stylesheet, next to it |
 | `static/` | the app's own CSS (element defaults, the layout), its favicon (`favicon.svg`, Corten's mark until you replace it; also answered at `/favicon.ico`), images; compiled into the program (`embed!`, a constant per file) and served at versioned URLs |
 | `AGENTS.md` | the rules for an AI agent working on the app |
-| `Dockerfile` | a release build in a slim image that preloads jemalloc, which gives back memory a burst of connections took (remove its three lines to run on glibc's allocator); zstd is linked to the build image's libzstd, so the server needs `libzstd.so.1` where it runs (the slim image has it; for one without it, distroless or scratch, remove the `ZSTD_SYS_USE_PKG_CONFIG` line) |
+| `Dockerfile` | a release build in a slim image that preloads jemalloc, which gives back memory a burst of connections took (remove its three lines to run on glibc's allocator); zstd is linked to the build image's libzstd, so the server needs `libzstd.so.1` where it runs (the slim image has it; for one without it, distroless or scratch, remove the `ZSTD_SYS_USE_PKG_CONFIG` line); the server runs as an unprivileged user, `USER 10001:10001` (by number, so a cluster that requires non-root containers starts it; the server writes no file, and an app whose server does gives that user a directory) |
 
 ## A whole app in one file
 
