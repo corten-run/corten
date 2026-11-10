@@ -98,7 +98,9 @@ security headers and `Cache-Control: private, no-cache`, a 10-second deadline an
 compression when asked (brotli and gzip; Corten also offers zstd), a host allow-list (`HOSTS`),
 and `/health/live` and `/health/ready` (ready while the item API answers). It differs in what
 ASP.NET Core does differently: a host it does not know gets a 400 HTML page without the security
-headers, before the app's middleware (Corten: 421 with its headers), a problem body carries ASP.NET Core's `type` and
+headers, before the app's middleware (Corten: 421 with its headers), its exception handler's 500
+and request timeout's 503 clear the answer and go without them, a problem body carries
+ASP.NET Core's `type` and
 `trace_id`, the host list has no rule for "any IP address", a whole number in a double is
 written `9` where Corten writes `9.0` (218 bytes fewer over the fixture's 3.34 MB of JSON;
 otherwise the bytes are the same for every fixture item), text with HTML's characters (`<`, `&`,
@@ -1421,9 +1423,10 @@ the profile. "Provides" is a middleware, a setting or a builder option of the fr
 companion its documentation points to for it (tower-http for axum); a part that needs the app to
 write its own handler, error mapper or server loop is left out, as the defaults tier leaves it;
 code the framework's own documentation gives for a part, written as it gives it, counts as provided
-(Next.js's Proxy for a nonce CSP). Topcoat's documentation gives such code for headers on its error
-answers (a layer that queues them with `response_headers`), which its app does not use yet; no
-counted column reads those headers, so its row is the same either way.
+(Next.js's Proxy for a nonce CSP, ASP.NET Core's inline middleware that appends a header). Topcoat's
+documentation gives such code for headers on its error answers (a layer that queues them with
+`response_headers`), which its app does not use yet; no counted column reads those headers, so its
+row is the same either way.
 The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
 rule (Corten; axum-maud, the anchor every tier shares; the three best on the tier's own measure
 and the four most used in the Stack Overflow survey, on r13 and the 2026 survey ASP.NET Core,
@@ -1510,8 +1513,55 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    liveness or readiness, a deadline, or the Node server's header timeout (Node's `headersTimeout`
    is 60 s, and the standalone server sets only `keepAliveTimeout`) or connection cap
    (`server.maxConnections`, which it does not set), so those columns stay unmet.
-6. `aspnet` (and `aspnet-aot`), `fastapi` and `express` are not in it yet: each joins with its
-   profile.
+6. `aspnet`: a matched round runs the Razor Pages app in the page phases and `aspnet-aot` in the
+   JSON ones (`matchedJson: false` in `apps.mjs` keeps the Razor Pages app out of those; both are in
+   cold start, the counts and the matrix). `PROFILE=matched` turns on the profile in `Program.cs`,
+   each part ASP.NET Core's own middleware or setting; without it the app starts as before, and its
+   defaults-tier matrix is unchanged (every cell as r16's, measured at `2fa883a6`:
+   `results/conform-defaults-aspnet1/conformance.json`), though it gains the template's `/Error`
+   page. Kestrel takes `MAX_CONNECTIONS` as `MaxConcurrentConnections` and a 2 MiB request body
+   limit (`MaxRequestBodySize`; its default is 30 MB), and its request head timeout is already 30 s.
+   The host filter (`AddHostFiltering`) lists localhost, the loopback addresses and `HOSTS`
+   (`.example.com` as the domain and its subdomains) and answers others 400; Corten also answers to
+   any IP address. A middleware written as ASP.NET Core's documentation sets a header ("Control
+   headers in C# code": append it, then call the next) adds axum-maud's security headers; the
+   exception handler clears the headers before it answers, so its 500s go without them (the counted
+   columns read headers on the 200 answers, as for Topcoat). The same middleware under `/api` adds
+   `Cache-Control: private, no-cache` to the JSON. The pages have none of their own: one with a post
+   form (the item and marketplace pages) gets its antiforgery token's `no-cache, no-store`, the
+   static files keep their own (a second, appended, would conflict), and the others (the index and
+   catalog) go without: the response cache attribute sets one on a page model's class, which would
+   change them in the defaults tier too, and registered for every page under the profile
+   (`Conventions.ConfigureFilter` with `Location = Client`) it wrote nothing (tried: the index still
+   answered without `Cache-Control`), since the filter it makes is an MVC action filter, which a
+   page does not run; the page version is internal and made only from an attribute on the page's own
+   class. The response compression middleware sends Brotli or gzip. Under `/api` the exception
+   handler and status code pages answer with problem details (`AddProblemDetails`); elsewhere the
+   exception handler runs the request again as the template's error page (`Pages/Error.cshtml`),
+   with `UseRouting` after it as the template places it: the handler clears the failed request's
+   endpoint before it runs it again, and routing placed before it would not route the request again.
+   The health checks middleware answers `/health/live` and `/health/ready`, and the JSON routes
+   answer `HEAD` as well as `GET`. The item API's clients give up after 10 s (`HttpClient.Timeout`),
+   card-market's deadline: ASP.NET Core's request timeout (`UseRequestTimeouts`) cancels only code
+   that reads the request's token, which the app's reads do not take, so the client's own timeout is
+   the framework setting that reaches them (the defaults tier keeps HttpClient's 100 s). Its timeout
+   is an exception, so the page and the JSON answer 500 at 10 s, where Corten answers 503. Left out:
+   the ETag (ASP.NET Core writes one for static files, and has no setting for one on a rendered page
+   or the JSON) and a readiness that knows the item API (a health check of the app's own). The image
+   grows by 9 KB (`docker image inspect`: 230,581,450 bytes at `2fa883a6` against 230,572,093 built
+   at `1e1fb7be`, the commit before the profile). `aspnet-aot` was written for round aot1 with its
+   headers, deadline and health endpoints in both tiers; the profile adds only `MAX_CONNECTIONS` as
+   Kestrel's cap. Its headers moved, in both tiers, to the same documented middleware, so its
+   exception handler's 500 and its request timeout's 503 (both clear the answer first) now go
+   without them, and the 503 without its `Cache-Control` too, where before they had them (the 200s,
+   and the 404 and 405, keep them, so no cell of either tier changed). Its readiness that knows the
+   item API is a health check of its own (`ItemsReachable`), which the rule leaves out of the Razor
+   Pages app: it meets that column by code the tier would not add. The alert form (with its
+   antiforgery token), the sort and "show all" work in Chromium through the edge, with one
+   `style-src` violation, htmx's indicator styles in a `<style>` element, which `style-src 'self'`
+   blocks (checked at `2fa883a6` with Playwright's Chromium: the sort reorders the prices, "show
+   all" shows 25 offers, the alert posts a 200 and shows its message).
+7. `fastapi` and `express` are not in it yet: each joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1539,6 +1589,12 @@ Next.js, from `cb-nextjs-matched` built at `eedbcc2a`
 compression (none), 405 and failed read (empty), the unknown Host (200), liveness and readiness,
 the item API's deadline and the unfinished head (each held 45 s), and the cap (served with 1,050
 held).
+ASP.NET Core's Razor Pages app, from `cb-aspnet` built at `2fa883a6`
+(`results/conform-matched-aspnet1/conformance.json`), met 22 and missed 2: the ETag, and
+readiness with the item API hung (200); its deadline is a 500 in 10.3 s. aspnet-aot, from
+`cb-aspnet-aot` built at the same commit, met all 14 of its columns that are not about pages
+(its readiness 503 in 2.0 s, its deadline 503 in 10.1 s), 13 by the tier's rule, since its
+readiness is a health check of its own.
 No load phase has run in the tier yet.
 
 ### The hardening step

@@ -2648,6 +2648,21 @@ Corten is pre-1.0, so any minor version may change the API.
     edge's host for server actions; the defaults tier's image is built from the same config as
     before. Its matched matrix meets 14 of 24 columns
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+290. ASP.NET Core joins `bench/fullstack`'s matched tier, as its Razor Pages app and aspnet-aot:
+    under `PROFILE=matched` the Razor Pages app adds the security headers by the middleware ASP.NET
+    Core's documentation gives for a header, ASP.NET Core's host filter, response compression,
+    problem details and an error page from its exception handler, health checks, `HEAD` on the JSON,
+    Kestrel's body limit and connection cap, and a 10 s timeout on the item API's client (a 500,
+    where Corten answers 503); aspnet-aot, which already had the rest, adds the cap, and its headers
+    move, in both tiers, to the same documented middleware, so its 500 and its deadline's 503 now go
+    without them, and its host list takes a `.example.com` in `HOSTS` as the domain too, as the
+    Razor Pages app's does. Without the profile every defaults-tier cell of both is as r16's; no
+    load run has measured the moved header middleware, so aspnet-aot's next defaults row may move. A
+    matched round runs the Razor Pages app in the page phases and aspnet-aot in the JSON ones
+    (`matchedJson: false` in `apps.mjs`). The Razor Pages app's matched matrix meets 22 of 24
+    columns, and aspnet-aot's all 14 that are not about pages, one of them (readiness) by a health
+    check of its own that the tier's rule would not add
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

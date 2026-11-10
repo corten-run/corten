@@ -26,7 +26,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apiContainer, apps, network, pageApps, runArgs, tier, viaEdge } from "./apps.mjs";
+import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
 import { buildStep, calls, idleMinutes, mayStart, resumeAt, roundNameError, startMinutes, steps } from "./round.mjs";
@@ -197,7 +197,7 @@ try {
   const jsonOnly = Object.keys(apps).filter((name) => !(name in pageApps));
   // The browser step reaches each app as the round's load phases do: the matched tier's through the edge.
   const urls = Object.values(pageApps).map((a) => (viaEdge ? edgeBase(a, "outside") : `http://localhost:${a.port}`));
-  const all = calls(round, browserRuns, Object.keys(pageApps), urls, jsonOnly, passesOf(process.env.BENCH_PASSES));
+  const all = calls(round, browserRuns, Object.keys(pageApps), urls, jsonOnly, passesOf(process.env.BENCH_PASSES), pageOnly);
   for (const step of first ? steps.slice(steps.indexOf(first)) : []) {
     if (step === "count" && process.platform !== "linux") continue;
     progress(`start ${step}`);
