@@ -19,7 +19,7 @@ your routes. Each default can be replaced in one line.
 | Error pages | every [`Failure`](#error-pages) in a plain document, in the request's mode (page, swap or JSON), sent with `X-Robots-Tag: noindex`; the error is logged, and shown only under `corten dev`; right for an API or a first sketch; an app with a layout sets one, and a debug build warns once at startup when an app with a stylesheet has none | `.error_page(page, state)`: `async fn(Failure, Req, ..extractors) -> HtmlResult`, in the app's layout and for who is asking; `corten new` writes one that names each case |
 | JSON-only routes | none | `.api(api::api)` for a `#[corten::routes(api = ApiRoot)]` module: every failure under the prefix is JSON, unknown URLs included, with no document ([below](#json-only-routes)) |
 | WebSockets and relays | none | a handler takes `Upgrade` and returns its `websocket(..)` or `switch(..)`; `Relay` passes another server's answer on as it came ([below](#websockets-and-relays)) |
-| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies 16 powerful features (camera, microphone, screen recording, location, motion sensors, installed fonts, idle detection, window placement, payment, and devices: USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
+| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies 16 powerful features (camera, microphone, screen recording, location, motion sensors, installed fonts, idle detection, window placement, payment, and devices: USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses, `.frame_ancestors("https://partner.example")` for a site that may show the pages in a frame; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
 | Caching | static files and the runtime cached forever; everything rendered `private, no-cache` ([below](#caching)) | return `Public<HtmlResult>` (or `Public<JsonResult<T>>`) for an answer that is the same for everyone |
 | Static files | component scripts and the components' stylesheets (one file, plus one per area that lists components and one per set of areas that list the same components) at content-hashed, immutable URLs; each script loaded by the pages whose handlers use it | `.assets(Static)`: `static/`, compiled into the program by `corten::assets::embed!` (a constant per file, `req.asset(Static::STYLE_CSS)`) and served the same way ([below](#static-files)); `/favicon.ico` answers the directory's `favicon.ico`, else its `favicon.svg`, cached a day, unless a route of the app's matches the path; `.components(&[..])`, `Area::components(&[..])` ([styles](styles.md#areas)) |
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
@@ -1734,21 +1734,23 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
 6. Only HTTP/1.1 connections served by `corten::serve` switch; an HTTP/2 request (no extended
    `CONNECT`) and a test's `app().test()` get a 426.
 
-`corten::Relay::new(status, headers, body)` is another server's answer passed on as it came,
-for a gateway or a backend for a frontend: its status, its headers less the hop-by-hop ones, and
-its body as it arrives (`Body::from_stream(res.bytes_stream())` from reqwest). A failure status
-keeps the upstream's body, never the error page or the JSON error. The app's security and cache
-rules still apply, except that a `Content-Security-Policy` the upstream sent replaces the app's:
-a relayed page's scripts were written for its own policy (their nonces and hosts), which the app's
-would block. Without one, the app's applies. A `Permissions-Policy` the upstream sent is kept the
-same way, and a relayed page without one gets the app's
-([below](#a-policy-for-part-of-the-app)). A streamed body is passed on as each piece arrives.
-Corten compresses no relayed body, buffered or streamed, an event stream included, so a long
-relayed stream holds no compression context: the encoding is the upstream's. A relay that should
-be compressed forwards the client's `Accept-Encoding`, and the upstream's encoded body goes on as
-it is, as long as the HTTP client does not decode it (for reqwest, leave its `gzip`, `brotli` and
-`zstd` features off). When the client leaves, the body is dropped, and
-the upstream request with it. What else to drop (`Set-Cookie`) is the route's to decide.
+`corten::Relay::new(status, headers, body)` is another server's answer passed on as it came, for a
+gateway or a backend for a frontend: its status, its headers less the hop-by-hop ones, and its body
+as it arrives (`Body::from_stream(res.bytes_stream())` from reqwest). A failure status keeps the
+upstream's body, never the error page or the JSON error. The app's security and cache rules still
+apply, except that a `Content-Security-Policy` the upstream sent replaces the app's: a relayed
+page's scripts were written for its own policy (their nonces and hosts), which the app's would
+block. Who may frame it stays the app's: its `frame-ancestors` is enforced beside the upstream's
+policy, and its `X-Frame-Options` (none, for a page another origin may frame) replaces the
+upstream's ([below](#a-policy-for-part-of-the-app)).
+Without an upstream policy, the app's applies. A `Permissions-Policy` the upstream sent is kept the
+same way, and a relayed page without one gets the app's. A streamed body is passed on as each piece
+arrives. Corten compresses no relayed body, buffered or streamed, an event stream included, so a
+long relayed stream holds no compression context: the encoding is the upstream's. A relay that
+should be compressed forwards the client's `Accept-Encoding`, and the upstream's encoded body goes
+on as it is, as long as the HTTP client does not decode it (for reqwest, leave its `gzip`, `brotli`
+and `zstd` features off). When the client leaves, the body is dropped, and the upstream request with
+it. What else to drop (`Set-Cookie`) is the route's to decide.
 
 A route that answers some requests itself and passes the rest on (by method, body or tenant,
 while it moves off another service; a cache in front of an upstream) names one answer for both.
@@ -2227,6 +2229,28 @@ answers with a whole page (not a patch) gets that page under the other policy, s
 loads the current page again rather than swap it in: answer such a form with a patch or a redirect.
 An area that adds only sources the app already has keeps the app's policy and shell key. A policy for a single route is an area of one page. An `App::api` keeps its
 own `default-src 'none'`.
+
+No site may show a page in a frame (`frame-ancestors 'none'`, and `X-Frame-Options: DENY` for
+browsers that do not read it), so another site cannot lay its own page over one of the app's to
+steer a click. An unstaged route's answer is sent with neither unless its handler sets one: it
+is data, not a page, and runs no script ([A route outside the stages](#a-route-outside-the-stages)).
+A widget other sites embed (an item's card, a chart) is an area whose policy names them,
+`p.frame_ancestors("https://partner.example")`, and every other page keeps the denial; the card
+market's `/embed` area takes them from `EMBED_ORIGINS`. A source is a host or a scheme, or
+`'self'` for the app's own pages; `*` or a bare scheme (`https:`) lets any site frame them. On
+a staged route the policy decides `X-Frame-Options`, whatever a handler, middleware or relayed
+upstream sets: pages another origin may frame are sent none (it cannot name one) and pages only
+the app may frame `SAMEORIGIN`. Who may frame a page stays enforced where the app's CSP is not: a
+relayed answer that brings its own CSP, and under `Policy::report_only` a page another origin may
+frame, are also sent an enforced `Content-Security-Policy` of their `frame-ancestors` alone.
+Frame read-only pages: a
+parent on another site gets none of the app's `SameSite` cookies (Corten's cookie helper makes them
+`Lax`), so the page is drawn signed out there, but a parent on the same site (`blog.example.com`
+framing `app.example.com`) gets them, so the page is signed in and a write from it carries the
+session while the parent can lay its page over the button. A link meant to leave the frame (to a
+page that may not be framed) opens in the parent's tab: `<base target="_top">` in the framed page's
+head, with `data-no-prefetch` around its links, since a hover's prefetch would fetch a page the
+frame never shows.
 
 Every page requires [Trusted Types](https://developer.mozilla.org/en-US/docs/Web/API/Trusted_Types_API)
 (`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rule-html-macro):
