@@ -6321,6 +6321,13 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+77. [Design Choice 32](docs/design.md#choice-state-derives) records why shared state keeps
+    `#[derive(Clone, FromRef)]` rather than a `#[corten::state]` attribute that writes both: `Clone`
+    is what routing and a handler taking the whole state need, `FromRef` what a handler taking one
+    part needs, and the attribute would take one word off the three routed example state types that
+    derive both while giving three of the four that derive `Clone` alone (the fourth is an enum,
+    which `FromRef` does not take) a third way to write theirs
+    ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 80. The kit guide's Size states what every component costs now: 59,878 bytes of `components.css`,
     8,691 with brotli at level 11 and 9,863 with gzip at level 9 (the kit at 5ba4e476), where it
     said 35,239, 5,331 and 6,050 from before the kit grew from 34 stylesheets to 42. A test in the
