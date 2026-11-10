@@ -3925,30 +3925,47 @@ async function run(browser) {
     /**
      * Moves focus up the long box from its last row with Shift+Tab, as a user does (WebKit does
      * not scroll a dialog for a script's focus()), counting the rows that land under the held
-     * header and those it reached; then removes the rows.
+     * header and those it reached; then removes the rows. Returns the covered count, or -1 when a
+     * Shift+Tab did not land on a row and -2 when a row never held its place, so neither passes.
      * @param {import("@playwright/test").Page} page
      * @param {string} selector The dialog or sheet.
      */
     const focusUp = async (page, selector) => {
       let covered = 0;
       let reached = 0;
+      let unsettled = 0;
       for (let i = 0; i < 39; i++) {
         await page.keyboard.press("Shift+Tab");
-        const [row, under] = await page.locator(selector).evaluate((box) => {
+        // Read once the row has stopped moving: WebKit scrolls a focused row into view over a few
+        // frames, and a row read mid-scroll can sit under the header it ends well below (one read at
+        // 28 px under it settled 248 px below it). Read once it has kept its place for two frames; one
+        // still moving after 120 frames is not read as settled.
+        const [row, under, settled] = await page.locator(selector).evaluate(async (box) => {
           const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
           const now = document.activeElement;
-          const row = !!now?.hasAttribute("data-smoke-row");
-          return [row, row && /** @type {Element} */ (now).getBoundingClientRect().top < header.getBoundingClientRect().bottom - 1];
+          if (!now?.hasAttribute("data-smoke-row")) return [false, false, true];
+          const gap = () => now.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
+          let last = gap();
+          let same = 0;
+          for (let frames = 0; same < 2 && frames < 120; frames++) {
+            await new Promise((done) => requestAnimationFrame(() => done(undefined)));
+            const next = gap();
+            same = next === last ? same + 1 : 0;
+            last = next;
+          }
+          return [true, last < -1, same >= 2];
         });
         if (row) reached += 1;
         if (under) covered += 1;
+        if (!settled) unsettled += 1;
       }
       await page.locator(selector).evaluate((box) => {
         box.querySelectorAll("[data-smoke-row]").forEach((row) => row.remove());
         box.scrollTop = 0;
       });
-      // Every Shift+Tab lands on a row, so a covered count of 0 is a measurement.
-      return reached === 39 ? covered : -1;
+      // Every Shift+Tab lands on a row and every row settles, so a covered count of 0 is a measurement.
+      if (reached !== 39) return -1;
+      return unsettled === 0 ? covered : -2;
     };
     for (const width of [1280, 390]) {
       const at = await (await browser.newContext({ viewport: { width, height: 600 } })).newPage();
