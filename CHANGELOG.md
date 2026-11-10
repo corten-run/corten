@@ -6195,6 +6195,12 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+81. What the runtime sends and receives is left to the browser's network panel: the requests and
+    forms guide says where a `data-patch` submit's fields, its answer's fragments and a live
+    stream's events show, that the runtime has no diagnostics hook (so it does no work for one and
+    opens no second stream), and that its own fields are not an API; an app's outcomes are its typed
+    events. New design Limit 24 says why and what would lift it
+    ([#1130 Expose opt-in browser diagnostics for action responses and live HTML patches](https://github.com/corten-run/corten/issues/1130)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

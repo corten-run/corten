@@ -1403,3 +1403,18 @@ by design; where it is known, a limit says what would lift it or why it is so.
     endpoint, and a trial of one directive beside the enforced policy is not built in: the
     enforced policy's reports show what a change must allow, and `report_only` tries the whole
     policy.
+24. <a id="limit-wire-diagnostics"></a>A page cannot see what the runtime sent or received: no
+    hook hands a script a submit's answer or a live stream's fragments as they came, so an in-page
+    inspector of the payload a page received has no supported way in (a script that wraps `fetch`
+    or `EventSource` before the runtime calls them is outside its contract). The browser's network panel shows
+    each navigation and submit and its answer, after content decoding and only while it is open,
+    and Chromium's shows an event stream's messages, the other engines' not checked
+    ([Requests and forms](guide/requests-and-forms.md#seeing-what-went-over-the-wire)). An app
+    learns its own outcomes from typed events its markup dispatches, from a submit's patch or a
+    live fragment. So by design: a hook would cost every page a check on each patch and runtime
+    bytes for an inspector few apps would show (Value 1), would have to define its own order,
+    cancellation and redaction of the private HTML and form data it carries, and would be a second
+    way to hear an outcome (Value 5), where the network panel already shows the wire (Value 2;
+    [#1130 Expose opt-in browser diagnostics for action responses and live HTML patches](https://github.com/corten-run/corten/issues/1130)).
+    It lifts when apps need the received payload in the page for their users, not their
+    developers, or when Chromium's panel stops showing an event stream's messages.
