@@ -5992,7 +5992,10 @@ mod api_module {
     }
 }
 
-async fn module_item(crate::extract::State(base): crate::extract::State<u32>, item: crate::Params<api_module::ModItem>) -> String {
+async fn module_item(
+    crate::extract::State(base): crate::extract::State<u32>,
+    item: crate::Params<api_module::ModItem>,
+) -> String {
     format!("item {}", base + item.id)
 }
 
@@ -13281,4 +13284,3 @@ async fn an_app_layer_is_made_once_outside_the_router() {
     assert_eq!(headers["content-length"], "20");
     assert!(!matched.load(Ordering::Relaxed), "a layer runs before the route is matched");
 }
-

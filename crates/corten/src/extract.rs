@@ -79,54 +79,53 @@
 //! (`docs/design.md#choice-own-extractors`), so an extractor written against axum's compiles
 //! against them as it is. axum's own extractors (its `Path`, `Query`, `Extension`) implement
 //! axum's traits, not these, so a handler cannot take one: a route's path and query are its
-//! [`crate::Params`]. One that does not compile, where before it compiled and answered `500` to
-//! every request:
+//! [`crate::Params`]. A handler that takes one of axum's does not compile:
 //!
 //! ```compile_fail,E0277
 //! use corten::prelude::*;
 //!
 //! #[corten::routes]
 //! mod url {
-//!     #[route("/items/{id}", get = item)]
-//!     pub struct Item { pub id: u32 }
+//!     #[route("/items", get = items)]
+//!     pub struct Items;
 //! }
 //!
-//! async fn item(corten::axum::extract::Path(id): corten::axum::extract::Path<u32>) -> String {
-//!     id.to_string()
+//! async fn items(corten::axum::Extension(n): corten::axum::Extension<u32>) -> String {
+//!     n.to_string()
 //! }
 //! # fn main() {}
 //! ```
 //!
-//! Nor does one under `no_store`, which reads its arguments the same way:
+//! Nor does axum's `State`, under `no_store` too, which reads its arguments the same way:
 //!
 //! ```compile_fail,E0277
 //! use corten::prelude::*;
 //!
 //! #[corten::routes]
 //! mod url {
-//!     #[route("/items/{id}", get = item, no_store)]
-//!     pub struct Item { pub id: u32 }
+//!     #[route("/items", get = items, no_store)]
+//!     pub struct Items;
 //! }
 //!
-//! async fn item(_: corten::axum::extract::RawPathParams) -> String {
+//! async fn items(_: corten::axum::extract::State<()>) -> String {
 //!     String::new()
 //! }
 //! # fn main() {}
 //! ```
 //!
-//! The same handler with [`crate::Params`] compiles:
+//! The same handler with Corten's `State` compiles:
 //!
 //! ```
 //! use corten::prelude::*;
 //!
 //! #[corten::routes]
 //! mod url {
-//!     #[route("/items/{id}", get = item, no_store)]
-//!     pub struct Item { pub id: u32 }
+//!     #[route("/items", get = items, no_store)]
+//!     pub struct Items;
 //! }
 //!
-//! async fn item(Params(at): Params<url::Item>) -> String {
-//!     at.id.to_string()
+//! async fn items(_: State<()>) -> String {
+//!     String::new()
 //! }
 //! # fn main() { let _ = App::new(url::router()); }
 //! ```
@@ -139,8 +138,8 @@
 
 use std::{future::Future, pin::Pin, task::Poll, time::Duration};
 
-use axum::body::{BodyDataStream, HttpBody};
 pub use crate::handler::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request, State};
+use axum::body::{BodyDataStream, HttpBody};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use tokio::time::Sleep;

@@ -702,8 +702,10 @@ rules something out.
     signature for nothing Corten uses; and `#[async_trait]` or boxed futures, which axum 0.8 itself
     dropped for `impl Future` in the trait.
 
-    Stands on: measured (callgrind, release, the same requests as [Choice 25](#choice-axum-router),
-    step 2, Corten's handler traits against axum's at `fa0b1525`; see Choice 25, Stands on);
+    Stands on: measured (callgrind, release, Corten's handler traits against axum's, step 3
+    against step 2 at `7bba1e2b`: about 100 instructions fewer a staged request with jemalloc
+    and 150 to 170 with glibc, an unstaged one the same; [Choice 25](#choice-axum-router), Stands
+    on);
     reasoned (the trait's shape is axum 0.8's, so an extractor's `impl` body compiles unchanged;
     the router calls `Handler` once per request, as it called axum's); value (one way to read
     each part of a request, Value 5, and a mistake that fails when the app compiles rather than
@@ -715,7 +717,7 @@ rules something out.
     and `IntoResponse` with it and reopens where they come from.
 
     Last checked: 2026-11-09, axum 0.8.9 (`axum-core` 0.5.6) and rustc 1.99.1, Corten's own
-    traits at the commit that adds them (Choice 25, Last checked).
+    traits at the commit that adds them ([Choice 25](#choice-axum-router), Last checked).
 
 22. <a id="choice-locale-in-url"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
@@ -914,12 +916,16 @@ rules something out.
        app sees is in the changelog: an extractor's `impl` names `corten::extract`, not axum; axum's
        own extractors (`Path`, `Query`, `Extension`, ..) and `axum::extract::State` no longer fill a
        handler argument and fail to compile, where `Path` and `RawPathParams` were refused at
-       startup. Measured against `fa0b1525` (callgrind, release, five runs with jemalloc, every run
-       the same): an unstaged route 7,003 against 7,003 and 7,054 against 7,068 in an API's
-       module, an API request 13,006 against 13,110, a page route 18,189 against 18,288, one with
-       a middleware 18,473 against 18,573, a staged route beside an unstaged one 18,200 against
-       18,299, the 404s 12,167 and 18,102 against 12,167 and 18,099, and axum's plain router
-       7,085 in both; GLIBC_PLACEHOLDER. Two other shapes were measured once each and not
+       startup. Measured against step 2 at `7bba1e2b` (callgrind, release, five runs with jemalloc and
+       three with glibc, every run the same), every staged request that reaches a handler costs
+       about 100 fewer with jemalloc and 150 to 170 fewer with glibc, and the rest the same: an API
+       request 13,006 against 13,110 (14,034 against 14,187 with glibc), a page route 18,185
+       against 18,288 (19,490 against 19,655), one with a middleware 18,469 against 18,573
+       (19,771 against 19,938), a staged route beside an unstaged one 18,196 against 18,299
+       (19,520 against 19,677), an unstaged route 7,009 against 7,007 and 7,060 against 7,072 in
+       an API's module (7,813 against 7,811 and 7,866 against 7,878), the 404s, which call no
+       handler of the app's, 12,167 and 18,098 against 12,167 and 18,099, and axum's plain router
+       7,085 (8,099) in both. Two other shapes were measured once each and not
        taken: the request split into its head and body inside the handler's future rather than
        before it, 62 more an unstaged request and about 60 more a staged one; and an unstaged
        route's handler boxed once with its lane (step 2's `call_in`) rather than boxed by itself
@@ -955,7 +961,12 @@ rules something out.
     route for axum's router, which Corten's now does itself (`corten::middleware::MatchedPath`), and
     `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
-    Stands on: measured (callgrind, release, jemalloc and glibc, five runs each in process and
+    Stands on: measured (callgrind, release, five runs with jemalloc and three with glibc, every
+    run the same, Corten's handler traits against axum's, step 3 at its commit against step 2 at
+    `7bba1e2b`: staged requests 103 to 104 fewer with jemalloc and 153 to 167 with glibc, an
+    unstaged route and the 404s within 12; on uncommitted variants of it, one run each, the
+    request split inside the handler's future 62 more unstaged and about 60 more staged, and
+    `call_in` 29 more unstaged with staged requests moved 18); measured (callgrind, release, jemalloc and glibc, five runs each in process and
     three over one keep-alive socket for card-market, Corten's router at `373a10f9` against
     axum's at `7e897bd6`: every request above costs less, by 1,547 to 3,254 instructions with
     jemalloc and 1,791 to 4,135 with glibc); measured (callgrind, release, three runs each, every
@@ -1005,7 +1016,8 @@ rules something out.
     dispatch suite on axum 0.8.9, hyper 1.12.0 and matchit 0.8.4, at `599c302a`; 2026-11-09,
     Corten's router against axum's, at `373a10f9`, with the suite unchanged; 2026-11-09, the
     stages as combinators on Corten's router, on the uncommitted variant of `8ddeaea2`, and the
-    unstaged route's lane, at `bfa20380`, with the suite unchanged; 2026-11-09, the lane boxed
+    unstaged route's lane, at `bfa20380`, with the suite unchanged; 2026-11-09, Corten's handler
+    traits (step 3) against step 2 at `7bba1e2b`, with the suite unchanged; 2026-11-09, the lane boxed
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
     the `laned` variant of `fa0b1525`.
 

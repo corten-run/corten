@@ -45,6 +45,7 @@ use std::{
 
 use axum::{
     body::{Body, Bytes},
+    extract::FromRequestParts,
     http::{header, request::Parts, HeaderName, HeaderValue},
     response::{IntoResponse, Response},
 };
@@ -630,6 +631,15 @@ impl Since {
         let header = parts.headers.get("last-event-id").and_then(|v| v.to_str().ok()).and_then(Cursor::parse);
         let query = || parts.uri.query()?.split('&').find_map(|pair| pair.strip_prefix("since=")).and_then(Cursor::parse);
         Since(header.or_else(query))
+    }
+}
+
+/// For an app on axum alone; a Corten app's handler takes it through `corten`.
+impl<S: Send + Sync> FromRequestParts<S> for Since {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(Since::read(parts))
     }
 }
 

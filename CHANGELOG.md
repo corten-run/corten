@@ -2643,7 +2643,9 @@ Corten is pre-1.0, so any minor version may change the API.
   4. A handler argument no request fills is reported as "a request cannot fill `T`", naming
      `corten::extract::FromRequestParts`, where rustc named axum's trait.
   `Bytes`, `Json` and `Form` read the body through axum's readers as before, with the same
-  limit, refusals and texts. MEASURE_PLACEHOLDER
+  limit, refusals and texts. A staged request costs about 100 instructions fewer (callgrind,
+  jemalloc; 150 to 170 with glibc): an API request 13,006 against 13,110, a page 18,185 against
+  18,288; an unstaged route and the 404s cost the same.
 
 - Corten routes with a router of its own on matchit, `corten::Router`, in place of axum's `Router`
   and `MethodRouter` (design Choice 25, step 2), and passes the dispatch suite unchanged. Every

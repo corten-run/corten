@@ -40,10 +40,7 @@ pub trait OptionalFromRequestParts<S>: Sized {
     type Rejection: IntoResponse;
 
     /// Reads the value from the request's head, if it has one.
-    fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> impl Future<Output = Result<Option<Self>, Self::Rejection>> + Send;
+    fn from_request_parts(parts: &mut Parts, state: &S) -> impl Future<Output = Result<Option<Self>, Self::Rejection>> + Send;
 }
 
 mod private {
