@@ -6364,7 +6364,7 @@ Corten is pre-1.0, so any minor version may change the API.
 77. Design Choice 34 records why shared state keeps `#[derive(Clone, FromRef)]` rather than a
     `#[corten::state]` attribute that writes both: `Clone` is the router's requirement and
     `FromRef` each handler's, and the attribute would take one word off the four example state
-    types that derive both while giving the three that derive `Clone` alone a third way to write
+    types that derive both while giving the four that derive `Clone` alone a third way to write
     theirs
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 78. Which tables sort in place is decided and measured: every table whose page has all its rows,
