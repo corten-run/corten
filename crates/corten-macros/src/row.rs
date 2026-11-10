@@ -227,7 +227,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         return err(item.name.span(), format!("#[serde(tag = \"{id_key}\")] writes the struct's name as \"{id_key}\", the id's key, so a script reads it in the id's place: rename one of them"));
     }
     let member = TokenTree::Ident(ident);
-    let mut body = q("#[inline] fn id(&self) -> &str", &[]);
+    let mut body = q("fn id(&self) -> &str", &[]);
     // `&self.<field>`, at the field, so an id that is not text is reported there; `self` has the
     // method's hygiene (located at the field), so a row a `macro_rules!` declares reads it too.
     let at = member.span();

@@ -1316,7 +1316,10 @@ rules something out.
     The derive is `corten::feed::Row`, beside the trait, and not in `corten-feed` itself: its impl
     names `::corten::feed::Row`, so `corten-feed` and `corten-protocol`, which do not depend on
     `corten`, keep writing their test rows by hand, as does a row whose `id` does more than
-    return a field (`corten-cluster`'s `Gated`).
+    return a field (`corten-cluster`'s `Gated`). That is a cost: a native or agent client built on
+    `corten-protocol` alone, which a replica's read-side checks are for, writes its rows' `impl Row`
+    by hand too, since taking the derive there would bring in `corten` and its server
+    dependencies. No such client is in the repository or has been reported.
 
     Stands on: reasoned (the generated impl is the one written by hand and the feed's path is
     unchanged, which `crates/corten/tests/derived_row.rs` checks by comparing a derived row's
@@ -1324,7 +1327,9 @@ rules something out.
     and no second way to derive `Clone` or `Serialize`, Values 5 and 6).
 
     Revisit when: an example app, or an app that reports it, implements `Row` by hand for a key
-    made from more than one field, which a mark on one field cannot say.
+    made from more than one field, which a mark on one field cannot say; or a native or agent
+    client on `corten-protocol` alone keeps rows it would derive (the derive would then take a path
+    to the trait, such as `#[row(crate = corten_protocol)]`).
 
     Last checked: 2026-11-10, the derive, its `compile_fail` examples, each compiled for its own
     message, `tests/derived_row.rs`, and the rows of the four example apps and `corten-cluster` by
