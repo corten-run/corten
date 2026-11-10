@@ -5852,6 +5852,14 @@ Corten is pre-1.0, so any minor version may change the API.
     the gallery built from this change and from the commit it was merged onto, 71c0361a. Found by
     the Chase Sets pilot, which set `margin: auto` on its reviews page's dialog
     ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
+222. `bench/fullstack/builds.test.mjs`'s touch test runs every app's touch in one bash, each in a
+    subshell in the app's directory, where it started a bash per app: on Windows each is a WSL
+    start, and the test failed now and then under load with `1 !== 0` and nothing on stderr. A
+    bash that never ran the script is asked once more, and so is the probe that decides whether
+    bash is there; a quoting mistake that stops the script names the app it stopped at. The test
+    takes 0.89 s against 7.27 s (median of five alternating runs each, 0.81 to 1.35 against 6.03
+    to 10.22, on a loaded Windows workstation)
+    ([#1095 builds.test.mjs's touch test fails now and then on Windows under load: WSL's bash exits 1 with no stderr for one app](https://github.com/corten-run/corten/issues/1095)).
 
 ### Documentation
 
