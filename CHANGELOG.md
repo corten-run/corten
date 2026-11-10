@@ -5725,7 +5725,20 @@ Corten is pre-1.0, so any minor version may change the API.
     and Firefox). The prefetch check's one-off failure in Firefox (an extra request) matches this.
     The two Firefox checks that failed now and then say what they counted when they fail: each
     request with its purpose, and the timed requests and console errors of the module that is
-    imported again
+    imported again. The prefetch checks read each count once the request it counts is seen: each
+    of the nine hovers waits for its prefetch, the oldest page's click for its fetch (or its
+    hover's), and the `data-no-prefetch` control for its own prefetch. The opt-out and the
+    held-page check, which look for a request that must not come, pause on the page's own timer,
+    set after the dwell. The held-page check holds every request for its page, a prefetch too,
+    until that timer has outlasted the re-hover's dwell, instead of for 600 ms from the click,
+    which a slow hover could outlast so the check passed untested; it fails if the address changed
+    first, and is skipped where the address changes at the click (no `precommitHandler`), where it
+    could not fail. Each count's own request must have been seen, not only the total.
+    The reuse of the oldest page kept and of the newest is read from the requests themselves (no
+    visit asked for either), so a cache of fewer than 8 now fails the check, where one of 7 passed
+    it, and its failure says how old the oldest kept prefetch was at its click, since one past the
+    runtime's 10 s is fetched again however large the cache. The module check already waited for
+    the event it counts; why its third request once did not come is not known
     ([#1053 Two Firefox watchlist smoke checks (prefetch's newest 8, a script module imported again) each fail now and then on a branch that does not touch them](https://github.com/corten-run/corten/issues/1053)).
 186. A page upload whose client stopped sending was answered at the deadline as the server's
     timeout (503, `Failure::TimedOut`) and logged as a deadline, never as the stalled client it
@@ -5877,6 +5890,23 @@ Corten is pre-1.0, so any minor version may change the API.
     22,258,651) and 22,238,287 to 22,383,606 after (median 22,296,593), about 44,500 a page, and the
     same 3,677,304 bytes
     ([#1111 Optional UrlValue enum attributes fail where direct enum attributes compile](https://github.com/corten-run/corten/issues/1111)).
+198. A `<dialog>` or `[popover]` written as a direct child of a kit `Stack` or `Cluster` (beside the
+    button that opens it) lost the browser's `margin: auto` to the kit's margin reset, so a modal
+    opened pinned to the top of a phone's screen and a popover without an anchor at the top; one in
+    a `StackStart` column also lost the browser's width, as the column's `max-width: 100%` cap
+    reached it, so a modal with a long line touched the screen's edges. Both rules now leave a
+    dialog or popover child alone, still with no specificity; its long words still break, as the
+    column's do, and every other child is as before. A non-modal dialog opens where it is written,
+    over the content after it, as the browser places it. The ui-gallery's smoke test opens a modal
+    with a long word and a popover in a `StackStart` column at 320px and checks both are centered,
+    the dialog clear of the edges and not scrolling sideways, and that a paragraph beside them still
+    drops its margin; against the earlier stylesheet it fails in Chromium with the dialog at the
+    top, touching both edges, and the popover at the top. No request or render cost: the rules make
+    the ui-gallery's served `components.css` 61,405 bytes where it was 61,306 (gzip 10,166 against
+    10,156, brotli 8,951 against 8,947, Node's zlib at gzip level 9 and brotli's default), served by
+    the gallery built from this change and from the commit it was merged onto, 71c0361a. Found by
+    the Chase Sets pilot, which set `margin: auto` on its reviews page's dialog
+    ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
 
 ### Documentation
 
