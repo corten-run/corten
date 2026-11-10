@@ -1425,6 +1425,115 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
+32. <a id="choice-json-derives"></a>**A type's JSON role is the derive that names its direction,
+    `ToJson` to write and `FromJson` to read, not a data-role attribute.** Each derive is already
+    the one thing a type declares for its direction: `ToJson` lays out the JSON a response, a
+    screen's data, a typed script argument or an agent tool's output writes, and its schema (feature
+    `types`); `FromJson` reads it, with its `Deserialize`
+    ([Choice 26](#choice-derived-deserialize)). An attribute such as `#[corten::data(write)]` would
+    spell the same derive another way: it takes no line off a type and adds no check the derive does
+    not already make, and two spellings of one thing is what Values 5 and 6 rule out. The direction
+    stays in the type's own declaration, so nothing is written because it appears in a handler's
+    signature, and no type of another module or crate is exposed by it. An agent tool's output was
+    the one place a response type still needed serde's `Serialize` beside `ToJson`: its
+    `outputSchema` came from `ToJson`'s schema while its bytes came from `Serialize`, so a
+    hand-written `Serialize` could drift from the schema with nothing failing to compile (Value 4).
+    Tool outputs are now bounded on `ToJson`, so a derived `ToJson` writes both the schema and the
+    bytes (a field of another crate's type inside it is still written by serde under a schema
+    written for it, as in any `ToJson` answer), and a tool's output is written by the code every
+    other response is. The std types Corten gives a schema for are `ToJson` too, and `FromJson` in
+    their owned forms (`str`, `[T]`, `Path` and `RawValue` boxed or shared), written and read as
+    serde does (but for a map whose key is not a `JsonKey`, which is not written, or not `String`,
+    which is not read, an array of more than 32 items, which is not read, and an `Arc` or `Rc` read
+    without serde's `rc`), and another crate's type that has a schema goes in a
+    `#[serde(transparent)]` newtype that derives `ToJson`, one impl. A `ToJson` written by hand, for
+    a type whose schema is written by hand (one the derive refuses, or another crate's type with
+    none, in a newtype of the app's), comes with that `ToJsonSchema` beside it, two impls its author
+    keeps in step, as before. Tool inputs are bounded on `FromJson` the same way, so an input that
+    derives serde's `Deserialize` beside a schema written by hand does not compile, short of the
+    deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson` cannot write takes
+    (written by hand, or serde's for an attribute it refuses), which again leaves two impls in its
+    author's hands. A hand-written `ToJson` can write what serde could not, broken JSON, which would
+    break the JSON-RPC answer around a tool's output, so whether an output is parsed before it is
+    sent follows from its type: `ToJson::__well_formed` (hidden) is true for Corten's own impls, for
+    `Raw` (parsed when it is made) and for what serde writes, the AND of its fields' for the derive
+    (each type expanded once in a question, so a tree, a cycle or a type many others hold answers at
+    once), and false for an impl written by hand (`JsonKey` likewise, for a map's keys). serde_json
+    writes well-formed JSON for a `Serialize` that follows serde's protocol, as every derived one
+    does; it does not check a hand-written one that calls a map's `serialize_key` twice, which a
+    debug build's parse catches and a release build sends as written, as before this Choice. An
+    output derived over well-formed types, the common case, goes out unparsed; one that is or holds
+    a hand-written `ToJson` is parsed in every build, and one that is not one JSON object is the
+    tool's internal error, logged with the tool's name, the output's size and the fault, not its
+    data. A debug build parses every output and answers a bad one with a 500, so a test stops at it.
+    Not chosen: parsing every output in a release build, about 92,700 more instructions a call
+    (303,500 against 210,762, 44% of `tool_cost`, and 14% over the serde path this replaced) for
+    outputs Corten's and the derives' impls cannot break; and checking only an output's ends, which
+    sent a broken object as written. `Json` answers are unchanged: they send a hand-written `ToJson`
+    as written. A tool output whose `ToJson` falls back to a field's own `Serialize` and fails
+    (another crate's map with a key JSON cannot hold, or a std type serde refuses: a path that is
+    not UTF-8, a `SystemTime` before the epoch) panics where it is written, as in every other
+    `ToJson` answer; the call catches that panic and answers the tool's internal error (`isError`,
+    "internal error"), as it did when serde wrote outputs, so `ToJson` stays the one writer (an app
+    built with `panic = "abort"` ends instead):
+
+    ```rust,ignore
+    // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
+    #[derive(serde::Serialize, corten::ToJson)]
+    struct Adjusted { id: String, quantity: i64 }
+
+    // After: ToJson alone.
+    #[derive(corten::ToJson)]
+    struct Adjusted { id: String, quantity: i64 }
+
+    // Not chosen: a data-role attribute spelling the same derive.
+    #[corten::data(write)]
+    struct Adjusted { id: String, quantity: i64 }
+    ```
+
+    Feed rows are the known exception: the feed sends a row with serde (`Row: Serialize`) and its
+    script type comes from `ToJson`, so a row still derives both; their declaration is
+    [#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044).
+
+    Not chosen: the attribute, a synonym; an attribute that derives both directions, which would
+    save a type that is read and written one name in its `#[derive(..)]` list
+    ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
+
+    Stands on: platform (the std types' `ToJson` and `FromJson` write and read what serde and
+    serde_json do for them, some by Corten's own code: serde 1.0.229 and serde_json 1.0.154);
+    measured (an agent's `items.get` call in card-market's `tool_cost` runs about 21% fewer
+    instructions, a median of 266,844 before (265,376 to 267,830) and 211,152 after (211,123 to
+    211,865): callgrind, release, 1,200 calls less 200 over 1,000, three alternating runs each,
+    14,464 bytes an answer on average over the calls counted; parsing each output in a release build
+    would add about 92,700 a call, a median of 303,500 (302,705 to 303,650) against 210,762 (210,433
+    to 211,420), three runs each, on `19fd761c` with its debug parse made unconditional
+    (`debug_assert!` to `assert!`); card-market's output is derived, so it is not parsed; tests
+    compare a tool answer's bytes with serde's for the item, and each std type's with serde's, and
+    check which outputs are parsed); reasoned (serde_json writes well-formed JSON for a `Serialize`
+    that follows serde's protocol, not checked for one that does not, where a debug build's parse is
+    the net; a type asked again in one question is known by its derive's static and its `type_name`,
+    which can coincide only for one generic type over two arguments of the same printed name, with
+    the same net; a derived `ToJson` writes a tool output's schema and its bytes, and a derived
+    `FromJson` a tool input's schema and what it reads); value (one declaration per direction,
+    Values 4, 5 and 6).
+
+    Revisit when: an example app needs, because the derives refuse its type, a hand-written `ToJson`
+    with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in `impl FromJson for T {}`
+    (none in `examples/` at the last check), or a JSON seam other than the feed is bounded on
+    serde's `Serialize` or `Deserialize` again, or serde or serde_json changes how it writes or
+    reads one of the std types Corten writes or reads itself (the `json` tests that compare them
+    fail).
+
+    Last checked: 2026-11-09, the derives and the agent endpoint's bounds, inputs and outputs, at
+    `7965aeab`, the bounds' last change; 2026-11-10, no such impl in `examples/`, at `7197604f`;
+    2026-11-10, the std types' and pointers' `ToJson` and `FromJson` against serde's bytes and
+    values (`json` tests, and `corten-run` built with `json` alone and with `agent,feed`, serde
+    1.0.229 and serde_json 1.0.154), at `479f3f0e`; 2026-11-10, the `tool_cost` count, on `217bce2c`
+    with `tool_cost` added and on `6d04bbe6`, which parses only an output that is or holds a
+    hand-written `ToJson`, and the release parse's cost on `19fd761c`; 2026-11-10, which outputs are
+    parsed, trees, cycles and twelve types that all hold each other included (the agent test of that
+    name), at `d4aca597`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -1468,7 +1577,7 @@ rules something out.
 5. <a id="rule-works-without-js"></a>Pages and actions work without JavaScript: links are links and forms post. A feature only a
    browser can provide (drag and drop, a canvas) needs JavaScript; one that makes a server action
    instant (filtering the rows on the page as you type) keeps the form that does it without.
-6. <a id="rule-page-view-model"></a>A page another surface reads derives `Serialize`, and its fields are its whole view model
+6. <a id="rule-page-view-model"></a>A page another surface reads derives `ToJson`, and its fields are its whole view model
    (formatted text included). Then `req.screen` gives every surface the same data.
 7. <a id="rule-app-and-areas"></a>`App` configures the whole app; a part of it under a URL prefix is an `Area` (or an `Api`
    for routes that answer only JSON), which owns its routes. Its prefix and its routes are route
