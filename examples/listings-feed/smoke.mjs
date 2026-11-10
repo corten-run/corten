@@ -1,5 +1,6 @@
 // Browser smoke test for the seller's page, against one instance with Postgres and NATS.
 // Usage: node examples/listings-feed/smoke.mjs http://localhost:18485 (seller s1, the default seed)
+import http from "node:http";
 import { chromium } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
@@ -135,6 +136,40 @@ try {
     return l && !tr.includes(usd.format(l.market_cents / 100));
   });
   check("without JavaScript the page it lands on has the write", seq >= landed && drawn.length === 500 && stale.length === 0, `seq ${seq}, ${stale.length} stale`);
+
+  // The sequence route the failover benchmark reads is unstaged: none of the app's stages (its middleware's
+  // X-Instance among them) and its own caching, beside the page, which keeps them all.
+  const polled = await fetch(`${base}/api/feeds/${seller}/seq`);
+  const polledHeaders = Object.fromEntries(polled.headers);
+  const polledBody = await polled.text();
+  const pageRes = await fetch(`${base}/sellers/${seller}`);
+  check(
+    "the unstaged sequence meets no middleware and says its own caching, with nosniff and a sandbox",
+    polled.ok && /^\d+$/.test(polledBody) && !("x-instance" in polledHeaders) && polledHeaders["cache-control"] === "no-store" &&
+      polledHeaders["x-content-type-options"] === "nosniff" && polledHeaders["content-security-policy"] === "sandbox",
+    `${polled.status} ${polledBody} ${JSON.stringify(polledHeaders)}`,
+  );
+  check("the page beside it keeps every stage", pageRes.headers.has("x-instance") && (pageRes.headers.get("content-security-policy") ?? "").includes("script-src"), JSON.stringify(Object.fromEntries(pageRes.headers)));
+  // Its failure is the API's JSON, as every failure under /api is.
+  const unknown = await fetch(`${base}/api/feeds/nobody/seq`);
+  const problem = await unknown.json().catch(() => null);
+  check("its failure is the API's Problem Details", unknown.status === 404 && unknown.headers.get("content-type") === "application/problem+json" && problem?.status === 404, `${unknown.status} ${unknown.headers.get("content-type")} ${JSON.stringify(problem)}`);
+  // A name the app does not answer to (a DNS-rebound page's) is refused there as everywhere.
+  const rebound = await new Promise((resolve, reject) => {
+    const at = new URL(`${base}/api/feeds/${seller}/seq`);
+    http.get({ hostname: at.hostname, port: at.port, path: at.pathname, headers: { host: "rebound.attacker.example" } }, (res) => {
+      res.resume();
+      resolve(res.statusCode);
+    }).on("error", reject);
+  });
+  check("a request for another host name is refused (421)", rebound === 421, String(rebound));
+  // Opened in a tab, its document is sandboxed: it runs on no origin of the app's.
+  const tab = await (await browser.newContext()).newPage();
+  await tab.goto(`${base}/api/feeds/${seller}/seq`);
+  const opened = await tab.evaluate(() => ({ origin: self.origin, text: document.body.textContent?.trim() ?? "" }));
+  await tab.goto(`${base}/sellers/${seller}`);
+  const pageOrigin = await tab.evaluate(() => self.origin);
+  check("opened in a tab it is a sandboxed document, on no origin of the app's", opened.origin === "null" && /^\d+$/.test(opened.text) && pageOrigin === new URL(base).origin, `${JSON.stringify(opened)}, page ${pageOrigin}`);
 } catch (error) {
   console.log(`\n${await report()}`);
   throw error;

@@ -28,12 +28,12 @@ use corten::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    api, items, mcp,
+    api, embeds, items, mcp,
     model::{AlertInput, ItemView, set_alert},
     routes,
     source::Source,
     text::Msg,
-    views::{self, AlertForm, AlertFormView, AlertMessage, ItemList, ItemPage, Layout, MoreOffers, Shown},
+    views::{self, AlertForm, AlertFormView, AlertMessage, Framed, ItemCard, ItemList, ItemPage, Layout, MoreOffers, Shown},
 };
 
 /// The app, assembled: routes plus the error page, catalogs and PWA settings. Corten adds the rest.
@@ -93,6 +93,8 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
         );
     // Agents in a browser on another site (AGENT_ORIGINS, comma separated) may call the tools.
     let origins = std::env::var("AGENT_ORIGINS").unwrap_or_default();
+    // Partners' sites (EMBED_ORIGINS, comma separated) may frame an item's card, and no other page.
+    let embedders = std::env::var("EMBED_ORIGINS").unwrap_or_default();
     let tools = tools(source.clone(), tokens).route();
     // Served over HTTPS in production (`HTTPS=1`): browsers are told to use it from then on.
     // What a page's policy blocks (a script writing markup, a fetch to another site) is reported
@@ -102,6 +104,10 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
     let ready = source.clone();
     App::new(routes::router(source.clone()))
         .area(|area| items::area(area, source.clone()).middleware(limit.clone()))
+        .area(|area| {
+            let embedders = embedders.split(',').map(str::trim).filter(|o| !o.is_empty());
+            embeds::area(area, source.clone()).policy(|p| embedders.fold(p, |p, origin| p.frame_ancestors(origin)))
+        })
         .assets(crate::views::Static)
         .api(|routes| api::api(routes, ApiState { source, partners }).middleware(limit.for_partners()))
         .api(|routes| {
@@ -419,9 +425,25 @@ pub(crate) async fn show(req: Req, State(source): State<Source>, Params(at): Par
     if all_offers { req.patch_or(MoreOffers { t: req.t(), offers: &item.offers }, page).await } else { page().await }
 }
 
+/// An item's card in a page of its own, for a partner's site to frame (`EMBED_ORIGINS`). Its link
+/// opens the item's page in the partner's tab: that page may not be framed.
+pub(crate) async fn embed_item(req: Req, State(source): State<Source>, Params(at): Params<embeds::EmbedItem<'_>>) -> HtmlResult {
+    let item = source.item(&at.id).await?.ok_or_else(Error::not_found)?;
+    let (t, item): (Msg, &ItemView) = (req.t(), &item);
+    let req = &req;
+    req.page(
+        html! { <Framed req={req} title={item.title.as_str()}><ItemCard req={req} t={t} item={item} eager={true} /></Framed> },
+    )
+}
+
 /// The cached item, serialized where it is.
 pub(crate) async fn item_json(State(source): State<Source>, Params(at): Params<api::ItemJson<'_>>) -> JsonResult<Arc<ItemView>> {
-    Ok(Json(source.item(&at.id).await?.ok_or_else(Error::not_found)?))
+    item_view(&source, &at.id).await
+}
+
+/// The item `id` as JSON, or a 404.
+async fn item_view(source: &Source, id: &str) -> JsonResult<Arc<ItemView>> {
+    Ok(Json(source.item(id).await?.ok_or_else(Error::not_found)?))
 }
 
 /// A partner's alert for one of its users: the form's rules, as JSON. A missing item is a 404
@@ -566,7 +588,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{api, items, mcp, routes, views::ItemQuery};
+    use crate::{api, embeds, items, mcp, routes, views::ItemQuery};
 
     /// Fetch metadata a browser sends with a form post: a post from another site is refused.
     const SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
@@ -632,6 +654,18 @@ mod tests {
         assert!(html.contains(r#"<link rel="canonical" href="/items/item_9" data-corten-head>"#));
         assert!(html.contains(r#"/scripts/listing_sort.js">"#), "the scripts the page's handlers use are preloaded");
         assert!(html.contains(r#"<link rel="manifest" href="/manifest.webmanifest">"#));
+    }
+
+    /// An item's card in a page of its own, for a partner to frame: its links open in the partner's
+    /// tab, so a hover in the frame prefetches none of them, and no site may frame it unless
+    /// `EMBED_ORIGINS` names it (#1129).
+    #[tokio::test]
+    async fn an_items_card_for_a_partners_frame_opens_its_links_in_the_partners_tab() {
+        let res = app().get(&embeds::EmbedItem { id: "item_9" }).await;
+        let (status, headers, html) = read(&res);
+        assert_eq!(status, StatusCode::OK);
+        assert!(html.contains(r#"<base target="_top">"#) && html.contains("<main data-no-prefetch>"), "{html}");
+        assert_eq!(headers["x-frame-options"], "DENY");
     }
 
     #[tokio::test]
@@ -941,20 +975,36 @@ mod tests {
         // Against axum alone too (`bare-json`), so through the router, not the test client.
         use corten::{answer::Body, axum::Router, http::Request};
         use http_body_util::BodyExt;
-        use tower::ServiceExt;
+        use tower::{ServiceExt, util::BoxCloneService};
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
         let source = Source::fixture(&std::fs::read_to_string(path).unwrap()).unwrap();
+        // Corten's router and axum's are different types: each is boxed the same way.
+        type Boxed = BoxCloneService<Request<Body>, corten::middleware::Response, std::convert::Infallible>;
+        fn boxed<S>(service: S) -> Boxed
+        where
+            S: tower::Service<Request<Body>, Response = corten::middleware::Response, Error = std::convert::Infallible>
+                + Clone
+                + Send
+                + 'static,
+            S::Future: Send + 'static,
+        {
+            BoxCloneService::new(service)
+        }
         let target = std::env::var("LOOP_TARGET").unwrap_or_else(|_| "json".into());
         let seconds: u64 = std::env::var("LOOP_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
         let (router, prefix, mode) = match target.as_str() {
-            "json" => (super::app(source.clone()).router(), "/api/items/", None),
+            "json" => (boxed(super::app(source.clone()).router()), "/api/items/", None),
             "bare-json" => {
-                // Axum alone, without Corten around the handler: what Corten's layer costs.
-                let bare = corten::axum::routing::get(item_json);
-                (Router::new().route(api::ItemJson::PATH, bare).with_state(source.clone()), "/api/items/", None)
+                // Axum alone, without Corten around the handler: what Corten's layer costs. The
+                // item is read as `item_json` reads it, its id by axum's own `Path`.
+                use corten::axum::extract::{Path, State};
+                let bare = corten::axum::routing::get(|State(source): State<Source>, Path(id): Path<String>| async move {
+                    corten::middleware::IntoResponse::into_response(super::item_view(&source, &id).await)
+                });
+                (boxed(Router::new().route(api::ItemJson::PATH, bare).with_state(source.clone())), "/api/items/", None)
             }
-            "page" => (super::app(source.clone()).router(), "/items/", Some("nav")),
-            "document" => (super::app(source.clone()).router(), "/items/", None),
+            "page" => (boxed(super::app(source.clone()).router()), "/items/", Some("nav")),
+            "document" => (boxed(super::app(source.clone()).router()), "/items/", None),
             other => panic!("unknown LOOP_TARGET {other}"),
         };
         // What the client sends: `curl`'s `identity` by default. A browser's names its compressions

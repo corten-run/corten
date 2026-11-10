@@ -3,9 +3,9 @@
 
 use std::{borrow::Cow, marker::PhantomData, time::Duration};
 
+use crate::extract::{FromRequest, Request};
 use axum::{
     body::{BodyDataStream, Bytes},
-    extract::{FromRequest, Request},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
