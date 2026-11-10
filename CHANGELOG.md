@@ -6,6 +6,28 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- `unstaged` on a `#[route(..)]`, in the app's, an area's or an API's routes module, serves that
+  route outside the stages, beside routes that keep them all: no same-origin check, signal,
+  deadline, middleware (the app's, the area's or the API's), error page, security headers, cache
+  rule, tag, compression or allowed origins. Its handler's answer, a raw `Response` too, is sent
+  as it made it, after the host check every route meets (421 for a name the app does not answer
+  to), with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` added
+  whatever its type, and `Cache-Control: private, no-cache` (or `no-store`) with no CDN caching
+  header when it sets a cookie; a panic is logged and answered 500. Under an API's prefix a
+  failure after the host check is the API's Problem Details (or its `Api::errors` shape), elsewhere plain text. It
+  answers `get` only, its handler takes only the request's method and URL and the app's state
+  (`corten::answer::Unstaged`), and a link to it is never prefetched; an unstaged route with
+  another method or `prefetch = ..`, in a `caller = ..` module, or with `no_store`, `rows` or
+  `gives(..)`, does not compile, nor does one whose path can answer at a path of Corten's own (a
+  first segment that is a parameter, `/corten/..`, `/health/live`, `/health/ready`,
+  `/health/{..}`); one that can match another path Corten serves (the assets, the PWA's files and
+  offline page, an API's or area's companions) is refused at startup, as is one declared outside
+  the module of the innermost area or API whose prefix holds it, whose parameter can reach an
+  area's or API's prefix, or whose path is routed again in another module (a parameter's name or
+  the text after it, `{n}.xml`, does not make it another). The listings-feed example's
+  sequence route uses it. Measured with callgrind (jemalloc), on Corten's own router: 7,003
+  instructions a request unstaged against 18,299 through the stages, and 7,085 for a plain axum router.
+
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent
   pre-load gate checks full pages, native forms, layout, escaping, JSON and uncached upstream
@@ -2552,6 +2574,20 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
+    `apps/express`), each written its framework's usual way with htmx as the other server-rendered
+    apps are: the item page, the catalog page, the localized marketplace page and the live price
+    stream. Each app's own tests (`python -m unittest`, `node --test`) cover the marketplace page
+    (formatting, rows, links, the cross-site check, both sources); the catalog and item pages are
+    covered by the shared gates, and the live stream only by the live benchmark. FastAPI's records are Pydantic models, so a
+    record that is not one is a 502, and its item API clients have no connection cap, as the
+    README's item API rule asks. Neither framework has
+    CSRF protection of its own, so each refuses a cross-site post by its `Sec-Fetch-Site` or
+    `Origin`, as the Gin and Drogon apps do. Both join the catalog and marketplace gates, CI's matrix
+    and official rounds, which now need all twenty apps, so no marketplace round is compared with
+    one of eighteen. Neither has a build step, so build-cost rows say so.
+    They take Spring Boot's and Django's places among the matched tier's four most used frameworks
+    ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -2603,6 +2639,65 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 
 ### Changed
+
+- Handlers are called through Corten's own `Handler`, and `corten::extract`'s
+  `FromRequestParts`, `OptionalFromRequestParts`, `FromRequest` and `State` are Corten's own
+  traits and type (design Choice 25, step 3, and Choice 21), with the names, `Rejection` and
+  `from_request_parts(parts, state)` signature they had as axum's. What an app sees:
+  1. An extractor that implements `corten::extract::FromRequestParts` (or `FromRequest`) compiles
+     as it was. One written against `axum::extract::FromRequestParts` (or through `corten::axum`)
+     no longer fills a handler argument: change its `use` to `corten::extract`; the body is the
+     same.
+  2. `State` is Corten's own: `corten::extract::State` and the prelude's, as before. A handler
+     that takes `axum::extract::State` does not compile; take `corten::extract::State`.
+  3. axum's own extractors are no longer handler arguments: `Path`, `RawPathParams`, `Query`,
+     `Json`, `Extension`, `ConnectInfo`, `MatchedPath` and `http::request::Parts`. A route's path
+     and query are its `Params`, a body its `corten::Json`, `Form` or `Upload`, the client's
+     address its `ClientIp`, and the head its `Req`. axum's `Path` and `RawPathParams` compiled
+     before and stopped the app at startup; they now fail to compile.
+  4. A handler argument no request fills is reported as "a request cannot fill `T`", naming
+     `corten::extract::FromRequestParts`, where rustc named axum's trait.
+  5. A tuple of extractors no longer reads as one: an extractor of the app's own that called
+     `<(A, B)>::from_request_parts` calls `A`'s and then `B`'s. `Option<T>`,
+     `Result<T, T::Rejection>`, and a last argument of `String`, `Bytes`, `Body` or `Request`
+     read as before.
+  `Bytes`, `String`, `Json` and `Form` read the body through axum's readers as before, with the same
+  limit, refusals and texts. A staged request costs about 100 instructions fewer (callgrind,
+  jemalloc; 150 to 170 with glibc): an API request 13,006 against 13,110, a page 18,185 against
+  18,288; an unstaged route and the 404s cost the same.
+
+- Corten routes with a router of its own on matchit, `corten::Router`, in place of axum's `Router`
+  and `MethodRouter` (design Choice 25, step 2), and passes the dispatch suite unchanged. Every
+  request measured costs less (callgrind, release, jemalloc): card-market's item page 79,731
+  instructions against 82,792 and its JSON 59,754 against 63,008, an API request 13,112 against
+  15,726, and an `unstaged` route 6,932 against 8,479. Breaking for an app that named axum's
+  router through Corten: `App::router()` (and `Router::from(app)`) gives `corten::Router`, a
+  tower `Service<Request>` that is `Clone`, served by `serve` (or by axum's `serve` through
+  `into_make_service`), and no longer an `axum::Router` to add routes to; and `corten::routes()`,
+  `corten::health`, `Assets::routes` and `Pwa::routes`, which gave axum routers for an app to
+  merge, are gone, since `App` serves them. axum's extractors that read what axum's router stored,
+  `axum::extract::Path`, `RawPathParams` and `MatchedPath`, still compile in a handler, and stop
+  the app at startup, naming the argument, as its route is made (`corten::axum` no longer has
+  `MatchedPath`; read from the extensions, axum's finds nothing, with no error, as does an
+  extractor of the app's own that calls axum's `Path` inside): read a route's
+  parameters with `Params`, and the route a middleware is on with the new
+  `corten::middleware::MatchedPath` (`as_str()`). `App::layer` takes a
+  `tower::Layer<corten::Router>` and is made once around the whole app, where axum made it once
+  per route and method: a layer that keeps state (a concurrency limit) now counts the whole
+  app, and it sees the request before its route is matched, with no `MatchedPath`; the router
+  still sets `Content-Length` and empties a `HEAD`'s body after it. Two routes the router cannot
+  hold side by side stop the app at startup with Corten's message, naming the path. An answer of
+  known length, an error page included, carries `Content-Length` from the router. A path
+  parameter that is not its type says "Cannot parse `x` to a `u32`", where axum named the
+  value's index in a route's parameters, and one after which the route writes text no longer
+  adds serde's reason. axum's `matched-path` feature is off. An `unstaged` route's host check,
+  headers, panic catch and API JSON are run by the router in place of its stages rather than by
+  code wrapped into its handler, with nothing an app sees changed; it costs 71 instructions
+  more a request (7,003 against 6,932, callgrind, jemalloc; 67 with glibc), 86 in an API's
+  module (7,068 against 6,982; 82 with glibc), and wall times did not differ beyond their runs;
+  staged requests moved by less than two builds differ. The stages stay one boxed future:
+  written as combinators on this router they cost 92 to 367 more a request with jemalloc (16 to
+  298 with glibc).
 
 - Nightly benchmarking moves to equivalent-localization marketplace v2 from official r17,
   with a new baseline, detached launch/collection and three short-window CPU, memory, load
@@ -3754,9 +3849,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `https://github.com/corten-run/corten` (and with it `corten-cli`'s binstall download URL), and
     the template's README and AGENTS.md, SECURITY.md's advisory link, CONTRIBUTING.md's trusted
     publisher (with a step to re-point crates published before the move), the README, the guides
-    and design notes, the benchmark README and `corten-ui`'s doc link name it. The crates have no
-    `homepage` until `https://corten.run` serves the landing page (it repeated `repository`, which
-    Cargo advises against). The published 0.1.0 crates keep the old URLs until the next version
+    and design notes, the benchmark README, the benchmark rounds' `raw.txt` notes and `corten-ui`'s
+    doc link name it. The crates have no `homepage` until `https://corten.run` serves the landing
+    page (it repeated `repository`, which Cargo advises against). The published 0.1.0 crates keep
+    the old URLs until the next version
     ([#836 After the move to corten-run, the crates, docs, template and automations still name todd-skelton/corten](https://github.com/corten-run/corten/issues/836)).
 143. A bench/fullstack round can run each load phase three or five times (`droplet.mjs --passes 3`,
     `BENCH_PASSES`; one pass unless set), the apps taking turns between passes, and records the
@@ -4076,6 +4172,19 @@ Corten is pre-1.0, so any minor version may change the API.
     again (a `chunk()` inside a `timeout` or `select!`) no longer starts the idle time again, so a
     client that went quiet is given up on after the idle time however the handler reads
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
+168. The kit's `Pagination` and `PreviousNext` take `on:link`, the handler each link they draw runs
+    as it joins the page (its `on:connect`), so a pager under a table sorted in place whose pages
+    read its order passes `corten_ui::ordered::link(target, [sorted(&SupplyId)], signal)` and
+    each link opens its page in the order on screen. Before, a pager's links could carry no
+    handler, so such a page drew its own pager. Breaking for a copy's callers: every
+    `<Pagination>` and `<PreviousNext>` writes `on:link`, `None::<Handler>` for none (take the
+    kit's file with `corten ui add pagination --merge`). `ordered::link` takes an `HTMLElement`,
+    as a prop's handler gets one, so the compiler no longer refuses another element; one that is
+    not an `<a>` or `<area>` is reported in the console and left. `ordered.js` as served (its
+    comments removed) grows from 3,182 to 3,384 bytes (gzip 1,188 to 1,269, brotli 1,003 to
+    1,074), loaded only by a page that calls it. A pager step that writes is a form the app draws
+    in place of the pager, which the guides now say
+    ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
 
 172. The kit's `Card` and `CardPanel` take a `size` (`CardSize::Md`, the theme's `--card-padding`,
     or `Sm`, denser), as `Button`, `Dialog` and `Progress` do, and `CardCompact` is gone: it was a
@@ -5710,6 +5819,23 @@ Corten is pre-1.0, so any minor version may change the API.
     fetch draws the error page rather than its plain text, and an error page keeps the `Vary` of
     the failure it replaces beside its own
     ([#1034 A page fetched whole after a write that redirects to a place loses its #id: the fetch sends no corten header, so the redirect is a 303 that fetch follows without the fragment](https://github.com/corten-run/corten/issues/1034)).
+198. A `<dialog>` or `[popover]` written as a direct child of a kit `Stack` or `Cluster` (beside the
+    button that opens it) lost the browser's `margin: auto` to the kit's margin reset, so a modal
+    opened pinned to the top of a phone's screen and a popover without an anchor at the top; one in
+    a `StackStart` column also lost the browser's width, as the column's `max-width: 100%` cap
+    reached it, so a modal with a long line touched the screen's edges. Both rules now leave a
+    dialog or popover child alone, still with no specificity; its long words still break, as the
+    column's do, and every other child is as before. A non-modal dialog opens where it is written,
+    over the content after it, as the browser places it. The ui-gallery's smoke test opens a modal
+    with a long word and a popover in a `StackStart` column at 320px and checks both are centered,
+    the dialog clear of the edges and not scrolling sideways, and that a paragraph beside them still
+    drops its margin; against the earlier stylesheet it fails in Chromium with the dialog at the
+    top, touching both edges, and the popover at the top. No request or render cost: the rules make
+    the ui-gallery's served `components.css` 61,405 bytes where it was 61,306 (gzip 10,166 against
+    10,156, brotli 8,951 against 8,947, Node's zlib at gzip level 9 and brotli's default), served by
+    the gallery built from this change and from the commit it was merged onto, 71c0361a. Found by
+    the Chase Sets pilot, which set `margin: auto` on its reviews page's dialog
+    ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
 
 ### Documentation
 
@@ -6211,6 +6337,17 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+80. The kit guide's Size states what every component costs now: 59,878 bytes of `components.css`,
+    8,691 with brotli at level 11 and 9,863 with gzip at level 9 (the kit at 5ba4e476), where it
+    said 35,239, 5,331 and 6,050 from before the kit grew from 34 stylesheets to 42. A test in the
+    ui-gallery example (`the_kit_guide_states_what_every_component_costs`) serves the stylesheet of
+    an app listing every component and the theme's tokens, waits for its stored brotli and gzip
+    forms, and fails when the guide is more than 3 percent off, naming the new numbers. The guide's
+    browser list is Chromium, Firefox and WebKit, as the gallery's smoke runs, and `FormAlert` is
+    drawn in the gallery (a rename refused because the other draft has that name, above the form)
+    with a smoke check of its role, its one live region and its tone's colors, so every kit
+    component is again in the gallery and its browser test
+    ([#1125 The kit guide says corten ui add --all serves 35,239 bytes of CSS; it serves 59,299 now (8,615 brotli, not 5,331), and two lines beside it are stale](https://github.com/corten-run/corten/issues/1125)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

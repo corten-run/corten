@@ -1,14 +1,6 @@
 //! [`App`]: an app's routes with the production pieces around them, configured by defaults.
 
-use std::{
-    convert::Infallible,
-    future::Future,
-    marker::PhantomData,
-    pin::Pin,
-    sync::Arc,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::{convert::Infallible, future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
 use axum::{
     extract::Request,
@@ -17,8 +9,6 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         Response,
     },
-    routing::{get, Route},
-    Router,
 };
 use futures_util::{stream, StreamExt};
 
@@ -31,6 +21,7 @@ use crate::{
     page::{self, default_error_page, error_page_fn, Asked, Credentials, ErrorPageFn, Failure, Shared},
     pwa::Pwa,
     route::{Methods, Prefix, Route as TypedRoute, Routes},
+    router::{get, Route, Router, Table},
     security::{Applied, NonceSlot, Policy},
     signal::{self, Watch},
     task::{Finishing, Running, Task},
@@ -72,7 +63,7 @@ type ReadyFn = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = bool> + Send>> + Send
 /// A library that ships an area is a function, `pub fn admin(area: Area<Admin>) -> Area<Admin>`,
 /// that the app passes to [`App::area`].
 pub struct Area<P> {
-    routes: Router,
+    routes: Table,
     pages: Vec<(&'static str, bool)>,
     /// Its routes with text after a parameter, for [`crate::route::assert_no_clash_with`].
     with_text: Vec<&'static str>,
@@ -82,7 +73,9 @@ pub struct Area<P> {
     middleware: Vec<Arc<dyn crate::middleware::Erased>>,
     /// Corten's own routes served with its routes (an MCP endpoint's metadata), outside its
     /// prefix, so neither its stylesheet nor its middleware applies to them.
-    companions: Vec<(String, axum::routing::MethodRouter)>,
+    companions: Vec<(String, crate::router::MethodSet)>,
+    /// Its routes that say `unstaged`, which the app serves outside its stages.
+    unstaged: crate::route::UnstagedRoutes,
     types: PhantomData<fn() -> P>,
 }
 
@@ -129,6 +122,27 @@ impl<P: Prefix> Area<P> {
     /// # let _ = app.router();
     /// ```
     pub fn route<R: TypedRoute>(mut self, methods: Methods) -> Self {
+        self.place::<R>(methods.1);
+        if let Some(companion) = methods.2 {
+            self.companions.push((companion.0)(R::PATH));
+        }
+        self.routes = crate::route::written::<R, ()>(self.routes, methods.0);
+        self
+    }
+
+    /// Used by `#[corten::routes(area = ..)]`: `R`'s handlers at its path, a route that says
+    /// `unstaged`, which the app serves outside its stages, the area's among them. Not a public
+    /// API.
+    #[doc(hidden)]
+    pub fn __unstaged_route<R: TypedRoute>(mut self, methods: crate::route::__private::UnstagedMethods) -> Self {
+        self.place::<R>(false);
+        self.unstaged.add::<R>(methods, Some(P::PREFIX));
+        self
+    }
+
+    /// Holds `R` to the area's prefix and the shape of a route's path, and adds it to the area's
+    /// paths (`get`: whether it has a `GET` page).
+    fn place<R: TypedRoute>(&mut self, get: bool) {
         const {
             assert!(
                 crate::api::under_const(P::PREFIX, R::PATH),
@@ -147,12 +161,7 @@ impl<P: Prefix> Area<P> {
         if R::WRITTEN != R::PATH {
             self.with_text.push(R::WRITTEN);
         }
-        if let Some(companion) = methods.2 {
-            self.companions.push((companion.0)(R::PATH));
-        }
-        self.routes = self.routes.route(R::PATH, crate::route::with_suffixes::<R, _>(methods.0));
-        self.pages.push((R::WRITTEN, methods.1));
-        self
+        self.pages.push((R::WRITTEN, get));
     }
 
     /// Components only this area's pages render: `.components(&[AdminTable, SalesChart])`. Their
@@ -184,14 +193,16 @@ impl<P: Prefix> Area<P> {
     /// request's [`crate::Signal`] aborts with [`crate::Abort::Deadline`], as at the app's. In
     /// nested areas the innermost that sets one decides. An [`App::api`] under the prefix with no
     /// deadline of its own, nor one from an API around it, takes it too, answered with the JSON
-    /// 503. `None` removes it, for routes that bound themselves.
+    /// 503. `None` removes it, for routes that bound themselves. A route that says `unstaged`
+    /// has no deadline.
     pub fn deadline(mut self, deadline: impl Into<Option<Duration>>) -> Self {
         self.deadline = Some(deadline.into());
         self
     }
 
     /// A step of the area's own in each request at its prefix or under it (a write limit, an
-    /// audit log): its routes, its nested areas' and an unknown URL there, as with its
+    /// audit log): its routes but one that says `unstaged`, its nested areas' and an unknown URL
+    /// there, as with its
     /// [`deadline`](Area::deadline) and [`policy`](Area::policy). It runs after the app's
     /// middleware ([`App::middleware`]) and before the handler: `.middleware(WriteLimit::new(20))`,
     /// or a tuple run in order. Given again, it runs after what was given before; an outer area's
@@ -210,7 +221,7 @@ impl<P: Prefix> Area<P> {
     /// (a size drawn from data needs none: it is a custom property, [`crate::style::Var`]). Only adding is possible, so a page in the
     /// area never allows less than the app; nested areas add up, outermost first. A stricter
     /// `Referrer-Policy` ([`crate::security::Sources::referrer`]) is the one way an area sends
-    /// less, for every answer under it, an API's included.
+    /// less, for every answer under it, an API's included, but a route's that says `unstaged`.
     ///
     /// ```
     /// use corten::prelude::*;
@@ -264,7 +275,7 @@ impl<P: Prefix> Area<P> {
 /// An [`Area`] given to [`App::area`], without its type.
 struct Placed {
     prefix: &'static str,
-    routes: Router,
+    routes: Table,
     pages: Vec<(&'static str, bool)>,
     /// The paths of Corten's own routes served with its routes ([`Area`]'s `companions`).
     companions: Vec<String>,
@@ -304,10 +315,12 @@ struct Placed {
 ///     .pwa(Pwa::new(Manifest::new("Shop", "Shop").icon(Static::ICONS_192_PNG, "192x192")))
 /// ```
 pub struct App<M = ()> {
-    routes: Router,
+    routes: Table,
     /// The app's route patterns and whether each has a `GET` handler ([`crate::Req::serves`]);
     /// the areas' are added in `router`.
     pages: Vec<(&'static str, bool)>,
+    /// The routes that say `unstaged`, the areas' and APIs' too: served outside the stages.
+    unstaged: crate::route::UnstagedRoutes,
     error_page: Option<Box<page::ErrorPage>>,
     policy: Policy,
     /// The static directory `embed!` compiled in (`App::assets`): where it was read, and its files.
@@ -324,7 +337,7 @@ pub struct App<M = ()> {
     components: Vec<crate::Component>,
     areas: Vec<Placed>,
     deadline: Option<Duration>,
-    apis: Vec<(Mount, Router)>,
+    apis: Vec<(Mount, Table)>,
     /// The APIs' route paths as written, checked with the pages' when the router is built.
     api_paths: Vec<&'static str>,
     tasks: Vec<Task>,
@@ -443,6 +456,7 @@ impl App {
         App {
             routes: routes.0,
             pages: routes.1,
+            unstaged: routes.2,
             error_page: None,
             policy: Policy::new(),
             static_files: None,
@@ -481,6 +495,7 @@ impl App {
         App {
             routes: self.routes,
             pages: self.pages,
+            unstaged: self.unstaged,
             error_page: self.error_page,
             policy: self.policy,
             static_files: self.static_files,
@@ -543,7 +558,7 @@ impl<M: Middleware> App<M> {
         let prefix = P::PREFIX;
         assert!(!self.areas.iter().any(|placed| placed.prefix == prefix), "corten: the area {prefix:?} is given twice");
         let mut area = build(Area {
-            routes: Router::new(),
+            routes: Table::new(),
             pages: Vec::new(),
             with_text: Vec::new(),
             components: Vec::new(),
@@ -551,8 +566,10 @@ impl<M: Middleware> App<M> {
             sources: crate::security::Sources::default(),
             middleware: Vec::new(),
             companions: Vec::new(),
+            unstaged: Default::default(),
             types: PhantomData,
         });
+        self.unstaged.0.append(&mut area.unstaged.0);
         let mut companions = Vec::new();
         for (path, methods) in std::mem::take(&mut area.companions) {
             self.routes = self.routes.route(&path, methods);
@@ -607,6 +624,7 @@ impl<M: Middleware> App<M> {
         assert!(!self.apis.iter().any(|(mount, ..)| mount.prefix == prefix), "corten: the API {prefix:?} is given twice");
         let mut api = build(Api::new());
         self.api_paths.extend(&api.written);
+        self.unstaged.0.append(&mut api.unstaged.0);
         let mount = Mount::new(prefix.to_string(), &api);
         // Corten's own routes for it (an MCP endpoint's metadata), outside its prefix.
         for (path, methods) in std::mem::take(&mut api.companions) {
@@ -975,17 +993,21 @@ impl<M: Middleware> App<M> {
         self
     }
 
-    /// A tower layer around the whole app, outside every stage of [`crate::middleware`], for what
-    /// must see the raw request first: a cap on body size, a limit per address, a trace span.
-    /// Layers added later go outside earlier ones. A step inside Corten's order (after its
-    /// checks, with the error page around it) is a [`Middleware`] ([`App::middleware`]). In an app
+    /// A tower layer around the whole app, outside the router and every stage of
+    /// [`crate::middleware`], for what must see the raw request first: a cap on body size, a limit
+    /// per address, a trace span. It sees the request before its route is matched (so with no
+    /// [`crate::middleware::MatchedPath`]), and the route's answer with its body: the router sets
+    /// the answer's `Content-Length` and empties a `HEAD`'s body after every layer, so a layer may
+    /// change the body. It is made once, around the whole app, so what it keeps (a concurrency
+    /// limit's count) is the app's, not a route's. Layers added later go outside earlier ones. A step inside Corten's order
+    /// (after its checks, with the error page around it) is a [`Middleware`] ([`App::middleware`]). In an app
     /// whose areas or APIs set deadlines of their own, a request a layer holds or answers itself,
     /// or runs on a task of its own, has not told its connection its deadline when shutdown
     /// begins: the connection has the grace, then the longest deadline
     /// ([`App::shutdown_grace`]).
     pub fn layer<L>(mut self, layer: L) -> Self
     where
-        L: tower_layer::Layer<Route> + Clone + Send + Sync + 'static,
+        L: tower_layer::Layer<Router> + Send + 'static,
         L::Service: tower_service::Service<Request> + Clone + Send + Sync + 'static,
         <L::Service as tower_service::Service<Request>>::Response: axum::response::IntoResponse + 'static,
         <L::Service as tower_service::Service<Request>>::Error: Into<Infallible> + 'static,
@@ -1075,6 +1097,47 @@ impl<M: Middleware> App<M> {
                 panic!("corten: the area {:?} is under App::api({:?}), whose routes answer only JSON", area.prefix, mount.prefix);
             }
         }
+        // An unstaged route meets none of an area's or API's settings, so it is declared in the
+        // module of the innermost one whose prefix holds it, where a reader of that area or API
+        // sees it, and its parameter or catch-all cannot reach another one's prefix (`/pay/{id}`
+        // at `/pay/api`): a staged route that does is turned away per request, which an unstaged
+        // one never meets.
+        let prefixes: Vec<&str> =
+            self.areas.iter().map(|area| area.prefix).chain(self.apis.iter().map(|(mount, ..)| mount.prefix.as_str())).collect();
+        // Nor is its path routed again elsewhere (the app's routes and an area's share a path as
+        // one route): a method the unstaged route lacks would get its 405 there, with no stage.
+        let all_written: Vec<&str> = (self.pages.iter().map(|(p, _)| *p))
+            .chain(self.areas.iter().flat_map(|area| area.pages.iter().map(|(p, _)| *p)))
+            .chain(self.api_paths.iter().copied())
+            .collect();
+        // As the router matches it: a parameter's name and the text after it (`{n}.xml`) do not
+        // count, so `/x/{n}.xml` and `/x/{id}.json` are one route.
+        fn routed(path: &str) -> String {
+            let segments = path.split('/').map(|segment| match segment.strip_prefix('{') {
+                Some(rest) if rest.starts_with('*') => "{*}",
+                Some(_) => "{}",
+                None => segment,
+            });
+            segments.collect::<Vec<_>>().join("/")
+        }
+        let all_routed: Vec<String> = all_written.iter().map(|path| routed(path)).collect();
+        for route in &self.unstaged.0 {
+            let written = route.written;
+            let shape = routed(written);
+            if all_routed.iter().filter(|p| **p == shape).count() > 1 {
+                panic!("corten: the route {written:?} says unstaged and its path is routed again in another module, where its other methods would meet no stage; give the unstaged route a path of its own");
+            }
+            let holder = prefixes.iter().copied().filter(|prefix| crate::api::under(prefix, written)).max_by_key(|p| p.len());
+            if holder != route.declared_in {
+                let declared =
+                    route.declared_in.map_or("the app's routes".to_string(), |prefix| format!("the module of {prefix:?}"));
+                let holder = holder.map_or("the app's routes".to_string(), |prefix| format!("the module of {prefix:?}"));
+                panic!("corten: the route {written:?} says unstaged and is declared in {declared}, but its path is under {holder}, whose settings it would skip unseen; declare it there");
+            }
+            if let Some(reached) = prefixes.iter().find(|prefix| crate::api::reaches(written, prefix)) {
+                panic!("corten: the route {written:?} says unstaged and can answer under {reached:?}, whose settings it would skip; give it a segment of its own text before the parameter");
+            }
+        }
         // An area's stylesheet is a section of the asset pipeline.
         let sections: Vec<(&str, &[crate::Component])> = self
             .areas
@@ -1096,7 +1159,7 @@ impl<M: Middleware> App<M> {
                 .chain(self.areas.iter().flat_map(|area| area.companions.iter().cloned()))
                 .collect(),
         };
-        routes = routes.merge(crate::routes());
+        routes = routes.merge(crate::runtime_routes());
         let mut offline = None;
         if let Some(pwa) = self.pwa {
             let pwa = pwa.resolve(assets.as_deref());
@@ -1153,6 +1216,26 @@ impl<M: Middleware> App<M> {
         if !taken {
             own.exact.push(favicon);
             routes = routes.merge(crate::assets::favicon(assets.as_ref()));
+        }
+        // An unstaged route is not where Corten's own paths are (`/corten/`, the assets, the health
+        // checks, the PWA's files and offline page, an API's or area's companions): one that can
+        // match one of them would answer there, or join Corten's route there, outside its stages
+        // (the service worker would show an unstaged answer as the offline page). A prefix is
+        // reached by any parameter before it; an exact path only by a route that can match that
+        // path itself (`/.well-known/{file}` cannot match `/.well-known/oauth-protected-resource/mcp`).
+        // The routes macro refuses what the path alone shows (a first segment that is a parameter,
+        // `/corten/..`, `/health/live`, `/health/{..}`); this is the rest.
+        for path in self.unstaged.paths() {
+            let reached = (own.prefixes.iter().map(|prefix| prefix.trim_end_matches('/')))
+                .find(|prefix| crate::api::under(prefix, path) || crate::api::reaches(path, prefix))
+                .or_else(|| own.exact.iter().copied().find(|exact| crate::route::routes_path(path, exact)))
+                .or_else(|| {
+                    (own.companions.iter().map(String::as_str)).find(|companion| crate::route::routes_path(path, companion))
+                })
+                .or_else(|| offline.as_deref().filter(|offline| crate::route::routes_path(path, offline)));
+            if let Some(corten_s) = reached {
+                panic!("corten: the route {path:?} says unstaged and can answer at {corten_s:?}, which is Corten's own; give it a first segment of its own text");
+            }
         }
         routes = routes.merge(match self.ready {
             None => crate::health(|| async { true }),
@@ -1229,6 +1312,7 @@ impl<M: Middleware> App<M> {
             }
         }
         let policy = proxies_from_env(hosts_from_env(self.policy));
+        let hosts = policy.host_check();
         shared.proxies = policy.proxies().to_vec();
         shared.allowed_origins = policy.allowed_origins().to_vec();
         shared.plain_notice = !policy.sends_hsts();
@@ -1287,19 +1371,36 @@ impl<M: Middleware> App<M> {
                     area_deadlines.iter().find(|(prefix, _)| crate::api::under(prefix, &mount.prefix)).map(|(_, d)| *d);
             }
         }
+        // The routes that say `unstaged`, each through a lane of its own in place of the stages,
+        // where under the innermost API whose prefix holds it a failure is the API's JSON. An app
+        // with none has none.
+        let unstaged = (!self.unstaged.0.is_empty()).then(|| {
+            let mut unstaged = Table::new();
+            for crate::route::UnstagedRoute { written, path, methods, .. } in self.unstaged.0 {
+                let json = mounts.iter().find(|mount| mount.contains(path)).map(|mount| (mount.errors.clone(), dev));
+                let lane = Arc::new(crate::route::Lane { hosts: hosts.clone(), json, written });
+                unstaged = unstaged.unstaged(path, written, methods, lane);
+            }
+            unstaged
+        });
         owned.extend(self.areas.into_iter().map(|area| area.routes));
-        // The app's own routes are merged last: when two routers both have axum's default
-        // fallback, a merge keeps the one merged in, and the app's answers unknown URLs.
-        let mut router = Router::new();
+        // One table: a path routed in two of them (the app's routes and an area's) is one route
+        // with the methods of both. The unstaged routes are beside the others, each in its lane
+        // (a wrong method at an unstaged route's path, or a segment without its suffix, is the
+        // router's answer in that lane); an unknown URL is the app's 404 inside the stages.
+        let mut table = Table::new();
         for routes in owned {
-            router = router.merge(routes);
+            table = table.merge(routes);
         }
-        let router = router.merge(routes);
+        let mut table = table.merge(routes);
+        if let Some(unstaged) = unstaged {
+            table = table.merge(unstaged);
+        }
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
         let plain = area_middleware.is_empty() && mounts.iter().all(|mount| mount.middleware.is_empty());
-        macro_rules! wrap {
+        macro_rules! stages {
             ($steps:expr) => {
-                router.layer(Wrap(Arc::new(Layer {
+                Arc::new(Layer {
                     shared: Arc::new(shared),
                     deadline: self.deadline,
                     area_deadlines,
@@ -1308,11 +1409,15 @@ impl<M: Middleware> App<M> {
                     mounts,
                     own,
                     steps: $steps,
-                })))
+                }) as Arc<dyn crate::router::Stages>
             };
         }
-        let mut router =
-            if plain { wrap!(Plain(self.middleware)) } else { wrap!(Scoped { app: self.middleware, areas: area_middleware }) };
+        let stages = if plain {
+            stages!(Plain(self.middleware))
+        } else {
+            stages!(Scoped { app: self.middleware, areas: area_middleware })
+        };
+        let mut router = Router::new(table, Some(stages));
         for wrap in self.layers {
             router = wrap(router);
         }
@@ -1723,15 +1828,6 @@ impl Own {
     }
 }
 
-/// Whether the route axum matched (`matched`) is outside `mount`. Under `Router::nest` the
-/// matched path carries the outer router's prefix and the request's path does not: it is taken
-/// off first.
-fn outside(mount: &crate::api::Mount, matched: &str, req: &Request) -> bool {
-    let nested = req.extensions().get::<axum::extract::NestedPath>();
-    let matched = nested.and_then(|nested| matched.strip_prefix(nested.as_str().trim_end_matches('/'))).unwrap_or(matched);
-    !mount.contains(matched)
-}
-
 /// Paths no page is at, however the app's routes match them: Corten's own and the APIs'.
 #[derive(Default)]
 pub(crate) struct NotPages {
@@ -1745,48 +1841,13 @@ impl NotPages {
     }
 }
 
-/// Puts [`Layer`] around each route. A tower layer of its own rather than axum's `from_fn`, which
-/// boxes the rest of the stack again for every request (`Next`) on top of the future.
-struct Wrap<S>(Arc<Layer<S>>);
-
-impl<S> Clone for Wrap<S> {
-    fn clone(&self) -> Self {
-        Wrap(self.0.clone())
-    }
-}
-
-impl<S: Steps> tower_layer::Layer<Route> for Wrap<S> {
-    type Service = Wrapped<S>;
-
-    fn layer(&self, route: Route) -> Wrapped<S> {
-        Wrapped { layer: self.0.clone(), route }
-    }
-}
-
-struct Wrapped<S> {
-    layer: Arc<Layer<S>>,
-    route: Route,
-}
-
-impl<S> Clone for Wrapped<S> {
-    fn clone(&self) -> Self {
-        Wrapped { layer: self.layer.clone(), route: self.route.clone() }
-    }
-}
-
-impl<S: Steps> tower_service::Service<Request> for Wrapped<S> {
-    type Response = Response;
-    type Error = Infallible;
-    type Future = Pin<Box<dyn Future<Output = Result<Response, Infallible>> + Send>>;
-
-    // A route is always ready: it clones its service for each call.
-    fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Infallible>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: Request) -> Self::Future {
-        let (layer, route) = (self.layer.clone(), self.route.clone());
-        Box::pin(async move { Ok(layer.handle(req, route).await) })
+/// The stages around each staged route, as the router runs them: one boxed future per request,
+/// beside the handler's own. Not axum's `from_fn`, which boxes the rest of the stack again for
+/// every request (`Next`) on top of the future.
+impl<S: Steps> crate::router::Stages for Layer<S> {
+    fn run(self: Arc<Self>, req: Request, route: &Route) -> crate::router::Answering {
+        let route = route.clone();
+        Box::pin(async move { self.handle(req, route).await })
     }
 }
 
@@ -1978,15 +2039,12 @@ impl<S: Steps> Layer<S> {
         // Only an API such a route can reach pays for the check.
         let foreign = mount.is_some_and(|mount| {
             mount.exposed
-                && req
-                    .extensions()
-                    .get::<axum::extract::MatchedPath>()
-                    .is_some_and(|matched| outside(mount, matched.as_str(), &req))
+                && req.extensions().get::<crate::router::MatchedPath>().is_some_and(|matched| !mount.contains(matched.as_str()))
         });
         let route = (!foreign).then_some(route);
         if foreign {
             // It is an unknown URL of the API's, for middleware that reads the route too.
-            req.extensions_mut().remove::<axum::extract::MatchedPath>();
+            req.extensions_mut().remove::<crate::router::MatchedPath>();
         }
         let cors = mount.and_then(|mount| mount.allowed_origin(req.headers()));
         let credentials = cache::credentials(req.headers());
@@ -2013,8 +2071,8 @@ impl<S: Steps> Layer<S> {
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;
         }
-        // The outer route's `Allow` (axum adds it to a method that route lacks) would list methods
-        // the path does not have: none has any here, whatever answered.
+        // The outer route's `Allow` (the router adds it to a method that route lacks) would list
+        // methods the path does not have: none has any here, whatever answered.
         if foreign {
             res.headers_mut().insert(header::ALLOW, axum::http::HeaderValue::from_static(""));
         }

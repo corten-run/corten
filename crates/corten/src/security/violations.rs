@@ -1,8 +1,8 @@
 //! What browsers report a page's CSP blocked ([`super::Policy::report_to`]), read the same
 //! whichever browser sent it.
 
+use crate::extract::{FromRequest, Request};
 use axum::{
-    extract::{FromRequest, Request},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
