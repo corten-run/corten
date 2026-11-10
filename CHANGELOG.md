@@ -5869,6 +5869,53 @@ Corten is pre-1.0, so any minor version may change the API.
     the gallery built from this change and from the commit it was merged onto, 71c0361a. Found by
     the Chase Sets pilot, which set `margin: auto` on its reviews page's dialog
     ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
+220. A form with a control named after another member the runtime calls on an element still broke it
+    after Fixed 196, without an error that named the cause: `closest` kept a handler that takes an
+    `@ref` or `^ref` from running on the form, `querySelectorAll` or `getElementsByTagName` threw as
+    the form joined the page and left the other elements added with it unbound, `isConnected` kept a
+    removed form's `signal` from aborting and its `on:connect` from running when it came back, and
+    `remove`, `append`, `contains`, `replaceWith` or `matches` broke a patch of the form. Names like
+    `remove`, `append`, `contains`, `children` and `matches` are ordinary for a field, and so are
+    `focus`, which broke focus moved to the form after a patch, and `id`, which `corten/views` read
+    on a view's root. The runtime (`corten.js`) now reads and calls these through Element's and
+    Node's own members wherever the element may be a form (dispatch, refs, the scan of what joins
+    the page, the end of an element's life, patches, a layout drawn again, focus moved or kept after
+    a patch or a swap, the scroll a swap keeps, the fields a swap remembers, a hover's prefetch, and
+    the element a navigation came from, which browsers may give as the form), as it did for
+    `getAttribute` and `hasAttribute`; focus kept on an SVG or MathML element still goes through
+    that element's own `focus`. `corten/views` does the same for a row or a view's root that is a
+    form: `rows().remove` and `replace`, the children it lists, and `view()`'s checks of the root's
+    id and contents, the `parentNode` and `nextSibling` of a row, and the `key` and attribute holes
+    a generated view class reads and writes on a `<form>` (`<form key={id} data-busy={busy}>`). A
+    control named `style` no longer breaks a form's custom properties (`style={..}`) when a patch, a
+    swap or `corten/views` sets them. A few members are still read or called directly
+    (`parentElement`, `localName`, `nodeName`, `childNodes`, `childElementCount`, `outerHTML`,
+    `textContent`, `cloneNode`, `showPopover`, the layout a nav link's ancestors are measured by; in
+    `corten/views`, `insertBefore` and `textContent` on the rows' parent, `firstElementChild`,
+    `tagName`, `ownerDocument`, and a generated view class's text holes and the path to its holes):
+    no form names a field so, and the first ones are read on every walk up the page. Calling
+    Element's own members also skips a custom element's override of `remove`, `append`,
+    `replaceWith`, `replaceChildren` or `closest` when the runtime patches or walks it. Refusing
+    such names was not taken: the markup may come from anywhere, and `remove` is a field's name as
+    often as a method's. The runtime is 199 B and 262 B larger gzipped (40,991 to 41,190 B, 14,872
+    to 15,134 B gzip, 13,424 to 13,663 B brotli, against main e8a5208f, Node's zlib at its default
+    levels), and `corten/views` 276 B and 122 B larger (4,497 to 4,773 B, 2,149 to 2,271 B gzip). In
+    Chromium only (headless Chromium 156.0.8078.4, a test page of one form served with each build,
+    20 rounds in rotating order, medians with ranges, before then after), dispatching 50,000 events
+    to a form's handler (221.6 ms, 193 to 328, then 214.2 ms, 190 to 343), a scan of 2,000 elements
+    joining (6.6 ms, 5 to 11, then 6.4 ms, 6 to 12), 300 patches of a form with controls named
+    `remove` and `isConnected` (31.8 ms, 28 to 47, then 31.9 ms, 27 to 56) and then the end of the
+    lives of 3,000 elements with a page-wide handler, checked 400 times (96.5 ms, 83 to 164, then
+    93.3 ms, 80 to 148; alone, 99.6 ms, 88 to 160, then 96.7 ms, 87 to 146) take the same time
+    within the spread. The sweep reads `isConnected` itself in each of its loops: through one shared
+    helper it was slower after the other three (140.6 ms, 117 to 200), likely as one read shared
+    with the dispatch, scan and patches sees every kind of element (not shown). A generated view
+    class's attribute hole on a form is no slower through Element's own: 2,000 `<form>` rows made
+    and 50,000 toggles of `data-selected`, 12 rounds each way alternating, each in a new page, the
+    first of each way dropped, medians 194.5 ms (160 to 244) and 28.9 ms (24 to 40) called directly
+    against 192.6 ms (160 to 219) and 9.7 ms (7 to 14), the toggles faster, likely as a form looks a
+    name up among its controls first; a hole on any other tag is called directly, as before
+    ([#1105 Form controls named after other Element members (closest, querySelectorAll, isConnected, remove, contains) still shadow what the runtime calls on a form](https://github.com/corten-run/corten/issues/1105)).
 
 ### Documentation
 

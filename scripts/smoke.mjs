@@ -17,6 +17,35 @@ const engines = { chromium, firefox, webkit };
  * @param {import("@playwright/test").Request} r
  */
 const swapped = (r) => ["nav", "action"].includes(r.headers()["corten"] ?? "");
+/**
+ * Names of form controls that shadow a member the runtime reads or calls on a form (a control's
+ * `name` becomes the form's property): the shadowed-form checks put a control of each in a form,
+ * and reach that form's own members through the prototype themselves.
+ */
+const shadowing = [
+  "hasAttribute",
+  "getAttribute",
+  "closest",
+  "matches",
+  "querySelector",
+  "querySelectorAll",
+  "getElementsByTagName",
+  "isConnected",
+  "contains",
+  "remove",
+  "append",
+  "replaceWith",
+  "replaceChildren",
+  "children",
+  "attributes",
+  "focus",
+  "style",
+  "setAttribute",
+  "removeAttribute",
+  "toggleAttribute",
+  "addEventListener",
+  "removeEventListener",
+];
 const names = process.argv.slice(3).length ? process.argv.slice(3) : Object.keys(engines);
 // The markup this test writes into pages goes through a policy of its own, which the watchlist
 // allows only when run with SMOKE_TRUSTED_TYPES=1 (CONTRIBUTING): without it, say so here rather
@@ -374,7 +403,7 @@ async function run(browser) {
   // The optional views helper, using its actual built bytes under the watchlist's CSP. This
   // fixture needs no app view class: the nested deck-builder smoke also uses generated classes.
   await page.route("**/smoke-views.js", (route) => route.fulfill({ contentType: "text/javascript", body:
-    readFileSync(new URL("../crates/corten/js/dist/view.js", import.meta.url), "utf8") + "\nexport { view };\n",
+    readFileSync(new URL("../crates/corten/js/dist/view.js", import.meta.url), "utf8") + "\nexport { view, rows };\n",
   }));
   const branches = await page.evaluate(async () => {
     const { view } = await import("/smoke-views.js");
@@ -421,6 +450,118 @@ async function run(browser) {
   check("view follows external replacement rather than a detached cache", branches.follows);
   check("view refuses ID collisions, malformed templates and scripts before removing the active tree", branches.refused === 5, JSON.stringify(branches));
   check("view refuses an outside ID even when the outgoing tree has the first match", branches.rejectsHiddenCollision);
+  // Rows and a view's root that are forms with controls named after the members the helper reads
+  // or calls on them (`<button name="remove">`, a hidden `id`, and the rest of `shadowing`).
+  const formViews = await page.evaluate(async (names) => {
+    const { view, rows } = await import("/smoke-views.js");
+    const controls = names.map((name) => `<input type="hidden" name="${name}" value="x" disabled>`).join("");
+    // As #[component(view)] writes a keyed view's class, with a hole on the root itself
+    // (`data-selected={selected}`), which it reads and writes through Element's own.
+    class Row {
+      constructor(el) { this.el = el; }
+      get selected() { return Element.prototype.hasAttribute.call(this.el, "data-selected"); }
+      static fill(el, data) {
+        if (Element.prototype.hasAttribute.call(el, "data-selected") !== data.s) Element.prototype.toggleAttribute.call(el, "data-selected", data.s);
+      }
+      static key(el) { return Element.prototype.getAttribute.call(el, "data-key") ?? ""; }
+      static keyOf(data) { return String(data.k); }
+    }
+    const own = Element.prototype;
+    const parent = document.createElement("div");
+    parent.innerHTML = __html(["a", "b", "c"].map((k) => `<form data-key="${k}"><button name="remove">Remove</button><input type="hidden" name="id" value="${k}">${controls}</form>`).join(""));
+    document.body.append(parent);
+    let removed = "";
+    try {
+      const list = rows(parent, Row);
+      const keys = () => Array.from(own.querySelectorAll.call(parent, "form"), (f) => own.getAttribute.call(f, "data-key")).join();
+      list.remove(list.get("b"));
+      const afterRemove = keys();
+      list.replace([{ k: "c", s: true }, { k: "a", s: false }]);
+      const reordered = keys();
+      const selected = `${list.get("c")?.selected}/${list.get("a")?.selected}`;
+      list.replace([{ k: "c", s: false }]);
+      removed = `${afterRemove};${reordered};${selected};${keys()}`;
+    } catch (error) {
+      removed = String(error);
+    }
+    parent.remove();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const template = document.createElement("template");
+    template.innerHTML = __html(`<form id="smoke-form-view" data-vars="--smoke-width:7px"><input type="hidden" name="id" value="1">${controls}</form>`);
+    let viewed = "";
+    try {
+      const first = view(host, Row, template).el;
+      const again = view(host, Row, template).el;
+      // The form's own `style`: its control named style is `first.style`.
+      const style = /** @type {CSSStyleDeclaration} */ (Reflect.get(HTMLElement.prototype, "style", first));
+      viewed = String(first === again && own.getAttribute.call(first, "id") === "smoke-form-view" && style.getPropertyValue("--smoke-width") === "7px");
+    } catch (error) {
+      viewed = String(error);
+    }
+    host.remove();
+    return { removed, viewed };
+  }, [...shadowing, "id"]);
+  check("rows() finds, removes, reorders, fills and drops rows that are forms with controls named remove, getAttribute and the like", formViews.removed === "a,c;c,a;true/false;c", formViews.removed);
+  check("view() draws and adopts a root that is a form with controls named id, children and the like", formViews.viewed === "true", formViews.viewed);
+  // Form rows with controls named parentNode and nextSibling: `of` walks up from a control inside
+  // one (a walk through the form's own `parentNode` would never end, so this runs on its own page,
+  // timed), from `window` and from a node of another realm; `swap` moves neighbors past one, and a
+  // key a script changes is seen.
+  {
+    const walkPage = await browser.newPage();
+    await walkPage.route("**/smoke-views.js", (route) => route.fulfill({ contentType: "text/javascript", body:
+      readFileSync(new URL("../crates/corten/js/dist/view.js", import.meta.url), "utf8") + "\nexport { view, rows };\n",
+    }));
+    await walkPage.goto(page.url());
+    const walking = walkPage.evaluate(async (names) => {
+      const { rows } = await import("/smoke-views.js");
+      const controls = names.map((name) => `<input type="hidden" name="${name}" value="x" disabled>`).join("");
+      class Row {
+        constructor(el) { this.el = el; }
+        static fill() {}
+        static key(el) { return Element.prototype.getAttribute.call(el, "data-key") ?? ""; }
+        static keyOf(data) { return String(data.k); }
+      }
+      const own = Element.prototype;
+      const parent = document.createElement("div");
+      parent.innerHTML = __html(["a", "b", "c"].map((k) => `<form data-key="${k}"><button name="remove">Remove</button>${controls}</form>`).join(""));
+      document.body.append(parent);
+      const frame = document.createElement("iframe");
+      document.body.append(frame);
+      try {
+        const list = rows(parent, Row);
+        const keys = () => Array.from(own.querySelectorAll.call(parent, "form"), (f) => own.getAttribute.call(f, "data-key")).join();
+        const rowB = own.querySelector.call(parent, 'form[data-key="b"]');
+        const found = list.of(own.querySelector.call(rowB, "button"))?.el === rowB && list.of(window) === undefined;
+        // A row made in another document's realm and moved here.
+        const other = /** @type {Document} */ (frame.contentDocument);
+        const foreign = other.createElement("div");
+        const button = other.createElement("button");
+        foreign.append(button);
+        parent.append(foreign);
+        const realm = list.of(button)?.el === foreign;
+        foreign.remove();
+        list.swap(0, 1);
+        const swapped = keys();
+        list.swap(0, 1);
+        const rowA = list.get("a")?.el;
+        own.setAttribute.call(rowA, "data-key", "z");
+        const rekeyed = list.get("z")?.el === rowA && list.get("a") === undefined;
+        own.setAttribute.call(rowA, "data-key", "a");
+        return `${found};${realm};${swapped};${keys()};${rekeyed}`;
+      } catch (error) {
+        return String(error);
+      } finally {
+        parent.remove();
+        frame.remove();
+      }
+    }, [...shadowing, "parentNode", "nextSibling"]);
+    const walked = await Promise.race([walking, new Promise((resolve) => setTimeout(() => resolve("timed out after 5 s"), 5000))]);
+    await walkPage.close().catch(() => {});
+    walking.catch(() => {});
+    check("rows() finds a form row from inside it, swaps form rows and sees a changed key, with controls named parentNode and nextSibling", walked === "true;true;b,a,c;a,b,c;true", String(walked));
+  }
   // A module the network drops twice (the page's module script, then the runtime's import of it)
   // is imported again, so on:connect still runs its handler rather than never.
   {
@@ -974,13 +1115,13 @@ async function run(browser) {
   // The form's on:corten:error runs (the runtime's event, on the form): it says the change failed.
   const told = await page.waitForSelector("#watch-form [role=alert]", { state: "visible", timeout: 5000 }).then(() => true, () => false);
   check("a form's on:corten:error handler runs for a submit the network fails", told);
-  // A form with controls named hasAttribute and getAttribute still runs its handlers, as the
-  // runtime reads its attributes through Element's own methods: the form the page loaded with,
+  // A form with controls named after the members the runtime reads on it (hasAttribute, closest,
+  // querySelectorAll, isConnected and the rest of `shadowing`) still runs its handlers, as the
+  // runtime reads them through Element's and Node's own: the form the page loaded with,
   // hearing an event that bubbles, and copies put in after load, bound to an event no element
   // listened for until they joined (so only the runtime's scan of them can hear it), one hearing
   // it bubble and one not.
-  const shadowed = await page.evaluate(async () => {
-    const names = ["hasAttribute", "getAttribute"];
+  const shadowed = await page.evaluate(async (names) => {
     const inputs = names.map((name) => `<input type="hidden" name="${name}" value="x">`).join("");
     const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
     const markup = form.outerHTML.replace(/^<form[^>]*>/, (open) => open + inputs);
@@ -1017,23 +1158,158 @@ async function run(browser) {
       window.removeEventListener("error", report);
       return skipped && !note.hidden && reported === 0;
     };
+    // One that leaves the page ends its life, so its on:connect runs again when it comes back:
+    // the runtime reads whether it is still on the page past its control named isConnected.
+    const comesBack = async () => {
+      const made = document.createElement("template");
+      made.innerHTML = /** @type {any} */ (window).__html(
+        markup
+          .replace(/ id="([^"]+)"/g, (_, id) => ` id="smoke-3-${id}"`)
+          .replace(/data-on="corten:error:([\w.]+)\(@(\w+)\)"/, (_, f, ref) => `data-on="connect:${f}(@${ref})"`),
+      );
+      const form = /** @type {Element} */ (made.content.firstElementChild);
+      const note = /** @type {HTMLElement} */ (Element.prototype.querySelector.call(form, "[role=alert]"));
+      const main = /** @type {HTMLElement} */ (document.querySelector("main"));
+      const settle = () => new Promise((r) => setTimeout(r, 100));
+      note.hidden = true;
+      main.append(form);
+      await settle();
+      const first = !note.hidden;
+      note.hidden = true;
+      Element.prototype.remove.call(form);
+      await settle();
+      main.append(form);
+      await settle();
+      const again = !note.hidden;
+      Element.prototype.remove.call(form);
+      return first && again;
+    };
     try {
       return {
         loaded: heard("watch-form", "corten:error", true),
         added: heard("smoke-1-watch-form", "smoke-shadowed-1", true),
         notBubbling: heard("smoke-2-watch-form", "smoke-shadowed-2", false),
         closest: closest(),
+        comesBack: await comesBack(),
       };
     } finally {
-      for (const n of [1, 2]) document.getElementById(`smoke-${n}-watch-form`)?.remove();
+      for (const n of [1, 2]) {
+        const copy = document.getElementById(`smoke-${n}-watch-form`);
+        if (copy) Element.prototype.remove.call(copy);
+      }
       for (const name of names) document.querySelector(`#watch-form > input[name="${name}"]`)?.remove();
     }
-  });
+  }, shadowing);
   check(
-    "a form with controls named hasAttribute and getAttribute runs its handlers, loaded with the page or added after, for events that bubble or not",
-    shadowed.loaded && shadowed.added && shadowed.notBubbling && shadowed.closest,
+    "a form with controls named after the members the runtime reads on it runs its handlers, loaded with the page or added after, for events that bubble or not, and on:connect again when it comes back",
+    shadowed.loaded && shadowed.added && shadowed.notBubbling && shadowed.closest && shadowed.comesBack,
     JSON.stringify(shadowed),
   );
+  // The rest of what the runtime does with such a form, each through Element's and Node's own: a
+  // page-wide handler on it runs for an event anywhere, and not once it left the page; elements a
+  // patch appends to it, more at once than the runtime wires one by one (it queries the form),
+  // run their handlers; focus in it stays on the field's counterpart when a patch replaces it,
+  // goes to the new form when that field is gone, and to the element around it when a patch
+  // removes it.
+  const ways = await page.evaluate(async (names) => {
+    const { patch } = await import("corten");
+    const w = /** @type {any} */ (window);
+    const own = Element.prototype;
+    const inputs = names.map((name) => `<input type="hidden" name="${name}" value="x">`).join("");
+    const main = /** @type {HTMLElement} */ (document.querySelector("main"));
+    const watch = /** @type {Element} */ (document.getElementById("watch-form"));
+    const failed = /data-on="corten:error:([\w.]+)\(@(\w+)\)"/;
+    const [, f, ref] = /** @type {RegExpMatchArray} */ (watch.outerHTML.match(failed));
+    const on = `document.smoke-anywhere:${f}(@${ref})`;
+    // The watch form with the controls, its ids its own and the page-wide handler for its own; with
+    // a button first, which a copy `without` it lacks.
+    const copy = (/** @type {boolean} */ button = true) =>
+      watch.outerHTML
+        .replace(/^<form[^>]*>/, (open) => open + (button ? '<button type="button">B</button>' : "") + inputs)
+        .replace(/ id="([^"]+)"/g, (_, id) => ` id="smoke-4-${id}"`)
+        .replace(failed, `data-on="${on}"`);
+    const settle = () => new Promise((r) => setTimeout(r, 100));
+    const form = () => /** @type {Element} */ (document.getElementById("smoke-4-watch-form"));
+    const note = () => /** @type {HTMLElement} */ (document.querySelector("#smoke-4-watch-form [role=alert]"));
+    const anywhere = () => {
+      const shown = note();
+      shown.hidden = true;
+      document.body.dispatchEvent(new CustomEvent("smoke-anywhere", { bubbles: true }));
+      return !shown.hidden;
+    };
+    const errors = /** @type {string[]} */ ([]);
+    const report = (/** @type {ErrorEvent} */ e) => errors.push(String(e.message));
+    window.addEventListener("error", report);
+    try {
+      main.insertAdjacentHTML("beforeend", w.__html(copy()));
+      await settle();
+      const heardAnywhere = anywhere();
+      const many = Array.from({ length: 40 }, (_, i) => `<p id="smoke-many-${i}" data-on="smoke-many:${f}(@${ref})">${i}</p>`).join("");
+      await patch(w.__html(`<template id="smoke-4-watch-form" data-append>${many}</template>`));
+      await settle();
+      note().hidden = true;
+      /** @type {Element} */ (document.getElementById("smoke-many-39")).dispatchEvent(new CustomEvent("smoke-many", { bubbles: true }));
+      const batch = !note().hidden && own.querySelectorAll.call(form(), "p[id^=smoke-many-]").length === 40;
+      // Focus on its select (named id), then the form drawn again: focus is on the new one's.
+      const first = form();
+      /** @type {HTMLElement} */ (own.querySelector.call(first, "select")).focus();
+      await patch(w.__html(copy()));
+      const kept = form() !== first && document.activeElement instanceof HTMLSelectElement && Node.prototype.contains.call(form(), document.activeElement);
+      // Focus on its first button, then the form drawn without it: focus goes to the new form.
+      const second = form();
+      /** @type {HTMLElement} */ (own.querySelector.call(second, "button")).focus();
+      await patch(w.__html(copy(false)));
+      const toForm = form() !== second && document.activeElement === form();
+      // Focus on its select, then the form taken away: focus goes to <main> around it.
+      const last = form();
+      const lastNote = note();
+      /** @type {HTMLElement} */ (own.querySelector.call(last, "select")).focus();
+      await patch(w.__html('<template id="smoke-4-watch-form" data-remove></template>'));
+      await settle();
+      const removed = !document.getElementById("smoke-4-watch-form") && document.activeElement === main;
+      // Gone from the page, its page-wide handler no longer runs.
+      lastNote.hidden = true;
+      document.body.dispatchEvent(new CustomEvent("smoke-anywhere", { bubbles: true }));
+      const stopped = lastNote.hidden;
+      return { heardAnywhere, batch, kept, toForm, removed, stopped, errors };
+    } finally {
+      window.removeEventListener("error", report);
+      const left = document.getElementById("smoke-4-watch-form");
+      if (left) own.remove.call(left);
+    }
+  }, shadowing);
+  check(
+    "a form with controls named after the members the runtime reads on it gets page-wide handlers and a batch appended to it, keeps focus through a patch, and gives it up when removed",
+    ways.heardAnywhere && ways.batch && ways.kept && ways.toForm && ways.removed && ways.stopped && !ways.errors.length,
+    JSON.stringify(ways),
+  );
+  // Its on:connect handler's `signal` aborts when it leaves the page, though the runtime reads
+  // whether it is still there past its control named isConnected: the live prices drawn in such a
+  // form open a feed stream of their own, which closes once the form is taken away.
+  const feedsBefore = await openFeeds();
+  await page.evaluate((names) => {
+    const inputs = names.map((name) => `<input type="hidden" name="${name}" value="x">`).join("");
+    const prices = /** @type {Element} */ (document.querySelector('[data-on*=".watch("]'));
+    // Its rows' remove forms go: a form inside a form is not parsed as one.
+    const life = prices.outerHTML
+      .replace(/<form[\s\S]*?<\/form>/g, "")
+      .replace(/ id="([^"]+)"/g, (_, id) => ` id="smoke-life-${id}"`)
+      .replace(/^<div([^>]*)>/, (_, attrs) => `<form id="smoke-life"${attrs.replace(/ id="[^"]*"/, "")}>${inputs}`)
+      .replace(/<\/div>$/, "</form>");
+    document.querySelector("main")?.insertAdjacentHTML("beforeend", /** @type {any} */ (window).__html(life));
+  }, shadowing);
+  /** @param {number} n */
+  const feedsAre = (n) =>
+    page
+      .waitForFunction((n) => (/** @type {any} */ (window)).__sources.filter((/** @type {EventSource} */ s) => s.url.includes("/feed/") && s.readyState !== EventSource.CLOSED).length === n, n, { timeout: 5000 })
+      .then(() => true, () => false);
+  const lifeOpened = await feedsAre(feedsBefore + 1);
+  await page.evaluate(() => {
+    const life = document.getElementById("smoke-life");
+    if (life) Element.prototype.remove.call(life);
+  });
+  const lifeClosed = await feedsAre(feedsBefore);
+  check("a form with controls named after the members the runtime reads on it ends its life when it leaves: its handler's signal aborts", lifeOpened && lifeClosed, JSON.stringify({ feedsBefore, lifeOpened, lifeClosed }));
   // A newer submit that waited for a write the network failed is not sent: it would fail the
   // same way, and the user sends it again.
   let afterFailure = 0;
@@ -1208,15 +1484,15 @@ async function run(browser) {
     !new URL(r.url()).pathname.startsWith("/feed/") &&
     shadowedPosts.push(`${r.method()} ${new URL(r.url()).pathname} ${new URLSearchParams(r.postData() ?? "").get("id")}`);
   page.on("request", onShadowed);
-  // The answer draws the watch form again: one with controls named hasAttribute and getAttribute
-  // is replaced as any other, and no corten:error says the write failed.
-  await page.evaluate(() => {
+  // The answer draws the watch form again: one with controls named after the members the runtime
+  // reads on it (`shadowing`) is replaced as any other, and no corten:error says the write failed.
+  await page.evaluate((names) => {
     document
       .getElementById("watch-form")
-      ?.insertAdjacentHTML("afterbegin", __html('<input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x">'));
+      ?.insertAdjacentHTML("afterbegin", __html(names.map((name) => `<input type="hidden" name="${name}" value="x">`).join("")));
     /** @type {any} */ (window).__shadowedErrors = 0;
     document.addEventListener("corten:error", () => (/** @type {any} */ (window).__shadowedErrors += 1));
-  });
+  }, shadowing);
   // Clicked from the page: Playwright's own click reads the form's getAttribute, which the
   // control named getAttribute shadows.
   await page.evaluate(() => /** @type {HTMLButtonElement} */ (document.querySelector("#shadowed button")).click());
@@ -1233,11 +1509,13 @@ async function run(browser) {
   }));
   // And an answer that carries such controls itself, as the server's would for a form that has
   // them: drawn as any other, its reads of the new form go through Element's own methods too.
-  const carried = await page.evaluate(async () => {
+  const carried = await page.evaluate(async (names) => {
     const { patch } = await import("corten");
     const form = /** @type {HTMLFormElement} */ (document.getElementById("watch-form"));
-    const inputs = '<input type="hidden" name="hasAttribute" value="x"><input type="hidden" name="getAttribute" value="x">';
-    const fresh = form.outerHTML.replace(/^<form[^>]*>/, (open) => open + inputs);
+    const inputs = names.map((name) => `<input type="hidden" name="${name}" value="x">`).join("");
+    // With a custom property of its own (`style={..}`), which the runtime sets through the
+    // form's `style`, a member its control named style shadows.
+    const fresh = form.outerHTML.replace(/^<form([^>]*)>/, (_, attrs) => `<form${attrs} data-vars="--smoke-shadowed:3px">${inputs}`);
     /** @type {unknown} */
     let failed = null;
     try {
@@ -1246,12 +1524,17 @@ async function run(browser) {
       failed = String(error);
     }
     const now = document.getElementById("watch-form");
-    const drawn = now !== form && !!now?.querySelector("input[name=hasAttribute]");
-    for (const input of Array.from(now?.querySelectorAll("input[name=hasAttribute], input[name=getAttribute]") ?? [])) input.remove();
+    // The new form's own querySelector is its control of that name.
+    const drawn =
+      now !== form &&
+      !!now &&
+      !!Element.prototype.querySelector.call(now, "input[name=hasAttribute]") &&
+      /** @type {CSSStyleDeclaration} */ (Reflect.get(HTMLElement.prototype, "style", now)).getPropertyValue("--smoke-shadowed") === "3px";
+    for (const name of names) document.querySelector(`#watch-form > input[name="${name}"]`)?.remove();
     return { drawn, failed };
-  });
+  }, shadowing);
   check(
-    "a patch draws again a form with controls named hasAttribute and getAttribute, and says no write failed",
+    "a patch draws again a form with controls named after the members the runtime reads on it, and says no write failed",
     redrawn.replaced && redrawn.errors === 0 && carried.drawn && carried.failed === null,
     JSON.stringify({ ...redrawn, ...carried }),
   );
@@ -3364,6 +3647,51 @@ async function run(browser) {
       );
       await redrawPage.context().close();
     } else skip("a nav row a write's page draws again brings its current link into the row's view", noSwaps);
+    // A live region around <main> that is a form with controls named after the members the runtime
+    // reads on it: a write's page draws its new text into it, the form kept.
+    if (swaps) {
+      const layoutPage = await (await browser.newContext()).newPage();
+      /** @type {string[]} */
+      const layoutErrors = [];
+      layoutPage.on("pageerror", (e) => layoutErrors.push(e.message));
+      const controls = shadowing.map((name) => `<input type="hidden" name="${name}" value="x" disabled>`).join("");
+      let drawnTimes = 0;
+      await layoutPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET" || swapped(route.request())) return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          // An attribute that changes on each draw, so the region's attributes are set and removed
+          // (through Element's own: the form's controls shadow setAttribute and removeAttribute).
+          const drawn = drawnTimes++;
+          const form = `<form id="smoke-layout-form" role="status" data-drawn="${drawn}"${drawn ? "" : " data-first"}>${controls}<span>Drawn ${drawn}</span></form>`;
+          await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(/(<header\b[^>]*>)/, `$1${form}`) });
+        },
+      );
+      await layoutPage.goto(`${base}/news#briefing`);
+      await layoutPage.evaluate(() => {
+        (/** @type {any} */ (document.getElementById("smoke-layout-form"))).__old = 1;
+        /** @type {HTMLInputElement} */ (document.querySelector("#briefing [name=email]")).value = "ada@example.com";
+        /** @type {HTMLButtonElement} */ (document.querySelector("#briefing button")).click();
+      });
+      const layoutDrawn = await layoutPage
+        .waitForFunction(() => document.querySelector("#smoke-layout-form span")?.textContent === "Drawn 1" && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 })
+        .then(() => true, () => false);
+      const layoutKept = await layoutPage.evaluate(() => {
+        const form = document.getElementById("smoke-layout-form");
+        const own = Element.prototype;
+        return (/** @type {any} */ (form))?.__old === 1 && own.getAttribute.call(form, "data-drawn") === "1" && !own.hasAttribute.call(form, "data-first");
+      });
+      check(
+        "a write's page draws its text into a live region around <main> that is a form with controls named after the members the runtime reads on it",
+        layoutDrawn && layoutKept && !layoutErrors.length,
+        JSON.stringify({ layoutDrawn, layoutKept, layoutErrors }),
+      );
+      await layoutPage.context().close();
+    } else skip("a write's page draws its text into a live region around <main> that is a form with controls named after the members the runtime reads on it", noSwaps);
     // A swap that keeps the user's place (data-keep-place) puts back a row in <main> where the user
     // scrolled it, and its current link is left there, out of view. The row is put in <main> on its
     // way from the server, its current link first.
@@ -3416,6 +3744,103 @@ async function run(browser) {
       );
       await keptPage.context().close();
     } else skip("a swap that keeps the user's place leaves a row in <main> where the user scrolled it", noSwaps);
+    // A data-keep-place form with controls named after the members the runtime reads on it (its
+    // `closest` as the navigation's source, its scroll, its `focus`), drawn so by the server and
+    // scrolling on its own: the swap keeps the form's scroll and focus on the box changed.
+    if (swaps) {
+      const keptPage = await (await browser.newContext({ viewport: { width: 800, height: 400 } })).newPage();
+      /** @type {string[]} */
+      const keptErrors = [];
+      keptPage.on("pageerror", (e) => keptErrors.push(e.message));
+      const controls = ["closest", "matches", "getAttribute", "scrollTop", "scrollLeft", "scrollTo", "focus", "contains"].map((name) => `<input type="hidden" name="${name}" value="x" disabled>`).join("");
+      await keptPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(/(<form\b[^>]*data-keep-place[^>]*>)/, `$1${controls}`) });
+        },
+      );
+      await keptPage.goto(`${base}/news`);
+      await keptPage.evaluate(() => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync("main form[data-keep-place] { max-height: 6rem !important; overflow: auto !important }");
+        document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+      });
+      const settled = () => keptPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      await settled();
+      const formTop = () => keptPage.evaluate(() => Math.round(Reflect.get(Element.prototype, "scrollTop", /** @type {Element} */ (document.querySelector("main form[data-keep-place]")))));
+      await keptPage.evaluate(() => {
+        // Its box is in a group the server draws closed.
+        for (const group of Array.from(document.querySelectorAll("main form[data-keep-place] details"))) /** @type {HTMLDetailsElement} */ (group).open = true;
+        const box = /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]"));
+        box.focus({ preventScroll: true });
+        Element.prototype.scrollTo.call(/** @type {Element} */ (document.querySelector("main form[data-keep-place]")), 0, 40);
+      });
+      await settled();
+      const before = await formTop();
+      await keptPage.keyboard.press("Space");
+      const swapped = await keptPage
+        .waitForFunction(() => location.search === "?mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks", null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await settled();
+      const after = {
+        top: await formTop(),
+        focused: await keptPage.evaluate(() => document.activeElement && Element.prototype.getAttribute.call(document.activeElement, "name")),
+        drawn: await keptPage.evaluate(() => !!document.querySelector("main form[data-keep-place] input[name=closest]")),
+      };
+      check(
+        "a data-keep-place form with controls named closest, scrollTo, focus and the like keeps its scroll and focus through the swap",
+        before > 0 && swapped && after.drawn && Math.abs(after.top - before) <= 1 && after.focused === "mine" && !keptErrors.length,
+        JSON.stringify({ before, swapped, after, keptErrors }),
+      );
+      await keptPage.context().close();
+    } else skip("a data-keep-place form with controls named closest, scrollTo, focus and the like keeps its scroll and focus through the swap", noSwaps);
+    // Focus kept by a swap on an element that is not HTML (a chart's point, in SVG): its own focus
+    // is SVGElement's, which the swap calls rather than HTMLElement's.
+    if (swaps) {
+      const svgPage = await (await browser.newContext()).newPage();
+      /** @type {string[]} */
+      const svgErrors = [];
+      svgPage.on("pageerror", (e) => svgErrors.push(e.message));
+      await svgPage.route(
+        (url) => url.pathname === "/news",
+        async (route) => {
+          if (route.request().method() !== "GET") return route.fallback();
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          const chart = `<svg id="smoke-chart" width="40" height="40"><a id="smoke-point" href="#smoke-chart" tabindex="0"><circle cx="20" cy="20" r="10"></circle></a></svg>`;
+          const body = await res.text();
+          await route.fulfill({ status: res.status(), headers, body: /<main\b/.test(body) ? body.replace(/(<main\b[^>]*>)/, `$1${chart}`) : body.replace("<div", `${chart}<div`) });
+        },
+      );
+      await svgPage.goto(`${base}/news`);
+      const focusedBefore = await svgPage.evaluate(() => {
+        const point = /** @type {SVGElement} */ (document.getElementById("smoke-point"));
+        point.focus({ preventScroll: true });
+        const mine = /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]"));
+        mine.checked = !mine.checked;
+        mine.dispatchEvent(new Event("input", { bubbles: true }));
+        mine.dispatchEvent(new Event("change", { bubbles: true }));
+        return document.activeElement === point;
+      });
+      const swapped = await svgPage
+        .waitForFunction(() => location.search === "?mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks", null, { timeout: 5000 })
+        .then(() => true, () => false);
+      await svgPage.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      const focusedAfter = await svgPage.evaluate(() => document.activeElement?.id ?? "");
+      check(
+        "a swap that keeps the user's place gives focus back to an SVG element",
+        focusedBefore && swapped && focusedAfter === "smoke-point" && !svgErrors.length,
+        JSON.stringify({ focusedBefore, swapped, focusedAfter, svgErrors }),
+      );
+      await svgPage.context().close();
+    } else skip("a swap that keeps the user's place gives focus back to an SVG element", noSwaps);
     // The same when the row's scroll event has not come yet as the page is swapped: focus in the row
     // (a link the user tabbed to, which scrolls it) and the row scrolled with its scroll events held
     // back, then the filter changed without moving focus.
@@ -3668,6 +4093,22 @@ async function run(browser) {
     await page.hover("#prefetch");
     await page.waitForTimeout(300);
     check("data-no-prefetch: hovering the link fetches nothing", afterOptOut === 0 && navRequests.length === 1, `${afterOptOut} then ${navRequests.join()}`);
+    // The pointer resting on a form with a control named closest (the form itself the target): the
+    // hover's dwell looks for a link around it and throws nothing.
+    const hovered = await page.evaluate(async () => {
+      const form = document.createElement("form");
+      form.innerHTML = __html('<input type="hidden" name="closest" disabled>');
+      document.querySelector("main")?.append(form);
+      let thrown = "";
+      const caught = (/** @type {ErrorEvent} */ e) => (thrown = e.message);
+      addEventListener("error", caught);
+      form.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+      await new Promise((done) => setTimeout(done, 200));
+      removeEventListener("error", caught);
+      form.remove();
+      return thrown;
+    });
+    check("the pointer resting on a form with a control named closest throws nothing", hovered === "", hovered);
 
     // The prefetch cache keeps the 8 newest pages: after hovering 9 links, following the newest
     // reuses its prefetch and following the oldest fetches it again. The links sit in the shell,
@@ -3837,6 +4278,7 @@ async function run(browser) {
     for (const name of [
       'data-nav="section" marks the link on pages under it',
       "data-no-prefetch: hovering the link fetches nothing",
+      "the pointer resting on a form with a control named closest throws nothing",
       "prefetch keeps the 8 newest pages",
       "a link followed during its hover's dwell is fetched once, with no prefetch of its page",
       "a prefetch dropped before it answers is aborted",
@@ -4123,6 +4565,34 @@ async function run(browser) {
     const refusedLogs = errors.slice(errorsAtRefusal);
     check("a refused field logs no console error of Corten's", refusedLogs.every((e) => e.includes("422")), refusedLogs.join(" | "));
     errors.splice(errorsAtRefusal);
+    // The same refusal from a form with controls named after the members the runtime reads on it
+    // (whether it is on the page and holds focus): focus goes from its button to the marked field.
+    // Sent by keys: Playwright's own fill and click read the form's getAttribute.
+    const errorsAtShadowed = errors.length;
+    await page.evaluate((names) => {
+      const form = /** @type {Element} */ (document.getElementById("alert-form"));
+      form.insertAdjacentHTML("afterbegin", __html(names.map((name) => `<input type="hidden" name="${name}" value="x" disabled>`).join("")));
+      /** @type {HTMLInputElement} */ (Element.prototype.querySelector.call(form, "input[name=above]")).value = "1.235";
+      /** @type {HTMLElement} */ (Element.prototype.querySelector.call(form, "button")).focus();
+    }, shadowing);
+    await page.keyboard.press("Enter");
+    const shadowRefused = await page
+      .waitForFunction(
+        () => {
+          const field = document.querySelector('#alert-form input[name=above][aria-invalid="true"]');
+          return !!field && document.activeElement === field && !document.querySelector("#alert-form input[name=hasAttribute]");
+        },
+        null,
+        { timeout: 5000 },
+      )
+      .then(() => true, () => false);
+    const shadowLogs = errors.slice(errorsAtShadowed);
+    check(
+      "a refused field in a form with controls named after the members the runtime reads on it gets focus",
+      shadowRefused && shadowLogs.every((e) => e.includes("422")),
+      shadowLogs.join(" | "),
+    );
+    errors.splice(errorsAtShadowed);
     await page.evaluate(() => ((/** @type {any} */ (window)).__marker = 7));
     await submit();
     await savedSoon();
