@@ -2684,6 +2684,17 @@ Corten is pre-1.0, so any minor version may change the API.
     and its smoke test checks the dot is the badge's text color in a soft badge and a solid one, and
     that a `Success` dot beside plain text is the theme's success color
     ([#1092 Kit StatusDot and Badge take separate tone enums, so a badge with a computed tone writes it twice and a mismatched pair compiles](https://github.com/corten-run/corten/issues/1092)).
+285. Leptos joins `bench/fullstack`'s matched tier: under `PROFILE=matched` it adds axum-maud's
+    tower-http layers and a page CSP whose scripts run by the nonce Leptos makes for each
+    response, and its matched matrix meets the same 12 of 24 columns as axum-maud's
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+286. Topcoat joins `bench/fullstack`'s matched tier: under `PROFILE=matched` it runs axum-maud's
+    tower-http header layers and timeout through Topcoat's `TowerLayer` (its body limit, origin
+    check and compression are Topcoat's defaults), with `'unsafe-eval'` in its CSP (on every answer
+    the layer sets headers on) because its runtime compiles the page's expressions with `new
+    Function`. Answers Topcoat makes from an error go without the profile's headers. Its matched
+    matrix meets 13 of 24 columns
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4293,6 +4304,17 @@ Corten is pre-1.0, so any minor version may change the API.
     in place of the pager, which the guides now say
     ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
 
+169. The image `corten new` writes (and card-market's) runs jemalloc with
+    `MALLOC_CONF=background_thread:true,tcache_max:65536`, a third line beside the two that preload
+    it. The background thread returns a flood's memory while the app is idle (eight floods of
+    unfinished heads left 13 to 16 MiB of `memory.current`, against 118 to 139 without it and 406 to
+    455 on glibc's allocator, three runs each). The larger thread cache keeps brotli's buffers:
+    brotli responses took 19.3 to 19.4 page faults each on average before, and none now. glibc's own
+    tunables were tried: fewer arenas changed nothing, and a lower mmap threshold left about 180
+    MiB, still growing. `bench/fullstack/flood-memory.mjs` drives the floods, `alloc-faults.mjs`
+    counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
+    every row and removes its app however the run ends
+    ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 172. The kit's `Card` and `CardPanel` take a `size` (`CardSize::Md`, the theme's `--card-padding`,
     or `Sm`, denser), as `Button`, `Dialog` and `Progress` do, and `CardCompact` is gone: it was a
     class written beside a card (`(Card {}, CardCompact {})`) that compiled alone or beside any
@@ -4307,8 +4329,27 @@ Corten is pre-1.0, so any minor version may change the API.
     and `corten ui add card --force` (an unedited copy) or `--merge` (an edited one) takes
     `card.rs` and `card.css`
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
+177. An integer of 100 or more that markup or a message writes (`{count}`) goes into the page two
+    digits at a time, one `push_str` of a pair from a table in place of one `push` a digit. The
+    text is unchanged. Measured with callgrind (release build, three alternated runs each, 500
+    items at 2 and 12 rounds, the difference over 5,000), one item through `render_cost`'s
+    first two loops (build the page's view; build it and render its main) takes 45,032-45,528
+    instructions (median 45,319) instead of 47,089-47,292 (median 47,160), about 1,840 fewer.
+    The standard library's `NumBuffer` would raise the minimum Rust to 1.98 for no measured gain
+    on the page: counted the same way in a second session, it takes 45,186-45,427 (median 45,301)
+    against this change's 45,249-45,492 (median 45,418), less than either's spread. Alone, it
+    writes a three- or four-digit number in as many instructions as this, a six-digit one in about
+    15% fewer, a nine- or ten-digit one in about a third fewer, and one of nineteen or twenty
+    digits in half
+    ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
 ### Fixed
+- A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
+  feed load, relay or JetStream consumer, is logged as the error itself, so Corten's log line
+  adds each source's message (`error.sources`): an HTTP client's "error sending request" now
+  names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
+  message
+  ([#1127 Benchmark r17: Corten returns two HTTP 500s fetching upstream during page load](https://github.com/corten-run/corten/issues/1127)).
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
   flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
@@ -6497,6 +6538,13 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+77. [Design Choice 33](docs/design.md#choice-state-derives) records why shared state keeps
+    `#[derive(Clone, FromRef)]` rather than a `#[corten::state]` attribute that writes both: `Clone`
+    is what routing and a handler taking the whole state need, `FromRef` what a handler taking one
+    part needs, and the attribute would take one word off the three routed example state types that
+    derive both while giving three of the four that derive `Clone` alone (the fourth is an enum,
+    which `FromRef` does not take) a third way to write theirs
+    ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 78. Which tables sort in place is decided and measured: every table whose page has all its rows,
     also when other routes read its order. `bench/browser/sort-cost.mjs` times a sort click with
     `rows::sort` against a swap of the server-sorted table, fetched at the click or before it, and

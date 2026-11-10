@@ -11,7 +11,7 @@ your routes. Each default can be replaced in one line.
 | Names it answers to | `localhost`, IP addresses; any other `Host` gets `421` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
-| What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; `#[derive(Clone, FromRef)]` on `Shared` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out) |
+| What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; on `Shared`, `#[derive(Clone, FromRef)]`: `Clone` lets each route have a copy and a handler take the whole state, and `FromRef` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out; [design Choice 33](../design.md#choice-state-derives)) |
 | What a route answers | its handler's return type: `HtmlResult` (a page, a patch, a redirect; failures are the error page) or `JsonResult<T>` (failures are JSON too; `Result<JsonResponse, JsonError>` for a status or cookie of the handler's own, or another server's answer passed on) | `Public<..>` around either for an answer that is the same for everyone, `NoStore<..>` (or `no_store` on the route) for one nothing may keep ([below](#caching)) |
 | The client's address | the connection's peer; no `X-Forwarded-For` is read | a handler takes `ClientIp`; behind a proxy, `PROXIES=10.0.0.0/8` in the environment or `Policy::proxy("10.0.0.0/8")` ([below](#the-clients-address)) |
 | Who is asking | nothing: no lookup runs | a handler takes `Caller<Viewer>` (`Viewer: Identify`), looked up only then, once per request ([below](#who-is-asking)) |
@@ -84,16 +84,28 @@ from flood to flood, which is how it was told from a leak (no allocation count w
 mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
 left 167 MiB, still rising about 18 MiB a flood
 ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+The same floods driven by `bench/fullstack/flood-memory.mjs` (three runs each, the cgroup's
+`memory.current` 35 seconds after the last flood) left 406 to 455 MiB on glibc's allocator, and its
+tunables did not stop it: two arenas or one left 382 to 452 MiB, and a 16 KiB mmap threshold 177 to
+184 MiB, still climbing 20 MiB a flood. jemalloc as it comes left 118 to 139 MiB, since it returns
+memory only while the app allocates (more than the earlier run's 45 MiB 35 seconds after the last
+flood, taken by `docker stats` on a build of `e751d127`, for a cause not found; the sizing below
+uses this run);
+with its background thread
+(`MALLOC_CONF=background_thread:true`) the same app idle went back to 7 to 11 MiB
+([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
-room to spare, sized from the peak repeated floods reach rather than the first. The Dockerfile
-`corten new` writes preloads jemalloc in the image's last stage, which gives the memory back
-between floods at no measured cost per request ([design Choice 23](../design.md#choice-jemalloc-image)).
-An image of the app's own adds the same two lines, before any `USER` line; removing them runs
-the app on glibc's allocator:
+room to spare, sized from the peak repeated floods reach rather than the first: 187 to 197 MiB for
+4,000 here with the background thread, about 48 KiB a connection (sampled a second before each
+flood's hold ended). The Dockerfile `corten new` writes preloads jemalloc in the image's last
+stage with that background thread and a 64 KiB thread cache, which keeps brotli's buffers between
+responses ([design Choice 23](../design.md#choice-jemalloc-image)). An image of the app's own adds
+the same three lines, before any `USER` line; removing them runs the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
+ENV MALLOC_CONF=background_thread:true,tcache_max:65536
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
@@ -2536,10 +2548,16 @@ go on the answer as a header (which the error page keeps), but the page's body c
 When the lookup itself fails, an optional caller is `None` there, so the page is drawn signed
 out rather than not at all. Keeping the credentials for it is measured below.
 
-`failure.detail()` is what went wrong, under `corten dev` only; in production it is logged. A
-debug build's error about the app's own code (a component it does not serve, a `Refresh`
-header, a write redirected outside `form-action`) is the exception: it is set in every debug
-build, so a router test's error page names it.
+`failure.detail()` is what went wrong, under `corten dev` only; in production it is logged as
+the error itself, so Corten's log line names each error under the message as `error.sources`
+(the reset connection under an HTTP client's "error sending request"). A subscriber of the
+app's own decides how to show them: `tracing-subscriber`'s text format does the same, its JSON
+format writes the message alone. Each source's message is its library's own and can quote what it
+read (a JSON error names the value it could not parse, so part of an upstream answer), as the
+message above it could already (an HTTP client's names the URL); none of it reaches the client.
+A debug build's error about the app's own code (a component it
+does not serve, a `Refresh` header, a write redirected outside `form-action`) is the exception:
+it is set in every debug build, so a router test's error page names it.
 The error page `corten new` writes names every case without `_`, so when Corten adds one the
 app stops compiling instead of showing the wrong text. A JSON route's failures, a data
 client's and every failure under `App::api` are a JSON Problem Details document instead
