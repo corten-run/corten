@@ -932,7 +932,8 @@ impl<E: std::error::Error + Send + Sync + 'static> From<E> for Error {
 
 /// A handler refuses the request as an extractor does: `Err(Refused::forbidden())?` (or
 /// `.into()`). It is answered as a [`Caller`]'s refusal is: the error page for a browser, at the
-/// refusal's status (a sign-in is a redirect, a 429 carries `Retry-After`), and the page treats it
+/// refusal's status (a sign-in is a redirect, a 429 carries `Retry-After`, a 401 its challenge in
+/// `WWW-Authenticate`), and the page treats it
 /// as the request's fault, so it draws the layout's reads ([`LayoutRead`]) as for a 404. A plain
 /// `Error::status(StatusCode::FORBIDDEN)` stays a failure that may be the app's own (a service
 /// that is down answered with a 4xx), which starts none.

@@ -502,11 +502,11 @@ try {
   const anonymousBody = await anonymous.json().catch(() => null);
   check(
     "a partner write without an API key is a Problem Details 401 that says what to send",
-    anonymous.status === 401 && anonymous.headers.get("content-type") === "application/problem+json" && anonymous.headers.get("www-authenticate") === "Bearer" && anonymousBody?.status === 401 && anonymousBody?.detail === "Send a valid partner API key as a bearer token.",
+    anonymous.status === 401 && anonymous.headers.get("content-type") === "application/problem+json" && anonymous.headers.get("www-authenticate") === 'Bearer realm="partners"' && anonymousBody?.status === 401 && anonymousBody?.detail === "Send a valid partner API key as a bearer token.",
     `${anonymous.headers.get("content-type")} ${anonymous.headers.get("www-authenticate")} ${JSON.stringify(anonymousBody)}`,
   );
   const wrong = await alertFrom({ authorization: "Bearer wrong" });
-  check("a wrong key is a 401 that says the token is not valid", wrong.status === 401 && wrong.headers.get("www-authenticate") === 'Bearer error="invalid_token"', `${wrong.status} ${wrong.headers.get("www-authenticate")}`);
+  check("a wrong key is a 401 that says the token is not valid", wrong.status === 401 && wrong.headers.get("www-authenticate") === 'Bearer realm="partners", error="invalid_token"', `${wrong.status} ${wrong.headers.get("www-authenticate")}`);
   const keyed = await alertFrom({ authorization: "Bearer dev-key" });
   const keyedBody = await keyed.json().catch(() => null);
   check("with its key the partner's alert is set", keyed.status === 200 && keyedBody?.partner === "dev" && /^Alert set: /.test(keyedBody?.message ?? ""), JSON.stringify(keyedBody));

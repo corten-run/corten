@@ -4402,7 +4402,7 @@ impl<S: Sync> crate::Identify<S> for Keyed {
             Some(b"Bearer k1") => Ok(Keyed),
             Some(b"Bearer locked") => Err(crate::Refused::too_many(std::time::Duration::from_millis(1500))
                 .message("Too many failed attempts; try again later")),
-            _ => Err(crate::Refused::unauthorized(crate::Challenge::BEARER.param("realm", "keys")).message("Invalid API key")),
+            _ => Err(crate::Refused::unauthorized(crate::Challenge::bearer("keys")).message("Invalid API key")),
         }
     }
 }
@@ -4463,9 +4463,7 @@ async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
             Some(b"forbid") => crate::Refused::forbidden().message("Not your item"),
             Some(b"lock") => crate::Refused::too_many(std::time::Duration::from_millis(1500)).message("Slow down"),
             Some(b"down") => crate::Refused::unavailable("the session store is down"),
-            Some(b"key") => {
-                crate::Refused::unauthorized(crate::Challenge::BEARER.param("error", "invalid_token")).message("Bad key")
-            }
+            Some(b"key") => crate::Refused::unauthorized(crate::Challenge::basic("shop")).message("Bad key"),
             _ => return Ok("ok"),
         };
         Err(refused.into())
@@ -4487,7 +4485,7 @@ async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
         let got = (res.status().as_u16(), res.headers().get("retry-after").map(|v| v.to_str().unwrap().to_owned()));
         assert_eq!(got, (status, retry.map(str::to_owned)), "{case}");
         let challenge = res.headers().get("www-authenticate").map(|v| v.to_str().unwrap().to_owned());
-        let want = (status == 401).then(|| r#"Bearer error="invalid_token""#.to_owned());
+        let want = (status == 401).then(|| r#"Basic realm="shop""#.to_owned());
         assert_eq!(challenge, want, "a handler's own 401 keeps its challenge: {case}");
         let body = res.into_body().collect().await.unwrap().to_bytes();
         let want = format!(r#"{{"type":"error","error":{{"code":{status},"message":{message:?}}}}}"#);
@@ -8330,7 +8328,7 @@ impl<S: Sync> crate::Identify<S> for Partner {
     async fn identify(parts: &http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
         match parts.headers.get("authorization").map(|v| v.as_bytes()) {
             Some(b"Bearer k1") => Ok(Partner("acme")),
-            _ => Err(crate::Refused::unauthorized(crate::Challenge::BEARER)),
+            _ => Err(crate::Refused::unauthorized(crate::Challenge::bearer("partners"))),
         }
     }
 }
@@ -8823,11 +8821,11 @@ async fn a_caller_with_nowhere_to_sign_in_is_a_401_page() {
     let (status, res, body) = guarded(&router, "GET", "/partner", None, &[("accept", "text/html")]).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!res.contains_key("location") && body.contains("Something went wrong"), "{body}");
-    assert_eq!(res["www-authenticate"], "Bearer", "the error page keeps the challenge every 401 sends");
+    assert_eq!(res["www-authenticate"], r#"Bearer realm="partners""#, "the error page keeps the challenge every 401 sends");
     let (status, res, _) = guarded(&router, "GET", "/partner", None, &[("corten", "action")]).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(res.contains_key("corten-page"), "a form patch gets the error page to swap in");
-    assert_eq!(res["www-authenticate"], "Bearer", "and so does the page swapped in");
+    assert_eq!(res["www-authenticate"], r#"Bearer realm="partners""#, "and so does the page swapped in");
     let (status, _, body) = guarded(&router, "GET", "/partner", None, &[("authorization", "Bearer k1")]).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "acme"));
 }
@@ -8921,7 +8919,7 @@ async fn a_json_route_answers_every_failure_as_json_whatever_the_client_accepts(
         let (status, res, body) = guarded(&router, "GET", "/api/price/7", None, headers).await;
         assert_eq!((status, &body[..]), (StatusCode::UNAUTHORIZED, r#"{"title":"Unauthorized","status":401}"#), "{accept:?}");
         assert_eq!(res["content-type"], "application/problem+json");
-        assert_eq!(res["www-authenticate"], "Bearer", "{accept:?}");
+        assert_eq!(res["www-authenticate"], r#"Bearer realm="partners""#, "{accept:?}");
         let (status, _, body) = guarded(&router, "GET", "/api/price/abc", None, headers).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{accept:?}");
         assert!(body.starts_with(r#"{"title":"Bad Request","status":400,"#), "a path that does not parse: {body}");

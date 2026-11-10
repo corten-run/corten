@@ -258,7 +258,7 @@ impl Authorization {
         // RFC 9728 3.1: the well-known path goes between the host and the resource's path.
         let well_known = format!("/.well-known/oauth-protected-resource{}", path.trim_end_matches('/'));
         let metadata = format!("{}{well_known}", self.origin);
-        let mut unauthorized = crate::Challenge::BEARER.param("resource_metadata", &metadata);
+        let mut unauthorized = crate::Challenge::new("Bearer").param("resource_metadata", &metadata);
         if !self.scopes.is_empty() {
             unauthorized = unauthorized.param("scope", &self.scopes.join(" "));
         }
@@ -617,7 +617,7 @@ impl<A: Send + 'static> Tools<A> {
             ToolError::Invalid(message) => {
                 let mut res = reply(id, Err((-32600, format!("invalid request: {message}"))));
                 *res.status_mut() = StatusCode::BAD_REQUEST;
-                let challenge = crate::Challenge::BEARER.param("error", "invalid_request");
+                let challenge = crate::Challenge::new("Bearer").param("error", "invalid_request");
                 res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.value().clone());
                 return res;
             }
@@ -642,7 +642,7 @@ impl<A: Send + 'static> Tools<A> {
     fn unauthorized(&self, id: Value, sent: bool) -> Response {
         let mut res = reply(id, Err((-32001, "unauthorized".into())));
         *res.status_mut() = StatusCode::UNAUTHORIZED;
-        let mut challenge = self.challenge.get().map_or(crate::Challenge::BEARER, |c| c.unauthorized.clone());
+        let mut challenge = self.challenge.get().map_or(crate::Challenge::new("Bearer"), |c| c.unauthorized.clone());
         if sent {
             challenge = challenge.param("error", "invalid_token");
         }
@@ -660,7 +660,7 @@ impl<A: Send + 'static> Tools<A> {
 
     /// The 403's `WWW-Authenticate` for a call that needs `scope`.
     fn insufficient_scope(&self, scope: &str) -> HeaderValue {
-        let mut value = crate::Challenge::BEARER.param("error", "insufficient_scope");
+        let mut value = crate::Challenge::new("Bearer").param("error", "insufficient_scope");
         if scope.split(' ').all(scope_token) {
             value = value.param("scope", scope);
         } else {
@@ -1007,8 +1007,11 @@ mod tests {
             ("two words", StatusCode::BAD_REQUEST, -32600),
         ] {
             for method in ["initialize", "tools/list", "tools/call"] {
-                let (got, _, body) = send(&app, rpc(token, method)).await;
+                let (got, headers, body) = send(&app, rpc(token, method)).await;
                 assert_eq!(got, status, "{token} {method}: {body}");
+                // A malformed request is told so in the challenge (RFC 6750 3.1); the others carry none.
+                let challenge = (status == StatusCode::BAD_REQUEST).then_some(r#"Bearer error="invalid_request""#);
+                assert_eq!(headers.get("www-authenticate").map(|v| v.to_str().unwrap()), challenge, "{token} {method}");
                 let body: Value = serde_json::from_str(&body).unwrap();
                 assert_eq!(body["error"]["code"], code, "{token} {method}");
                 assert!(body.get("result").is_none(), "{token} {method}: no tools listed");
@@ -1171,7 +1174,7 @@ mod tests {
 
     impl crate::Middleware for Deny {
         async fn call(&self, _: crate::extract::Request, _: impl crate::middleware::Next) -> Response {
-            crate::Refused::unauthorized(crate::Challenge::BEARER).into_response()
+            crate::Refused::unauthorized(crate::Challenge::basic("tools")).into_response()
         }
     }
 
@@ -1188,7 +1191,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK, "{body}");
         let (status, headers, _) = send(&app, adjust(None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "the API's own route meets its middleware");
-        assert_eq!(headers["www-authenticate"], "Bearer", "a middleware's refusal keeps its challenge");
+        assert_eq!(headers["www-authenticate"], r#"Basic realm="tools""#, "a middleware's refusal keeps its challenge");
     }
 
     #[derive(crate::Route)]

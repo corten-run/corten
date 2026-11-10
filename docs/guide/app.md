@@ -1614,9 +1614,9 @@ crate compiles, so no route is left out or described as less than it is. Corten'
 answers do, a protocol switch's `Upgrade` and `Switch` and a stream's `since` and
 `Last-Event-ID` included. An extractor of the app's own implements `corten::openapi::Argument`,
 empty when the document has nothing to show of it (a session, a pool), with
-`Operation::bearer("..")` for a key or token it checks (`Operation::api_key("x-api-key", "..")`
-for a header of an existing API's own, which no 401 challenge can name)
-(a security scheme of the document, which `Option<Caller<..>>` makes optional), or with
+`Operation::bearer("..")` for a key or token it checks, or `Operation::api_key("x-api-key", "..")`
+for a header of an existing API's own, which no 401 challenge can name (each a security scheme
+of the document, which `Option<Caller<..>>` makes optional), or with
 `Operation::header` for another header it reads; for another crate's type, a newtype around it
 implements it. What the types cannot say is described as what it is: a `JsonResponse` or a
 `StatusCode` is a 2XX the handler chooses, a `Relay` or a `Media` any content, a body the
@@ -2041,7 +2041,7 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
 | `identify` says | Page, or a form post without JavaScript | Form patch | Data client, JSON route |
 |---|---|---|---|
 | `Ok(caller)` | the handler runs | the handler runs | the handler runs |
-| `Refused::sign_in(&route)` | 303 to the route (`corten-location` to the runtime's fetch when the route is on another site or names a place) | `corten-location`, and the runtime goes there | JSON 401 |
+| `Refused::sign_in(&route)` | 303 to the route (`corten-location` to the runtime's fetch when the route is on another site or names a place) | `corten-location`, and the runtime goes there | JSON 401, without `WWW-Authenticate` |
 | `Refused::unauthorized(challenge)` | the error page, `Failure::Refused` (401), with `WWW-Authenticate` | the error page, swapped in, with `WWW-Authenticate` | JSON 401, with `WWW-Authenticate` |
 | `Refused::forbidden()` | the error page, `Failure::Refused` (403) | the error page, swapped in | JSON 403 |
 | `Refused::too_many(wait)` | the error page, `Failure::Refused` (429), with `Retry-After` | the error page, swapped in | JSON 429, with `Retry-After` |
@@ -2059,7 +2059,7 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
 4. Callers of different kinds are different types with their own lookup: `Caller<Viewer>` from
    a session cookie on the pages, `Caller<Partner>` from a key sent as a bearer token
    (`Authorization: Bearer <key>`) on a `JsonResult` route, where a missing key is a JSON 401
-   with `WWW-Authenticate: Bearer`. A type that is a rule over another
+   with `WWW-Authenticate: Bearer realm="partners"`. A type that is a rule over another
    (staff is a viewer with a role) reads the other in its `identify` with
    `let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;`, so the session is read
    once in the request whichever of the two the handler, a middleware and the error page take.
@@ -2100,14 +2100,17 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    is how the lookup says the count is reached, checked before the credentials so a locked-out
    client learns nothing about them.
    A 401 says how to send credentials (RFC 9110 requires it): `Refused::unauthorized` takes the
-   `Challenge` that goes in `WWW-Authenticate`, `Challenge::BEARER` for a key or token
-   in `Authorization` (RFC 6750), with `.param("error", "invalid_token")` when the one sent is
-   wrong. `Challenge::basic(realm)` makes a browser show its own sign-in prompt. A key in a header of the app's own
+   `Challenge` that goes in `WWW-Authenticate`, `Challenge::bearer("partners")` for a key or
+   token in `Authorization` (RFC 6750, whose challenge names a realm), with
+   `.param("error", "invalid_token")` when the one sent is wrong, and no error when the request
+   sent none or another scheme's credentials (RFC 6750 3.1). `Challenge::basic(realm)` makes a
+   browser show its own sign-in prompt. A key in a header of the app's own
    (`X-Api-Key`) has no scheme to name, so send it as a bearer token; an API whose clients
    already send that header takes the key as a bearer token too and challenges `Bearer`. Another
    scheme is a `const` of the app's (`const NEGOTIATE: Challenge = Challenge::new("Negotiate");`),
    so one that is not a token does not compile (called elsewhere, `new` checks it as it runs);
-   a parameter's value is always sent quoted and in ASCII. `Refused::sign_in`'s 401
+   a parameter's value is always sent quoted and in ASCII, and is checked when the refusal is
+   made, so a test that sends a refused request finds a mistake in it. `Refused::sign_in`'s 401
    to a data client has no challenge: a session cookie has no HTTP authentication scheme. A lookup
    that also takes a token refuses a request that sent one with `unauthorized`.
 8. A check that depends on the record (only the author may edit a draft) stays in the handler,

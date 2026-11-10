@@ -62,7 +62,7 @@
 //!
 //! impl<S: Sync> Identify<S> for Partner {
 //!     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-//!         Err(Refused::unauthorized(Challenge::BEARER))
+//!         Err(Refused::unauthorized(Challenge::bearer("partners")))
 //!     }
 //! }
 //!
@@ -98,7 +98,7 @@
 //!
 //! impl<S: Sync> Identify<S> for Partner {
 //!     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-//!         Err(Refused::unauthorized(Challenge::BEARER))
+//!         Err(Refused::unauthorized(Challenge::bearer("partners")))
 //!     }
 //! }
 //!
@@ -1047,7 +1047,7 @@ mod tests {
 
     impl<S: Sync> crate::Identify<S> for Partner {
         async fn identify(_: &crate::http::request::Parts, _: &S) -> Result<Self, crate::Refused> {
-            Err(crate::Refused::unauthorized(crate::Challenge::BEARER))
+            Err(crate::Refused::unauthorized(crate::Challenge::bearer("partners")))
         }
     }
 

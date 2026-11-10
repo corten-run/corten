@@ -176,8 +176,8 @@ impl Identify<ApiState> for Partner {
     async fn identify(parts: &Parts, state: &ApiState) -> Result<Self, Refused> {
         let refused = match (state.partners.named(&parts.headers), Partners::sent(&parts.headers)) {
             (Some(name), _) => return Ok(Partner { name: name.clone() }),
-            (None, None) => Refused::unauthorized(Challenge::BEARER),
-            (None, Some(_)) => Refused::unauthorized(Challenge::BEARER.param("error", "invalid_token")),
+            (None, None) => Refused::unauthorized(Challenge::bearer("partners")),
+            (None, Some(_)) => Refused::unauthorized(Challenge::bearer("partners").param("error", "invalid_token")),
         };
         Err(refused.message("Send a valid partner API key as a bearer token."))
     }
@@ -1397,7 +1397,9 @@ mod tests {
         let app = app();
         let alert = r#"{"id":"item_9","email":"ada@example.com","target_price":"0.40"}"#;
         // No key: send one; a wrong one: it is not valid (RFC 6750 3.1).
-        for (key, challenge) in [(None, "Bearer"), (Some("wrong"), r#"Bearer error="invalid_token""#)] {
+        for (key, challenge) in
+            [(None, r#"Bearer realm="partners""#), (Some("wrong"), r#"Bearer realm="partners", error="invalid_token""#)]
+        {
             let res = partner(&app, key, alert).await;
             assert_eq!(
                 (res.status(), res.text()),

@@ -67,7 +67,7 @@
 //!
 //! impl<S: Sync> Identify<S> for Partner {
 //!     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-//!         Err(Refused::unauthorized(Challenge::BEARER))
+//!         Err(Refused::unauthorized(Challenge::bearer("partners")))
 //!     }
 //! }
 //!
@@ -113,7 +113,7 @@ use crate::{route::Href, Error, Signal};
 ///
 /// impl<S: Sync> Identify<S> for Viewer {
 ///     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-///         Err(Refused::unauthorized(Challenge::BEARER))
+///         Err(Refused::unauthorized(Challenge::bearer("app")))
 ///     }
 /// }
 ///
@@ -188,7 +188,7 @@ impl Refused {
 
     /// No credentials, and nowhere to sign in (an API key that is missing or wrong): a 401 with
     /// `challenge` in `WWW-Authenticate` (RFC 9110 15.5.2), saying how the client should send
-    /// them: `Refused::unauthorized(Challenge::BEARER)`. It takes one, so none is left out:
+    /// them: `Refused::unauthorized(Challenge::bearer("partners"))`. It takes one, so none is left out:
     ///
     /// ```compile_fail,E0061
     /// let _ = corten::Refused::unauthorized();
@@ -256,13 +256,14 @@ impl Refused {
 ///         // The scheme is matched in any case (RFC 9110 11.1).
 ///         let sent = parts.headers.get("authorization").and_then(|v| v.to_str().ok());
 ///         let key = sent.and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"));
-///         match (sent, key.map(|(_, key)| key)) {
-///             // No key: say how to send one.
-///             (None, _) => Err(Refused::unauthorized(Challenge::BEARER)),
+///         match key.map(|(_, key)| key) {
+///             // No key, or another scheme's credentials: say how to send one, and no error
+///             // (RFC 6750 3.1).
+///             None => Err(Refused::unauthorized(Challenge::bearer("partners"))),
 ///             // A real app looks the key up here.
-///             (_, Some("dev-key")) => Ok(Partner { name: "dev".into() }),
-///             // A key that is wrong (RFC 6750 3.1).
-///             _ => Err(Refused::unauthorized(Challenge::BEARER.param("error", "invalid_token"))),
+///             Some("dev-key") => Ok(Partner { name: "dev".into() }),
+///             // A key that is wrong.
+///             Some(_) => Err(Refused::unauthorized(Challenge::bearer("partners").param("error", "invalid_token"))),
 ///         }
 ///     }
 /// }
@@ -277,8 +278,13 @@ impl Refused {
 pub struct Challenge(HeaderValue);
 
 impl Challenge {
-    /// `Bearer` (RFC 6750): a key or token sent in `Authorization`.
-    pub const BEARER: Challenge = Challenge::new("Bearer");
+    /// `Bearer` (RFC 6750): a key or token sent in `Authorization`, with a `realm` naming what it
+    /// protects, since RFC 6750 (3) has the scheme followed by at least one parameter. Panics as
+    /// [`Challenge::param`] does.
+    #[track_caller]
+    pub fn bearer(realm: &str) -> Self {
+        Challenge::new("Bearer").param("realm", realm)
+    }
 
     /// Another scheme the client knows, written as a `const` of the app's
     /// (`const NEGOTIATE: Challenge = Challenge::new("Negotiate");`), where one that is not a token
@@ -291,8 +297,10 @@ impl Challenge {
 
     /// A parameter of the scheme's (`realm`, RFC 6750's `error` or `scope`), its value always sent
     /// as a quoted string, with `"` and `\` escaped: a scheme with a parameter that must be a bare
-    /// token (Digest's `algorithm`) is not written with it, and RFC 6750's own parameters must not
-    /// hold `"` or `\` at all. Panics when `name` is not a token or the challenge has it already
+    /// token (Digest's `algorithm`) is not written with it, and keeping `"` and `\` out of RFC
+    /// 6750's `error`, `error_description` and `scope`, which must not hold them, is the app's.
+    /// It runs when the refusal is made, so a challenge is best built from literals the app's
+    /// tests send a request through. Panics when `name` is not a token or the challenge has it already
     /// (RFC 9110 11.2, in any case), or `value` has a control character or a byte outside ASCII,
     /// Corten's rule since the authentication framework has no reliable way to carry another
     /// character set (RFC 7617 3): a value from a request or a store is the app's to clean first.
@@ -596,8 +604,8 @@ mod tests {
 
     #[test]
     fn a_challenge_is_its_scheme_then_its_parameters_quoted() {
-        assert_eq!(Challenge::BEARER.0, "Bearer");
-        let challenge = Challenge::BEARER.param("realm", "partners").param("error", "invalid_token");
+        assert_eq!(Challenge::bearer("partners").0, r#"Bearer realm="partners""#);
+        let challenge = Challenge::bearer("partners").param("error", "invalid_token");
         assert_eq!(challenge.0, r#"Bearer realm="partners", error="invalid_token""#);
         assert_eq!(Challenge::new("Basic").param("realm", r#"say "hi" \ go"#).0, r#"Basic realm="say \"hi\" \\ go""#);
     }
@@ -605,7 +613,7 @@ mod tests {
     #[test]
     fn a_name_inside_a_quoted_value_is_not_a_parameter() {
         let challenge =
-            Challenge::BEARER.param("error_description", "scope=x, realm=\"y\"").param("scope", "y").param("realm", "z");
+            Challenge::new("Bearer").param("error_description", "scope=x, realm=\"y\"").param("scope", "y").param("realm", "z");
         assert_eq!(challenge.0, r#"Bearer error_description="scope=x, realm=\"y\"", scope="y", realm="z""#);
         assert_eq!(Challenge::basic("shop").0, r#"Basic realm="shop""#);
     }
@@ -613,13 +621,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "is ASCII")]
     fn a_parameter_value_outside_ascii_panics() {
-        let _ = Challenge::BEARER.param("realm", "caf\u{e9}");
+        let _ = Challenge::bearer("caf\u{e9}");
     }
 
     #[test]
     #[should_panic(expected = "names \"REALM\" twice")]
     fn a_parameter_named_twice_panics() {
-        let _ = Challenge::BEARER.param("realm", "a \"quoted\", realm=").param("scope", "x").param("REALM", "b");
+        let _ = Challenge::bearer("a \"quoted\", realm=").param("scope", "x").param("REALM", "b");
     }
 
     #[test]
@@ -631,12 +639,12 @@ mod tests {
     #[test]
     #[should_panic(expected = "parameter name is a token")]
     fn a_parameter_name_with_a_quote_panics() {
-        let _ = Challenge::BEARER.param("re\"alm", "x");
+        let _ = Challenge::new("Bearer").param("re\"alm", "x");
     }
 
     #[test]
     #[should_panic(expected = "no control character and is ASCII")]
     fn a_parameter_value_with_a_line_break_panics() {
-        let _ = Challenge::BEARER.param("realm", "a\r\nSet-Cookie: x=1");
+        let _ = Challenge::bearer("a\r\nSet-Cookie: x=1");
     }
 }

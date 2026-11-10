@@ -40,7 +40,8 @@
 //! it sets on a failure (a request id, `Retry-After`) stays on the error page. A middleware that
 //! turns a request away answers with a [`crate::Refused`] (`Refused::too_many(wait)`,
 //! `Refused::forbidden()`), answered in the request's mode as a [`crate::Caller`]'s refusal is:
-//! the error page for a browser, JSON for an API or a data client, `Retry-After` on a 429.
+//! the error page for a browser, JSON for an API or a data client, `Retry-After` on a 429 and the
+//! challenge in `WWW-Authenticate` on a 401.
 //!
 //! ```
 //! use std::time::Duration;
