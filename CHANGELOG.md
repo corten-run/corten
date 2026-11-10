@@ -2671,11 +2671,11 @@ Corten is pre-1.0, so any minor version may change the API.
      matches on the boxed one (`downcast_ref`), and `Body::into_data_stream()` gives a
      `BodyDataStream` that is a `Stream` of those pieces but no longer an `http_body::Body`:
      a body is the `Body` itself.
-  Measured with callgrind (release, three runs of each build, every run the same, at the commit
+  Measured with callgrind (release, three runs of each build, every run the same but the feed's, at the commit
   design Choice 25 names), a staged page costs 478 instructions fewer with jemalloc (540 with
   glibc): a page route 17,717 against 18,195, one with a middleware 18,001 against 18,479. An API
-  request, the 404s and an unstaged route are within 24 of before, about what one build of the
-  harness moves the same code (13,057 against 13,059, 7,030 against 7,019). A `live` stream writes
+  request, the 404s and an unstaged route are within 24 of before, small differences whose
+  cause is not separated from how each build is laid out (13,057 against 13,059, 7,030 against 7,019). A `live` stream writes
   an event in 2,161 instructions against axum's 4,982 (2,402 against 4,074 with glibc), and a JSON
   `POST` read by `Json` costs 14,165 against 14,574 (15,707 against 15,969). A feed's live event
   costs 28 to 36 more (7,553 to 7,561 against 7,525; about 100 with glibc): `FeedBody` boxes its

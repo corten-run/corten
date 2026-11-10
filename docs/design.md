@@ -735,8 +735,8 @@ rules something out.
 
     Revisit when: an app needs an extractor that cannot be written with this signature (one that
     borrows from the request beyond its call, say); or an `http` release changes what `Parts`
-    holds; or an app needs `Json`, `Form`, `String` or `Bytes` over 2 MiB on a route, which
-    reopens the fixed limit; or a client is refused a JSON content type RFC 9110 allows, which
+    holds; or an app needs `Json`, `Form`, `String` or `Bytes` over 2 MiB on a route, or a
+    smaller limit than 2 MiB for them, which reopens the fixed limit; or a client is refused a JSON content type RFC 9110 allows, which
     moves `Json` to one reader of the RFC's grammar, shared with `Form`, so a content type is
     parsed one way.
 
@@ -981,7 +981,8 @@ rules something out.
        Measured at `5548c97a` against step 3 at `67e7f5f5` with a harness outside the repository
        (the same JSON item answered in process by each request shape, built with feature `json`;
        callgrind, release, the run of 1,200 requests less the run of 200 over 1,000, three runs of
-       each build with jemalloc and with glibc's allocator in brackets, every run the same): a
+       each build with jemalloc and with glibc's allocator in brackets, every run the same but the
+       feed's below): a
        staged page costs 478 fewer and the rest is within 24: a page route 17,717 against 18,195
        (18,960 against 19,500), one with a middleware 18,001 against 18,479 (19,241 against
        19,781), a staged route beside an unstaged one 17,723 against 18,201 (18,985 against
@@ -993,8 +994,9 @@ rules something out.
        so the builds are comparable; a plain axum router, which shares no code with Corten either,
        counted 7,059 against 7,092 (8,073 against 8,106), axum's own code compiled differently
        beside a different Corten ([Choice 28](#choice-fixed-stages) has its profile). The
-       differences of 2 to 24 are the size of what one harness build moves the same Corten code
-       (up to 8, [Choice 28](#choice-fixed-stages)), so they are reported as the same, not as a gain or a loss. Wall times
+       differences of 2 to 24 are small and their cause is not separated: two builds of the
+       harness moved the same Corten code by up to 8 ([Choice 28](#choice-fixed-stages)), less than
+       some of them, and no profile was taken to tell layout from code. Wall times
        (in process, one CPU, jemalloc, seven runs of 200,000 requests alternating the builds, on
        Docker Desktop) differ by less than their runs do: an API request 2,626 ns against 2,683
        (runs 1,874 to 3,485), a page 3,748 against 3,963 (2,894 to 6,397) and an unstaged route
@@ -1048,7 +1050,7 @@ rules something out.
     `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
     Stands on: measured (callgrind, release, three runs of each build with jemalloc and with
-    glibc, every run the same, step 4 at `5548c97a` against step 3 at `67e7f5f5`, built with
+    glibc, every run the same but the feed's, step 4 at `5548c97a` against step 3 at `67e7f5f5`, built with
     feature `json`, in a harness outside the repository that answers the same JSON item by each
     request shape, the dispatch suite unchanged: a staged page 478 fewer, every other request
     within 24, a `POST` read by `Json` 14,165 against 14,574, a service of no framework 3,190 in
@@ -1314,9 +1316,9 @@ rules something out.
     axum's code compiled beside a different Corten. From step 4 the control is a service of no
     framework (tower's `service_fn` reading the id from the path and answering the same JSON),
     which shares no code with Corten or axum: it counted 3,190 in both builds (3,568 with glibc),
-    so the builds do not differ. The unstaged route's 11 more is no larger than what one build of
-    the harness moves the same Corten code (up to 8 between two builds of it), so it is not read
-    as the route's own cost or as noise, only as the bound's room: 7,030 is 98 over 6,932 and
+    so the builds do not differ. The unstaged route's 11 more is measured, and whether it is the
+    route's own code or how the build laid it out is not separated (two builds of the harness
+    moved the same Corten code by up to 8); either way it counts against the bound: 7,030 is 98 over 6,932 and
     7,076 is 94 over 6,982 (jemalloc), so the next change that adds to an unstaged route reopens
     this.
 

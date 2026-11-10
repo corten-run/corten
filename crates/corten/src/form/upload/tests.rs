@@ -1248,6 +1248,28 @@ async fn a_whole_body_read_past_its_limit_at_the_deadline_is_the_413() {
     assert_eq!(took, std::time::Duration::from_secs(30), "at the default deadline");
 }
 
+/// A whole body whose length says it is over the limit is read past from its first piece, none
+/// of it kept, so a client that stalls before sending the limit's worth still gets the 413 at the
+/// deadline: kept, its wait would have been a read of the body, answered 408.
+#[tokio::test(start_paused = true)]
+async fn a_whole_body_declared_over_its_limit_that_stalls_early_is_the_413() {
+    async fn whole(text: String) -> String {
+        text
+    }
+    let app = crate::App::new(crate::Routes::from(crate::router::Table::new().route("/up", crate::router::post(whole))));
+    let bytes = vec![b'a'; 3 << 20];
+    let (page, took) = stalled_over_a_socket(
+        app,
+        "/up",
+        "accept: text/html\r\n",
+        Some(bytes.len()),
+        (std::time::Duration::ZERO, &bytes[..(1 << 20)]),
+    )
+    .await;
+    assert!(page.starts_with("HTTP/1.1 413"), "{page}");
+    assert_eq!(took, std::time::Duration::from_secs(30), "at the default deadline");
+}
+
 /// What reading an upload costs per piece of its body: `UPLOAD_READS` (200) reads of a form with
 /// a 2 KiB file and a title, sent a byte at a time (each read is 2,259 pieces), the file
 /// read with `bytes_up_to`. Counted under callgrind at two numbers of reads, the difference is the
