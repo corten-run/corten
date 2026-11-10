@@ -4077,6 +4077,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
 
 ### Fixed
+- The watchlist smoke waits up to 5 seconds, after the page swaps back to `/`, for the newest feed
+  stream to be open and every earlier one closed, and prints the streams it saw, rather than
+  counting them once right after the swap, when the new page's stream may not be opened yet or the
+  left one not yet closed
+  ([#1134 The watchlist smoke reads its open feed streams once, right after a client navigation, so 'one feed stream while the component is on the page' fails about 1 run in 80](https://github.com/corten-run/corten/issues/1134)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.

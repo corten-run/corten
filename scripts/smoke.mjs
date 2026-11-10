@@ -1460,8 +1460,12 @@ async function run(browser) {
     `${whileWrite} | ${afterWrites}`,
   );
   const redirectName = "a write that sends the browser to another page keeps its button busy until that page is in";
+  // The feed sources before the write: a write that swaps the page in brings the component a new one.
+  const feedsBeforeGo = (await feedSources()).length;
+  let goSwapped = false;
   if (!(await page.evaluate(() => "navigation" in window))) skip(redirectName, "without the Navigation API the browser loads that page in full");
   else {
+    goSwapped = true;
     await page.click("#busy-wgo");
     const goBusy = await page.evaluate(() => /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"));
     await page
@@ -1483,7 +1487,20 @@ async function run(browser) {
   // The sector links beside <main> are marked `page`: each navigation brings the page's.
   const sectors = () => page.$$eval("#sector-nav a", (links) => links.length);
   check("a layout element marked page is the page's: no sector links outside the news", (await sectors()) === 0);
-  check("one feed stream while the component is on the page", (await openFeeds()) === 1);
+  // When the page has just swapped back to /, its component may not have opened its feed yet and
+  // the one it left may not be closed, so the state is awaited rather than read once (#1134): the
+  // newest feed source open, every earlier one closed, and a new one if the page was swapped in.
+  const oneFeed = await page
+    .waitForFunction(
+      (/** @type {number} */ min) => {
+        const feeds = /** @type {EventSource[]} */ ((/** @type {any} */ (window)).__sources.filter((/** @type {EventSource} */ s) => s.url.includes("/feed/")));
+        return feeds.length >= min && feeds.at(-1)?.readyState !== EventSource.CLOSED && feeds.slice(0, -1).every((s) => s.readyState === EventSource.CLOSED);
+      },
+      Math.max(1, feedsBeforeGo + (goSwapped ? 1 : 0)),
+      { timeout: 5000 },
+    )
+    .then(() => true, () => false);
+  check("one feed stream while the component is on the page", oneFeed, `${await openFeeds()} open of ${JSON.stringify(await feedSources())}, ${feedsBeforeGo} before the write, ${goSwapped ? "swapped in" : "not swapped"}`);
   // The news page's disclaimer is in an area (Area::components): its stylesheet loads before the page is
   // swapped in, so the note is styled the moment it joins the page.
   await page.evaluate(() => {
