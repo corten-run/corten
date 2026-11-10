@@ -77,7 +77,7 @@ that type: in the test that calls `Types::sync`, or at startup for a tool. Deriv
 `FromJson`) on the type (a `Fields` or `UrlValue` type has its read schema already), or, for
 another crate's type, implement the trait for a
 `#[serde(transparent)]` newtype around it (a newtype that is a tool's whole output implements
-`ToJson` by hand as well, `serde_json::to_writer(&mut *out, &self.0)`). In a generic type, a field type that has a schema
+`ToJson` by hand as well, `serde_json::to_writer(&mut *out, &self.0).expect(..)`). In a generic type, a field type that has a schema
 only under a bound the type does not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same
 way: add the bound to the type's where clause. A type a root names directly (`Types::add`, a
 tool's input or output, an event's field) without a schema does not compile. Rust's own types

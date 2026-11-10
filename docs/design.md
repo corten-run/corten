@@ -1318,43 +1318,42 @@ rules something out.
     Last checked: 2026-11-09, sizes on `c65c10ec` and `4de159ab` with esbuild 0.28.2 and terser
     5.51.2, and the smoke tests on `10cd394d`.
 
-35. <a id="choice-json-derives"></a>**A type's JSON role is the derive that names its direction, `ToJson` to write and
-    `FromJson` to read, not a data-role attribute.** Each derive is already the one thing a type
-    declares for its direction: `ToJson` lays out the JSON a response, a screen's data, a typed
-    script argument or an agent tool's output writes, and its schema (feature `types`);
-    `FromJson` reads it, with its `Deserialize` ([Choice 26](#choice-derived-deserialize)).
-    An attribute such as `#[corten::data(write)]` would spell the same derive another way: it
-    takes no line off a type and adds no check the derive does not already make, and two
-    spellings of one thing is what Values 5 and 6 rule out. The direction stays in the type's own
-    declaration, so nothing is written because it appears in a handler's signature, and no type
-    of another module or crate is exposed by it. An agent tool's output was the one place a
-    response type still needed serde's `Serialize` beside `ToJson`: its `outputSchema` came from
-    `ToJson`'s schema while its bytes came from `Serialize`, so a hand-written `Serialize` could
-    drift from the schema with nothing failing to compile (Value 4). Tool outputs are now bounded on
-    `ToJson`, so a derived `ToJson` writes both the schema and the bytes (a field of another crate's
-    type inside it is still written by serde under a schema written for it, as in any `ToJson`
-    answer), and a tool's output is written by the code every other response is. The std types
-    Corten gives a schema for are `ToJson` too, and `FromJson` in their owned forms (`str`, `[T]`,
-    `Path` and `RawValue` boxed or shared), written and read as serde does (but for a map whose key is not a `JsonKey`, which is not written, or not `String`, which is not
-    read, and an `Arc` or `Rc` read without serde's `rc`), and
-    another crate's type that has a schema goes in a `#[serde(transparent)]` newtype that derives
-    `ToJson`, one impl. A `ToJson` written by hand, for a type whose schema is written by hand (one
-    the derive refuses, or another crate's type with none, in a newtype of the app's), comes with
-    that `ToJsonSchema` beside it, two impls its author keeps in step, as before. Tool inputs are bounded on `FromJson` the same way, so an
-    input that derives serde's `Deserialize` beside a schema written by hand does not compile, short
-    of the deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson` cannot write
-    takes (written by hand, or serde's for an attribute it refuses), which again leaves two impls in
-    its author's hands. What this gives up: a tool output whose `ToJson` falls back to a field's own
+35. <a id="choice-json-derives"></a>**A type's JSON role is the derive that names its direction,
+    `ToJson` to write and `FromJson` to read, not a data-role attribute.** Each derive is already
+    the one thing a type declares for its direction: `ToJson` lays out the JSON a response, a
+    screen's data, a typed script argument or an agent tool's output writes, and its schema (feature
+    `types`); `FromJson` reads it, with its `Deserialize`
+    ([Choice 26](#choice-derived-deserialize)). An attribute such as `#[corten::data(write)]` would
+    spell the same derive another way: it takes no line off a type and adds no check the derive does
+    not already make, and two spellings of one thing is what Values 5 and 6 rule out. The direction
+    stays in the type's own declaration, so nothing is written because it appears in a handler's
+    signature, and no type of another module or crate is exposed by it. An agent tool's output was
+    the one place a response type still needed serde's `Serialize` beside `ToJson`: its
+    `outputSchema` came from `ToJson`'s schema while its bytes came from `Serialize`, so a
+    hand-written `Serialize` could drift from the schema with nothing failing to compile (Value 4).
+    Tool outputs are now bounded on `ToJson`, so a derived `ToJson` writes both the schema and the
+    bytes (a field of another crate's type inside it is still written by serde under a schema
+    written for it, as in any `ToJson` answer), and a tool's output is written by the code every
+    other response is. The std types Corten gives a schema for are `ToJson` too, and `FromJson` in
+    their owned forms (`str`, `[T]`, `Path` and `RawValue` boxed or shared), written and read as
+    serde does (but for a map whose key is not a `JsonKey`, which is not written, or not `String`,
+    which is not read, and an `Arc` or `Rc` read without serde's `rc`), and another crate's type
+    that has a schema goes in a `#[serde(transparent)]` newtype that derives `ToJson`, one impl. A
+    `ToJson` written by hand, for a type whose schema is written by hand (one the derive refuses, or
+    another crate's type with none, in a newtype of the app's), comes with that `ToJsonSchema`
+    beside it, two impls its author keeps in step, as before. Tool inputs are bounded on `FromJson`
+    the same way, so an input that derives serde's `Deserialize` beside a schema written by hand
+    does not compile, short of the deliberate `impl FromJson for T {}` a type whose `Deserialize`
+    `FromJson` cannot write takes (written by hand, or serde's for an attribute it refuses), which
+    again leaves two impls in its author's hands. What this gives up: the guarantee that a release
+    build's answer parses: a hand-written `ToJson` that writes broken JSON breaks the JSON-RPC
+    answer around it, where serde could not (a debug build answers a call whose output is not one
+    object with a 500 and logs the tool). A tool output whose `ToJson` falls back to a field's own
     `Serialize` and fails (another crate's map with a key JSON cannot hold, or a std type serde
-    refuses: a path that is not UTF-8, a `SystemTime` before the epoch) panics, and the call ends
-    with the app's 500 (an app built with `panic = "abort"` ends instead), as every other `ToJson` answer already does, where it used to be
-    answered as the tool's failed result (`isError`, "internal error"). It stands because such a
-    value fails for every client the same way, the derive refuses what it cannot write and Corten's own impls refuse only what serde refuses,
-    and a
-    fallible write on this one path would be a second way to write an answer. It also gives up the
-    guarantee that a release build's answer parses: a hand-written `ToJson` that writes broken
-    JSON breaks the JSON-RPC answer around it, where serde could not (a debug build answers a call
-    whose output is not one object with a 500 and logs the tool):
+    refuses: a path that is not UTF-8, a `SystemTime` before the epoch) panics where it is written,
+    as in every other `ToJson` answer; the call catches that panic and answers the tool's internal
+    error (`isError`, "internal error"), as it did when serde wrote outputs, so `ToJson` stays the
+    one writer (an app built with `panic = "abort"` ends instead):
 
     ```rust,ignore
     // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
@@ -1383,19 +1382,23 @@ rules something out.
     tool answer's bytes equal serde's for the item); measured (an agent's `items.get` call in
     card-market's `tool_cost` runs about 21% fewer instructions, 265,017 and 267,984 before and
     210,598 and 211,269 after: callgrind, release, 1,200 calls less 200 over 1,000, two
-    alternating runs each); value (one declaration per direction, Values 4, 5 and
-    6).
+    alternating runs each); platform (the std types' `ToJson` and `FromJson` write and read what
+    serde and serde_json do for them, some by Corten's own code: serde 1.0.229 and serde_json
+    1.0.154); value (one declaration per direction, Values 4, 5 and 6).
 
-    Revisit when: an example app needs, because the derives refuse its type, a hand-written
-    `ToJson` with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in
-    `impl FromJson for T {}` (none in `examples/` at the last check), or a JSON seam other than the
-    feed is bounded on serde's `Serialize` or `Deserialize` again.
+    Revisit when: an example app needs, because the derives refuse its type, a hand-written `ToJson`
+    with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in `impl FromJson for T {}`
+    (none in `examples/` at the last check), or a JSON seam other than the feed is bounded on
+    serde's `Serialize` or `Deserialize` again, or serde or serde_json changes how it writes or
+    reads one of the std types Corten writes or reads itself (the `json` tests that compare them
+    fail).
 
-    Last checked: 2026-11-09, the
-    derives and the agent endpoint's bounds, inputs and outputs, at `7965aeab`, the bounds' last
-    change; 2026-11-10, no such impl in `examples/`, at `7197604f`; 2026-11-10, the std types' and
-    pointers' `ToJson` and `FromJson` against serde's bytes and values (`json` tests, and `corten-run` built with `json` alone and with `agent,feed`), at `479f3f0e`; 2026-11-10, the
-    `tool_cost` count, on `217bce2c` with `tool_cost` added and on `fcecee41`.
+    Last checked: 2026-11-09, the derives and the agent endpoint's bounds, inputs and outputs, at
+    `7965aeab`, the bounds' last change; 2026-11-10, no such impl in `examples/`, at `7197604f`;
+    2026-11-10, the std types' and pointers' `ToJson` and `FromJson` against serde's bytes and
+    values (`json` tests, and `corten-run` built with `json` alone and with `agent,feed`, serde
+    1.0.229 and serde_json 1.0.154), at `479f3f0e`; 2026-11-10, the `tool_cost` count, on `217bce2c`
+    with `tool_cost` added and on `fcecee41`.
 
 ## Rules
 

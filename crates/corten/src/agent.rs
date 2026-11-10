@@ -97,9 +97,10 @@
 //! writes the JSON serde's `Serialize` would, laid out when the crate compiles), into the response
 //! as is, so a tool returning a large shared value (`Arc<T>`) costs one write and no copy. As in
 //! any `ToJson` answer, a field whose own `Serialize` fails (another crate's map with a key JSON
-//! cannot hold, a path that is not UTF-8, a `SystemTime` before the epoch) panics: the request ends as a handler's panic does, logged and answered with the
-//! app's 500 (in an [`Api`](crate::Api), its JSON failure), not as the tool's result, with a log
-//! line that names the tool.
+//! cannot hold, a path that is not UTF-8, a `SystemTime` before the epoch) panics where it is
+//! written; for a tool's output the call catches that panic and answers it as the tool's internal
+//! error (`isError`, "internal error"), logged with the tool's name and the panic's message. An
+//! app built with `panic = "abort"` ends instead.
 //!
 //! An output needs `ToJson` and no `Serialize`. One written by serde, with a schema written by
 //! hand, does not compile as one: derive `ToJson`, which writes the schema and the bytes from one
@@ -171,8 +172,7 @@ use crate::json::{
     FromJson, ToJson,
 };
 
-/// Names the tool in the log when its handler, or its output's `ToJson`, panics: the request's
-/// own panic log does not.
+/// Names the tool in the log when its handler panics: the request's own panic log does not.
 struct Naming<'a>(&'a str);
 
 impl Drop for Naming<'_> {
@@ -630,7 +630,12 @@ impl<A: Send + 'static> Tools<A> {
             let handler = handler.clone();
             Box::pin(async move {
                 let input: I = serde_json::from_value(args)?;
-                Ok(handler(caller, input).await?.to_json())
+                let output = handler(caller, input).await?;
+                // A value in the output that its `ToJson` cannot write (a field whose own
+                // `Serialize` fails) panics there; the call answers it as the tool's internal
+                // error, a JSON-RPC result the agent reads, as it did when serde wrote outputs.
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| output.to_json()))
+                    .map_err(|panic| ToolError::internal(crate::task::panic_message(&*panic).to_owned()))
             })
         });
         let tools = Arc::get_mut(&mut self.tools).expect("add tools before serving");
@@ -1063,10 +1068,10 @@ mod tests {
     struct Mcp;
 
     /// A value inside a tool's output that serde cannot write (here, one whose `Serialize`
-    /// fails): the request ends as a handler's panic does, with the app's 500 in the API's JSON
-    /// failure, not as the tool's result or a JSON-RPC answer.
+    /// fails): the call answers it as the tool's internal error, a JSON-RPC result with the call's
+    /// `id`, and logs the tool's name with serde's message.
     #[tokio::test]
-    async fn an_output_that_cannot_be_written_ends_the_request_as_a_panic_does() {
+    async fn an_output_that_cannot_be_written_is_the_tools_internal_error() {
         struct Unwritable;
         impl serde::Serialize for Unwritable {
             fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
@@ -1088,12 +1093,14 @@ mod tests {
         let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "broken", "arguments": {} } });
         let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
         let ((status, _, body), text) = logging(send(&app, req)).await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        assert_eq!(status, StatusCode::OK, "{body}");
         let body: Value = serde_json::from_str(&body).unwrap();
-        assert!(body.get("jsonrpc").is_none() && body.get("result").is_none(), "{body}");
+        assert_eq!(body["id"], 7, "{body}");
+        assert_eq!(body["result"]["isError"], true, "{body}");
+        assert_eq!(body["result"]["content"][0]["text"], "internal error", "{body}");
         assert!(
-            text.lines().any(|line| line.contains("agent tool panicked") && line.contains("tool=") && line.contains("broken")),
-            "the log names the tool: {text}"
+            text.lines().any(|line| line.contains("agent tool failed") && line.contains("broken") && line.contains("not JSON")),
+            "the log names the tool and serde's message: {text}"
         );
     }
 

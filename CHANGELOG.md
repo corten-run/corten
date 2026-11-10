@@ -4258,46 +4258,47 @@ Corten is pre-1.0, so any minor version may change the API.
     written by it, so it derives `ToJson` alone, as every other JSON answer does, where it needed
     serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
     The answer is the same JSON (card-market's agent test checks its bytes against serde's for the
-    item). An `items.get` call costs about 21% fewer instructions: 265,017 and
-    267,984 a call before, 210,598 and 211,269 after, with the same 16,800-byte answer on average
-    (callgrind, release build, card-market's `tool_cost`, 1,200 calls less 200 over 1,000, two
-    alternating runs each). No data-role attribute is added beside `ToJson` and
-    `FromJson`, which already name each type's direction ([design Choice
-    35](docs/design.md#choice-json-derives)). **Breaking:** the type a tool returns must be a `ToJson` and the
-    type it takes a `FromJson`, as must any container around them (a derived struct's own fields
-    still fall back to serde), so what was only `Serialize` or `Deserialize` no longer compiles
-    as one: an output whose `Serialize` is derived by serde or written by hand, with a
-    `ToJsonSchema` written by hand; an input that is a `Deserialize` with a `FromJsonSchema`
-    written by hand; a container (`Option`, `Box`, `Vec`, a map, `Cow`, `Arc`) whose item or
-    value is one of those or another crate's type; a derived generic type, output or input, whose
-    type argument is not `ToJson` or `FromJson`; an output map whose key is not a `JsonKey` (an
-    app's key type implements `corten::json::JsonKey`, writing the text serde writes for it: an
-    enum of unit variants that derives `ToJson` calls `self.write_json(out)`); and an input map whose key is not
-    `String` (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types Corten gives a schema
-    for are both, written and read as serde does (`Duration`, `SystemTime`, IP and socket
-    addresses, paths, the `NonZero` integers, `PhantomData`, `serde_json::Number` and, with
-    the `types` feature, `RawValue`), as are `Cow<T>`, `Box<str>`, `Box<Path>` and `Box<[T]>`, the 128-bit
-    integers, sets, `VecDeque`, arrays and tuples, and `Arc` and `Rc` of a `FromJson`, of `str`, of `Path`,
-    of `[T]` or (with `types`) of `RawValue`, which are read with serde's `rc` feature. Derive `ToJson` or `FromJson`; a `Serialize` or
-    `Deserialize` type that has a schema but is not one (another crate's, or a map of one) goes
-    in a `#[serde(transparent)]` newtype that derives it; only a type whose output schema is
-    written by hand implements `ToJson` by hand beside it
-    (`serde_json::to_writer(&mut *out, &self.0)` in a newtype, for another crate's type); an input
-    whose `Deserialize` is not `FromJson`'s takes `impl corten::FromJson for T {}`; an input type
-    the orphan rule keeps an app from implementing it for (a map with other keys) goes in a
-    `#[serde(transparent)]` newtype that derives `FromJson`. `serde_json::Map<String, Value>` is now a `FromJson`, so an input read as
-    any object compiles as before. CI and the Checks build `corten-run` with `agent` and `feed` alone, as an app
-    takes them, since the workspace turns on serde's `rc` and an app need not. A field whose own
-    `Serialize` fails (a map with a key JSON cannot hold, inside another crate's type, or a std type
-    serde refuses: a path that is not UTF-8, a `SystemTime` before the epoch) now panics,
-    as in any `ToJson` answer: the request ends as a handler's panic does, logged and answered with
-    the app's 500 (in an `Api`, its JSON failure), where the call answered an internal error as the
-    tool's result with the call's `id`; a test holds it, and a log line names the tool. A debug
-    build (`corten dev`, tests without `--release`) answers a call whose hand-written output
-    `ToJson` writes anything but one JSON object with the app's 500 and a log line naming the tool;
-    a release build sends it as written, so a broken one breaks the JSON-RPC answer around it.
-    A tool's output can hold `Raw`, a `ToJson` with any JSON value as its schema; the app guide said
-    it needed `Box<RawValue>`, which only a feed row still does
+    item). An `items.get` call costs about 21% fewer instructions: 265,017 and 267,984 a call
+    before, 210,598 and 211,269 after, with the same 16,800-byte answer on average over the first 200 calls
+    (callgrind,
+    release build, card-market's `tool_cost`, 1,200 calls less 200 over 1,000, two alternating runs
+    each). No data-role attribute is added beside `ToJson` and `FromJson`, which already name each
+    type's direction ([design Choice 35](docs/design.md#choice-json-derives)). **Breaking:** the
+    type a tool returns must be a `ToJson` and the type it takes a `FromJson`, as must any container
+    around them (a derived struct's own fields still fall back to serde), so what was only
+    `Serialize` or `Deserialize` no longer compiles as one: an output whose `Serialize` is derived
+    by serde or written by hand, with a `ToJsonSchema` written by hand; an input that is a
+    `Deserialize` with a `FromJsonSchema` written by hand; a container (`Box`, a map, `Cow`, `Arc`)
+    whose item or value is one of those or another crate's type; a derived generic type, output or
+    input, whose type argument is not `ToJson` or `FromJson`; an output map whose key is not a
+    `JsonKey` (an app's key type implements `corten::json::JsonKey`, writing the text serde writes
+    for it: an enum of unit variants that derives `ToJson` calls `self.write_json(out)`); and an
+    input map whose key is not `String` (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types
+    Corten gives a schema for are both (`Path` and `RawValue` read in their boxed or shared forms),
+    written and read as serde does (`Duration`, `SystemTime`, IP and socket addresses, paths, the
+    `NonZero` integers, `PhantomData`, `serde_json::Number` and, with the `types` feature,
+    `RawValue`), as are `Cow<T>`, `Box<str>`, `Box<Path>` and `Box<[T]>`, the 128-bit integers,
+    sets, `VecDeque`, arrays and tuples, and `Arc` and `Rc` of a `FromJson`, of `str`, of `Path`, of
+    `[T]` or (with `types`) of `RawValue`, which are read with serde's `rc` feature. Derive `ToJson`
+    or `FromJson`; a `Serialize` or `Deserialize` type that has a schema but is not one (another
+    crate's, or a map of one) goes in a `#[serde(transparent)]` newtype that derives it; only a type
+    whose output schema is written by hand implements `ToJson` by hand beside it
+    (`serde_json::to_writer(&mut *out, &self.0).expect(..)` in a newtype, for another crate's type);
+    an input whose `Deserialize` is not `FromJson`'s takes `impl corten::FromJson for T {}`; an
+    input type the orphan rule keeps an app from implementing it for (a map with other keys) goes in
+    a `#[serde(transparent)]` newtype that derives `FromJson`. `serde_json::Map<String, Value>` is
+    now a `FromJson`, so an input read as any object compiles as before. CI and the Checks build
+    `corten-run` with `json` alone and with `agent` and `feed` alone, as an app takes them, since
+    the workspace turns on serde's `rc` and an app need not. A field whose own `Serialize` fails (a
+    map with a key JSON cannot hold, inside another crate's type, or a std type serde refuses: a
+    path that is not UTF-8, a `SystemTime` before the epoch) panics in its `ToJson`; for a tool's
+    output the call catches it and answers the tool's internal error with the call's `id`, as
+    before, and logs the tool's name with the panic's message (a test holds it; an app built with
+    `panic = "abort"` ends instead). A debug build (`corten dev`, tests without `--release`) answers
+    a call whose hand-written output `ToJson` writes anything but one JSON object with the app's 500
+    and a log line naming the tool; a release build sends it as written, so a broken one breaks the
+    JSON-RPC answer around it. A tool's output can hold `Raw`, a `ToJson` with any JSON value as its
+    schema; the app guide said it needed `Box<RawValue>`, which only a feed row still does
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 176. The runtime and its modules are minified by terser after esbuild minifies them, so every page
     ships fewer bytes: the runtime is 14,318 bytes with gzip (level 9), 533 fewer, and 12,955 with
