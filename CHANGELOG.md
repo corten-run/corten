@@ -2572,17 +2572,15 @@ Corten is pre-1.0, so any minor version may change the API.
     brotli 8,657 against 8,567), the theme's seven tokens (210 bytes, on every page of an app on
     the kit's theme) included; the earlier size is the served file with the old rules put back
     ([#1054 Kit Stats writes its label and figure type as literals, so a theme with a display face or uppercase labels (Chase Sets' design system) edits the copied stats.css](https://github.com/corten-run/corten/issues/1054)).
-276. The kit's `stack` has `StackStart`, a look written beside a `Stack`
-    (`class={(Stack { gap: Gap::Xs }, StackStart {})}`): the column's children keep their own
-    width at its start (its end on a right-to-left page), each at most the stack's, a word wider than
-    that breaking inside it and a picture narrowing in its shape, for a column of links as wide as
-    their words, badges, or a button under a line of text. Its rule names both classes, so it wins
-    over `.stack`'s wherever an app links its stylesheets and does nothing beside a `Cluster` or
-    alone; an app's own `align-items` on the stack tied with the kit's and won only by stylesheet
-    order. Not breaking: every `Stack { gap }` is as it was, and a copied `stack.rs` and
-    `stack.css` take it from `corten ui diff`. Measured as the Dialog's entry was: `stack.css` 237 to 395 bytes
-    (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
-    link and a badge
+287. The kit's `stack` has `StackStart { gap }` (changed by Changed 174; it was first a class
+    written beside a `Stack`): a stack whose children keep their own width at its start (its end on
+    a right-to-left page), each at most the column's, a word wider than that breaking inside it and
+    a picture narrowing in its shape, for a column of links as wide as their words, badges, or a
+    button under a line of text. Its rule names both classes, so it wins over `.stack`'s wherever
+    an app links its stylesheets; an app's own `align-items` on the stack tied with the kit's and
+    won only by stylesheet order. Not breaking: every `Stack { gap }` is as it was. Measured as
+    the Dialog's entry was: `stack.css` 237 to 395 bytes (gzip 164 to 226, brotli 125 to 182). The
+    ui-gallery's selling limit card has a column of a link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
 277. The kit's `status_dot` has `LiveDot { tone }`, the dot of a live view's badge: its opacity
     pulses while the `<corten-live>` around it is live, so a glance tells a live view from a frozen
@@ -4253,6 +4251,19 @@ Corten is pre-1.0, so any minor version may change the API.
     and `corten ui add card --force` (an unedited copy) or `--merge` (an edited one) takes
     `card.rs` and `card.css`
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
+174. The kit's `StackStart` is the stack itself, `StackStart { gap }` written in place of the
+    `Stack` (with `Gap::App`, the app's `gap` utility beside it, as for `Stack`), where it was a
+    class written beside one (`(Stack { gap }, StackStart {})`) that compiled alone, doing nothing.
+    It writes the same classes, so the page is the same, and `StackStart {}` alone no longer
+    compiles (E0063, the missing `gap`). A class list cannot refuse a second look, so two misuses
+    still compile and the docs name them: kept beside its `Stack` (the error's `gap` added there
+    too) it writes the stack's classes twice, and both gaps when they differ, the larger winning;
+    beside a `Cluster` it turns the row into a column. **Migration:** replace `(Stack { gap },
+    StackStart {})` with `StackStart { gap }` and remove the `Stack`. `corten ui diff stack` shows
+    the kit's change, and `corten ui add stack --force` (an unedited copy) or `--merge` (an edited
+    one) takes `stack.rs` and `stack.css` ([#1126 Kit StackStart compiles alone or beside a Cluster
+    and does nothing there, since it is a class beside Stack's rather than an option of the
+    look](https://github.com/corten-run/corten/issues/1126)).
 
 ### Fixed
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
