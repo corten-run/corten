@@ -4081,7 +4081,8 @@ Corten is pre-1.0, so any minor version may change the API.
   feed load, relay or JetStream consumer, is logged as the error itself, so Corten's log line
   adds each source's message (`error.sources`): an HTTP client's "error sending request" now
   names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
-  message.
+  message
+  ([#1127 Benchmark r17: Corten returns two HTTP 500s fetching upstream during page load](https://github.com/corten-run/corten/issues/1127)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
