@@ -1305,12 +1305,12 @@ rules something out.
     `Desk`) a choice between it and the derive they write now; `Source`, an enum, could not take
     it, since `FromRef` is derived only for a struct with named fields. That is a third way to write
     state, and a concept to learn that one word a type does not earn (Values 5 and 6). The
-    generated code would be the same. `FromRef` deriving `Clone` itself is not chosen either: a type that writes its own `impl Clone` (a generic state whose
-    fields are behind an `Arc`, which `#[derive(Clone)]` would bound on its parameter, as
-    `corten_cluster::Cluster<S>`, a part of listings-feed's state, does) would get a second,
-    conflicting impl, and the derive list would no longer say that the type is `Clone`. Not
-    chosen: the attribute; an option on `FromRef` (`#[from_ref(clone)]`), the same second
-    spelling in another place
+    generated code would be the same. `FromRef` deriving `Clone` itself is not chosen either: a
+    type that writes its own `impl Clone` (a generic state whose fields are behind an `Arc`, which
+    `#[derive(Clone)]` would bound on its parameter, as `corten_cluster::Cluster<S>`, a part of
+    listings-feed's state, does) would get a second, conflicting impl, and the derive list would no
+    longer say that the type is `Clone`. Not chosen: the attribute; an option on `FromRef`
+    (`#[from_ref(clone)]`), the same second spelling in another place
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 
     Stands on: platform (axum 0.8.9's `Router<S>` requires `S: Clone`, `Cargo.lock`);
