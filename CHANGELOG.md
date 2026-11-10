@@ -4258,10 +4258,10 @@ Corten is pre-1.0, so any minor version may change the API.
     written by it, so it derives `ToJson` alone, as every other JSON answer does, where it needed
     serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
     The answer is the same JSON (card-market's agent test checks its bytes against serde's for the
-    item). An `items.get` call costs about 21% fewer instructions: 266,735 a call before (265,585 to
-    267,508) and 211,213 after (210,919 to 212,058), with the same answer, 14,464 bytes on average
+    item). An `items.get` call costs about 21% fewer instructions: 266,844 a call before (265,376 to
+    267,830) and 211,152 after (211,123 to 211,865), with the same answer, 14,464 bytes on average
     over the calls counted (callgrind, release build, card-market's `tool_cost`, 1,200 calls less
-    200 over 1,000, medians and ranges of three alternating runs, on `217bce2c` and `016fc6a1`). No
+    200 over 1,000, medians and ranges of three alternating runs, on `217bce2c` and `6d04bbe6`). No
     data-role attribute is added beside `ToJson` and `FromJson`, which already name each type's
     direction ([design Choice 35](docs/design.md#choice-json-derives)). **Breaking:** the type a
     tool returns must be a `ToJson` and the type it takes a `FromJson`, as must any container around
@@ -4296,12 +4296,19 @@ Corten is pre-1.0, so any minor version may change the API.
     `SystemTime` before the epoch) panics in its `ToJson`; for a tool's output the call catches it
     and answers the tool's internal error with the call's `id`, as before, and logs the tool's name
     with the panic's message (a test holds it; an app built with `panic = "abort"` ends instead). A
-    debug build (`corten dev`, tests without `--release`) answers a call whose hand-written output
-    `ToJson` writes anything but one JSON object with the app's 500 and a log line naming the tool;
-    a release build checks only that it starts with `{` and ends with `}`, answering the tool's
-    internal error otherwise (parsing it there measured about 92,700 more instructions a call,
-    medians 303,500 against 210,762 over three runs, 44% of `tool_cost`'s), and sends any other as
-    written, so a broken object breaks the JSON-RPC answer around it. A tool's output can hold
+    tool output derived over types whose `ToJson` Corten or serde writes goes out unparsed; one that
+    is or holds a `ToJson` or map key (`JsonKey`) written by hand is parsed before it is sent, and
+    one that is not one JSON object is the tool's internal error, logged with the tool's name, the
+    output's size and the fault, not its data (a debug build, `corten dev` or tests without
+    `--release`, parses every output and answers a bad one with the app's 500 and a log line
+    naming the tool). Parsing every output in a release build measured about 92,700 more
+    instructions a call (medians 303,500 against 210,762 over three runs, 44% of `tool_cost`'s),
+    which a derived output does not pay. An enum whose `Serialize` is not serde's derive (written
+    by hand, or `serde_repr`'s number) and that derives `ToJson` writes what its `#[serde(..)]`
+    attributes say, its variant's name for a unit variant, as a value and as a map key, not what
+    that `Serialize` writes. To keep what its `Serialize` writes, do not derive `ToJson` on it: as
+    a field it is then written by serde, and as a map key it takes a hand-written `JsonKey` that
+    writes the text serde writes. A tool's output can hold
     `Raw`, a `ToJson` with any JSON value as its schema; the app guide said it needed
     `Box<RawValue>`, which only a feed row still does
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).

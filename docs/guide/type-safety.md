@@ -77,12 +77,12 @@ type: in the test that calls `Types::sync`, or at startup for a tool. Derive `To
 `FromJson`) on the type (a `Fields` or `UrlValue` type has its read schema already), or, for another
 crate's type, implement the trait for a `#[serde(transparent)]` newtype around it (a newtype that is
 a tool's whole output implements `ToJson` by hand as well, `serde_json::to_writer(&mut *out,
-&self.0).expect(..)`, writing exactly one JSON object: a debug build answers a call whose output is
-not one with a 500 naming the tool, and a release build answers one that does not start with `{` and
-end with `}` as the tool's internal error and sends any other as written; a newtype that is a tool's
-whole input takes `impl corten::FromJson for T {}` beside its `Deserialize`). In a generic type, a
-field type that has a schema only under a bound the type does not declare (`Cow<'a, [T]>` needs `T:
-Clone`) is named the same way: add the bound to the type's where clause. A type a root names
+&self.0).expect(..)`, writing exactly one JSON object: an output that is or holds a `ToJson`
+written by hand is parsed before it is sent, so one that is not one object is the tool's internal
+error, logged with the tool's name, and a debug build answers it with a 500 naming the tool; a
+newtype that is a tool's whole input takes `impl corten::FromJson for T {}` beside its
+`Deserialize`). In a generic type, a field type that has a schema only under a bound the type does
+not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same way: add the bound to the type's where clause. A type a root names
 directly (`Types::add`, a tool's input or output, an event's field) without a schema does not
 compile. Rust's own types that serde writes have one (strings, numbers, `NonZero*`, lists, sets,
 maps, tuples, `Option`, `Box`/`Rc`/`Arc`/`Cow`, `Duration`, `SystemTime`, paths and addresses,

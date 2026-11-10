@@ -1385,7 +1385,13 @@ Under the prefix:
    bytes `serde_json` would. A `#[serde(flatten)]` field whose type is a struct that derives
    `ToJson` is written in place, its members laid out the same way; an attribute it cannot follow
    (`flatten` of a map or an enum, `serialize_with`) does not compile. A field whose type has only
-   `Serialize` (an id or a date from another crate) is written by `serde_json`. `serde_json::Value`
+   `Serialize` (an id or a date from another crate) is written by `serde_json`, and so is a whole
+   field around one (`Vec<theirs::Id>`, a map whose values are one) or a map whose key is not a
+   `JsonKey` (`BTreeMap<theirs::Key, u32>`). An app's own key type is a `JsonKey` when it is an
+   externally tagged enum of unit variants that derives `ToJson`, or by `impl
+   corten::json::JsonKey`, whose `write_key` writes the one JSON string serde writes for it, quotes
+   included (an agent tool's output that holds a hand-written `ToJson` or `JsonKey` is parsed
+   before it is sent). `serde_json::Value`
    is a `ToJson`, as above. axum's `Json` works too, and writes any `Serialize` through `serde_json`
    and a `BytesMut`.
 7. Numbers are written as serde_json writes them, a whole float as `2.0`

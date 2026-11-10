@@ -1346,16 +1346,20 @@ rules something out.
     derives serde's `Deserialize` beside a schema written by hand does not compile, short of the
     deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson` cannot write takes
     (written by hand, or serde's for an attribute it refuses), which again leaves two impls in its
-    author's hands. What this gives up: the guarantee that a release build's answer parses: a
-    hand-written `ToJson` that writes a broken object breaks the JSON-RPC answer around it, where
-    serde could not. A debug build answers a call whose output is not one object with a 500 and logs
-    the tool; a release build checks only that the output starts with `{` and ends with `}`,
-    answering the tool's internal error otherwise, because parsing it there measured about 92,700
-    more instructions a call (303,500 against 210,762, 44%, on `tool_cost`). Parsing only outputs
-    that are not derived would not make the guarantee: a derived struct writes what its fields'
-    `ToJson` write, hand-written ones included, so a derived output is no proof either; and every
-    `Json` answer sends a hand-written `ToJson` as written, so a tool asks no more of one than they
-    do. A tool output whose `ToJson` falls back to a field's own `Serialize` and fails (another
+    author's hands. A hand-written `ToJson` can write what serde could not, broken JSON, which
+    would break the JSON-RPC answer around a tool's output, so whether an output is parsed before it
+    is sent follows from its type: `ToJson::__well_formed` (hidden) is true for Corten's own impls,
+    for `Raw` (parsed when it is made) and for what serde writes, the AND of its fields' for the
+    derive, and false for an impl written by hand (`JsonKey` likewise, for a map's keys). An output
+    derived over well-formed types, the common case, goes out unparsed; one that is or holds a
+    hand-written `ToJson` is parsed in every build, and one that is not one JSON object is the
+    tool's internal error, logged with the tool's name, the output's size and the fault, not its
+    data. A debug build parses every output and answers a bad one with a 500, so a test stops at
+    it. Not chosen: parsing every output in a release build, about 92,700 more instructions a call
+    (303,500 against 210,762, 44% of `tool_cost`, and 14% over the serde path this replaced) for
+    outputs that cannot be broken; and checking only an output's ends, which sent a broken object as
+    written. `Json` answers are unchanged: they send a hand-written `ToJson` as written. A tool
+    output whose `ToJson` falls back to a field's own `Serialize` and fails (another
     crate's map with a key JSON cannot hold, or a std type serde refuses: a path that is not UTF-8,
     a `SystemTime` before the epoch) panics where it is written, as in every other `ToJson` answer;
     the call catches that panic and answers the tool's internal error (`isError`, "internal error"),
@@ -1387,14 +1391,15 @@ rules something out.
     Stands on: platform (the std types' `ToJson` and `FromJson` write and read what serde and
     serde_json do for them, some by Corten's own code: serde 1.0.229 and serde_json 1.0.154);
     measured (an agent's `items.get` call in card-market's `tool_cost` runs about 21% fewer
-    instructions, a median of 266,735 before (265,585 to 267,508) and 211,213 after (210,919 to
-    212,058): callgrind, release, 1,200 calls less 200 over 1,000, three alternating runs each,
+    instructions, a median of 266,844 before (265,376 to 267,830) and 211,152 after (211,123 to
+    211,865): callgrind, release, 1,200 calls less 200 over 1,000, three alternating runs each,
     14,464 bytes an answer on average over the calls counted; parsing each output in a release build
     would add about 92,700 a call, a median of 303,500 (302,705 to 303,650) against 210,762 (210,433
-    to 211,420), three runs each); reasoned (a derived `ToJson` writes a tool output's schema and
-    its bytes, and a derived `FromJson` a tool input's schema and what it reads; card-market's agent
-    test checks a tool answer's bytes equal serde's for the item); value (one declaration per
-    direction, Values 4, 5 and 6).
+    to 211,420), three runs each, on `19fd761c`; card-market's output is derived, so it is not
+    parsed; tests compare a tool answer's bytes with serde's for the item, and each std type's with
+    serde's, and check which outputs are parsed); reasoned (a derived `ToJson` writes a tool
+    output's schema and its bytes, and a derived `FromJson` a tool input's schema and what it
+    reads); value (one declaration per direction, Values 4, 5 and 6).
 
     Revisit when: an example app needs, because the derives refuse its type, a hand-written `ToJson`
     with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in `impl FromJson for T {}`
@@ -1408,7 +1413,8 @@ rules something out.
     2026-11-10, the std types' and pointers' `ToJson` and `FromJson` against serde's bytes and
     values (`json` tests, and `corten-run` built with `json` alone and with `agent,feed`, serde
     1.0.229 and serde_json 1.0.154), at `479f3f0e`; 2026-11-10, the `tool_cost` count, on `217bce2c`
-    with `tool_cost` added and on `016fc6a1`, and the release parse's cost on `19fd761c`.
+    with `tool_cost` added and on `6d04bbe6`, which parses only an output that is or holds a
+    hand-written `ToJson`, and the release parse's cost on `19fd761c`.
 
 ## Rules
 
