@@ -1318,10 +1318,9 @@ rules something out.
     Revisit when: an example app, or an app that reports it, implements `Row` by hand for a key
     made from more than one field, which a mark on one field cannot say.
 
-    Last checked: 2026-11-10, the derive (which now refuses a skipped id and reads a row a
-    `macro_rules!` declares with a passed-in visibility or attributes), its `compile_fail`
-    examples, `tests/derived_row.rs` and the rows of the four example apps, the live benchmark
-    and `corten-cluster`, on this branch after its merge of `97a63a92`.
+    Last checked: 2026-11-10, the derive, its `compile_fail` examples, `tests/derived_row.rs` and
+    the rows of the four example apps, the live benchmark and `corten-cluster`, on `5710383f`,
+    the derive's last change.
 
 ## Rules
 
