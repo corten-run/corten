@@ -16,8 +16,8 @@ use crate::body::{Body, BoxError};
 pub type Response<B = Body> = http::Response<B>;
 
 // Every stage moves a response; past 128 bytes each move is a call to `memcpy` rather than inline
-// stores, which cost an API request 384 instructions when the body was four words (design
-// Choice 25, step 4).
+// stores, which cost an API request 384 instructions when the body was four words
+// (`docs/design.md#choice-axum-router`, step 4).
 const _: () = assert!(std::mem::size_of::<Response>() <= 128, "a Response<Body> past 128 bytes is copied by a call each move");
 
 /// A value that answers a request: text (`text/plain`), bytes (`application/octet-stream`), a
