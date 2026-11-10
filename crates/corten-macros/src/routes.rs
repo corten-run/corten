@@ -34,6 +34,8 @@ struct Routed {
     doc: String,
     /// `gives(CartCount)`: the layout reads its `GET` page gives itself, as written.
     gives: Vec<TokenStream>,
+    /// `unstaged`: served outside the stages, where it is written.
+    unstaged: Option<Span>,
 }
 
 /// Which of a route's handlers answer as `NoStore` would make them: none, every one (`no_store`),
@@ -76,6 +78,8 @@ struct Serves {
     gives: Vec<TokenStream>,
     /// Where `gives(..)` is.
     gives_at: Option<Span>,
+    /// `unstaged`: no stage runs for it; where it is written.
+    unstaged: Option<Span>,
 }
 
 /// What `#[corten::routes(..)]` says: what the handlers share (`state = Db`), the area the
@@ -264,6 +268,13 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
     // Each handler is checked against the module's state, named for every call, so one that wants
     // another state is an error at its name rather than a mismatch between routers.
     let state_ty = state.clone().unwrap_or_else(|| q("()", &[]));
+    // An unstaged route looks up no caller, which a module's `caller = ..` holds every route to.
+    if let (Some(route), true) = (routed.iter().find(|r| r.unstaged.is_some()), caller.is_some()) {
+        return err(
+            route.unstaged.unwrap_or(route.span),
+            format!("{} says unstaged, which reads no caller, and this module's caller = .. holds every route to taking one: put it in a routes module without caller", route.name),
+        );
+    }
     // Each handler of a module with `caller = Viewer` takes `Caller<Viewer>`, checked at its name.
     let required = match &caller {
         Some(caller) => q("::corten::Caller<__A0>", std::slice::from_ref(caller)),
@@ -299,18 +310,32 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             // `no_store`: the method's no-store form, which checks the handler as one that
             // answers `NoStore<..>` and wraps its answer so, so the handler keeps its own result
             // type and its `?`.
-            let function = if route.no_store.covers(method) {
+            let function = if route.unstaged.is_some() {
+                Ident::new(&format!("unstaged_{method}"), method.span())
+            } else if route.no_store.covers(method) {
                 Ident::new(&format!("no_store_{method}"), method.span())
             } else {
                 method.clone()
             };
-            let call = respan(
-                q(
-                    "::corten::route::__private::__A0::<_, _, __A1, __A2, _, __A3, _, __A4>",
-                    &[TokenTree::Ident(function).into(), state_ty.clone(), required.clone(), params.clone(), rows.clone()],
-                ),
-                at,
-            );
+            // An unstaged route's checks take no caller and no rows: it is in no `caller = ..`
+            // module and names none.
+            let call = if route.unstaged.is_some() {
+                respan(
+                    q(
+                        "::corten::route::__private::__A0::<_, _, __A1, __A2, _>",
+                        &[TokenTree::Ident(function).into(), state_ty.clone(), params.clone()],
+                    ),
+                    at,
+                )
+            } else {
+                respan(
+                    q(
+                        "::corten::route::__private::__A0::<_, _, __A1, __A2, _, __A3, _, __A4>",
+                        &[TokenTree::Ident(function).into(), state_ty.clone(), required.clone(), params.clone(), rows.clone()],
+                    ),
+                    at,
+                )
+            };
             if let (Some(_), Some(args)) = (&document, &route.args) {
                 // The operation, described by the handler's argument and answer types: one the
                 // document cannot describe is an error at the handler's name, as `call` is.
@@ -369,7 +394,11 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
             }
             methods = q("::corten::Methods::__gives(__A0, &[__A1])", &[methods, list]);
         }
-        let template = if within.is_some() {
+        // An unstaged route is added apart from the others, in an area's or API's module too: the
+        // app serves it outside the stages, its host check aside.
+        let template = if route.unstaged.is_some() {
+            ".__unstaged_route::<__A0::__A1>(::corten::route::__private::UnstagedMethods::with_state(__A2, state.clone()))"
+        } else if within.is_some() {
             ".route::<__A0::__A1>(::corten::Methods::with_state(__A2, state.clone()))"
         } else {
             ".__route::<__A0::__A1>(::corten::Methods::with_state(__A2, state.clone()))"
@@ -792,6 +821,51 @@ fn scan(
                     if serves.no_store.said() && serves.handlers.is_empty() {
                         return err(span, format!("no_store says what {name}'s handlers answer, and it has none: #[route(\"{path}\", get = .., no_store)]"));
                     }
+                    if let Some(at) = serves.unstaged {
+                        if serves.handlers.is_empty() {
+                            return err(at, format!("unstaged says how {name}'s handlers are served, and it has none: #[route(\"{path}\", get = .., unstaged)]"));
+                        }
+                        // It reads only its URL, and no same-origin check covers it: it answers a
+                        // read (`get`, which `HEAD` takes too), never another site's write.
+                        if let Some((method, _)) = serves.handlers.iter().find(|(m, _)| m.to_string() != "get") {
+                            return err(method.span(), format!("unstaged serves {name} with no same-origin check, so it answers reads only: give it get = .. alone, and serve {method} on a route without unstaged"));
+                        }
+                        // What the path alone says: a parameter or catch-all as the first segment
+                        // can stand at Corten's own `/corten/`, and `/corten/..`, `/health/live`,
+                        // `/health/ready` and `/health/{..}` are Corten's; the paths an app adds
+                        // (assets, the PWA's, an API's or area's companions) are checked when it
+                        // starts.
+                        let mut segments = path.trim_start_matches('/').split('/');
+                        let first = segments.next().unwrap_or("");
+                        if first.contains('{') {
+                            return err(at, format!("unstaged serves {name} outside the stages, and \"{path}\" starts with a parameter, which can stand at Corten's own /corten/: give it a first segment of its own text"));
+                        }
+                        let second = segments.next();
+                        let health = first == "health"
+                            && second
+                                .is_some_and(|s| s.contains('{') || ((s == "live" || s == "ready") && segments.next().is_none()));
+                        if first == "corten" || health {
+                            return err(at, format!("unstaged serves {name} outside the stages, and \"{path}\" can answer at a path of Corten's own (/corten/.., /health/live, /health/ready): give it a first segment of its own text"));
+                        }
+                        // Each of these is done by a stage, which an unstaged route does not have.
+                        let said = if serves.no_store.said() {
+                            Some("no_store")
+                        } else if serves.rows.is_some() {
+                            Some("rows")
+                        } else if serves.gives_at.is_some() {
+                            Some("gives(..)")
+                        } else {
+                            None
+                        };
+                        if let Some(said) = said {
+                            let hint = if said == "no_store" {
+                                " (an unstaged handler that must not be kept returns NoStore<..> itself)"
+                            } else {
+                                ""
+                            };
+                            return err(at, format!("unstaged sends {name}'s answer as its handler made it, with no stage to apply {said}: say unstaged or {said}, not both{hint}"));
+                        }
+                    }
                     if serves.handlers.is_empty()
                         && prefix != Some(name.to_string().as_str())
                         && document != Some(name.to_string().as_str())
@@ -843,6 +917,7 @@ fn scan(
                             no_store: NoStore::Not,
                             doc: std::mem::take(&mut docs),
                             gives: Vec::new(),
+                            unstaged: None,
                         });
                         start = None;
                         docs.clear();
@@ -884,6 +959,7 @@ fn scan(
                         no_store: serves.no_store,
                         doc: std::mem::take(&mut docs),
                         gives: serves.gives,
+                        unstaged: serves.unstaged,
                     });
                 }
             }
@@ -1011,6 +1087,16 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 }
                 serves.rows = Some(stream(rows.iter().cloned()));
             }
+            // `unstaged`: the route is served outside the app's stages.
+            [TokenTree::Ident(key), ..] if key.to_string() == "unstaged" => {
+                if part.len() > 1 {
+                    return err(part[1].span(), format!("unstaged takes no value: #[route(\"{path}\", get = ping, unstaged)]"));
+                }
+                if serves.unstaged.is_some() {
+                    return err(key.span(), "unstaged is named twice");
+                }
+                serves.unstaged = Some(key.span());
+            }
             [TokenTree::Ident(key), TokenTree::Punct(eq), ..] if eq.as_char() == '=' && key.to_string() == "gives" => {
                 return err(
                     key.span(),
@@ -1086,7 +1172,7 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
             _ => {
                 return err(
                     part[0].span(),
-                    "expected a handler (get = show), rows = .., prefetch = .., no_store, no_store(post) or gives(CartCount)",
+                    "expected a handler (get = show), rows = .., prefetch = .., no_store, no_store(post), gives(CartCount) or unstaged",
                 )
             }
         }
@@ -1098,6 +1184,19 @@ fn route_attr(attr: &Group) -> Result<Option<(String, Span, Serves, Group)>, Err
                 return err(method.span(), format!("no_store({method}) names a method this route has no handler for: #[route(\"{path}\", {method} = .., no_store({method}))]"));
             }
         }
+    }
+    // An unstaged route is not a page, so a link to it is not fetched ahead of a click: it says
+    // `prefetch = false` for `#[derive(Route)]`, and refuses a `prefetch` of its own.
+    if serves.unstaged.is_some() {
+        if let Some(at) = serves.prefetch_at {
+            return err(
+                at,
+                format!(
+                    "unstaged serves \"{path}\" as data, not a page, and a link to it is never prefetched: leave prefetch out"
+                ),
+            );
+        }
+        keep.extend(q(", prefetch = false", &[]));
     }
     let mut cut_args = Group::new(Delimiter::Parenthesis, stream(std::iter::once(TokenTree::Literal(lit.clone())).chain(keep)));
     cut_args.set_span(attr.span());

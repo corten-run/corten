@@ -41,7 +41,10 @@
 //! [`App`] puts the production pieces around the app's routes with defaults: security headers
 //! and a CSP, a cross-site write check, error pages, versioned static files, cache headers
 //! ([`cache`]), health checks, compression (feature `compress`), and live reload under
-//! `corten dev`.
+//! `corten dev`. A route that says `unstaged` is served outside them, for data that is the same
+//! for everyone who can reach it, at about what the router alone costs: it keeps the host check, `nosniff`, a sandbox, keeping an
+//! answer that sets a cookie out of shared caches and, under an API's prefix, the API's JSON
+//! failures.
 //!
 //! Modules: [`answer`] (what a route answers), [`caller`] (who is asking), [`middleware`],
 //! [`api`] (JSON-only routes), [`cache`] (HTTP caching), [`view`] (markup), [`script`]
@@ -117,6 +120,7 @@ mod client;
 pub mod compress;
 pub mod extract;
 pub mod form;
+mod handler;
 mod html;
 pub mod i18n;
 #[cfg(feature = "json")]
@@ -130,6 +134,7 @@ pub mod openapi;
 mod page;
 pub mod pwa;
 pub mod route;
+mod router;
 pub mod script;
 pub mod security;
 pub mod seo;
@@ -154,8 +159,6 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::get,
-    Router,
 };
 use futures_util::{Stream, StreamExt};
 
@@ -376,6 +379,7 @@ pub use page::{
     ReadAgainFrom, ReadAgainWithoutJavaScript, Req, MODE_HEADER,
 };
 pub use route::{routes, Elsewhere, Href, Local, Methods, OnSite, Params, ParamsRejection, Prefix, Route, Routes, UrlValue};
+pub use router::Router;
 pub use script::{event, Handler, Ref, Script};
 pub use signal::{Abort, Shutdown, Signal};
 pub use style::Style;
@@ -632,7 +636,17 @@ impl From<String> for Fragment {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LiveSince(pub Option<String>);
 
-impl<S: Send + Sync> axum::extract::FromRequestParts<S> for LiveSince {
+/// A feed's cursor ([`feed::Since`]), read by [`feed::Since::read`].
+#[cfg(feature = "feed")]
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for corten_feed::Since {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> std::result::Result<Self, Self::Rejection> {
+        Ok(corten_feed::Since::read(parts))
+    }
+}
+
+impl<S: Send + Sync> crate::extract::FromRequestParts<S> for LiveSince {
     type Rejection = Infallible;
 
     async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> std::result::Result<Self, Self::Rejection> {
@@ -656,10 +670,9 @@ async fn draining() {
     let _ = DRAINING.subscribe().wait_for(|draining| *draining).await;
 }
 
-/// Routes the runtime at [`runtime_path`], versioned and cached forever. Merge into the app
-/// router.
-pub fn routes<St: Clone + Send + Sync + 'static>() -> Router<St> {
-    Router::new().route(runtime_path(), get(|headers: HeaderMap| async move { RUNTIME.respond(&headers) }))
+/// The runtime's route, at [`runtime_path`], versioned and cached forever.
+pub(crate) fn runtime_routes() -> router::Table {
+    router::Table::new().route(runtime_path(), router::get(|headers: HeaderMap| async move { RUNTIME.respond(&headers) }))
 }
 
 const JS: &str = "text/javascript; charset=utf-8";
@@ -702,9 +715,8 @@ impl Served {
 
 /// `GET /health/live` (the process answers) and `GET /health/ready` (`ready` says it can serve:
 /// database reachable, feeds loaded). Both answer `no-store` plain text.
-pub fn health<St, F, Fut>(ready: F) -> Router<St>
+pub(crate) fn health<F, Fut>(ready: F) -> router::Table
 where
-    St: Clone + Send + Sync + 'static,
     F: Fn() -> Fut + Clone + Send + Sync + 'static,
     Fut: std::future::Future<Output = bool> + Send,
 {
@@ -713,9 +725,9 @@ where
         (status, [(header::CACHE_CONTROL, HeaderValue::from_static("no-store"))], if ok { "ok" } else { "unavailable" })
             .into_response()
     };
-    Router::new().route("/health/live", get(move || async move { answer(true) })).route(
+    router::Table::new().route("/health/live", router::get(move || async move { answer(true) })).route(
         "/health/ready",
-        get(move || {
+        router::get(move || {
             let ready = ready.clone();
             async move { answer(ready().await) }
         }),
