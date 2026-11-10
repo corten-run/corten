@@ -43,8 +43,6 @@ use std::sync::Arc;
 use axum::{
     http::{header, HeaderValue, Uri},
     response::{IntoResponse, Response},
-    routing::get,
-    Router,
 };
 
 use crate::{
@@ -747,20 +745,20 @@ impl Pwa {
     }
 
     /// `GET /manifest.webmanifest` and `GET /service-worker.js`.
-    pub fn routes<S: Clone + Send + Sync + 'static>(&self) -> Router<S> {
+    pub(crate) fn routes(&self) -> crate::router::Table {
         let manifest: Arc<str> = self.manifest.to_json().into();
         let worker: Arc<str> = self.worker_js().into();
-        Router::new()
+        crate::router::Table::new()
             .route(
                 MANIFEST_PATH,
-                get(move || {
+                crate::router::get(move || {
                     let manifest = manifest.clone();
                     async move { text(&manifest, "application/manifest+json", "public, max-age=3600") }
                 }),
             )
             .route(
                 WORKER_PATH,
-                get(move || {
+                crate::router::get(move || {
                     let worker = worker.clone();
                     async move {
                         let mut res = text(&worker, "text/javascript; charset=utf-8", "no-cache");

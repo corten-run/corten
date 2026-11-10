@@ -232,8 +232,8 @@ test("nightly short-window pinned matrix validates, but has a different comparis
   const old = nightly("r17"), current = nightly("r18");
   validateSummary(current);
   const runs = Object.values(current.apps).flatMap((a) => Object.values(a.runs).flat());
-  assert.equal(runs.length, 18 * 8 * 3);
-  assert.equal(runs.filter((r) => r.locale === null).length, 18 * 2 * 3);
+  assert.equal(runs.length, 20 * 8 * 3);
+  assert.equal(runs.filter((r) => r.locale === null).length, 20 * 2 * 3);
   assert.match(report(current), /Short 15s phase windows \(10s warmup\)/);
   const key = comparisonKey(old);
   assert.match(key, /^[a-f0-9]{64}$/);

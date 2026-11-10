@@ -72,12 +72,11 @@ use std::{
 
 use axum::body::Bytes;
 use axum::{
-    extract::Path as UrlPath,
     http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
-    Router,
 };
+
+use crate::router::{get, Table};
 
 use crate::{fnv, Component};
 
@@ -216,12 +215,12 @@ const NO_FAVICON_CACHE: HeaderValue = HeaderValue::from_static("public, max-age=
 /// directory's `favicon.ico` (`image/x-icon`), else its `favicon.svg` (`image/svg+xml`), each
 /// with its ETag and a day's cache; with neither, a 404 with no body and an hour's cache. Chosen
 /// once, at startup, and no layout read or page runs for it (#1056).
-pub(crate) fn favicon<S: Clone + Send + Sync + 'static>(assets: Option<&Arc<Assets>>) -> Router<S> {
+pub(crate) fn favicon(assets: Option<&Arc<Assets>>) -> Table {
     let icon = assets.and_then(|assets| {
         let path = ["favicon.ico", "favicon.svg"].into_iter().find(|path| assets.files.contains_key(*path))?;
         Some((assets.clone(), path))
     });
-    Router::new().route(
+    Table::new().route(
         FAVICON_PATH,
         get(move |method: Method, headers: HeaderMap| {
             let icon = icon.clone();
@@ -784,20 +783,25 @@ impl Assets {
         self.files.keys().map(|path| format!("{}{path}", self.prefix))
     }
 
-    /// The route that serves the files. Merge into the app router.
-    pub fn routes<S: Clone + Send + Sync + 'static>(self: &Arc<Self>) -> Router<S> {
+    /// The route that serves the files, which `App` serves with the app's.
+    pub(crate) fn routes(self: &Arc<Self>) -> Table {
         let assets = self.clone();
-        Router::new().route(
+        Table::new().route(
             &format!("{}/{{version}}/{{*path}}", self.mount),
-            get(move |UrlPath((version, path)): UrlPath<(String, String)>, method: Method, headers: HeaderMap| {
+            get(move |req: axum::extract::Request| {
                 let assets = assets.clone();
                 async move {
+                    let (parts, _) = req.into_parts();
+                    let (version, path) = match crate::route::read_path::<(String, String)>(&parts) {
+                        Ok(read) => read,
+                        Err(rejection) => return rejection.into_response(),
+                    };
                     let (cache, url) = if version == assets.version {
                         (IMMUTABLE, Url::Current)
                     } else {
                         (HeaderValue::from_static("no-cache"), Url::Old)
                     };
-                    assets.serve(&path, &method, &headers, cache, url)
+                    assets.serve(&path, &parts.method, &parts.headers, cache, url)
                 }
             }),
         )
@@ -1237,7 +1241,7 @@ mod tests {
         let requests: usize = std::env::var("ASSET_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
         let root = dir("cost", &[("style.css", &"a{color:red}\n".repeat(320))]);
         let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
-        let app: Router = assets.routes();
+        let app = crate::Router::from(assets.routes());
         let url = assets.url("style.css");
         let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
         runtime.block_on(async {
@@ -1253,7 +1257,7 @@ mod tests {
         let root = dir("serve", &[("style.css", "a{}"), ("scripts/x_y.js", "export function f() {}"), (".env", "SECRET=1")]);
         let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
         assert_eq!(assets.scripts_dir(), format!("/assets/{}/scripts/", assets.version()));
-        let app: Router = assets.routes();
+        let app = crate::Router::from(assets.routes());
         let get = |uri: String| app.clone().oneshot(Request::get(uri).body(Body::empty()).unwrap());
         let res = get(assets.url("style.css")).await.unwrap();
         assert_eq!(res.status(), StatusCode::OK);
@@ -1307,7 +1311,7 @@ mod tests {
         let video: String = (0..100u8).map(|i| char::from(b'a' + i % 26)).collect();
         let root = dir("ranges", &[("intro.mp4", &video)]);
         let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
-        let app: Router = assets.routes();
+        let app = crate::Router::from(assets.routes());
         let url = assets.url("intro.mp4");
         let get = |headers: &[(header::HeaderName, &str)]| {
             let mut req = Request::get(&url);
@@ -1402,8 +1406,7 @@ mod tests {
         assert_eq!(head.headers()[header::CONTENT_TYPE], "video/mp4", "a HEAD names the file's type");
         let root = dir("ranges-empty", &[("empty.vtt", "")]);
         let empty = Arc::new(Assets::load(&root, "/assets").unwrap());
-        let res = empty
-            .routes::<()>()
+        let res = crate::Router::from(empty.routes())
             .oneshot(Request::get(empty.url("empty.vtt")).header(header::RANGE, "bytes=0-").body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -1422,7 +1425,7 @@ mod tests {
         let captions = format!("WEBVTT\n\n{}", "00:00.000 --> 00:01.000\nA line of captions.\n\n".repeat(60));
         let root = dir("ranges-encoded", &[("en.vtt", &captions)]);
         let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
-        let app: Router = assets.routes();
+        let app = crate::Router::from(assets.routes());
         let url = assets.url("en.vtt");
         let get = |encodings: &str| {
             let req = Request::get(&url).header(header::RANGE, "bytes=0-9").header(header::ACCEPT_ENCODING, encodings);
@@ -1459,7 +1462,7 @@ mod tests {
         let captions = format!("WEBVTT\n\n{}", "00:00.000 --> 00:01.000\nA line of captions.\n\n".repeat(60));
         let root = dir("ranges-middleware", &[("en.vtt", &captions)]);
         let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
-        let app: Router = crate::compress::apply(assets.routes());
+        let app = crate::compress::apply(axum::Router::new().fallback_service(crate::Router::from(assets.routes())));
         let url = assets.url("en.vtt");
         for encodings in ["gzip", "zstd"] {
             let req = Request::get(&url).header(header::RANGE, "bytes=100-1299").header(header::ACCEPT_ENCODING, encodings);
@@ -1478,7 +1481,7 @@ mod tests {
         let svg = format!("<svg>{}</svg>", "<path d=\"M0 0h1v1\"/>".repeat(200));
         let root = dir("favicon-compression", &[("favicon.svg", &svg)]);
         let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
-        let app: Router = crate::compress::apply(favicon(Some(&assets)));
+        let app = crate::compress::apply(axum::Router::new().fallback_service(crate::Router::from(favicon(Some(&assets)))));
         let request = |tag: Option<HeaderValue>| {
             let mut req = Request::get(FAVICON_PATH).header(header::ACCEPT_ENCODING, "gzip, deflate");
             if let Some(tag) = tag {
@@ -1813,7 +1816,10 @@ mod tests {
         };
         let assets = Arc::new(Assets::build(None, &[theme(&[("sm", "40rem"), ("md", "48rem")]), wide], "/assets").unwrap());
         let url = assets.stylesheet().expect("a stylesheet").to_string();
-        let res = assets.routes().oneshot(axum::http::Request::get(url).body(Body::empty()).unwrap()).await.unwrap();
+        let res = crate::Router::from(assets.routes())
+            .oneshot(axum::http::Request::get(url).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
         assert_eq!(
             &body[..],
@@ -1861,7 +1867,10 @@ mod tests {
             Assets::build_with(Vec::new(), &[theme(&[("sm", "40rem"), ("md", "48rem")])], &[("/admin", &[wide])], "/assets")
                 .unwrap();
         let admin = area.url("sections/admin.css");
-        let res = Arc::new(area).routes().oneshot(axum::http::Request::get(admin).body(Body::empty()).unwrap()).await.unwrap();
+        let res = crate::Router::from(Arc::new(area).routes())
+            .oneshot(axum::http::Request::get(admin).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
         assert_eq!(
             &body[..],
@@ -1874,7 +1883,7 @@ mod tests {
         let assets = Arc::new(Assets::build(None, &[tokens, card, SCRIPT, card], "/assets").unwrap());
         let url = assets.stylesheet().expect("a stylesheet").to_string();
         assert_eq!(url, assets.url(STYLESHEET));
-        let app: Router = assets.routes();
+        let app = crate::Router::from(assets.routes());
         let res = app.oneshot(axum::http::Request::get(url).body(Body::empty()).unwrap()).await.unwrap();
         assert_eq!(res.headers()["content-type"], "text/css; charset=utf-8");
         let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
@@ -1945,7 +1954,7 @@ mod tests {
             ],
             "a section without stylesheets has no file"
         );
-        let app: Router = assets.routes();
+        let app = crate::Router::from(assets.routes());
         let body = |url: String| {
             let app = app.clone();
             async move {
@@ -1961,8 +1970,7 @@ mod tests {
         assert_eq!(&body(assets.url("sections/admin.css")).await[..], b".chart__a{}", "listed twice, joined once");
         let only_areas = Arc::new(Assets::build_with(Vec::new(), &[SCRIPT], &[("/admin", &[chart])], "/assets").unwrap());
         assert!(only_areas.stylesheet().is_none(), "no components.css without a stylesheet in it");
-        let res = only_areas
-            .routes()
+        let res = crate::Router::from(only_areas.routes())
             .oneshot(Request::get(only_areas.url("sections/admin.css")).body(Body::empty()).unwrap())
             .await
             .unwrap();
@@ -2012,8 +2020,7 @@ mod tests {
                 ("/search /categories".to_string(), assets.url("sections/search+categories.css"), "SearchPage Facet".to_string()),
             ]
         );
-        let res = assets
-            .routes::<()>()
+        let res = crate::Router::from(assets.routes())
             .oneshot(Request::get(assets.url("sections/search+categories.css")).body(Body::empty()).unwrap());
         let body = http_body_util::BodyExt::collect(res.await.unwrap().into_body()).await.unwrap().to_bytes();
         assert_eq!(

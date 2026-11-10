@@ -12,9 +12,9 @@ use std::{
     },
 };
 
+use crate::extract::{FromRequestParts, Request};
 use axum::{
     body::Body,
-    extract::{FromRequestParts, Request},
     http::{header, request::Parts, Extensions, HeaderMap, HeaderName, HeaderValue, StatusCode, Uri},
     response::{IntoResponse, Response},
 };
