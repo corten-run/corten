@@ -20,10 +20,6 @@ mod routes {
         pub id: &'a str,
     }
 
-    /// How the market grades a card's condition: a short captioned clip, linked from each category.
-    #[route("/grading", get = app::grading)]
-    pub struct Grading;
-
     #[route("/categories/{slug}", get = app::category)]
     pub struct Category<'a> {
         pub slug: &'a str,
@@ -38,6 +34,15 @@ mod routes {
     /// Where browsers send a report of what a page's policy blocked (`Policy::report_to`).
     #[route("/csp-reports", post = app::csp_reports)]
     pub struct CspReports;
+}
+
+/// How the market grades a card's condition: a short captioned clip, linked from each category.
+/// An area of its own, so the clip's stylesheet is linked from this page alone and the components'
+/// sheet every other page links (the one the bench apps copy) stays as it was.
+#[corten::routes(area = Grading)]
+mod grading {
+    #[route("/grading", get = app::grading)]
+    pub struct Grading;
 }
 
 /// The item pages, where a visitor writes (a price alert): the write limit is on this area, so

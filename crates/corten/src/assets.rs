@@ -837,7 +837,9 @@ impl Assets {
         // encoded body's offsets are not the file's, so it is sent whole, and RFC 9110 has every other
         // method ignore `Range`. Only a URL of this version names these exact bytes: an old
         // version's URL or the favicon's may name other bytes across a deploy, and a player that
-        // joined ranges of two would play neither, so those are sent whole. `If-Range` holds for
+        // joined ranges of two would play neither, so those are sent whole (a fleet partway through a deploy
+        // can still answer one URL from two versions, and a client that sends `If-Range` then gets the
+        // whole file). `If-Range` holds for
         // this version's own strong tag only (the files have no date). No `Accept-Ranges`: a
         // browser asks for a range unprompted, and the header would cost every file's answer (#1133).
         #[cfg(feature = "compress")]

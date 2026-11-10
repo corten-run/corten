@@ -3,7 +3,7 @@ use corten::{Component, prelude::*};
 
 use std::sync::Arc;
 
-use crate::{model::ItemView, routes, source::Shelf, text::Msg, theme};
+use crate::{grading, model::ItemView, routes, source::Shelf, text::Msg, theme};
 
 corten::assets::embed! {
     /// The files in `static/`, compiled into the program: `Static::STYLE_CSS` is `static/style.css`.
@@ -32,8 +32,7 @@ pub use site_header::SiteHeader;
 
 /// Every component with a script or a stylesheet, tokens first: for `App::components` and the
 /// generated types.
-pub const COMPONENTS: &[Component] =
-    &[theme::TOKENS, SiteHeader, ItemDetail, AlertForm, Price, ItemList, ItemCard, ListingSort, ConditionGuide];
+pub const COMPONENTS: &[Component] = &[theme::TOKENS, SiteHeader, ItemDetail, AlertForm, Price, ItemList, ItemCard, ListingSort];
 
 /// The page for a failed request (`App::error_page`), in the layout; under `corten dev` it shows
 /// the error. The PWA's offline page is `Failure::Offline`.
@@ -67,7 +66,7 @@ pub fn category<'a>(req: &'a Req, t: Msg, title: &'a str, items: &'a [Arc<ItemVi
     html! {
         <h1>{title}</h1>
         if !items.is_empty() { <ItemList req={req} t={t} shelf={Shelf::Items(items)} /> }
-        <p><a href={routes::Grading}>{t.grading_title()}</a></p>
+        <p><a href={grading::Grading}>{t.grading_title()}</a></p>
         <p><a href={routes::Home}>{t.category_back()}</a></p>
     }
 }

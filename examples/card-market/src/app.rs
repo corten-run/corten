@@ -28,7 +28,7 @@ use corten::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    api, items, mcp,
+    api, grading, items, mcp,
     model::{AlertInput, ItemView, set_alert},
     routes,
     source::Source,
@@ -102,6 +102,7 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
     let ready = source.clone();
     App::new(routes::router(source.clone()))
         .area(|area| items::area(area, source.clone()).middleware(limit.clone()))
+        .area(|area| grading::area(area).components(&[ConditionGuide]))
         .assets(crate::views::Static)
         .api(|routes| api::api(routes, ApiState { source, partners }).middleware(limit.for_partners()))
         .api(|routes| {
@@ -405,8 +406,8 @@ pub(crate) async fn category(
     if items.is_empty() { answer.header::<XRobotsTag>(HeaderValue::from_static("noindex")) } else { answer }
 }
 
-/// How the market grades a card's condition: a page of its own, so the home page every bench app
-/// renders alike stays the same (#1133).
+/// How the market grades a card's condition: a page of its own in an area of its own, so the pages
+/// and the components' stylesheet the bench apps copy stay as they were (#1133).
 pub(crate) async fn grading(req: Req) -> Public<HtmlResult> {
     let t: Msg = req.t();
     let req = &req;
@@ -580,7 +581,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{api, items, mcp, routes, views::ItemQuery};
+    use crate::{api, grading, items, mcp, routes, views::ItemQuery};
 
     /// Fetch metadata a browser sends with a form post: a post from another site is refused.
     const SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
@@ -733,7 +734,7 @@ mod tests {
     async fn the_condition_clip_is_captioned_in_the_readers_language() {
         let app = app();
         for (language, on, off) in [("en", "en", "fr"), ("fr-CA", "fr", "en")] {
-            let page = app.get(&routes::Grading).header(header::ACCEPT_LANGUAGE, language).await;
+            let page = app.get(&grading::Grading).header(header::ACCEPT_LANGUAGE, language).await;
             let html = page.text();
             let track = |lang: &str| {
                 let at = html.find(&format!(r#"srclang="{lang}""#)).unwrap_or_else(|| panic!("{lang} track: {html}"));
@@ -750,7 +751,14 @@ mod tests {
         assert!(!app.get(&routes::Home).await.text().contains("<video"), "the home page is the bench's, unchanged");
         let category = app.get(&routes::Category { slug: "promo" }).await;
         let category = category.text();
-        assert!(category.contains(&format!(r#"<a href="{}">"#, routes::Grading)), "{category}");
+        assert!(category.contains(&format!(r#"<a href="{}">"#, grading::Grading)), "{category}");
+        let sheet = |html: &str, name: &str| html.contains(&format!("/{name}\" data-corten-style>"));
+        let grading = app.get(&grading::Grading).await;
+        let grading = grading.text();
+        assert!(sheet(grading, "sections/grading.css"), "the clip's styles are its area's: {grading}");
+        let home = app.get(&routes::Home).await;
+        let home = home.text();
+        assert!(!sheet(home, "sections/grading.css"), "and no other page links them");
     }
 
     #[tokio::test]
