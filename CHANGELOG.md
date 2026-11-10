@@ -5888,6 +5888,23 @@ Corten is pre-1.0, so any minor version may change the API.
     fetch draws the error page rather than its plain text, and an error page keeps the `Vary` of
     the failure it replaces beside its own
     ([#1034 A page fetched whole after a write that redirects to a place loses its #id: the fetch sends no corten header, so the redirect is a 303 that fetch follows without the fragment](https://github.com/corten-run/corten/issues/1034)).
+197. A `#[derive(UrlValue)]` enum is an attribute's value (`AttrValue`), so
+    `data-finish={Some(finish)}` writes its word and `None` leaves the attribute out, as an
+    `Option<&str>` does; before, the enum was written alone through `Display` and an `Option` of
+    it did not compile. The word is escaped as before. An `Option` of a type that implements only
+    `Display` still needs `.map(|v| v.to_string())` (`Option<T>` is an `AttrValue` when `T`
+    is), which the `AttrValue` doc now says, and the compiler's message for it says what an
+    `Option` takes there (tested by building an app). Breaking for an app that implemented
+    `AttrValue` on its own `UrlValue` enum, or that implements a trait of its own for every
+    `AttrValue` and again for such an enum: both now conflict with the derive's impl.
+    **Migration:** delete the hand-written impl; the derive's writes the same word. A direct
+    `UrlValue` attribute now goes through `AttrValue` for `str` rather than the `Display` escaper,
+    and callgrind resolves no difference: counting only the loop that renders the 500 benchmark item
+    pages once (271 of them have more than five offers and so draw one, `value={Shown::All}`), three
+    runs of each build, alternated, gave 22,256,152 to 22,322,895 instructions before (median
+    22,258,651) and 22,238,287 to 22,383,606 after (median 22,296,593), about 44,500 a page, and the
+    same 3,677,304 bytes
+    ([#1111 Optional UrlValue enum attributes fail where direct enum attributes compile](https://github.com/corten-run/corten/issues/1111)).
 198. A `<dialog>` or `[popover]` written as a direct child of a kit `Stack` or `Cluster` (beside the
     button that opens it) lost the browser's `margin: auto` to the kit's margin reset, so a modal
     opened pinned to the top of a phone's screen and a popover without an anchor at the top; one in
