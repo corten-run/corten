@@ -78,7 +78,7 @@ struct NewListing { title: String, photos: Files }   // <input type="file" name=
 
 async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
     let f = NewListing::FIELDS;
-    upload.limit(60 << 20);                     // the whole body (the route's body_limit, 2 MiB, unless set), before reading
+    upload.limit(60 << 20);                     // the whole body, in place of the route's body_limit (2 MiB by default); before reading
     let mut errors = Errors::new();
     while let Some(mut file) = upload.next_file().await? {
         if !file.is(f.photos) { continue }      // skipped, not stored

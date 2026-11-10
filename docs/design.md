@@ -710,7 +710,8 @@ rules something out.
     larger whole body). It is a setting again because the limit is the readers' defence and one
     size serves neither end of an app well: a public area of short forms is cheaper to refuse at
     a few KiB, and an API that takes documents needs more than 2 MiB without dropping `Json` for
-    `bytes_up_to` and parsing by hand. No example app sets one yet. Not chosen: a limit per route, which axum's layer gave and which
+    `bytes_up_to` and parsing by hand. No example app sets one yet, so that is a bet, and every
+    app pays for it whether it sets one or not: a whole body read costs about 1% more (below). Not chosen: a limit per route, which axum's layer gave and which
     would be a second place a route's settings live beside its area or API; and a type parameter
     on the readers (`Json<T, LIMIT>`), which puts a server setting in every handler's signature.
     The request's `Signal`, which every staged request already allocates, carries the limit,
@@ -741,11 +742,15 @@ rules something out.
     against step 2 at `7bba1e2b`: about 100 instructions fewer a staged request with jemalloc
     and 150 to 170 with glibc, an unstaged one the same; [Choice 25](#choice-axum-router), Stands
     on);
+    bet (the maintainer asked for the limit to be set where the deadline is, after the review of
+    the framework without axum; an app that needs a size other than 2 MiB for `Json` or `Form`
+    is expected, not yet seen);
     measured (callgrind, release, jemalloc, 1,200 against 200 requests in process through the
-    stages, the settable limit against `9653c20c`: a plain answer 13,234 instructions a request
-    before and 13,260 after, and a 1 KiB body `Bytes` reads 17,291 before and 17,465 after, the
-    same with a limit set; a limit put on the request as an extension of its own instead cost
-    17,969 with one set);
+    stages, one run each, the settable limit against `9653c20c`: a plain answer 13,234
+    instructions a request before and 13,261 after, and a 1 KiB body `Bytes` reads 17,291 before
+    and 17,461 after, the same with `App::body_limit(4 << 20)` set (an area's limit adds the
+    prefix lookup the deadline already pays); a limit put on the request as an extension of its own
+    instead cost 17,969 with one set);
     measured (axum 0.8.9's `Json` answers to twelve bodies under eight content types, recorded
     before it left and held by `json.rs`'s `AXUM_0_8_9` table);
     reasoned (the trait's shape is axum 0.8's, so an extractor's `impl` body compiles unchanged;
@@ -764,7 +769,8 @@ rules something out.
     Last checked: 2026-11-09, axum 0.8.9 (`axum-core` 0.5.6) and rustc 1.99.1, Corten's own
     traits at the commit that adds them ([Choice 25](#choice-axum-router), Last checked);
     2026-11-10, `IntoResponse`, `FromRef` and the body readers Corten's, axum gone
-    ([Choice 25](#choice-axum-router), step 4), with axum 0.8.9's `Json` answers recorded first.
+    ([Choice 25](#choice-axum-router), step 4), with axum 0.8.9's `Json` answers recorded first;
+    2026-11-10, the limit set per app, area and API and its cost, measured against `9653c20c`.
 
 22. <a id="choice-locale-in-url"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)

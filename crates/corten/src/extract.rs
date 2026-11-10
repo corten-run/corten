@@ -960,6 +960,15 @@ mod tests {
         let (req, read) = limited(512 << 10, 10);
         assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 2);
+        // Over 64 MiB the read past stops at 64 MiB: 66 pieces to cross a 65 MiB limit, then until
+        // 64 MiB more than the limit has arrived (131 without the cap).
+        let (req, read) = limited(65 << 20, 140);
+        assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 130);
+        // A body whose length says it is over twice the limit is refused unread.
+        let mut req = super::Request::new(Body::new(Said((1 << 20) + 1)));
+        req.extensions_mut().insert(crate::Signal::with_body_limit(512 << 10));
+        assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     /// The whole body of `req`, at the limit the stages put on it, as a reader takes it.

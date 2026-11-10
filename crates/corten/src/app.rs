@@ -700,9 +700,10 @@ impl<M: Middleware> App<M> {
     /// ([`crate::Upload::limit`]): 2 MiB unless set. Over it the answer is a 413 (before the
     /// handler runs for the readers, at the read that crosses it for an `Upload`), and the rest of
     /// the body is read past by up to the limit again (at most 64 MiB) so a browser still sending
-    /// sees it. The readers wait for a slow client until the deadline, not an idle time as an
-    /// `Upload` does, so a raised limit keeps one ([`App::deadline`]); a proxy in front needs a
-    /// body limit of at least twice the app's (see the deploy guide). An area or an API whose
+    /// sees it (an `Upload` reads past by up to 64 MiB whatever its limit). The readers wait for a
+    /// slow client until the deadline, not an idle time as an `Upload` does, so a raised limit
+    /// keeps one ([`App::deadline`]); a proxy in front needs a body limit of at least twice the
+    /// app's, or the limit and 64 MiB where uploads take it (see the deploy guide). An area or an API whose
     /// routes take more, or should take less, sets its own ([`Area::body_limit`],
     /// [`Api::body_limit`]), so one route that takes large documents does not raise it for every
     /// page. A handler that takes the whole request reads its body at a limit of its own
@@ -2040,7 +2041,7 @@ impl<S: Steps> Layer<S> {
         if self.bounds {
             crate::client::answering(deadline);
         }
-        // The body limit, the same way, carried by the request's signal when it is not the default.
+        // The body limit, the same way, carried by the request's signal.
         let body_limit = match mount {
             Some(mount) => mount.body_limit.unwrap_or(self.body_limit),
             None if own || self.area_limits.is_empty() => self.body_limit,
@@ -2057,8 +2058,6 @@ impl<S: Steps> Layer<S> {
                 return res;
             }
         }
-        // 0: the default, which the signal does not carry.
-        let body_limit = if body_limit == crate::extract::BODY_LIMIT { 0 } else { body_limit };
         // A debug build holds a write's redirect to the page's `form-action`, as a browser does.
         #[cfg(debug_assertions)]
         if mount.is_none() {
@@ -2176,7 +2175,7 @@ impl<S: Steps> Layer<S> {
         }
         // Refused before `run` gives the request its signal: the error page reads the app's
         // state (its static files, head tags, import map, the visitor's zone) from it.
-        let watch = Watch(self.signal(req.headers(), 0));
+        let watch = Watch(self.signal(req.headers(), crate::extract::BODY_LIMIT));
         req.extensions_mut().insert(watch.0.clone());
         Some((Asked::new(req, &self.shared, Credentials::of(req.headers()), (mode, fetched)), watch))
     }

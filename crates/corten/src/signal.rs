@@ -144,29 +144,28 @@ struct Inner {
     /// its own, so the request's extensions stay within their first allocation.
     shared: Option<Arc<crate::page::Shared>>,
     /// The body limit of the request's app, area or API where it is not the default
-    /// ([`crate::App::body_limit`]), here for the same reason; 0 for the default.
+    /// ([`crate::App::body_limit`]), here for the same reason: the limit XOR the default, so a
+    /// signal made without one (`Default`, 0) has the default and every limit, 0 too, is kept.
     body_limit: usize,
 }
 
 impl Signal {
     /// A request's signal in an app.
     pub(crate) fn for_app(shared: Arc<crate::page::Shared>, body_limit: usize) -> Signal {
+        let body_limit = body_limit ^ crate::extract::BODY_LIMIT;
         Signal(Arc::new(Inner { shared: Some(shared), body_limit, ..Inner::default() }))
     }
 
     /// The most of the request's body the readers take ([`crate::App::body_limit`]).
     #[inline]
     pub(crate) fn body_limit(&self) -> usize {
-        match self.0.body_limit {
-            0 => crate::extract::BODY_LIMIT,
-            limit => limit,
-        }
+        self.0.body_limit ^ crate::extract::BODY_LIMIT
     }
 
     /// A signal with a body limit and nothing else, for a test of a reader.
     #[cfg(test)]
     pub(crate) fn with_body_limit(limit: usize) -> Signal {
-        Signal(Arc::new(Inner { body_limit: limit, ..Inner::default() }))
+        Signal(Arc::new(Inner { body_limit: limit ^ crate::extract::BODY_LIMIT, ..Inner::default() }))
     }
 
     /// A request's signal in an app that learns its visitors' zones, with the one the browser
@@ -177,6 +176,7 @@ impl Signal {
         zone: Option<crate::client::ZoneName>,
         body_limit: usize,
     ) -> Signal {
+        let body_limit = body_limit ^ crate::extract::BODY_LIMIT;
         Signal(Arc::new(Inner { shared: Some(shared), zone, body_limit, ..Inner::default() }))
     }
 

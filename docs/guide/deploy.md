@@ -79,8 +79,9 @@ server {
 ```
 
 A prefix that raises the app's body limit (`Api::body_limit(16 << 20)` for a document API)
-needs a `client_max_body_size` of at least twice that limit in a `location` of its own, so a
-body just over it reaches the app and the client reads the app's 413, not nginx's page.
+needs a `client_max_body_size` of at least twice that limit in a `location` of its own (the
+limit and 64 MiB where an `Upload` takes it, which reads past by that much), so a body just over
+it reaches the app and the client reads the app's 413, not nginx's page.
 
 A route that reads a large body as it arrives (a file `PUT` read with
 `corten::extract::pieces_up_to`) gets a `location` of its own in the same `server`, so nginx

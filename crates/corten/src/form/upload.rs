@@ -153,7 +153,7 @@ const HEAD_LIMIT: usize = 8 * 1024;
 /// name and no bytes (which `FormData` keeps as an empty `File`), and [`Upload::next_file`] passes
 /// over it (design.md, Limits). A part with bytes is a file, with an empty name if it came with
 /// none. The request may take the route's body limit (fields, and files it reads or passes on;
-/// [`crate::App::body_limit`], 2 MiB unless set) unless the handler sets [`Upload::limit`]
+/// [`crate::App::body_limit`], 2 MiB by default), or what the handler sets with [`Upload::limit`]
 /// before reading; past it the request is a 413. A file it passes
 /// over does not count, and one over its [`File::bytes_up_to`] needs room for that `max` as it
 /// goes over, then counts nothing (the rest is read past). A client that sends nothing for a

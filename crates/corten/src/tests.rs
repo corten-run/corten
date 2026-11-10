@@ -3509,6 +3509,9 @@ async fn an_area_or_an_api_sets_its_own_body_limit() {
     };
     assert_eq!(default.clone().oneshot(req(2 << 20)).await.unwrap().status(), StatusCode::OK, "2 MiB unless set");
     assert_eq!(default.oneshot(req((2 << 20) + 1)).await.unwrap().status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let none = App::new(Routes::from(Table::new().route("/take", take().0))).body_limit(0).router();
+    assert_eq!(none.clone().oneshot(req(0)).await.unwrap().status(), StatusCode::OK, "an empty body fits");
+    assert_eq!(none.oneshot(req(1)).await.unwrap().status(), StatusCode::PAYLOAD_TOO_LARGE, "0 is 0, not the default");
 }
 
 #[cfg(feature = "json")]

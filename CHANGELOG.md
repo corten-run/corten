@@ -10,11 +10,11 @@ Corten is pre-1.0, so any minor version may change the API.
   `Bytes`, `String`, `Json` and `Form` read, and what an `Upload` keeps unless its handler
   sets `upload.limit`, by the prefix rules the deadline has (the innermost area or API that sets
   one decides; an API in an area takes the area's). It is 2 MiB unless set, as before, and a body
-  over it is read past by up to the limit again (at most 64 MiB) where the fixed limit read past
-  by 2 MiB. The readers wait for a slow client until the deadline, so a prefix that raises the
+  the readers refuse is read past by up to the limit again (at most 64 MiB) where the fixed limit
+  read past by 2 MiB. The readers wait for a slow client until the deadline, so a prefix that raises the
   limit keeps one. Design Choice 21 is reopened for it.
-  Measured with callgrind (release, jemalloc): a plain answer costs 13,260 instructions a request
-  where it cost 13,234, and a 1 KiB body read whole 17,465 where it cost 17,291, the same with a
+  Measured with callgrind (release, jemalloc): a plain answer costs 13,261 instructions a request
+  where it cost 13,234, and a 1 KiB body read whole 17,461 where it cost 17,291, the same with a
   limit set (the request's `Signal` carries it, so setting one allocates nothing).
 
 - `unstaged` on a `#[route(..)]`, in the app's, an area's or an API's routes module, serves that
