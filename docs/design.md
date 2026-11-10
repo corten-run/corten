@@ -1212,10 +1212,11 @@ rules something out.
     connections, not 128.** `corten::listeners`, and so `serve`, binds each socket with a
     backlog of 511, the connections whose handshake is done and that the server has not yet
     accepted, where `TcpListener::bind` asks for 128 (mio's and the standard library's number).
-    Benchmark round r17 lost load iterations to page timeouts
-    ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128)),
-    and a burst past the queue is what made them: Linux takes one more than the backlog and drops
-    the next SYN, so that client waits for its resend, about a second. With 1,024 k6 clients
+    Investigating round r17's page timeouts and dropped load iterations
+    ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128))
+    found a burst-connect delay that reproduces, though it is not shown to be what made r17's
+    failures: Linux takes one more than the backlog and drops the next SYN, so that client waits
+    for its resend, about a second. With 1,024 k6 clients
     starting at once against a page on one CPU, the kernel counted 142 and 485 listen-queue
     overflows (two runs) and the slowest connect took 1.27 and 2.08 s at 128; at 511 there were
     none and it took 0.28 and 0.24 s, and 4096 overflowed none either. 511 is Node's default and
@@ -1243,8 +1244,9 @@ rules something out.
     find, Values 7).
 
     Revisit when: a round or an app sees listen-queue overflows at 511 under a burst a server
-    should take; a platform Corten serves on caps the queue below 511 by default (then say so where
-    the app is deployed); or a measurement of the kernel memory held past `max_connections` shows
+    should take; a platform cap not listed above is found, a listed one changes (a macOS default
+    raised, a Windows that holds more or fewer than 200), or one of them is shown to need a
+    different default; or a measurement of the kernel memory held past `max_connections` shows
     511 costs more than the bursts it absorbs.
 
     Last checked: 2026-11-08, the k6 bursts and overflow counts on Docker Desktop's Linux 6.18 VM,
