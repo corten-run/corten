@@ -498,7 +498,9 @@ Routes write their URL straight into the page (path parameters percent-encoded, 
 parameters left out). A query field is anything `Display`; an enum in an address (a tab, a sort,
 what a redirect says happened) derives `UrlValue`, which writes each variant as the word
 its `Deserialize` (derived with it) reads (`#[serde(rename_all = "kebab-case")]`: `AwaitingLabel` is
-`awaiting-label`), so the link and the handler cannot disagree.
+`awaiting-label`), so the link and the handler cannot disagree. The same word is its value in an
+attribute (`data-tab={tab}`), and an `Option` of it leaves the attribute out when `None`, as an
+`Option<&str>` does.
 
 A component several pages draw (a filter and sortable table that two screens share) takes where
 its links and forms go from the page, typed: a prop `action: &'a dyn Href` takes any route (or a
