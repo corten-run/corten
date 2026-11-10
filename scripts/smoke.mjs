@@ -282,14 +282,46 @@ async function run(browser) {
     errors.push(at ? `${text} at ${at}` : text);
   });
   page.on("pageerror", (e) => errors.push(e.message));
-  // Every EventSource the page opens, to see which are still open.
+  // Every EventSource the page opens, to see which are still open, with when it opened and when
+  // an error closed it for good, on the page's own clock (`openedAt`, `closedAt`), and each timer
+  // of half a second or more the page sets, so a wait the runtime asks for is read as asked, not
+  // only as a loaded browser ran it: `nextTimer` is the index of the first one set after the close.
   await page.addInitScript(() => {
-    const sources = ((/** @type {any} */ (window)).__sources = /** @type {EventSource[]} */ ([]));
+    const w = /** @type {any} */ (window);
+    const timers = (w.__timers = /** @type {number[]} */ ([]));
+    // The index of the recorded timer whose callback is running, so a source knows which opened it.
+    let running = -1;
+    const setTimer = window.setTimeout;
+    window.setTimeout = /** @type {typeof setTimeout} */ (
+      (/** @type {TimerHandler} */ handler, /** @type {number | undefined} */ delay, /** @type {unknown[]} */ ...rest) => {
+        if ((delay ?? 0) < 500 || typeof handler !== "function") return setTimer.call(window, handler, delay, ...rest);
+        const index = timers.push(delay ?? 0) - 1;
+        const fire = (/** @type {unknown[]} */ ...args) => {
+          const outer = running;
+          running = index;
+          try {
+            handler(...args);
+          } finally {
+            running = outer;
+          }
+        };
+        return setTimer.call(window, fire, delay, ...rest);
+      }
+    );
+    const sources = (w.__sources = /** @type {EventSource[]} */ ([]));
     window.EventSource = class extends EventSource {
       /** @param {ConstructorParameters<typeof EventSource>} args */
       constructor(...args) {
         super(...args);
         sources.push(this);
+        const self = /** @type {any} */ (this);
+        self.openedAt = performance.now();
+        self.openedBy = running;
+        this.addEventListener("error", () => {
+          if (this.readyState !== EventSource.CLOSED || self.closedAt !== undefined) return;
+          self.closedAt = performance.now();
+          self.nextTimer = timers.length;
+        });
       }
     };
   });
@@ -2929,7 +2961,10 @@ async function run(browser) {
         /** @type {[string, number]} */ ([name, times]),
         { timeout },
       )
-      .catch(() => {});
+      .then(
+        () => true,
+        () => false,
+      );
   /** @param {string} name */
   const unrouteFeed = async (name) => {
     await page.unroute(`**/feed/${name}`);
@@ -3021,23 +3056,44 @@ async function run(browser) {
   const failedFeed = await feedTimes("failed", (n) =>
     n === 1 ? `retry: 100\n\n${patchEvent(2)}` : n === 4 ? "retry: 100\n\n" : n <= 5 ? { status: 503 } : "retry: 60000\n\n",
   );
-  await feedLive("failed", 3, 10000);
+  // Long enough for a loaded browser that runs each timer seconds late; it ends once live.
+  const failedLive = await feedLive("failed", 3, 60_000);
   const failedStates = await stopFeed("failed");
   await unrouteFeed("failed");
-  const failedGaps = [2, 3, 5].map((i) => failedFeed.streamsAt[i] - failedFeed.streamsAt[i - 1]);
+  // The runtime's three waits: after the first source closed (the browser's reconnect to a 503),
+  // after its own first try (a 503), and after the source that opened and then closed. Each is the
+  // timer the runtime set as that source closed, which must be 1 s, 2 s and 1 s, and the time from
+  // the close to the next source, at least that long. A loaded Firefox ran a 1 s timer about 6 s
+  // late (#1102), which says nothing of the runtime, so the time taken has no upper bound.
+  const failedAt = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    const sources = w.__sources
+      .filter((/** @type {EventSource} */ s) => s.url.includes("/feed/failed/live"))
+      .map((/** @type {any} */ s) => ({ opened: /** @type {number} */ (s.openedAt), closed: /** @type {number | null} */ (s.closedAt ?? null), next: /** @type {number | undefined} */ (s.nextTimer), by: /** @type {number} */ (s.openedBy) }));
+    const timers = /** @type {number[]} */ (w.__timers);
+    // The first timer set after the close, which the runtime's error listener, run straight after
+    // the smoke's, sets in the same dispatch.
+    const asked = sources.map((s) => (s.next === undefined ? null : (timers[s.next] ?? null)));
+    return { sources, asked };
+  });
+  const failedAsked = failedAt.asked.slice(0, 3);
+  const failedGaps = [0, 1, 2].map((i) => Math.round((failedAt.sources[i + 1]?.opened ?? NaN) - (failedAt.sources[i]?.closed ?? NaN)));
+  const seenGaps = [2, 3, 5].map((i) => failedFeed.streamsAt[i] - failedFeed.streamsAt[i - 1]);
   check(
     "a stream answered with an error is listened to again from the last patch, after 1 s then 2 s, and 1 s again after a stream opened, with no snapshot",
     failedFeed.snapshots.length === 1 &&
       failedFeed.streams === 6 &&
       failedFeed.since.slice(2).every((since) => since === "a-2") &&
-      failedGaps[0] >= 900 &&
-      failedGaps[0] < 1900 &&
-      failedGaps[1] >= 1900 &&
-      failedGaps[1] < 3500 &&
-      failedGaps[2] >= 900 &&
-      failedGaps[2] < 1900 &&
+      failedAsked.join() === "1000,2000,1000" &&
+      // Each next source opened by the timer set as the one before it closed, and not sooner
+      // (5 ms for the clocks' granularity). The runtime opens it inside that timer's callback
+      // (`retry(() => listen(..))`); a wait added before it would fail this link, not the backoff.
+      failedAt.sources.length >= 4 &&
+      [0, 1, 2].every((i) => failedAt.sources[i + 1]?.by === failedAt.sources[i]?.next) &&
+      failedGaps.every((gap, i) => gap >= /** @type {number} */ (failedAsked[i]) - 5) &&
+      failedLive &&
       failedStates.includes("reconnecting live"),
-    `${failedFeed.snapshots.length} snapshots, ${failedFeed.streams} streams since ${failedFeed.since.join(" ")}, ${failedGaps.map((g) => `+${g} ms`).join(", ")}; ${failedStates}`,
+    `${failedLive ? "live 3 times" : "not live 3 times within 60 s"}, ${failedFeed.snapshots.length} snapshots, ${failedFeed.streams} streams since ${failedFeed.since.join(" ")}, ${failedAt.sources.length} sources, waits asked ${failedAsked.join(", ")} ms and taken ${failedGaps.map((g) => `${g} ms`).join(", ")} (as Playwright saw the requests: ${seenGaps.map((g) => `+${g} ms`).join(", ")}); ${failedStates}`,
   );
   // A snapshot that fails is fetched again after 1 s, and the feed goes live once one arrives.
   const retriedFeed = await feedTimes("retried", () => "retry: 60000\n\n", { snapshot: (n) => (n === 1 ? 500 : 200) });

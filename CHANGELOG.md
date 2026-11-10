@@ -4275,6 +4275,16 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
 
 ### Fixed
+- The watchlist smoke's check of the feed's backoff after a stream answered with an error failed
+  in Firefox under load: a 2 s wait measured 6.1 and 6.6 s against a 3.5 s bound. Timed in the
+  page, from the error that closed a source to the next `EventSource`, the first wait (the 1 s
+  the runtime's `wait` sets) took 5,892 ms (Playwright saw 5,897), so the page itself ran late,
+  not only Playwright's view of it. The check now reads the timers the runtime set as each source
+  closed, which must be 1 s, 2 s and 1 s, requires the next source to be opened by that timer
+  and no sooner, and has no upper bound on how late it ran; the sequence may take up to 60 s,
+  and ends once live. The failure detail gives the timers asked, the waits taken and the
+  requests as Playwright saw them
+  ([#1102 The watchlist smoke's Firefox feed backoff check fails under load: a 2 s wait measured over 6 s against a 3.5 s bound](https://github.com/corten-run/corten/issues/1102)).
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
   flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
