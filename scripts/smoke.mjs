@@ -81,7 +81,7 @@ const liveEvent = (accept) =>
   new Promise((resolve, reject) => {
     const req = http.get(`${base}/live/trades`, { headers: { "accept-encoding": accept } }, (res) => {
       const coding = res.headers["content-encoding"];
-      const body = coding === "br" ? res.pipe(zlib.createBrotliDecompress()) : res;
+      const body = coding === "gzip" ? res.pipe(zlib.createGunzip()) : coding === "br" ? res.pipe(zlib.createBrotliDecompress()) : res;
       let text = "";
       const timer = setTimeout(() => (req.destroy(), resolve({ coding, first: text })), 5000);
       body.on("data", (chunk) => {
@@ -99,10 +99,12 @@ const liveEvent = (accept) =>
 {
   const zstd = await liveEvent("gzip, deflate, br, zstd");
   check("a live stream is zstd for a client that accepts it", zstd.coding === "zstd", String(zstd.coding));
-  const br = await liveEvent("gzip, br");
-  check("a live stream's first event decodes before the stream ends (brotli, flushed per event)", br.coding === "br" && br.first.includes("Last trade"), `${br.coding}: ${br.first.slice(0, 60)}`);
-  const plain = await liveEvent("gzip");
-  check("a gzip-only client gets the stream as it is", plain.coding === undefined && plain.first.includes("event: patch"), String(plain.coding));
+  // Never brotli, which Playwright's Windows WebKit holds back past 16 KiB of an event (#1131): a
+  // client without zstd, as that WebKit asks.
+  const gzip = await liveEvent("gzip, deflate, br");
+  check("a live stream's first event decodes before the stream ends (gzip, flushed per event, for a client without zstd)", gzip.coding === "gzip" && gzip.first.includes("Last trade"), `${gzip.coding}: ${gzip.first.slice(0, 60)}`);
+  const plain = await liveEvent("br");
+  check("a client that takes only brotli gets the stream as it is", plain.coding === undefined && plain.first.includes("event: patch"), String(plain.coding));
 }
 
 // A DNS-rebound page reaches the server under a name the app is not: 421, and nothing of the app.
@@ -804,6 +806,65 @@ async function run(browser) {
   // A trade a second: one drawn in four seconds is a fragment the runtime applied.
   const nextTrade = (await page.textContent("#last-trade")) ?? "";
   check("<corten-live> swaps in the fragments the server streams", nextTrade.startsWith("Last trade: ") && nextTrade !== firstTrade, `${firstTrade} -> ${nextTrade}`);
+  // As this browser asks for it, a live stream is zstd or gzip, never brotli, which
+  // Playwright's WebKit on Windows holds back past 16 KiB of an event until more of the stream
+  // arrives (#1131); its first event decodes while the stream is open.
+  // Bounded: an event held back fails the check rather than the whole run.
+  const streamed = await page.evaluate(async () => {
+    const stop = new AbortController();
+    let text = "";
+    let coding = null;
+    try {
+      const res = await fetch("/live/trades", { headers: { accept: "text/event-stream" }, signal: AbortSignal.any([stop.signal, AbortSignal.timeout(15_000)]) });
+      coding = res.headers.get("content-encoding");
+      const reader = /** @type {ReadableStream<Uint8Array>} */ (res.body).getReader();
+      while (!text.includes("event: patch")) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        text += new TextDecoder().decode(value);
+      }
+    } catch (error) {
+      text += ` (${String(error)})`;
+    }
+    stop.abort();
+    return { coding, patch: text.includes("event: patch"), seen: text.slice(-80) };
+  });
+  check("a live stream is zstd or gzip as the browser asks, and its first event decodes while it is open", ["zstd", "gzip"].includes(streamed.coding ?? "") && streamed.patch, JSON.stringify(streamed));
+  // An event over 16 KiB followed by nothing, the case WebKit held back under brotli: it is
+  // dispatched with the stream left quiet, well inside the keepalive's 15 s, the next thing the
+  // server would send (#1131). The bound is the check's, not a pause: it ends at the event. The
+  // stream's status and coding are read first, so a missing route fails as one and a late event
+  // says what coding held it.
+  const large = await page.evaluate(async () => {
+    const stop = new AbortController();
+    /** @type {{ status?: number, coding?: string | null, failed?: string }} */
+    let head = {};
+    try {
+      const answer = await fetch("/smoke/live/large", { headers: { accept: "text/event-stream" }, signal: AbortSignal.any([stop.signal, AbortSignal.timeout(15_000)]) });
+      head = { status: answer.status, coding: answer.headers.get("content-encoding") };
+    } catch (error) {
+      return { failed: `no answer: ${String(error)}` };
+    } finally {
+      stop.abort();
+    }
+    return new Promise((done) => {
+      const started = performance.now();
+      const source = new EventSource("/smoke/live/large");
+      const finish = (/** @type {{ size?: number, ms?: number, failed?: string }} */ result) => {
+        source.close();
+        clearTimeout(bound);
+        done({ ...head, ...result });
+      };
+      const bound = setTimeout(() => finish({ failed: "no event in 5 s" }), 5000);
+      source.addEventListener("error", () => finish({ failed: `stream error, readyState ${source.readyState}` }));
+      source.addEventListener("patch", (event) => finish({ size: event.data.length, ms: Math.round(performance.now() - started) }));
+    });
+  });
+  check(
+    "a live event over 16 KiB with nothing after it is dispatched while the stream is quiet",
+    large.status === 200 && (large.size ?? 0) > 16_384,
+    JSON.stringify(large),
+  );
 
   // Only what the page's own origin answered goes through the runtime's policy: not another
   // origin's answer (one connect-src allows), a Response a script made, or an event a script
@@ -3662,61 +3723,107 @@ async function run(browser) {
     await page.evaluate(() =>
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html('<p><a id="no-prefetch" href="/" data-no-prefetch>Home</a> <a id="prefetch" href="/?from=hover">Home</a></p>')),
     );
+    // Each count is read once the request it counts has been seen, not after a pause (#1053). A
+    // request may be a prefetch (true), a visit (false) or either (undefined).
+    /** @param {string} search @param {boolean} [prefetch] */
+    const navTo = (search, prefetch) =>
+      page
+        .waitForRequest(
+          (request) =>
+            request.headers()["corten"] === "nav" &&
+            new URL(request.url()).search === search &&
+            (prefetch === undefined || (request.headers()["purpose"] === "prefetch") === prefetch),
+          { timeout: 15_000 },
+        )
+        .catch(() => null);
     navRequests.length = 0;
     await page.hover("#no-prefetch");
-    await page.waitForTimeout(300);
+    // Nothing to wait for: the check is that no request comes. The pause is the page's own timer,
+    // set after the hover's dwell timer, so it ends after the dwell would have fetched.
+    await page.evaluate(() => new Promise((done) => setTimeout(done, 300)));
     const afterOptOut = navRequests.length;
+    const control = navTo("?from=hover", true);
     await page.hover("#prefetch");
-    await page.waitForTimeout(300);
-    check("data-no-prefetch: hovering the link fetches nothing", afterOptOut === 0 && navRequests.length === 1, `${afterOptOut} then ${navRequests.join()}`);
+    const controlSeen = (await control) !== null;
+    check("data-no-prefetch: hovering the link fetches nothing", afterOptOut === 0 && controlSeen && navRequests.length === 1, `${afterOptOut} then ${navRequests.join()}`);
 
-    // The prefetch cache keeps the 8 newest pages: after hovering 9 links, following the newest
-    // reuses its prefetch and following the oldest fetches it again. The links sit in the shell,
-    // which navigation keeps.
+    // The prefetch cache keeps the 8 newest pages: after hovering 9 links, following the oldest of
+    // the 8 kept and the newest reuses their prefetches, so a cache of fewer than 8 fails here, and
+    // following the oldest fetches it again, so one of more than 8 fails. The links sit in the
+    // shell, which navigation keeps.
     await page.evaluate(() =>
       document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html(Array.from({ length: 9 }, (_, i) => `<a class="hovered" href="/news?p=${i}">${i}</a>`).join(" "))),
     );
+    let p1Prefetched = 0;
+    /** @type {number[]} */
+    const unseen = [];
     for (let i = 0; i < 9; i += 1) {
+      const prefetched = navTo(`?p=${i}`, true);
       await page.hover(`header a.hovered[href="/news?p=${i}"]`);
-      await page.waitForTimeout(150);
+      // Each hover's own prefetch must be seen: a missing one is not made up for by another request.
+      if ((await prefetched) === null) unseen.push(i);
+      else if (i === 1) p1Prefetched = Date.now();
     }
     const hoveredCount = navRequests.length;
+    // A prefetch older than the runtime's 10 s is not reused, so a slow run is told apart from a
+    // cache that keeps too few. The age runs from when the prefetch was seen, so it reads low.
+    const p1Age = Date.now() - p1Prefetched;
+    await page.click('header a.hovered[href="/news?p=1"]');
+    await page.waitForFunction(() => location.search === "?p=1");
     await page.click('header a.hovered[href="/news?p=8"]');
     await page.waitForFunction(() => location.search === "?p=8");
-    const afterNewest = navRequests.length;
+    // The oldest is fetched again by its click, or by its hover's dwell when that ends first.
+    const fetchedAgain = navTo("?p=0");
     await page.click('header a.hovered[href="/news?p=0"]');
     await page.waitForFunction(() => location.search === "?p=0");
     // Playwright can report the request after the address changes.
-    for (let waited = 0; navRequests.length < 11 && waited < 2000; waited += 50) await page.waitForTimeout(50);
+    const oldestFetched = (await fetchedAgain) !== null;
+    // The oldest kept and the newest were reused: no visit fetched either, however late its
+    // request was reported.
+    const keptFetched = ["/news?p=1", "/news?p=8"].filter((path) => navRequests.includes(new URL(path, base).href));
     check(
-      "prefetch keeps the 8 newest pages: the newest is reused, the oldest is fetched again",
-      hoveredCount === 10 && afterNewest === 10 && navRequests.length === 11,
-      `${hoveredCount}, ${afterNewest}, ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
+      "prefetch keeps the 8 newest pages: the oldest kept and the newest are reused, the oldest is fetched again",
+      unseen.length === 0 && hoveredCount === 10 && keptFetched.length === 0 && oldestFetched && navRequests.length === 11,
+      `${unseen.length ? `no prefetch seen for ${unseen.join(" ")}, ` : ""}${hoveredCount}, ${oldestFetched ? "" : "the oldest not fetched again, "}${keptFetched.length ? `fetched ${keptFetched.join(" ")}` : "both reused"} (p1 prefetch seen about ${p1Age} ms before its click), ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
     );
 
     // The page a visit is fetching is not prefetched as well, by the dwell the click cut short or
     // by the pointer leaving its link and coming back: the address stays this page's until that
-    // page is in, so the prefetch would fetch it a second time (#1053). Its answer is held so both
-    // dwells end while it is fetched.
-    await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?p=held">held</a>')));
-    /** @param {URL} url */
-    const heldPage = (url) => url.pathname === "/news" && url.searchParams.get("p") === "held";
-    await page.route(heldPage, async (route) => {
-      if (route.request().headers()["purpose"] !== "prefetch") await new Promise((resolve) => setTimeout(resolve, 600));
-      await route.continue().catch(() => {});
-    });
-    navRequests.length = 0;
-    await page.click('header a.hovered[href="/news?p=held"]');
-    await page.mouse.move(0, 0);
-    await page.hover('header a.hovered[href="/news?p=held"]');
-    await page.waitForTimeout(150);
-    await page.waitForFunction(() => location.search === "?p=held");
-    check(
-      "a link followed during its hover's dwell is fetched once, with no prefetch of its page",
-      navRequests.length === 1,
-      navRequests.map((u) => u.replace(base, "")).join(" ") || "none",
-    );
-    await page.unroute(heldPage);
+    // page is in, so the prefetch would fetch it a second time (#1053). Its answer is held until
+    // both dwells have ended, however long the hover takes: once the address changes, a dwell
+    // finds its link is this page and fetches nothing, so the check would pass untested. A
+    // prefetch is held too: one sent before the click, when a slow click lets the first dwell end,
+    // is the fetch the visit reuses, and still counts once.
+    if (await page.evaluate(precommits)) {
+      await page.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a class="hovered" href="/news?p=held">held</a>')));
+      /** @param {URL} url */
+      const heldPage = (url) => url.pathname === "/news" && url.searchParams.get("p") === "held";
+      /** @type {() => void} */
+      let releaseHeld = () => {};
+      const heldReleased = new Promise((resolve) => (releaseHeld = () => resolve(undefined)));
+      await page.route(heldPage, async (route) => {
+        await heldReleased;
+        await route.continue().catch(() => {});
+      });
+      navRequests.length = 0;
+      await page.click('header a.hovered[href="/news?p=held"]');
+      await page.mouse.move(0, 0);
+      await page.hover('header a.hovered[href="/news?p=held"]');
+      // The page's own timer, set after the hover's dwell timer, ends after the dwell would have
+      // fetched; only then is the answer let through.
+      await page.evaluate(() => new Promise((done) => setTimeout(done, 300)));
+      const heldSearch = await page.evaluate(() => location.search);
+      releaseHeld();
+      await page.waitForFunction(() => location.search === "?p=held");
+      check(
+        "a link followed during its hover's dwell is fetched once, with no prefetch of its page",
+        heldSearch !== "?p=held" && navRequests.length === 1,
+        `${heldSearch === "?p=held" ? "the address changed before the dwell ended: not tested; " : ""}${navRequests.map((u) => u.replace(base, "")).join(" ") || "none"}`,
+      );
+      await page.unroute(heldPage);
+    } else {
+      skip("a link followed during its hover's dwell is fetched once, with no prefetch of its page", "no precommitHandler: the address changes at the click");
+    }
     await page.evaluate(() => document.querySelectorAll("header a.hovered").forEach((a) => a.remove()));
 
     // A prefetch pushed out while its answer is still coming is aborted, so the server sees the
