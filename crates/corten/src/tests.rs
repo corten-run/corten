@@ -8555,6 +8555,15 @@ async fn a_handlers_arguments_are_read_in_order_and_the_first_refusal_answers() 
     assert_eq!(answer(response).await, (StatusCode::OK, "418 text".to_string()));
     assert_eq!(reads.take(), ["first", "refuses", "body"]);
 
+    let whole = |text: Result<String, axum::extract::rejection::StringRejection>| async move {
+        text.map_err(|refusal| refusal.status().as_u16().to_string()).unwrap_or_else(|code| code)
+    };
+    let response = Handler::call(whole, Request::new(Body::from(vec![0xff])), reads.clone()).await;
+    assert_eq!(answer(response).await, (StatusCode::OK, "400".to_string()), "the last argument's refusal, taken");
+    let response = Handler::call(whole, request(&reads), reads.clone()).await;
+    assert_eq!(answer(response).await, (StatusCode::OK, "text".to_string()));
+    reads.take();
+
     let raw = |body: Body| async move { body.collect().await.unwrap().to_bytes() };
     let response = Handler::call(raw, request(&reads), reads.clone()).await;
     assert_eq!(answer(response).await, (StatusCode::OK, "text".to_string()));
