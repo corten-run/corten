@@ -4263,6 +4263,12 @@ Corten is pre-1.0, so any minor version may change the API.
   adds each source's message (`error.sources`): an HTTP client's "error sending request" now
   names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
   message.
+- `corten::listeners` (and so `serve`) listens with a queue of 511 finished connections on Linux
+  (Windows 11 held 200 in one run; macOS keeps its 128 unless raised), not mio's and the standard library's 128.
+  With 1,024 clients connecting at once to a page on one CPU (Docker Desktop's Linux VM), the
+  kernel counted 142 and 485 listen-queue overflows (two runs) and the slowest connect
+  took 1.27 and 2.08 s; with 511, no overflows and 0.28 and 0.24 s (design Choice 33)
+  ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
@@ -6454,6 +6460,17 @@ Corten is pre-1.0, so any minor version may change the API.
     the browser has the Navigation API, and the watchlist's checks that a value set with them is
     put back
     ([#1098 CheckboxGroup docs do not say a script that sets checked must dispatch change, so the group keeps its old validity](https://github.com/corten-run/corten/issues/1098)).
+80. The kit guide's Size states what every component costs now: 59,878 bytes of `components.css`,
+    8,691 with brotli at level 11 and 9,863 with gzip at level 9 (the kit at 5ba4e476), where it
+    said 35,239, 5,331 and 6,050 from before the kit grew from 34 stylesheets to 42. A test in the
+    ui-gallery example (`the_kit_guide_states_what_every_component_costs`) serves the stylesheet of
+    an app listing every component and the theme's tokens, waits for its stored brotli and gzip
+    forms, and fails when the guide is more than 3 percent off, naming the new numbers. The guide's
+    browser list is Chromium, Firefox and WebKit, as the gallery's smoke runs, and `FormAlert` is
+    drawn in the gallery (a rename refused because the other draft has that name, above the form)
+    with a smoke check of its role, its one live region and its tone's colors, so every kit
+    component is again in the gallery and its browser test
+    ([#1125 The kit guide says corten ui add --all serves 35,239 bytes of CSS; it serves 59,299 now (8,615 brotli, not 5,331), and two lines beside it are stale](https://github.com/corten-run/corten/issues/1125)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
