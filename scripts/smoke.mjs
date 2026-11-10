@@ -3693,11 +3693,14 @@ async function run(browser) {
       document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html(Array.from({ length: 9 }, (_, i) => `<a class="hovered" href="/news?p=${i}">${i}</a>`).join(" "))),
     );
     let p1Prefetched = 0;
+    /** @type {number[]} */
+    const unseen = [];
     for (let i = 0; i < 9; i += 1) {
       const prefetched = navTo(`?p=${i}`, true);
       await page.hover(`header a.hovered[href="/news?p=${i}"]`);
-      await prefetched;
-      if (i === 1) p1Prefetched = Date.now();
+      // Each hover's own prefetch must be seen: a missing one is not made up for by another request.
+      if ((await prefetched) === null) unseen.push(i);
+      else if (i === 1) p1Prefetched = Date.now();
     }
     const hoveredCount = navRequests.length;
     // A prefetch older than the runtime's 10 s is not reused, so a slow run is told apart from a
@@ -3718,8 +3721,8 @@ async function run(browser) {
     const keptFetched = ["/news?p=1", "/news?p=8"].filter((path) => navRequests.includes(new URL(path, base).href));
     check(
       "prefetch keeps the 8 newest pages: the oldest kept and the newest are reused, the oldest is fetched again",
-      hoveredCount === 10 && keptFetched.length === 0 && oldestFetched && navRequests.length === 11,
-      `${hoveredCount}, ${oldestFetched ? "" : "the oldest not fetched again, "}${keptFetched.length ? `fetched ${keptFetched.join(" ")}` : "both reused"} (p1 prefetch seen about ${p1Age} ms before its click), ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
+      unseen.length === 0 && hoveredCount === 10 && keptFetched.length === 0 && oldestFetched && navRequests.length === 11,
+      `${unseen.length ? `no prefetch seen for ${unseen.join(" ")}, ` : ""}${hoveredCount}, ${oldestFetched ? "" : "the oldest not fetched again, "}${keptFetched.length ? `fetched ${keptFetched.join(" ")}` : "both reused"} (p1 prefetch seen about ${p1Age} ms before its click), ${navRequests.length}: ${navRequests.map((u) => u.replace(base, "")).join(" ")}`,
     );
 
     // The page a visit is fetching is not prefetched as well, by the dwell the click cut short or
