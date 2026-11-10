@@ -18,10 +18,10 @@ function result() {
       [1, 2, 3].map((pass) => ({ pass, complete: true, phases: { sat64: { ...structuredClone(phase), rps: 100 * pass } } }))])) }])) };
 }
 
-test("a clean complete result requires all eighteen apps and requested passes", () => {
+test("a clean complete result requires all twenty apps and requested passes", () => {
   const report = inspectCatalog(result(), "a".repeat(40));
   assert.equal(report.baseline, true);
-  assert.equal(Object.keys(report.apps).length, 18);
+  assert.equal(Object.keys(report.apps).length, 20);
   assert.deepEqual(report.apps.corten["fixture-page"].rps, { median: 200, min: 100, max: 300 });
   assert.match(renderCatalog(report), /200 \[100, 300\] \(3\/3\)/);
 });

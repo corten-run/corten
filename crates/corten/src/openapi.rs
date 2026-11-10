@@ -631,7 +631,7 @@ impl Argument for corten_feed::Since {
     }
 }
 
-impl<T> Argument for axum::extract::State<T> {}
+impl<T> Argument for crate::extract::State<T> {}
 
 /// What its caller type says: the header an API key is read from (an app's type implements
 /// [`Argument`], as a caller type of an API with a document must).
@@ -911,7 +911,7 @@ fn components(value: &mut Value) {
 /// Not a public API: what `#[corten::routes(api = .., openapi = ..)]` builds the document with.
 #[doc(hidden)]
 pub mod __private {
-    use axum::handler::Handler;
+    use crate::handler::Handler;
     use serde_json::{json, Map, Value};
 
     use super::{Answers, Arguments, Document, Operation};

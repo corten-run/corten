@@ -15,9 +15,17 @@ app names about a request is Corten's too: an extractor of its own implements
 the same name), a middleware takes `corten::extract::Request` and answers a
 `corten::middleware::Response` (`IntoResponse` makes one of a `Refused` or a status), a relay's
 body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a
-`corten::Listener`, and a test sends its requests with `app.test()`. These are axum's own traits
-and types, named from Corten so the app imports one crate
-([design Choice 21](../design.md#choice-own-extractors)). A handler that takes the whole `Request` and answers
+`corten::Listener`, and a test sends its requests with `app.test()`. The extractor and handler
+traits and `State` are Corten's own, with the names, the `Rejection` and the
+`from_request_parts(parts, state)` signature they had as axum's, so an extractor written against
+axum's compiles against them with its `use` changed; `Request`, `Response` and `Body` are the
+`http` crate's and axum's types, named from Corten so the app imports one crate
+([design Choice 21](../design.md#choice-own-extractors)). axum's own extractors (`Path`,
+`Query`, `Json`, `Extension`, `ConnectInfo`, `Parts`) are not handler arguments: a route's path
+and query are its `Params`, a body its `Json` or `Form`, and the whole head its `Req`. A handler
+that answers a refusal itself takes `Result<T, T::Rejection>`, as `Option<T>` goes without a
+value; an extractor of the app's own that needs two others reads each in turn, since a tuple of
+them is not one. A handler that takes the whole `Request` and answers
 a body over a limit of its own itself (a route that keeps another server's error shape) reads it
 with `corten::extract::bytes_up_to(request.into_body(), max)`: `None` when it is over. A body too
 large to hold (a file `PUT` as `application/octet-stream`) is passed on as it arrives instead:
@@ -1250,7 +1258,8 @@ one the app names:
 `Media::new("image/png", bytes)`. Kept at a URL that names its bytes (a keyed hash of them,
 `/pictures/{id}`), `Public::immutable(..)` lets every cache keep it for a year, cookies or not,
 and its handler cannot read who is asking; anywhere else it is `private, no-cache` like the rest
-of the app. The watchlist example's
+of the app, except on a route that says [`unstaged`](app.md#a-route-outside-the-stages), which sends the
+caching its handler set. The watchlist example's
 profile picture (`examples/watchlist/src/account.rs`) does both.
 
 A file the user downloads names itself on its `Media`: `.attachment("shipments-2026-10-29.csv")`
@@ -1710,7 +1719,9 @@ instead. The page is given a `Failure` that says which case it is
 ([error pages](app.md#error-pages)).
 
 A client that asked for JSON, every route whose handler returns `JsonResult<T>`, and every
-request under an [`App::api`](app.md#json-only-routes) prefix, gets every failure in one shape,
+request under an [`App::api`](app.md#json-only-routes) prefix, gets every failure in one shape
+(a route that says [`unstaged`](app.md#a-route-outside-the-stages) outside an API's prefix answers its
+failures as plain text instead),
 the standard one: an RFC 9457 Problem Details document, sent as `application/problem+json`,
 `{"title":"Not Found","status":404,"detail":"No item 7."}`. `title` is the status's reason. A
 4xx's `detail` is the error's message or the rejection's text; a 5xx has no `detail`, only the
