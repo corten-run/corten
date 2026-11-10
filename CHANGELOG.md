@@ -4078,8 +4078,8 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 - The watchlist smoke's check that a submit button's formaction and formmethod are used waits up
-  to 15 seconds for the post's answer and the message it draws, as the smoke waits for any outcome
-  that must happen, rather than 4: a loaded Firefox took longer and the check read status 0
+  to 15 seconds for the post's answer and the message it draws, rather than 4 (most of the smoke's
+  waits are 5 seconds): a loaded Firefox took longer than 4 and the check read status 0
   ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.

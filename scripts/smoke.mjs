@@ -1178,8 +1178,8 @@ async function run(browser) {
   );
   // The message already says Acme from the keyed form, so the check waits for this post's own
   // answer: otherwise a slow post (Firefox) is still going out during the next check, which
-  // counts the posts it sees (#161). It waits as long as any outcome that must happen: a loaded
-  // Firefox has taken over 4 s to answer it (#1149).
+  // counts the posts it sees (#161). It waits 15 s, past the 5 s most of the smoke's waits take,
+  // because a loaded Firefox has taken over 4 s to answer this post (#1149).
   const viaButton = page
     .waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 15_000 })
     .then(async (r) => (await r.finished(), r.status()))
