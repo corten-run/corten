@@ -1387,7 +1387,8 @@ rules something out.
 
     Last checked: 2026-11-09, the
     derives and the agent endpoint's bounds, inputs and outputs, at `7965aeab`, the bounds' last
-    change; 2026-11-10, no such impl in `examples/`, at `7197604f`.
+    change; 2026-11-10, no such impl in `examples/`, at `7197604f`; 2026-11-10, the std types' and
+    pointers' `ToJson` and `FromJson` against serde's bytes and values (`json` tests), at `28796587`.
 
 ## Rules
 
