@@ -1216,7 +1216,7 @@ rules something out.
     take, so no route given to the `App` skips them, an unstaged route's arguments standing in for
     its answer's); bet (most of an app's access rules are
     about who is asking, which a type can name, and the rest depend on the record, which the
-    handler reads anyway); standard (RFC 9110 15.5.2: a 401 MUST send `WWW-Authenticate`; RFC
+    handler reads anyway); platform (RFC 9110 15.5.2: a 401 MUST send `WWW-Authenticate`; RFC
     6750 for Bearer's parameters; IANA's HTTP Authentication Scheme Registry, which has no scheme
     for a session cookie); value (mistakes fail at compile time, Value 4).
 
