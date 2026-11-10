@@ -20,8 +20,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:bookworm-slim
 WORKDIR /app
 COPY --from=build /out/server /app/server
-RUN mkdir -p /app/data
-# The database is a file in /app/data: mount a volume there to keep it.
+# The database is a file in /app/data, which the server's user owns: mount a volume there to keep
+# it. A new Docker volume takes this owner; a bind mount or a Kubernetes volume needs
+# `fsGroup: 10001` or a directory 10001 owns, and a volume an earlier image wrote as root needs
+# `docker run --rm -u 0 -v <volume>:/app/data --entrypoint chown <image> -R 10001:10001 /app/data`.
+RUN mkdir -p /app/data && chown 10001:10001 /app/data
 ENV HOST=0.0.0.0 PORT=8080 DATABASE_URL=sqlite:/app/data/auction.db?mode=rwc
 EXPOSE 8080
+# Not root, by number (the template's Dockerfile says why).
+USER 10001:10001
 CMD ["/app/server"]

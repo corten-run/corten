@@ -31,4 +31,11 @@ COPY --from=build /server /app/server
 # gets 421, so a DNS-rebound page cannot use the app. localhost and IP addresses always answer.
 ENV HOST=0.0.0.0 PORT=8080
 EXPOSE 8080
+# The server runs as an unprivileged user, by number so a cluster that requires non-root
+# containers (Kubernetes' restricted policy) can tell it is not root, and not 65534 (nobody),
+# which other services share: it listens on 8080 and writes no file, and /app/server stays
+# root's, so it cannot replace itself. An app that writes files gives that user a directory
+# (`RUN mkdir /app/data && chown 10001:10001 /app/data` before this line); a bind mount needs a
+# host directory 10001 owns, and a Kubernetes volume `securityContext.fsGroup: 10001`.
+USER 10001:10001
 CMD ["/app/server"]

@@ -7,6 +7,7 @@ mod lists;
 mod market;
 mod news;
 mod recent;
+mod smoke;
 mod socket;
 #[cfg(test)]
 mod testing;
