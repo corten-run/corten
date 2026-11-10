@@ -4275,7 +4275,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `Serialize` fails (a map with a key JSON cannot hold, inside another crate's type) now panics,
     as in any `ToJson` answer: the request ends as a handler's panic does, logged and answered with
     the app's 500 (in an `Api`, its JSON failure), where the call answered an internal error as the
-    tool's result with the call's `id`; a test holds it
+    tool's result with the call's `id`; a test holds it, and a log line names the tool. A test or
+    `corten dev` stops at a hand-written output `ToJson` that writes anything but one JSON object.
+    A tool's output can hold `Raw`, a `ToJson` with any JSON value as its schema; the app guide said
+    it needed `Box<RawValue>`, which only a feed row still does
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 176. The runtime and its modules are minified by terser after esbuild minifies them, so every page
     ships fewer bytes: the runtime is 14,318 bytes with gzip (level 9), 533 fewer, and 12,955 with

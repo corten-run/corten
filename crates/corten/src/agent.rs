@@ -34,14 +34,24 @@
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
 //!
-//! With the opt-in impl it does, its `Deserialize` reading what the hand-written schema describes:
+//! With the opt-in impl it does. Here the input trims its id with serde's `deserialize_with`,
+//! which `FromJson` does not follow, and the schema written beside it describes what that reads:
 //!
 //! ```
 //! use corten::{agent::Tools, json::schema::{FromJsonSchema, Generator}};
-//! #[derive(serde::Deserialize)]
-//! struct Adjust { id: String }
+//! use serde::Deserialize;
+//! #[derive(Deserialize)]
+//! struct Adjust {
+//!     #[serde(deserialize_with = "trimmed")]
+//!     id: String,
+//! }
+//! fn trimmed<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+//!     String::deserialize(d).map(|id| id.trim().to_owned())
+//! }
 //! impl FromJsonSchema for Adjust {
-//!     fn json_schema(_: &mut Generator) -> serde_json::Value { serde_json::json!({ "type": "object" }) }
+//!     fn json_schema(_: &mut Generator) -> serde_json::Value {
+//!         serde_json::json!({ "type": "object", "properties": { "id": { "type": "string" } }, "required": ["id"] })
+//!     }
 //! }
 //! impl corten::FromJson for Adjust {}
 //! #[derive(corten::ToJson)]
@@ -88,12 +98,15 @@
 //! as is, so a tool returning a large shared value (`Arc<T>`) costs one write and no copy. As in
 //! any `ToJson` answer, a field whose own `Serialize` fails (another crate's map with a key JSON
 //! cannot hold) panics: the request ends as a handler's panic does, logged and answered with the
-//! app's 500 (in an [`Api`](crate::Api), its JSON failure), not as the tool's result.
+//! app's 500 (in an [`Api`](crate::Api), its JSON failure), not as the tool's result, with a log
+//! line that names the tool.
 //!
 //! An output needs `ToJson` and no `Serialize`. One written by serde, with a schema written by
 //! hand, does not compile as one: derive `ToJson`, which writes the schema and the bytes from one
 //! reading of the type, or, for a type the derive refuses, write `ToJson` by hand with its
-//! `ToJsonSchema` beside it, two impls you keep in step:
+//! `ToJsonSchema` beside it, two impls you keep in step. A hand-written one writes exactly one
+//! JSON object, which goes into the response as written (a test or `corten dev` stops at one
+//! that does not):
 //!
 //! ```compile_fail,E0277
 //! use corten::{agent::Tools, json::schema::{Generator, ToJsonSchema}};
@@ -146,6 +159,18 @@ use crate::json::{
     schema::{FromJsonSchema, Generator, ToJsonSchema},
     FromJson, ToJson,
 };
+
+/// Names the tool in the log when its handler, or its output's `ToJson`, panics: the request's
+/// own panic log does not.
+struct Naming<'a>(&'a str);
+
+impl Drop for Naming<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            tracing::error!(tool = self.0, "corten: agent tool panicked");
+        }
+    }
+}
 
 /// Protocol revisions this server speaks, newest first.
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
@@ -784,8 +809,17 @@ impl<A: Send + 'static> Tools<A> {
                 Err(error) => return Ok(self.failed(name, error)),
             },
         };
-        match (tool.handler)(caller, args).await {
+        let naming = Naming(name);
+        let result = (tool.handler)(caller, args).await;
+        drop(naming);
+        match result {
             Ok(output) => {
+                // A hand-written `ToJson` goes into the envelope as written, so a test or
+                // `corten dev` stops at one that is not one JSON object.
+                debug_assert!(
+                    serde_json::from_str::<serde_json::Map<String, Value>>(&output).is_ok(),
+                    "corten: tool {name}'s output ToJson must write one JSON object, not {output}"
+                );
                 // The output as written, and once more as a JSON string for the text block, into
                 // one string sized for both: a large result is not copied as it grows.
                 let text = serde_json::to_string(&output).map_err(|e| CallError::Rpc(-32603, e.to_string()))?;
@@ -1040,10 +1074,31 @@ mod tests {
         let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
         let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "broken", "arguments": {} } });
         let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        #[derive(Clone, Default)]
+        struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Lines {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let lines = Lines::default();
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        let logging = tracing::subscriber::set_default(subscriber);
         let (status, _, body) = send(&app, req).await;
+        drop(logging);
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
         let body: Value = serde_json::from_str(&body).unwrap();
         assert!(body.get("jsonrpc").is_none() && body.get("result").is_none(), "{body}");
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            text.lines().any(|line| line.contains("agent tool panicked") && line.contains("tool=") && line.contains("broken")),
+            "the log names the tool: {text}"
+        );
     }
 
     /// An app whose agents get tokens from an authorization server: `reader` may read, `writer`

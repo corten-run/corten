@@ -1364,9 +1364,8 @@ rules something out.
     script type comes from `ToJson`, so a row still derives both; their declaration is
     [#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044).
 
-    Not chosen: the attribute, a synonym; an attribute that derives both directions, since a type
-    read from a service and one written to a client are seldom the same, and one that is derives
-    both
+    Not chosen: the attribute, a synonym; an attribute that derives both directions, which would
+    save a type that is read and written one name in its `#[derive(..)]` list
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 
     Stands on: measured (callgrind, release build, card-market's `tool_cost`: an agent's `items.get`
@@ -1380,13 +1379,14 @@ rules something out.
     card-market's agent test checks a tool answer's bytes equal serde's); value (one declaration per
     direction, Values 4, 5 and 6).
 
-    Revisit when: a response type other than a feed row needs two impls kept in step that one derive
-    cannot write, as `FromJson` and `Deserialize` were before
-    [Choice 26](#choice-derived-deserialize) covered it.
+    Revisit when: an example app needs, because the derives refuse its type, a hand-written
+    `ToJson` with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in
+    `impl FromJson for T {}` (none in `examples/` at the last check), or a seam other than the feed
+    is bounded on serde's `Serialize` or `Deserialize` again.
 
     Last checked: 2026-11-08, the callgrind count on `a791d9ba` and `620bc298`; 2026-11-09, the
     derives and the agent endpoint's bounds, inputs and outputs, at `7965aeab`, the bounds' last
-    change.
+    change; 2026-11-10, no such impl in `examples/`, at `7197604f`.
 
 ## Rules
 

@@ -1518,10 +1518,10 @@ value (with `JSON.stringify`'s form, `2` reads as an integer and `2.5` as a floa
    integers and `as_f64` on both otherwise, and flags a field the old service sent as an integer
    that now arrives as a float: that field should be an integer type.
 3. Text that must match another service's byte for byte is written by the app and sent as `Raw`,
-   which is a `ToJson` and so can be one field of a derived response. `Raw` has no `Serialize`, so
-   a type that feeds or agent output also write holds `Box<serde_json::value::RawValue>`
-   (serde_json's `raw_value` feature; for agent output or generated types its schema is any JSON
-   value). JavaScript's number form comes from
+   which is a `ToJson` and so can be one field of a derived response or of an agent tool's output
+   (its schema is any JSON value). `Raw` has no `Serialize`, so a feed row, which serde writes,
+   holds `Box<serde_json::value::RawValue>` instead (serde_json's `raw_value` feature; for
+   generated types its schema is any JSON value). JavaScript's number form comes from
    `serde_json::Serializer::with_formatter` over a type that derives `Serialize`, with a
    `Formatter` whose `write_f64` and `write_f32` write it (`-0.0` as `0`, digits below `1e21` and
    down to `1e-6`, an exponent outside that), sent with `Raw::new`.

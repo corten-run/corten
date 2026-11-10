@@ -288,6 +288,10 @@ pub fn to_vec<T: ToJson + ?Sized>(value: &T) -> Vec<u8> {
 
 /// A value that writes itself as JSON: what `#[derive(ToJson)]` implements, and what a [`Json`]
 /// response holds. A hand-written impl appends exactly one JSON value to `out`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not write itself as JSON (ToJson)",
+    note = "derive ToJson on it (it needs no Serialize); for a type the derive refuses, implement ToJson by hand, with ToJsonSchema beside it where a schema is asked for"
+)]
 pub trait ToJson {
     /// Appends the value's JSON to `out`.
     fn write_json(&self, out: &mut Vec<u8>);
