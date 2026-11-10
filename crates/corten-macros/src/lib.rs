@@ -149,10 +149,16 @@ pub fn derive_fields(input: TokenStream) -> TokenStream {
         Ok(code) => code.parse().expect("generated code parses"),
         Err(message) => return format!("::core::compile_error!({message:?});").parse().expect("compile_error parses"),
     };
-    // serde's `Deserialize`, so the struct needs no `#[derive(Deserialize)]` beside this one.
+    // serde's `Deserialize`, so the struct needs no `#[derive(Deserialize)]` beside this one,
+    // and the `FromJson` that reads it from JSON with corten's reader, so it needs no
+    // `#[derive(FromJson)]` either (a second `Deserialize`).
     out.extend(
         derive::parse(input, "Fields")
-            .and_then(|item| deserialize::for_struct(&item))
+            .and_then(|item| {
+                let mut code = deserialize::for_struct(&item)?;
+                code.extend(from_json::beside_deserialize(&item));
+                Ok(code)
+            })
             .unwrap_or_else(|(span, message)| tokens::compile_error(span, &message)),
     );
     out

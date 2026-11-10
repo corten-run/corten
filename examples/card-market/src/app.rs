@@ -25,7 +25,7 @@ use corten::{
     security::{Policy, Violations},
     seo::{self, SitemapUrl},
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::{
     api, items, mcp,
@@ -471,7 +471,7 @@ pub(crate) async fn create_alert(
 }
 
 /// Which item, for `items.get`.
-#[derive(Deserialize, FromJson)]
+#[derive(FromJson)]
 struct ItemId {
     /// Item id, like item_17.
     id: String,
@@ -479,7 +479,7 @@ struct ItemId {
 
 /// A price alert as an agent or a partner asks for it: the form's fields (same names, same
 /// rules) plus the item.
-#[derive(Deserialize, FromJson)]
+#[derive(FromJson)]
 pub(crate) struct CreateAlert {
     /// Item id, like item_17.
     id: String,

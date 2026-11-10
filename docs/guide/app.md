@@ -1540,12 +1540,21 @@ Under the prefix:
    axum's `Json` works too, and writes any `Serialize` through `serde_json` and a `BytesMut`.
 7. Numbers are written as serde_json writes them, a whole float as `2.0`
    ([Numbers in JSON](#numbers-in-json)).
-8. To read JSON another service answers, derive `FromJson` (in the prelude) next to `Deserialize`
-   and read it with `corten::json::from_slice` or `from_str`. Corten's reader takes the fields the
-   type declares and skips the rest; on anything it does not follow (an escaped key, a missing or
-   duplicate field) `serde_json` reads the text instead, so the value and every error are
-   `serde_json`'s. It reads `#[serde(...)]` as `Deserialize` does and refuses one it cannot follow
-   (`flatten`, `deserialize_with`); a field of a type with only `Deserialize` is read by `serde_json`.
+8. To read JSON another service answers, derive `FromJson` (in the prelude) and read it with
+   `corten::json::from_slice` or `from_str`. The derive writes the type's serde `Deserialize` too,
+   so it needs no second derive (one beside it does not compile). Corten's reader takes the fields
+   the type declares and skips the rest; on anything it does not follow (an escaped key, a missing
+   or duplicate field) `serde_json` reads the text instead, so the value and every error are
+   `serde_json`'s. It reads `#[serde(...)]` as serde's derive does and refuses one it cannot follow
+   (`flatten`, `deserialize_with`); a field of a type with only `Deserialize` is read by
+   `serde_json`, and an empty `impl corten::FromJson for T {}` lets such a type be read alone. A
+   `#[derive(Fields)]` form input or a `#[derive(UrlValue)]` enum is a `FromJson` already (with
+   feature `json`, and has its schema with `types`), so `FromJson` beside either does not compile
+   either. A generic one (`Offer<T>`) is a `FromJson` wherever its `Deserialize` applies, read by
+   serde_json rather than Corten's reader, and a `UrlValue` enum with a `#[serde(other)]` variant
+   reads any other word as that variant (its schema is any string). A form input whose fields borrow
+   from the input (`&'a str`, `#[serde(borrow)]`) cannot be a `FromJson`, which reads owned values;
+   give it owned fields (`String`) to read it from JSON.
 
 Each route is a `#[derive(Route)]` struct, and the API's prefix is one too (`ApiRoot` above), so
 the router and the links name the same URL, and a route outside the prefix (`/apis/items`

@@ -5,7 +5,7 @@
 use proc_macro::{Delimiter, Group, Literal, TokenStream, TokenTree};
 
 use crate::{
-    component::split,
+    component::variants,
     derive::parse_item,
     to_json::{serde_args_for, variant_rule, Value, RULES},
     tokens::{err, is_punct, q, Error},
@@ -52,7 +52,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let mut listed = TokenStream::new();
     // Each variant as serde reads it, for the `Deserialize` impl.
     let mut read = Vec::new();
-    for tokens in split(body.stream(), ',') {
+    for tokens in variants(body.stream()) {
         let mut j = 0;
         let mut attrs = Vec::new();
         while is_punct(tokens.get(j), '#') {
@@ -176,7 +176,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         q("const __WORDS: &'static [&'static ::core::primitive::str] = &[__A0];", &[listed]),
     ))]);
     out.extend(q("::corten::__if_types! { __A0 }", &[words_impl]));
-    // serde's `Deserialize`, so the enum needs no `#[derive(Deserialize)]` beside this one.
+    // serde's `Deserialize`, so the enum needs no `#[derive(Deserialize)]` beside this one, and
+    // its `FromJson`, so it needs no `#[derive(FromJson)]` either (a second `Deserialize`).
     out.extend(crate::deserialize::for_unit_enum(&item, &read)?);
+    out.extend(crate::from_json::beside_deserialize(&item));
     Ok(out)
 }

@@ -1,19 +1,19 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 
-#[derive(Debug, Deserialize, Serialize, corten::FromJson, corten::ToJson)]
+#[derive(Debug, Serialize, corten::FromJson, corten::ToJson)]
 pub struct Field {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, corten::FromJson, corten::ToJson)]
+#[derive(Debug, Serialize, corten::FromJson, corten::ToJson)]
 pub struct Related {
     pub id: String,
     pub title: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, corten::FromJson, corten::ToJson)]
+#[derive(Debug, Serialize, corten::FromJson, corten::ToJson)]
 pub struct Record {
     pub id: String,
     pub title: String,

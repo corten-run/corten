@@ -18,7 +18,7 @@ checked on the other side.
 | Text to catalogs | `messages!`: every locale has every key with the same arguments |
 | Form to handler | `#[derive(Fields)]` names are `FieldName`s, the only key `name=`, `Errors` and corten-ui's fields take, and the same derive reads the post by those names (it implements serde's `Deserialize`, so a form type derives nothing else) |
 | Handler to JSON client | `Json<T>` and `req.screen` take a `ToJson`; `#[derive(ToJson)]` reads `#[serde(...)]` and refuses one it cannot write as serde does (`flatten` of anything but a derived struct, `serialize_with`), so what it writes is what serde reads back |
-| Another service's JSON to a page | `corten::json::from_slice` takes a `FromJson`; `#[derive(FromJson)]` reads `#[serde(...)]` and refuses one it cannot read as serde does (`flatten`, `deserialize_with`), and needs `Deserialize` too, which reads whatever its reader gives up on |
+| Another service's JSON to a page | `corten::json::from_slice` takes a `FromJson`; `#[derive(FromJson)]` reads `#[serde(...)]` and refuses one it cannot read as serde does (`flatten`, `deserialize_with`), and writes the type's `Deserialize` from the same reading, which reads whatever its reader gives up on (serde's derive beside it does not compile) |
 | Server to script | `corten::types::Types::new().add::<Row>().components(COMPONENTS).sync(path)` in a test writes TypeScript declarations and fails while they are stale (line endings aside, so a Windows checkout with CRLF is not); `corten check` then fails in every script that reads an old name (it runs TypeScript's `tsc` over `src/` and `static/`, and fails when the app has scripts and `tsc` is not installed, unless told `--no-script-types`) |
 | Server to agent | tool input and output schemas generated from the structs by `#[derive(FromJson)]` and `#[derive(ToJson)]` (feature `agent`) |
 
@@ -74,7 +74,8 @@ carries its `default`. The schemas are compiled only with feature `types` (which
 A derived type compiles with a field of any type serde writes or reads, since many are never
 described. Describing one whose field, at any depth, has a type with no schema panics naming
 that type: in the test that calls `Types::sync`, or at startup for a tool. Derive `ToJson` (or
-`FromJson`) on the type, or, for another crate's type, implement the trait for a
+`FromJson`) on the type (a `Fields` or `UrlValue` type has its read schema already), or, for
+another crate's type, implement the trait for a
 `#[serde(transparent)]` newtype around it. In a generic type, a field type that has a schema
 only under a bound the type does not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same
 way: add the bound to the type's where clause. A type a root names directly (`Types::add`, a

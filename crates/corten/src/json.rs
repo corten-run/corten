@@ -77,18 +77,20 @@
 //!
 //! # Reading
 //!
-//! [`from_slice`] and [`from_str`] read a [`FromJson`] type, which `#[derive(FromJson)]` implements next to
-//! serde's `Deserialize`: another service's response, read into structs of only the fields a page
-//! uses. Corten's reader matches each key against the fields, makes each value straight from the
-//! text and skips (validating) the rest; where it meets anything it does not follow (an escaped
+//! [`from_slice`] and [`from_str`] read a [`FromJson`] type: another service's response, read into
+//! structs of only the fields a page uses. `#[derive(FromJson)]` writes Corten's reader for the
+//! type and serde's `Deserialize` for it, both from the same `#[serde(..)]`, so the type needs no
+//! second derive. The reader matches each key against the fields, makes each value straight from
+//! the text and skips (validating) the rest; where it meets anything it does not follow (an escaped
 //! key, a missing or duplicate field, a number it does not parse itself) serde_json reads the text
-//! instead, so the value, and every error, is `serde_json::from_slice`'s. The item page's 55 KB API
+//! instead, through that `Deserialize`, so the value, and every error, is
+//! `serde_json::from_slice`'s. The item page's 55 KB API
 //! response takes a fifth fewer instructions than through serde_json (see the changelog).
 //!
 //! ```
 //! use corten::FromJson;
 //!
-//! #[derive(serde::Deserialize, FromJson, Debug, PartialEq)]
+//! #[derive(FromJson, Debug, PartialEq)]
 //! #[serde(rename_all = "camelCase")]
 //! struct Listing { listing_id: String, price: Option<f64> }
 //!
@@ -102,10 +104,11 @@
 //! `Vec`, `Box`, maps with `String` keys, `serde_json::Value` and derived types) or else any
 //! `Deserialize` type, which serde_json reads from that field's text. An attribute that changes how
 //! serde reads in a way the derive does not follow, or an enum with data, does not compile; derive
-//! `Deserialize` alone for that type and it is still read, by serde_json, as a field:
+//! `Deserialize` alone for that type and it is still read, by serde_json, as a field (an empty
+//! `impl FromJson` makes it one too, read by serde_json: see [`FromJson`]):
 //!
 //! ```compile_fail
-//! #[derive(serde::Deserialize, corten::FromJson)]
+//! #[derive(corten::FromJson)]
 //! struct Page {
 //!     #[serde(flatten)]
 //!     extra: std::collections::HashMap<String, String>,
@@ -113,15 +116,119 @@
 //! ```
 //!
 //! ```compile_fail
-//! #[derive(serde::Deserialize, corten::FromJson)]
+//! #[derive(corten::FromJson)]
 //! enum Event { Sold { price: f64 } }
 //! ```
 //!
-//! A type that only derives `FromJson` does not compile either: serde's `Deserialize` is the fallback.
+//! Neither do the attributes serde's derive refuses: a unit struct's `default` or `transparent`,
+//! and `rename_all_fields` on a struct:
+//!
+//! ```compile_fail
+//! #[derive(Default, corten::FromJson)]
+//! #[serde(default)]
+//! struct Marker;
+//! ```
 //!
 //! ```compile_fail
 //! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! struct Marker;
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(rename_all_fields = "camelCase")]
 //! struct Price { amount: f64 }
+//! ```
+//!
+//! Nor does a `transparent` struct whose one field has a default, which leaves nothing to read:
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! struct Cents { #[serde(default)] amount: u64 }
+//! ```
+//!
+//! Since the derive writes the type's `Deserialize`, serde's derive beside it is a second one and
+//! does not compile (E0119); take it out of the list:
+//!
+//! ```compile_fail,E0119
+//! #[derive(serde::Deserialize, corten::FromJson)]
+//! struct Price { amount: f64 }
+//! ```
+//!
+//! `#[derive(Fields)]` (a form's input) and `#[derive(UrlValue)]` (a word in a URL) write the
+//! type's `Deserialize` too, and with it its `FromJson` and schema, so a form's input is read
+//! from JSON (and is an agent tool's input) as it is, through Corten's reader:
+//!
+//! ```
+//! #[derive(Debug, PartialEq, corten::UrlValue)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Shipping { Standard, NextDay }
+//!
+//! #[derive(Debug, PartialEq, corten::Fields)]
+//! struct Order { email: String, shipping: Shipping }
+//!
+//! let order: Order = corten::json::from_str(r#"{"email":"a@b.c","shipping":"next_day"}"#).unwrap();
+//! assert_eq!(order, Order { email: "a@b.c".into(), shipping: Shipping::NextDay });
+//! ```
+//!
+//! `FromJson` beside either is a second `Deserialize` as well; take it out of the list:
+//!
+//! ```compile_fail,E0119
+//! #[derive(corten::Fields, corten::FromJson)]
+//! struct Order { email: String }
+//! ```
+//!
+//! ```compile_fail,E0119
+//! #[derive(corten::UrlValue, corten::FromJson)]
+//! enum Shipping { Standard, NextDay }
+//! ```
+//!
+//! A generic one is a `FromJson` wherever the `Deserialize` they wrote applies (with the bounds
+//! serde infers, such as `T: Default` for a defaulted `T`), read by serde_json rather than
+//! Corten's reader (so inside another value it is read twice: the reader finds its text, then
+//! serde_json reads that). A `UrlValue` enum with `#[serde(other)]` reads any other word as that
+//! variant: Corten's reader gives up on the whole text at such a word and serde_json reads it all
+//! again with the `Deserialize` they wrote. A form input whose fields borrow from the input gets
+//! none and cannot take one, since a `FromJson` reads owned values. `#[derive(FromJson)]` itself
+//! still refuses `#[serde(other)]`, which its reader does not follow; derive `UrlValue` for that:
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Shown { All, Mine, #[serde(other)] Other }
+//! ```
+//!
+//! ```
+//! #[derive(Debug, PartialEq, corten::UrlValue)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Shown { All, Mine, #[serde(other)] Other }
+//!
+//! #[derive(Debug, PartialEq, corten::Fields)]
+//! struct Offer<T> { shown: Shown, amount: T }
+//!
+//! assert_eq!(corten::json::from_str::<Shown>(r#""lost""#).unwrap(), Shown::Other);
+//! let offer: Offer<u32> = corten::json::from_str(r#"{"shown":"mine","amount":3}"#).unwrap();
+//! assert_eq!(offer, Offer { shown: Shown::Mine, amount: 3 });
+//! ```
+//!
+//! A form input that borrows cannot take one:
+//!
+//! ```compile_fail,E0277
+//! #[derive(corten::Fields)]
+//! struct Note<'a> { text: &'a str }
+//! impl corten::FromJson for Note<'static> {}
+//! ```
+//!
+//! A generic `#[derive(FromJson)]` type with a defaulted field of the bare parameter is refused
+//! where it is defined, since its reader needs `T: Default` and asks each parameter only for
+//! `FromJson`. A defaulted `Vec<T>` or `Option<T>` is read by its reader, where `T: Default` (as
+//! serde's derive asks), and `Fields` takes the bare one, read by serde_json:
+//!
+//! ```compile_fail,E0277
+//! #[derive(corten::FromJson)]
+//! struct Pick<T> { #[serde(default)] value: T }
 //! ```
 
 use std::{
@@ -1231,7 +1338,7 @@ mod tests {
         assert_eq!(<Arc<Id>>::__json_size().map(|s| s as *const _), Id::__json_size().map(|s| s as *const _));
     }
 
-    #[derive(Debug, PartialEq, serde::Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, FromJson)]
     struct Alert {
         email: String,
         target: Option<u32>,
