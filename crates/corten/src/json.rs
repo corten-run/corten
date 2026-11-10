@@ -290,7 +290,7 @@ pub fn to_vec<T: ToJson + ?Sized>(value: &T) -> Vec<u8> {
 /// response holds. A hand-written impl appends exactly one JSON value to `out`.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` does not write itself as JSON (ToJson)",
-    note = "derive ToJson on it (it needs no Serialize); for another crate's type, or one whose schema is written by hand, implement ToJson by hand on a newtype around it (serde_json::to_writer(&mut *out, &self.0)), with ToJsonSchema beside it where a schema is asked for"
+    note = "derive ToJson on it (it needs no Serialize); a Serialize type that has a schema but is not ToJson (another crate's, or a map of one) goes in a #[serde(transparent)] newtype that derives ToJson; only a type whose schema is written by hand implements ToJson by hand, beside its ToJsonSchema (serde_json::to_writer(&mut *out, &self.0) in a newtype, for another crate's type)"
 )]
 pub trait ToJson {
     /// Appends the value's JSON to `out`.
@@ -612,10 +612,10 @@ impl ToJson for String {
     }
 }
 
-impl ToJson for Cow<'_, str> {
+impl<T: ToJson + ToOwned + ?Sized> ToJson for Cow<'_, T> {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
-        string(out, self)
+        (**self).write_json(out)
     }
 }
 
@@ -895,6 +895,72 @@ macro_rules! serde_json_values {
     )*};
 }
 serde_json_values!(serde_json::Value, serde_json::Map<String, serde_json::Value>, serde_json::Number);
+
+macro_rules! by_serde {
+    ($($t:ty),*) => {$(
+        /// Written by serde_json, as its `Serialize` writes it.
+        impl ToJson for $t {
+            fn write_json(&self, out: &mut Vec<u8>) {
+                __private::serde(self, out)
+            }
+        }
+    )*};
+}
+by_serde!(
+    std::path::Path,
+    std::path::PathBuf,
+    std::net::IpAddr,
+    std::net::Ipv4Addr,
+    std::net::Ipv6Addr,
+    std::net::SocketAddr,
+    std::net::SocketAddrV4,
+    std::net::SocketAddrV6,
+    std::time::Duration,
+    std::time::SystemTime
+);
+
+macro_rules! nonzero {
+    ($($t:ty),*) => {$(
+        /// The number, as serde writes it.
+        impl ToJson for $t {
+            #[inline]
+            fn write_json(&self, out: &mut Vec<u8>) {
+                self.get().write_json(out)
+            }
+        }
+    )*};
+}
+nonzero!(
+    std::num::NonZeroU8,
+    std::num::NonZeroU16,
+    std::num::NonZeroU32,
+    std::num::NonZeroU64,
+    std::num::NonZeroU128,
+    std::num::NonZeroUsize,
+    std::num::NonZeroI8,
+    std::num::NonZeroI16,
+    std::num::NonZeroI32,
+    std::num::NonZeroI64,
+    std::num::NonZeroI128,
+    std::num::NonZeroIsize
+);
+
+/// `null`, as serde writes it.
+impl<T: ?Sized> ToJson for std::marker::PhantomData<T> {
+    #[inline]
+    fn write_json(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(b"null")
+    }
+}
+
+/// The JSON text it holds, as it is.
+#[cfg(feature = "types")]
+impl ToJson for serde_json::value::RawValue {
+    #[inline]
+    fn write_json(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.get().as_bytes())
+    }
+}
 
 /// Used by the code `#[derive(ToJson)]` generates. Not a public API.
 #[doc(hidden)]
@@ -1337,6 +1403,53 @@ mod tests {
         names.insert("a\"b".into(), vec![-1, 2]);
         same(&names);
         same(&serde_json::json!({ "id": "item_1", "price": 0.5, "tags": ["a", "<b>"], "none": null }));
+    }
+
+    /// The std types a schema is given for are written as serde writes them, alone and in a map.
+    #[test]
+    fn std_types_with_a_schema_write_what_serde_json_writes() {
+        use std::{
+            borrow::Cow,
+            marker::PhantomData,
+            net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
+            num::{NonZeroI8, NonZeroU128, NonZeroU32},
+            path::{Path, PathBuf},
+            time::{Duration, SystemTime},
+        };
+        let v4 = Ipv4Addr::new(10, 0, 0, 1);
+        let v6 = Ipv6Addr::LOCALHOST;
+        same(&v4);
+        same(&v6);
+        same(&IpAddr::V4(v4));
+        same(&SocketAddr::new(IpAddr::V6(v6), 443));
+        same(&SocketAddrV4::new(v4, 80));
+        same(&SocketAddrV6::new(v6, 8080, 0, 0));
+        same(Path::new("a/\"b\""));
+        same(&PathBuf::from("c"));
+        same(&Duration::new(1, 5));
+        same(&(SystemTime::UNIX_EPOCH + Duration::new(1_700_000_000, 7)));
+        same(&NonZeroU32::new(7).unwrap());
+        same(&NonZeroI8::new(-8).unwrap());
+        same(&NonZeroU128::new(u128::MAX).unwrap());
+        same(&PhantomData::<String>);
+        same(&Cow::<Inner>::Owned(Inner { a: 1 }));
+        same(&Cow::Borrowed(&[1u8, 2][..]));
+        let mut waits: BTreeMap<String, Duration> = BTreeMap::new();
+        waits.insert("a".into(), Duration::from_millis(1500));
+        same(&waits);
+        #[cfg(feature = "types")]
+        {
+            let raw = serde_json::value::RawValue::from_string(" {\"a\": [1, 2]} ".trim().into()).unwrap();
+            same(&raw);
+            let mut held: BTreeMap<String, Box<serde_json::value::RawValue>> = BTreeMap::new();
+            held.insert("x".into(), raw);
+            same(&held);
+        }
+    }
+
+    #[derive(Clone, Serialize, ToJson)]
+    struct Inner {
+        a: u8,
     }
 
     #[tokio::test]

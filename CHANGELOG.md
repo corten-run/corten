@@ -4266,21 +4266,27 @@ Corten is pre-1.0, so any minor version may change the API.
     [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042),
     so that drop is not this change's. No data-role attribute is added beside `ToJson` and
     `FromJson`, which already name each type's direction ([design Choice
-    35](docs/design.md#choice-json-derives)). **Breaking:** a tool's output must be a `ToJson` and
-    its input a `FromJson` all the way down, so what was only `Serialize` or `Deserialize` no longer
-    compiles as one: an output whose `Serialize` is derived by serde or written by hand, with a
+    35](docs/design.md#choice-json-derives)). **Breaking:** the type a tool returns must be a `ToJson` and the
+    type it takes a `FromJson`, as must any container around them (a derived struct's own fields
+    still fall back to serde), so what was only `Serialize` or `Deserialize` no longer compiles
+    as one: an output whose `Serialize` is derived by serde or written by hand, with a
     `ToJsonSchema` written by hand; an input that is a `Deserialize` with a `FromJsonSchema`
-    written by hand; a container (`Cow`, `Option`, `Box`, `Vec`, a map) whose item or value is
-    one of those; a derived generic type, output or input, whose type argument is not `ToJson` or
-    `FromJson`; an output map whose key is not a `JsonKey` (an app's key newtype implements
-    `corten::json::JsonKey`); and an input map whose key is not `String` (`BTreeMap<u32, _>`,
-    `BTreeMap<Box<str>, _>`) or whose values are not `FromJson` (`Box<RawValue>`). Derive
-    `ToJson` or `FromJson`; a type whose output schema is written by hand, another crate's type in
-    a newtype of the app's included, implements `ToJson` by hand beside it
-    (`serde_json::to_writer(&mut *out, &self.0)`); an input whose `Deserialize` is not
-    `FromJson`'s takes `impl corten::FromJson for T {}`; an input type the orphan rule keeps an app
-    from implementing it for (a map with other keys) goes in a `#[serde(transparent)]` newtype that
-    derives `FromJson`. `serde_json::Map<String, Value>` is now a `FromJson`, so an input read as
+    written by hand; a container (`Option`, `Box`, `Vec`, a map, `Cow`, `Arc`) whose item or
+    value is one of those or another crate's type; a derived generic type, output or input, whose
+    type argument is not `ToJson` or `FromJson`; an output map whose key is not a `JsonKey` (an
+    app's key newtype implements `corten::json::JsonKey`); and an input map whose key is not
+    `String` (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types Corten gives a schema
+    for are both, written and read as serde does (`Duration`, `SystemTime`, IP and socket
+    addresses, paths, the `NonZero` integers, `PhantomData`, `serde_json::Number` and, with
+    the `types` feature, `RawValue`), as are `Cow<T>`, `Box<str>`, and `Arc` and `Rc` of a
+    `FromJson` with serde's `rc` feature. Derive `ToJson` or `FromJson`; a `Serialize` or
+    `Deserialize` type that has a schema but is not one (another crate's, or a map of one) goes
+    in a `#[serde(transparent)]` newtype that derives it; only a type whose output schema is
+    written by hand implements `ToJson` by hand beside it
+    (`serde_json::to_writer(&mut *out, &self.0)` in a newtype, for another crate's type); an input
+    whose `Deserialize` is not `FromJson`'s takes `impl corten::FromJson for T {}`; an input type
+    the orphan rule keeps an app from implementing it for (a map with other keys) goes in a
+    `#[serde(transparent)]` newtype that derives `FromJson`. `serde_json::Map<String, Value>` is now a `FromJson`, so an input read as
     any object compiles as before. A field whose own
     `Serialize` fails (a map with a key JSON cannot hold, inside another crate's type) now panics,
     as in any `ToJson` answer: the request ends as a handler's panic does, logged and answered with

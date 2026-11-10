@@ -103,7 +103,9 @@
 //!
 //! An output needs `ToJson` and no `Serialize`. One written by serde, with a schema written by
 //! hand, does not compile as one: derive `ToJson`, which writes the schema and the bytes from one
-//! reading of the type. A type whose schema is written by hand (one the derive refuses, or another
+//! reading of the type. A `Serialize` type that has a schema but is not a `ToJson` (another
+//! crate's, or a map of one) goes in a `#[serde(transparent)]` newtype that derives `ToJson`, one
+//! impl that writes it by serde. A type whose schema is written by hand (one the derive refuses, or another
 //! crate's type, in a newtype of the app's) writes its `ToJson` by hand too, beside its
 //! `ToJsonSchema`, two impls you keep in step (deriving `ToJson` beside a hand-written schema is
 //! E0119). A hand-written one writes exactly one

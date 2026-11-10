@@ -682,6 +682,55 @@ impl<T: FromJson> FromJson for Box<T> {
     }
 }
 
+/// Read as its item, as serde's `rc` feature reads it (an app turns that feature on to read one).
+impl<T: FromJson> FromJson for std::sync::Arc<T>
+where
+    std::sync::Arc<T>: DeserializeOwned,
+{
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        T::__read(r).map(std::sync::Arc::new)
+    }
+}
+
+/// Read as its item, as serde's `rc` feature reads it (an app turns that feature on to read one).
+impl<T: FromJson> FromJson for std::rc::Rc<T>
+where
+    std::rc::Rc<T>: DeserializeOwned,
+{
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        T::__read(r).map(std::rc::Rc::new)
+    }
+}
+
+macro_rules! shared_str {
+    ($($t:ty),*) => {$(
+        /// Text, read as a `String` is and moved into place.
+        impl FromJson for $t
+        where
+            $t: DeserializeOwned,
+        {
+            #[inline]
+            fn __read(r: &mut Reader<'_>) -> R<Self> {
+                String::__read(r).map(<$t>::from)
+            }
+        }
+    )*};
+}
+shared_str!(Box<str>, std::sync::Arc<str>, std::rc::Rc<str>);
+
+/// Read as its owned form, as serde reads a `Cow`.
+impl<T: ToOwned + ?Sized> FromJson for std::borrow::Cow<'_, T>
+where
+    T::Owned: FromJson,
+{
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        T::Owned::__read(r).map(std::borrow::Cow::Owned)
+    }
+}
+
 impl<T: FromJson> FromJson for Vec<T> {
     fn __read(r: &mut Reader<'_>) -> R<Self> {
         let mut out = Vec::new();
@@ -742,6 +791,44 @@ impl FromJson for serde_json::Map<String, Value> {
         Ok(out)
     }
 }
+
+macro_rules! by_serde {
+    ($($t:ty),*) => {$(
+        /// Read by serde_json, as its `Deserialize` reads it.
+        impl FromJson for $t {}
+    )*};
+}
+by_serde!(
+    std::path::PathBuf,
+    std::net::IpAddr,
+    std::net::Ipv4Addr,
+    std::net::Ipv6Addr,
+    std::net::SocketAddr,
+    std::net::SocketAddrV4,
+    std::net::SocketAddrV6,
+    std::time::Duration,
+    std::time::SystemTime,
+    std::num::NonZeroU8,
+    std::num::NonZeroU16,
+    std::num::NonZeroU32,
+    std::num::NonZeroU64,
+    std::num::NonZeroU128,
+    std::num::NonZeroUsize,
+    std::num::NonZeroI8,
+    std::num::NonZeroI16,
+    std::num::NonZeroI32,
+    std::num::NonZeroI64,
+    std::num::NonZeroI128,
+    std::num::NonZeroIsize,
+    serde_json::Number
+);
+
+/// Read as `null`, as serde reads it.
+impl<T: ?Sized> FromJson for std::marker::PhantomData<T> {}
+
+/// The value's JSON text, kept as it is.
+#[cfg(feature = "types")]
+impl FromJson for Box<serde_json::value::RawValue> {}
 
 impl FromJson for Value {
     /// Scalars are made here; an array or an object (rarer in a field typed `Value`) by serde_json.
@@ -1057,6 +1144,48 @@ mod tests {
         assert!(same::<Vec<i64>>("[0,-1,9223372036854775807,-9223372036854775808]"));
         assert!(same::<Vec<u8>>("[0,255]"));
         assert!(same::<Vec<f32>>("[0.1,16777217,3.4028235e38]"));
+    }
+
+    /// The std types a schema is given for, and the pointers serde reads through, read as serde_json
+    /// reads them, alone and inside a container.
+    #[test]
+    fn std_types_with_a_schema_are_serde_json_s() {
+        use std::{
+            borrow::Cow,
+            marker::PhantomData,
+            net::{IpAddr, Ipv4Addr, SocketAddr},
+            num::{NonZeroI8, NonZeroU32},
+            path::PathBuf,
+            rc::Rc,
+            sync::Arc,
+            time::{Duration, SystemTime},
+        };
+        same::<Ipv4Addr>(r#""10.0.0.1""#);
+        same::<Ipv4Addr>(r#""10.0.0""#);
+        same::<IpAddr>(r#""::1""#);
+        same::<SocketAddr>(r#""127.0.0.1:80""#);
+        same::<PathBuf>(r#""a/b""#);
+        same::<Duration>(r#"{"secs":1,"nanos":5}"#);
+        same::<SystemTime>(r#"{"secs_since_epoch":1700000000,"nanos_since_epoch":7}"#);
+        same::<NonZeroU32>("7");
+        same::<NonZeroU32>("0");
+        same::<NonZeroI8>("-8");
+        same::<PhantomData<String>>("null");
+        same::<serde_json::Number>("1.5");
+        same::<BTreeMap<String, Duration>>(r#"{"a":{"secs":1,"nanos":0}}"#);
+        assert!(same::<Arc<Line>>(LINE));
+        assert!(same::<Rc<Vec<u8>>>("[1,2]"));
+        assert!(same::<Cow<'static, str>>(r#""c""#));
+        assert!(same::<Vec<Box<str>>>(r#"["a","\u00e9"]"#));
+        assert!(same::<Arc<str>>(r#""a""#));
+        assert!(same::<Rc<str>>(r#""a""#));
+        assert!(same::<Vec<Cow<'static, [u8]>>>("[[1],[2,3]]"));
+        assert!(same::<BTreeMap<String, Arc<Line>>>(&format!(r#"{{"x":{LINE}}}"#)));
+        #[cfg(feature = "types")]
+        {
+            let raw: BTreeMap<String, Box<serde_json::value::RawValue>> = from_str(r#"{"x": [1, {"a": 2}]}"#).unwrap();
+            assert_eq!(raw["x"].get(), r#"[1, {"a": 2}]"#);
+        }
     }
 
     /// A string read or skipped stops where serde_json does at every place in the scan's 16 and 8

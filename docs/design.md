@@ -1333,10 +1333,12 @@ rules something out.
     drift from the schema with nothing failing to compile (Value 4). Tool outputs are now bounded on
     `ToJson`, so a derived `ToJson` writes both the schema and the bytes (a field of another crate's
     type inside it is still written by serde under a schema written for it, as in any `ToJson`
-    answer), and a tool's output is written by the code every other response is. A `ToJson` written
-    by hand, for a type whose schema is written by hand (one the derive refuses, or another crate's
-    type in a newtype of the app's), comes with that `ToJsonSchema` beside it, two impls its author
-    keeps in step, as before. Tool inputs are bounded on `FromJson` the same way, so an
+    answer), and a tool's output is written by the code every other response is. The std types
+    Corten gives a schema for are `ToJson` and `FromJson` too, written and read as serde does, and
+    another crate's type that has a schema goes in a `#[serde(transparent)]` newtype that derives
+    `ToJson`, one impl. A `ToJson` written by hand, for a type whose schema is written by hand (one
+    the derive refuses, or another crate's type with none, in a newtype of the app's), comes with
+    that `ToJsonSchema` beside it, two impls its author keeps in step, as before. Tool inputs are bounded on `FromJson` the same way, so an
     input that derives serde's `Deserialize` beside a schema written by hand does not compile, short
     of the deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson` cannot write
     takes (written by hand, or serde's for an attribute it refuses), which again leaves two impls in
