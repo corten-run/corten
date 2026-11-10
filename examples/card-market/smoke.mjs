@@ -252,11 +252,19 @@ try {
       if (!cached) await new Promise((resolve) => setTimeout(resolve, 100));
     }
     const part = await fetch(src, { headers: { range: "bytes=100-199" } });
-    return { cached, length, status: part.status, range: part.headers.get("content-range"), bytes: (await part.arrayBuffer()).byteLength };
+    return {
+      cached,
+      length,
+      status: part.status,
+      range: part.headers.get("content-range"),
+      size: part.headers.get("content-length"),
+      bytes: (await part.arrayBuffer()).byteLength,
+    };
   });
   check(
     "under the service worker, a range of the clip is a 206 of those bytes after the whole file is cached",
-    underWorker.cached && underWorker.status === 206 && underWorker.range === `bytes 100-199/${underWorker.length}` && underWorker.bytes === 100,
+    underWorker.cached && underWorker.status === 206 && underWorker.range === `bytes 100-199/${underWorker.length}` &&
+      underWorker.size === "100" && underWorker.bytes === 100,
     JSON.stringify(underWorker),
   );
 

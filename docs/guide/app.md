@@ -975,12 +975,14 @@ the file's length (never the app's error page), and several ranges or another un
 file, as RFC 9110 allows. `If-Range` keeps the range only while it names the file's own strong
 ETag, and a `HEAD` is answered whole. An old version's URL is answered the same way from this
 version's file, so a page left open across a deploy still plays and seeks its clip (Safari on iOS
-plays media only from ranges); while a fleet runs two versions, a player that sends no `If-Range`
-may join ranges of a clip whose bytes changed. A file sent compressed is sent whole, since the
+plays media only from ranges); while a fleet runs two versions, or when a deploy lands between two
+ranges, a player that sends no `If-Range` may join ranges of a clip whose bytes changed. A file
+sent compressed is sent whole, since the
 compressed bytes' offsets are not the file's, and so is the favicon, whose URL outlives every
 deploy. No answer sends `Accept-Ranges`: browsers ask for a range without it
-([design Choice 35](../design.md#choice-asset-ranges)). The PWA's service worker leaves a range to
-the network, since its cache holds whole files, so a video does not play offline. A video is
+([design Choice 35](../design.md#choice-asset-ranges)). The PWA's service worker leaves a range,
+and every request a `<video>` or `<audio>` makes, to the network, since its cache holds whole
+files and a player does not read a video back from it, so a video does not play offline. A video is
 compiled into the program like every static file
 ([design Choice 8](../design.md#choice-compiled-static-files)), so a short clip fits; serve long
 or many videos from storage of their own.

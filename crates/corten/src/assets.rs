@@ -848,10 +848,9 @@ impl Assets {
         // versions' URLs whole prevented that, and Safari would not play them). A file whose bytes
         // did not change has the same tag and bytes in both. The favicon's URL outlives every
         // deploy under a weak tag, so it is sent whole. `If-Range` holds for the strong tag
-        // compared byte for byte, so a weak tag or a
-        // date never matches (RFC 9110's strong comparison; the files have no date). No
-        // `Accept-Ranges`: a browser asks for a range unprompted, and the header would cost every
-        // file's answer (#1133).
+        // compared byte for byte, so a weak tag or a date never matches (RFC 9110's strong
+        // comparison; the files have no date). No `Accept-Ranges`: a browser asks for a range
+        // unprompted (#1133).
         #[cfg(feature = "compress")]
         let ranged = url != Url::Fixed && coding.is_none() && method == Method::GET;
         #[cfg(not(feature = "compress"))]
@@ -1400,6 +1399,7 @@ mod tests {
             .unwrap();
         assert_eq!(head.status(), StatusCode::OK, "only a GET is answered in part (RFC 9110 14.2)");
         assert!(!head.headers().contains_key(header::CONTENT_RANGE));
+        assert_eq!(head.headers()[header::CONTENT_TYPE], "video/mp4", "a HEAD names the file's type");
         let root = dir("ranges-empty", &[("empty.vtt", "")]);
         let empty = Arc::new(Assets::load(&root, "/assets").unwrap());
         let res = empty
