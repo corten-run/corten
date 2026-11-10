@@ -2573,6 +2573,23 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+277. The kit's `status_dot` has `LiveDot { tone }`, the dot of a live view's badge: its opacity
+    pulses while the `<corten-live>` around it is live, so a glance tells a live view from a frozen
+    one, and is still while it connects, reconnects or has closed or ended, before the runtime
+    runs, without JavaScript and outside a `<corten-live>`. It is still under
+    `prefers-reduced-motion: reduce`, pulses in the system's text color under forced colors as
+    `Progress`'s sweep moves. The guides give the rules that make the words beside it follow the
+    stream too ("Live" only while it is live, "Not live" otherwise and without JavaScript).
+    Not breaking: `StatusDot` is unchanged (its doc test no longer names a class a live form
+    could have), and `corten ui add status_dot --merge` takes `LiveDot`. The kit's new rules
+    add 195 bytes to the stylesheet of every app that draws a `StatusDot`, as the two share one:
+    measured on the ui-gallery's served `components.css`, 60,666 bytes with them where it was
+    60,471 (gzip 10,056 against 10,012, brotli 8,856 against 8,814, Node's zlib at gzip level 9
+    and brotli's default; the earlier size is the served file without the new rules). The
+    ui-gallery's orders page has a live badge with those words, whose own three rules bring the
+    served file to 60,833 bytes (gzip 10,081, brotli 8,876), and the smoke test puts it inside a
+    `<corten-live>` and checks it in each state
+    ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
 279. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
     tokens, `choice-list-gap` and `choice-list-legend-gap` (.75rem each, the values the two
     stylesheets printed and kept equal by hand), so a theme with tighter choice lists sets them once
@@ -2614,13 +2631,28 @@ Corten is pre-1.0, so any minor version may change the API.
     `var()`s in each stylesheet, with the hover rule's selector, make the ui-gallery's served
     `components.css` 61,306 bytes where it was 61,057 (gzip 10,156 against 10,126, brotli 8,947
     against 8,925, Node's zlib at gzip level 9 and brotli's default); the earlier size is the
-    served file just before this change, with the LiveDot and `StatusTone::Text` rules (277, 280).
+    served file just before this change, with the LiveDot and `StatusTone::Text` rules (277, 284).
     The ui-gallery's smoke test checks a tab, a segmented choice, a `SegmentedLinks` link and a
     `SegmentedRadio` at the kit's values and at a theme's, and each of the four chosen under the
     pointer.
     Asked for by the Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen
     choice in `--primary` at 600
     ([#1123 Kit Segmented and Tabs draw the chosen choice in --foreground at weight 500 as literals, so a theme whose chosen tab is its primary color edits both copies](https://github.com/corten-run/corten/issues/1123)).
+284. The kit's `StatusTone` has `Text`, the color of the text around the dot: in a badge, the
+    badge's, so `<span class={Badge { tone, .. }}><StatusDot tone={StatusTone::Text} />"Open"</span>`
+    writes a computed tone once, on the badge, and a dot that takes it cannot disagree with it. It
+    shows on a `Solid` badge's fill too, where a dot in the badge's own tone was the fill's color
+    and could not be seen; the kit doc and guide say a dot in a badge takes it. `LiveDot` takes it
+    as well. Under forced colors it is `CanvasText`, as every tone is.
+    A dot in another tone in a badge still compiles: kit files are copied into an app one by one,
+    so the dot has no badge type to check against. Not
+    breaking: the other tones are unchanged, and `corten ui add status_dot --merge` takes `Text`.
+    The kit's rule adds 42 bytes to the stylesheet (measured on the ui-gallery's served
+    `components.css`: 60,920 bytes against 60,878, gzip 10,099 against 10,089, brotli 8,900
+    against 8,884, with the rule taken out for the earlier size). The ui-gallery's badges use it,
+    and its smoke test checks the dot is the badge's text color in a soft badge and a solid one, and
+    that a `Success` dot beside plain text is the theme's success color
+    ([#1092 Kit StatusDot and Badge take separate tone enums, so a badge with a computed tone writes it twice and a mismatched pair compiles](https://github.com/corten-run/corten/issues/1092)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

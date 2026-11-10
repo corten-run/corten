@@ -30,7 +30,7 @@ use crate::ui::{
     slider::Slider,
     stack::{Cluster, Gap, Stack, StackStart},
     stats::{Stat, StatTone, Stats, StatsSurface},
-    status_dot::{StatusDot, StatusTone},
+    status_dot::{LiveDot, StatusDot, StatusTone},
     steps::{Step, StepState, Steps, StepsLayout},
     switch::Switch,
     table::{CellLabel, Sort, SortHeader, Table, TableLayout, TableNumeric},
@@ -296,8 +296,13 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
             <div class={Cluster { gap: Gap::Sm }}>
                 <h1>"Orders"</h1>
                 <span class={Badge { tone: BadgeTone::Success, emphasis: BadgeEmphasis::Soft }}>
-                    <StatusDot tone={StatusTone::Success} />
+                    <StatusDot tone={StatusTone::Text} />
                     "Taking orders"
+                </span>
+                <span class={Badge { tone: BadgeTone::Info, emphasis: BadgeEmphasis::Soft }}>
+                    <LiveDot tone={StatusTone::Text} />
+                    <span class={WhenLive}>"Live"</span>
+                    <span class={WhenNot}>"Not live"</span>
                 </span>
             </div>
             <Alert variant={AlertVariant::Warning} emphasis={AlertEmphasis::Soft}>
@@ -578,6 +583,11 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                     // One block of content, so one element: a panel, which a Stack lays out.
                     <section class={(CardPanel {}, Stack { gap: Gap::Md })} aria-labelledby={PayoutTitle}>
                         <h2 class={Title} id={PayoutTitle}>"Next payout"</h2>
+                        // A dot in a status's own color beside plain text, where a badge's takes its text color.
+                        <p class={Schedule}>
+                            <StatusDot tone={StatusTone::Success} />
+                            " On schedule"
+                        </p>
                         // The shape the payout's live region shows before its first value.
                         // A gap off the kit's scale: `Gap::App` sets none, so the page's `.payout` is the one.
                         <div class={(Cluster { gap: Gap::App }, Payout)} aria-busy="true">
