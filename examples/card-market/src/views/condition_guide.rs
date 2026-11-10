@@ -16,8 +16,20 @@ pub fn ConditionGuide<'a>(req: &'a Req, t: Msg) -> impl Render {
             <video class={Clip} controls preload="metadata" width="320" height="180">
                 <source src={req.asset(Static::GRADING_CONDITION_MP4)} type="video/mp4">
                 <source src={req.asset(Static::GRADING_CONDITION_WEBM)} type="video/webm">
-                <track kind="captions" srclang="en" label={t.home_captions_en()} src={req.asset(Static::GRADING_CONDITION_EN_VTT)} default={lang == "en"}>
-                <track kind="captions" srclang="fr" label={t.home_captions_fr()} src={req.asset(Static::GRADING_CONDITION_FR_VTT)} default={lang == "fr"}>
+                <track
+                    kind="captions"
+                    srclang="en"
+                    label={t.home_captions_en()}
+                    src={req.asset(Static::GRADING_CONDITION_EN_VTT)}
+                    default={lang == "en"}
+                >
+                <track
+                    kind="captions"
+                    srclang="fr"
+                    label={t.home_captions_fr()}
+                    src={req.asset(Static::GRADING_CONDITION_FR_VTT)}
+                    default={lang == "fr"}
+                >
             </video>
             <figcaption>{t.home_grading()}</figcaption>
         </figure>

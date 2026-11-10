@@ -2575,7 +2575,7 @@ Corten is pre-1.0, so any minor version may change the API.
     served file to 60,833 bytes (gzip 10,081, brotli 8,876), and the smoke test puts it inside a
     `<corten-live>` and checks it in each state
     ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
-277. `bench/fullstack` measures what each production default costs in CPU a request under load:
+288. `bench/fullstack` measures what each production default costs in CPU a request under load:
     `cost-under-load.sh` builds card-market's round image as it is and with each `ablate/` patch,
     and `ab.mjs` loads the page and the JSON at a fixed 300 a second and with 64 users, alternating,
     on a droplet's pinned CPU; `cost-under-load.mjs` gives each default's microseconds a request.
