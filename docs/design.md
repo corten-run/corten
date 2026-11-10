@@ -743,44 +743,78 @@ rules something out.
    Last checked: 2026-11-06, CloudFront's guide to the cache key and Cloudflare's Cache Rules, whose
    Vary setting normalizes `Accept-Language` only when a rule turns it on, read at `62eb57f7`.
 
-23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image package, not a crate.** glibc's
-   allocator keeps memory a burst of connections freed, and each burst grows what it keeps: eight
-   floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 45 MiB with
-   jemalloc preloaded 35 seconds after the last (31 to 81 MiB after each), one run each
+23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image
+   package, not a crate, with its background thread and a 64 KiB thread cache.** glibc's allocator
+   keeps memory a burst of connections freed, and each burst grows what it keeps. Eight floods of
+   4,000 unfinished 30 KiB request heads (`bench/fullstack/flood-memory.mjs`, card-market at
+   `81f1f8ef`, `--cpus 1 --memory 1g`, three runs each, the cgroup's `memory.current` 35 seconds
+   after the last flood, its anonymous memory in brackets) left 406 to 455 MiB (398 to 446) on
+   glibc's allocator, climbing 31 to 38 MiB a flood. Its own settings did not stop that: two arenas
+   or one left 382 to 452 MiB (376 to 439), and two with a 16 KiB mmap threshold 177 to 184 (172 to
+   177), still climbing 20 MiB a flood. jemalloc as Debian builds it left 118 to 139 MiB (114 to
+   128), since it returns memory only while the app allocates, and with `background_thread:true` 7
+   to 11 (4 to 8), and 13 to 16 (4 to 9) with the thread cache below too, with no climb. Sampled a
+   second before each hold ended, the highest was 187 to 197 MiB with the background thread, 217 to
+   227 without it and 418 to 466 on glibc. The thread costs nothing seen at rest: an app that had
+   served no request took 87 to 112 ms of CPU a minute with the tuned settings and 83 to 91 without
+   them (`alloc-faults.mjs` with `IDLE_SECONDS=60`, cgroup `usage_usec`, three rounds,
+   `results/alloc-idle`), with three more threads; capping them at one (`max_background_threads:1`)
+   left one more thread and 79 to 113 ms, so the image leaves jemalloc's default. A flooded app's
+   idle time, while the thread returns the flood's memory, was not measured
    ([the app guide](guide/app.md),
-   [#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886),
-   [#894 docs: a flood of unfinished heads leaves memory with glibc's allocator; size max_connections from repeated floods](https://github.com/corten-run/corten/pull/894),
-   [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
-   No cost to requests was measured: under callgrind the item page took about 83,000 instructions
-   per request with jemalloc and 87,000 with glibc (five runs each, at `547b54ae`), and on the
-   benchmark item page (three rounds each, 64 connections for 30 seconds, then 1,000 requests a
-   second for 30, a 1 GiB container on two cores of a desktop) CPU time per request was within the
-   rounds' spread (median 212 against 210 microseconds closed, 292 against 299 open), and memory at
-   rest after load was 16.4 to 18.2 MiB against 17.5 to 29.5 (cgroup `memory.current`). With
-   compression, as a browser asks for it (zstd 1, the coding current browsers get; images at
-   `b179987a`, three rounds each), CPU time per request was again within the spread (median 213
-   against 224 microseconds closed, 349 against 368 open) and memory at rest overlapped (17.9 to
-   24.7 MiB against 18.8 to 24.0). Brotli, for a client without zstd, was not measured. The rounds
-   ran on a shared desktop and varied more between rounds than between allocators, so they show no
-   cost large enough to see there, not a gain. The image grows by 1.8 MB (84.1 against 82.3). A
-   `#[global_allocator]` crate in the app would do the same in the program, but it compiles C into
-   every build and binds the app to it outside Docker too; the image's two lines are the app's,
-   which it removes to run on glibc's, and card-market's image has them too
+   [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852),
+   [#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
+   jemalloc's thread cache stops at 32 KiB unless set, and a brotli response, which a client
+   without zstd gets, allocates buffers above that, so jemalloc maps them again for every one: the
+   item page sent with brotli took 19.3 to 19.4 minor page faults a request with jemalloc's
+   defaults, its background thread, no decay, `retain:false` or `thp:never`, and none with
+   `tcache_max` at 64 KiB or 8 MiB, as on glibc (`bench/fullstack/alloc-faults.mjs`, the server's
+   `minflt` over 2,000 requests, three rounds, `results/alloc-faults-br`); with `identity` or zstd
+   jemalloc's defaults, the tuned image and glibc took none (`results/alloc-faults`). That probe's
+   coarse CPU time put a brotli page at 355 to 595 microseconds with those faults and 285 to 350
+   without in one set, but 430 to 580 against 340 to 530 (tuned) and 345 to 465 (glibc) in the
+   other, so it agrees in direction only. On the benchmark item page (`bench/fullstack/ab.mjs`,
+   jemalloc as it comes, tuned, and glibc alternating, three rounds, 300 requests a second for 40
+   seconds, then 64 users, `results/ab-jemalloc-tuned`) the tuned image used 12.4% of its core at
+   300 brotli pages a second (12.0 to 14.4) against 16.8% (15.8 to 18.4) and 17.0% on glibc (16.3
+   to 17.5), and served 3,486 a second at 64 users (2,298 to 3,829) against 2,132 (1,303 to 2,210)
+   and 2,357 (1,908 to 2,470); with `identity` and with a browser's encodings (zstd) their ranges
+   overlapped, except a browser's at 64 users, where glibc's 2,139 to 3,392 sat below both (while in
+   `results/ab-jemalloc` glibc's median, 4,936, was above theirs, 3,607 and 3,454, the ranges
+   overlapping). No image with glibc's tunables went through `ab.mjs`, since none gave a flood's
+   memory back. An earlier set without the thread cache
+   (`results/ab-jemalloc`) had glibc at 3,554 brotli pages a second against 1,720 for jemalloc and
+   1,905 with its background thread. Those rounds ran on Docker Desktop with other work running,
+   where rounds of one image moved by up to 2.4 times at 64 users (glibc with `identity`, 3,490 to
+   8,467) and CPU time at 300 a second by up to 1.9 times (7.8 to 14.5% in `results/ab-jemalloc`),
+   so they show no cost they could see, and a brotli gain that the fault counts explain but whose
+   size they do not settle. Under callgrind the item page took about 83,000 instructions per
+   request with jemalloc and 87,000 with glibc (five runs each, at `547b54ae`). The image grows by
+   1.8 MB (84.1 against 82.3). A `#[global_allocator]` crate in the app would do the same in the
+   program, but it compiles C into every build and binds the app to it outside Docker too; the
+   image's three lines are the app's, which it removes to run on glibc's, and card-market's image
+   has them too
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
-   Stands on: measured, noisy and partly (memory after eight floods, one run each; CPU time per
-   request within the spread of three rounds on a shared desktop, which cannot show a small cost;
-   brotli not measured); bet (an app's image is Debian with the `libjemalloc2` package); reasoned
-   (an image package binds only the image, where a `#[global_allocator]` crate compiles C into every
-   build).
+   Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
+   faults a request, repeatable to 0.1 in every round; idle CPU, three rounds; instructions a
+   request under callgrind, five runs each); measured, noisy (CPU time and throughput in three
+   rounds on a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 12's
+   `libjemalloc2`, 5.3.0, has `background_thread` off and a 32 KiB `tcache_max` unless set, and
+   takes these option names); bet (an app's image is Debian with that package); reasoned (an image
+   package binds only the image, where a `#[global_allocator]` crate compiles C into every build).
 
-   Revisit when: a run on a quiet Linux host (`bench/fullstack/ab.mjs`) or with brotli shows a cost
-   per request; or glibc's own settings (`MALLOC_ARENA_MAX`, its trim threshold) give the memory
-   back with no package, which has not been tried.
+   Revisit when: a run on a quiet Linux host (`ab.mjs` or `alloc-faults.mjs` on a droplet) shows a
+   cost per request or no gain with brotli; the brotli encoder or its level changes what it
+   allocates (buffers above 64 KiB would fault again); Debian's jemalloc changes its thread cache's
+   default or drops `background_thread`; or an allocator Debian ships returns a flood's memory with
+   no settings.
 
-   Last checked: 2026-11-05, the eight floods, recorded at `83123350`; 2026-11-06, the callgrind
-   runs on `547b54ae`, recorded at `b179987a`; 2026-11-06, the rounds with zstd, images at
-   `b179987a`, recorded at `312b2c1c`.
+   Last checked: 2026-11-06, the callgrind runs on `547b54ae`, recorded at `b179987a`; 2026-11-08,
+   the floods, the page faults and the rounds, images of `81f1f8ef` (but for the tuned image in
+   `results/alloc-faults` and `alloc-idle`, a build whose commit was not recorded); 2026-11-09,
+   Debian's libjemalloc2 5.3.0 (package 5.3.0-1) in `debian:bookworm-slim`, its options printed by
+   `MALLOC_CONF=stats_print:true`.
 
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
@@ -1119,7 +1153,87 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
-32. <a id="choice-json-derives"></a>**A type's JSON role is the derive that names its direction, `ToJson` to write and
+32. <a id="choice-stream-coding"></a>**A compressed stream is zstd, else gzip, never brotli.** A
+    live stream, a feed and a streamed `Media` are compressed as one stream per connection,
+    flushed after each event or chunk with the context kept, so the client decodes each at once
+    and a redraw costs about what changed. Playwright's WebKit (27.2, on Windows) dispatches a
+    flushed brotli event that decodes to more than 16 KiB only once more of the body arrives, so the
+    last change before a quiet spell showed one event late: an event of 16,385 bytes showed only
+    when the next chunk came, with Corten's encoder and with Node's at quality 4 and 11, and with
+    empty blocks after it (the issue saw a 17 KB event from Node's encoder on time; that was not
+    seen again). Replaying a stream's captured chunks one a second from a Node server, gzip and
+    identity were on time at every size tried, to 200 KB, in all three engines
+    ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
+    The watchlist smoke holds the fix: an event that decodes to 52,395 bytes with nothing after it
+    must be dispatched within 5 s in each engine (Chromium and Firefox get zstd there, WebKit
+    gzip), and a build whose streams are brotli fails it in Playwright's WebKit on Windows; CI's
+    Linux WebKit takes no brotli, so there the rule is held by the negotiation tests and the smoke's
+    HTTP checks, which ask for each coding themselves.
+    So a client that accepts zstd gets zstd 1 as before, any other that accepts gzip gets gzip 3
+    (sync-flushed, its window kept), and one that accepts only brotli gets the stream as it is, even
+    if it says `identity;q=0` (RFC 9110 section 12.4.1 lets a server disregard the field when nothing
+    it has is acceptable, as a stream past the budget already does, rather than answer 406). A
+    streamed `Media` follows the same rule though a download ends, so its tail is never held for
+    long: one rule for every stream, at the cost of gzip's bytes for a client without zstd.
+    Gzip sends more than brotli 4 did, most for a large region (`what_a_redraw_sends`, ten redraws
+    of a list with one row changed): of 40 rows (2.7 KB) 60 to 69 bytes against 20 to 40, of 250 (17
+    KB) 477 to 524 against 23 to 91, and of 640 (45 KB, past deflate's 32 KiB window, so most of the
+    event before is out of reach) 6,203 to 6,214 against 44 to 2,029. Level 3, not 1: at 1 the
+    redraws are 129 to 453 bytes, 2,188 to 2,684 and 7,238 to 7,330. A gzip stream holds 352,232 bytes and reserves 360
+    KiB (`tests/stream_memory.rs`, the bytes asked of the system allocator; jemalloc, which the
+    template's image preloads, rounds them up to its size classes, which is not measured), where
+    brotli reserved 1,000 KiB. It costs more CPU: an event of the 2.7 KB redraw, made and sent
+    through the compression layer, is about 286,650 instructions against brotli's 213,720 (zstd 1:
+    100,470, unchanged).
+    Not chosen: brotli with an empty block or a keepalive after each event (WebKit held the event
+    back with empty blocks after it); a gzip-only client getting the stream as it is, as before (a
+    redraw's saved bytes are why streams are compressed).
+
+    Stands on: platform (Playwright's WebKit on Windows holds back a flushed brotli event of more
+    than 16 KiB and sends `deflate, gzip, br`, no zstd; its Linux build, which CI's smoke runs,
+    takes no brotli at all, so the smoke there cannot see the holdback and the rule is held by
+    `compress.rs`'s and `tests.rs`'s tests; the 16 KiB edge matches libcurl's write size, the
+    Windows build's network stack, which suggests the holdback is that stack's, not measured;
+    Chromium and Firefox send zstd, which arrives at once there; no WebKit that accepts zstd was
+    tried, and Safari, whose network stack is not Playwright's and which caniuse lists as sending
+    zstd over HTTPS from 26.3, was not tried at all); measured (bytes a redraw by `what_a_redraw_sends`, one run, the counts fixed
+    by the encoders; a gzip stream's memory by `tests/stream_memory.rs`; the large event on a
+    quiet stream by the watchlist smoke; instructions an event by callgrind,
+    `what_an_event_stream_costs` at 2,000 and 12,000 events, three runs each, within 20
+    instructions); reasoned (a sync flush ends deflate's output on a byte boundary with everything
+    sent so far decodable, so a decoder has the whole event); value (an event on time at the
+    user's end before the bytes brotli saves, Values 1, and the issue's own ask: decline the
+    coding for streams until a WebKit is shown to take it on time).
+
+    Revisit when: a WebKit that Playwright runs dispatches a flushed brotli event of more than
+    16 KiB at once, or sends zstd (then check a flushed zstd event there); Safari is tried and
+    shows a large event on time under brotli (then the holdback is the Windows build's own, and
+    brotli can come back for a client without zstd), or late under zstd or gzip; or apps send redraws
+    over 32 KB to clients without zstd often enough that gzip's bytes show in a round.
+
+    Last checked: 2026-11-08, WebKit 27.2, Chromium 156 and Firefox 157: the late brotli event
+    against `c65c10ec`'s streams and Node's encoder, by replaying a stream's captured chunks one a
+    second from a Node server (the issue's Isolation), and each engine's `Accept-Encoding`;
+    2026-11-08, the callgrind counts on `c65c10ec` (brotli 4, zstd) and `541fc59b` (gzip 3, zstd);
+    2026-11-08, the bytes, miniz_oxide 0.9.1 and brotli 9.0.0, on `202f6427` with
+    `what_a_redraw_sends`; 2026-11-08, the memory on `a4958acb` with `tests/stream_memory.rs` (test
+    profile, printed with `--nocapture`, the same in two runs); 2026-11-09, the watchlist smoke's
+    large event, against a server built from `0b9a134c`, in Chromium, Firefox and WebKit (two
+    runs, all on time, 10 to 22 ms; the second, which reads the route's answer, saw 200 with zstd,
+    zstd and gzip, and failed only WebKit's busy-mark check, the flake of
+    [#1108 The smoke's busy-mark check failed once in WebKit: the replaced button A was still marked busy while B's submit was on its way](https://github.com/corten-run/corten/issues/1108)),
+    and in WebKit again with the check's bounded fetch (`228dba80`, gzip, 32 ms),
+    all on Windows; 2026-11-09, the smoke against `022c3282` with `c65c10ec`'s `compress.rs`
+    and `answer.rs`, whose streams are brotli, in WebKit on Windows (one run: the route
+    answered 200 with `br`, and no event came in 5 s), and the same build on `535b22f9` in
+    Playwright 1.64.1's Linux image, as CI runs it (one run: the route answered 200 uncompressed,
+    so that WebKit did not ask for brotli or zstd, its header not logged, and the event came in
+    18 ms); 2026-11-09, the whole smoke against a server built from `0b9a134c` in that Linux image
+    (one run, all passed; Chromium and Firefox got zstd, WebKit gzip, the large event in 7 to
+    17 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
+    test's thread (352,232 bytes, the same).
+
+35. <a id="choice-json-derives"></a>**A type's JSON role is the derive that names its direction, `ToJson` to write and
     `FromJson` to read, not a data-role attribute.** Each derive is already the one thing a type
     declares for its direction: `ToJson` lays out the JSON a response, a screen's data, a typed
     script argument or an agent tool's output writes, and its schema (feature `types`);
@@ -1190,14 +1304,17 @@ rules something out.
    not reach outside a component; `RelativeTime` keeps the page's relative times in its
    module, so one timer serves them all, with a `visibilitychange` and a `pageshow` listener for
    the life of the page that read the clock again when it comes back; and `rows::sort` writes the
-   order it drew into the `ReadAgain::from` tag of the part around its table, which the server
-   puts beside the part as a patch instruction, so no ref can name it, and into where the forms
-   in that part post, looking only beside the elements with an id around the table, as the
-   runtime finds a part. A form or link elsewhere whose route reads the order calls
-   `ordered::send` (a form's `on:submit`) or `ordered::link` (a link's `on:connect`) from its
-   own markup with the tables' ids, `ElementId`s made from their `#[derive(Id)]` types, as
-   `CopyButton` is given the element it copies, and it reads the order from the address when it
-   is sent or about to be followed; nothing searches the page for them.)
+   order it drew into the address and into the part the runtime reads again around its table,
+   found as the runtime finds a part: its `ReadAgain::from` tag, which no ref can name, and where
+   its forms that post send (a `GET` form's fields are its query, so it is not rewritten). That
+   search is closed: any other form or link whose route reads the order, inside the part or not,
+   except a form that posts without an `action` or `formaction` (it sends to the address, which
+   has the order), names the tables in its markup or in a kit pager's `on:link` (`ordered::send`,
+   `ordered::link`, with `sorted(&Id)` of each table's `#[derive(Id)]`, or of an element around
+   them, as `CopyButton` is given the element it copies) and reads the order from the address, so a
+   new kind of reader is one of those calls, not a wider search ([Limit 24](#limit-sort-readers)).
+   Which tables sort in place, also when other routes read their order, is decided in the [UI
+   guide](guide/ui.md) from the measurements there.)
 4. <a id="rule-user-facing-text"></a>User-facing text lives in views, the view model or the catalog, never in scripts. Which of
    the first and the last is one rule per app (`docs/guide/views.md`, Text): an app with one
    locale writes fixed text as literals in its views, and the catalog holds only what needs it (a
@@ -1399,7 +1516,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `target` an `HTMLElement`, so its script narrows (`event instanceof MouseEvent`) where an
     `on:click` written on an `<a>` declares `MouseEvent` and `HTMLAnchorElement`. Typing a prop by
     the event and element it lands on would make each prop name its element's type, and the
-    arguments the call passes (a column, as a Rust type) are checked either way.
+    arguments the call passes (a column, as a Rust type) are checked either way. A handler meant
+    for such a prop takes the wide type too (corten-ui's `rows::sort` and `ordered::link`, which
+    the kit's pagers take as `on:link`), so written on an element of its own it accepts any
+    element: `ordered::link` on a `<button>` compiles, is reported in the console, and does nothing.
 19. <a id="limit-permissions-policy"></a>The `Permissions-Policy` a document is sent (`Feature`) is enforced by Chromium-based browsers
     (measured in Chromium 156: with the location granted, `geolocation=()` refuses it). Firefox 157
     and WebKit 27.2 gave the location under the same header (probed), so in them the features it
@@ -1479,3 +1599,14 @@ by design; where it is known, a limit says what would lift it or why it is so.
     endpoint, and a trial of one directive beside the enforced policy is not built in: the
     enforced policy's reports show what a change must allow, and `report_only` tries the whole
     policy.
+24. <a id="limit-sort-readers"></a>A form or link whose route reads a table's order that
+    `rows::sort` drew takes that order only by naming the table (`ordered::send`, `ordered::link`,
+    [Rule 3](#rule-handler-arguments)). Two kinds need no call: a form in the part read again around
+    the table that posts, which `rows::sort` rewrites, and a form that posts without an `action` or
+    `formaction`, which sends to the address it keeps. Any other that does not name the table sends
+    the order the page was drawn with, and nothing notices (a kit pager must write `on:link`, but
+    `on:link={None::<Handler>}` builds): the compiler cannot see which routes read the order, and
+    the runtime cannot tell a form that should carry it from one that should not. A navigating sort
+    header would close this at the cost of a round trip on every sort ([UI guide](guide/ui.md)). It
+    lifts when a route's type says it reads a table's order, so markup that sends to it on a page
+    that draws that table without the call does not build.
