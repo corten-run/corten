@@ -6488,6 +6488,12 @@ Corten is pre-1.0, so any minor version may change the API.
     with a smoke check of its role, its one live region and its tone's colors, so every kit
     component is again in the gallery and its browser test
     ([#1125 The kit guide says corten ui add --all serves 35,239 bytes of CSS; it serves 59,299 now (8,615 brotli, not 5,331), and two lines beside it are stale](https://github.com/corten-run/corten/issues/1125)).
+81. What the runtime sends and receives is left to the browser's network panel: the requests and
+    forms guide says where a `data-patch` submit's fields, its answer's fragments and a live
+    stream's events show, that the runtime has no diagnostics hook (so it does no work for one and
+    opens no second stream), and that its own fields are not an API; an app's outcomes are its typed
+    events. New design Limit 25 says why and what would lift it
+    ([#1130 Expose opt-in browser diagnostics for action responses and live HTML patches](https://github.com/corten-run/corten/issues/1130)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
