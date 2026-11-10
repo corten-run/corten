@@ -1246,8 +1246,10 @@ rules something out.
     response type still needed serde's `Serialize` beside `ToJson`: its `outputSchema` came from
     `ToJson`'s schema while its bytes came from `Serialize`, so a hand-written `Serialize` could
     drift from the schema with nothing failing to compile (Value 4). Tool outputs are now bounded
-    on `ToJson`, so one impl writes both and a tool's output is written by the code every other
-    response is:
+    on `ToJson`, so one impl writes both (a field of another crate's type inside it is still
+    written by serde under a schema written for it, as in any `ToJson` answer) and a tool's output
+    is written by the code every other response is (tool inputs are bounded on `FromJson` the same
+    way, so an input read by serde under a schema written by hand does not compile either):
 
     ```rust,ignore
     // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
@@ -1272,17 +1274,20 @@ rules something out.
     both
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 
-    Stands on: reasoned (one declaration per direction, Values 4, 5 and 6); measured (callgrind,
-    release build, card-market's `tool_cost`: an agent's `items.get` call through `/mcp`, 1,200
-    calls less 200 over 1,000, two runs each, costs 265,961 and 268,013 instructions on
-    `a791d9ba` with `tool_cost` added and 211,736 and 210,459 on `6e118a77`, outputs written
-    by `ToJson`); reasoned (one impl writes the schema and the bytes; card-market's agent test
-    checks a tool answer's bytes equal serde's).
+    Stands on: measured (callgrind, release build, card-market's `tool_cost`: an agent's `items.get`
+    call through `/mcp`, each answer checked to be the tool's output, 1,200 calls less 200 over
+    1,000, two runs each: 267,820 and 265,852 instructions a call on `a791d9ba` with `tool_cost`
+    added, 211,330 and 211,236 on `620bc298`, outputs written by `ToJson`); reasoned (one impl
+    writes a tool output's schema and its bytes, and one a tool input's schema and what it reads;
+    card-market's agent test checks a tool answer's bytes equal serde's); value (one declaration per
+    direction, Values 4, 5 and 6).
 
-    Revisit when: a response type other than a feed row needs two impls kept in step that one
-    derive cannot write, as `FromJson` and `Deserialize` were before [Choice 26](#choice-derived-deserialize) covered it.
+    Revisit when: a response type other than a feed row needs two impls kept in step that one derive
+    cannot write, as `FromJson` and `Deserialize` were before
+    [Choice 26](#choice-derived-deserialize) covered it.
 
-    Last checked: 2026-11-08, the derives and the agent endpoint's bounds, against `6e118a77`.
+    Last checked: 2026-11-08, the callgrind count on `a791d9ba` and `620bc298`; 2026-11-09, the
+    derives and the agent endpoint's bounds, inputs and outputs, at `e1ecfee0` and after.
 
 ## Rules
 

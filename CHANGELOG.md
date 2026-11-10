@@ -4252,20 +4252,23 @@ Corten is pre-1.0, so any minor version may change the API.
     after (callgrind, release build, `read_cost` in `examples/card-market`, two runs each) ([#1042
     Let FromJson generate its required Deserialize
     implementation](https://github.com/corten-run/corten/issues/1042)).
-173. An agent tool's output (`Tools::tool`, `idempotent_tool`, `read_tool`) is a `ToJson` and
-    is written by it, so it derives `ToJson` alone, as every other JSON answer does, where it
-    needed serde's `Serialize` beside it. The answer is the same JSON (card-market's agent test
-    checks its bytes against serde's), and an `items.get` call in `examples/card-market` costs a
-    fifth fewer instructions: 211,736 and 210,459 a call on `6e118a77`, against 265,961 and
-    268,013 on `a791d9ba` with `tool_cost` added (callgrind, release build, `tool_cost`, 1,200
-    calls less 200 over 1,000, two runs each). No data-role attribute is added beside `ToJson` and
-    `FromJson`, which already name each type's direction (design Choice 35). **Breaking:** an
-    output that implements `Serialize` and `ToJsonSchema` by hand and not `ToJson`, or a derived
-    generic output whose type argument is not `ToJson`, no longer compiles as one; implement
-    `ToJson` (or derive it). A field whose own `Serialize` fails (a map with a key JSON cannot
-    hold, inside another crate's type) now panics, as in any `ToJson` answer: the request ends as
-    a handler's panic does, logged and answered with the app's 500 (in an `Api`, its JSON
-    failure), where the call answered an internal error as the tool's result with the call's `id`
+173. An agent tool's output (`Tools::tool`, `idempotent_tool`, `read_tool`) is a `ToJson` and is
+    written by it, so it derives `ToJson` alone, as every other JSON answer does, where it needed
+    serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
+    The answer is the same JSON (card-market's agent test checks its bytes against serde's), and an
+    `items.get` call in `examples/card-market` costs a fifth fewer instructions: 211,330 and 211,236
+    a call on `620bc298`, against 267,820 and 265,852 on `a791d9ba` with `tool_cost` added
+    (callgrind, release build, `tool_cost`, each answer checked to be the tool's output, 1,200 calls
+    less 200 over 1,000, two runs each). No data-role attribute is added beside `ToJson` and
+    `FromJson`, which already name each type's direction (design Choice 35). **Breaking:** an output
+    that implements `Serialize` and `ToJsonSchema` by hand and not `ToJson`, a derived generic
+    output whose type argument is not `ToJson`, or an input that implements `Deserialize` and
+    `FromJsonSchema` by hand and not `FromJson`, no longer compiles as one; derive `ToJson` or
+    `FromJson` (or implement it). A field whose own `Serialize` fails (a map with a key JSON cannot
+    hold, inside another crate's type) now panics, as in any `ToJson` answer: the request ends as a
+    handler's panic does, logged and answered with the app's 500 (in an `Api`, its JSON failure),
+    where the call answered an internal error as the tool's result with the call's `id`; a test
+    holds it
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 
 ### Fixed

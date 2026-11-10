@@ -17,6 +17,21 @@
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
 //!
+//! Nor does one read by serde with a schema written by hand, since its schema and what it reads
+//! could drift apart:
+//!
+//! ```compile_fail,E0277
+//! use corten::{agent::Tools, json::schema::{FromJsonSchema, Generator}};
+//! #[derive(serde::Deserialize)]
+//! struct Adjust { id: String }
+//! impl FromJsonSchema for Adjust {
+//!     fn json_schema(_: &mut Generator) -> serde_json::Value { serde_json::json!({ "type": "object" }) }
+//! }
+//! #[derive(corten::ToJson)]
+//! struct Done { ok: bool }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
 //! The same input deriving `FromJson` instead does:
 //!
 //! ```
@@ -51,10 +66,10 @@
 //!
 //! A screen's data is already available to agents through [`crate::Req::screen`]; tools cover
 //! the writes. Results go back as `structuredContent` and as the same JSON in a text block, for
-//! clients that only read text. The output is written once, by its `ToJson` (the same JSON
-//! serde's `Serialize` writes, laid out when the crate compiles), into the response as is, so a
-//! tool returning a large shared value (`Arc<T>`) costs one write and no copy. As in any
-//! `ToJson` answer, a field whose own `Serialize` fails (another crate's map with a key JSON
+//! clients that only read text. The output is written once, by its `ToJson` (a derived one
+//! writes the JSON serde's `Serialize` would, laid out when the crate compiles), into the response
+//! as is, so a tool returning a large shared value (`Arc<T>`) costs one write and no copy. As in
+//! any `ToJson` answer, a field whose own `Serialize` fails (another crate's map with a key JSON
 //! cannot hold) panics: the request ends as a handler's panic does, logged and answered with the
 //! app's 500 (in an [`Api`](crate::Api), its JSON failure), not as the tool's result.
 //!
@@ -86,12 +101,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use crate::json::{
     schema::{FromJsonSchema, Generator, ToJsonSchema},
-    ToJson,
+    FromJson, ToJson,
 };
 
 /// Protocol revisions this server speaks, newest first.
@@ -484,7 +498,7 @@ impl<A: Send + 'static> Tools<A> {
     /// tool never takes a key it does not store.
     pub fn tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
-        I: DeserializeOwned + FromJsonSchema + Send + 'static,
+        I: FromJson + FromJsonSchema + Send + 'static,
         O: ToJson + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
@@ -497,7 +511,7 @@ impl<A: Send + 'static> Tools<A> {
     /// may call it again after a lost reply.
     pub fn idempotent_tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
-        I: DeserializeOwned + FromJsonSchema + Send + 'static,
+        I: FromJson + FromJsonSchema + Send + 'static,
         O: ToJson + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
@@ -508,7 +522,7 @@ impl<A: Send + 'static> Tools<A> {
     /// Adds a tool that only reads (marked `readOnlyHint`, so clients may call it without asking).
     pub fn read_tool<I, O, F, Fut>(self, name: &str, description: &str, handler: F) -> Self
     where
-        I: DeserializeOwned + FromJsonSchema + Send + 'static,
+        I: FromJson + FromJsonSchema + Send + 'static,
         O: ToJson + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
@@ -518,7 +532,7 @@ impl<A: Send + 'static> Tools<A> {
 
     fn add<I, O, F, Fut>(mut self, name: &str, description: &str, read_only: bool, idempotent: bool, handler: F) -> Self
     where
-        I: DeserializeOwned + FromJsonSchema + Send + 'static,
+        I: FromJson + FromJsonSchema + Send + 'static,
         O: ToJson + ToJsonSchema + 'static,
         F: Fn(A, I) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<O, ToolError>> + Send + 'static,
@@ -959,6 +973,37 @@ mod tests {
     #[derive(crate::Route)]
     #[route("/mcp")]
     struct Mcp;
+
+    /// A value inside a tool's output that serde cannot write (here, one whose `Serialize`
+    /// fails): the request ends as a handler's panic does, with the app's 500 in the API's JSON
+    /// failure, not as the tool's result or a JSON-RPC answer.
+    #[tokio::test]
+    async fn an_output_that_cannot_be_written_ends_the_request_as_a_panic_does() {
+        struct Unwritable;
+        impl serde::Serialize for Unwritable {
+            fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("not JSON"))
+            }
+        }
+        impl ToJsonSchema for Unwritable {
+            fn json_schema(_: &mut Generator) -> Value {
+                json!({})
+            }
+        }
+        #[derive(crate::json::ToJson)]
+        struct Out {
+            value: Unwritable,
+        }
+        let tools = Tools::new("test", "1.0")
+            .read_tool("broken", "Fails to write", |(), _: Nothing| async { Ok(Out { value: Unwritable }) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "broken", "arguments": {} } });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        let (status, _, body) = send(&app, req).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+        let body: Value = serde_json::from_str(&body).unwrap();
+        assert!(body.get("jsonrpc").is_none() && body.get("result").is_none(), "{body}");
+    }
 
     /// An app whose agents get tokens from an authorization server: `reader` may read, `writer`
     /// may write too.
