@@ -2232,16 +2232,18 @@ own `default-src 'none'`.
 
 No site may show a page in a frame (`frame-ancestors 'none'`, and `X-Frame-Options: DENY` for
 browsers that do not read it), so another site cannot lay its own page over one of the app's to
-steer a click. An unstaged route's answer is sent with neither: it is data, not a page, and runs
-no script ([A route outside the stages](#a-route-outside-the-stages)). A widget other sites embed (an item's card, a chart) is an area whose policy names
-them, `p.frame_ancestors("https://partner.example")`, and every other page keeps the denial; the
-card market's `/embed` area takes them from `EMBED_ORIGINS`. A source is a host or a scheme, or
-`'self'` for the app's own pages; `*` or a bare scheme (`https:`) lets any site frame them. The
-policy decides `X-Frame-Options`, whatever a handler, middleware or relayed upstream sets: pages
-another origin may frame are sent none (it cannot name one) and pages only the app may frame
-`SAMEORIGIN`. Who may frame a page stays enforced where the app's CSP is not: a relayed answer that
-brings its own CSP, and under `Policy::report_only` a page another origin may frame, are also sent
-an enforced `Content-Security-Policy` of their `frame-ancestors` alone. Frame read-only pages: a
+steer a click. An unstaged route's answer is sent with neither unless its handler sets one: it
+is data, not a page, and runs no script ([A route outside the stages](#a-route-outside-the-stages)).
+A widget other sites embed (an item's card, a chart) is an area whose policy names them,
+`p.frame_ancestors("https://partner.example")`, and every other page keeps the denial; the card
+market's `/embed` area takes them from `EMBED_ORIGINS`. A source is a host or a scheme, or
+`'self'` for the app's own pages; `*` or a bare scheme (`https:`) lets any site frame them. On
+a staged route the policy decides `X-Frame-Options`, whatever a handler, middleware or relayed
+upstream sets: pages another origin may frame are sent none (it cannot name one) and pages only
+the app may frame `SAMEORIGIN`. Who may frame a page stays enforced where the app's CSP is not: a
+relayed answer that brings its own CSP, and under `Policy::report_only` a page another origin may
+frame, are also sent an enforced `Content-Security-Policy` of their `frame-ancestors` alone.
+Frame read-only pages: a
 parent on another site gets none of the app's `SameSite` cookies (Corten's cookie helper makes them
 `Lax`), so the page is drawn signed out there, but a parent on the same site (`blog.example.com`
 framing `app.example.com`) gets them, so the page is signed in and a write from it carries the
