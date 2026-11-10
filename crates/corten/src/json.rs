@@ -307,6 +307,15 @@ pub trait ToJson {
         None
     }
 
+    /// Whether every value of the type writes one well-formed JSON value, so an agent tool's
+    /// output need not be parsed to know it: true for the std types, `Raw` and what serde writes,
+    /// the AND of the fields' for the derive, and false for an impl written by hand, which an agent
+    /// tool's output is parsed for in a release build. Not a public API.
+    #[doc(hidden)]
+    fn __well_formed() -> bool {
+        false
+    }
+
     /// The response [`Json`] sends, before its headers: the value written into a new vector, or
     /// for [`Raw`] the bytes it holds. Not a public API.
     #[doc(hidden)]
@@ -434,6 +443,11 @@ impl std::fmt::Debug for Raw {
 impl ToJson for Raw {
     fn write_json(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(self.as_bytes());
+    }
+
+    /// `Raw::new` parsed it.
+    fn __well_formed() -> bool {
+        true
     }
 
     fn __into_response(self) -> Response {
@@ -576,6 +590,13 @@ impl<T: ToJsonMembers + ?Sized> ToJsonMembers for Box<T> {
 pub trait JsonKey {
     /// Appends the key as one JSON string, quotes included.
     fn write_key(&self, out: &mut Vec<u8>);
+
+    /// As `ToJson`'s: true for Corten's keys and the derive's, false for one written by hand. Not
+    /// a public API.
+    #[doc(hidden)]
+    fn __well_formed() -> bool {
+        false
+    }
 }
 
 /// The escaped contents of a JSON string, without its quotes: what serde_json escapes (`"`, `\` and
@@ -649,12 +670,20 @@ impl ToJson for str {
     fn write_json(&self, out: &mut Vec<u8>) {
         string(out, self)
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl ToJson for String {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
         string(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        true
     }
 }
 
@@ -667,12 +696,20 @@ impl<T: ToJson + ToOwned + ?Sized> ToJson for Cow<'_, T> {
     fn __json_size() -> Option<&'static AtomicUsize> {
         T::__json_size()
     }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
+    }
 }
 
 impl ToJson for char {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
         string(out, self.encode_utf8(&mut [0; 4]))
+    }
+
+    fn __well_formed() -> bool {
+        true
     }
 }
 
@@ -682,12 +719,20 @@ impl ToJson for crate::i18n::Day {
         use std::io::Write as _;
         let _ = write!(out, "\"{self}\"");
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl ToJson for bool {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(if *self { b"true" } else { b"false" })
+    }
+
+    fn __well_formed() -> bool {
+        true
     }
 }
 
@@ -698,6 +743,10 @@ macro_rules! integers {
             fn write_json(&self, out: &mut Vec<u8>) {
                 $write(out, *self as $wide)
             }
+
+            fn __well_formed() -> bool {
+                true
+            }
         }
 
         impl JsonKey for $t {
@@ -706,6 +755,10 @@ macro_rules! integers {
                 out.push(b'"');
                 $write(out, *self as $wide);
                 out.push(b'"');
+            }
+
+            fn __well_formed() -> bool {
+                true
             }
         }
     )*};
@@ -719,11 +772,19 @@ macro_rules! wide_integers {
             fn write_json(&self, out: &mut Vec<u8>) {
                 out.extend_from_slice(self.to_string().as_bytes())
             }
+
+            fn __well_formed() -> bool {
+                true
+            }
         }
 
         impl JsonKey for $t {
             fn write_key(&self, out: &mut Vec<u8>) {
                 string(out, &self.to_string())
+            }
+
+            fn __well_formed() -> bool {
+                true
             }
         }
     )*};
@@ -747,6 +808,10 @@ macro_rules! floats {
                     out.extend_from_slice(b"null")
                 }
             }
+
+            fn __well_formed() -> bool {
+                true
+            }
         }
     )*};
 }
@@ -757,6 +822,10 @@ impl ToJson for () {
     fn write_json(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(b"null")
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl<T: ToJson> ToJson for Option<T> {
@@ -766,6 +835,10 @@ impl<T: ToJson> ToJson for Option<T> {
             Some(value) => value.write_json(out),
             None => out.extend_from_slice(b"null"),
         }
+    }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
     }
 }
 
@@ -779,6 +852,10 @@ macro_rules! forward {
 
             fn __json_size() -> Option<&'static AtomicUsize> {
                 T::__json_size()
+            }
+
+            fn __well_formed() -> bool {
+                T::__well_formed()
             }
         }
     )*};
@@ -805,12 +882,20 @@ impl<T: ToJson> ToJson for [T] {
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
     }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
+    }
 }
 
 impl<T: ToJson, const N: usize> ToJson for [T; N] {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
     }
 }
 
@@ -819,11 +904,19 @@ impl<T: ToJson> ToJson for Vec<T> {
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
     }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
+    }
 }
 
 impl<T: ToJson> ToJson for VecDeque<T> {
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
     }
 }
 
@@ -831,11 +924,19 @@ impl<T: ToJson> ToJson for BTreeSet<T> {
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
     }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
+    }
 }
 
 impl<T: ToJson, S> ToJson for HashSet<T, S> {
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
     }
 }
 
@@ -854,6 +955,10 @@ macro_rules! tuples {
                 )*
                 out.push(b']');
             }
+
+            fn __well_formed() -> bool {
+                $first::__well_formed() $(&& $rest::__well_formed())*
+            }
         }
     )*};
 }
@@ -864,12 +969,20 @@ impl JsonKey for str {
     fn write_key(&self, out: &mut Vec<u8>) {
         string(out, self)
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl JsonKey for String {
     #[inline]
     fn write_key(&self, out: &mut Vec<u8>) {
         string(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        true
     }
 }
 
@@ -878,17 +991,29 @@ impl JsonKey for Cow<'_, str> {
     fn write_key(&self, out: &mut Vec<u8>) {
         string(out, self)
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl JsonKey for char {
     fn write_key(&self, out: &mut Vec<u8>) {
         string(out, self.encode_utf8(&mut [0; 4]))
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl JsonKey for bool {
     fn write_key(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(if *self { b"\"true\"" } else { b"\"false\"" })
+    }
+
+    fn __well_formed() -> bool {
+        true
     }
 }
 
@@ -898,6 +1023,10 @@ macro_rules! forward_key {
             #[inline]
             fn write_key(&self, out: &mut Vec<u8>) {
                 (**self).write_key(out)
+            }
+
+            fn __well_formed() -> bool {
+                K::__well_formed()
             }
         }
     )*};
@@ -925,12 +1054,20 @@ impl<K: JsonKey, V: ToJson> ToJson for BTreeMap<K, V> {
     fn write_json(&self, out: &mut Vec<u8>) {
         object(out, self)
     }
+
+    fn __well_formed() -> bool {
+        K::__well_formed() && V::__well_formed()
+    }
 }
 
 /// In the map's order, as serde_json writes it.
 impl<K: JsonKey, V: ToJson, S> ToJson for HashMap<K, V, S> {
     fn write_json(&self, out: &mut Vec<u8>) {
         object(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        K::__well_formed() && V::__well_formed()
     }
 }
 
@@ -940,6 +1077,10 @@ macro_rules! serde_json_values {
         impl ToJson for $t {
             fn write_json(&self, out: &mut Vec<u8>) {
                 __private::serde(self, out)
+            }
+
+            fn __well_formed() -> bool {
+                true
             }
         }
     )*};
@@ -952,6 +1093,10 @@ macro_rules! by_serde {
         impl ToJson for $t {
             fn write_json(&self, out: &mut Vec<u8>) {
                 __private::serde(self, out)
+            }
+
+            fn __well_formed() -> bool {
+                true
             }
         }
     )*};
@@ -977,6 +1122,10 @@ macro_rules! nonzero {
             fn write_json(&self, out: &mut Vec<u8>) {
                 self.get().write_json(out)
             }
+
+            fn __well_formed() -> bool {
+                true
+            }
         }
     )*};
 }
@@ -1001,6 +1150,10 @@ impl<T: ?Sized> ToJson for std::marker::PhantomData<T> {
     fn write_json(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(b"null")
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 /// The JSON text it holds, as it is.
@@ -1009,6 +1162,10 @@ impl ToJson for serde_json::value::RawValue {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(self.get().as_bytes())
+    }
+
+    fn __well_formed() -> bool {
+        true
     }
 }
 
@@ -1055,6 +1212,33 @@ pub mod __private {
     impl<T: Serialize + ?Sized> ViaSerialize for &Field<'_, T> {
         fn __write(&self, out: &mut Vec<u8>) {
             serde(self.0, out)
+        }
+    }
+
+    // A field's type, for `ToJson::__well_formed`, resolved as `Field` is: its `ToJson`'s answer,
+    // or true for what serde_json writes (its serializer cannot write broken JSON; a failure
+    // panics before anything is sent).
+    pub struct Type<T: ?Sized>(pub core::marker::PhantomData<T>);
+
+    pub trait WellToJson {
+        fn __well_formed(&self) -> bool;
+    }
+
+    impl<T: ToJson + ?Sized> WellToJson for Type<T> {
+        #[inline]
+        fn __well_formed(&self) -> bool {
+            T::__well_formed()
+        }
+    }
+
+    pub trait WellSerialize {
+        fn __well_formed(&self) -> bool;
+    }
+
+    impl<T: Serialize + ?Sized> WellSerialize for &Type<T> {
+        #[inline]
+        fn __well_formed(&self) -> bool {
+            true
         }
     }
 }

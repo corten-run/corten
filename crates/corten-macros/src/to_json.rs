@@ -28,10 +28,12 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let mut members_body = None;
     // An externally tagged enum of unit variants writes each as its name, a JSON string: a key.
     let mut key = false;
+    // The types of the fields it writes, whose `ToJson`s decide whether it writes well-formed JSON.
+    let mut types: Vec<TokenStream> = Vec::new();
     let schema;
     let body = if item.is_enum {
         let Some(body) = &item.body else { return err(item.name.span(), "ToJson: expected the enum's variants") };
-        let (code, variants) = enumeration(&container, body)?;
+        let (code, variants) = enumeration(&container, body, &mut types)?;
         let tagging = match (&container.tag, &container.content, container.untagged) {
             (_, _, true) => crate::schema::Tagging::Untagged,
             (Some(t), Some(c), _) => crate::schema::Tagging::Adjacent(t.clone(), c.clone()),
@@ -45,6 +47,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         code
     } else if let Some(fields) = &item.tuple {
         let fields = parse_fields(fields, false)?;
+        types.extend(fields.iter().filter(|f| !f.skip).map(|f| f.ty.iter().cloned().collect::<TokenStream>()));
         let shown: Vec<TokenStream> = fields.iter().filter(|f| !f.skip).map(|f| f.ty.iter().cloned().collect()).collect();
         schema = match (container.transparent || fields.len() == 1, shown.as_slice()) {
             (true, [only]) => Schema::Value(only.clone()),
@@ -59,6 +62,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         }
     } else if let Some(fields) = &item.body {
         let fields = parse_fields(fields, true)?;
+        types.extend(fields.iter().filter(|f| !f.skip).map(|f| f.ty.iter().cloned().collect::<TokenStream>()));
         schema = if container.transparent {
             match fields.iter().find(|f| !f.skip) {
                 Some(f) => Schema::Value(f.ty.iter().cloned().collect()),
@@ -98,6 +102,11 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         &crate::schema::doc(&item.attrs),
         &schema,
     );
+    // `true && ..` over its fields, each resolved as `value` writes it (ToJson, else serde).
+    let mut well = q("true", &[]);
+    for ty in types {
+        well.extend(q("&& (&::corten::json::__private::Type::<__A0>(::core::marker::PhantomData)).__well_formed()", &[ty]));
+    }
     let mut out = q("#[automatically_derived] impl", &[]);
     out.extend(item.impl_generics.clone());
     out.extend(q("::corten::json::ToJson for", &[]));
@@ -115,8 +124,13 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             fn __json_size() -> ::core::option::Option<&'static ::core::sync::atomic::AtomicUsize> {
                 static SIZE: ::core::sync::atomic::AtomicUsize = ::core::sync::atomic::AtomicUsize::new(0);
                 ::core::option::Option::Some(&SIZE)
+            }
+            fn __well_formed() -> bool {
+                #[allow(unused_imports)]
+                use ::corten::json::__private::{WellSerialize as _, WellToJson as _};
+                __A1
             }",
-            &[body],
+            &[body, well],
         ),
     ))]);
     if key {
@@ -132,6 +146,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                 "#[inline]
                 fn write_key(&self, __OUT: &mut ::std::vec::Vec<u8>) {
                     ::corten::json::ToJson::write_json(self, __OUT)
+                }
+                fn __well_formed() -> bool {
+                    true
                 }",
                 &[],
             ),
@@ -721,7 +738,11 @@ fn transparent(fields: &[Field], span: Span) -> Result<TokenStream, Error> {
     Ok(gen.finish())
 }
 
-fn enumeration(container: &Container, body: &Group) -> Result<(TokenStream, Vec<crate::schema::SchemaVariant>), Error> {
+fn enumeration(
+    container: &Container,
+    body: &Group,
+    types: &mut Vec<TokenStream>,
+) -> Result<(TokenStream, Vec<crate::schema::SchemaVariant>), Error> {
     let mut described = Vec::new();
     if container.content.is_some() && container.tag.is_none() {
         return err(body.span(), "ToJson: #[serde(content = \"...\")] needs tag = \"...\" too");
@@ -765,6 +786,9 @@ fn enumeration(container: &Container, body: &Group) -> Result<(TokenStream, Vec<
             Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis => (false, Some(parse_fields(g, false)?)),
             _ => (false, None),
         };
+        if let Some(fields) = &fields {
+            types.extend(fields.iter().filter(|f| !f.skip).map(|f| f.ty.iter().cloned().collect::<TokenStream>()));
+        }
         described.push(crate::schema::SchemaVariant {
             name: name.clone(),
             doc: crate::schema::doc(&attrs),
