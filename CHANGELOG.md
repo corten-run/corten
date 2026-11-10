@@ -4218,6 +4218,14 @@ Corten is pre-1.0, so any minor version may change the API.
     counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
     every row and removes its app however the run ends
     ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
+176. The runtime and its modules are minified by terser after esbuild minifies them, so every page
+    ships fewer bytes: the runtime is 14,318 bytes with gzip (level 9), 533 fewer, and 12,955 with
+    brotli (level 11), 532 fewer (3.6% and 3.9%), and 105 fewer uncompressed (against `4de159ab`); `view.js` is 75 and 60
+    bytes smaller compressed, `format.js` 8 and 18, and `upload.js` and `keys.js` within 11 bytes
+    either way. terser (5.51.2) is a development dependency of the repository's tooling; apps
+    install nothing new
+    ([design Choice 34](docs/design.md#choice-runtime-terser),
+    [#1047 Benchmark round r16: item-page JavaScript grew 9.1% (13,187 to 14,392 gzip bytes)](https://github.com/corten-run/corten/issues/1047)).
 
 ### Fixed
 - The ui-gallery smoke's check that keyboard focus never lands under a dialog's or sheet's sticky
@@ -6430,7 +6438,7 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
-77. Design Choice 34 records why shared state keeps `#[derive(Clone, FromRef)]` rather than a
+77. Design Choice 35 records why shared state keeps `#[derive(Clone, FromRef)]` rather than a
     `#[corten::state]` attribute that writes both: `Clone` is the router's requirement and
     `FromRef` each handler's, and the attribute would take one word off the four example state
     types that derive both while giving the four that derive `Clone` alone a third way to write
