@@ -1234,8 +1234,8 @@ rules something out.
     `prefetch`, `/health/live`, `/{*rest}`), at `f703d3f8`; 2026-11-10, IANA's HTTP
     Authentication Scheme Registry (no scheme for a session cookie) and the tests that a 401
     keeps its challenge as JSON and on the error page (`crates/corten/src/tests.rs`), at
-    `96e2c907`, the commit that adds them; and that a handler's own 401, the page swapped in and
-    a middleware's refusal keep it, at `2d6b88d0`.
+    `96e2c907`, the commit that adds them; 2026-11-10, the tests that a handler's own 401, the
+    page swapped in and a middleware's refusal keep it, at `2d6b88d0`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
