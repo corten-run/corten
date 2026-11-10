@@ -1345,7 +1345,7 @@ rules something out.
     ranges to seek, so a file sent only whole makes a player download what it skips, and Safari on
     iOS plays media only from a server that answers ranges. A `GET` of a versioned URL, this
     version's or an old one's, for a file sent unencoded answers one range as a `206` with its
-    `Content-Range`, a range past the end as a bare `416`, and `If-Range` keeps the range only for
+    `Content-Range`, a range the file cannot hold as a bare `416`, and `If-Range` keeps the range only for
     the tag of the bytes sent, compared byte for byte (RFC 9110). An old version's URL is answered
     from this version's file, `no-cache`, under that file's strong tag, so a page still holding an
     old version's URLs after a deploy (a tab left open, a page a cache kept) still plays and seeks
@@ -1361,49 +1361,45 @@ rules something out.
     that, and was traded for Safari playing them; a file whose bytes did not change has the same
     tag and bytes in both. No answer advertises ranges: the header is optional and browsers send
     `Range` without it. The PWA's worker leaves a range to the network, since its cache holds whole
-    files and cannot hold a `206`, and so is every request a `<video>` or `<audio>` makes: one
-    without a range (Playwright's Linux WebKit sends one first) would otherwise be stored whole,
-    downloading the whole video, which a player does not read back from the cache. Not chosen:
-    `Accept-Ranges: bytes` on every file (optional, and
-    a draft that sent it counted more instructions, below); an old version's URL sent whole
+    files and cannot hold a `206`, and the video or audio a player loads too (a request whose
+    destination is `video` or `audio`): one without a range (Playwright's Linux WebKit sends one
+    first) would otherwise be stored whole, downloading the whole video, which a player does not
+    read back from the cache; its captions and poster are cached like any versioned file. Not
+    chosen: `Accept-Ranges: bytes` on every file (optional, above); an old version's URL sent whole
     (Safari on iOS would not play it, above); a URL named by each file's own hash rather than the
     app's version (an unchanged clip would keep its URL across deploys and a server would know
     which bytes a URL names, but it changes how every asset is named and cached, a change of its
-    own); multipart ranges (no
-    browser player asks for them, and each would be a body Corten writes); slicing an encoded body
-    (the client's offsets name the file, not the encoding); the worker cutting a range from a whole
-    file it cached and answering the `206` itself (code in every app's worker for offline video,
-    which no app here needs; [Limit 5](#limit-offline-fallback) stays).
+    own); multipart ranges (no browser player asks for them, and each would be a body Corten
+    writes); slicing an encoded body (the client's offsets name the file, not the encoding); the
+    worker cutting a range from a whole file it cached and answering the `206` itself (code in
+    every app's worker for offline video, which no app here needs;
+    [Limit 5](#limit-offline-fallback) stays).
 
     Stands on: platform (Apple's Safari Web Content Guide, "Creating Video", says a server hosting
     media for iOS must answer byte ranges, which iOS uses for random access; with no
-    `Accept-Ranges`, Chromium, Firefox and WebKit each send a `Range` for the clip and play it from
-    the `206` and seek, as card-market's smoke shows on Linux, below; the smoke does not check
-    which range a seek asks for, since the 8 KB clip comes whole in the first); measured
-    (callgrind, `what_serving_a_file_costs`, which sends no `Range`, so its count is what every
-    file's answer pays, 1,200
-    requests less 200 over 1,000, five runs each taking turns: 11,826.69 (11,825.27 to 11,826.73)
-    instructions a request on `97a63a92` with the test added and 12,024.05 (12,024.05 to
-    12,025.49) with ranges, +197 (+1.7%), counted before old URLs took ranges, which counted +2
-    more, 12,024.02 (12,023.98 to 12,024.06) on `84719c0f` against 12,026.06 (12,026.01 to
-    12,026.08) on a build whose request path is `a7b1c808`'s, taken in turns the same way; a
-    draft that sent
-    `Accept-Ranges` measured 12,182, one figure from three runs on `c65c10ec`, not taken in turns
-    with these);
+    `Accept-Ranges`, Chromium and Firefox ask for the clip by a `Range` and play it from the
+    `206`, and WebKit reads it whole once and then asks for a range from inside it, each seeking,
+    as card-market's smoke shows on Linux, below; the 8 KB clip comes whole in Chromium's and
+    Firefox's first range, so the smoke does not show them asking for a range from inside it);
+    measured (callgrind, `what_serving_a_file_costs`, which sends no `Range`, so its count is what
+    every file's answer pays, 1,200 requests less 200 over 1,000, five runs each taking turns:
+    11,826.69 (11,825.27 to 11,826.73) instructions a request on `97a63a92` with the test added
+    and 12,024.05 (12,024.05 to 12,025.49) on `92d38464`, with ranges at this version's URL only,
+    +197 (+1.7%); then 12,024.02 (12,023.98 to 12,024.06) on `84719c0f` and 12,026.06 (12,026.01
+    to 12,026.08) on a build whose request path is `a7b1c808`'s, with old URLs ranged too, +2);
     reasoned (one range per answer and a tag naming the bytes sent keep a client that sends
     `If-Range` from joining bytes of two files).
 
     Revisit when: Safari or iOS on real hardware, not tested here, will not play or seek a clip
     served this way, or a client that matters will not seek without `Accept-Ranges`; a clip is
     reported playing garbled after a deploy (ranges of two versions joined); a player asks for
-    several ranges; or an
-    app needs a `Media` answer, not a static file, to seek.
+    several ranges; or an app needs a `Media` answer, not a static file, to seek.
 
     Last checked: 2026-11-10, Apple's guide read and the crate's asset tests on `112422cb`;
     2026-11-10, card-market's smoke in Playwright 1.64.1 against a build of `4ec25ef4`, on Linux
     with Chromium, Firefox and WebKit each playing and seeking the clip, and on Windows with
-    Chromium and Firefox; 2026-11-10, the count on `97a63a92` and `92d38464`; 2026-11-10, the count on `84719c0f`
-    and `a7b1c808`.
+    Chromium and Firefox; 2026-11-10, the count on `97a63a92` and `92d38464`; 2026-11-10, the
+    count on `84719c0f` and `a7b1c808`.
 
 ## Rules
 
@@ -1512,8 +1508,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    modules as module scripts that hand their exports to the runtime as they run, so their handlers are
    in before `DOMContentLoaded`, and this needs a person faster than the network.
 5. <a id="limit-offline-fallback"></a>Offline is a fallback page plus cached versioned files, not offline data.
-   A video does not play offline: the worker leaves a range, and every request a media element
-   makes, to the network ([Choice 36](#choice-asset-ranges)).
+   A video does not play offline: the worker leaves a range, and the video or audio a player
+   loads, to the network ([Choice 36](#choice-asset-ranges)).
 6. <a id="limit-prefetch-reuse"></a>Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
    post). It keeps the 8 newest and aborts the rest (the request, or the body once it answered),
    so hovering does not hold pages for the whole session; with the browser's data saver on it

@@ -981,7 +981,8 @@ sent compressed is sent whole, since the
 compressed bytes' offsets are not the file's, and so is the favicon, whose URL outlives every
 deploy. No answer sends `Accept-Ranges`: browsers ask for a range without it
 ([design Choice 36](../design.md#choice-asset-ranges)). The PWA's service worker leaves a range,
-and every request a `<video>` or `<audio>` makes, to the network, since its cache holds whole
+and the video or audio a player loads, to the network (its captions and poster are cached like
+any versioned file), since its cache holds whole
 files and a player does not read a video back from it, so a video does not play offline. A video is
 compiled into the program like every static file
 ([design Choice 8](../design.md#choice-compiled-static-files)), so a short clip fits; serve long

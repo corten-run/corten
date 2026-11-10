@@ -22,8 +22,9 @@
 //!   page's `Cache-Control` ([`crate::cache`]).
 //! - Versioned files (`/assets/{version}/...` and the runtime) are served cache-first, and only
 //!   responses marked `immutable` are stored, so a mismatched version is never cached. A request
-//!   for a range of one (a video seeking), or any request a media element makes, is left to the
-//!   network.
+//!   for a range of one (a video seeking), or for the video or audio a player loads, is left to
+//!   the network (`scripts/worker.test.mjs` runs the worker); its captions and poster are cached
+//!   like any versioned file.
 //! - Everything else (runtime navigation fetches, form actions, feeds, JSON, anything under a
 //!   `network_only` prefix) is not touched by the worker at all, so it costs nothing.
 //! - A new deploy changes the worker's bytes (the cache name includes the version), the browser
@@ -1027,11 +1028,6 @@ mod tests {
         assert!(js.contains(&format!(r#"const PRECACHE = ["/assets/v1/a.css","{}""#, crate::runtime_path())));
         assert!(!js.contains("__"), "every placeholder is filled");
         assert!(!js.contains("importScripts"));
-        assert!(js.contains(r#"request.headers.has("range")"#), "a range is left to the network");
-        assert!(
-            js.contains(r#"request.destination === "video""#) && js.contains(r#"request.destination === "audio""#),
-            "a media element's request is left to the network"
-        );
         assert_ne!(js, pwa.clone().version("v2").worker_js());
     }
 }
