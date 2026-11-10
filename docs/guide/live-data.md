@@ -223,13 +223,13 @@ For scripts that keep state (a table of live prices, a grid), a `corten::feed::F
 (feature `feed`) holds keyed rows and serves a snapshot plus ordered patches; an `on:connect`
 handler calls `subscribe(feed, { snapshot, patch, status }, { signal })`.
 
-A row derives `Row` beside `Clone` and `Serialize`, and marks the field that keys it, the id
-its upserts and removes name: a `String` or another type that derefs to `str` (`Box<str>`,
-`&'static str`). The feed sends what `Serialize` writes, so `#[serde(..)]` on the row, the id
-included, changes the JSON and not the key; a script reads the key under the id's serde name, so
-the derive refuses `#[serde(skip)]` (or `skip_serializing`, `skip_serializing_if`) on it. `Row` is the derive and the trait at once (`use
-corten::feed::Row`), and a row that is an enum, or keeps its key inside another field, implements
-it by hand.
+A row derives `Row` beside `Clone` and `Serialize`, and marks the field that keys it, the id its
+upserts and removes name: a `String` or another type that derefs to `str` (`Box<str>`, `&'static
+str`). The feed sends what `Serialize` writes, so `#[serde(..)]` on the row, the id included,
+changes the JSON and not the key; a script reads the key under the id's serde name, so the derive
+refuses `#[serde(skip)]` (or `skip_serializing`, `skip_serializing_if`) on it. `Row` is the derive
+and the trait at once (`use corten::feed::Row`), and a row that is an enum, or keeps its key inside
+another field, implements it by hand.
 
 ```rust
 use corten::feed::Row;
