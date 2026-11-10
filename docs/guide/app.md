@@ -680,7 +680,8 @@ that implements `corten::Listener`, with `serve`'s shutdown across all of them
 (tasks told, live streams ended, every listener closed and drained, tasks waited for). A Unix
 socket, or a socket a supervisor hands over, is a listener of the app's own.
 Each of `listeners`' sockets asks the system to hold up to 511 connections that finished their
-handshake but are not yet accepted (nginx's and Node's number), not the standard library's 128.
+handshake but are not yet accepted (Node's default, and nginx's on Linux), not the standard library's
+128 ([design Choice 33](../design.md#choice-listen-backlog)).
 On Linux, which caps it at `net.core.somaxconn` (4096 since 5.4), a burst of clients faster than
 the server accepts them then waits in that queue rather than a second or more for a resent SYN.
 macOS caps it at `kern.ipc.somaxconn`, 128 by default, so there the change takes a raised

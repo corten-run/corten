@@ -1503,7 +1503,8 @@ pub(crate) async fn bind(host: Option<&str>, port: u16) -> std::io::Result<Vec<t
 /// against a page on one CPU (Docker Desktop's Linux 6.18 VM, 2026-11-08), the kernel counted 142
 /// and 485 listen-queue overflows (two runs) and the slowest connect took 1.27 and 2.08 s (a SYN
 /// resent after about a second, and the load generator's own delay); with 511, none and 0.28 and
-/// 0.24 s (4096 overflowed none either). 511 is nginx's and Node's. The system caps it: Linux at
+/// 0.24 s (4096 overflowed none either). 511 is Node's default and nginx's on Linux
+/// (`docs/design.md#choice-listen-backlog`). The system caps it: Linux at
 /// `net.core.somaxconn` (4096 since 5.4, 128 before), macOS at `kern.ipc.somaxconn` (128 by
 /// default), Windows 11 at 200 (one run on loopback), where a connection past it is refused. Past
 /// [`App::max_connections`] connections wait in this queue for as long as the cap holds, each with
