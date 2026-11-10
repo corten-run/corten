@@ -1337,23 +1337,24 @@ rules something out.
     other response is. The std types Corten gives a schema for are `ToJson` too, and `FromJson` in
     their owned forms (`str`, `[T]`, `Path` and `RawValue` boxed or shared), written and read as
     serde does (but for a map whose key is not a `JsonKey`, which is not written, or not `String`,
-    which is not read, and an `Arc` or `Rc` read without serde's `rc`), and another crate's type
-    that has a schema goes in a `#[serde(transparent)]` newtype that derives `ToJson`, one impl. A
-    `ToJson` written by hand, for a type whose schema is written by hand (one the derive refuses, or
-    another crate's type with none, in a newtype of the app's), comes with that `ToJsonSchema`
-    beside it, two impls its author keeps in step, as before. Tool inputs are bounded on `FromJson`
-    the same way, so an input that derives serde's `Deserialize` beside a schema written by hand
-    does not compile, short of the deliberate `impl FromJson for T {}` a type whose `Deserialize`
-    `FromJson` cannot write takes (written by hand, or serde's for an attribute it refuses), which
-    again leaves two impls in its author's hands. What this gives up: the guarantee that a release
-    build's answer parses: a hand-written `ToJson` that writes broken JSON breaks the JSON-RPC
-    answer around it, where serde could not (a debug build answers a call whose output is not one
-    object with a 500 and logs the tool). A tool output whose `ToJson` falls back to a field's own
-    `Serialize` and fails (another crate's map with a key JSON cannot hold, or a std type serde
-    refuses: a path that is not UTF-8, a `SystemTime` before the epoch) panics where it is written,
-    as in every other `ToJson` answer; the call catches that panic and answers the tool's internal
-    error (`isError`, "internal error"), as it did when serde wrote outputs, so `ToJson` stays the
-    one writer (an app built with `panic = "abort"` ends instead):
+    which is not read, an array of more than 32 items, which is not read, and an `Arc` or `Rc` read
+    without serde's `rc`), and another crate's type that has a schema goes in a
+    `#[serde(transparent)]` newtype that derives `ToJson`, one impl. A `ToJson` written by hand, for
+    a type whose schema is written by hand (one the derive refuses, or another crate's type with
+    none, in a newtype of the app's), comes with that `ToJsonSchema` beside it, two impls its author
+    keeps in step, as before. Tool inputs are bounded on `FromJson` the same way, so an input that
+    derives serde's `Deserialize` beside a schema written by hand does not compile, short of the
+    deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson` cannot write takes
+    (written by hand, or serde's for an attribute it refuses), which again leaves two impls in its
+    author's hands. What this gives up: the guarantee that a release build's answer parses: a
+    hand-written `ToJson` that writes broken JSON breaks the JSON-RPC answer around it, where serde
+    could not (a debug build answers a call whose output is not one object with a 500 and logs the
+    tool). A tool output whose `ToJson` falls back to a field's own `Serialize` and fails (another
+    crate's map with a key JSON cannot hold, or a std type serde refuses: a path that is not UTF-8,
+    a `SystemTime` before the epoch) panics where it is written, as in every other `ToJson` answer;
+    the call catches that panic and answers the tool's internal error (`isError`, "internal error"),
+    as it did when serde wrote outputs, so `ToJson` stays the one writer (an app built with `panic =
+    "abort"` ends instead):
 
     ```rust,ignore
     // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
@@ -1377,14 +1378,14 @@ rules something out.
     save a type that is read and written one name in its `#[derive(..)]` list
     ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 
-    Stands on: reasoned (a derived `ToJson` writes a tool output's schema and its bytes, and a
-    derived `FromJson` a tool input's schema and what it reads; card-market's agent test checks a
-    tool answer's bytes equal serde's for the item); measured (an agent's `items.get` call in
-    card-market's `tool_cost` runs about 21% fewer instructions, 265,017 and 267,984 before and
-    210,598 and 211,269 after: callgrind, release, 1,200 calls less 200 over 1,000, two
-    alternating runs each); platform (the std types' `ToJson` and `FromJson` write and read what
-    serde and serde_json do for them, some by Corten's own code: serde 1.0.229 and serde_json
-    1.0.154); value (one declaration per direction, Values 4, 5 and 6).
+    Stands on: platform (the std types' `ToJson` and `FromJson` write and read what serde and
+    serde_json do for them, some by Corten's own code: serde 1.0.229 and serde_json 1.0.154);
+    measured (an agent's `items.get` call in card-market's `tool_cost` runs about 21% fewer
+    instructions, 266,970 and 266,083 before and 210,563 and 210,136 after: callgrind, release,
+    1,200 calls less 200 over 1,000, two alternating runs each); reasoned (a derived `ToJson` writes
+    a tool output's schema and its bytes, and a derived `FromJson` a tool input's schema and what it
+    reads; card-market's agent test checks a tool answer's bytes equal serde's for the item); value
+    (one declaration per direction, Values 4, 5 and 6).
 
     Revisit when: an example app needs, because the derives refuse its type, a hand-written `ToJson`
     with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in `impl FromJson for T {}`
@@ -1398,7 +1399,7 @@ rules something out.
     2026-11-10, the std types' and pointers' `ToJson` and `FromJson` against serde's bytes and
     values (`json` tests, and `corten-run` built with `json` alone and with `agent,feed`, serde
     1.0.229 and serde_json 1.0.154), at `479f3f0e`; 2026-11-10, the `tool_cost` count, on `217bce2c`
-    with `tool_cost` added and on `fcecee41`.
+    with `tool_cost` added and on `2e64d275`.
 
 ## Rules
 

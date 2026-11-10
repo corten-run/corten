@@ -4258,27 +4258,28 @@ Corten is pre-1.0, so any minor version may change the API.
     written by it, so it derives `ToJson` alone, as every other JSON answer does, where it needed
     serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
     The answer is the same JSON (card-market's agent test checks its bytes against serde's for the
-    item). An `items.get` call costs about 21% fewer instructions: 265,017 and 267,984 a call
-    before, 210,598 and 211,269 after, with the same 16,800-byte answer on average over the first 200 calls
-    (callgrind,
-    release build, card-market's `tool_cost`, 1,200 calls less 200 over 1,000, two alternating runs
-    each). No data-role attribute is added beside `ToJson` and `FromJson`, which already name each
-    type's direction ([design Choice 35](docs/design.md#choice-json-derives)). **Breaking:** the
-    type a tool returns must be a `ToJson` and the type it takes a `FromJson`, as must any container
-    around them (a derived struct's own fields still fall back to serde), so what was only
-    `Serialize` or `Deserialize` no longer compiles as one: an output whose `Serialize` is derived
-    by serde or written by hand, with a `ToJsonSchema` written by hand; an input that is a
-    `Deserialize` with a `FromJsonSchema` written by hand; a container (`Box`, a map, `Cow`, `Arc`)
-    whose item or value is one of those or another crate's type; a derived generic type, output or
-    input, whose type argument is not `ToJson` or `FromJson`; an output map whose key is not a
-    `JsonKey` (an app's key type implements `corten::json::JsonKey`, writing the text serde writes
-    for it: an enum of unit variants that derives `ToJson` calls `self.write_json(out)`); and an
-    input map whose key is not `String` (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types
-    Corten gives a schema for are both (`Path` and `RawValue` read in their boxed or shared forms),
-    written and read as serde does (`Duration`, `SystemTime`, IP and socket addresses, paths, the
-    `NonZero` integers, `PhantomData`, `serde_json::Number` and, with the `types` feature,
-    `RawValue`), as are `Cow<T>`, `Box<str>`, `Box<Path>` and `Box<[T]>`, the 128-bit integers,
-    sets, `VecDeque`, arrays and tuples, and `Arc` and `Rc` of a `FromJson`, of `str`, of `Path`, of
+    item). An `items.get` call costs about 21% fewer instructions: 266,970 and 266,083 a call
+    before, 210,563 and 210,136 after, with the same 16,800-byte answer on average over the first
+    200 calls (callgrind, release build, card-market's `tool_cost`, 1,200 calls less 200 over 1,000,
+    two alternating runs each). No data-role attribute is added beside `ToJson` and `FromJson`,
+    which already name each type's direction
+    ([design Choice 35](docs/design.md#choice-json-derives)). **Breaking:** the type a tool returns
+    must be a `ToJson` and the type it takes a `FromJson`, as must any container around them (a
+    derived struct's own fields still fall back to serde), so what was only `Serialize` or
+    `Deserialize` no longer compiles as one: an output whose `Serialize` is derived by serde or
+    written by hand, with a `ToJsonSchema` written by hand; an input that is a `Deserialize` with a
+    `FromJsonSchema` written by hand; a container (`Box`, a map, `Cow`, `Arc`) whose item or value
+    is one of those or another crate's type; a derived generic type, output or input, whose type
+    argument is not `ToJson` or `FromJson`; an output map whose key is not a `JsonKey` (an app's key
+    type implements `corten::json::JsonKey`, writing the text serde writes for it: an externally
+    tagged enum of unit variants that derives `ToJson` calls `self.write_json(out)`); and an input
+    map whose key is not `String` (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types
+    Corten gives a schema for are `ToJson`, and `FromJson` in their owned forms (`str`, `[T]`,
+    `Path` and `RawValue` boxed or shared), written and read as serde does (`Duration`,
+    `SystemTime`, IP and socket addresses, paths, the `NonZero` integers, `PhantomData`,
+    `serde_json::Number` and, with the `types` feature, `RawValue`), as are `Cow<T>`, `Box<str>`,
+    `Box<Path>` and `Box<[T]>`, the 128-bit integers, sets, `VecDeque`, arrays (read up to 32 items,
+    as serde reads them) and tuples, and `Arc` and `Rc` of a `FromJson`, of `str`, of `Path`, of
     `[T]` or (with `types`) of `RawValue`, which are read with serde's `rc` feature. Derive `ToJson`
     or `FromJson`; a `Serialize` or `Deserialize` type that has a schema but is not one (another
     crate's, or a map of one) goes in a `#[serde(transparent)]` newtype that derives it; only a type

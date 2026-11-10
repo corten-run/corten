@@ -706,7 +706,9 @@ impl<T: FromJson> FromJson for Box<[T]> {
     }
 }
 
-/// Read as its item, as serde's `rc` feature reads it (an app turns that feature on to read one).
+/// Read as its item, as serde's `rc` feature reads it (an app turns that feature on to read one),
+/// for an item that is a `FromJson`, `str`, `Path`, `[T]` of a `FromJson`, or (feature `types`)
+/// `RawValue`.
 impl<T: __private::Shared + ?Sized> FromJson for std::sync::Arc<T>
 where
     std::sync::Arc<T>: DeserializeOwned,
@@ -717,7 +719,9 @@ where
     }
 }
 
-/// Read as its item, as serde's `rc` feature reads it (an app turns that feature on to read one).
+/// Read as its item, as serde's `rc` feature reads it (an app turns that feature on to read one),
+/// for an item that is a `FromJson`, `str`, `Path`, `[T]` of a `FromJson`, or (feature `types`)
+/// `RawValue`.
 impl<T: __private::Shared + ?Sized> FromJson for std::rc::Rc<T>
 where
     std::rc::Rc<T>: DeserializeOwned,

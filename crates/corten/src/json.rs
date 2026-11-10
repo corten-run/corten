@@ -508,10 +508,6 @@ impl<T: ToJsonMembers + ?Sized> ToJsonMembers for Box<T> {
 }
 
 /// A map key: written as a JSON string (numbers, `bool` and `char` in quotes, as serde_json does).
-#[diagnostic::on_unimplemented(
-    message = "`{Self}` is not a map key ToJson can write (JsonKey)",
-    note = "a key is text, a number, bool or char; for an app's own key type, implement corten::json::JsonKey for it, writing the text serde writes for it (for an enum of unit variants that derives ToJson, `self.write_json(out)`, so its renames hold)"
-)]
 ///
 /// An app's key type implements it by writing the text it stands for:
 ///
@@ -530,8 +526,9 @@ impl<T: ToJsonMembers + ?Sized> ToJsonMembers for Box<T> {
 ///
 /// A key must be the text serde writes for it, or a derived type's map field changes when the key
 /// gains this impl (that field is written by `ToJson` from then on, not by serde). An enum of unit
-/// variants that derives `ToJson` writes its name as a JSON string already, renames included, so
-/// its key is that:
+/// variants that derives `ToJson` and is externally tagged (serde's default) writes its name as a
+/// JSON string already, renames included, so its key is that (an internally tagged or untagged one
+/// writes an object or `null`, which is no key):
 ///
 /// ```
 /// use corten::json::{JsonKey, ToJson};
@@ -547,6 +544,10 @@ impl<T: ToJsonMembers + ?Sized> ToJsonMembers for Box<T> {
 /// assert_eq!(counts.to_json(), serde_json::to_string(&counts).unwrap());
 /// assert_eq!(counts.to_json(), r#"{"in_stock":1,"sold_out":2}"#);
 /// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a map key ToJson can write (JsonKey)",
+    note = "a key is text, a number, bool or char; for an app's own key type, implement corten::json::JsonKey for it, writing the text serde writes for it (for an externally tagged enum of unit variants, serde's default, that derives ToJson, `self.write_json(out)`, so its renames hold)"
+)]
 pub trait JsonKey {
     /// Appends the key as one JSON string, quotes included.
     fn write_key(&self, out: &mut Vec<u8>);

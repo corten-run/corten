@@ -172,17 +172,6 @@ use crate::json::{
     FromJson, ToJson,
 };
 
-/// Names the tool in the log when its handler panics: the request's own panic log does not.
-struct Naming<'a>(&'a str);
-
-impl Drop for Naming<'_> {
-    fn drop(&mut self) {
-        if std::thread::panicking() {
-            tracing::error!(tool = self.0, "corten: agent tool panicked");
-        }
-    }
-}
-
 /// Protocol revisions this server speaks, newest first.
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 
@@ -825,10 +814,7 @@ impl<A: Send + 'static> Tools<A> {
                 Err(error) => return Ok(self.failed(name, error)),
             },
         };
-        let naming = Naming(name);
-        let result = (tool.handler)(caller, args).await;
-        drop(naming);
-        match result {
+        match (tool.handler)(caller, args).await {
             Ok(output) => {
                 // A hand-written `ToJson` goes into the envelope as written, so a debug build
                 // answers a call whose output is not one JSON object with a 500 (the panic, logged
@@ -1127,6 +1113,65 @@ mod tests {
         let ((status, _, body), text) = logging(send(&app, req)).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
         assert!(text.contains("tool listed's output ToJson must write one JSON object, not [1]"), "{text}");
+    }
+
+    /// A release build sends a hand-written output as written, even one that is not an object.
+    #[cfg(not(debug_assertions))]
+    #[tokio::test]
+    async fn a_release_build_sends_a_hand_written_output_as_written() {
+        struct Listed;
+        impl ToJson for Listed {
+            fn write_json(&self, out: &mut Vec<u8>) {
+                out.extend_from_slice(b"[1]");
+            }
+        }
+        impl ToJsonSchema for Listed {
+            fn json_schema(_: &mut Generator) -> Value {
+                json!({ "type": "object" })
+            }
+        }
+        let tools = Tools::new("test", "1.0").read_tool("listed", "Writes an array", |(), _: Nothing| async { Ok(Listed) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "listed", "arguments": {} } });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        let (status, _, body) = send(&app, req).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#""structuredContent":[1]"#), "{body}");
+    }
+
+    /// Another crate's `Serialize` type with a schema is a tool's whole output in a
+    /// `#[serde(transparent)]` newtype that derives `ToJson`: serde writes its bytes, and its
+    /// schema is the output's.
+    #[tokio::test]
+    async fn an_output_can_be_another_crates_type_in_a_transparent_newtype() {
+        #[derive(serde::Serialize)]
+        struct Theirs {
+            ok: bool,
+            #[serde(rename = "seenAt")]
+            seen_at: u32,
+        }
+        impl ToJsonSchema for Theirs {
+            fn json_schema(_: &mut Generator) -> Value {
+                json!({ "type": "object", "properties": { "ok": { "type": "boolean" }, "seenAt": { "type": "integer" } }, "required": ["ok", "seenAt"] })
+            }
+        }
+        #[derive(crate::json::ToJson)]
+        #[serde(transparent)]
+        struct Done(Theirs);
+        let tools = Tools::new("test", "1.0")
+            .read_tool("theirs", "Another crate's", |(), _: Nothing| async { Ok(Done(Theirs { ok: true, seen_at: 3 })) });
+        let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+        let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(list.to_string())).unwrap();
+        let (status, _, body) = send(&app, req).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let listed: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(listed["result"]["tools"][0]["outputSchema"], Generator::root_for_write::<Theirs>(), "{body}");
+        let call = json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": "theirs", "arguments": {} } });
+        let req = Request::post("/mcp").header("content-type", "application/json").body(Body::from(call.to_string())).unwrap();
+        let (status, _, body) = send(&app, req).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.contains(r#""structuredContent":{"ok":true,"seenAt":3}"#), "{body}");
     }
 
     /// A tool's input can be any object, read whole (`serde_json::Map`), and an integer-keyed map
