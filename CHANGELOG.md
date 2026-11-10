@@ -4243,6 +4243,11 @@ Corten is pre-1.0, so any minor version may change the API.
   layer, is about 286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470;
   callgrind, three runs each, within 20 instructions)
   ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
+- A `data-patch` submit that is abandoned, by a newer submit of the form (another button, other
+  values) or by a navigation, drops its `aria-busy` marks at once, as the guide says, rather than
+  when its own code next ran (after its fetch rejected, or once what it waited on to draw had loaded),
+  so a replaced button is never shown working; the runtime grows 15 bytes gzip (14,872 to 14,887)
+  ([#1108 The smoke's busy-mark check failed once in WebKit: the replaced button A was still marked busy while B's submit was on its way](https://github.com/corten-run/corten/issues/1108)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
