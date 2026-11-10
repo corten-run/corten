@@ -80,7 +80,7 @@ until it checks. An app cannot turn one of them off: `corten check` writes the c
 checks with each time, and `--no-script-types` leaves every script unchecked, not one option.
 `exactOptionalPropertyTypes` is not used: it refuses a property set to `undefined` where one is
 optional, and the DOM's option objects (`{ signal }` for `addEventListener`) take that as left out,
-as JSON does, so it rejects scripts that work ([design Choice 34](../design.md#choice-script-checks)).
+as JSON does, so it rejects scripts that work ([design Choice 35](../design.md#choice-script-checks)).
 Types are erased when the script runs, so they hold only for values the checker saw made. What
 comes from outside it (JSON a script fetches or parses, storage, a message from another window or
 a worker) is typed `any` by TypeScript's libraries (`JSON.parse`, `res.json()`, `event.data`),
@@ -91,7 +91,7 @@ reads: a feed's envelope is checked, while its rows are trusted as the server's 
 examples) have no explicit `any` and no `@ts-ignore`, which `npm run check` holds them to; where
 the DOM library lacks a type (the Navigation API, a service worker's global) they declare what
 they use and cast once, with a comment saying what vouches for the value
-([design Choice 35](../design.md#choice-script-boundaries)).
+([design Choice 36](../design.md#choice-script-boundaries)).
 A ref on several kinds of element is typed as one they all are: `ref={tab as HTMLElement}`.
 
 **What the browser gets.** Plain HTML: `data-ref="rows"` and

@@ -4218,6 +4218,14 @@ Corten is pre-1.0, so any minor version may change the API.
     counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
     every row and removes its app however the run ends
     ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
+176. The runtime and its modules are minified by terser after esbuild minifies them, so every page
+    ships fewer bytes: the runtime is 14,318 bytes with gzip (level 9), 533 fewer, and 12,955 with
+    brotli (level 11), 532 fewer (3.6% and 3.9%), and 105 fewer uncompressed (against `4de159ab`); `view.js` is 75 and 60
+    bytes smaller compressed, `format.js` 8 and 18, and `upload.js` and `keys.js` within 11 bytes
+    either way. terser (5.51.2) is a development dependency of the repository's tooling; apps
+    install nothing new
+    ([design Choice 34](docs/design.md#choice-runtime-terser),
+    [#1047 Benchmark round r16: item-page JavaScript grew 9.1% (13,187 to 14,392 gzip bytes)](https://github.com/corten-run/corten/issues/1047)).
 
 170. Scripts are type-checked with `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`,
     `allowUnreachableCode: false` and `noUncheckedSideEffectImports` as well as `strict`, by
@@ -4233,7 +4241,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `rows(..).at(i)` is `V | undefined`: none past either end, and a negative `i` counts back
     from the last, as an array's `at()`, where it gave a view of no row before. The kit's
     `ComboBox` with no options threw on Enter after Arrow Down; it closes now.
-    `exactOptionalPropertyTypes` is not used (design Choice 34)
+    `exactOptionalPropertyTypes` is not used (design Choice 35)
     ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)).
 171. `subscribe()` checks the envelope of what a feed sends: a snapshot's `epoch`, `seq` and
     `rows`, and a patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An
@@ -4245,8 +4253,8 @@ Corten is pre-1.0, so any minor version may change the API.
     Navigation API and a service worker's global are declared where they are used), and
     `npm run check` fails on an explicit `any` or a `@ts-ignore` in them. card-market's push
     worker shows a message with no title as an empty title, where it showed "undefined", and opens
-    `/` for a `url` that is not text. The runtime's gzip size grows by 215 bytes, 188 of them the
-    feed's checks (design Choice 35)
+    `/` for a `url` that is not text. The runtime's gzip size grows by 200 bytes, 121 of them the
+    feed's checks (design Choice 36)
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
@@ -6486,6 +6494,17 @@ Corten is pre-1.0, so any minor version may change the API.
     the browser has the Navigation API, and the watchlist's checks that a value set with them is
     put back
     ([#1098 CheckboxGroup docs do not say a script that sets checked must dispatch change, so the group keeps its old validity](https://github.com/corten-run/corten/issues/1098)).
+80. The kit guide's Size states what every component costs now: 59,878 bytes of `components.css`,
+    8,691 with brotli at level 11 and 9,863 with gzip at level 9 (the kit at 5ba4e476), where it
+    said 35,239, 5,331 and 6,050 from before the kit grew from 34 stylesheets to 42. A test in the
+    ui-gallery example (`the_kit_guide_states_what_every_component_costs`) serves the stylesheet of
+    an app listing every component and the theme's tokens, waits for its stored brotli and gzip
+    forms, and fails when the guide is more than 3 percent off, naming the new numbers. The guide's
+    browser list is Chromium, Firefox and WebKit, as the gallery's smoke runs, and `FormAlert` is
+    drawn in the gallery (a rename refused because the other draft has that name, above the form)
+    with a smoke check of its role, its one live region and its tone's colors, so every kit
+    component is again in the gallery and its browser test
+    ([#1125 The kit guide says corten ui add --all serves 35,239 bytes of CSS; it serves 59,299 now (8,615 brotli, not 5,331), and two lines beside it are stale](https://github.com/corten-run/corten/issues/1125)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
