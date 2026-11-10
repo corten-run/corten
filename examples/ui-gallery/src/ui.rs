@@ -645,13 +645,18 @@ pub(crate) mod tests {
         );
     }
 
-    /// The dot is drawn, not read: the status is in the text beside it.
+    /// The dot is drawn, not read: the status is in the text beside it. A live one is the same dot
+    /// with the class that pulses it.
     #[test]
     fn a_status_dot_is_not_read() {
-        use super::status_dot::{StatusDot, StatusTone};
+        use super::status_dot::{LiveDot, StatusDot, StatusTone};
         use corten::view::Render;
         let html = StatusDot { tone: StatusTone::Success }.to_html();
         assert_eq!(html, r#"<span class="status-dot__dot status-dot__success" aria-hidden="true"></span>"#);
+        let live = LiveDot { tone: StatusTone::Info }.to_html();
+        assert_eq!(live, r#"<span class="status-dot__dot status-dot__live status-dot__info" aria-hidden="true"></span>"#);
+        let text = StatusDot { tone: StatusTone::Text }.to_html();
+        assert_eq!(text, r#"<span class="status-dot__dot status-dot__text" aria-hidden="true"></span>"#);
     }
 
     /// A hidden legend is still the fieldset's legend, which names the group, with the class that
