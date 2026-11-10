@@ -1334,7 +1334,9 @@ rules something out.
     file's answer pays, 1,200
     requests less 200 over 1,000, five runs each taking turns: 11,826.69 (11,825.27 to 11,826.73)
     instructions a request on `97a63a92` with the test added and 12,024.05 (12,024.05 to
-    12,025.49) with ranges, +197 (+1.7%), counted before old URLs took ranges; a draft that sent
+    12,025.49) with ranges, +197 (+1.7%), counted before old URLs took ranges, which counted +2
+    more, 12,024.02 (12,023.98 to 12,024.06) on `84719c0f` against 12,026.06 (12,026.01 to
+    12,026.08) on `a7b1c808`, taken in turns the same way; a draft that sent
     `Accept-Ranges` measured 12,182, one figure from three runs on `c65c10ec`, not taken in turns
     with these);
     reasoned (one range per answer and a tag naming the bytes sent keep a client that sends
