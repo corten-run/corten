@@ -920,7 +920,7 @@ rules something out.
     the prototype's runs (`prototypes/pipeline/results/round4.tsv` and `round4-socket.tsv`),
     the prototype at `7cea4970`; 2026-11-09, the `route_layer` runs, on an uncommitted variant of
     `3452790a` with the host check and the API's JSON in a `route_layer`; 2026-11-09, the
-    dispatch suite on axum 0.8.9, hyper 1.12.0 and matchit 0.8.4, at `COMMIT_SUITE`.
+    dispatch suite on axum 0.8.9, hyper 1.12.0 and matchit 0.8.4, at `599c302a`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
     `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
