@@ -1328,7 +1328,7 @@ rules something out.
     Last checked: 2026-11-10, the derive, its `compile_fail` examples, `tests/derived_row.rs` and
     the rows of the four example apps, the live benchmark and `corten-cluster`, on `5710383f`;
     2026-11-10, the serde attributes it refuses, tuple structs and its generic rows, by their
-    `compile_fail` examples, each compiled for its own message, on `9fca170c`, the derive's last
+    `compile_fail` examples, each compiled for its own message, on `b8882bda`, the derive's last
     change.
 
 ## Rules
