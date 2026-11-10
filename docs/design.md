@@ -1334,7 +1334,9 @@ rules something out.
     `ToJson`, so a derived `ToJson` writes both the schema and the bytes (a field of another crate's
     type inside it is still written by serde under a schema written for it, as in any `ToJson`
     answer), and a tool's output is written by the code every other response is. The std types
-    Corten gives a schema for are `ToJson` and `FromJson` too, written and read as serde does, and
+    Corten gives a schema for are `ToJson` and `FromJson` too, written and read as serde does
+    (but for a map whose key is not a `JsonKey`, which is not written, or not `String`, which is not
+    read, and an `Arc` or `Rc` read without serde's `rc`), and
     another crate's type that has a schema goes in a `#[serde(transparent)]` newtype that derives
     `ToJson`, one impl. A `ToJson` written by hand, for a type whose schema is written by hand (one
     the derive refuses, or another crate's type with none, in a newtype of the app's), comes with
@@ -1390,7 +1392,7 @@ rules something out.
     Last checked: 2026-11-09, the
     derives and the agent endpoint's bounds, inputs and outputs, at `7965aeab`, the bounds' last
     change; 2026-11-10, no such impl in `examples/`, at `7197604f`; 2026-11-10, the std types' and
-    pointers' `ToJson` and `FromJson` against serde's bytes and values (`json` tests, and `corten-run` built with `json` alone), at `22263bfc`; 2026-11-10, the
+    pointers' `ToJson` and `FromJson` against serde's bytes and values (`json` tests, and `corten-run` built with `json` alone), at `fcecee41`; 2026-11-10, the
     `tool_cost` count, on `217bce2c` with `tool_cost` added and on `fcecee41`.
 
 ## Rules

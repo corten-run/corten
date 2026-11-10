@@ -510,7 +510,7 @@ impl<T: ToJsonMembers + ?Sized> ToJsonMembers for Box<T> {
 /// A map key: written as a JSON string (numbers, `bool` and `char` in quotes, as serde_json does).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not a map key ToJson can write (JsonKey)",
-    note = "a key is text, a number, bool or char; for an app's own key type, implement corten::json::JsonKey for it"
+    note = "a key is text, a number, bool or char; for an app's own key type, implement corten::json::JsonKey for it, writing the text serde writes for it (for an enum of unit variants that derives ToJson, `self.write_json(out)`, so its renames hold)"
 )]
 ///
 /// An app's key type implements it by writing the text it stands for:
@@ -526,6 +526,26 @@ impl<T: ToJsonMembers + ?Sized> ToJsonMembers for Box<T> {
 /// }
 /// let stock = std::collections::BTreeMap::from([(Sku("a\"1".into()), 3)]);
 /// assert_eq!(stock.to_json(), r#"{"a\"1":3}"#);
+/// ```
+///
+/// A key must be the text serde writes for it, or a derived type's map field changes when the key
+/// gains this impl (that field is written by `ToJson` from then on, not by serde). An enum of unit
+/// variants that derives `ToJson` writes its name as a JSON string already, renames included, so
+/// its key is that:
+///
+/// ```
+/// use corten::json::{JsonKey, ToJson};
+/// #[derive(serde::Serialize, ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// #[serde(rename_all = "snake_case")]
+/// enum Stock { InStock, SoldOut }
+/// impl JsonKey for Stock {
+///     fn write_key(&self, out: &mut Vec<u8>) {
+///         self.write_json(out)
+///     }
+/// }
+/// let counts = std::collections::BTreeMap::from([(Stock::InStock, 1), (Stock::SoldOut, 2)]);
+/// assert_eq!(counts.to_json(), serde_json::to_string(&counts).unwrap());
+/// assert_eq!(counts.to_json(), r#"{"in_stock":1,"sold_out":2}"#);
 /// ```
 pub trait JsonKey {
     /// Appends the key as one JSON string, quotes included.
