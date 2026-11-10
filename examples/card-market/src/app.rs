@@ -2,7 +2,8 @@
 //! policy (CSP nonce, cross-site write check), versioned assets, error pages, health, PWA with
 //! push, head tags, an i18n catalog, robots/sitemap, compression, the home and category pages
 //! cached by CDNs (`Public`), an item as JSON for other services and the price-alert
-//! action as an MCP tool for agents, both mounted as JSON-only routes (`App::api`). Partners'
+//! action as an MCP tool for agents, both mounted as JSON-only routes (`App::api`), and a
+//! grading page whose captioned clip the browser seeks by byte ranges (its own area, `/grading`). Partners'
 //! services set alerts with an API key (`Caller<Partner>`), and writes are limited per client
 //! address by a middleware on the routes that take them, the item pages' area and the partner
 //! API (`WriteLimit`, `ClientIp`; `PROXIES` behind a load balancer).

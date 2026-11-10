@@ -232,7 +232,8 @@ rules something out.
    file a compile error).
 
    Revisit when: an app's static directory makes builds or images measurably slower than files
-   beside the binary would; or a macro on stable Rust can tell cargo to rebuild when a directory
+   beside the binary would, or startup measurably slower (every file is hashed when the app
+   starts, so a large video costs there first); or a macro on stable Rust can tell cargo to rebuild when a directory
    changes (`proc_macro`'s path tracking is unstable today), which would end the wait for the next
    build.
 

@@ -839,8 +839,9 @@ impl Assets {
         // version's URL or the favicon's may name other bytes across a deploy, and a player that
         // joined ranges of two would play neither, so those are sent whole (a fleet partway through
         // a deploy can still answer one URL from two versions, and a client that sends `If-Range`
-        // then gets the whole file). `If-Range` holds for this version's own strong tag only (the
-        // files have no date). No `Accept-Ranges`: a browser asks for a range unprompted, and the
+        // then gets the whole file). `If-Range` holds for this version's own tag, which is strong,
+        // compared byte for byte, so a weak tag or a date never matches (RFC 9110's strong
+        // comparison; the files have no date). No `Accept-Ranges`: a browser asks for a range unprompted, and the
         // header would cost every file's answer (#1133).
         #[cfg(feature = "compress")]
         let ranged = url == Url::Current && coding.is_none() && method == Method::GET;
@@ -848,8 +849,7 @@ impl Assets {
         let ranged = url == Url::Current && method == Method::GET;
         let range = match ranged.then(|| headers.get(header::RANGE)).flatten() {
             Some(value) => {
-                let strong = !etag.as_bytes().starts_with(b"W/");
-                let holds = headers.get(header::IF_RANGE).is_none_or(|tag| strong && *tag == etag);
+                let holds = headers.get(header::IF_RANGE).is_none_or(|tag| *tag == etag);
                 holds.then(|| byte_range(value.as_bytes(), body.len())).flatten()
             }
             None => None,
@@ -1337,11 +1337,7 @@ mod tests {
         assert_eq!(body(stale).await.len(), 100);
         let weak = format!("W/{}", tag.to_str().unwrap());
         let weak = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, &weak)]).await.unwrap();
-        assert_eq!(
-            weak.status(),
-            StatusCode::OK,
-            "If-Range compares strongly: the weak tag a compressed copy carries is not this file"
-        );
+        assert_eq!(weak.status(), StatusCode::OK, "If-Range compares strongly: a weak tag never names these exact bytes");
         let dated = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, "Sun, 08 Nov 2026 00:00:00 GMT")]).await.unwrap();
         assert_eq!(dated.status(), StatusCode::OK, "the files have no date to compare");
         let huge = get(&[(header::RANGE, "bytes=99999999999999999999-")]).await.unwrap();

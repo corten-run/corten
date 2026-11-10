@@ -5,9 +5,9 @@ use crate::text::Msg;
 
 /// The grading page's short clip of how the market grades a card's condition, captioned in each
 /// language the app has (the reader's is the default track): a native `<video>` the browser
-/// plays and seeks by byte ranges from the embedded files. MP4 comes first, the format every
-/// engine here plays (Playwright's WebKit on Windows never finishes loading a page whose first
-/// source is this WebM); WebM is for a browser without MP4.
+/// plays and seeks by byte ranges from the embedded files. MP4 comes first (Playwright's
+/// WebKit on Windows never finishes loading a page whose first source is this WebM); WebM is for
+/// a browser without MP4.
 #[component(css)]
 pub fn ConditionGuide<'a>(req: &'a Req, t: Msg) -> impl Render {
     let lang = req.lang();
