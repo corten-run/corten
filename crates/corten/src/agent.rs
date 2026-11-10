@@ -1125,11 +1125,11 @@ mod tests {
     /// A route served outside every stage at the metadata's path, which Corten adds when the app
     /// starts, would join its route there: refused then.
     #[test]
-    #[should_panic(expected = "says stages = bare and can answer at \"/.well-known/oauth-protected-resource/mcp\"")]
-    fn a_bare_route_at_the_metadata_s_path_is_refused_at_startup() {
+    #[should_panic(expected = "says unstaged and can answer at \"/.well-known/oauth-protected-resource/mcp\"")]
+    fn an_unstaged_route_at_the_metadata_s_path_is_refused_at_startup() {
         #[crate::routes]
         mod at_metadata {
-            #[route("/.well-known/oauth-protected-resource/mcp", get = bare_metadata, stages = bare)]
+            #[route("/.well-known/oauth-protected-resource/mcp", get = unstaged_metadata, unstaged)]
             pub struct Metadata;
         }
         let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example");
@@ -1137,13 +1137,13 @@ mod tests {
         let _ = crate::App::new(at_metadata::router()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
     }
 
-    async fn bare_metadata() -> &'static str {
+    async fn unstaged_metadata() -> &'static str {
         "mine"
     }
 
     /// One at a path beside it that cannot match it (`/.well-known/{file}`, one segment) starts.
     #[test]
-    fn a_bare_route_beside_the_metadata_s_path_starts() {
+    fn an_unstaged_route_beside_the_metadata_s_path_starts() {
         let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example");
         let tools = Tools::new("test", "1.0").authorization(authorization);
         let _ = crate::App::new(beside_metadata::router()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
@@ -1151,7 +1151,7 @@ mod tests {
 
     #[crate::routes]
     mod beside_metadata {
-        #[route("/.well-known/{file}", get = well_known, stages = bare)]
+        #[route("/.well-known/{file}", get = well_known, unstaged)]
         pub struct WellKnown<'a> {
             pub file: &'a str,
         }

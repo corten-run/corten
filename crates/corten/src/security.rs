@@ -308,8 +308,7 @@ impl Policy {
 
     /// A name the app answers to (`shop.example`; `.shop.example` for it and every subdomain).
     /// By default a request is answered only when its `Host` is `localhost` (or a name under
-    /// it), an IP address or missing; any other gets `421 Misdirected Request` before routing
-    /// (except at a route that says `stages = bare`, which no check covers).
+    /// it), an IP address or missing; any other gets `421 Misdirected Request` before routing.
     /// Otherwise a page on a name someone else controls could point that name at this machine
     /// (DNS rebinding) and use every route as if it were the app's own origin, the same-origin
     /// check included, which matters most for an app on loopback, where "only this machine can
@@ -344,19 +343,12 @@ impl Policy {
     /// True when the app answers to the request's host: `localhost` or a name under it, an IP
     /// address, a name given to [`Policy::host`], or no host at all (HTTP/1.0; a test's request).
     pub(crate) fn answers(&self, req: &Request) -> bool {
-        let Some(hosts) = &self.hosts else { return true };
-        let host = match req.uri().host() {
-            Some(host) => host.as_bytes(),
-            None => match req.headers().get(header::HOST) {
-                Some(host) => host.as_bytes(),
-                None => return true,
-            },
-        };
-        let named = answers(host, hosts);
-        if !named {
-            refused_host(host);
-        }
-        named
+        self.hosts.as_deref().is_none_or(|hosts| named(req, hosts))
+    }
+
+    /// The same check apart from the policy, for the routes that say `unstaged`.
+    pub(crate) fn host_check(&self) -> HostCheck {
+        HostCheck(self.hosts.as_deref().map(Arc::from))
     }
 
     /// A proxy in front of the app (`10.0.0.5`), or a network of them (`10.0.0.0/8`, `fc00::/7`),
@@ -1563,6 +1555,34 @@ fn refused_host(host: &[u8]) {
             "corten: refused a request for host {host:?} (421): if the app is served under that name, list it with Policy::host"
         );
     }
+}
+
+/// [`Policy::answers`], held apart from the policy: the names the app answers to, or `None` when
+/// it answers to any.
+#[derive(Clone)]
+pub(crate) struct HostCheck(Option<Arc<[String]>>);
+
+impl HostCheck {
+    pub(crate) fn answers(&self, req: &Request) -> bool {
+        self.0.as_deref().is_none_or(|hosts| named(req, hosts))
+    }
+}
+
+/// Whether the request's host is one of `hosts` (or a name `answers` lets through), or it names
+/// none; a refusal is logged.
+fn named(req: &Request, hosts: &[String]) -> bool {
+    let host = match req.uri().host() {
+        Some(host) => host.as_bytes(),
+        None => match req.headers().get(header::HOST) {
+            Some(host) => host.as_bytes(),
+            None => return true,
+        },
+    };
+    let named = answers(host, hosts);
+    if !named {
+        refused_host(host);
+    }
+    named
 }
 
 /// The answer to a request for a host the app does not answer to.

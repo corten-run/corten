@@ -808,7 +808,7 @@ rules something out.
    axum's; the handler bound and axum's features are Corten's.** Corten owns the layer around
    them: the accept loop and connection limits, its middleware stages, typed routes and
    `Params`, the readers (`Form`, `Json`, `Upload`), `Upgrade`, and the checks every route
-   passes (a route that says `stages = bare`, [Choice 28](#choice-fixed-stages), passes the check
+   passes (a route that says `unstaged`, [Choice 28](#choice-fixed-stages), passes the check
    of its arguments and no stage). What stays axum's is `Router`, `MethodRouter` and matchit,
    axum's `Handler` impls that read each argument and call the function, and `Sse`.
 
@@ -938,15 +938,16 @@ rules something out.
     unchecked (what an app adds to the `Router` that `App::router()` hands out for serving it
     another way, or answers in a `.layer(l)` around it, is its own). A WebSocket (`Upgrade`)
     and another server's answer passed on (`Relay`) are such routes too. A route that says
-    `stages = bare` ([Choice 28](#choice-fixed-stages)) is in `Routes` too, but meets no stage, so
-    its answer type is not checked; its handler is checked instead to take only the request's URL
-    (`corten::answer::Bare`): no `Caller` and no headers, which carry
+    `unstaged` ([Choice 28](#choice-fixed-stages)), in any routes module, meets no stage, so
+    its answer type is not checked; its handler is checked instead to take only what the request line and the app hold
+    (`corten::answer::Unstaged`: the route's `Params`, `Uri`, `Method` and `State`): no `Caller` and no headers, which carry
     the cookies and credentials, so no input Corten gives it says who is asking (an extractor of
-    the app's own that implements `Bare` is the app's to keep so, as with `Anonymous`), and no
+    the app's own that implements `Unstaged` is the app's to keep so, as with `Anonymous`), and no
     reader of the body, which no deadline would end there and no same-origin check would keep
     another site from posting. A module with `caller = T`
-    cannot hold one, and its handlers are a type (`BareMethods`) that only `Routes` takes, so `Area::route`
-    and `Api::route` still take only checked `Methods`. Not chosen: guards and
+    cannot hold one, and its handlers are a type (`UnstagedMethods`) that only the hidden
+    `__unstaged_route`s of `Routes`, `Area` and `Api` take, so `Area::route` and `Api::route` still
+    take only checked `Methods`. Not chosen: guards and
     a context object checked per request (`App::guard`, `Area::guard`, `App<C>`), which Corten
     had and removed in
     [#81 A route's handler says what it answers, who may call it and how it caches, checked for every route](https://github.com/corten-run/corten/pull/81).
@@ -958,7 +959,7 @@ rules something out.
     Stands on: reasoned (a handler's arguments and return type are checked where the routes module
     is compiled, so a module's `caller = T`, `Public` and `no_store` hold every handler in it,
     and `Routes` and `Methods` are the only types `App::new`, `Area::route` and `Api::route`
-    take, so no route given to the `App` skips them, a bare route's arguments standing in for
+    take, so no route given to the `App` skips them, an unstaged route's arguments standing in for
     its answer's); bet (most of an app's access rules are
     about who is asking, which a type can name, and the rest depend on the record, which the
     handler reads anyway); value (mistakes fail at compile time, Value 4).
@@ -969,63 +970,95 @@ rules something out.
 
     Last checked: 2026-11-06, the `compile_fail` doctests that hold `caller = T`
     (`crates/corten/src/route.rs`) and the caller's own (`crates/corten/src/caller.rs`) at
-    `bcd31ffe`; 2026-11-09, the `stages = bare` `compile_fail` doctests in
+    `bcd31ffe`; 2026-11-09, the `unstaged` `compile_fail` doctests in
     `crates/corten/src/route.rs` (a stage's input, a header reader, a body reader, a
-    `caller = T`, area or API module, a path that reaches Corten's own, a method other than
-    `get`, `prefetch`, `/health/live`, `/{*rest}`), at `78d3d2e4`.
+    `caller = T` module, a path that reaches Corten's own, a method other than `get`,
+    `prefetch`, `/health/live`, `/{*rest}`), at `COMMIT_CODE`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
     `corten::middleware`'s; the app's steps are resolved at compile time. An area's or an API's
     own steps (`Area::middleware`, `Api::middleware`) run right after the app's, for the requests
     at its prefix; they are boxed, since which run depends on the path, and an app with none pays
-    nothing for them. A route that says `stages = bare` where it is declared is routed beside the
-    stages, not inside them: its handler's answer is sent as it made it, a raw `Response` too, and
-    every other route keeps every stage. It is all or nothing, so the order a reader checks is
-    still one. It is for an answer that must cost what the router alone costs and that anyone may
-    read (a public JSON figure a CDN fronts), beside
-    pages that need every stage; the stages add about 1.6 times what its handler and the router cost
-    together (below). Its answer gets `X-Content-Type-Options: nosniff` and its own
+    nothing for them. A route that says `unstaged` where it is declared, in the app's routes
+    module, an area's or an API's, goes through none of the stages, the app's, area's and API's
+    middleware among them, and every other route keeps every stage. It is every stage or no stage, so the
+    order a reader checks is still one, and a flag, as `no_store` is, that names what the route
+    goes without. It is for an answer that must cost what the router alone costs and is the same
+    for everyone who can reach it (a public JSON figure a CDN fronts, a value every client polls),
+    beside pages that need every stage; the stages add about 1.5 times what its handler, the
+    router and the host check cost together (below). What it keeps adds no stage and no layer: its handler, wrapped
+    when the app is built, runs the host check every request meets, so a DNS-rebound page reads it
+    no more than any route, and, under an API's prefix, writes a failure as the API writes every
+    failure there (its Problem Details or `Api::errors` shape), the router's `405` and a segment
+    without its suffix among them, so an API's clients still read every failure under its prefix
+    as JSON; only a failure boxes anything for that. A tower layer around those routes alone
+    (axum's `route_layer`) was built first and measured at 751 instructions a request more than
+    the same checks in the handler (jemalloc), since axum boxes a layered route again and clones
+    that box on each request. Its answer gets `X-Content-Type-Options: nosniff` and its own
     `Content-Security-Policy: sandbox` beside any the handler set, whatever its type, both
-    added in its handler's own future, not by a stage: a browser takes it only as the type it
+    added in its handler's own future: a browser takes it only as the type it
     says, a page of the app's cannot load it as a script (`script-src 'self'` trusts every URL of
     the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
     client that reads it as data sees nothing else change, and a PDF the browser opens still shows
     in Chrome's, Edge's and Firefox's viewers; an answer that sets a cookie is
     `private, no-cache` (`no-store` when it says one) with no CDN caching header, so no shared cache hands one
-    visitor's cookie to another; a panic is logged and answered `500` in the same future. It gets
-    no host check, so it is
-    data anyone anywhere may read. It answers `get` alone and its handler reads no body: no
-    same-origin check covers it, a form posted to it needs no preflight, so any site could make
-    its visitors send one, and no deadline would end a slow body. A bare route
-    whose path can answer at one of Corten's own paths does not compile where the path alone
-    shows it, and one that can answer under an area's or API's prefix, or under a path the app
-    adds, is refused when the app starts. Not chosen: an app's own tower layer that
+    visitor's cookie to another; a panic is logged and answered `500` in the same future. It
+    answers `get` alone and its handler reads no body: no same-origin check covers it, a form
+    posted to it needs no preflight, so any site could make its visitors send one, and no deadline
+    would end a slow body. An unstaged route whose path can answer at one of Corten's own paths
+    does not compile where the path alone shows it, and one that can answer under a path the app
+    adds is refused when the app starts, as is one declared outside the module of the innermost
+    area or API whose prefix holds it (where a reader of that module would not see what it
+    skips), one whose parameter can reach an area's or API's prefix, where a staged route is
+    turned away per request and an unstaged one never would be, and one whose path another module
+    routes too (a parameter's name and the text after it not counting, as the router matches),
+    where the methods it lacks would answer with no stage. Not chosen: an app's own tower layer that
     answers the route's path before the stages (`.layer(l)`), which works today but is outside
     the routes module: its path is a
     string, not a typed route, its handler is checked for nothing, and a reader of the routes does
     not see it; hooks at several stages (before routing, after the caller, around the error page), each a
     place an app's step could run and a reader of the app would have to check; what must see the
     raw request first is a tower layer around the whole app ([Limit 12](#limit-fixed-stages)).
-    Nor presets that keep some stages and drop others (`stages = fast`), each another order to
-    read and test, with no app yet needing one; nor the stages rewritten as combinators, measured
-    on a branch not merged: about 200 to 360 instructions fewer a request with glibc's allocator,
-    but about 200 to 263 more with jemalloc, which the images preload; nor refusing an answer
-    type that sends HTML, since a raw `Response`, which a bare route exists to allow, carries any
+    Nor presets that keep some stages and drop others, each another order to
+    read and test, with no app yet needing one (`unstaged` is one more, no stage at all, which
+    listings-feed's sequence route uses, and all it keeps is written into its handler); nor the stages rewritten as combinators, measured
+    on a variant that is not in the repository (Stands on): about 200 to 360 instructions fewer a request with glibc's allocator,
+    but about 200 to 263 more with jemalloc, which the images preload; nor making the stages cheap
+    enough for such a route instead, since a profile of the staged request (callgrind, jemalloc)
+    spread the 13,266 instructions it costs over a route without them across the stages' own work
+    (the tag's hash and body read, 3,494 of them; the security headers, 2,371; the error page's
+    plumbing, the signal and the boxed future most of the rest), which such a route would still pay;
+    nor refusing an answer
+    type that sends HTML, since a raw `Response`, which an unstaged route exists to allow, carries any
     content type, and the sandbox keeps such a document from running script; nor sending the
     answer with no header added, as this Choice first had it, which left a `text/plain` echo of
     the URL loadable as a script by the app's own pages and an uploaded SVG running script on its
     origin: correctness comes before the cost (below); nor `Media` setting the headers itself,
     measured on an API request answering `Media` at 524 instructions more with `nosniff` on every
-    type and 106 more checking its type alone, paid on every route for what only a bare one
+    type and 106 more checking its type alone, paid on every route for what only an unstaged one
     needs; nor adding the sandbox only to a type that runs script, or only when the handler's
     policy has none, which reads text a handler writes (a list of types, a second header, a
-    `sandbox` that allows the same origin) and so can be fooled, and cost more: a bare request
+    `sandbox` that allows the same origin) and so can be fooled, and cost more: an unstaged request
     measured 8,242 instructions reading them against 8,067 adding both headers always
-    (jemalloc); nor writes or body readers on a bare route, which no app has asked for and which
-    no same-origin check or deadline would cover; nor keeping the host check alone, a second kind
-    of bare route that, for an answer anyone may read, keeps out only readers who may read it
-    anyway. Data only this machine or its network may see is not for a bare route.
+    (jemalloc); nor writes or body readers on an unstaged route, which no app has asked for and which
+    no same-origin check or deadline would cover; nor the form this Choice first had,
+    `stages = bare`: a key with one value, whose word was not so (it kept `nosniff`, the sandbox,
+    the cookie rule and the panic catch), with no host check, so its answer had to be one anyone
+    anywhere may read, and refused in an area's or an API's module and under their prefixes, which
+    kept a public figure out of the API it belongs in and made it a rule with exceptions; nor an
+    API's allowed origins (CORS) or deadline on it, which are its stages: a partner's page reads it
+    through a route with stages, or its handler sends `Access-Control-Allow-Origin` itself.
+
+    That host check put an unstaged route 12% over a plain axum router (jemalloc; 10% with
+    glibc), past the about 10% this Choice was to be revisited at. It was: a route the host check
+    did not cover answered a DNS-rebound page, and correctness comes before the 494 instructions
+    (the README's Values), so the check stays, and the bound below is now the 12% it costs with
+    the check (8,479 against 7,559): a change that adds more than the about 100 instructions two
+    builds of the same code differ by (measured on the pipeline prototype, which the repository
+    does not hold) reopens this. What would
+    take it under is a router of Corten's own, which [Choice 25](#choice-axum-router) weighs,
+    not dropping the check.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -1035,34 +1068,44 @@ rules something out.
     to 19,976 to 19,988 in the allocator with the same allocations, so the same layout effect may
     be in the request outside the area); measured (callgrind, release, the same JSON handler
     answering `Media`, a request counted as the run of 1,200 less the run of 200 over 1,000, five
-    runs each, this change's request path as committed, the staged variants alternating with main
-    `c65c10ec`, median and range: with jemalloc a bare route 8,067 (8,065 to 8,067) instructions
-    a request with its headers and panic catch, 7,398 (7,397 to 7,400) before either, the same
-    handler through the stages 21,318 (21,304 to 21,321; main 21,310, 21,301 to 21,316), a
-    staged route beside a bare one 21,317 (21,316 to 21,331), and a plain axum router 7,640; an
-    API request 15,813 against main's 15,813 and a 404 19,986 against 19,985; with glibc's
-    allocator a bare route 9,130 (9,129 to 9,131), the same handler through the stages 23,795
-    (23,773 to 23,854; main 23,733, 23,719 to 23,811), beside a bare one 23,821 (23,766 to
-    23,852), a plain axum router 8,716, an API request 17,643 (17,604 to 17,873) against main's
-    17,559 (17,559 to 17,839), and a 404 21,680 (21,650 to 21,919) against 21,640 (21,579 to
-    22,332)); reasoned (one place for the app's steps is
+    runs each, this change's request path, the staged variants alternating with main `c65c10ec`,
+    median and range: with jemalloc an unstaged route 8,479 instructions a request in all five
+    runs, 8,537 in an API's module, the same handler through the stages 21,220 (21,218 to 21,228;
+    main 21,307, 21,300 to 21,317), a staged route beside an unstaged one 21,252 (21,245 to
+    21,265), an API request 15,725 against main's 15,813, its 404 14,106 against 14,082 and a
+    page's 404 19,991 against 19,996, and a plain axum router 7,559; with glibc's allocator an
+    unstaged route 9,537 (9,531 to 9,539), 9,589 in an API's module, and a plain axum router
+    8,635. Before the host check (`stages = bare` at `3452790a`) the same route was 7,985 (7,984
+    to 7,986) with jemalloc and 9,040 with glibc, and with the host check and the API's JSON in
+    a `route_layer` 9,230; the 494 the host check adds is mostly its read of `Host` and the
+    match against the app's names (`security::named`, about 400 in the profile)); measured
+    (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
+    `3452790a`: of the 13,266 instructions the stages add to a request, the tag's hash and body
+    read 3,494, the security headers 2,371, and the error page's plumbing, the signal and the
+    boxed future most of the rest); measured (callgrind, release, the same request path, on an
+    uncommitted variant of main `c65c10ec` with the stages written as combinators on axum's
+    router, which the repository does not hold: about 200 to 360 instructions a request fewer
+    than main with glibc's allocator, about 200 to 263 more with jemalloc); reasoned (one place for the app's steps is
     one order to read, a tuple resolved at compile time costs no box, and a route that needs none
     of it says so where it is declared); platform (a PDF sent with a sandbox shows in the viewers of
     Chrome, Edge and Firefox as one sent without it, probed as Last checked says; Safari's is not
     run, since the repository's WebKit has no PDF viewer, and WebKit's bug tracker records that it
     showed nothing for one until a fix in December 2024, which was read, not run); bet (apps have an answer anyone may read whose cost the
-    stages would make about 2.6 times as costly, beside pages that need them all; no example or template uses
-    `stages = bare` yet); value
+    stages would make about 2.5 times as costly, beside pages that need them all; listings-feed's
+    sequence route, which its failover benchmark reads, is the first use, and no app's in
+    production is yet); value
     (one way to do each thing, Value 5, and good defaults with easy overrides,
     Value 7).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
     layer around the app cannot serve it; or a route needs some stages and not others, which
-    `stages = bare` cannot give (the host check, a write or a body on a bare route among them); or a
+    `unstaged` cannot give (a write, a body, an API's allowed origins or a deadline on it among
+    them); or a
     browser the runtime supports shows a PDF sent with a sandbox differently from one sent without
     it; or no
-    app uses `stages = bare` by the next minor release; or a bare route costs more than about
-    10% over a plain axum router's; or a request outside every area costs more than twice
+    app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
+    than about 100 instructions over the 8,479 measured here with jemalloc (12% over a plain axum
+    router's 7,559); or a request outside every area costs more than twice
     the about 200 instructions measured here over the build before area middleware (the lookup
     and any layout effect together; layout alone moved a whole request by about 280). Area
     middleware has no switch, so the next check builds current main with the prefix lookup taken
@@ -1071,10 +1114,13 @@ rules something out.
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
-    own); 2026-11-09, the `stages = bare` runs on this change against main `c65c10ec` (the bench
-    binary was not committed, so the next check writes its own: the same JSON handler answered in
-    process by an `App` with it bare, by the same `App` with it staged, and by a plain axum
-    `Router`); 2026-11-09, a PDF sent `inline` with `Content-Security-Policy: sandbox` shown by
+    own); 2026-11-09, the `unstaged` runs on this change against main `c65c10ec` and `stages = bare`
+    at `3452790a` (the bench binary was not committed, so the next check writes its own: the same
+    JSON handler answered in process by an `App` with the route unstaged, in the app's routes and
+    in an API's, by the same `App` with it staged, and by a plain axum `Router`); 2026-11-09, the
+    profile of the staged request against `stages = bare` (callgrind, inclusive counts by
+    function, jemalloc, one run each) on the bench binary built at `3452790a`; 2026-11-08, the
+    stages as combinators on the uncommitted variant of `c65c10ec`; 2026-11-09, a PDF sent `inline` with `Content-Security-Policy: sandbox` shown by
     the viewers of Chrome 156.0.8078.49, Edge 157.0.4341.42 and Firefox 157.0 (Playwright's, its
     PDF viewer turned on) as one sent without it (Playwright's WebKit 27.2 has no PDF viewer and
     downloads both, so Safari was not run), and
@@ -1334,12 +1380,13 @@ by design; where it is known, a limit says what would lift it or why it is so.
     ([Choice 28](#choice-fixed-stages)), not as hooks at several: a step that must see the raw
     request before every stage is a tower layer around the whole app (`.layer(l)`), and there is
     no step for one route, whose needs are its handler's arguments and return type. A route
-    takes every stage or, with `stages = bare`, none: no host or same-origin check, deadline,
-    error page, security headers but `nosniff` and `sandbox`, or cache rule
-    but `private` on a cookie, which its handler gives itself if it needs them; it answers reads
-    only; a wrong method or a missing suffix at its path is the router's plain 405 or 404, a
-    failure is sent as its handler made it (plain text, not Problem Details), and a panic is
-    logged and answered a plain 500.
+    takes every stage or, with `unstaged`, none: no same-origin check, deadline, middleware,
+    error page, security headers but `nosniff` and `sandbox`, cache rule but `private` on a
+    cookie, or allowed origins, which its handler gives itself if it needs them; the host check
+    and, under an API's prefix, the API's JSON for a failure stay; it answers reads only; a wrong
+    method or a missing suffix at its path is a plain 405 or 404 (the API's JSON under an
+    API's prefix), a failure elsewhere is sent as its handler made it (plain text, not Problem
+    Details), and a panic is logged and answered 500 (plain, or the API's JSON under its prefix).
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the

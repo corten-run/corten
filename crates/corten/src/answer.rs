@@ -399,8 +399,8 @@ pub type JsonResult<T> = std::result::Result<crate::Json<T>, JsonError>;
 /// the client as written. A failure (`Err`) is answered as every failure of a JSON route is, a
 /// Problem Details document (`application/problem+json`, `{"title","status","detail"}`), except
 /// a refusal in the app's own shape, `Err(answer)?` ([`JsonError::Own`]), which is answered as
-/// written, and any failure on a route that says `stages = bare`, which has no stage to shape it
-/// and sends the status's reason as plain text. A refusal (a 4xx or 5xx of the app's) is that `Err`; `Ok` is for the route's answers
+/// written, and a failure on a route that says `unstaged` outside an API's prefix, which has no
+/// stage to shape it and sends the status's reason as plain text. A refusal (a 4xx or 5xx of the app's) is that `Err`; `Ok` is for the route's answers
 /// and another server's passed on.
 ///
 /// ```
@@ -816,12 +816,12 @@ impl Answer for Relay {
 /// first bytes. What keeps a file that holds HTML from running as a page is the app's headers,
 /// which every `Media` gets: browsers do not guess another type
 /// (`X-Content-Type-Options: nosniff`), and the CSP allows no inline script. A route that says
-/// `stages = bare` has no stages, and its answer gets `nosniff` and `Content-Security-Policy:
-/// sandbox` instead, whatever its type. A PDF sent [`Media::inline`] from a bare route still
+/// `unstaged` has no stages, and its answer gets `nosniff` and `Content-Security-Policy:
+/// sandbox` instead, whatever its type. A PDF sent [`Media::inline`] from an unstaged route still
 /// shows in Chrome's, Edge's and Firefox's viewers (Safari's was not checked); a PDF that must
-/// open in every browser is sent from a staged route or as an attachment.
+/// open in every browser is sent from a route with stages or as an attachment.
 ///
-/// It is cached as anything the app answers is (`private, no-cache`), except on a bare route,
+/// It is cached as anything the app answers is (`private, no-cache`), except on an unstaged route,
 /// which sends no `Cache-Control` unless the handler says one. At a URL that names its
 /// content, a hash of the bytes, the bytes never change, so [`Public::immutable`] lets every cache
 /// keep it for a year, as Corten's own versioned files are; its handler cannot read who is asking,
@@ -1702,30 +1702,30 @@ impl Anonymous for corten_feed::Since {}
 #[doc(hidden)]
 pub trait AllAnonymous {}
 
-/// An input a route with `stages = bare` may take: its URL. No stage runs there, so nothing gives
+/// An input a route that says `unstaged` may take: its URL. No stage runs there, so nothing gives
 /// the request its signal, its nonce or who is asking, and an extractor that reads one of those
 /// (`Req`, `Signal`, `Nonce`, `Caller`, `ClientIp`) does not compile. Nor does one that reads the
 /// headers (`HeaderMap`, the whole `Request`), which carry the visitor's cookies and credentials,
-/// since no stage keeps a shared cache from storing what a bare handler made of them; nor one
+/// since no stage keeps a shared cache from storing what an unstaged handler made of them; nor one
 /// that reads the body (`Bytes`, `String`, `Form`, `Json`, `Upload`): no deadline ends a client
 /// that sends it a byte at a time, and no same-origin check keeps another site from posting it.
 /// Implement it for an extractor of the app's own that reads none of these.
 #[diagnostic::on_unimplemented(
-    message = "a route with `stages = bare` runs no stage, so its handler cannot take `{Self}`",
+    message = "a route that says `unstaged` runs no stage, so its handler cannot take `{Self}`",
     label = "`{Self}` reads what a stage gives the request, its headers, or its body",
-    note = "take the request's method and URL (Params, Method, Uri) or the module's State, or leave stages = bare out so the route gets every stage; an extractor of the app's own that reads none of those implements `corten::answer::Bare`"
+    note = "take the request's method and URL (Params, Method, Uri) or the module's State, or leave unstaged out so the route gets every stage; an extractor of the app's own that reads none of those implements `corten::answer::Unstaged`"
 )]
-pub trait Bare {}
+pub trait Unstaged {}
 
-impl<R: crate::route::FromUrl + ?Sized> Bare for crate::route::Params<R> {}
-impl<T> Bare for State<T> {}
-impl Bare for Method {}
-impl Bare for Uri {}
+impl<R: crate::route::FromUrl + ?Sized> Unstaged for crate::route::Params<R> {}
+impl<T> Unstaged for State<T> {}
+impl Unstaged for Method {}
+impl Unstaged for Uri {}
 
-/// Every argument is [`Bare`].
+/// Every argument is [`Unstaged`].
 #[doc(hidden)]
-pub trait AllBare {}
-impl AllBare for () {}
+pub trait AllUnstaged {}
+impl AllUnstaged for () {}
 
 /// Whether an answer's [`Answer::Inputs`] allows the handler's arguments.
 #[doc(hidden)]
@@ -1780,7 +1780,7 @@ macro_rules! arities {
         }
 
         impl<$($ty: Anonymous,)*> AllAnonymous for ($($ty,)*) {}
-        impl<$($ty: Bare,)*> AllBare for ($($ty,)*) {}
+        impl<$($ty: Unstaged,)*> AllUnstaged for ($($ty,)*) {}
 
         holds!([] [$($ty)*] [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]);
     };

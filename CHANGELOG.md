@@ -6,21 +6,27 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
-- `stages = bare` on a `#[route(..)]` serves that route outside every stage, beside routes that
-  keep them all: its handler's answer, a raw `Response` too, is sent as it made it, with
-  `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` added whatever its
-  type, and `Cache-Control: private, no-cache` (or `no-store`) with no CDN caching header when it
-  sets a cookie; a panic is logged and answered 500,
-  and a failure is plain text, not Problem Details. It answers `get` only, its
-  handler takes only the request's method and URL (`corten::answer::Bare`), and a link to it is never
-  prefetched; a bare route with another method or `prefetch = ..`, in a `caller = ..`, area or
-  API module, or with `no_store`, `rows` or `gives(..)`, does not compile, nor does one whose
-  path can answer at a path of Corten's own (a first segment that is a parameter, `/corten/..`,
-  `/health/live`, `/health/ready`, `/health/{..}`); one under an area's or API's prefix, that can
-  match another path Corten serves (the assets, the PWA's files and offline page, an API's or
-  area's companions), is refused at startup. Its answer gets no host check, so it is for data
-  anyone anywhere may read. Measured with callgrind: 8,067 (8,065-8,067) instructions a request
-  against 21,318 (21,304-21,321) through the stages (jemalloc; a plain axum router 7,640).
+- `unstaged` on a `#[route(..)]`, in the app's, an area's or an API's routes module, serves that
+  route outside the stages, beside routes that keep them all: no same-origin check, signal,
+  deadline, middleware (the app's, the area's or the API's), error page, security headers, cache
+  rule, tag, compression or allowed origins. Its handler's answer, a raw `Response` too, is sent
+  as it made it, after the host check every route meets (421 for a name the app does not answer
+  to), with `X-Content-Type-Options: nosniff` and `Content-Security-Policy: sandbox` added
+  whatever its type, and `Cache-Control: private, no-cache` (or `no-store`) with no CDN caching
+  header when it sets a cookie; a panic is logged and answered 500. Under an API's prefix a
+  failure after the host check is the API's Problem Details (or its `Api::errors` shape), elsewhere plain text. It
+  answers `get` only, its handler takes only the request's method and URL and the app's state
+  (`corten::answer::Unstaged`), and a link to it is never prefetched; an unstaged route with
+  another method or `prefetch = ..`, in a `caller = ..` module, or with `no_store`, `rows` or
+  `gives(..)`, does not compile, nor does one whose path can answer at a path of Corten's own (a
+  first segment that is a parameter, `/corten/..`, `/health/live`, `/health/ready`,
+  `/health/{..}`); one that can match another path Corten serves (the assets, the PWA's files and
+  offline page, an API's or area's companions) is refused at startup, as is one declared outside
+  the module of the innermost area or API whose prefix holds it, whose parameter can reach an
+  area's or API's prefix, or whose path is routed again in another module (a parameter's name or
+  the text after it, `{n}.xml`, does not make it another). The listings-feed example's
+  sequence route uses it. Measured with callgrind (jemalloc): 8,479 instructions a request
+  unstaged against 21,220 through the stages, and 7,559 for a plain axum router.
 
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent

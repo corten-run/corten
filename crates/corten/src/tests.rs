@@ -4971,59 +4971,59 @@ async fn leading_rest(rest: crate::Params<leading_url::Rest<'_>>) -> String {
 
 /// A route served outside every stage beside one served through all of them.
 #[crate::routes]
-mod bare_url {
-    #[route("/ping", get = bare_ping, stages = bare)]
+mod unstaged_url {
+    #[route("/ping", get = unstaged_ping, unstaged)]
     pub struct Ping;
 
-    #[route("/raw/{id}", get = bare_raw, stages = bare)]
+    #[route("/raw/{id}", get = unstaged_raw, unstaged)]
     pub struct Raw {
         pub id: u32,
     }
 
-    #[route("/page", get = bare_page)]
+    #[route("/page", get = unstaged_page)]
     pub struct Page;
 
-    #[route("/serves", get = bare_serves)]
+    #[route("/serves", get = unstaged_serves)]
     pub struct Serves;
 
-    #[route("/where/{id}", get = bare_where, stages = bare)]
+    #[route("/where/{id}", get = unstaged_where, unstaged)]
     pub struct Where {
         pub id: u32,
     }
 
-    #[route("/picture", get = bare_picture, stages = bare)]
+    #[route("/picture", get = unstaged_picture, unstaged)]
     pub struct Picture;
 
-    #[route("/framed", get = bare_framed, stages = bare)]
+    #[route("/framed", get = unstaged_framed, unstaged)]
     pub struct Framed;
 
-    #[route("/cookie", get = bare_cookie, stages = bare)]
+    #[route("/cookie", get = unstaged_cookie, unstaged)]
     pub struct Cookie;
 
-    #[route("/listed", get = bare_listed, stages = bare)]
+    #[route("/listed", get = unstaged_listed, unstaged)]
     pub struct Listed;
 
-    #[route("/boom", get = bare_boom, stages = bare)]
+    #[route("/boom", get = unstaged_boom, unstaged)]
     pub struct Boom;
 
-    #[route("/shared-cookie", get = bare_shared_cookie, stages = bare)]
+    #[route("/shared-cookie", get = unstaged_shared_cookie, unstaged)]
     pub struct SharedCookie;
 
-    #[route("/private-cookie", get = bare_private_cookie, stages = bare)]
+    #[route("/private-cookie", get = unstaged_private_cookie, unstaged)]
     pub struct PrivateCookie;
 
-    #[route("/feeds/{name}.xml", get = bare_feed, stages = bare)]
+    #[route("/feeds/{name}.xml", get = unstaged_feed, unstaged)]
     pub struct Feed<'a> {
         pub name: &'a str,
     }
 }
 
-async fn bare_ping() -> &'static str {
+async fn unstaged_ping() -> &'static str {
     "pong"
 }
 
 /// The raw request in and a raw response out, its headers the handler's alone.
-async fn bare_raw(at: crate::Params<bare_url::Raw>, method: axum::http::Method) -> axum::response::Response {
+async fn unstaged_raw(at: crate::Params<unstaged_url::Raw>, method: axum::http::Method) -> axum::response::Response {
     axum::response::Response::builder()
         .status(StatusCode::IM_A_TEAPOT)
         .header("x-raw", format!("{method} {}", at.id))
@@ -5031,17 +5031,17 @@ async fn bare_raw(at: crate::Params<bare_url::Raw>, method: axum::http::Method) 
         .unwrap()
 }
 
-async fn bare_feed(feed: crate::Params<bare_url::Feed<'_>>) -> String {
+async fn unstaged_feed(feed: crate::Params<unstaged_url::Feed<'_>>) -> String {
     format!("feed {}", feed.name)
 }
 
-/// The rest of what a bare handler may take: the request's `Uri` and the app's state.
-async fn bare_where(at: crate::Params<bare_url::Where>, uri: axum::http::Uri, _: axum::extract::State<()>) -> String {
+/// The rest of what an unstaged handler may take: the request's `Uri` and the app's state.
+async fn unstaged_where(at: crate::Params<unstaged_url::Where>, uri: axum::http::Uri, _: axum::extract::State<()>) -> String {
     format!("{} {uri}", at.id)
 }
 
-/// A document with headers of its own, which the ones a bare route adds do not replace.
-async fn bare_framed() -> axum::response::Response {
+/// A document with headers of its own, which the ones an unstaged route adds do not replace.
+async fn unstaged_framed() -> axum::response::Response {
     axum::response::Response::builder()
         .header("content-type", "text/html")
         .header("content-security-policy", "frame-ancestors 'none'")
@@ -5051,26 +5051,31 @@ async fn bare_framed() -> axum::response::Response {
 }
 
 /// A cookie set with nothing said of caching.
-async fn bare_cookie() -> axum::response::Response {
+async fn unstaged_cookie() -> axum::response::Response {
     axum::response::Response::builder().header("set-cookie", "seen=1").body(Body::from("seen")).unwrap()
 }
 
 /// A type a browser may read as the last of a list, HTML.
-async fn bare_listed() -> axum::response::Response {
+async fn unstaged_listed() -> axum::response::Response {
     axum::response::Response::builder().header("content-type", "text/plain, text/html").body(Body::from("<p>listed</p>")).unwrap()
 }
 
-/// A handler that panics, which a bare route answers 500 rather than dropping the connection.
-async fn bare_boom() -> &'static str {
+/// An unstaged handler for any route with a parameter.
+async fn unstaged_at<R: crate::route::FromUrl>(_: crate::Params<R>) -> &'static str {
+    "at"
+}
+
+/// A handler that panics, which an unstaged route answers 500 rather than dropping the connection.
+async fn unstaged_boom() -> &'static str {
     if true {
-        panic!("bare and broken")
+        panic!("unstaged and broken")
     } else {
         "never"
     }
 }
 
 /// A cookie set on an answer that says it is private, with a CDN's header that says otherwise.
-async fn bare_private_cookie() -> axum::response::Response {
+async fn unstaged_private_cookie() -> axum::response::Response {
     axum::response::Response::builder()
         .header("set-cookie", "id=fresh")
         .header("cache-control", "private=\"x-id\", no-store")
@@ -5080,41 +5085,43 @@ async fn bare_private_cookie() -> axum::response::Response {
 }
 
 /// A cookie set on an answer that says a shared cache may keep it.
-async fn bare_shared_cookie() -> axum::response::Response {
+async fn unstaged_shared_cookie() -> axum::response::Response {
     axum::response::Response::builder()
         .header("set-cookie", "id=fresh")
         .header("cache-control", "public, max-age=60")
         .header("cdn-cache-control", "max-age=600")
+        .header("vercel-cdn-cache-control", "max-age=600")
+        .header("surrogate-control", "max-age=600")
         .body(Body::from("id"))
         .unwrap()
 }
 
 /// A picture that can run script, as an uploaded SVG can.
-async fn bare_picture() -> crate::Media {
+async fn unstaged_picture() -> crate::Media {
     crate::Media::new("image/svg+xml", r#"<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>"#)
 }
 
-async fn bare_page(req: Req) -> HtmlResult {
+async fn unstaged_page(req: Req) -> HtmlResult {
     req.test_page("Page", html! { <p>"page"</p> })
 }
 
-/// Whether `?next=` may send the visitor to the bare route and to the page.
-async fn bare_serves(req: Req) -> String {
+/// Whether `?next=` may send the visitor to the unstaged route and to the page.
+async fn unstaged_serves(req: Req) -> String {
     let serves = |path: &str| req.serves(&crate::Local::parse(path).unwrap());
     format!("{} {}", serves("/ping"), serves("/page"))
 }
 
-/// `stages = bare` sends the handler's answer as it made it, with `nosniff` and
-/// `Content-Security-Policy: sandbox` always added: no host check, no other security headers,
+/// `unstaged` sends the handler's answer as it made it, with `nosniff` and
+/// `Content-Security-Policy: sandbox` always added, after the host check: no other security headers,
 /// `Cache-Control` (unless it sets a cookie), error page or tag. It answers reads only. The route
 /// beside it, and an unknown URL, still go through every stage.
 #[tokio::test]
-async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
-    let router = App::new(bare_url::router()).error_page(test_error_page, ()).router();
+async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
+    let router = App::new(unstaged_url::router()).error_page(test_error_page, ()).router();
     let (status, headers, body) = call_with(router.clone(), "GET", "/ping", None, Some("text/html")).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
     for name in ["cache-control", "etag", "referrer-policy", "x-frame-options"] {
-        assert!(!headers.contains_key(name), "a bare route has no {name}: {headers:?}");
+        assert!(!headers.contains_key(name), "an unstaged route has no {name}: {headers:?}");
     }
     assert_eq!(headers["x-content-type-options"], "nosniff", "no page of the app's can load it as a script");
     assert_eq!(headers["content-security-policy"], "sandbox", "a document it sends runs no script on the app's origin");
@@ -5125,8 +5132,8 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!((status, body.as_str()), (StatusCode::IM_A_TEAPOT, "raw"), "a 4xx is sent as it is, not as the error page");
     assert_eq!(headers.get("x-raw").unwrap(), "GET 7");
     assert!(!headers.contains_key("cache-control") && headers["x-content-type-options"] == "nosniff", "{headers:?}");
-    // It answers no write, so another site's is the router's plain 405; another host's read
-    // reaches it, with no stage to refuse it.
+    // It answers no write, so another site's is the router's plain 405; another host's read is
+    // the 421 every route gives it, with the headers an unstaged answer gets.
     let (status, _, body) = call_with_any(
         router.clone(),
         "POST",
@@ -5135,8 +5142,15 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     )
     .await;
     assert_eq!((status, body.as_str()), (StatusCode::METHOD_NOT_ALLOWED, ""));
-    let (status, body) = for_host(&router, "/ping", "rebound.attacker.example:3917", &[]).await;
-    assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"));
+    let (status, headers, body) =
+        call_with_any(router.clone(), "GET", "/ping", &[("host", "rebound.attacker.example:3917")]).await;
+    assert_eq!((status, body.as_str()), (StatusCode::MISDIRECTED_REQUEST, "Misdirected request."));
+    assert_eq!(
+        (&headers["content-security-policy"], &headers["cache-control"]),
+        (&"sandbox".parse().unwrap(), &"private, no-cache".parse().unwrap())
+    );
+    let (status, _, body) = call_with_any(router.clone(), "GET", "/ping", &[("host", "localhost:3000")]).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"), "the app's own name is answered");
     let (status, _, body) = call_with(router.clone(), "GET", "/where/7?x=1", None, None).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "7 /where/7?x=1"));
     // `Media` keeps a file that can run script from running it, with no stage to do so.
@@ -5154,7 +5168,9 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     // Whatever caching it says, a CDN's own header too, and `no-store` where it says one.
     let (_, headers, _) = call_with(router.clone(), "GET", "/shared-cookie", None, None).await;
     assert_eq!(headers["cache-control"], "private, no-cache");
-    assert!(!headers.contains_key("cdn-cache-control"), "{headers:?}");
+    for cdn in ["cdn-cache-control", "vercel-cdn-cache-control", "surrogate-control"] {
+        assert!(!headers.contains_key(cdn), "{headers:?}");
+    }
     let (_, headers, _) = call_with(router.clone(), "GET", "/private-cookie", None, None).await;
     assert_eq!(headers["cache-control"], "no-store");
     assert!(!headers.contains_key("cdn-cache-control"), "{headers:?}");
@@ -5162,7 +5178,7 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     let (_, headers, _) = call_with(router.clone(), "GET", "/listed", None, None).await;
     assert_eq!(headers["content-security-policy"], "sandbox");
     // A link to it is not fetched ahead of a click.
-    assert_eq!(html! { <a href={bare_url::Picture}>"P"</a> }.to_html(), r#"<a href="/picture" data-no-prefetch>P</a>"#);
+    assert_eq!(html! { <a href={unstaged_url::Picture}>"P"</a> }.to_html(), r#"<a href="/picture" data-no-prefetch>P</a>"#);
     // A panic is a plain 500, and the next request is served.
     let (status, headers, body) = call_with(router.clone(), "GET", "/boom", None, Some("text/html")).await;
     assert_eq!((status, body.as_str()), (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"));
@@ -5173,16 +5189,19 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     let (status, headers, _) = call_with(router.clone(), "GET", "/raw/seven", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "not the error page's policy");
-    // A method it has no handler for is the router's plain 405, not the error page.
+    // A method it has no handler for is a plain 405 with the router's `Allow` and the headers
+    // every unstaged answer gets, not the error page.
     let (status, headers, body) = call_with(router.clone(), "PUT", "/ping", None, Some("text/html")).await;
-    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
-    assert!(!headers.contains_key("content-security-policy") && !body.contains("<html"), "{headers:?} {body}");
-    // A segment without the route's suffix is the router's plain 404, not the error page.
+    assert_eq!((status, headers["allow"].to_str().unwrap()), (StatusCode::METHOD_NOT_ALLOWED, "GET,HEAD"));
+    assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "{headers:?}");
+    assert!(!body.contains("<html"), "{body}");
+    // A segment without the route's suffix is a plain 404, not the error page.
     let (status, _, body) = call_with(router.clone(), "GET", "/feeds/new.xml", None, None).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "feed new"));
     let (status, headers, body) = call_with(router.clone(), "GET", "/feeds/new", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert!(!headers.contains_key("content-security-policy") && !body.contains("<html"), "{headers:?} {body}");
+    assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "{headers:?}");
+    assert!(!body.contains("<html"), "{body}");
 
     let (status, headers, _) = call_with(router.clone(), "GET", "/page", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::OK);
@@ -5191,7 +5210,7 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     }
     let (status, body) = for_host(&router, "/page", "rebound.attacker.example:3917", &[]).await;
     assert_eq!((status, body.as_str()), (StatusCode::MISDIRECTED_REQUEST, "Misdirected request."));
-    // A bare route is not a page: no stage gives its answer the app's layout.
+    // An unstaged route is not a page: no stage gives its answer the app's layout.
     let (_, _, body) = call_with(router.clone(), "GET", "/serves", None, None).await;
     assert_eq!(body, "false true");
     let (status, headers, body) = call_with(router, "GET", "/missing", None, Some("text/html")).await;
@@ -5200,11 +5219,11 @@ async fn a_bare_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert!(body.contains("<html"), "with the error page: {body}");
 }
 
-/// Beside a bare route every other route keeps its stages: an area's pages and its unknown URLs,
+/// Beside an unstaged route every other route keeps its stages: an area's pages and its unknown URLs,
 /// and another site's write to a staged route.
 #[tokio::test]
-async fn the_stages_hold_beside_a_bare_route() {
-    let router = App::new(bare_url::router()).area(docs_url::area).error_page(test_error_page, ()).router();
+async fn the_stages_hold_beside_an_unstaged_route() {
+    let router = App::new(unstaged_url::router()).area(docs_url::area).error_page(test_error_page, ()).router();
     let (status, _, body) = call_with(router.clone(), "GET", "/docs/intro", None, None).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "doc intro"));
     let (status, headers, body) = call_with(router.clone(), "GET", "/docs/intro/deeper", None, Some("text/html")).await;
@@ -5214,15 +5233,15 @@ async fn the_stages_hold_beside_a_bare_route() {
     let (status, _, _) = call_with_any(router.clone(), "POST", "/page", &cross).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "the staged route beside it still refuses another site's write");
     let (status, _, _) = call_with_any(router, "POST", "/raw/7", &cross).await;
-    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "the bare one answers no write");
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "the unstaged one answers no write");
 }
 
-/// A bare JSON route's failure is sent as its handler made it: plain text, not Problem Details,
-/// since no stage shapes it.
+/// An unstaged JSON route's failure outside an API's prefix is sent as its handler made it: plain
+/// text, not Problem Details, since no stage shapes it.
 #[cfg(feature = "json")]
 #[tokio::test]
-async fn a_bare_route_s_failure_is_plain_text() {
-    let router = App::new(bare_json_url::router()).router();
+async fn an_unstaged_route_s_failure_is_plain_text() {
+    let router = App::new(unstaged_json_url::router()).router();
     let (status, headers, body) = call_with(router, "GET", "/figure", None, Some("application/json")).await;
     assert_eq!(
         (status, body.as_str()),
@@ -5234,17 +5253,17 @@ async fn a_bare_route_s_failure_is_plain_text() {
 
 #[cfg(feature = "json")]
 #[crate::routes]
-mod bare_json_url {
-    #[route("/figure", get = bare_figure, stages = bare)]
+mod unstaged_json_url {
+    #[route("/figure", get = unstaged_figure, unstaged)]
     pub struct Figure;
 }
 
 #[cfg(feature = "json")]
-async fn bare_figure() -> crate::JsonResult<u32> {
+async fn unstaged_figure() -> crate::JsonResult<u32> {
     Err(Error::new("the store is down").into())
 }
 
-/// Whether a bare route can match a path of Corten's own exactly, as the startup check asks it.
+/// Whether an unstaged route can match a path of Corten's own exactly, as the startup check asks it.
 #[test]
 fn a_route_matches_a_path_segment_by_segment() {
     let can = crate::route::routes_path;
@@ -5258,10 +5277,10 @@ fn a_route_matches_a_path_segment_by_segment() {
     assert!(can("/sw.js", "/sw.js") && !can("/sw.js", "/sw.json"));
 }
 
-/// A tower layer around the whole app still goes around a bare route.
+/// A tower layer around the whole app still goes around an unstaged route.
 #[tokio::test]
-async fn a_layer_around_the_app_goes_around_a_bare_route() {
-    let router = App::new(bare_url::router())
+async fn a_layer_around_the_app_goes_around_an_unstaged_route() {
+    let router = App::new(unstaged_url::router())
         .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
             let mut res = next.run(req).await;
             res.headers_mut().insert("x-outer", axum::http::HeaderValue::from_static("1"));
@@ -5287,82 +5306,339 @@ async fn call_with_any(
     (parts.status, parts.headers, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
 }
 
-/// A bare route under an area's prefix would skip what the area says covers every request there.
+/// An unstaged route in an area's module meets none of the area's middleware or error page; the
+/// area's other routes and its unknown URLs meet all of them.
+#[tokio::test]
+async fn an_unstaged_route_in_an_area_meets_none_of_its_stages() {
+    let router = App::new(Routes::new())
+        .area(|area| unstaged_area::area(area).middleware(Step("area", true)))
+        .error_page(test_error_page, ())
+        .router();
+    let flood = [("x-flood", "1")];
+    let (status, headers, body) = call_with_any(router.clone(), "GET", "/quiet/ping", &flood).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "pong"), "the area's limit does not cover it");
+    assert_eq!(headers["content-security-policy"], "sandbox");
+    let (status, _, _) = call_with_any(router.clone(), "GET", "/quiet/page", &flood).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "the area's route beside it meets the limit");
+    // Its own failure is plain, not the area's error page.
+    let (status, headers, body) = call_with(router.clone(), "GET", "/quiet/fails", None, Some("text/html")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(headers["content-security-policy"], "sandbox");
+    assert!(!body.contains("<html"), "{body}");
+    // An unknown URL there is still the area's.
+    let (status, headers, body) = call_with(router, "GET", "/quiet/missing", None, Some("text/html")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(headers["content-security-policy"] != "sandbox" && body.contains("<html"), "{headers:?} {body}");
+}
+
+#[crate::routes(area = Quiet)]
+mod unstaged_area {
+    #[route("/quiet")]
+    pub struct Quiet;
+
+    #[route("/quiet/ping", get = unstaged_ping, unstaged)]
+    pub struct Ping;
+
+    #[route("/quiet/page", get = unstaged_area_page)]
+    pub struct Page;
+
+    #[route("/quiet/fails", get = unstaged_area_fails, unstaged)]
+    pub struct Fails;
+}
+
+async fn unstaged_area_fails() -> StatusCode {
+    StatusCode::NOT_FOUND
+}
+
+/// Nor is its path routed again in another module, where its other methods would meet no stage.
 #[test]
-#[should_panic(expected = "says stages = bare and is under the area \"/docs\"")]
-fn a_bare_route_under_an_area_is_refused_at_startup() {
+#[should_panic(expected = "says unstaged and its path is routed again in another module")]
+fn an_unstaged_path_routed_again_elsewhere_is_refused_at_startup() {
+    #[crate::routes]
+    mod again {
+        #[route("/quiet/ping", post = unstaged_area_page)]
+        pub struct Ping;
+    }
+    let _ = App::new(again::router()).area(unstaged_area::area).router();
+}
+
+/// As the router matches it: a parameter's name and the text after it do not make a path apart.
+#[test]
+#[should_panic(expected = "says unstaged and its path is routed again in another module")]
+fn an_unstaged_path_routed_again_with_another_suffix_is_refused_at_startup() {
+    let _ = App::new(shelf_again::router()).area(shelf::area).router();
+}
+
+#[crate::routes(area = Shelf)]
+mod shelf {
+    #[route("/shelf")]
+    pub struct Shelf;
+
+    #[route("/shelf/{n}.xml", get = shelf_feed, unstaged)]
+    pub struct Feed {
+        pub n: u32,
+    }
+}
+
+#[crate::routes]
+mod shelf_again {
+    #[route("/shelf/{id}.json", post = shelf_json)]
+    pub struct Json {
+        pub id: u32,
+    }
+}
+
+async fn shelf_feed(at: crate::Params<shelf::Feed>) -> String {
+    format!("feed {}", at.n)
+}
+
+async fn shelf_json(at: crate::Params<shelf_again::Json>) -> String {
+    format!("json {}", at.id)
+}
+
+/// An unstaged route in an outer area's module whose path is under a nested area belongs to the
+/// nested one's module.
+#[test]
+#[should_panic(expected = "is declared in the module of \"/quiet\", but its path is under the module of \"/quiet/inner\"")]
+fn an_unstaged_route_under_a_nested_area_is_declared_in_its_module() {
+    #[crate::routes(area = Outer)]
+    mod outer {
+        #[route("/quiet")]
+        pub struct Outer;
+
+        #[route("/quiet/inner/ping", get = unstaged_ping, unstaged)]
+        pub struct InnerPing;
+    }
+    paths! { InnerArea = "/quiet/inner", InnerPage = "/quiet/inner/page" }
+    let _ = App::new(Routes::new())
+        .area(outer::area)
+        .area::<InnerArea>(|area| area.route::<InnerPage>(crate::Methods::reads(get(|| async { "page" }))))
+        .router();
+}
+
+/// Nor can its parameter reach an area's prefix.
+#[test]
+#[should_panic(expected = "says unstaged and can answer under \"/admin/quick\"")]
+fn an_unstaged_parameter_that_reaches_an_area_s_prefix_is_refused_at_startup() {
+    #[crate::routes(area = Admin)]
+    mod admin {
+        #[route("/admin")]
+        pub struct Admin;
+
+        #[route("/admin/{page}", get = unstaged_at, unstaged)]
+        pub struct AdminPage<'a> {
+            pub page: &'a str,
+        }
+    }
+    let _ = App::new(Routes::new())
+        .area(admin::area)
+        .area::<AdminQuick>(|quick| quick.route::<AdminQuickSlow>(crate::Methods::reads(get(|| async { "slow" }))))
+        .router();
+}
+
+async fn unstaged_area_page() -> &'static str {
+    "page"
+}
+
+/// An unstaged route in an API's module meets none of the API's middleware or allowed origins,
+/// and answers a failure as every failure under the prefix is answered: JSON, in the API's shape
+/// when it gives one, with the headers an unstaged answer gets. The host check holds there too.
+#[cfg(feature = "json")]
+#[tokio::test]
+async fn an_unstaged_route_in_an_api_answers_its_failures_as_the_api_does() {
+    let router = App::new(Routes::new())
+        .api(|api| unstaged_api::api(api).middleware(Step("api", true)).allow_origin("https://partner.example"))
+        .router();
+    let flood = [("x-flood", "1"), ("origin", "https://partner.example")];
+    let (status, headers, body) = call_with_any(router.clone(), "GET", "/lane/items/7", &flood).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "7"), "the API's limit does not cover it");
+    assert!(!headers.contains_key("access-control-allow-origin"), "nor its allowed origins: {headers:?}");
+    assert_eq!(headers["content-security-policy"], "sandbox");
+    let (status, _, _) = call_with_any(router.clone(), "GET", "/lane/staged", &flood).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "the API's route beside it meets the limit");
+    // The handler's failure, a path that does not parse, and a method it has no handler for.
+    let problem = "application/problem+json";
+    let (status, headers, body) = call_with_any(router.clone(), "GET", "/lane/items/0", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_FOUND, problem));
+    assert!(body.contains(r#""status":404"#), "{body}");
+    assert_eq!(headers["content-security-policy"], "sandbox", "with the headers an unstaged answer gets");
+    let (status, headers, _) = call_with_any(router.clone(), "GET", "/lane/items/seven", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::BAD_REQUEST, problem));
+    let (status, headers, _) = call_with_any(router.clone(), "PUT", "/lane/items/7", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::METHOD_NOT_ALLOWED, problem));
+    assert_eq!(headers["allow"], "GET,HEAD");
+    // A segment without the route's suffix.
+    let (status, _, body) = call_with_any(router.clone(), "GET", "/lane/files/a.txt", &[]).await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, "a"));
+    let (status, headers, _) = call_with_any(router.clone(), "GET", "/lane/files/a", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_FOUND, problem));
+    // A 5xx tells the client its reason, and the cause stays in the log.
+    let (status, headers, body) = call_with_any(router.clone(), "GET", "/lane/figure", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::INTERNAL_SERVER_ERROR, problem));
+    assert!(!body.contains("store is down"), "{body}");
+    let (status, _, _) = call_with_any(router, "GET", "/lane/items/7", &[("host", "rebound.attacker.example")]).await;
+    assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
+
+    // A name the app's policy gives is answered, and only that one.
+    let named =
+        App::new(Routes::new()).api(unstaged_api::api).policy(crate::security::Policy::new().host("shop.example")).router();
+    let (status, _, _) = call_with_any(named.clone(), "GET", "/lane/items/7", &[("host", "shop.example")]).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = call_with_any(named, "GET", "/lane/items/7", &[("host", "other.example")]).await;
+    assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
+
+    let shaped = App::new(Routes::new())
+        .api(|api| {
+            unstaged_api::api(api).errors(|status, message| ShapedError {
+                r#type: "error",
+                error: ShapedDetail { code: status.as_u16(), message: message.to_string() },
+            })
+        })
+        .router();
+    let (status, headers, body) = call_with_any(shaped, "GET", "/lane/items/0", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_FOUND, "application/json"));
+    assert_eq!(body, r#"{"type":"error","error":{"code":404,"message":"Not Found"}}"#);
+
+    // A panic there is the API's 500.
+    let router = App::new(Routes::new()).api(unstaged_api::api).router();
+    let (status, headers, body) = call_with_any(router, "GET", "/lane/boom", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::INTERNAL_SERVER_ERROR, problem));
+    assert!(!body.contains("broken"), "{body}");
+
+    // In an API inside another, the innermost's shape.
+    let nested = App::new(Routes::new())
+        .api(unstaged_api::api)
+        .api(|api| {
+            unstaged_inner::api(api).errors(|status, message| ShapedError {
+                r#type: "inner",
+                error: ShapedDetail { code: status.as_u16(), message: message.to_string() },
+            })
+        })
+        .router();
+    let (status, headers, body) = call_with_any(nested.clone(), "GET", "/lane/inner/missing", &[]).await;
+    assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::NOT_FOUND, "application/json"));
+    assert!(body.contains(r#""type":"inner""#), "{body}");
+    let (_, headers, _) = call_with_any(nested, "GET", "/lane/items/0", &[]).await;
+    assert_eq!(headers["content-type"], problem, "the outer API's own route keeps the outer's");
+}
+
+#[cfg(feature = "json")]
+#[crate::routes(api = Inner)]
+mod unstaged_inner {
+    #[route("/lane/inner")]
+    pub struct Inner;
+
+    #[route("/lane/inner/missing", get = unstaged_missing, unstaged)]
+    pub struct Missing;
+}
+
+#[cfg(feature = "json")]
+async fn unstaged_missing() -> crate::JsonResult<u32> {
+    Err(Error::not_found().into())
+}
+
+#[cfg(feature = "json")]
+#[crate::routes(api = Lane)]
+mod unstaged_api {
+    #[route("/lane")]
+    pub struct Lane;
+
+    #[route("/lane/items/{id}", get = unstaged_item, unstaged)]
+    pub struct Item {
+        pub id: u32,
+    }
+
+    #[route("/lane/figure", get = unstaged_figure, unstaged)]
+    pub struct Figure;
+
+    #[route("/lane/staged", get = staged_item)]
+    pub struct Staged;
+
+    #[route("/lane/boom", get = unstaged_boom, unstaged)]
+    pub struct Boom;
+
+    #[route("/lane/files/{name}.txt", get = unstaged_file, unstaged)]
+    pub struct File {
+        pub name: String,
+    }
+}
+
+#[cfg(feature = "json")]
+async fn unstaged_file(at: crate::Params<unstaged_api::File>) -> String {
+    at.name.clone()
+}
+
+#[cfg(feature = "json")]
+async fn unstaged_item(at: crate::Params<unstaged_api::Item>) -> crate::JsonResult<u32> {
+    match at.id {
+        0 => Err(Error::not_found().into()),
+        id => Ok(crate::Json(id)),
+    }
+}
+
+#[cfg(feature = "json")]
+async fn staged_item() -> crate::JsonResult<u32> {
+    Ok(crate::Json(1))
+}
+
+/// An unstaged route in the app's routes under an area's prefix would skip what the area says
+/// covers every request there, unseen by a reader of the area's module.
+#[test]
+#[should_panic(expected = "says unstaged and is declared in the app's routes, but its path is under the module of \"/docs\"")]
+fn an_unstaged_route_under_an_area_is_declared_in_the_area_s_module() {
     #[crate::routes]
     mod under_area {
-        #[route("/docs/ping", get = bare_ping, stages = bare)]
+        #[route("/docs/ping", get = unstaged_ping, unstaged)]
         pub struct DocsPing;
     }
     let _ = App::new(under_area::router()).area(docs_url::area).router();
 }
 
-/// Nor under an API's prefix, whose settings answer every request there.
+/// Nor can its parameter reach an API's prefix, where a staged route is turned away per request.
 #[test]
-#[should_panic(expected = "says stages = bare and is under App::api(\"/api\")")]
-fn a_bare_route_under_an_api_is_refused_at_startup() {
+#[should_panic(expected = "says unstaged and can answer under \"/pay/api\"")]
+fn an_unstaged_parameter_that_reaches_an_api_s_prefix_is_refused_at_startup() {
     #[crate::routes]
-    mod under_api {
-        #[route("/api/ping", get = bare_ping, stages = bare)]
-        pub struct ApiPing;
+    mod reaching {
+        #[route("/pay/{step}", get = unstaged_at, unstaged)]
+        pub struct PayStep<'a> {
+            pub step: &'a str,
+        }
     }
-    let _ = App::new(under_api::router())
-        .api::<ApiRoot>(|api| api.route::<ApiRates>(crate::Methods::reads(get(|| async { "rates" }))))
-        .router();
-}
-
-/// Nor one whose parameter can stand at an area's prefix (`/admin/{x}` at `/admin/quick`).
-#[test]
-#[should_panic(expected = "says stages = bare and is under the area \"/admin/quick\"")]
-fn a_bare_parameter_at_an_area_s_prefix_is_refused_at_startup() {
-    let _ = App::new(bare_beside_area::router())
-        .area::<AdminQuick>(|quick| quick.route::<AdminQuickSlow>(crate::Methods::reads(get(|| async { "slow" }))))
-        .router();
-}
-
-/// Nor one whose parameter can stand at an API's prefix (`/pay/{x}` at `/pay/api`).
-#[test]
-#[should_panic(expected = "says stages = bare and is under App::api(\"/pay/api\")")]
-fn a_bare_parameter_at_an_api_s_prefix_is_refused_at_startup() {
-    let _ = App::new(bare_beside_api::router())
+    let _ = App::new(reaching::router())
         .api::<PayApi>(|api| api.route::<PayApiGo>(crate::Methods::reads(get(|| async { "go" }))))
         .router();
 }
 
-#[crate::routes]
-mod bare_beside_area {
-    #[route("/admin/{x}", get = bare_beside_area_any, stages = bare)]
-    pub struct Any<'a> {
-        pub x: &'a str,
+/// Nor an outer API's, at an inner API's prefix.
+#[test]
+#[should_panic(expected = "says unstaged and can answer under \"/outer/inner\"")]
+fn an_outer_api_s_unstaged_parameter_at_an_inner_api_s_prefix_is_refused_at_startup() {
+    #[crate::routes(api = Outer)]
+    mod outer {
+        #[route("/outer")]
+        pub struct Outer;
+
+        #[route("/outer/{id}", get = unstaged_at, unstaged)]
+        pub struct Thing<'a> {
+            pub id: &'a str,
+        }
     }
-}
-
-async fn bare_beside_area_any(_: crate::Params<bare_beside_area::Any<'_>>) -> &'static str {
-    "any"
-}
-
-#[crate::routes]
-mod bare_beside_api {
-    #[route("/pay/{x}", get = bare_beside_api_any, stages = bare)]
-    pub struct Any<'a> {
-        pub x: &'a str,
-    }
-}
-
-async fn bare_beside_api_any(_: crate::Params<bare_beside_api::Any<'_>>) -> &'static str {
-    "any"
+    paths! { Inner = "/outer/inner", InnerGo = "/outer/inner/go" }
+    let _ = App::new(Routes::new())
+        .api(outer::api)
+        .api::<Inner>(|api| api.route::<InnerGo>(crate::Methods::reads(get(|| async { "go" }))))
+        .router();
 }
 
 /// Nor at a path of Corten's own the app adds (the PWA's manifest), which would otherwise answer
 /// there outside the stages.
 #[test]
-#[should_panic(expected = "says stages = bare and can answer at \"/manifest.webmanifest\"")]
-fn a_bare_route_at_a_path_of_corten_s_own_is_refused_at_startup() {
+#[should_panic(expected = "says unstaged and can answer at \"/manifest.webmanifest\"")]
+fn an_unstaged_route_at_a_path_of_corten_s_own_is_refused_at_startup() {
     #[crate::routes]
     mod at_manifest {
-        #[route("/manifest.webmanifest", get = bare_ping, stages = bare)]
+        #[route("/manifest.webmanifest", get = unstaged_ping, unstaged)]
         pub struct Manifest;
     }
     let _ = App::new(at_manifest::router()).pwa(crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A"))).router();
@@ -5371,11 +5647,11 @@ fn a_bare_route_at_a_path_of_corten_s_own_is_refused_at_startup() {
 /// Nor at the PWA's offline page, which the service worker would show for every navigation made
 /// offline.
 #[test]
-#[should_panic(expected = "says stages = bare and can answer at \"/offline\"")]
-fn a_bare_route_at_the_offline_page_is_refused_at_startup() {
+#[should_panic(expected = "says unstaged and can answer at \"/offline\"")]
+fn an_unstaged_route_at_the_offline_page_is_refused_at_startup() {
     #[crate::routes]
     mod at_offline {
-        #[route("/offline", get = bare_ping, stages = bare)]
+        #[route("/offline", get = unstaged_ping, unstaged)]
         pub struct Offline;
     }
     let _ = App::new(at_offline::router()).pwa(crate::pwa::Pwa::new(crate::pwa::Manifest::new("A", "A"))).router();
@@ -5385,20 +5661,20 @@ fn a_bare_route_at_the_offline_page_is_refused_at_startup() {
 /// assets'), which the routes macro cannot see: the parameters it can see, a first segment or
 /// `/health/{..}`, do not compile (`compile_fail` doctests in `route.rs`).
 #[test]
-#[should_panic(expected = "says stages = bare and can answer at \"/assets\"")]
-fn a_bare_parameter_under_the_assets_is_refused_at_startup() {
-    let _ = App::new(bare_assets_url::router()).assets(IconStatic).router();
+#[should_panic(expected = "says unstaged and can answer at \"/assets\"")]
+fn an_unstaged_parameter_under_the_assets_is_refused_at_startup() {
+    let _ = App::new(unstaged_assets_url::router()).assets(IconStatic).router();
 }
 
 #[crate::routes]
-mod bare_assets_url {
-    #[route("/assets/{file}", get = bare_asset_ping, stages = bare)]
+mod unstaged_assets_url {
+    #[route("/assets/{file}", get = unstaged_asset_ping, unstaged)]
     pub struct File<'a> {
         pub file: &'a str,
     }
 }
 
-async fn bare_asset_ping(_: crate::Params<bare_assets_url::File<'_>>) -> &'static str {
+async fn unstaged_asset_ping(_: crate::Params<unstaged_assets_url::File<'_>>) -> &'static str {
     "pong"
 }
 

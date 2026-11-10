@@ -1,6 +1,7 @@
 //! [`Middleware`]: a step of the app's own in every request (a request id, a rate limit, a trace
-//! span), at one place in Corten's order. A route that says `stages = bare` goes through none of
-//! it ([`crate::route`]), so a rate limit or a check of the app's does not cover it.
+//! span), at one place in Corten's order. A route that says `unstaged` goes through none of it,
+//! the app's, its area's or its API's ([`crate::routes`]), so a rate limit or a check of the
+//! app's does not cover it.
 //!
 //! The order is fixed, outside in, and each stage needs the one before it:
 //!
@@ -72,8 +73,8 @@
 //! ```
 //!
 //! Middleware that belongs to part of the app is given to that part, an area or an API, and runs
-//! for each request at its prefix (its routes, nested areas and APIs, an unknown URL there),
-//! never by a path compared in the middleware:
+//! for each request at its prefix (its routes, nested areas and APIs, an unknown URL there; not
+//! a route that says `unstaged`, which meets none), never by a path compared in the middleware:
 //!
 //! ```
 //! # use corten::{extract::Request, middleware::{IntoResponse, Response}, prelude::*};
@@ -118,7 +119,7 @@ pub trait Next: Send {
 }
 
 /// A step of the app's own in every request, or of an area's or an API's in each request at its
-/// prefix; see [`crate::middleware`]. Several are a tuple,
+/// prefix, but a route's that says `unstaged`; see [`crate::middleware`]. Several are a tuple,
 /// run in order: `(RequestId, RateLimit)`.
 pub trait Middleware: Send + Sync + 'static {
     /// Answers the request, usually by running `next` and changing what it gives.
