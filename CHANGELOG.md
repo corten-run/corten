@@ -2671,13 +2671,16 @@ Corten is pre-1.0, so any minor version may change the API.
      matches on the boxed one (`downcast_ref`), and `Body::into_data_stream()` gives a
      `BodyDataStream` that is a `Stream` of those pieces but no longer an `http_body::Body`:
      a body is the `Body` itself.
-  A staged page costs about 480 instructions fewer (callgrind, release, jemalloc; 541 with
-  glibc): a page route 17,713 against 18,192, one with a middleware 17,997 against 18,476. An API
-  request, the 404s and an unstaged route are within 31 of before (13,005 against 13,009, 7,022
-  against 7,012). A `live` stream writes an event in 2,140 instructions against axum's 4,960
-  (2,381 against 4,051 with glibc), and a JSON `POST` read by `Json` costs 14,164 against 14,574
-  (15,706 against 15,969). A feed's live event costs about 48 more (7,567 to 7,568 against 7,517 to
-  7,521; about 105 with glibc): `FeedBody` boxes its stream and Corten boxes the body again.
+  Measured with callgrind (release, three runs of each build, every run the same, at the commit
+  design Choice 25 names), a staged page costs 478 instructions fewer with jemalloc (540 with
+  glibc): a page route 17,717 against 18,195, one with a middleware 18,001 against 18,479. An API
+  request, the 404s and an unstaged route are within 24 of before, about what one build of the
+  harness moves the same code (13,057 against 13,059, 7,030 against 7,019). A `live` stream writes
+  an event in 2,161 instructions against axum's 4,982 (2,402 against 4,074 with glibc), and a JSON
+  `POST` read by `Json` costs 14,165 against 14,574 (15,707 against 15,969). A feed's live event
+  costs 28 to 36 more (7,553 to 7,561 against 7,525; about 100 with glibc): `FeedBody` boxes its
+  stream and Corten boxes the body again. Wall times (seven runs on Docker Desktop) differ by less
+  than their runs do for every request, the JSON `POST` included (medians 2,694 ns against 3,372).
 
 - Handlers are called through Corten's own `Handler`, and `corten::extract`'s
   `FromRequestParts`, `OptionalFromRequestParts`, `FromRequest` and `State` are Corten's own

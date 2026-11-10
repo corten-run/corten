@@ -974,41 +974,55 @@ rules something out.
        security headers are stages `App` puts around every route, and a route with neither is
        `unstaged`. corten-feed answers with the `http` crate's `Response` over a body of its own
        (`FeedBody`). Corten's workspace keeps axum only as a dev-dependency: card-market's bench
-       binary answers with it beside Corten (the benchmark apps outside the workspace depend on it
-       as one of the frameworks they measure), and the harness that measures this Choice keeps a
-       plain axum router beside a control of no framework (tower's `service_fn`), which stayed at
-       3,190 (3,568) in both builds where axum's moved ([Choice 28](#choice-fixed-stages)). The dispatch suite passes unchanged. Measured against
-       step 3 at `67e7f5f5` (callgrind, release, jemalloc with glibc in brackets, two runs each,
-       every run the same), a staged page costs about 480 fewer and the rest the same: a page
-       route 17,713 against 18,192 (18,956 against 19,497), one with a middleware 17,997 against
-       18,476 (19,237 against 19,778), a staged route beside an unstaged one 17,724 against
-       18,203 (18,986 against 19,527), an API request 13,005 against 13,009 (14,021 against
-       14,025), the 404s 12,144 and 18,078 against 12,170 and 18,105 (13,286 and 19,989 against
-       13,311 and 19,992), an unstaged route 7,022 against 7,012 and 7,073 against 7,063 in an
-       API's module (7,826 and 7,879 against 7,816 and 7,869), and axum's plain router 7,057
-       against 7,088 (8,071 against 8,102), the same source compiled differently beside a
-       different Corten ([Choice 28](#choice-fixed-stages) has its profile and the control that
-       did not move). The body is two words: none for an empty one and one box for any other, the
-       bytes of a whole one included. Held as bytes beside a box, four words where axum's body
-       was two, it made a `Response<Body>` 144 bytes rather than 128, and every request moves
-       one through the stages: `memcpy` was called 40 to 57 times a request rather than under
-       once, and an API request cost 13,393, its 404 12,416 and a page's 404 18,561 (jemalloc,
-       five runs, every run the same), 246 to 468 more than step 3 in the same runs (13,009,
-       12,170 and 18,093). With the body two words,
-       `memcpy`'s cost on the API request is step 3's to the instruction (1,594,184 over the
-       run). A JSON body read whole by `Json` under an API, now through Corten's reader, costs 410
-       fewer: a `POST` 14,164 against 14,574 (15,706 against 15,969 with glibc; built with
-       feature `json`, where the same `GET` is 13,057 against 13,058). A [`live`](guide/live-data.md) stream's events are Corten's writer's: one patch event
-       with its id, read from the response's body, costs 2,140 instructions against axum's `Sse`
-       4,960 (2,381 against 4,051 with glibc), its buffer sized for the fragment up front; grown
-       from empty, as axum's was, it cost 4,451 (3,461). A feed's live event (a row written,
-       its patch read from the stream) costs about 48 more, 7,567 and 7,568 against 7,517 and
-       7,521 in two runs each (7,676 and 7,677 against 7,571 and 7,573 with glibc, about 105): corten-feed's body (`FeedBody`, which
-       names no Corten type) boxes its stream, and Corten boxes that body as it boxes any other,
-       so each event passes one more `poll_frame` than axum's one box did, and a stream opens
-       with one more allocation. Not taken out: one box needs a stream type Corten can box itself,
-       which `FeedBody` cannot name (its stream holds an `async fn`'s future) without making
-       the public `FeedBody` generic, for 0.6% of an event.
+       binary answers with it beside Corten. The benchmark apps outside the workspace that measure
+       axum as a framework (axum-maud, leptos) depend on it as they always did, and Corten's own
+       bench apps no longer do. The dispatch suite passes unchanged.
+
+       Measured at `5548c97a` against step 3 at `67e7f5f5` with a harness outside the repository
+       (the same JSON item answered in process by each request shape, built with feature `json`;
+       callgrind, release, the run of 1,200 requests less the run of 200 over 1,000, three runs of
+       each build with jemalloc and with glibc's allocator in brackets, every run the same): a
+       staged page costs 478 fewer and the rest is within 24: a page route 17,717 against 18,195
+       (18,960 against 19,500), one with a middleware 18,001 against 18,479 (19,241 against
+       19,781), a staged route beside an unstaged one 17,723 against 18,201 (18,985 against
+       19,517), an API request 13,057 against 13,059 (14,089 against 14,075), its 404 12,227
+       against 12,251 (13,366 against 13,369) and a page's 18,087 against 18,101 (19,996 against
+       20,010), and an unstaged route 7,030 against 7,019 and 7,076 against 7,065 in an API's
+       module (7,834 against 7,823 and 7,882 against 7,871). A service of no framework in the same
+       harness (tower's `service_fn` answering the same JSON) counted 3,190 (3,568) in both builds,
+       so the builds are comparable; a plain axum router, which shares no code with Corten either,
+       counted 7,059 against 7,092 (8,073 against 8,106), axum's own code compiled differently
+       beside a different Corten ([Choice 28](#choice-fixed-stages) has its profile). The
+       differences of 2 to 24 are the size of what one harness build moves the same Corten code
+       (up to 8, [Choice 28](#choice-fixed-stages)), so they are reported as the same, not as a gain or a loss. Wall times
+       (in process, one CPU, jemalloc, seven runs of 200,000 requests alternating the builds, on
+       Docker Desktop) differ by less than their runs do: an API request 2,626 ns against 2,683
+       (runs 1,874 to 3,485), a page 3,748 against 3,963 (2,894 to 6,397) and an unstaged route
+       1,077 against 1,119 (847 to 1,804).
+
+       The body is two words: none for an empty one and one box for any other, the bytes of a whole
+       one included. Held as bytes beside a box, four words where axum's body was two, it made a
+       `Response<Body>` 144 bytes rather than 128, and every request moves one through the stages:
+       `memcpy` was called 40 to 57 times a request rather than under once, and an API request cost
+       13,393, its 404 12,416 and a page's 404 18,561 (jemalloc, five runs, every run the same, on
+       an uncommitted variant built without feature `json`), 246 to 468 more than step 3 in the
+       same runs (13,009, 12,170 and 18,093). With the body two words, `memcpy`'s cost on the API
+       request is step 3's to the instruction (1,594,184 over the run), and a compile-time assertion
+       keeps `Response<Body>` at 128 bytes or fewer. A JSON body read whole by `Json` under an API,
+       now through Corten's reader, costs 409 fewer: a `POST` 14,165 against 14,574 (15,707 against
+       15,969), and in wall time a median of 2,694 ns against 3,372, though the two builds' runs overlap (2,062
+       to 2,930 against 2,249 to 3,728). A
+       [`live`](guide/live-data.md) stream's events are Corten's writer's: one patch event with its
+       id, read from the response's body, costs 2,161 instructions against axum's `Sse` 4,982
+       (2,402 against 4,074), its buffer sized for the fragment up front; grown from empty, as
+       axum's was, it cost 4,451 (3,461) in an earlier build of the harness. A feed's live event (a
+       row written, its patch read from the stream) costs 28 to 36 more, 7,553 to 7,561 against
+       7,525 (7,668 to 7,674 against 7,560 to 7,573, about 100 more): corten-feed's body
+       (`FeedBody`, which names no Corten type) boxes its stream, and Corten boxes that body as it
+       boxes any other, so each event passes one more `poll_frame` than axum's one box did, and a
+       stream opens with one more allocation. Not taken out: one box needs a stream type Corten can
+       box itself, which `FeedBody` cannot name (its stream holds an `async fn`'s future) without
+       making the public `FeedBody` generic, for 0.5% of an event (1.5% with glibc).
 
     Not chosen: keeping axum's router and handlers, which this Choice held until the seam above
     was measured (functions named for axum, tower or matchit were 2.5% of the item page's user
@@ -1033,16 +1047,19 @@ rules something out.
     route for axum's router, which Corten's now does itself (`corten::middleware::MatchedPath`), and
     `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
-    Stands on: measured (callgrind, release, two runs each with jemalloc and glibc, every run the
-    same, with feature `json`, a `POST` of a JSON body read by `Json` under an API, step 4
-    uncommitted against step 3 at `67e7f5f5`: 14,164 instructions against 14,574); measured
-    (callgrind, release, two runs each with jemalloc and glibc, every run the
-    same, a `live` stream of 1,200 fragments less one of 200, over 1,000, step 4 uncommitted
-    against step 3 at `67e7f5f5`: 2,140 instructions an event against 4,960, 4,451 with the
-    event's buffer grown from empty); measured (callgrind, release, two runs each with jemalloc
-    and glibc, every run the same, step 4 uncommitted on `67e7f5f5` against step 3 at `67e7f5f5`, the dispatch suite
-    unchanged: a staged page about 480 fewer, every other request within 31; on an uncommitted
-    variant with the body four words, five runs with jemalloc and three with glibc, an API
+    Stands on: measured (callgrind, release, three runs of each build with jemalloc and with
+    glibc, every run the same, step 4 at `5548c97a` against step 3 at `67e7f5f5`, built with
+    feature `json`, in a harness outside the repository that answers the same JSON item by each
+    request shape, the dispatch suite unchanged: a staged page 478 fewer, every other request
+    within 24, a `POST` read by `Json` 14,165 against 14,574, a service of no framework 3,190 in
+    both; a `live` stream of 1,200 fragments less one of 200, over 1,000, 2,161 instructions an
+    event against 4,982; a feed's live event 7,553 to 7,561 against 7,525); measured (wall time,
+    in process, one CPU, jemalloc, seven runs of 200,000 requests each alternating the builds on
+    Docker Desktop, the same commits: medians within the runs' ranges for an API request, a page
+    and an unstaged route, and a JSON `POST`, whose runs overlap too, 2,694 ns against 3,372); measured (callgrind,
+    release, two runs, an earlier build of the live harness on the uncommitted tree: 4,451
+    instructions an event with the buffer grown from empty); measured (callgrind, release, on an
+    uncommitted variant with the body four words, without feature `json`, five runs with jemalloc and three with glibc, an API
     request 384 more, its 404 246 and a page's 404 468, against step 3's 13,009, 12,170 and
     18,093 in the same runs, with `memcpy` called 40 to 57 times a
     request); reasoned (LLVM copies a move of up to 128 bytes on x86-64 with inline stores and
@@ -1102,7 +1119,8 @@ rules something out.
     stages as combinators on Corten's router, on the uncommitted variant of `8ddeaea2`, and the
     unstaged route's lane, at `bfa20380`, with the suite unchanged; 2026-11-10, Corten's handler
     traits (step 3) at `6d78a069` against step 2 at `7bba1e2b`, with the suite unchanged;
-    2026-11-10, axum gone (step 4) against step 3 at `67e7f5f5`, with the suite unchanged; 2026-11-09, the lane boxed
+    2026-11-10, axum gone (step 4) at `5548c97a` against step 3 at `67e7f5f5`, with the suite
+    unchanged; 2026-11-09, the lane boxed
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
     the `laned` variant of `fa0b1525`.
 
@@ -1287,21 +1305,20 @@ rules something out.
     The bound stays where it was, below: the plain axum router counted the same in both builds
     (7,085; 8,099 with glibc), so these are the lane's own cost and not a difference between
     builds, and the next change to an unstaged route has about 29 left in the app's routes and 14
-    in an API's module. Step 4 ([Choice 25](#choice-axum-router)) leaves it at 7,022 and 7,073
-    (7,826 and 7,879 with glibc), 10 more than step 3 in the same harness (7,012 and 7,063): about
-    10 left in each. The plain axum router stopped being a control at that step: the same source
-    with the same features counted 7,057 against 7,088 (8,071 against 8,102 with glibc), since in
-    step 3's build its header array's `into_response_parts` was a call (272 instructions a
-    request) and collecting its body another (354), and in step 4's both are inlined: it moved
-    with how axum's code compiled beside a different Corten. From step 4 the control is a service
-    of no framework (tower's `service_fn` reading the id from the path and answering the same
-    JSON), which shares no code with Corten or axum. In the harness built with it, it counted 3,190
-    in both builds (3,568 with glibc), so the builds do not differ, and the unstaged route 7,030
-    against 7,019 and 7,076 against 7,065 (7,834 against 7,823 and 7,882 against 7,871 with
-    glibc): 11 more, the route's own. The same Corten code counted up to 8 fewer in the harness
-    built before the control was added, which is how far a harness's own build moves it. The
-    bound is met, barely: 7,030 is 98 over 6,932 and 7,076 is 94 over 6,982 (jemalloc), so the
-    next change that adds to an unstaged route reopens this.
+    in an API's module. Step 4 ([Choice 25](#choice-axum-router)) leaves it at 7,030 and 7,076 at `5548c97a`
+    (7,834 and 7,882 with glibc), against 7,019 and 7,065 for step 3 in the same harness (7,823
+    and 7,871). The plain axum router stopped being a control at that step: the same source with
+    the same features counted 7,059 against 7,092 (8,073 against 8,106 with glibc), since in step
+    3's build its header array's `into_response_parts` was a call (272 instructions a request)
+    and collecting its body another (354), and in step 4's both are inlined: it moved with how
+    axum's code compiled beside a different Corten. From step 4 the control is a service of no
+    framework (tower's `service_fn` reading the id from the path and answering the same JSON),
+    which shares no code with Corten or axum: it counted 3,190 in both builds (3,568 with glibc),
+    so the builds do not differ. The unstaged route's 11 more is no larger than what one build of
+    the harness moves the same Corten code (up to 8 between two builds of it), so it is not read
+    as the route's own cost or as noise, only as the bound's room: 7,030 is 98 over 6,932 and
+    7,076 is 94 over 6,982 (jemalloc), so the next change that adds to an unstaged route reopens
+    this.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -1331,8 +1348,9 @@ rules something out.
     and 7,797, and 8,099 for a plain axum router in both); measured (callgrind, release, three runs each, every run the same, an uncommitted
     variant of `fa0b1525` whose `laned` adds the headers as it takes the handler's answer: 7,022
     and 7,083 against 7,003 and 7,068); measured (callgrind, release, three runs each with
-    jemalloc and with glibc, every run the same, step 4's uncommitted tree against step 3 at
-    `67e7f5f5`, in the harness with the control: an unstaged route 7,030 against 7,019 and
+    jemalloc and with glibc, every run the same, step 4 at `5548c97a` against step 3 at
+    `67e7f5f5`, in the harness with the control (the same numbers on the uncommitted tree before
+    review): an unstaged route 7,030 against 7,019 and
     7,076 in an API's module against 7,065, a `service_fn` with no framework 3,190 in both, a
     plain axum router 7,059 against 7,092; with glibc 7,834 against 7,823, 7,882 against 7,871,
     3,568 in both, and 8,073 against 8,106; the harness built before the control, two runs each:
@@ -1395,8 +1413,8 @@ rules something out.
     unstaged route through its lane at `bfa20380` against its checks in its handler at
     `8ddeaea2`; 2026-11-09, the stages as combinators on Corten's router, on an uncommitted
     variant of `8ddeaea2`; 2026-11-09, the `laned` variant of `fa0b1525`; 2026-11-10, the
-    unstaged route and the plain axum router with axum gone (step 4) against step 3 at
-    `67e7f5f5`, with the profile of each, and the `service_fn` control with no framework in both
+    unstaged route and the plain axum router with axum gone (step 4) at `5548c97a` against step 3
+    at `67e7f5f5`, with the profile of each, and the `service_fn` control with no framework in both
     builds (three runs each with jemalloc and with glibc, every run the same).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by

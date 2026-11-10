@@ -1059,8 +1059,7 @@ What it saves, measured with callgrind on a release build answering the same JSO
 unstaged (7,076 in an API's module) with jemalloc, where a plain axum router takes 7,059 and a
 service of no framework that only answers the JSON 3,190, and 7,834 unstaged with glibc's
 allocator (7,882 in an API's module; axum: 8,073; no framework: 3,568). Through the stages
-beside it the same answer took 17,724 (18,986 with glibc), in a build of the harness without
-the no-framework service, where the unstaged route took 7,022 (two runs each). What the route keeps (the host check, the headers above, the panic
+beside it the same answer takes 17,723 (18,985 with glibc). What the route keeps (the host check, the headers above, the panic
 catch and an API's JSON) the router runs around its handler in place of the stages, so its 404
 and 405 meet it as its handler's answer does; when that was measured it cost 71 instructions
 more than the same checks written into the handler (86 in an API's module; 67 and 82 with
