@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use crate::app::{CREATED, DRAFT, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, QTY, RenameForm, SellForm, WEIGHT, url};
 use crate::glyphs;
 use crate::ui::{
-    alert::{AlertEmphasis, FailedAlert},
+    alert::{AlertEmphasis, FailedAlert, FormAlert},
     button::{Button, ButtonSize, ButtonVariant},
     card::{Card, CardContent, CardFooter, CardHeader},
     checkbox::Checkbox,
@@ -798,6 +798,7 @@ pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
                 <p>"That did not go through, and may not have been saved. Check and try again."</p>
             </FailedAlert>
             <form class={Rename} method="post" action={url::Rename} data-patch>
+                <FormAlert errors={errors} emphasis={AlertEmphasis::Soft} />
                 <Field id={e.id(f.name)} label="Name" hint="" error={e.message(f.name)}>
                     <input class={Input {}} value={name} {..e.control(f.name)}>
                 </Field>

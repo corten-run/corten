@@ -8,7 +8,7 @@
 //! | `POST /archive`, `POST /watch` | the menu's form actions: archive the draft, watch the card |
 //! | `POST /save` | saving the draft, answered with a toast |
 //! | `POST /publish` | publishing the draft: refused (409, the card sold meanwhile), answered with a failed toast |
-//! | `POST /rename` | the rename dialog's form: refused, the dialog drawn open; else back to the draft, whose toaster says it was renamed (`req.redirect_with_notice`) |
+//! | `POST /rename` | the rename dialog's form: refused (no name, or the other draft's, which the form's own message says in `FormAlert`), the dialog drawn open; else back to the draft, whose toaster says it was renamed (`req.redirect_with_notice`) |
 //! | `GET /help` | the menu's link |
 //! | `GET /orders?page=2` | the seller's orders, a page of them: the kit's other components |
 //! | `POST /orders/settings` | the shipping settings: back to the orders, whose toaster says they were saved |
@@ -312,18 +312,27 @@ pub struct RenameForm {
     pub name: String,
 }
 
-/// A name is required: refused, the dialog comes back drawn open with the error, as a patch or in
-/// the whole page.
+/// The name of the seller's other draft, which this one cannot take.
+pub const TAKEN: &str = "Holiday lot";
+
+/// A name is required, and not the other draft's: refused, the dialog comes back drawn open with
+/// the error, as a patch or in the whole page. A taken name is said for the whole form too
+/// (`FormAlert`), as it is about the other draft, not about what was typed.
 async fn rename(req: Req, Form(form): Form<RenameForm>) -> HtmlResult {
     let name = form.name.trim();
-    if !name.is_empty() {
+    let f = RenameForm::FIELDS;
+    let mut errors = Errors::new();
+    if name.is_empty() {
+        errors.add(f.name, "Give the draft a name.");
+    } else if name.eq_ignore_ascii_case(TAKEN) {
+        errors.add_form(format!("Your other draft is named {TAKEN}. Rename that one first, or choose another name."));
+        errors.add(f.name, "Choose another name.");
+    } else {
         return req.redirect_with_notice(
             &url::Home { tab: None, sale: None, period: None, sold: None },
             format_args!("Renamed to {name}."),
         );
     }
-    let mut errors = Errors::new();
-    errors.add(RenameForm::FIELDS.name, "Give the draft a name.");
     let page = || async { gallery(&req, Gallery { rename: RenameDialog { name, errors: &errors }, ..listings(&req, &errors) }) };
     req.invalid(&errors, RenameDialog { name, errors: &errors }, page).await
 }
@@ -622,6 +631,18 @@ mod tests {
         assert!(
             home.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" aria-label"#),
             "drawn closed: {home}"
+        );
+        assert!(!patch.contains("alert__destructive alert__soft\" role="), "a field's error alone draws no form alert: {patch}");
+        // The other draft's name: the form says why, in the kit's destructive alert, and the field
+        // is marked.
+        let taken = rename(" holiday LOT ").mode(Mode::Action).await;
+        assert_eq!(taken.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let taken = taken.text();
+        assert!(
+            taken.contains(r#"<div class="alert__alert alert__destructive alert__soft" role="alert"><p>Your other draft is named Holiday lot. Rename that one first, or choose another name.</p></div>"#)
+                && taken.contains("Choose another name.")
+                && taken.contains("aria-invalid=\"true\""),
+            "{taken}"
         );
     }
 
