@@ -8,7 +8,7 @@ test("versioned round namespace and safe defaults", () => {
   assert.doesNotMatch(inventory.laravel.label, /Livewire/);
   assert.deepEqual(parseArgs(["w1"], { corten: {} }).apps, ["corten"]);
   assert.equal(parseArgs(["w1"], {}).passes, 3);
-  assert.equal(parseArgs(["r17"], inventory).apps.length, 18);
+  assert.equal(parseArgs(["r17"], inventory).apps.length, 20);
   assert.equal(parseArgs(["r18", "--build"], inventory).round, "r18");
   assert.throws(() => parseArgs(["r17"], { corten: {} }));
   assert.deepEqual(roundIdentity("r999"), { kind: "official", number: 999 });
@@ -40,8 +40,8 @@ test("load rejects dirty-built or unproven images even at the same HEAD", () => 
   assert.throws(() => imageProvenance(labels, "b".repeat(40), false));
   assert.equal(imageProvenance({}, commit, true).builtDirty, true);
 });
-test("legacy selection cannot silently reduce the eighteen-app default", () => {
+test("legacy selection cannot silently reduce the twenty-app default", () => {
   const child = spawnSync(process.execPath, ["--input-type=module", "-e", `import { inventory, parseArgs } from ${JSON.stringify(new URL("./run-contract.mjs", import.meta.url).href)}; console.log(parseArgs(['w1'], inventory).apps.length);`], { env: { ...process.env, BENCH_APPS: "corten", BENCH_TIER: "matched" }, encoding: "utf8" });
   assert.equal(child.status, 0, child.stderr);
-  assert.equal(child.stdout.trim(), "18");
+  assert.equal(child.stdout.trim(), "20");
 });

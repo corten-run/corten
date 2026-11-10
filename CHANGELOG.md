@@ -254,12 +254,13 @@ Corten is pre-1.0, so any minor version may change the API.
     `render_cost` (median of 3) reads one in 304.8 µs through serde_json and 185.5 µs. Its
     `render_cost` checks the 500 responses read the same both ways.
 35. Live streams are compressed (feature `compress`). A `corten::live` or feed response to a client
-    that accepts zstd or brotli is one compressed stream per connection, flushed after every
-    event, with the context kept between events. On a 33-row list (6,126 B an event), measured:
-    the first event 425 B with zstd 1 and each redraw 16-23 B, where every event was 6,126 B;
-    brotli 4 gives 376 B, then 13-23 B. A stream holds about 470 KiB (zstd, 64 KiB window) or
-    800 KiB (brotli) while open, and all of them share a 256 MiB budget past which a new stream is
-    sent as it is. Gzip-only clients get streams as they are. Asked for by the Chase Sets pilot
+    that accepts zstd or gzip is one compressed stream per connection, flushed after every event,
+    with the context kept between events; never brotli
+    ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131),
+    under Fixed). On a 33-row list (6,126 B an event), measured: the first event 425 B with zstd 1
+    and each redraw 16-23 B, where every event was 6,126 B. A stream holds about 470 KiB (zstd,
+    64 KiB window) or 344 KiB (gzip) while open, and all of them share a 256 MiB budget past which
+    a new stream is sent as it is. Asked for by the Chase Sets pilot
     ([#24 corten::live responses are never compressed](https://github.com/todd-skelton/corten/issues/24)).
 36. `SubmitKey` (in the prelude): one submission of a form, so a write whose answer was lost and
     is sent again applies once. A form struct takes a `SubmitKey` field and draws it with
@@ -2308,7 +2309,7 @@ Corten is pre-1.0, so any minor version may change the API.
     app makes as it is sent (an export of every order, an archive), from a stream of
     `Result<Bytes, E>`. It is pulled only as fast as the client reads and dropped when the client
     leaves, it keeps `Media`'s file name, headers and caching, and a text type is compressed a
-    chunk at a time (zstd or brotli, as an event stream is), its frame ended when the stream ends;
+    chunk at a time (zstd or gzip, as an event stream is), its frame ended when the stream ends;
     an event stream that ends now ends its frame too, where a decoder that checks for the end
     took it as cut short. A failure after it began, or a stream that does not make the length it
     said, ends the connection without the body's end and is logged. auction-room's bid history is
@@ -2551,10 +2552,112 @@ Corten is pre-1.0, so any minor version may change the API.
     (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
     link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
+277. The kit's `status_dot` has `LiveDot { tone }`, the dot of a live view's badge: its opacity
+    pulses while the `<corten-live>` around it is live, so a glance tells a live view from a frozen
+    one, and is still while it connects, reconnects or has closed or ended, before the runtime
+    runs, without JavaScript and outside a `<corten-live>`. It is still under
+    `prefers-reduced-motion: reduce`, pulses in the system's text color under forced colors as
+    `Progress`'s sweep moves. The guides give the rules that make the words beside it follow the
+    stream too ("Live" only while it is live, "Not live" otherwise and without JavaScript).
+    Not breaking: `StatusDot` is unchanged (its doc test no longer names a class a live form
+    could have), and `corten ui add status_dot --merge` takes `LiveDot`. The kit's new rules
+    add 195 bytes to the stylesheet of every app that draws a `StatusDot`, as the two share one:
+    measured on the ui-gallery's served `components.css`, 60,666 bytes with them where it was
+    60,471 (gzip 10,056 against 10,012, brotli 8,856 against 8,814, Node's zlib at gzip level 9
+    and brotli's default; the earlier size is the served file without the new rules). The
+    ui-gallery's orders page has a live badge with those words, whose own three rules bring the
+    served file to 60,833 bytes (gzip 10,081, brotli 8,876), and the smoke test puts it inside a
+    `<corten-live>` and checks it in each state
+    ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
+277. `bench/fullstack` measures what each production default costs in CPU a request under load:
+    `cost-under-load.sh` builds card-market's round image as it is and with each `ablate/` patch,
+    and `ab.mjs` loads the page and the JSON at a fixed 300 a second and with 64 users, alternating,
+    on a droplet's pinned CPU; `cost-under-load.mjs` gives each default's microseconds a request.
+    Three rounds on a c-8 (the README's "What each production default costs under load"): for a
+    browser, compression is 45 of the page's 85 microseconds at 64 users (53%) and 25 of the JSON's
+    57 (44%); no other default is separated from the run's order and noise: the page's `ETag`,
+    7.7% of its instructions under callgrind, measures 6 microseconds there, as do defaults with
+    almost no instructions. `ab.mjs` now starts each round one image later, gives k6 the load CPUs
+    a round gives an app serving from memory (`BENCH_FIXTURE_LOAD_CPUS`), never reads an earlier
+    run's file, writes the rows so far to `summary.partial.json` after each one, and on a failed k6
+    run stops and removes the app; `cost-under-load.sh` reuses a `cbd-*` image only when its label
+    says it was built from the same source, and writes `source.txt` beside the results (its commit
+    unknown in a copy with no `.git`, as a droplet gets), which now keep the droplet's script and
+    CPU (`run.sh`, `host.txt`)
+    ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)).
+278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
+    after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
+    apps: how long it takes to be ready, cold and warm, and after an edit how long a completion
+    inside the item page's markup and the errors for an unknown field there take. In one run on a
+    desktop, with rust-analyzer's experimental diagnostics on (off by default, when only `cargo
+    check` on save shows the error), both had medians under 0.1 s inside Corten's `html!` and
+    Maud's, against 5 to 10 s inside Topcoat's and Leptos's `view!`; Corten's macro call there
+    is about a fifth the size of the others', so this is not a like-for-like comparison with
+    Maud's, and the errors' times partly measure each file. `results/dev-loop-default` has the
+    same run with those diagnostics off. `docker-rebuild.mjs` times each
+    anchor app's own `docker build` after the edit with BuildKit's cache warm, both on the builder
+    that built it and on a new builder given only the exported layer cache. That second case is
+    what a hosted CI runner restoring a cache gets. Since BuildKit exports no cache mount, it
+    rebuilds an app whose Dockerfile copies its source before building, as both of these do, about
+    as if from clean. Only those two apps run by default, for time, and the README says what the
+    others' Dockerfiles do instead. The results are in `results/dev-loop`, and `summarize.mjs`
+    prints both.
+    The time from a save to the page showing it under each stack's development server is not
+    measured, and the bench README says why
+    ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
+279. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
+    tokens, `choice-list-gap` and `choice-list-legend-gap` (.75rem each, the values the two
+    stylesheets printed and kept equal by hand), so a theme with tighter choice lists sets them once
+    and the copies stay the kit's. Nothing changes for an app that keeps its copies. One set up by an
+    older kit that takes the new copies adds the two tokens `corten ui add checkboxes --merge` (or
+    `radio_group`, or `--force` for a copy without edits) names, as the kit's theme has them,
+    before it starts. The kit theme's two declarations and the two `var()`s in each stylesheet make
+    the ui-gallery's served `components.css` 60,608 bytes where it was 60,471 (gzip 10,039 against
+    10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier
+    size is the served file with the literals put back). The ui-gallery's smoke test checks both
+    groups at the kit's values and at a theme's. Asked for by the Chase Sets pilot, which edited
+    both copies to .5rem
+    ([#1082 Kit RadioGroup and Checkboxes print their fieldset's gap and legend margin as literals kept equal by hand, so a theme with tighter choice lists edits both copies](https://github.com/corten-run/corten/issues/1082)).
+280. The kit's `StatusTone` has `Text`, the color of the text around the dot: in a badge, the
+    badge's, so `<span class={Badge { tone, .. }}><StatusDot tone={StatusTone::Text} />"Open"</span>`
+    writes a computed tone once, on the badge, and a dot that takes it cannot disagree with it. It
+    shows on a `Solid` badge's fill too, where a dot in the badge's own tone was the fill's color
+    and could not be seen; the kit doc and guide say a dot in a badge takes it. `LiveDot` takes it
+    as well. Under forced colors it is `CanvasText`, as every tone is.
+    A dot in another tone in a badge still compiles: kit files are copied into an app one by one,
+    so the dot has no badge type to check against. Not
+    breaking: the other tones are unchanged, and `corten ui add status_dot --merge` takes `Text`.
+    The kit's rule adds 42 bytes to the stylesheet (measured on the ui-gallery's served
+    `components.css`: 60,920 bytes against 60,878, gzip 10,099 against 10,089, brotli 8,900
+    against 8,884, with the rule taken out for the earlier size). The ui-gallery's badges use it,
+    and its smoke test checks the dot is the badge's text color in a soft badge and a solid one, and
+    that a `Success` dot beside plain text is the theme's success color
+    ([#1092 Kit StatusDot and Badge take separate tone enums, so a badge with a computed tone writes it twice and a mismatched pair compiles](https://github.com/corten-run/corten/issues/1092)).
+281. The kit's `Tabs` and `Segmented` (with `SegmentedLinks` and `SegmentedRadios`) take every
+    choice's weight and the chosen one's text color from two theme tokens, `tab-font-weight` (500)
+    and `tab-selected-color` (a reference, `"{foreground}"`, in both theme files), so a design
+    system whose chosen tab is its brand color, or whose choices are semibold, sets them once and
+    the copies stay the kit's. Nothing changes for an app that keeps its copies, and the kit's look
+    is the same. One set up by an older kit that takes the new copies adds the two tokens
+    `corten ui add tabs --merge` (or `segmented`, or `--force` for a copy without edits) names, the
+    color in both theme files, before it starts. A checked `SegmentedRadio` under the pointer keeps the
+    chosen color: its hover rule weighed more than the checked one and drew it in `--foreground`,
+    which only showed once the two could differ. The kit's contrast test checks the chosen text on
+    `--background`, its raised surface, in both themes. The theme's declarations and the two
+    `var()`s in each stylesheet, with the hover rule's selector, make the ui-gallery's served
+    `components.css` 61,306 bytes where it was 61,057 (gzip 10,156 against 10,126, brotli 8,947
+    against 8,925, Node's zlib at gzip level 9 and brotli's default); the earlier size is the
+    served file just before this change, with the LiveDot and `StatusTone::Text` rules (277, 280).
+    The ui-gallery's smoke test checks a tab, a segmented choice, a `SegmentedLinks` link and a
+    `SegmentedRadio` at the kit's values and at a theme's, and each of the four chosen under the
+    pointer.
+    Asked for by the Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen
+    choice in `--primary` at 600
+    ([#1123 Kit Segmented and Tabs draw the chosen choice in --foreground at weight 500 as literals, so a theme whose chosen tab is its primary color edits both copies](https://github.com/corten-run/corten/issues/1123)).
 282. `#[derive(Row)]` (`corten::feed::Row`, the derive and the trait at once): a feed row's key is
     the field marked `#[row(id)]`, in place of the `impl Row` each row wrote by hand, so a renamed
     key field moves the key with it. The row's `Clone` and `Serialize` stay in its derive list
-    (design Choice 32). A row with no field marked or two, an id that is not text (a type that
+    (design Choice 33). A row with no field marked or two, an id that is not text (a type that
     derefs to `str`: `String`, `Box<str>`, `Arc<str>`, `&'static str`, `Cow<'static, str>`), an
     enum, a unit struct, a `row` attribute on the struct, or one other than `#[row(id)]` on a
     field does not compile, and the trait's `Send` and `Sync` still hold. The listings-feed,
@@ -2564,6 +2667,20 @@ Corten is pre-1.0, so any minor version may change the API.
     bytes (`tests/derived_row.rs` compares a snapshot and a replayed patch with a hand-written
     row's), so nothing on the request path changed to measure
     ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
+283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
+    `apps/express`), each written its framework's usual way with htmx as the other server-rendered
+    apps are: the item page, the catalog page, the localized marketplace page and the live price
+    stream. Each app's own tests (`python -m unittest`, `node --test`) cover the marketplace page
+    (formatting, rows, links, the cross-site check, both sources); the catalog and item pages are
+    covered by the shared gates, and the live stream only by the live benchmark. FastAPI's records are Pydantic models, so a
+    record that is not one is a 502, and its item API clients have no connection cap, as the
+    README's item API rule asks. Neither framework has
+    CSRF protection of its own, so each refuses a cross-site post by its `Sec-Fetch-Site` or
+    `Origin`, as the Gin and Drogon apps do. Both join the catalog and marketplace gates, CI's matrix
+    and official rounds, which now need all twenty apps, so no marketplace round is compared with
+    one of eighteen. Neither has a build step, so build-cost rows say so.
+    They take Spring Boot's and Django's places among the matched tier's four most used frameworks
+    ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3766,9 +3883,10 @@ Corten is pre-1.0, so any minor version may change the API.
     `https://github.com/corten-run/corten` (and with it `corten-cli`'s binstall download URL), and
     the template's README and AGENTS.md, SECURITY.md's advisory link, CONTRIBUTING.md's trusted
     publisher (with a step to re-point crates published before the move), the README, the guides
-    and design notes, the benchmark README and `corten-ui`'s doc link name it. The crates have no
-    `homepage` until `https://corten.run` serves the landing page (it repeated `repository`, which
-    Cargo advises against). The published 0.1.0 crates keep the old URLs until the next version
+    and design notes, the benchmark README, the benchmark rounds' `raw.txt` notes and `corten-ui`'s
+    doc link name it. The crates have no `homepage` until `https://corten.run` serves the landing
+    page (it repeated `repository`, which Cargo advises against). The published 0.1.0 crates keep
+    the old URLs until the next version
     ([#836 After the move to corten-run, the crates, docs, template and automations still name todd-skelton/corten](https://github.com/corten-run/corten/issues/836)).
 143. A bench/fullstack round can run each load phase three or five times (`droplet.mjs --passes 3`,
     `BENCH_PASSES`; one pass unless set), the apps taking turns between passes, and records the
@@ -4088,8 +4206,56 @@ Corten is pre-1.0, so any minor version may change the API.
     again (a `chunk()` inside a `timeout` or `select!`) no longer starts the idle time again, so a
     client that went quiet is given up on after the idle time however the handler reads
     ([#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074)).
+168. The kit's `Pagination` and `PreviousNext` take `on:link`, the handler each link they draw runs
+    as it joins the page (its `on:connect`), so a pager under a table sorted in place whose pages
+    read its order passes `corten_ui::ordered::link(target, [sorted(&SupplyId)], signal)` and
+    each link opens its page in the order on screen. Before, a pager's links could carry no
+    handler, so such a page drew its own pager. Breaking for a copy's callers: every
+    `<Pagination>` and `<PreviousNext>` writes `on:link`, `None::<Handler>` for none (take the
+    kit's file with `corten ui add pagination --merge`). `ordered::link` takes an `HTMLElement`,
+    as a prop's handler gets one, so the compiler no longer refuses another element; one that is
+    not an `<a>` or `<area>` is reported in the console and left. `ordered.js` as served (its
+    comments removed) grows from 3,182 to 3,384 bytes (gzip 1,188 to 1,269, brotli 1,003 to
+    1,074), loaded only by a page that calls it. A pager step that writes is a form the app draws
+    in place of the pager, which the guides now say
+    ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
+
+169. The image `corten new` writes (and card-market's) runs jemalloc with
+    `MALLOC_CONF=background_thread:true,tcache_max:65536`, a third line beside the two that preload
+    it. The background thread returns a flood's memory while the app is idle (eight floods of
+    unfinished heads left 13 to 16 MiB of `memory.current`, against 118 to 139 without it and 406 to
+    455 on glibc's allocator, three runs each). The larger thread cache keeps brotli's buffers:
+    brotli responses took 19.3 to 19.4 page faults each on average before, and none now. glibc's own
+    tunables were tried: fewer arenas changed nothing, and a lower mmap threshold left about 180
+    MiB, still growing. `bench/fullstack/flood-memory.mjs` drives the floods, `alloc-faults.mjs`
+    counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
+    every row and removes its app however the run ends
+    ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 
 ### Fixed
+- A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
+  gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
+  flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
+  more than 16 KiB only once more of the body arrived, so the last change before a quiet spell
+  showed one event late: in Playwright's WebKit 27.2 on Windows an event of 16,385 bytes showed
+  only when the next chunk came, with Corten's encoder and with Node's at quality 4 and 11, and
+  with empty blocks after it; gzip and identity were on time at every size tried, to 200 KB, in all
+  three engines. Safari was not tried. Gzip-only clients, sent streams uncompressed before, get
+  gzip too, and a client that accepts only brotli now gets streams uncompressed. The watchlist
+  smoke checks that an event of about 50 KB with nothing after it is dispatched in each engine
+  (from a route the app adds only with `SMOKE_TRUSTED_TYPES=1`; only Playwright's Windows WebKit
+  would be sent brotli, the others getting zstd and Linux's WebKit asking for gzip, not
+  brotli, so only there would it catch a brotli stream), and a streamed download to a client that
+  sends `gzip, deflate, br` is now tested to be gzip; a new test fills the stream budget and checks
+  that a stream's share comes back when it is dropped unread, read to its end or cut by an error. A
+  gzip stream reserves 360 KiB where a brotli one reserved 1,000 KiB. It sends more than brotli 4,
+  most for a large region: a redraw of one row of 40 (2.7 KB) is 60 to 69 bytes against 20 to 40,
+  of 250 (17 KB) 477 to 524 against 23 to 91, and of 640 (45 KB, past gzip's 32 KiB window, so
+  most of the event before is out of reach) about 6,210 bytes, where brotli's 64 KiB window still
+  reached it; and more CPU: an event of the 2.7 KB redraw, made and sent through the compression
+  layer, is about 286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470;
+  callgrind, three runs each, within 20 instructions)
+  ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
@@ -6208,6 +6374,32 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+78. Which tables sort in place is decided and measured: every table whose page has all its rows,
+    also when other routes read its order. `bench/browser/sort-cost.mjs` times a sort click with
+    `rows::sort` against a swap of the server-sorted table, fetched at the click or before it, and
+    writes each case's median and range with the engine's version. With no network the three cases'
+    ranges overlap in Chromium, Firefox and WebKit from 50 to 2,000 rows, the lowest median changing
+    with size and engine; with 40 ms of latency, in Chromium, in place is faster on the text columns
+    by 59 to 63 ms up to 500 rows (15 ms against 77 at 50 rows). A swap fetched ahead matches it
+    only when the answer is in before the click (a hover that rests through the fetch, or a tap, not
+    measured; not a key press or a quick click). The UI guide has the tables. Design Rule 3's
+    `rows::sort` exception says its search of the page is closed and that any other reader, a link
+    or a `GET` form in the part or anything outside it (a kit pager through its `on:link`), names
+    the table with `sorted(&Id)`; new design Limit 24 says one that does not sends the order the
+    page was drawn with, which nothing notices, and what would lift that
+    ([#960 Design Rule 3's rows::sort exception grows with each kind of form or link that reads the order: decide which tables sort in place and which ask the server](https://github.com/corten-run/corten/issues/960)).
+79. `corten-ui`'s `CheckboxGroup` doc and the UI guide's row say the group checks again on a box's
+    `change`, which the browser does not send when a script sets `checked`, so a "Select all" or
+    "Clear" button dispatches `input` and `change` on each box it set, as the kit's own scripts do;
+    without them the group keeps its old answer, so a cleared group is sent and only the handler
+    refuses it, a group the script filled after the user cleared it is still refused by the browser,
+    and back/forward to a page the runtime swapped in brings a box the user has not changed back
+    as drawn. The requests and forms guide says the runtime puts back a value a script set when the
+    script dispatched one of those events. The ui-gallery's smoke test checks both directions in
+    each engine, the filled one from a box other than the first, and the back/forward case where
+    the browser has the Navigation API, and the watchlist's checks that a value set with them is
+    put back
+    ([#1098 CheckboxGroup docs do not say a script that sets checked must dispatch change, so the group keeps its old validity](https://github.com/corten-run/corten/issues/1098)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

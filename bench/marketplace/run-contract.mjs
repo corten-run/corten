@@ -30,7 +30,7 @@ export function parseArgs(args, inventory) {
   const identity = roundIdentity(args[0]);
   const options = catalogArgs([args[0].replace(/^[rw]/, "c"), ...args.slice(1)], inventory);
   if (identity.kind === "official") {
-    assert.deepEqual([...options.apps].sort(), [...apps].sort(), "official rounds require all eighteen apps; use wN for development");
+    assert.deepEqual([...options.apps].sort(), [...apps].sort(), "official rounds require all twenty apps; use wN for development");
     assert.equal(options.passes, 3, "official rounds require three passes");
     assert.equal(options.checkOnly, false, "use wN for check-only development");
   }
