@@ -59,7 +59,9 @@
 //!
 //! During a rolling deploy a page from the old version can ask a new server for an old URL. It
 //! gets the current file with `Cache-Control: no-cache`, so nothing caches the mismatch, under
-//! the current file's strong tag, so a range of it is answered as this version's is.
+//! the current file's strong tag, and a range of it is answered as this version's is. A server
+//! cannot tell an older version from a newer one, so an old server answers a new URL the same way
+//! (`docs/design.md#choice-asset-ranges` has what that costs a player).
 
 use std::{
     collections::HashMap,
@@ -839,11 +841,14 @@ impl Assets {
         // other method ignore `Range`. A versioned URL, this version's or an old one's, is
         // answered in part under the strong tag of the bytes it sends: Safari plays a video only
         // from ranges, and every deploy renames every file, so refusing an old URL would stop a
-        // cached page's clip for every Safari visitor until it reloads. A deploy between two
-        // ranges changes that tag, so a client that sends `If-Range` gets the whole file; one that
-        // does not may join ranges of two versions, the risk a fleet partway through a deploy
-        // already carries. The favicon's URL outlives every deploy under a weak tag, so it is sent
-        // whole. `If-Range` holds for the strong tag compared byte for byte, so a weak tag or a
+        // cached page's clip for every Safari visitor until it reloads. The trade: while a fleet
+        // runs two versions, or across a deploy between two ranges, a file whose bytes changed can
+        // be answered from either version at either URL, so a client that sends `If-Range` gets
+        // the whole file and one that does not may join ranges of two versions (sending other
+        // versions' URLs whole prevented that, and Safari would not play them). A file whose bytes
+        // did not change has the same tag and bytes in both. The favicon's URL outlives every
+        // deploy under a weak tag, so it is sent whole. `If-Range` holds for the strong tag
+        // compared byte for byte, so a weak tag or a
         // date never matches (RFC 9110's strong comparison; the files have no date). No
         // `Accept-Ranges`: a browser asks for a range unprompted, and the header would cost every
         // file's answer (#1133).
@@ -1373,6 +1378,19 @@ mod tests {
             .unwrap();
         assert_eq!(moved.status(), StatusCode::OK, "bytes that changed under an old URL are sent whole to If-Range");
         assert_eq!(body(moved).await.len(), 100);
+        let same = url.replacen(assets.version(), "000000000000", 1);
+        let same = app
+            .clone()
+            .oneshot(
+                Request::get(&same)
+                    .header(header::RANGE, "bytes=10-19")
+                    .header(header::IF_RANGE, tag.to_str().unwrap())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(same.status(), StatusCode::PARTIAL_CONTENT, "bytes unchanged under an old URL keep the range to If-Range");
         let kept = get(&[(header::RANGE, "bytes=10-19"), (header::IF_NONE_MATCH, tag.to_str().unwrap())]).await.unwrap();
         assert_eq!(kept.status(), StatusCode::NOT_MODIFIED);
         let head = app
