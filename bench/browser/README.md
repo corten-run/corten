@@ -48,7 +48,7 @@ node summarize.mjs <round>   # the client-heavy table in docs/performance.md, fr
 ```
 
 On a Linux droplet: `node bench/fullstack/droplet.mjs <round> --ssh-key <id> --suite browser`
-runs the eighteen-app browser pass of `bench/fullstack` and then `run-all.mjs`.
+runs the twenty-app browser pass of `bench/fullstack` and then `run-all.mjs`.
 
 Takeover on the server-rendered pages is the time from the parser finishing to the app being
 ready, less the rendering of any frame the browser paints in between: Chromium paints the

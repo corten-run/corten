@@ -1,4 +1,4 @@
-# Full-stack comparison: one marketplace item page in eighteen apps
+# Full-stack comparison: one marketplace item page in twenty apps
 
 This is the historical marketplace workload with **non-equivalent localization work**:
 Corten formats values per request while the other implementations use stored strings
@@ -8,7 +8,7 @@ not valid general framework speed rankings. The separate
 strings-only page work without currency or number localization. Its results start a new
 baseline; they do not replace or form a before/after comparison with the tables here.
 [Marketplace v2](../marketplace/README.md) implements equivalent request-time locale formatting
-in eighteen adapters, with a whole-page conformance gate and its own repeated-pass runner.
+in twenty adapters, with a whole-page conformance gate and its own repeated-pass runner.
 It starts a separate baseline and becomes the nightly workload at official r17. See the
 [nightly procedure](../marketplace/nightly.md). Compare only compatible v2 rounds, never an
 r16 or catalog c1 delta. Catalog remains an optional separate diagnostic, not a nightly duplicate.
@@ -36,6 +36,8 @@ price-alert form that posts and patches a message), and the same item as JSON, b
 | gin | Gin 1.12.0, Go 1.27, templ 0.3, htmx | [apps/gin](apps/gin) | not yet |
 | drogon | Drogon 1.9.14 (C++), CSP views, JsonCpp, htmx | [apps/drogon](apps/drogon) | not yet |
 | django | Django 6.1.2, Python 3.14, gunicorn 26 (3 sync workers), htmx | [apps/django](apps/django) | not yet |
+| fastapi | FastAPI 0.162.2, Python 3.14, Jinja2, `fastapi run` (uvicorn, one process), htmx | [apps/fastapi](apps/fastapi) | not yet |
+| express | Express 5.3.0, Node 24, EJS 7, htmx | [apps/express](apps/express) | not yet |
 | rails | Rails 8.1.4, Ruby 3.4 with YJIT, Puma (3 threads), Turbo and Stimulus | [apps/rails](apps/rails) | not yet |
 | laravel | Laravel 13.38, PHP 8.4, Octane on FrankenPHP (2 workers), Livewire 4.4 | [apps/laravel](apps/laravel) | not yet |
 | phoenix | Phoenix 1.8.16, LiveView 1.2, Elixir 1.19 on OTP 28, Bandit | [apps/phoenix](apps/phoenix) | not yet |
@@ -65,12 +67,12 @@ answers `GET /api/items/{id}` with the same JSON. A round runs parity and `look.
 server tests, with every app fetching items from the item API, so the home page they compare is
 the list of item links; `check-app.mjs`, which every app passes before it joins a round, runs
 both with items in memory, where the home page is Corten's cards, and compares the JSON. The
-tables below are from r16, with all eighteen page apps plus JSON-only aspnet-aot, each page app rendering Corten's markup
+tables below are from r16, with all eighteen page apps then plus JSON-only aspnet-aot (FastAPI and Express joined after it and have no rows yet), each page app rendering Corten's markup
 and stylesheets (caveat 12). Each app
 has the same interactions: a sort (in the browser, except where the framework renders again on
 the server: Phoenix's LiveView and Topcoat's shard, each a round trip), a form action that
 updates part of the page, and client-side navigation from the home page, each done the
-framework's usual way (htmx for Razor Pages, Spring, Django, Gin, Drogon and axum + Maud; Turbo
+framework's usual way (htmx for Razor Pages, Spring, Django, FastAPI, Express, Gin, Drogon and axum + Maud; Turbo
 for Rails; Livewire for Laravel; LiveView for Phoenix; shards, signals and a procedure for
 Topcoat).
 The item page's first response carries its first five offers in every app, and "Show all N
@@ -639,7 +641,8 @@ the commit it ran at: the first four phases at `d456063e` with local changes, th
 before the commit that adds it, and the clients that stop reading and the oversized requests run
 again at `330ff623` with none, each keeping its first pass in `earlier`; the first pass's `taken`
 is the file's header from then, marked `fromHeader`, whose time is when it was last written): Corten,
-axum-maud and the six other apps the matched tier names, ASP.NET Core as both its Razor Pages app
+axum-maud and the six other apps the matched tier then named (Next.js, Leptos, Django, Spring,
+Topcoat and ASP.NET Core), ASP.NET Core as both its Razor Pages app
 and aspnet-aot. Corten is card-market, with its own 10 s request deadline and its write limit
 raised for the probe (Method, The hardening step). The images
 were `cb-corten` and `cb-axum-maud` built at `720c8a88`, `cb-aspnet-aot` at this step's first
@@ -1290,7 +1293,8 @@ passes, a separate diagnostic build of card-market's crate run after it:
     - Build: the Dockerfile's build step on that tree. Clean is the two together: the Rust apps
       compile every crate in the build step, Phoenix, Rails and Drogon compile theirs in the
       dependency step, and npm, pip and Maven packages mostly arrive built, so only the two
-      together compare like for like, and that includes the downloads.
+      together compare like for like, and that includes the downloads. FastAPI and Express have
+      no build step, so their clean time is the dependency step alone and they have no rebuild.
     - Rebuild: the build step again after one edit, a `title` on the price-alert form's submit
       button in the file holding the item page's markup (touched in the container, so its time
       is newer than the build's by the container's clock), on the tree the clean build left, so
@@ -1441,8 +1445,10 @@ companion its documentation points to for it (tower-http for axum); a part that 
 write its own handler, error mapper or server loop is left out, as the defaults tier leaves it. The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
 rule (Corten; axum-maud, the anchor every tier shares; the three best on the tier's own measure
 and the four most used in the Stack Overflow survey, on r13 and the 2026 survey ASP.NET Core,
-Topcoat and Leptos, and Next.js, ASP.NET Core, Spring and Django; ASP.NET Core as its Razor Pages
-app in the page phases and its native AOT app in the JSON ones), are eight. An app takes part
+Topcoat and Leptos, and Next.js, ASP.NET Core, FastAPI and Express; ASP.NET Core as its Razor Pages
+app in the page phases and its native AOT app in the JSON ones), are eight. Spring Boot and Django,
+fifth and seventh in that survey, left the four when FastAPI and Express joined the bench
+([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)); they stay in the defaults tier. An app takes part
 (`matched: true` in `apps.mjs`) once it starts with its profile:
 
 1. `corten`: card-market's defaults are the profile's first two parts; `MAX_CONNECTIONS` sets
@@ -1455,7 +1461,7 @@ app in the page phases and its native AOT app in the JSON ones), are eight. An a
    are the app's own code, which the profile does not change, as no framework's error pages are
    rewritten by hand; and `axum::serve` has no header timeout or head size setting (hyper's are
    reached by writing the accept loop on hyper-util). Those columns stay unmet.
-3. `nextjs`, `leptos`, `django`, `aspnet` (and `aspnet-aot`), `spring` and `topcoat` are not
+3. `nextjs`, `leptos`, `aspnet` (and `aspnet-aot`), `topcoat`, `fastapi` and `express` are not
    in it yet: each joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
@@ -1591,26 +1597,34 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
 2. The data is synthetic (generated catalog items), sized like a production marketplace's item
    pages. The item API is a stand-in that serves the same responses as the production API (a
    Rust service with Postgres and Redis, not in this repository).
-3. JavaScript dependencies are pinned in each `package.json` without lockfiles, so transitive
-   versions can drift between builds; the other apps have lockfiles.
+3. JavaScript dependencies are pinned in each `package.json` without lockfiles, and the Python
+   apps' (Django, FastAPI) in `requirements.txt`, which pins only the packages it names, so
+   transitive versions can drift between builds; the other apps have lockfiles.
 4. The page is small. Apps with large client-side state (a seller grid of live rows) are a
    different test; see [bench/live](../live/README.md) for pushing updates.
-5. Each framework runs its production defaults with the worker count its docs give for one CPU,
-   in one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or
-   cannot serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked
-   failed. Each could be tuned further (caching, streaming, more workers). None of the apps cache
-   rendered pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at
-   their default level. Drogon runs one IO thread per core, as its docs advise, and counts its
-   cores from its CPU affinity capped by the container's CPU quota, since its own count (`0`)
-   sees every core of the host. Two settings differ from a library's default so that the item
-   API source does the same work in every app: Gin keeps as many idle connections to the item API
-   as its transport allows (Go's default keeps two per host; reqwest, .NET and Node have no
-   per-host cap), and Drogon keeps one `HttpClient` (one connection) per request in flight on
-   each thread. Drogon also hands the fixture parser's freed memory back to the system after
-   loading (`malloc_trim`), so its memory with items in memory is the items' rather than the
-   parser's peak, which the Rust apps avoid by parsing one item at a time. Drogon's JSON is
-   JsonCpp's, Drogon's default, which writes 17 significant digits (`0.79000000000000004`), so
-   its item JSON is about 3% longer than the others' for the same values.
+5. Each framework runs its production defaults with the worker count its docs give for one CPU, in
+   one CPU and 1 GiB. Nothing is tuned to get an app through a test: one that cannot start or cannot
+   serve the fixed rate (more than 5% of it never sent, or more than 1% errors) is marked failed.
+   Each could be tuned further (caching, streaming, more workers). None of the apps cache rendered
+   pages. Gin runs `gin.Default()`, so it logs every request, as Rails and Phoenix do at their
+   default level and FastAPI does (`fastapi run` keeps uvicorn's access log). Drogon runs one IO
+   thread per core, as its docs advise, and counts its cores from its CPU affinity capped by the
+   container's CPU quota, since its own count (`0`) sees every core of the host. FastAPI runs
+   `fastapi run`, one uvicorn process: its container guide gives one process a container where the
+   container is given its CPUs, and the live stream needs every client in one process. Express runs
+   one Node process with `NODE_ENV=production`, as its production guide says, which caches compiled
+   views; FastAPI's templates are Starlette's `Jinja2Templates` as created, which checks each
+   template file's time on every render (Jinja's default, which FastAPI's docs do not change). Three
+   settings differ from a library's default so that the item API source does the same work in every
+   app: Gin keeps as many idle connections to the item API as its transport allows (Go's default
+   keeps two per host; reqwest, .NET and Node have no per-host cap), FastAPI's httpx clients have no
+   connection cap (httpx's default keeps 20 idle and allows 100 in all), and Drogon keeps one
+   `HttpClient` (one connection) per request in flight on each thread. Drogon also hands the fixture
+   parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
+   in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one
+   item at a time. Drogon's JSON is JsonCpp's, Drogon's default, which writes 17 significant digits
+   (`0.79000000000000004`), so its item JSON is about 3% longer than the others' for the same
+   values.
 6. The images include the live benchmark's routes (`/live/...`), which the item page does not
    touch.
 7. Laravel ran with PHP's default `memory_limit` throughout r3 to r16. (r2's main run had raised it

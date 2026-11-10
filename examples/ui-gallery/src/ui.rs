@@ -220,6 +220,85 @@ pub const COMPONENTS: &[Component] = &[
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// A page that only links the components' stylesheet: no component of its own, so the app
+    /// lists only the kit's.
+    async fn bare(req: corten::Req) -> corten::HtmlResult {
+        use corten::{Corten, html};
+        req.page(html! {
+            <!DOCTYPE html>
+            <html lang="en">
+                <head>
+                    <title>"Kit"</title>
+                    <Corten />
+                </head>
+                <body><main></main></body>
+            </html>
+        })
+    }
+
+    #[corten::routes]
+    mod bare_url {
+        #[route("/", get = bare)]
+        pub struct Bare;
+    }
+
+    /// What `docs/guide/kit.md`'s Size says an app with every component and the theme's tokens
+    /// serves, its `components.css` as the server sends it: as it is, and as its own brotli (level
+    /// 11) and gzip (level 9), compressed once on a first request. Each within 3 percent, so a
+    /// component's small change does not fail it and the kit's growth does: it prints the numbers
+    /// to put in the guide.
+    #[tokio::test]
+    async fn the_kit_guide_states_what_every_component_costs() {
+        use corten::{App, http::header, testing::Client};
+        const SAYS: &str = "every component and the theme's tokens, nothing of its own, serves ";
+        // Its lines joined, so the sentence may wrap anywhere.
+        let guide = include_str!("../../../docs/guide/kit.md").split_whitespace().collect::<Vec<_>>().join(" ");
+        let stated = guide.split_once(SAYS).expect("the guide's Size says what the kit costs").1;
+        // "59,156 bytes, 8,580 with brotli and 9,740 with gzip, what ..." to the sentence's end.
+        let numbers: Vec<usize> = stated
+            .split(['.', ':'])
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .filter_map(|word| word.trim_end_matches(',').replace(',', "").parse().ok())
+            .filter(|&n: &usize| n > 100)
+            .collect();
+        let [raw, brotli, gzip] = numbers[..] else { panic!("three sizes after the guide's \"{SAYS}\": {numbers:?}") };
+
+        let app: Client = App::new(bare_url::router()).components(super::COMPONENTS).test();
+        let page = app.get(&bare_url::Bare).await;
+        let href = page.text().split_once(r#"<link rel="stylesheet" href=""#).expect("the stylesheet is linked").1;
+        let href = corten::Local::parse(href.split_once('"').unwrap().0).unwrap();
+        let first = app.get(&href).header(header::ACCEPT_ENCODING, "identity").await;
+        let plain_tag = first.headers()[header::ETAG].clone();
+        let sent = |coding: &'static str, tag: &'static str| {
+            let (app, href) = (app.clone(), href.clone());
+            // The stored form's tag is the file's with its coding's (`"0123..ef-br"`).
+            let stored_tag = format!("{}-{tag}\"", plain_tag.to_str().unwrap().trim_end_matches('"'));
+            async move {
+                // Until the stored forms are made (once, at the highest levels, started by the first
+                // request that accepts one), each answer is compressed per request at the fastest
+                // level, under the weak form of the file's tag (`W/"0123..ef"`).
+                for _ in 0..1200 {
+                    let res = app.get(&href).header(header::ACCEPT_ENCODING, coding).await;
+                    let got = res.headers().get(header::CONTENT_ENCODING).map(|v| v.to_str().unwrap().to_owned());
+                    if got.as_deref() == Some(coding) && res.headers()[header::ETAG] == stored_tag.as_str() {
+                        return res.bytes().len();
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+                panic!("the stored {coding} form was never sent");
+            }
+        };
+        let (now_raw, now_brotli, now_gzip) = (first.bytes().len(), sent("br", "br").await, sent("gzip", "gz").await);
+        let near = |stated: usize, now: usize| stated.abs_diff(now) * 100 <= now * 3;
+        assert!(
+            near(raw, now_raw) && near(brotli, now_brotli) && near(gzip, now_gzip),
+            "docs/guide/kit.md's Size says {raw}, {brotli} with brotli and {gzip} with gzip; the kit's components.css is now \
+             {now_raw} bytes, {now_brotli} with brotli at level 11 and {now_gzip} with gzip at level 9: put these in the guide"
+        );
+    }
+
     /// Every component the kit has is here, so the browser test covers it.
     #[test]
     fn the_gallery_has_every_kit_component() {
@@ -300,6 +379,7 @@ pub(crate) mod tests {
                 pages={3}
                 current={2}
                 link={page_link}
+                on:link={None::<corten::script::Handler>}
             />
         }
     }
@@ -309,7 +389,7 @@ pub(crate) mod tests {
     #[test]
     fn previous_next_links_the_neighbours_it_is_given_and_disables_the_others() {
         use super::pagination::PreviousNext;
-        use corten::{Href, route::Local, view::Render};
+        use corten::{Href, route::Local, script::Handler, view::Render};
         let older = Local::parse("/payouts?before=p2").unwrap();
         let html = PreviousNext {
             label: "Payouts",
@@ -317,6 +397,7 @@ pub(crate) mod tests {
             next_label: "Older",
             previous: None,
             next: Some(&older as &dyn Href),
+            on_link: &None::<Handler>,
         }
         .to_html();
         assert!(html.starts_with(r#"<nav class="pagination__pagination" aria-label="Payouts"><ul>"#), "{html}");
@@ -337,10 +418,61 @@ pub(crate) mod tests {
             next_label: "Older",
             previous: Some(&newer as &dyn Href),
             next: None,
+            on_link: &None::<Handler>,
         }
         .to_html();
         assert!(html.contains(r#"href="/payouts" rel="prev">Newer</a>"#), "{html}");
         assert!(html.contains(r#"pagination__next" aria-disabled="true">Older</span>"#), "{html}");
+    }
+
+    /// A table the pagers' pages read the order of.
+    #[derive(corten::prelude::Id)]
+    struct PagedId;
+
+    /// Pagers under a table sorted in place, whose pages read its order (#1107).
+    #[corten::component]
+    fn OrderedPagers() -> impl corten::view::Render {
+        use super::pagination::{Pagination, PreviousNext};
+        use corten::{Href, html};
+        use corten_ui::{ordered, sorted};
+        let after = crate::app::url::Orders { page: Some(3), sort: None, payout: None };
+        html! {
+            <Pagination
+                label="Pages"
+                previous_label="Previous"
+                next_label="Next"
+                pages={3}
+                current={3}
+                link={|page| crate::app::url::Orders { page: Some(page), sort: None, payout: None }}
+                on:link={ordered::link(target, [sorted(&PagedId)], signal)}
+            />
+            <PreviousNext
+                label="Payouts"
+                previous_label="Newer"
+                next_label="Older"
+                previous={None}
+                next={Some(&after as &dyn Href)}
+                on:link={ordered::link(target, [sorted(&PagedId)], signal)}
+            />
+        }
+    }
+
+    /// `on:link` is every link's `on:connect`, and a disabled end, which is not a link, has none.
+    #[test]
+    fn a_pager_puts_its_link_handler_on_every_link_it_draws() {
+        use corten::view::Render;
+        let html = OrderedPagers {}.to_html();
+        let on = r#"data-on="connect:ui.ordered.link($t,[&quot;paged&quot;],$s)""#;
+        // Pagination: Previous, pages 1 to 3, and none on its disabled Next; PreviousNext: Older.
+        assert_eq!(html.matches(on).count(), 5, "{html}");
+        assert!(html.contains(&format!(r#"href="/orders?page=2" rel="prev" {on}>Previous</a>"#)), "{html}");
+        assert!(html.contains(&format!(r#"href="/orders?page=3" aria-current="page" {on}>"#)), "{html}");
+        assert!(html.contains(r#"<span class="pagination__step pagination__next" aria-disabled="true">Next</span>"#), "{html}");
+        assert!(
+            html.contains(r#"<span class="pagination__step pagination__previous" aria-disabled="true">Newer</span>"#),
+            "{html}"
+        );
+        assert!(html.contains(&format!(r#"rel="next" {on}>Older</a>"#)), "{html}");
     }
 
     #[test]

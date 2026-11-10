@@ -98,7 +98,7 @@ node bench/marketplace/run.mjs ${s.round} --build --passes ${nightly.passes} --d
 node bench/marketplace/report.mjs bench/marketplace/results/${s.round}/summary.json > /bench/report.md
 `;
   const unit = `[Unit]
-Description=Localized marketplace ${s.round}, eighteen apps, three passes
+Description=Localized marketplace ${s.round}, twenty apps, three passes
 After=network-online.target
 Wants=network-online.target
 [Service]

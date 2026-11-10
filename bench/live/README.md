@@ -1,4 +1,4 @@
-# Live updates: one price feed pushed to many clients, in eighteen apps
+# Live updates: one price feed pushed to many clients, in twenty apps
 
 Each app holds many clients subscribed to listing-price updates, using the framework's own way
 of pushing to browsers, and sends every price it is given to every client. This measures what a
@@ -21,14 +21,16 @@ live page (a price ticker, a seller grid, a notification badge) costs to hold op
 | aspnet | Server-sent events | `TypedResults.ServerSentEvents` over a `Channel<T>` per client | [LivePrices.cs](../fullstack/apps/aspnet/LivePrices.cs) |
 | spring | Server-sent events | Spring MVC `SseEmitter` on Tomcat | [LiveController.java](../fullstack/apps/spring/src/main/java/bench/itempage/LiveController.java) |
 | django | Server-sent events | Async view, `StreamingHttpResponse`, on uvicorn (ASGI) | [live.py](../fullstack/apps/django/itempage/live.py) |
+| fastapi | Server-sent events | `EventSourceResponse`, an `asyncio.Queue` per client; FastAPI's own keepalive comment every 15 s on an idle stream | [main.py](../fullstack/apps/fastapi/app/main.py) |
+| express | Server-sent events | `res.write` on each open response | [server.mjs](../fullstack/apps/express/server.mjs) |
 | rails | WebSocket, Action Cable | A channel, `ActionCable.server.broadcast` | [prices_channel.rb](../fullstack/apps/rails/app/channels/prices_channel.rb) |
 | phoenix | WebSocket, Phoenix Channels | A channel, `Endpoint.broadcast` over PubSub | [prices_channel.ex](../fullstack/apps/phoenix/lib/item_page_web/channels/prices_channel.ex) |
 | laravel | WebSocket, Pusher protocol | Reverb, fed by a `ShouldBroadcastNow` event | [PriceTick.php](../fullstack/apps/laravel/app/Events/PriceTick.php) |
 
 Apart from Corten's, these are the full-stack comparison's apps ([bench/fullstack](../fullstack))
 with two more routes: the stream and `POST /live/publish`, which sends its JSON body on.
-Topcoat, axum + Maud, Gin and Drogon joined after r3, so they have no rows in the results below;
-the next round measures them.
+Topcoat, axum + Maud, Gin and Drogon joined after r3, and FastAPI and Express later still, so they
+have no rows in the results below; the next round measures them.
 
 ## What a run does
 

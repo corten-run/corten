@@ -13,11 +13,9 @@ use std::{
     sync::Arc,
 };
 
+use crate::extract::{FromRequestParts, OptionalFromRequestParts};
 use axum::{
-    extract::{
-        connect_info::{ConnectInfo, MockConnectInfo},
-        FromRequestParts, OptionalFromRequestParts,
-    },
+    extract::connect_info::{ConnectInfo, MockConnectInfo},
     http::{request::Parts, Extensions, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
