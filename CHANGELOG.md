@@ -4308,6 +4308,19 @@ Corten is pre-1.0, so any minor version may change the API.
     and `corten ui add card --force` (an unedited copy) or `--merge` (an edited one) takes
     `card.rs` and `card.css`
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
+177. An integer of 100 or more that markup or a message writes (`{count}`) goes into the page two
+    digits at a time, one `push_str` of a pair from a table in place of one `push` a digit. The
+    text is unchanged. Measured with callgrind (release build, three alternated runs each, 500
+    items at 2 and 12 rounds, the difference over 5,000), one item through `render_cost`'s
+    first two loops (build the page's view; build it and render its main) takes 45,032-45,528
+    instructions (median 45,319) instead of 47,089-47,292 (median 47,160), about 1,840 fewer.
+    The standard library's `NumBuffer` would raise the minimum Rust to 1.98 for no measured gain
+    on the page: counted the same way in a second session, it takes 45,186-45,427 (median 45,301)
+    against this change's 45,249-45,492 (median 45,418), less than either's spread. Alone, it
+    writes a three- or four-digit number in as many instructions as this, a six-digit one in about
+    15% fewer, a nine- or ten-digit one in about a third fewer, and one of nineteen or twenty
+    digits in half
+    ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
 ### Fixed
 - A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
