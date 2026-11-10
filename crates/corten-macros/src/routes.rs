@@ -374,18 +374,7 @@ pub fn expand(args: TokenStream, item: TokenStream) -> Result<TokenStream, Error
                 );
             }
             let mut call = call;
-            let args = if route.unstaged.is_some() {
-                // The route's path as written, for the log of a panic.
-                let mut args = handler.clone();
-                args.extend(q(
-                    ", <__A0::__A1 as ::corten::route::Route>::WRITTEN",
-                    &[TokenTree::Ident(module.clone()).into(), TokenTree::Ident(route.name.clone()).into()],
-                ));
-                args
-            } else {
-                handler.clone()
-            };
-            call.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, args))]);
+            call.extend([TokenTree::Group(Group::new(Delimiter::Parenthesis, handler.clone()))]);
             if i > 0 {
                 methods.extend([
                     TokenTree::Punct(Punct::new('.', Spacing::Alone)),

@@ -5219,6 +5219,14 @@ async fn an_unstaged_route_meets_no_stage_and_the_routes_beside_it_meet_all() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(headers.get_all("content-security-policy").iter().collect::<Vec<_>>(), ["sandbox"], "{headers:?}");
     assert!(!body.contains("<html"), "{body}");
+    // Another host's request is the 421 first, at a method or a segment the route lacks too: the
+    // router's own 405 and 404 go through the route's lane.
+    let rebound = [("host", "rebound.attacker.example:3917")];
+    for (method, uri) in [("PUT", "/ping"), ("GET", "/feeds/new")] {
+        let (status, headers, _) = call_with_any(router.clone(), method, uri, &rebound).await;
+        assert_eq!(status, StatusCode::MISDIRECTED_REQUEST, "{method} {uri}");
+        assert_eq!(headers["x-content-type-options"], "nosniff", "{method} {uri}");
+    }
 
     let (status, headers, _) = call_with(router.clone(), "GET", "/page", None, Some("text/html")).await;
     assert_eq!(status, StatusCode::OK);
@@ -5493,8 +5501,14 @@ async fn an_unstaged_route_in_an_api_answers_its_failures_as_the_api_does() {
     let (status, headers, body) = call_with_any(router.clone(), "GET", "/lane/figure", &[]).await;
     assert_eq!((status, headers["content-type"].to_str().unwrap()), (StatusCode::INTERNAL_SERVER_ERROR, problem));
     assert!(!body.contains("store is down"), "{body}");
-    let (status, _, _) = call_with_any(router, "GET", "/lane/items/7", &[("host", "rebound.attacker.example")]).await;
+    let (status, _, _) = call_with_any(router.clone(), "GET", "/lane/items/7", &[("host", "rebound.attacker.example")]).await;
     assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
+    // At a method or a segment the route lacks, it is the 421 too, not the API's JSON.
+    for (method, uri) in [("PUT", "/lane/items/7"), ("GET", "/lane/files/a")] {
+        let (status, headers, _) = call_with_any(router.clone(), method, uri, &[("host", "rebound.attacker.example")]).await;
+        assert_eq!(status, StatusCode::MISDIRECTED_REQUEST, "{method} {uri}");
+        assert!(!headers["content-type"].to_str().unwrap().contains("json"), "{method} {uri}: {headers:?}");
+    }
 
     // A name the app's policy gives is answered, and only that one.
     let named =

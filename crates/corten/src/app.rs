@@ -1371,34 +1371,23 @@ impl<M: Middleware> App<M> {
                     area_deadlines.iter().find(|(prefix, _)| crate::api::under(prefix, &mount.prefix)).map(|(_, d)| *d);
             }
         }
-        // The routes that say `unstaged`, each in the lane of the innermost API whose prefix holds
-        // it, where a failure is the API's JSON, or else the app's lane: their handlers are made
-        // here, with the lane in them, so no layer goes around the routes. An app with none has
-        // none.
+        // The routes that say `unstaged`, each through a lane of its own in place of the stages,
+        // where under the innermost API whose prefix holds it a failure is the API's JSON. An app
+        // with none has none.
         let unstaged = (!self.unstaged.0.is_empty()).then(|| {
-            let mut lanes: Vec<(Option<usize>, Arc<crate::route::Lane>)> = Vec::new();
             let mut unstaged = Table::new();
-            for crate::route::UnstagedRoute { written, path, make, .. } in self.unstaged.0 {
-                let at = mounts.iter().position(|mount| mount.contains(path));
-                let lane = match lanes.iter().find(|(lane, _)| *lane == at) {
-                    Some((_, lane)) => lane.clone(),
-                    None => {
-                        let json = at.map(|at| (mounts[at].errors.clone(), dev));
-                        let lane = Arc::new(crate::route::Lane { hosts: hosts.clone(), json });
-                        lanes.push((at, lane.clone()));
-                        lane
-                    }
-                };
-                unstaged = unstaged.unstaged(path, make(lane, written != path));
+            for crate::route::UnstagedRoute { written, path, methods, .. } in self.unstaged.0 {
+                let json = mounts.iter().find(|mount| mount.contains(path)).map(|mount| (mount.errors.clone(), dev));
+                let lane = Arc::new(crate::route::Lane { hosts: hosts.clone(), json, written });
+                unstaged = unstaged.unstaged(path, written, methods, lane);
             }
             unstaged
         });
         owned.extend(self.areas.into_iter().map(|area| area.routes));
         // One table: a path routed in two of them (the app's routes and an area's) is one route
-        // with the methods of both. The unstaged routes are beside the others, outside the stages
-        // (a wrong method at an unstaged route's path, or a segment without its suffix, is
-        // answered by the route's own handler, in its lane); an unknown URL is the app's 404
-        // inside them.
+        // with the methods of both. The unstaged routes are beside the others, each in its lane
+        // (a wrong method at an unstaged route's path, or a segment without its suffix, is the
+        // router's answer in that lane); an unknown URL is the app's 404 inside the stages.
         let mut table = Table::new();
         for routes in owned {
             table = table.merge(routes);
@@ -1856,7 +1845,8 @@ impl NotPages {
 /// beside the handler's own. Not axum's `from_fn`, which boxes the rest of the stack again for
 /// every request (`Next`) on top of the future.
 impl<S: Steps> crate::router::Stages for Layer<S> {
-    fn run(self: Arc<Self>, req: Request, route: Route) -> crate::router::Answering {
+    fn run(self: Arc<Self>, req: Request, route: &Route) -> crate::router::Answering {
+        let route = route.clone();
         Box::pin(async move { self.handle(req, route).await })
     }
 }

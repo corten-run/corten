@@ -1,6 +1,7 @@
 //! Corten's router: a request's path to its route ([matchit]), its method to one of the route's
-//! handlers, and the request through the app's stages to it ([`crate::middleware`]), or past
-//! them for a route that says `unstaged`. What [`crate::App::router`] gives, [`Router`], is a
+//! handlers, and the request through the app's stages to it ([`crate::middleware`]), or, for a
+//! route that says `unstaged`, through the few checks its lane keeps in their place
+//! ([`crate::route::Lane`]). What [`crate::App::router`] gives, [`Router`], is a
 //! tower `Service`, for a test or a server of the app's own.
 //!
 //! It answers as HTTP has a server answer, as axum's router did before it (and Corten's dispatch
@@ -39,6 +40,12 @@ pub(crate) type Answering = Pin<Box<dyn Future<Output = Response> + Send>>;
 /// A route's handler for one or more methods, with its state: what the router calls.
 pub(crate) trait Endpoint: Send + Sync + 'static {
     fn call(&self, req: Request) -> Answering;
+
+    /// The answer in an unstaged route's lane, which a handler's own future is wrapped in inside
+    /// the one box `call` would make.
+    fn call_in(&self, req: Request, lane: Arc<crate::route::Lane>) -> Answering {
+        Box::pin(crate::route::laned(lane, self.call(req)))
+    }
 }
 
 /// The handler the router chose for a request, which the stages call last.
@@ -55,6 +62,11 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     #[inline]
     fn call(&self, req: Request) -> Answering {
         Box::pin(self.handler.clone().call(req, self.state.clone()))
+    }
+
+    #[inline]
+    fn call_in(&self, req: Request, lane: Arc<crate::route::Lane>) -> Answering {
+        Box::pin(crate::route::laned(lane, self.handler.clone().call(req, self.state.clone())))
     }
 }
 
@@ -304,14 +316,23 @@ struct Placed<S> {
     /// The path as written when text follows a parameter (`/feeds/{name}.xml` at
     /// `/feeds/{name}`): a request whose segment does not end in it is a `404`.
     written: Option<&'static str>,
-    /// Whether the request goes through the stages (all but a route that says `unstaged`).
-    staged: bool,
+    through: Through,
 }
 
 impl<S> Clone for Placed<S> {
     fn clone(&self) -> Self {
-        Placed { path: self.path.clone(), methods: self.methods.clone(), written: self.written, staged: self.staged }
+        Placed { path: self.path.clone(), methods: self.methods.clone(), written: self.written, through: self.through.clone() }
     }
+}
+
+/// What a route's requests go through on the way to its handler, its `404` and its `405`.
+#[derive(Clone)]
+enum Through {
+    /// The app's stages, given to [`Router::new`].
+    App,
+    /// Its lane in their place: a route that says `unstaged`, which keeps the host check and
+    /// the few headers every answer needs ([`crate::route::Lane`]).
+    Lane(Arc<crate::route::Lane>),
 }
 
 impl<S> Default for Table<S> {
@@ -327,36 +348,52 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
 
     /// `methods` at `path`, beside the handlers already there for other methods.
     pub(crate) fn route(self, path: &str, methods: MethodSet<S>) -> Self {
-        self.place(path, methods, None, true)
+        self.place(path, methods, None, Through::App)
     }
 
     /// `methods` at `path`, written `written` (text after some parameters): a request whose
     /// segment lacks the text is a `404`, whatever its method, once the route is matched.
     pub(crate) fn written(self, path: &str, written: &'static str, methods: MethodSet<S>) -> Self {
-        self.place(path, methods, (written != path).then_some(written), true)
+        self.place(path, methods, (written != path).then_some(written), Through::App)
     }
 
-    /// `methods` at `path`, outside the stages (a route that says `unstaged`).
-    pub(crate) fn unstaged(self, path: &str, methods: MethodSet<S>) -> Self {
-        self.place(path, methods, None, false)
+    /// `methods` at `path`, written `written`, going through `lane` in place of the app's stages
+    /// (a route that says `unstaged`): its handler's answer, its `404` for a segment without the
+    /// text after a parameter and its `405` all meet it.
+    pub(crate) fn unstaged(
+        self,
+        path: &str,
+        written: &'static str,
+        methods: MethodSet<S>,
+        lane: Arc<crate::route::Lane>,
+    ) -> Self {
+        self.place(path, methods, (written != path).then_some(written), Through::Lane(lane))
     }
 
-    fn place(mut self, path: &str, methods: MethodSet<S>, written: Option<&'static str>, staged: bool) -> Self {
+    fn place(mut self, path: &str, methods: MethodSet<S>, written: Option<&'static str>, through: Through) -> Self {
         match self.routes.iter_mut().find(|placed| *placed.path == *path) {
             Some(placed) => {
-                assert!(placed.staged == staged, "corten: the route {path:?} is routed both unstaged and through the stages");
+                // An unstaged path is routed once (`App::router` refuses one routed again), so
+                // two lanes never meet at one path.
+                match (&placed.through, &through) {
+                    (Through::App, Through::App) => {}
+                    (Through::Lane(mine), Through::Lane(theirs)) => {
+                        assert!(Arc::ptr_eq(mine, theirs), "corten: the unstaged route {path:?} is routed twice")
+                    }
+                    _ => panic!("corten: the route {path:?} is routed both unstaged and through the stages"),
+                }
                 placed.methods = std::mem::take(&mut placed.methods).merge(methods);
                 placed.written = placed.written.or(written);
             }
-            None => self.routes.push(Placed { path: path.into(), methods, written, staged }),
+            None => self.routes.push(Placed { path: path.into(), methods, written, through }),
         }
         self
     }
 
     /// Both tables' routes, the handlers of a path in both together.
     pub(crate) fn merge(mut self, other: Table<S>) -> Self {
-        for Placed { path, methods, written, staged } in other.routes {
-            self = self.place(&path, methods, written, staged);
+        for Placed { path, methods, written, through } in other.routes {
+            self = self.place(&path, methods, written, through);
         }
         self
     }
@@ -368,17 +405,18 @@ impl<S: Clone + Send + Sync + 'static> Table<S> {
             path: placed.path,
             methods: placed.methods.with_state(state.clone()),
             written: placed.written,
-            staged: placed.staged,
+            through: placed.through,
         });
         Table { routes: routes.collect() }
     }
 }
 
-/// What goes around a request's route ([`crate::middleware`]'s order): the app's stages, made
-/// once by [`crate::App::router`].
+/// What goes around a request's route: the app's stages ([`crate::middleware`]'s order), made
+/// once by [`crate::App::router`], or an unstaged route's lane ([`crate::route::Lane`]) in
+/// their place.
 pub(crate) trait Stages: Send + Sync + 'static {
     /// The request through the stages, `route` last.
-    fn run(self: Arc<Self>, req: Request, route: Route) -> Answering;
+    fn run(self: Arc<Self>, req: Request, route: &Route) -> Answering;
 }
 
 /// The finished app: its routes, Corten's own, the stages around them and the app's
@@ -409,6 +447,8 @@ impl std::fmt::Debug for Router {
 struct Dispatch {
     paths: matchit::Router<usize>,
     routes: Vec<Entry>,
+    /// The app's stages, which every route but an unstaged one goes through, and an unknown
+    /// URL's `404`.
     stages: Option<Arc<dyn Stages>>,
     not_found: Route,
     not_allowed: Route,
@@ -422,7 +462,8 @@ struct Entry {
     /// What its `405` (or its `fallback`'s answer) says it allows; nothing for `any`.
     allow: Option<HeaderValue>,
     written: Option<&'static str>,
-    staged: bool,
+    /// The stages its requests go through: the app's, or its lane in their place.
+    stages: Option<Arc<dyn Stages>>,
 }
 
 impl Entry {
@@ -442,13 +483,13 @@ impl Entry {
 }
 
 impl Router {
-    /// `table`'s routes, each through `stages` unless it says `unstaged` (and an unknown URL too,
-    /// a `404`). A path the router cannot hold beside another (`/a/{x}` beside `/a/{y}`) stops
+    /// `table`'s routes, each through `stages` unless it has its own (and an unknown URL too, a
+    /// `404`). A path the router cannot hold beside another (`/a/{x}` beside `/a/{y}`) stops
     /// the app, naming it.
     pub(crate) fn new(table: Table, stages: Option<Arc<dyn Stages>>) -> Self {
         let mut paths = matchit::Router::new();
         let mut routes = Vec::with_capacity(table.routes.len());
-        for Placed { path, methods, written, staged } in table.routes {
+        for Placed { path, methods, written, through } in table.routes {
             if let Err(error) = paths.insert(&*path, routes.len()) {
                 panic!("corten: the route {path:?} cannot be routed beside the app's others: {error}");
             }
@@ -462,7 +503,10 @@ impl Router {
                 fallback: methods.fallback.map(Slot::route),
                 allow,
                 written,
-                staged,
+                stages: match through {
+                    Through::App => stages.clone(),
+                    Through::Lane(lane) => Some(lane),
+                },
             });
         }
         let not_found: Route = Arc::new(Status(StatusCode::NOT_FOUND));
@@ -508,7 +552,7 @@ impl Dispatch {
     fn answer(&self, mut req: Request, edge: bool) -> RouterFuture {
         let mut fix = Fix::of(req.method(), edge);
         let path = req.uri().path();
-        let (route, allow, staged, matched) = match self.paths.at(path) {
+        let (route, allow, stages, matched) = match self.paths.at(path) {
             Ok(found) => {
                 let entry = &self.routes[*found.value];
                 let matched = MatchedPath::new(&entry.path, req.uri(), &found.params);
@@ -518,17 +562,17 @@ impl Dispatch {
                     Some(written) if !crate::route::routes_path(written, path) => (&self.not_found, None),
                     _ => entry.pick(req.method(), &self.not_allowed),
                 };
-                (route, allow, entry.staged, Some(matched))
+                (route, allow, entry.stages.as_ref(), Some(matched))
             }
-            Err(_) => (&self.not_found, None, true, None),
+            Err(_) => (&self.not_found, None, self.stages.as_ref(), None),
         };
         fix.allow = allow.cloned();
         if let Some(matched) = matched {
             req.extensions_mut().insert(matched);
         }
-        let answering = match &self.stages {
-            Some(stages) if staged => stages.clone().run(req, route.clone()),
-            _ => route.call(req),
+        let answering = match stages {
+            Some(stages) => stages.clone().run(req, route),
+            None => route.call(req),
         };
         RouterFuture { answering, fix: Some(fix) }
     }

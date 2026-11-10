@@ -821,7 +821,8 @@ rules something out.
        protocol.
     4. Stages: what goes around a route ([Choice 28](#choice-fixed-stages)), each one a future that
        wraps the route's, in Corten's one order. A route goes through all of them or says
-       `unstaged` and goes through none; nothing reorders them.
+       `unstaged` and goes through none, its lane in their place (the host check and the headers
+       every answer needs); nothing reorders them.
     5. Router: the method and path to a route (matchit), boxing once per request.
     6. Handlers: a function whose arguments are read from the request and its stages, and whose
        answer is any `IntoResponse`, a raw `Response` included.
@@ -860,7 +861,7 @@ rules something out.
        no `async` block per stage is measured again on the new router before it replaces them.
        It lands when the suite passes and callgrind (CONTRIBUTING.md, Pull requests) counts no
        more on card-market's item page, its JSON and an API request than axum's router does.
-       The router has landed, and step 2 has not: the suite passes unchanged, and every request
+       It has landed. With the router (at `373a10f9`) the suite passes unchanged, and every request
        measured costs less (jemalloc,
        median of five runs in process, three over a socket): card-market's item page 79,731
        instructions against 82,792 and its JSON 59,754 against 63,008; an API request 13,112
@@ -869,10 +870,26 @@ rules something out.
        in the same build (7,099). Most of it is fewer copies of the request and fewer allocations
        (`memcpy`, `malloc` and `free` about 1,100 fewer on the API request). The stages kept their
        shape, now one boxed future the router calls (`router::Stages`) rather than a tower
-       service in a `route_layer`. Two parts of the step remain: an unstaged route skips the
-       stages in the router now, but its host check, its suffix check and its `405` are still
-       written into its handler (`UnstagedHandler`); and the prototype's one future with no
-       `async` block per stage is not measured on this router yet. Step 3 waits for both. Until
+       service in a `route_layer`: the prototype's shape, the stages written as combinators with
+       no `async` block of their own, measured on this router (on `8ddeaea2`, the same
+       requests), cost more on every one, an API request 13,226 against 13,120, a page route
+       18,657 against 18,298, one with a middleware 18,788 against 18,583 and their 404s 12,263 and
+       18,458 against 12,171 and 18,091 with jemalloc, and 16 to 298 more with glibc's allocator,
+       so it was not taken. An unstaged route is a route whose stages are left out: the router
+       sends it through a lane (`route::Lane`) in their place, a `Stages` of its own that holds
+       the host check, the headers every unstaged answer gets, the panic catch and, under an API's
+       prefix, the API's JSON, and that its `404` for a segment without the text after its
+       parameter and its `405`, the router's own, meet as its handler's answer does. Its handler
+       is the app's; the lane wraps the handler's future inside the one box the router makes for
+       it. It costs 71 instructions more than those checks written into the handler: 7,003
+       against 6,932 (7,068 against 6,982 in an API's module; 7,812 against 7,745 with glibc),
+       inside the about 100 [Choice 28](#choice-fixed-stages) allows, and every staged request
+       about 10 fewer, from the route handed to the stages by reference. Two other shapes were
+       measured and not taken: the lane boxed as a second future of its own, 110 more than the
+       checks in the handler; and the lane held by the router's future, outside `Stages`, 55
+       fewer for an unstaged route but 19 to 60 more for every staged one, which are most of an
+       app's requests. Wall times (in process, seven runs of 200,000 requests) differ by less than
+       their runs do: 859 ns against 839 for an unstaged route, with runs from 768 to 1,064. Until
        step 3, a handler that takes one of axum's readers of what axum's router stored (`Path`,
        `RawPathParams`, `MatchedPath`), which compiles and would answer `500` to every request, is
        refused when its route is made, by its arguments' type names (`std::any::type_name`, whose
@@ -912,7 +929,21 @@ rules something out.
     Stands on: measured (callgrind, release, jemalloc and glibc, five runs each in process and
     three over one keep-alive socket for card-market, Corten's router at `373a10f9` against
     axum's at `7e897bd6`: every request above costs less, by 1,547 to 3,254 instructions with
-    jemalloc and 1,791 to 4,135 with glibc); measured (callgrind, release, five runs each: an `unstaged` route in the app's
+    jemalloc and 1,791 to 4,135 with glibc); measured (callgrind, release, three runs each, every
+    run the same, Corten's router at `8ddeaea2` against an uncommitted variant of it with the
+    stages written as combinators, the variant [Choice 28](#choice-fixed-stages) measured on axum's
+    router carried over: 92 to 367 instructions more a staged request with jemalloc, 16 to 298 with
+    glibc); measured (callgrind, release, five runs each with jemalloc and three with glibc, every
+    run the same, an unstaged route through its lane at `LANE_COMMIT` against its checks in its
+    handler at `8ddeaea2`: 7,003 against 6,932 in the app's routes and 7,068 against 6,982 in an
+    API's with jemalloc, 7,812 against 7,745 and 7,879 against 7,797 with glibc; an API request
+    13,110 against 13,120, a page route 18,288 against 18,298, one with a middleware 18,573
+    against 18,583, a staged route beside an unstaged one 18,299 against 18,323, and the 404s
+    12,167 and 18,099 against 12,171 and 18,091; on uncommitted variants, one run each, the lane
+    as a second boxed future 7,042 and the lane held by the router's future 6,877, with staged
+    requests 19 to 60 more; wall times, seven runs each in process with jemalloc, medians 859 ns
+    against 839 unstaged, 882 against 942 in an API's module and 1,989 against 2,066 for an API
+    request, every pair's runs overlapping by more than the difference); measured (callgrind, release, five runs each: an `unstaged` route in the app's
     routes with its host check in a `route_layer` 9,230 (9,229 to 9,233) instructions a request against 8,479 with its checks in the handler, both
     with jemalloc, against main `c65c10ec`); measured (callgrind, release, five runs each, the
     prototype at `7cea4970` on the branch `codex/pipeline-prototype`, not yet pushed or merged, its
@@ -945,7 +976,9 @@ rules something out.
     the prototype at `7cea4970`; 2026-11-09, the `route_layer` runs, on an uncommitted variant of
     `3452790a` with the host check and the API's JSON in a `route_layer`; 2026-11-09, the
     dispatch suite on axum 0.8.9, hyper 1.12.0 and matchit 0.8.4, at `599c302a`; 2026-11-09,
-    Corten's router against axum's, at `373a10f9`, with the suite unchanged.
+    Corten's router against axum's, at `373a10f9`, with the suite unchanged; 2026-11-09, the
+    stages as combinators on Corten's router, on the uncommitted variant of `8ddeaea2`, and the
+    unstaged route's lane, at `LANE_COMMIT`, with the suite unchanged.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
     `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
@@ -1041,23 +1074,26 @@ rules something out.
     goes without. It is for an answer that must cost what the router alone costs and is the same
     for everyone who can reach it (a public JSON figure a CDN fronts, a value every client polls),
     beside pages that need every stage; the stages add about 1.5 times what its handler, the
-    router and the host check cost together (below). What it keeps adds no stage and no layer: its handler, wrapped
-    when the app is built, runs the host check every request meets, so a DNS-rebound page reads it
-    no more than any route, and, under an API's prefix, writes a failure as the API writes every
-    failure there (its Problem Details or `Api::errors` shape), the router's `405` and a segment
-    without its suffix among them, so an API's clients still read every failure under its prefix
-    as JSON; only a failure boxes anything for that. A tower layer around those routes alone
-    (axum's `route_layer`) was built first and measured at 751 instructions a request more than
-    the same checks in the handler (jemalloc), since axum boxes a layered route again and clones
-    that box on each request. Its answer gets `X-Content-Type-Options: nosniff` and its own
+    router and the host check cost together (below). What it keeps adds no stage and no layer: a
+    lane (`route::Lane`) the router runs in place of the stages, wrapping the handler's future
+    inside the one box the router makes for it, runs the host check every request meets, so a
+    DNS-rebound page reads it no more than any route, and, under an API's prefix, writes a failure
+    as the API writes every failure there (its Problem Details or `Api::errors` shape), the
+    router's `405` and a segment without its suffix among them, so an API's clients still read
+    every failure under its prefix as JSON; only a failure boxes anything for that. A tower layer
+    around those routes alone (axum's `route_layer`) was built first and measured at 751
+    instructions a request more than the same checks in the handler (jemalloc), since axum boxes a
+    layered route again and clones that box on each request; the lane costs 71 more than the same
+    checks in the handler, for one place that says what goes around a route
+    ([Choice 25](#choice-axum-router), step 2, has the shapes measured). Its answer gets `X-Content-Type-Options: nosniff` and its own
     `Content-Security-Policy: sandbox` beside any the handler set, whatever its type, both
-    added in its handler's own future: a browser takes it only as the type it
+    added as the lane takes its answer: a browser takes it only as the type it
     says, a page of the app's cannot load it as a script (`script-src 'self'` trusts every URL of
     the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
     client that reads it as data sees nothing else change, and a PDF the browser opens still shows
     in Chrome's, Edge's and Firefox's viewers; an answer that sets a cookie is
     `private, no-cache` (`no-store` when it says one) with no CDN caching header, so no shared cache hands one
-    visitor's cookie to another; a panic is logged and answered `500` in the same future. It
+    visitor's cookie to another; a panic is logged and answered `500` by the lane. It
     answers `get` alone and its handler reads no body: no same-origin check covers it, a form
     posted to it needs no preflight, so any site could make its visitors send one, and no deadline
     would end a slow body. An unstaged route whose path can answer at one of Corten's own paths
@@ -1076,9 +1112,12 @@ rules something out.
     raw request first is a tower layer around the whole app ([Limit 12](#limit-fixed-stages)).
     Nor presets that keep some stages and drop others, each another order to
     read and test, with no app yet needing one (`unstaged` is one more, no stage at all, which
-    listings-feed's sequence route uses, and all it keeps is written into its handler); nor the stages rewritten as combinators, measured
-    on a variant that is not in the repository (Stands on): about 200 to 360 instructions fewer a request with glibc's allocator,
-    but about 200 to 263 more with jemalloc, which the images preload; nor making the stages cheap
+    listings-feed's sequence route uses, and all it keeps is a lane of its own the router runs in
+    place of the stages, [Choice 25](#choice-axum-router), step 2); nor the stages rewritten as combinators, measured
+    on variants that are not in the repository (Stands on): on axum's router about 200 to 360
+    instructions fewer a request with glibc's allocator but about 200 to 263 more with jemalloc,
+    which the images preload, and on Corten's own router more with both, 92 to 367 with jemalloc
+    and 16 to 298 with glibc; nor making the stages cheap
     enough for such a route instead, since a profile of the staged request (callgrind, jemalloc)
     spread the 13,266 instructions it costs over a route without them across the stages' own work
     (the tag's hash and body read, 3,494 of them; the security headers, 2,371; the error page's
@@ -1111,9 +1150,10 @@ rules something out.
     the check (8,479 against 7,559): a change that adds more than the about 100 instructions two
     builds of the same code differ by (measured on the pipeline prototype, which the repository
     does not hold) reopens this. The router of Corten's own ([Choice 25](#choice-axum-router),
-    step 2) took it under, not dropping the check: an unstaged route now costs 6,932 instructions
+    step 2) took it under, not dropping the check: an unstaged route then cost 6,932 instructions
     against 7,099 for a plain axum router in the same build (jemalloc; 7,745 against 8,117 with
-    glibc), and the bound is the about 100 over 6,932.
+    glibc). Its checks then left its handler for a lane the router runs in place of its stages,
+    71 more (7,003; 7,812 with glibc), and the bound is now about 100 over that 7,003, below.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -1136,7 +1176,13 @@ rules something out.
     match against the app's names (`security::named`, about 400 in the profile)); measured
     (callgrind, release, five runs each, the same handler on Corten's router at `373a10f9`:
     unstaged 6,932 with jemalloc and 7,745 with glibc in every run, against 7,099 and 8,117 for a
-    plain axum router in the same build); measured
+    plain axum router in the same build); measured (callgrind, release, five runs each, the same
+    handler through its lane at `LANE_COMMIT`: 7,003 with jemalloc in every run and 7,068 in an
+    API's module, against 6,932 and 6,982 with its checks in its handler at `8ddeaea2`, and 7,085
+    for a plain axum router in both builds; 7,812 and 7,879 with glibc, three runs, against 7,745
+    and 7,797); measured (callgrind, release, three runs each, the stages written as combinators
+    on Corten's router, an uncommitted variant of `8ddeaea2`: 92 to 367 instructions more a
+    staged request with jemalloc and 16 to 298 with glibc); measured
     (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
     `3452790a`: of the 13,266 instructions the stages add to a request, the tag's hash and body
     read 3,494, the security headers 2,371, and the error page's plumbing, the signal and the
@@ -1162,8 +1208,9 @@ rules something out.
     browser the runtime supports shows a PDF sent with a sandbox differently from one sent without
     it; or no
     app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
-    than about 100 instructions over the 6,932 measured on Corten's router with jemalloc (2% under a
-    plain axum router's 7,099 in the same build); or a request outside every area costs more than twice
+    than about 100 instructions over the 7,003 measured through its lane with jemalloc, against a
+    plain axum router in the same build (7,085 there), the control that shows how far two builds
+    differ; or a request outside every area costs more than twice
     the about 200 instructions measured here over the build before area middleware (the lookup
     and any layout effect together; layout alone moved a whole request by about 280). Area
     middleware has no switch, so the next check builds current main with the prefix lookup taken
@@ -1184,7 +1231,10 @@ rules something out.
     downloads both, so Safari was not run), and
     [WebKit bug 284594](https://bugs.webkit.org/show_bug.cgi?id=284594), fixed in December 2024,
     was read; 2026-11-09, the unstaged route on Corten's router at `373a10f9` against axum's
-    plain router in the same build ([Choice 25](#choice-axum-router), step 2).
+    plain router in the same build ([Choice 25](#choice-axum-router), step 2); 2026-11-09, the
+    unstaged route through its lane at `LANE_COMMIT` against its checks in its handler at
+    `8ddeaea2`; 2026-11-09, the stages as combinators on Corten's router, on an uncommitted
+    variant of `8ddeaea2`.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports

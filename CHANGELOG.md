@@ -25,8 +25,8 @@ Corten is pre-1.0, so any minor version may change the API.
   the module of the innermost area or API whose prefix holds it, whose parameter can reach an
   area's or API's prefix, or whose path is routed again in another module (a parameter's name or
   the text after it, `{n}.xml`, does not make it another). The listings-feed example's
-  sequence route uses it. Measured with callgrind (jemalloc), on Corten's own router: 6,932
-  instructions a request unstaged against 18,288 through the stages, and 7,099 for a plain axum router.
+  sequence route uses it. Measured with callgrind (jemalloc), on Corten's own router: 7,003
+  instructions a request unstaged against 18,299 through the stages, and 7,085 for a plain axum router.
 
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent
@@ -2649,7 +2649,12 @@ Corten is pre-1.0, so any minor version may change the API.
   known length, an error page included, carries `Content-Length` from the router. A path
   parameter that is not its type says "Cannot parse `x` to a `u32`", where axum named the
   value's index in a route's parameters, and one after which the route writes text no longer
-  adds serde's reason. axum's `matched-path` feature is off.
+  adds serde's reason. axum's `matched-path` feature is off. An `unstaged` route's host check,
+  headers, panic catch and API JSON are a lane the router runs in place of its stages rather than
+  code wrapped around its handler, with nothing an app sees changed; it costs 71 instructions
+  more a request (7,003 against 6,932, callgrind, jemalloc; 67 with glibc; wall times did not
+  differ beyond their runs), and a staged request about 10 fewer. The stages stay one boxed
+  future: written as combinators on this router they cost 92 to 367 more a request.
 
 - Nightly benchmarking moves to equivalent-localization marketplace v2 from official r17,
   with a new baseline, detached launch/collection and three short-window CPU, memory, load

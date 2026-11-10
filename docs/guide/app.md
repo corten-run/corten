@@ -793,7 +793,8 @@ keep-alive connection, 1,300 less 300 requests, median of three):
 In process the runs of Corten's router did not differ. On the API request most of the difference
 is fewer copies of the request and fewer allocations (`memcpy`, `malloc` and `free`, about 1,100
 fewer), and the rest is axum's route lookup by id and its futures around the stages. With glibc's
-allocator every request in process costs 1,791 to 4,135 less.
+allocator every request in process costs 1,791 to 4,135 less. An unstaged route's checks have
+since become a lane of their own, which costs it 71 more ([below](#a-route-outside-the-stages)).
 
 ## Your own middleware
 
@@ -1049,14 +1050,18 @@ shutdown, which lets an unstaged route's request run for the longer of the shutd
 app's longest deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(median of five runs, which did not differ): 6,932 instructions a request unstaged (6,982 in an
-API's module) against 18,288 through the stages beside it with jemalloc, where a plain axum router
-takes 7,099, and 7,745 unstaged with glibc's allocator (7,797 in an API's module; axum: 8,117).
+(five runs with jemalloc and three with glibc, which did not differ): 7,003 instructions a request
+unstaged (7,068 in an API's module) against 18,299 through the stages beside it with jemalloc,
+where a plain axum router takes 7,085, and 7,812 unstaged with glibc's allocator (7,879 in an
+API's module; axum: 8,099). What the route keeps (the host check, the headers above, the panic
+catch and an API's JSON) is a lane the router sends it through in place of the stages, so its 404
+and 405 meet it as its handler's answer does; it costs 71 of those instructions (67 with glibc)
+over the same checks written into the handler, and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
 check's read of `Host` and its match against the app's names. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
-1,547 of these from an unstaged request and about 2,900 from one through the stages, against
-axum's router in the same app.
+1,547 of these from an unstaged request (1,476 with the lane since) and about 2,900 from one
+through the stages, against axum's router in the same app.
 
 ## Static files
 

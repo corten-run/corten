@@ -3478,8 +3478,8 @@ methods!(get, post, put, delete, patch, head, options, trace);
 pub struct Routes(pub(crate) crate::router::Table, pub(crate) Vec<(&'static str, bool)>, pub(crate) UnstagedRoutes);
 
 /// The routes that say `unstaged`, which `App` serves outside its stages: each one's path as
-/// written, the path it is routed at, its handlers, made once `App::router` knows the route's
-/// [`Lane`], and the prefix of the area or API whose module declares it (none for the app's).
+/// written, the path it is routed at, its handlers, which `App::router` routes through the
+/// route's [`Lane`], and the prefix of the area or API whose module declares it (none for the app's).
 /// The app's, its areas' and its APIs' are gathered here.
 #[derive(Default)]
 pub(crate) struct UnstagedRoutes(pub(crate) Vec<UnstagedRoute>);
@@ -3487,14 +3487,14 @@ pub(crate) struct UnstagedRoutes(pub(crate) Vec<UnstagedRoute>);
 pub(crate) struct UnstagedRoute {
     pub(crate) written: &'static str,
     pub(crate) path: &'static str,
-    pub(crate) make: __private::MakeUnstaged<()>,
+    pub(crate) methods: crate::router::MethodSet,
     pub(crate) declared_in: Option<&'static str>,
 }
 
 impl UnstagedRoutes {
     pub(crate) fn add<R: Route + ?Sized>(&mut self, methods: __private::UnstagedMethods, declared_in: Option<&'static str>) {
         written_checked::<R>();
-        self.0.push(UnstagedRoute { written: R::WRITTEN, path: R::PATH, make: methods.0, declared_in });
+        self.0.push(UnstagedRoute { written: R::WRITTEN, path: R::PATH, methods: methods.0, declared_in });
     }
 
     /// Each one's path as written.
@@ -3734,15 +3734,100 @@ fn written_checked<R: Route + ?Sized>() {
     };
 }
 
-/// What a route that says `unstaged` meets around its handler, which `App::router` gives it: the
-/// host check every request meets (a name the app does not answer to gets a 421), and, under an
-/// API's prefix, the API's JSON for a failure, as every failure there is. One for the app and one
-/// for each API with such a route, shared by their routes.
+/// What a route that says `unstaged` goes through in place of the app's stages, which
+/// `App::router` gives it: the router's own `404` for a segment without the text it writes after
+/// a parameter, its `405`, and its handler's answer all meet it. The host check every request
+/// meets comes first (a name the app does not answer to gets a `421`, and nothing else runs). Every
+/// answer then gets `X-Content-Type-Options: nosniff`, so a browser takes it only as the type it
+/// says (a page of the app's cannot load it as a script, since `script-src 'self'` trusts every
+/// URL of the app's), and a `Content-Security-Policy: sandbox` of its own beside any policy the
+/// handler set, since a browser enforces each: whatever its type, a document it sends (an uploaded
+/// SVG) runs no script on the app's origin. Neither reads the answer's type or policy, so none fools
+/// them; an unstaged route is for data, and an answer whose script must run is not one. An answer
+/// that sets a cookie is `private, no-cache` (`no-store` when it says one), with no CDN's own
+/// caching header, so no shared cache hands one visitor's cookie to another. A handler that panics
+/// is logged with the route's path and answered `500`, as a staged one is, rather than dropping
+/// the connection. Under an API's prefix a failure after the host check is the API's JSON, as
+/// every failure there is. It wraps the handler's own future inside the one box the router makes
+/// for it ([`laned`]); only a failure under an API boxes the JSON it writes.
 pub(crate) struct Lane {
     pub(crate) hosts: crate::security::HostCheck,
     /// Under an API's prefix: how the API writes a failure, and whether the app runs under
     /// `corten dev`, where a 5xx's detail is shown.
     pub(crate) json: Option<(Option<crate::api::ErrorShape>, bool)>,
+    /// The route's path as written, for the log of a panic.
+    pub(crate) written: &'static str,
+}
+
+impl crate::router::Stages for Lane {
+    #[inline]
+    fn run(self: std::sync::Arc<Self>, req: axum::extract::Request, route: &crate::router::Route) -> crate::router::Answering {
+        if !self.hosts.answers(&req) {
+            let mut res = crate::security::misdirected();
+            res.headers_mut().insert(axum::http::header::CACHE_CONTROL, crate::cache::PRIVATE);
+            return Box::pin(std::future::ready(unstaged_headers(res)));
+        }
+        route.call_in(req, self)
+    }
+}
+
+/// `answering` in `lane`: its answer with [`unstaged_headers`], or a `500` when the handler
+/// panics, and under an API's prefix a failure as the API's JSON. Generic, so the router boxes it
+/// with the handler's own future, once.
+pub(crate) async fn laned<F>(lane: std::sync::Arc<Lane>, answering: F) -> axum::response::Response
+where
+    F: std::future::Future<Output = axum::response::Response>,
+{
+    use std::{panic::AssertUnwindSafe, task::Poll};
+    let mut answering = std::pin::pin!(answering);
+    let polled = std::future::poll_fn(|cx| match std::panic::catch_unwind(AssertUnwindSafe(|| answering.as_mut().poll(cx))) {
+        Ok(Poll::Pending) => Poll::Pending,
+        Ok(Poll::Ready(res)) => Poll::Ready(Some(res)),
+        Err(panic) => {
+            let message = crate::task::panic_message(&*panic);
+            tracing::error!("corten: {} (unstaged) panicked: {message}", lane.written);
+            Poll::Ready(None)
+        }
+    })
+    .await;
+    let res = polled.unwrap_or_else(|| {
+        axum::response::IntoResponse::into_response((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"))
+    });
+    let res = unstaged_headers(res);
+    match &lane.json {
+        Some((shape, dev)) if res.status().is_client_error() || res.status().is_server_error() => {
+            let (shape, dev) = (shape.clone(), *dev);
+            // Boxed: a failure is rare, and its future would make every answer's larger.
+            Box::pin(crate::api::json_failure(res, dev, shape.as_ref())).await
+        }
+        _ => res,
+    }
+}
+
+/// `res` with `nosniff`, `sandbox`, and no shared caching when it sets a cookie.
+fn unstaged_headers(mut res: axum::response::Response) -> axum::response::Response {
+    use axum::http::{header, HeaderValue};
+    let headers = res.headers_mut();
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+    if headers.contains_key(header::SET_COOKIE) {
+        let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
+        headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::NO_STORE } else { crate::cache::PRIVATE });
+        // A CDN reads its own before `Cache-Control`: any `*cache-control` and
+        // `surrogate-control`, as a [`crate::Public`] answer may not set.
+        let cdn: Vec<header::HeaderName> = headers
+            .keys()
+            .filter(|name| {
+                let name = name.as_str();
+                (name.ends_with("cache-control") && name != "cache-control") || name == "surrogate-control"
+            })
+            .cloned()
+            .collect();
+        for name in cdn {
+            headers.remove(name);
+        }
+    }
+    res
 }
 
 /// The crate's tests build routes by hand, to test what `App` does with any response.
@@ -3844,193 +3929,33 @@ pub mod __private {
 
     // A route that says `unstaged`: no stage runs, so the handler takes only what the request
     // itself carries (`crate::answer::Unstaged`), and what it answers is sent as it is, a raw
-    // `Response` too, with the few headers `UnstagedHandler` adds and a panic answered 500. Its
+    // `Response` too, with what the route's lane (`super::Lane`) does in place of the stages. Its
     // route's `Params` (`P`) is still required, as on any route.
 
     /// An unstaged route's handlers: only the `__unstaged_route`s of `Routes`, `Area` and `Api`
     /// take them, so a handler checked for its arguments alone cannot reach `Area::route` or
-    /// `Api::route`, which take `Methods`. They are made once the app knows the route's lane
-    /// ([`super::Lane`]), and whether its path has text after a parameter (`/{page}.xml`).
-    pub struct UnstagedMethods<S = ()>(pub(crate) MakeUnstaged<S>);
-
-    pub(crate) type MakeUnstaged<S> =
-        Box<dyn FnOnce(std::sync::Arc<super::Lane>, bool) -> crate::router::MethodSet<S> + Send + Sync>;
+    /// `Api::route`, which take `Methods`. The app routes them through the route's lane
+    /// ([`super::Lane`]) in place of its stages.
+    pub struct UnstagedMethods<S = ()>(pub(crate) crate::router::MethodSet<S>);
 
     impl<S: Clone + Send + Sync + 'static> UnstagedMethods<S> {
         /// The handlers with the state they take, as [`Methods::with_state`].
         pub fn with_state<S2: 'static>(self, state: S) -> UnstagedMethods<S2> {
-            let make = self.0;
-            UnstagedMethods(Box::new(move |lane, suffixed| make(lane, suffixed).with_state(state)))
+            UnstagedMethods(self.0.with_state(state))
         }
-    }
-
-    /// An unstaged handler, whose answer always gets `X-Content-Type-Options: nosniff`, so a browser
-    /// takes it only as the type it says (a page of the app's cannot load it as a script, since
-    /// `script-src 'self'` trusts every URL of the app's), and a `Content-Security-Policy: sandbox`
-    /// of its own beside any policy the handler set, since a browser enforces each: whatever its
-    /// type, a document it sends (an uploaded SVG) runs no script on the app's origin. Neither
-    /// reads the answer's type or policy, so none fools them; an unstaged route is for data, and an
-    /// answer whose script must run is not one. An answer that sets a cookie is `private,
-    /// no-cache` (`no-store` when it says one), with no CDN's own caching header, so no shared
-    /// cache hands one visitor's cookie to another. A handler that panics is logged with the
-    /// route's path and answered `500`, as a staged one is, rather than dropping the connection.
-    /// The handler also does what the route's lane asks: a request for a host the app does not
-    /// answer to gets a `421` and never reaches it, a path whose segment lacks the text the route
-    /// writes after a parameter gets a `404`, and under an API's prefix a failure after the
-    /// host check is the API's JSON. It is the answer's handler, not a stage or a layer, so a request meets no box or step
-    /// besides the router's own; only a failure under an API boxes the JSON it writes.
-    #[derive(Clone)]
-    pub struct UnstagedHandler<H> {
-        inner: H,
-        /// The route's path as written, for the log and the suffix check.
-        written: &'static str,
-        /// Whether `written` has text after a parameter, which the router does not check.
-        suffixed: bool,
-        lane: std::sync::Arc<super::Lane>,
-    }
-
-    impl<H: Handler<T, S>, T, S> Handler<T, S> for UnstagedHandler<H>
-    where
-        H::Future: Unpin,
-    {
-        type Future = UnstagedFuture<H::Future>;
-
-        fn call(self, req: axum::extract::Request, state: S) -> Self::Future {
-            use futures_util::future::Either;
-            let json = || self.lane.json.is_some().then(|| self.lane.clone());
-            if !self.lane.hosts.answers(&req) {
-                let mut res = crate::security::misdirected();
-                res.headers_mut().insert(axum::http::header::CACHE_CONTROL, crate::cache::PRIVATE);
-                return UnstagedFuture::new(Either::Left(std::future::ready(res)), self.written, None);
-            }
-            if self.suffixed && !super::routes_path(self.written, req.uri().path()) {
-                let missing = axum::response::IntoResponse::into_response(axum::http::StatusCode::NOT_FOUND);
-                return UnstagedFuture::new(Either::Left(std::future::ready(missing)), self.written, json());
-            }
-            let lane = json();
-            UnstagedFuture::new(Either::Right(self.inner.call(req, state)), self.written, lane)
-        }
-    }
-
-    /// An unstaged route's answer to a method it has no handler for: `405`, to which the router
-    /// adds `Allow`. A handler, so the lane's checks and JSON reach it as they reach the route's.
-    #[derive(Clone)]
-    pub(crate) struct NotAllowed;
-
-    impl<S> Handler<NotAllowed, S> for NotAllowed {
-        type Future = std::future::Ready<axum::response::Response>;
-
-        fn call(self, _req: axum::extract::Request, _state: S) -> Self::Future {
-            std::future::ready(axum::response::IntoResponse::into_response(axum::http::StatusCode::METHOD_NOT_ALLOWED))
-        }
-    }
-
-    /// An unstaged handler's future: its answer with [`unstaged_headers`], or a `500` when it
-    /// panics, and under an API's prefix a failure as the API's JSON.
-    pub struct UnstagedFuture<F> {
-        state: Unstaged<F>,
-        /// The route's path as written, for the log.
-        written: &'static str,
-        /// The lane, when a failure is written as an API's JSON.
-        json: Option<std::sync::Arc<super::Lane>>,
-    }
-
-    enum Unstaged<F> {
-        Running(futures_util::future::Either<std::future::Ready<axum::response::Response>, F>),
-        Failure(std::pin::Pin<Box<dyn std::future::Future<Output = axum::response::Response> + Send>>),
-    }
-
-    impl<F> UnstagedFuture<F> {
-        fn new(
-            running: futures_util::future::Either<std::future::Ready<axum::response::Response>, F>,
-            written: &'static str,
-            json: Option<std::sync::Arc<super::Lane>>,
-        ) -> Self {
-            UnstagedFuture { state: Unstaged::Running(running), written, json }
-        }
-    }
-
-    impl<F: std::future::Future<Output = axum::response::Response> + Unpin> std::future::Future for UnstagedFuture<F> {
-        type Output = axum::response::Response;
-
-        fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
-            use std::{panic::AssertUnwindSafe, pin::Pin, task::Poll};
-            let this = &mut *self;
-            let running = match &mut this.state {
-                Unstaged::Failure(failure) => return failure.as_mut().poll(cx),
-                Unstaged::Running(running) => running,
-            };
-            let res = match std::panic::catch_unwind(AssertUnwindSafe(|| Pin::new(running).poll(cx))) {
-                Ok(Poll::Pending) => return Poll::Pending,
-                Ok(Poll::Ready(res)) => res,
-                Err(panic) => {
-                    let message = crate::task::panic_message(&*panic);
-                    tracing::error!("corten: {} (unstaged) panicked: {message}", this.written);
-                    axum::response::IntoResponse::into_response((
-                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                        "Internal Server Error",
-                    ))
-                }
-            };
-            let res = unstaged_headers(res);
-            match this.json.take() {
-                Some(lane) if res.status().is_client_error() || res.status().is_server_error() => {
-                    let mut failure = Box::pin(async move {
-                        let (shape, dev) = lane.json.as_ref().expect("a lane with JSON");
-                        crate::api::json_failure(res, *dev, shape.as_ref()).await
-                    });
-                    let polled = failure.as_mut().poll(cx);
-                    this.state = Unstaged::Failure(failure);
-                    polled
-                }
-                _ => Poll::Ready(res),
-            }
-        }
-    }
-
-    /// `res` with `nosniff`, `sandbox`, and no shared caching when it sets a cookie.
-    fn unstaged_headers(mut res: axum::response::Response) -> axum::response::Response {
-        use axum::http::{header, HeaderValue};
-        let headers = res.headers_mut();
-        headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
-        headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
-        if headers.contains_key(header::SET_COOKIE) {
-            let no_store =
-                headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
-            headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::NO_STORE } else { crate::cache::PRIVATE });
-            // A CDN reads its own before `Cache-Control`: any `*cache-control` and
-            // `surrogate-control`, as a [`crate::Public`] answer may not set.
-            let cdn: Vec<header::HeaderName> = headers
-                .keys()
-                .filter(|name| {
-                    let name = name.as_str();
-                    (name.ends_with("cache-control") && name != "cache-control") || name == "surrogate-control"
-                })
-                .cloned()
-                .collect();
-            for name in cdn {
-                headers.remove(name);
-            }
-        }
-        res
     }
 
     /// An unstaged route's `get`, its only method.
     #[inline]
-    pub fn unstaged_get<H, T, S, P, J>(handler: H, path: &'static str) -> UnstagedMethods<S>
+    pub fn unstaged_get<H, T, S, P, J>(handler: H) -> UnstagedMethods<S>
     where
         H: RouteHandler<T, S> + crate::answer::Signature<T>,
         <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
-        <<H as RouteHandler<T, S>>::Handler as Handler<T, S>>::Future: Unpin,
         <H as crate::answer::Signature<T>>::Args: crate::answer::AllUnstaged + crate::answer::Holds<P, J>,
         T: 'static,
         S: Clone + Send + Sync + 'static,
     {
-        let handler = handler.into_handler();
-        UnstagedMethods(Box::new(move |lane, suffixed| {
-            let not_allowed = UnstagedHandler { inner: NotAllowed, written: path, suffixed, lane: lane.clone() };
-            crate::router::get(UnstagedHandler { inner: handler, written: path, suffixed, lane }).fallback(not_allowed)
-        }))
+        UnstagedMethods(crate::router::get(handler.into_handler()))
     }
 
     /// A handler's rows (`Self`, [`crate::answer::Answer::Rows`]) are the ones its route names
