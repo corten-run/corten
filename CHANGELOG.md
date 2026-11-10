@@ -2663,6 +2663,34 @@ Corten is pre-1.0, so any minor version may change the API.
     Asked for by the Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen
     choice in `--primary` at 600
     ([#1123 Kit Segmented and Tabs draw the chosen choice in --foreground at weight 500 as literals, so a theme whose chosen tab is its primary color edits both copies](https://github.com/corten-run/corten/issues/1123)).
+282. `#[derive(Row)]` (`corten::feed::Row`, the derive and the trait at once): a feed row's key is
+    the field marked `#[row(id)]`, in place of the `impl Row` each row wrote by hand, so a renamed
+    key field moves the key with it. The row's `Clone` and `Serialize` stay in its derive list
+    ([design Choice 35](docs/design.md#choice-derived-row)). A row with no field marked or two, a
+    field marked twice, an id that is not text (a type that derefs to `str`: `String`, `Box<str>`,
+    `&'static str`, `Cow<'static, str>`, `Arc<str>` with serde's `rc` feature), an enum, a unit
+    struct, a `row` attribute on the struct, or one other than `#[row(id)]` on a field does not
+    compile, nor does an id serde leaves out of the JSON, where a script reads the key, or writes or
+    reads as other text than `id()` returns (`skip` and its variants, `with`, `serialize_with`,
+    `deserialize_with`, `flatten`), an id serde reads under another name than it writes it under or
+    under an `alias` too, another field serde writes or reads under the id's key (a `rename`, an `alias`, the row's
+    `rename_all` or `tag`; a flattened field's members are not checked), a row serde writes or reads as another value
+    (`into`, `transparent`, `from`, `try_from`), or a tuple struct, whose fields serde writes
+    without names (an id type's own `Serialize` and `Deserialize`, and a row's that are not serde's
+    derive, are not checked); the trait's bounds
+    (`Serialize`, `Clone`, `Send`, `Sync`, `'static`) still hold, each with a `compile_fail` example
+    on the derive. A row a `macro_rules!` declares with the id's visibility or attributes passed in
+    derives it too, and a generic row needs no bounds on its parameters: it is a row for each type
+    argument that makes it one, and a feed of one that is not does not compile. The listings-feed,
+    watchlist, seller-desk and deck-builder rows, the live benchmark's and `corten-cluster`'s take
+    it; an `impl Row` written by hand still works, for a row the derive cannot express (such as an
+    enum, a tuple struct, a key made of several fields, or an `id` that does more than return a
+    field). `corten::feed` is now a module that re-exports `corten-feed`
+    and the derive, so every `corten::feed::..` path still resolves. The feed sends the same rows and
+    patches (`tests/derived_row.rs` compares a derived row's snapshot, parsed without its epoch, and
+    its replayed patch, byte for byte, with a hand-written row's), so
+    nothing on the request path changed to measure
+    ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
     apps are: the item page, the catalog page, the localized marketplace page and the live price
@@ -2677,6 +2705,17 @@ Corten is pre-1.0, so any minor version may change the API.
     one of eighteen. Neither has a build step, so build-cost rows say so.
     They take Spring Boot's and Django's places among the matched tier's four most used frameworks
     ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
+284. Leptos joins `bench/fullstack`'s matched tier: under `PROFILE=matched` it adds axum-maud's
+    tower-http layers and a page CSP whose scripts run by the nonce Leptos makes for each
+    response, and its matched matrix meets the same 12 of 24 columns as axum-maud's
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+285. Topcoat joins `bench/fullstack`'s matched tier: under `PROFILE=matched` it runs axum-maud's
+    tower-http header layers and timeout through Topcoat's `TowerLayer` (its body limit, origin
+    check and compression are Topcoat's defaults), with `'unsafe-eval'` in its CSP (on every answer
+    the layer sets headers on) because its runtime compiles the page's expressions with `new
+    Function`. Answers Topcoat makes from an error go without the profile's headers. Its matched
+    matrix meets 13 of 24 columns
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a

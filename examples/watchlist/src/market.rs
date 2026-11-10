@@ -102,9 +102,10 @@ pub async fn simulate(market: Market, signal: Signal) {
 /// own (a native screen, an agent); the page's script writes `price_cents` and `change_bp` with
 /// the page's formats (`t.js().money(USD)`, `t.js().change(2)`), which write what the server
 /// does.
-#[derive(Clone, Debug, Serialize, Deserialize, ToJson)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToJson, Row)]
 pub struct Stock {
     /// The ticker.
+    #[row(id)]
     pub id: String,
     pub name: String,
     pub price_cents: u32,
@@ -155,12 +156,6 @@ impl Stock {
             bp if bp > 0 => "up",
             _ => "down",
         }
-    }
-}
-
-impl Row for Stock {
-    fn id(&self) -> &str {
-        &self.id
     }
 }
 

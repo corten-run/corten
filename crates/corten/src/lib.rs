@@ -100,8 +100,376 @@ macro_rules! __openapi_document {
     };
 }
 
+/// Live feeds (feature `feed`): everything [`corten_feed`] has (its crate page has the overview:
+/// routes, sync and authorization), and `#[derive(Row)]`. See the live-data guide.
 #[cfg(feature = "feed")]
-pub use corten_feed as feed;
+pub mod feed {
+    #[doc(inline)]
+    pub use corten_feed::*;
+    /// `#[derive(Row)]`: a row's [`Row::id`] is the field marked `#[row(id)]` (a
+    /// `String`, `Box<str>`, `&'static str`, `Cow<'static, str>`, `Arc<str>` with serde's `rc`
+    /// feature, or another type that derefs to `str`), so `Row` is the derive and the trait at
+    /// once, as serde's `Serialize` is. The row's `Clone` and `Serialize` stay in its derive list,
+    /// where Rust checks them and the trait's bounds. A struct row with named fields, keyed by one
+    /// of them, derives it; only a row the derive cannot express (such as an enum, a tuple struct,
+    /// a key made of several fields, or an `id` that does more than return a field) implements the
+    /// trait by hand. The derive reads the row's serde
+    /// attributes, not the id type's own `Serialize` and `Deserialize`: an id type that writes or
+    /// reads other than the text it derefs to is not checked, nor is a row whose `Serialize` or
+    /// `Deserialize` is not serde's derive. A generic row needs no bounds on its parameters: it is a `Row` for each type
+    /// argument that makes it `Clone`, `Serialize`, `Send`, `Sync` and `'static`, and a feed of
+    /// one that is not does not compile where it is built:
+    ///
+    /// ```
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Quote<P> {
+    ///     #[row(id)]
+    ///     ticker: String,
+    ///     price: P,
+    /// }
+    /// let feed = corten::feed::Feed::new([Quote { ticker: "ACME".into(), price: 1_u32 }]);
+    /// # let _ = feed;
+    /// ```
+    ///
+    /// ```compile_fail,E0277
+    /// # #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// # struct Quote<P> { #[row(id)] ticker: String, price: P }
+    /// // A `Cell` is not `Sync`, so this `Quote` is not a row.
+    /// let feed = corten::feed::Feed::new([Quote { ticker: "ACME".into(), price: std::cell::Cell::new(1_u32) }]);
+    /// ```
+    ///
+    /// ```
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     ticker: String,
+    ///     price_cents: u32,
+    /// }
+    /// # use corten::feed::Row as _;
+    /// assert_eq!(Stock { ticker: "ACME".into(), price_cents: 1 }.id(), "ACME");
+    /// ```
+    ///
+    /// What does not compile, each for its own reason.
+    ///
+    /// No field marked:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// Two fields marked:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[row(id)] isin: String }
+    /// ```
+    ///
+    /// A field marked twice:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// An id that is not text:
+    ///
+    /// ```compile_fail,E0308
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] number: u64 }
+    /// ```
+    ///
+    /// An enum:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// enum Stock { Open { #[row(id)] ticker: String } }
+    /// ```
+    ///
+    /// A unit struct:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock;
+    /// ```
+    ///
+    /// A tuple struct, whose fields serde writes without names, so a script has no key to read
+    /// (one implements the trait by hand):
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock(#[row(id)] String, u32);
+    /// ```
+    ///
+    /// A `row` attribute other than `#[row(id)]` on a field:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[row(key)] isin: String }
+    /// ```
+    ///
+    /// A `row` attribute on the struct:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[row(id)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// A row that is not `Sync` (a `Cell` in it):
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, views: std::cell::Cell<u32> }
+    /// ```
+    ///
+    /// An id serde leaves out of the JSON, where a script and a replica read the key, or writes or
+    /// reads as other text than `id()` returns (`skip`, `skip_serializing`, `skip_serializing_if`,
+    /// `skip_deserializing`, `with`, `serialize_with`, `deserialize_with`, `flatten`), one
+    /// example each:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(skip)] ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(skip_serializing)] ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(skip_deserializing)] ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// mod upper {
+    ///     pub fn serialize<S: serde::Serializer>(id: &str, s: S) -> Result<S::Ok, S::Error> {
+    ///         s.serialize_str(&id.to_uppercase())
+    ///     }
+    /// }
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(with = "upper")] ticker: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// fn upper<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    ///     <String as serde::Deserialize>::deserialize(d).map(|id| id.to_uppercase())
+    /// }
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(deserialize_with = "upper")] ticker: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize)]
+    /// struct Key { ticker: String }
+    /// impl std::ops::Deref for Key {
+    ///     type Target = str;
+    ///     fn deref(&self) -> &str { &self.ticker }
+    /// }
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(flatten)] key: Key, price_cents: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     #[serde(skip_serializing_if = "String::is_empty")]
+    ///     ticker: String,
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// fn upper<S: serde::Serializer>(id: &str, s: S) -> Result<S::Ok, S::Error> {
+    ///     s.serialize_str(&id.to_uppercase())
+    /// }
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(serialize_with = "upper")] ticker: String }
+    /// ```
+    ///
+    /// A row serde writes as another value (`into`, `transparent`), whose JSON has no id member:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize)]
+    /// struct Plain { n: u32 }
+    /// impl From<Stock> for Plain {
+    ///     fn from(s: Stock) -> Plain { Plain { n: s.n } }
+    /// }
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(into = "Plain")]
+    /// struct Stock { #[row(id)] ticker: String, n: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(transparent)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// An id serde reads under another name than it writes it, which a replica would key the row
+    /// by:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     #[serde(rename(deserialize = "name"))]
+    ///     ticker: String,
+    ///     #[serde(default)]
+    ///     name: String,
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// #[serde(rename_all(deserialize = "UPPERCASE"))]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// Or also under an `alias`, where a replica can find another member's value:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(alias = "symbol")] ticker: String, symbol: String }
+    /// ```
+    ///
+    /// Or reads as another value converted (`from`, `try_from`), so a replica's row can hold an id
+    /// other than the one its patches name:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Deserialize)]
+    /// struct Wire { ticker: String }
+    /// impl From<Wire> for Stock {
+    ///     fn from(w: Wire) -> Stock { Stock { ticker: w.ticker.to_uppercase() } }
+    /// }
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// #[serde(from = "Wire")]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Deserialize)]
+    /// struct Wire { ticker: String }
+    /// impl TryFrom<Wire> for Stock {
+    ///     type Error = String;
+    ///     fn try_from(w: Wire) -> Result<Stock, String> { Ok(Stock { ticker: w.ticker.to_uppercase() }) }
+    /// }
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// #[serde(try_from = "Wire")]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// Another member written under the id's key (a `rename`, the struct's `rename_all`, or its
+    /// `tag`), which a script would read in the id's place, a `rename` a `macro_rules!` passes in
+    /// included; a flattened field's members are not known when the derive runs, so one is not
+    /// checked:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[serde(rename = "ticker")] symbol: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(rename_all = "camelCase")]
+    /// struct Stock { #[row(id)] #[serde(rename = "listedAs")] ticker: String, listed_as: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(tag = "ticker")]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// macro_rules! stock {
+    ///     ($m:meta) => {
+    ///         #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    ///         struct Stock { #[row(id)] ticker: String, #[serde($m)] symbol: String }
+    ///     };
+    /// }
+    /// stock!(rename = "ticker");
+    /// ```
+    ///
+    /// Another member serde reads under the id's key (a `rename(deserialize = ..)` or an `alias`),
+    /// which a replica would read in the id's place:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[serde(rename(deserialize = "ticker"), default)]
+    ///     symbol: String,
+    ///     #[row(id)]
+    ///     #[serde(default)]
+    ///     ticker: String,
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, serde::Deserialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String, #[serde(alias = "ticker")] symbol: String }
+    /// ```
+    ///
+    /// Both sides are checked whether or not the row derives `Deserialize`, so a row that renames
+    /// its id for writing alone (`rename_all(serialize = ..)`) is refused too; `rename` or
+    /// `rename_all` without a side names both.
+    ///
+    /// The same rows with distinct keys compile:
+    ///
+    /// ```
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(rename_all = "camelCase", tag = "kind")]
+    /// struct Stock { #[row(id)] #[serde(rename = "listedAs")] ticker: String, #[serde(rename = "symbol")] listed_as: String }
+    /// ```
+    ///
+    /// A `row` attribute on the struct that a `macro_rules!` passes in:
+    ///
+    /// ```compile_fail
+    /// macro_rules! row {
+    ///     ($(#[$m:meta])* $name:ident) => {
+    ///         #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    ///         $(#[$m])*
+    ///         struct $name { #[row(id)] ticker: String }
+    ///     };
+    /// }
+    /// row!(#[row(id)] Stock);
+    /// ```
+    ///
+    /// A row that is not `Serialize`:
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(Clone, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// A row that borrows, so is not `'static`:
+    ///
+    /// ```compile_fail,E0478
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock<'a> { #[row(id)] ticker: &'a str }
+    /// ```
+    ///
+    /// A row that is not `Clone`:
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] ticker: String }
+    /// ```
+    ///
+    /// A row that is not `Send` (a `MutexGuard` is `Sync` but not `Send`):
+    ///
+    /// ```compile_fail,E0277
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     ticker: String,
+    ///     held: std::marker::PhantomData<std::sync::MutexGuard<'static, ()>>,
+    /// }
+    /// ```
+    pub use corten_macros::Row;
+}
 #[cfg(feature = "agent")]
 pub mod agent;
 mod ahead;
@@ -1015,6 +1383,8 @@ mod doc_examples {
     struct GettingStarted;
     #[doc = include_str!("../../../docs/guide/scripts.md")]
     struct Scripts;
+    // Its examples are feeds.
+    #[cfg(feature = "feed")]
     #[doc = include_str!("../../../docs/guide/live-data.md")]
     struct LiveData;
     #[doc = include_str!("../../../docs/guide/requests-and-forms.md")]
