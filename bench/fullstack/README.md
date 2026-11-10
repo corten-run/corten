@@ -1644,7 +1644,9 @@ is not measured doing so: every app is measured behind the same edge. `BENCH_EDG
 tier's steps without the edge, to measure what it adds to the same app.
 
 An app uses what its framework provides for each part and nothing hand-written; a part its
-framework has nothing for is left out and shows as a column not met, and no app is tuned beyond
+framework has nothing for is left out and shows as a column not met where a column reads it (no
+column reads the headers on an error answer, so an app that sends its error answers without the
+profile's headers shows that only in its item below and in the measured paragraph after the list), and no app is tuned beyond
 the profile. "Provides" is a middleware, a setting or a builder option of the framework or of the
 companion its documentation points to for it (tower-http for axum); a part that needs the app to
 write its own handler, error mapper or server loop is left out, as the defaults tier leaves it. The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
@@ -1666,8 +1668,48 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    are the app's own code, which the profile does not change, as no framework's error pages are
    rewritten by hand; and `axum::serve` has no header timeout or head size setting (hyper's are
    reached by writing the accept loop on hyper-util). Those columns stay unmet.
-3. `nextjs`, `leptos`, `aspnet` (and `aspnet-aot`), `topcoat`, `fastapi` and `express` are not
-   in it yet: each joins with its profile.
+3. `leptos`: Leptos serves through axum, so it takes axum-maud's tower-http layers beside the
+   compression it already had: the security headers, a 503 past 10 s, a 2 MiB body limit, and
+   `Cache-Control: private, no-cache` on its routes. What its fallback serves, the static files
+   and an unknown path's 404 page, goes without it, since tower-http cannot tell the two apart. A
+   page's CSP lets its scripts run by the nonce Leptos makes for each response and writes on the
+   hydration scripts (its `nonce` feature, which leptos_axum turns on), set by the shell through
+   Leptos's `ResponseOptions`; the page hydrates under it (checked in Chromium: the sort button
+   works, no CSP violation, every inline script has the nonce). Its `script-src` also lists
+   `'wasm-unsafe-eval'`, which lets the page compile its WebAssembly and runs no text as script, so
+   the matrix counts the policy strict, where Topcoat's `'unsafe-eval'` (item 4) does run text as
+   script. It misses what axum-maud misses,
+   but its page for a failed read is its own 200 with the error in it, the app's code as before.
+4. `topcoat`: Topcoat runs tower middleware as one of its own layers (`TowerLayer`, its `tower`
+   feature; tower-http is what Topcoat itself compresses with), so it takes axum-maud's tower-http
+   header layers and timeout around every request: the security headers, `Cache-Control: private,
+   no-cache` on an answer that sets none (its assets keep Topcoat's `public, max-age=31536000,
+   immutable`) and a 503 past 10 s. An answer Topcoat makes from an `Error` goes without them, since
+   `TowerLayer` passes the error through and the router makes the answer after every layer (a
+   cross-site post is refused before any layer runs): in its matrix the JSON 404, the 405, both
+   failed reads, the cross-site 403 and the 413 have no security headers or `Cache-Control` (the
+   counted columns read headers on the 200 answers only), where axum-maud's answers to the same four
+   (the JSON 404, the 405 and both failed reads) have them (axum-maud takes the cross-site post, and
+   its 3 MiB post ends in EPIPE, so it has no 403 or 413 to compare); Topcoat's own way to put a
+   header on those is `response_headers` in a hand-written layer, which the tier leaves out. Its
+   defaults already refuse a body over 2 MiB (413), refuse a cross-site form post (403, its origin
+   policy), compress, and close a request head left unfinished at 30 s. Its runtime compiles the
+   expressions it reads from the page's markup with `new Function`, so the page CSP needs
+   `'unsafe-eval'`, and the header layer sets that one CSP on every answer it sets headers on
+   (Leptos keeps answers that are not pages on axum-maud's strict policy; the `pageScripts` column
+   reads the page's only): without it Chromium blocks the runtime and the listings' sort does
+   nothing (checked in Chromium, the CSP rewritten in the browser); with it the sort works and no
+   CSP violation is reported. Topcoat has no host list, ETag for a rendered answer, liveness or
+   readiness endpoint, connection cap or head size setting (hyper 1.12's default read buffer,
+   417,792 bytes (about 408 KiB), bounds a request head; the probe's 64 KiB header fits under it),
+   and its error answers (a failed read as a 500 `text/plain`, a missing item as a 404 `text/plain`,
+   an empty 405) are the app's and Topcoat's own, which the profile does not change. Since the
+   runtime's rendered answers set no `Cache-Control`, they get the profile's `private, no-cache`,
+   which Topcoat's prefetch reads as usable for 0 ms: under the profile a prefetched link is
+   rendered again when it is followed after the prefetch's headers arrived (the browser phases click
+   without hovering, so they do not prefetch).
+5. `nextjs`, `aspnet` (and `aspnet-aot`), `fastapi` and `express` are not in it yet: each
+   joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1678,7 +1720,19 @@ answered with 950 connections held, and one past 1,050 waited until they closed 
 axum-maud met 12 and missed 12:
 the ETag, the cross-site post, the two failed reads (502 `text/plain`), the 404 and 405 formats
 (empty), the unknown Host and the 64 KiB header (200), liveness and readiness, the unfinished head
-(still held at 45 s) and the cap (answered with 1,050 held). No load phase has run in the tier yet.
+(still held at 45 s) and the cap (answered with 1,050 held). Leptos, probed the same way from
+`cb-leptos` built at `07ee94b6` (`results/conform-matched-leptos1/conformance.json`), met the
+same 12 and missed the same 12, with two of those answered differently: its failed read's page
+(200 `text/html`) and the cross-site post to its server function (302 with no `serverfnerror`).
+Topcoat, probed the same way from `cb-topcoat` built at `9a17b8ea`
+(`results/conform-matched-topcoat1/conformance.json`), met 13 and missed 11: it meets the
+cross-site post (403) and the unfinished head (closed in 30.0 s) that axum-maud misses, and misses
+the page's script CSP (`'unsafe-eval'`) that axum-maud meets. Of the misses it shares with
+axum-maud, three are answered differently: its failed reads are a 500 `text/plain` (axum-maud's a
+502) and its JSON 404 is `text/plain` (axum-maud's is empty). Not counted: its six error answers
+(the JSON 404, the 405, both failed reads, the 403 and the 413) go without the profile's headers,
+where axum-maud's answers to the same four carry them.
+No load phase has run in the tier yet.
 
 ### The hardening step
 
