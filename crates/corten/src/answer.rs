@@ -902,7 +902,8 @@ impl Media {
     /// known length the body is chunked (HTTP/1.1) and the client shows no progress;
     /// [`Media::stream_sized`] gives one. A chunk's error is anything
     /// [`Error::new`](crate::Error::new) takes: an error type (`std::io::Error`, a client's or a
-    /// store's), or a `String` or `&str` message.
+    /// store's), a `String` or `&str` message, or a [`corten::Error`](crate::Error), so a stream
+    /// made with the app's own `?` logs the error it holds.
     pub fn stream<S, E>(media_type: &'static str, chunks: S) -> Self
     where
         S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,

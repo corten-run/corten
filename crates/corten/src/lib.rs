@@ -936,7 +936,9 @@ impl<E: std::error::Error + Send + Sync + 'static> From<E> for Error {
 }
 
 /// The error it holds, with its causes and without its status, so a stream of
-/// `corten::Result<Bytes>` is a [`Media::stream`]'s chunks and logs as the error itself.
+/// `corten::Result<Bytes>` is a [`Media::stream`]'s chunks and logs as the error itself. A
+/// handler passes a `corten::Error` on with `?`, which keeps its status: `Error::new` on one
+/// makes it a 500, and a [`Refused`] in it a plain failure.
 impl From<Error> for Box<dyn std::error::Error + Send + Sync> {
     fn from(error: Error) -> Self {
         error.source

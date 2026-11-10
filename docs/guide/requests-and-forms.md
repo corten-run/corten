@@ -1290,8 +1290,7 @@ cause under its message, as a handler's error is. It cannot become an error page
 `String` or `&str` message, which is logged alone, or a `corten::Error`, so a stream made with
 the app's own `?` (of `corten::Result<Bytes>`) logs the error it holds; a type of the app's that
 only implements `Display` implements `std::error::Error` to be one.
-`Media::stream_sized(type, length, chunks)` sends a
-`Content-Length` so the browser shows progress; the stream must make exactly that many bytes, or
+`Media::stream_sized(type, length, chunks)` sends a `Content-Length` so the browser shows progress; the stream must make exactly that many bytes, or
 the connection ends there as for a failure. A text type is compressed a chunk at a time (zstd,
 else gzip, never brotli, ended when the stream ends; uncompressed for a client that takes neither
 zstd nor gzip), so make chunks of some kilobytes, a few hundred rows, not a row each. No `ETag`
