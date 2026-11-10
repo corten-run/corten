@@ -1283,7 +1283,7 @@ rules something out.
     without skipping) and a socket probe on Linux in which a backlog of 128 timed out at the 130th
     connection and 511 admitted 200 on each loopback address.
 
-36. <a id="choice-json-derives"></a>**A type's JSON role is the derive that names its direction, `ToJson` to write and
+34. <a id="choice-json-derives"></a>**A type's JSON role is the derive that names its direction, `ToJson` to write and
     `FromJson` to read, not a data-role attribute.** Each derive is already the one thing a type
     declares for its direction: `ToJson` lays out the JSON a response, a screen's data, a typed
     script argument or an agent tool's output writes, and its schema (feature `types`);
