@@ -37,6 +37,9 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                                 (Some(TokenTree::Group(args)), 2)
                                     if args.delimiter() == Delimiter::Parenthesis && args.stream().to_string() == "id" =>
                                 {
+                                    if marked.is_some() {
+                                        return err(g.span(), "this field is already marked #[row(id)]");
+                                    }
                                     marked = Some(g.span())
                                 }
                                 _ => return err(g.span(), "expected #[row(id)], on the field that identifies the row"),

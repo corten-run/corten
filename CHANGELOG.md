@@ -2657,15 +2657,15 @@ Corten is pre-1.0, so any minor version may change the API.
 282. `#[derive(Row)]` (`corten::feed::Row`, the derive and the trait at once): a feed row's key is
     the field marked `#[row(id)]`, in place of the `impl Row` each row wrote by hand, so a renamed
     key field moves the key with it. The row's `Clone` and `Serialize` stay in its derive list
-    (design Choice 33). A row with no field marked or two, an id that is not text (a type that
-    derefs to `str`: `String`, `Box<str>`, `Arc<str>`, `&'static str`, `Cow<'static, str>`), an
-    enum, a unit struct, a `row` attribute on the struct, or one other than `#[row(id)]` on a
-    field does not compile, and the trait's `Send` and `Sync` still hold. The listings-feed,
-    watchlist, seller-desk and deck-builder rows and `corten-cluster`'s take it; an `impl Row`
-    written by hand still works. `corten::feed` is now a module that re-exports `corten-feed`
-    and the derive, so every `corten::feed::..` path still resolves. The feed sends the same
-    bytes (`tests/derived_row.rs` compares a snapshot and a replayed patch with a hand-written
-    row's), so nothing on the request path changed to measure
+    (design Choice 33). A row with no field marked or two, a field marked twice, an id that is not
+    text (a type that derefs to `str`: `String`, `Box<str>`, `Arc<str>`, `&'static str`,
+    `Cow<'static, str>`), an enum, a unit struct, a `row` attribute on the struct, or one other than
+    `#[row(id)]` on a field does not compile, and the trait's `Send` and `Sync` still hold. The
+    listings-feed, watchlist, seller-desk and deck-builder rows and `corten-cluster`'s take it; an
+    `impl Row` written by hand still works. `corten::feed` is now a module that re-exports
+    `corten-feed` and the derive, so every `corten::feed::..` path still resolves. The feed sends
+    the same bytes (`tests/derived_row.rs` compares a snapshot and a replayed patch with a
+    hand-written row's), so nothing on the request path changed to measure
     ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
