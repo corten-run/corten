@@ -1309,8 +1309,9 @@ rules something out.
     minified. A message's parts and the templates the server writes for a format are cast too,
     for another reason: the server writes them in a shape it checks, so a read the cast covers
     cannot miss (not timed). The
-    runtime's minified build (gzip, level 9): `corten.js` 14,836 to 14,842 bytes, `format.js`
-    1,494 to 1,498, and `view.js` 2,149 to 2,153, `at()`'s check of the ends.
+    runtime's minified build (esbuild then terser, gzip level 9, against `97a63a92`): `corten.js`
+    14,318 to 14,317 bytes, `format.js` 1,486 to 1,499, and `view.js` 2,074 to 2,079, `at()`'s
+    check of the ends.
     `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and
     `noUncheckedSideEffectImports` each found nothing and cost nothing; a case that runs into the
     next one, code after a `return` and a side-effect import of a module that is not there are
@@ -1334,7 +1335,7 @@ rules something out.
     Stands on: measured (`tsc` 5.9.3 with each option alone over `jsconfig.json`'s files on
     `c65c10ec`, the counts above, and on `900d7dc3` for `allowUnreachableCode`,
     `noUncheckedSideEffectImports` and the three lint options, and the minified sizes before
-    and after); measured (Chromium through Playwright 1.64.1 on a busy Windows workstation, `bench/browser/rows-ab.mjs` (run
+    and after on `97a63a92`, one build each, the build being deterministic); measured (Chromium through Playwright 1.64.1 on a busy Windows workstation, `bench/browser/rows-ab.mjs` (run
     before it was committed), `rows()` with 1,000 rows, paired medians of 41 samples taking
     turns with `c65c10ec`'s `view.js`: with its loops rewritten not to index
     (`bench/browser/view-unindexed.js` in `f6885eca`), keeping some rows and making the rest
@@ -1352,8 +1353,9 @@ rules something out.
     timing on a quiet host shows the hot loops rewritten not to index cost nothing (their casts
     could then go).
 
-    Last checked: 2026-11-09, TypeScript 5.9.3 on `c65c10ec`, `900d7dc3` and the change, and
-    the timings in Chromium (Playwright 1.64.1) on 2026-11-08.
+    Last checked: 2026-11-10, TypeScript 5.9.3 on `c65c10ec`, `900d7dc3` and the change, the
+    sizes against `97a63a92` (esbuild 0.28.2, terser 5.51.2), and the timings in Chromium
+    (Playwright 1.64.1) on 2026-11-08.
 
 ## Rules
 
