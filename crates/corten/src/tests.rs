@@ -12372,18 +12372,6 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
 #[cfg(all(debug_assertions, feature = "log"))]
 #[test]
 fn a_failure_is_logged_with_each_cause_under_it() {
-    #[derive(Debug)]
-    struct Failed(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
-    impl std::fmt::Display for Failed {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.0)
-        }
-    }
-    impl std::error::Error for Failed {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            self.1.as_deref().map(|source| source as _)
-        }
-    }
     let lines = Lines(std::sync::Arc::default());
     let writer = lines.clone();
     let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
@@ -12395,6 +12383,67 @@ fn a_failure_is_logged_with_each_cause_under_it() {
     let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
     assert!(text.contains("error=error sending request"), "{text}");
     assert!(text.contains("error.sources=[client error (SendRequest), connection reset]"), "{text}");
+}
+
+/// A failure with the causes under it, for a test of what is logged.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[derive(Debug)]
+struct Failed(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
+
+#[cfg(all(debug_assertions, feature = "log"))]
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+#[cfg(all(debug_assertions, feature = "log"))]
+impl std::error::Error for Failed {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.1.as_deref().map(|source| source as _)
+    }
+}
+
+/// A streamed download whose chunk fails after the headers is logged as that error, each cause
+/// under its message, as a handler's error is; a message (`&str`) is logged as itself (#1153).
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_failed_stream_is_logged_with_each_cause_under_it() {
+    let lines = Lines(std::sync::Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    // A test runs on one thread, so the stream is pulled, and logs, under this subscriber.
+    let _logged = tracing::subscriber::set_default(subscriber);
+    let routes = Router::new()
+        .route(
+            "/error",
+            get(|| async {
+                let reset = Failed("connection reset", None);
+                let failed = Failed("error reading rows", Some(Box::new(reset)));
+                let chunks = futures_util::stream::iter([Ok(crate::Bytes::from_static(b"a,1\n")), Err(failed)]);
+                crate::Media::stream("application/octet-stream", chunks)
+            }),
+        )
+        .route(
+            "/message",
+            get(|| async {
+                let chunks = futures_util::stream::iter([Ok(crate::Bytes::from_static(b"a,1\n")), Err("the store went away")]);
+                crate::Media::stream("application/octet-stream", chunks)
+            }),
+        );
+    let router = app(routes, None);
+    for path in ["/error", "/message"] {
+        let res = router.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.into_body().collect().await.is_err(), "{path}: the body ends as a failure");
+    }
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    let line = |says: &str| text.lines().find(|line| line.contains(says)).unwrap_or_else(|| panic!("{says}: {text}"));
+    let error = line("error=error reading rows");
+    assert!(error.contains("error.sources=[connection reset]"), "{error}");
+    assert!(error.contains("corten: a streamed application/octet-stream answer stopped after its headers were sent"), "{error}");
+    let message = line("error=the store went away");
+    assert!(!message.contains("error.sources"), "a message has no cause under it: {message}");
 }
 
 /// An error's message (`Display`) is its source's, what the log says, and `status_code` the

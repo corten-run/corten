@@ -4080,9 +4080,16 @@ Corten is pre-1.0, so any minor version may change the API.
 - A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
   feed load, relay or JetStream consumer, is logged as the error itself, so Corten's log line
   adds each source's message (`error.sources`): an HTTP client's "error sending request" now
-  names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
-  message
+  names the reset or timeout beneath it
   ([#1127 Benchmark r17: Corten returns two HTTP 500s fetching upstream during page load](https://github.com/corten-run/corten/issues/1127)).
+- A streamed download's failed chunk (`Media::stream`, `Media::stream_sized`) is logged as the
+  error itself too, each cause under its message, where it was logged by its message alone. A
+  chunk's error is now anything `Error::new` takes, `Into<Box<dyn std::error::Error + Send +
+  Sync>>`, where it was any `Display + Send`: an error type, a `String` or a `&str` compiles as
+  before. Breaking: a chunk error that only implements `Display`, or is not `Sync`, does not
+  compile; implement `std::error::Error` for it, or map it with `.map_err(|e| e.to_string())`,
+  which logs the message alone
+  ([#1153 A streamed download's failure is logged by its message alone: Media::stream takes E: Display, not E: Error](https://github.com/corten-run/corten/issues/1153)).
 - The fixed favicon keeps its weak content tag when background compression finishes, so a
   conditional GET still returns 304 instead of downloading the unchanged icon again.
 - CopyButton ignores clipboard completions from a removed lifetime, including after reconnect.
