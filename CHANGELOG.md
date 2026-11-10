@@ -6321,6 +6321,20 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+78. Which tables sort in place is decided and measured: every table whose page has all its rows,
+    also when other routes read its order. `bench/browser/sort-cost.mjs` times a sort click with
+    `rows::sort` against a swap of the server-sorted table, fetched at the click or before it, and
+    writes each case's median and range with the engine's version. With no network the three cases'
+    ranges overlap in Chromium, Firefox and WebKit from 50 to 2,000 rows, the lowest median changing
+    with size and engine; with 40 ms of latency, in Chromium, in place is faster on the text columns
+    by 59 to 63 ms up to 500 rows (15 ms against 77 at 50 rows). A swap fetched ahead matches it
+    only when the answer is in before the click (a hover that rests through the fetch, or a tap, not
+    measured; not a key press or a quick click). The UI guide has the tables. Design Rule 3's
+    `rows::sort` exception says its search of the page is closed and that any other reader, a link
+    or a `GET` form in the part or anything outside it (a kit pager through its `on:link`), names
+    the table with `sorted(&Id)`; new design Limit 24 says one that does not sends the order the
+    page was drawn with, which nothing notices, and what would lift that
+    ([#960 Design Rule 3's rows::sort exception grows with each kind of form or link that reads the order: decide which tables sort in place and which ask the server](https://github.com/corten-run/corten/issues/960)).
 80. The kit guide's Size states what every component costs now: 59,878 bytes of `components.css`,
     8,691 with brotli at level 11 and 9,863 with gzip at level 9 (the kit at 5ba4e476), where it
     said 35,239, 5,331 and 6,050 from before the kit grew from 34 stylesheets to 42. A test in the
