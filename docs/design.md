@@ -1338,9 +1338,9 @@ rules something out.
 
     Last checked: 2026-11-10, Apple's guide read and the crate's asset tests on `112422cb`;
     2026-11-10, card-market's smoke in Playwright 1.64.1 on Windows on `3a6f8a3c`, Chromium and
-    Firefox (WebKit skipped there); 2026-11-09, the same smoke on Linux against a build of
-    `32cd2ce6`, Chromium, Firefox and WebKit, when the clip was on the home page; 2026-11-10, the
-    count on `97a63a92` and `92d38464`.
+    Firefox (WebKit skipped there); 2026-11-10, the same smoke on Linux in Playwright 1.64.1's
+    image against a build of `b370d79f`, Chromium, Firefox and WebKit each playing and seeking the
+    clip; 2026-11-10, the count on `97a63a92` and `92d38464`.
 
 ## Rules
 
