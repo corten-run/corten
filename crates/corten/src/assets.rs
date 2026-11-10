@@ -224,7 +224,7 @@ pub(crate) fn favicon<S: Clone + Send + Sync + 'static>(assets: Option<&Arc<Asse
             let icon = icon.clone();
             async move {
                 match icon {
-                    Some((assets, path)) => assets.serve(path, &method, &headers, FAVICON_CACHE, true, false),
+                    Some((assets, path)) => assets.serve(path, &method, &headers, FAVICON_CACHE, Url::Fixed),
                     None => {
                         let mut res = (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, NO_FAVICON_CACHE)]).into_response();
                         res.extensions_mut().insert(crate::page::AsIs);
@@ -789,25 +789,19 @@ impl Assets {
             get(move |UrlPath((version, path)): UrlPath<(String, String)>, method: Method, headers: HeaderMap| {
                 let assets = assets.clone();
                 async move {
-                    let current = version == assets.version;
-                    let cache = if current { IMMUTABLE } else { HeaderValue::from_static("no-cache") };
-                    assets.serve(&path, &method, &headers, cache, false, current)
+                    let (cache, url) = if version == assets.version {
+                        (IMMUTABLE, Url::Current)
+                    } else {
+                        (HeaderValue::from_static("no-cache"), Url::Old)
+                    };
+                    assets.serve(&path, &method, &headers, cache, url)
                 }
             }),
         )
     }
 
-    /// The file at `path`. `fixed` is a URL that outlives a deploy (the favicon's), revalidated
-    /// under a weak tag; `current` a URL whose version is this one, so it names these exact bytes.
-    fn serve(
-        &self,
-        path: &str,
-        method: &Method,
-        headers: &HeaderMap,
-        cache: HeaderValue,
-        fixed: bool,
-        current: bool,
-    ) -> Response {
+    /// The file at `path`, asked for at a URL of the kind `url`.
+    fn serve(&self, path: &str, method: &Method, headers: &HeaderMap, cache: HeaderValue, url: Url) -> Response {
         let Some(file) = self.files.get(path) else {
             return StatusCode::NOT_FOUND.into_response();
         };
@@ -815,7 +809,7 @@ impl Assets {
         let (body, coding) = file.body.pick(headers);
         #[cfg(not(feature = "compress"))]
         let body = file.body.clone();
-        let etag = if fixed {
+        let etag = if url == Url::Fixed {
             // Its URL is revalidated: keep the same weak content tag while background
             // compression changes the encoded bytes. Versioned files keep per-coding tags.
             HeaderValue::try_from(format!("W/\"{:016x}\"", file.hash)).expect("hex tag")
@@ -847,14 +841,14 @@ impl Assets {
         // this version's own strong tag only (the files have no date). No `Accept-Ranges`: a
         // browser asks for a range unprompted, and the header would cost every file's answer (#1133).
         #[cfg(feature = "compress")]
-        let ranged = current && coding.is_none() && method == Method::GET;
+        let ranged = url == Url::Current && coding.is_none() && method == Method::GET;
         #[cfg(not(feature = "compress"))]
-        let ranged = current && method == Method::GET;
+        let ranged = url == Url::Current && method == Method::GET;
         let range = match ranged.then(|| headers.get(header::RANGE)).flatten() {
             Some(value) => {
                 let strong = !etag.as_bytes().starts_with(b"W/");
-                let current = headers.get(header::IF_RANGE).is_none_or(|tag| strong && *tag == etag);
-                current.then(|| byte_range(value.as_bytes(), body.len())).flatten()
+                let holds = headers.get(header::IF_RANGE).is_none_or(|tag| strong && *tag == etag);
+                holds.then(|| byte_range(value.as_bytes(), body.len())).flatten()
             }
             None => None,
         };
@@ -878,6 +872,17 @@ impl Assets {
         crate::compress::encoded_headers(res.headers_mut(), file.content_type, coding);
         res
     }
+}
+
+/// What a URL a file is asked for at names, which decides its tag and whether it is sent in part.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Url {
+    /// This version's URL: these exact bytes, under a strong tag, sent in ranges.
+    Current,
+    /// An older version's URL: maybe other bytes after a deploy, so sent whole.
+    Old,
+    /// A URL that outlives a deploy (the favicon's): revalidated under a weak tag, sent whole.
+    Fixed,
 }
 
 /// The one byte range a `Range` header asks of a body `len` bytes long (RFC 9110 14.1.2):

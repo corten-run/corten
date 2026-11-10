@@ -11,7 +11,9 @@ Corten is pre-1.0, so any minor version may change the API.
   single byte `Range` with a `206` (a bare `416` past its end, the whole file for several ranges, a
   `HEAD` or an old version's URL), honoring
   `If-Range` for its strong ETag, so a native `<video>` with captions plays and seeks from
-  `embed!`; the PWA's service worker leaves a range to the network
+  `embed!`; the PWA's service worker leaves a range to the network. Card market's `/grading` page
+  shows a captioned clip, linked from each category, so the home page the benchmark compares is
+  unchanged
   ([#1133 Serve embedded video and caption assets with standard MIME types and byte-range responses](https://github.com/corten-run/corten/issues/1133)).
 - A separate rich marketplace-v2 benchmark: eighteen framework adapters localize raw numeric
   money, ratings and counts during each request in English, French and German. An independent

@@ -67,6 +67,7 @@ pub fn category<'a>(req: &'a Req, t: Msg, title: &'a str, items: &'a [Arc<ItemVi
     html! {
         <h1>{title}</h1>
         if !items.is_empty() { <ItemList req={req} t={t} shelf={Shelf::Items(items)} /> }
+        <p><a href={routes::Grading}>{t.grading_title()}</a></p>
         <p><a href={routes::Home}>{t.category_back()}</a></p>
     }
 }

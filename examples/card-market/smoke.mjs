@@ -241,7 +241,7 @@ try {
 
   // Under the worker, a range of a versioned file still goes to the network as a 206, after the
   // worker has cached the whole file (the cache holds whole files and cannot hold a 206) (#1133).
-  await page.goto(`${base}/`);
+  await page.goto(`${base}/grading`);
   await page.waitForFunction(() => !!navigator.serviceWorker.controller);
   const underWorker = await page.evaluate(async () => {
     const src = /** @type {HTMLSourceElement} */ (document.querySelector('video source[type="video/mp4"]')).src;
@@ -437,7 +437,7 @@ try {
       await other.close();
     }
   }
-  // The home page's condition clip plays from the embedded files in every engine: each byte range
+  // The grading page's condition clip plays from the embedded files in every engine: each byte range
   // the browser asks for is answered 206 (WebKit also reads the file once without one, a 200; a
   // request the browser drops shows as status 0), it seeks to the clip's last part, and the
   // reader's captions show there (#1133). The clip is 8 KB, so the first range may be the whole
@@ -447,7 +447,7 @@ try {
   // seek on the clip's start whatever server sends it (a plain Node one too), so it is skipped
   // there; on Linux, as in CI, it makes the whole check.
   for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
-    const clipCheck = `${name}: the home page's clip plays from its embedded file by byte ranges, seeks, and shows the reader's captions there`;
+    const clipCheck = `${name}: the grading page's clip plays from its embedded file by byte ranges, seeks, and shows the reader's captions there`;
     if (name === "WebKit" && process.platform === "win32") {
       skip(clipCheck, "Playwright's WebKit on Windows lands a seek on a video's start");
       continue;
@@ -461,7 +461,7 @@ try {
       clipPage.on("response", (r) => {
         if (/\/grading\/condition\.(webm|mp4)$/.test(new URL(r.url()).pathname)) answers.push(`${r.request().headers()["range"] ?? "whole"}: ${r.status()} ${r.headers()["content-range"] ?? "-"}`);
       });
-      await clipPage.goto(`${base}/`);
+      await clipPage.goto(`${base}/grading`);
       const clip = await clipPage.evaluate(async (/** @type {boolean} */ askFirst) => {
         const within = (/** @type {Promise<unknown>} */ p, /** @type {string} */ what) =>
           Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error(`no ${what} in 10 s`)), 10000))]);

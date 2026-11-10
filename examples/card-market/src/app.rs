@@ -344,7 +344,6 @@ pub(crate) async fn home(req: Req, State(source): State<Source>) -> Public<HtmlR
         <Layout req={req} title={t.home_title()} head="">
             <h1>{t.home_title()}</h1>
             <ItemList req={req} t={t} shelf={source.shelf()} />
-            <ConditionGuide req={req} t={t} />
         </Layout>
     }))
 }
@@ -404,6 +403,20 @@ pub(crate) async fn category(
     let page = req.page(html! { <Layout req={req} title={title} head={head}>{views::category(req, t, title, items)}</Layout> });
     let answer = shared(page).shared(Duration::from_secs(3600));
     if items.is_empty() { answer.header::<XRobotsTag>(HeaderValue::from_static("noindex")) } else { answer }
+}
+
+/// How the market grades a card's condition: a page of its own, so the home page every bench app
+/// renders alike stays the same (#1133).
+pub(crate) async fn grading(req: Req) -> Public<HtmlResult> {
+    let t: Msg = req.t();
+    let req = &req;
+    shared(req.page(html! {
+        <Layout req={req} title={t.grading_title()} head="">
+            <h1>{t.grading_title()}</h1>
+            <ConditionGuide req={req} t={t} />
+            <p><a href={routes::Home}>{t.category_back()}</a></p>
+        </Layout>
+    }))
 }
 
 /// The item's old address, moved for good.
@@ -713,13 +726,14 @@ mod tests {
         assert_eq!(app.get(&ITEM).await.headers()["cache-control"], "private, no-cache");
     }
 
-    /// The home page's condition clip: the video in MP4, then WebM, and captions in each language,
-    /// the reader's the default, every file from `static/` (a versioned URL) (#1133).
+    /// The grading page's condition clip: the video in MP4, then WebM, and captions in each
+    /// language, the reader's the default, every file from `static/` (a versioned URL); a category
+    /// links to it, and the home page has no clip (#1133).
     #[tokio::test]
     async fn the_condition_clip_is_captioned_in_the_readers_language() {
         let app = app();
         for (language, on, off) in [("en", "en", "fr"), ("fr-CA", "fr", "en")] {
-            let page = app.get(&routes::Home).header(header::ACCEPT_LANGUAGE, language).await;
+            let page = app.get(&routes::Grading).header(header::ACCEPT_LANGUAGE, language).await;
             let html = page.text();
             let track = |lang: &str| {
                 let at = html.find(&format!(r#"srclang="{lang}""#)).unwrap_or_else(|| panic!("{lang} track: {html}"));
@@ -733,6 +747,10 @@ mod tests {
             };
             assert!(source("condition.mp4", "video/mp4") < source("condition.webm", "video/webm"));
         }
+        assert!(!app.get(&routes::Home).await.text().contains("<video"), "the home page is the bench's, unchanged");
+        let category = app.get(&routes::Category { slug: "promo" }).await;
+        let category = category.text();
+        assert!(category.contains(&format!(r#"<a href="{}">"#, routes::Grading)), "{category}");
     }
 
     #[tokio::test]

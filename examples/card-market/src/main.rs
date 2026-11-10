@@ -20,6 +20,10 @@ mod routes {
         pub id: &'a str,
     }
 
+    /// How the market grades a card's condition: a short captioned clip, linked from each category.
+    #[route("/grading", get = app::grading)]
+    pub struct Grading;
+
     #[route("/categories/{slug}", get = app::category)]
     pub struct Category<'a> {
         pub slug: &'a str,

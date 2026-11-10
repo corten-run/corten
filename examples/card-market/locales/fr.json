@@ -61,8 +61,11 @@
   },
   "home": {
     "title": "Articles populaires",
-    "item": "Article {n}",
-    "grading": "Comment nous évaluons l'état d'une carte",
+    "item": "Article {n}"
+  },
+  "grading": {
+    "title": "Comment nous évaluons l'état d'une carte",
+    "caption": "De Quasi neuf à Joué, en six secondes.",
     "captions_en": "English",
     "captions_fr": "Français"
   },
