@@ -243,7 +243,14 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
 /// [`bytes_up_to`], reading at most `past` bytes past `max` before giving up on the client;
 /// `over` marks a wait there for the deadline, as [`read_past`] says.
 async fn up_to(body: Body, max: usize, past: usize, over: Option<Over>) -> Result<Option<Bytes>, Error> {
-    if body.size_hint().lower() > max.saturating_add(past) as u64 {
+    let declared = body.size_hint().lower();
+    if declared > max.saturating_add(past) as u64 {
+        return Ok(None);
+    }
+    let mut stream = body.into_data_stream();
+    // A body that says it is over the limit is read past, not kept, so none of it is copied.
+    if declared > max as u64 {
+        read_past(&mut stream, 0, max.saturating_add(past), &mut Idle::new(None), over).await;
         return Ok(None);
     }
     // As an upload's file is read: a piece of 1 KiB or more is kept as it came, a run of smaller
@@ -252,7 +259,6 @@ async fn up_to(body: Body, max: usize, past: usize, over: Option<Over>) -> Resul
     let mut pieces: Vec<Bytes> = Vec::new();
     let mut small: Vec<u8> = Vec::new();
     let mut len: usize = 0;
-    let mut stream = body.into_data_stream();
     while let Some(piece) = stream.next().await {
         let piece = piece.map_err(|e| Error::new(e).with_status(StatusCode::BAD_REQUEST))?;
         len = len.saturating_add(piece.len());
@@ -828,6 +834,35 @@ mod tests {
         });
         assert_eq!(bytes_up_to(Body::from_stream(pieces), 5).await.unwrap(), None);
         assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 4);
+    }
+
+    /// A body whose length says it is over the limit (but not past what is read past) is read past
+    /// from its first piece: every piece is read, and the answer is the same as for one that went
+    /// over.
+    #[tokio::test]
+    async fn a_body_declared_over_the_limit_is_read_past() {
+        struct Declared(std::collections::VecDeque<Bytes>, std::sync::Arc<std::sync::atomic::AtomicUsize>);
+        impl http_body::Body for Declared {
+            type Data = Bytes;
+            type Error = std::convert::Infallible;
+            fn poll_frame(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, std::convert::Infallible>>> {
+                let piece = self.0.pop_front();
+                if piece.is_some() {
+                    self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                std::task::Poll::Ready(piece.map(|piece| Ok(http_body::Frame::data(piece))))
+            }
+            fn size_hint(&self) -> http_body::SizeHint {
+                http_body::SizeHint::with_exact(self.0.iter().map(|p| p.len() as u64).sum())
+            }
+        }
+        let read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let pieces = [&b"123"[..], b"456", b"789"].into_iter().map(Bytes::from_static).collect();
+        assert_eq!(bytes_up_to(Body::new(Declared(pieces, read.clone())), 5).await.unwrap(), None);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 3);
     }
 
     /// Reading past stops 64 MiB past the limit, where the connection is closed after the answer:

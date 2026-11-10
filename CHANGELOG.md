@@ -2666,6 +2666,11 @@ Corten is pre-1.0, so any minor version may change the API.
   5. A server-sent event's data splits on CRLF and CR as on LF, one line each, and empty data
      writes no `data:` line (axum wrote an empty one), so such an event is not dispatched;
      Corten's own events always carry data.
+  6. `corten::answer::Body`'s error is a `Box<dyn std::error::Error + Send + Sync>` where it was
+     `axum::Error`, so a middleware that read a body's pieces and matched on axum's error
+     matches on the boxed one (`downcast_ref`), and `Body::into_data_stream()` gives a
+     `BodyDataStream` that is a `Stream` of those pieces but no longer an `http_body::Body`:
+     a body is the `Body` itself.
   A staged page costs about 480 instructions fewer (callgrind, release, jemalloc; 541 with
   glibc): a page route 17,713 against 18,192, one with a middleware 17,997 against 18,476. An API
   request, the 404s and an unstaged route are within 31 of before (13,005 against 13,009, 7,022

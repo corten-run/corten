@@ -701,8 +701,18 @@ rules something out.
     (and the piece that crossed that), so a browser still sending sees the 413, and one whose length says it is
     longer is refused unread: these readers serve every route that takes one, so a refused
     request costs about what the limit allows, not the 64 MiB `bytes_up_to` and an upload read
-    past, which an app chooses per route. `Json`'s answers are axum 0.8.9's, recorded before it
-    left and held by a test (`json.rs`, `AXUM_0_8_9`). A test's stand-in for another server the
+    past, which an app chooses per route. The 2 MiB is fixed: axum's `DefaultBodyLimit`, a layer that
+    set it per route, went with axum, and no app here reads a larger whole body, so a setting would
+    be a knob with no user; a route that takes more takes the whole `Request` and reads it with
+    `bytes_up_to` at its own limit (the app guide's example), at the cost of parsing it itself.
+    One reader per body, a whole one: a body declared over the limit is read past from its first
+    piece and none of it is kept. `Json`'s answers are axum 0.8.9's, recorded before it left and
+    held by a test (`json.rs`, `AXUM_0_8_9`), and so is which content types it takes: mime
+    0.3.17's grammar, narrower than RFC 9110's (8.3.1: no tab, no space before `;`, no escapes in
+    a quoted value), kept so an app's clients are answered as before; `Form` reads its content
+    type with Corten's media-type reader (`api::media_type`), which takes the type before any `;`
+    with the whitespace around it trimmed and does not check the parameters, so the two differ for
+    a content type the RFC allows and mime did not (a space before `;`). A test's stand-in for another server the
     app calls is not the app, so Corten names nothing for it: the test depends on a server of its
     own (axum as a dev-dependency, say), as the app guide shows.
 
@@ -725,7 +735,10 @@ rules something out.
 
     Revisit when: an app needs an extractor that cannot be written with this signature (one that
     borrows from the request beyond its call, say); or an `http` release changes what `Parts`
-    holds.
+    holds; or an app needs `Json`, `Form`, `String` or `Bytes` over 2 MiB on a route, which
+    reopens the fixed limit; or a client is refused a JSON content type RFC 9110 allows, which
+    moves `Json` to one reader of the RFC's grammar, shared with `Form`, so a content type is
+    parsed one way.
 
     Last checked: 2026-11-09, axum 0.8.9 (`axum-core` 0.5.6) and rustc 1.99.1, Corten's own
     traits at the commit that adds them ([Choice 25](#choice-axum-router), Last checked);
