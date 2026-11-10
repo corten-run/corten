@@ -36,6 +36,15 @@ mod routes {
     pub struct CspReports;
 }
 
+/// How the market grades a card's condition: a short captioned clip, linked from each category.
+/// An area of its own, so the clip's stylesheet is linked from this page alone and the components'
+/// sheet every other page links (the one the bench apps copy) stays as it was.
+#[corten::routes(area = Grading)]
+mod grading {
+    #[route("/grading", get = app::grading)]
+    pub struct Grading;
+}
+
 /// The item pages, where a visitor writes (a price alert): the write limit is on this area, so
 /// every request under `/items` meets it and the limit compares no paths. `Items` is the
 /// prefix, so it needs no handler of its own.

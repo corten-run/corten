@@ -3,7 +3,8 @@
 A trading card store: popular cards, categories, and an item page with listings, offers and a
 price alert. It has every production piece Corten offers switched on: a security policy, versioned
 assets, error pages, health checks, a PWA with push, head tags, French and English, robots and a
-sitemap, compression, pages a CDN may keep, and JSON routes for partners' services and AI agents.
+sitemap, compression, pages a CDN may keep, a captioned video served by byte ranges (`/grading`),
+and JSON routes for partners' services and AI agents.
 Read it after [watchlist](../watchlist) when you are taking an app to production.
 
 ## Run it
@@ -48,7 +49,7 @@ docker run --rm -p 3000:8080 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token c
 | Views, each with its stylesheet and script beside it | [`src/views/`](src/views) |
 | Text in English and French | [`locales/`](locales), [`src/text.rs`](src/text.rs) |
 | Design tokens (W3C format, dark and compact themes) | [`tokens/`](tokens/tokens.resolver.json), [`src/theme.rs`](src/theme.rs) |
-| The stylesheet, the demo cards' art, icons, the push handler | [`static/`](static) |
+| The stylesheet, the demo cards' art, icons, the push handler, the grading clip and its captions | [`static/`](static) |
 
 The browser test of the production pieces: [`smoke.mjs`](smoke.mjs). The item page is the one
 the [full-stack benchmark](../../bench/fullstack) measures.

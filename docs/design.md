@@ -225,13 +225,15 @@ rules something out.
    building, so the crate compiles with every file. The PWA's icons, screenshots and worker
    script are named by their constants too; an image another site serves is a `Uri`.
 
-   Stands on: bet (an app's static files are small enough to compile into its binary); platform (a
+   Stands on: bet (an app's static files are small enough to compile into its binary, a video
+   included: a short clip is, and long or many videos belong in storage of their own); platform (a
    macro cannot ask cargo to watch a directory, so a new file waits for the next build that compiles
    the crate); reasoned (the binary is the whole deploy, and a constant per file makes a removed
    file a compile error).
 
    Revisit when: an app's static directory makes builds or images measurably slower than files
-   beside the binary would; or a macro on stable Rust can tell cargo to rebuild when a directory
+   beside the binary would, or startup measurably slower (every file is hashed when the app
+   starts, so a large video costs there too); or a macro on stable Rust can tell cargo to rebuild when a directory
    changes (`proc_macro`'s path tracking is unstable today), which would end the wait for the next
    build.
 
@@ -1094,6 +1096,67 @@ rules something out.
     Last checked: 2026-11-07, the cases on `975ceec1` by the crate's tests and card-market's
     smoke, and the callgrind count on `82af2ec4` and `975ceec1`.
 
+32. <a id="choice-asset-ranges"></a>**A static file answers one range of its bytes at any
+    version's URL, only as it is stored, and never sends `Accept-Ranges`.** A `<video>` asks for
+    ranges to seek, so a file sent only whole makes a player download what it skips, and Safari on
+    iOS plays media only from a server that answers ranges. A `GET` of a versioned URL, this
+    version's or an old one's, for a file sent unencoded answers one range as a `206` with its
+    `Content-Range`, a range the file cannot hold as a bare `416`, and `If-Range` keeps the range only for
+    the tag of the bytes sent, compared byte for byte (RFC 9110). An old version's URL is answered
+    from this version's file, `no-cache`, under that file's strong tag, so a page still holding an
+    old version's URLs after a deploy (a tab left open, a page a cache kept) still plays and seeks
+    its clip: every deploy renames every file, so refusing those ranges would stop the clip for
+    every Safari visitor until the page is reloaded, even when its bytes did not change. Sent whole
+    instead: several ranges or another unit (RFC 9110 lets a server ignore `Range`); a compressed
+    body, whose offsets are not the file's; and the favicon, whose URL outlives every deploy under
+    a weak tag. The cost, which this Choice brings: a server cannot tell an older version's URL
+    from a newer one's, so while a fleet runs two versions, or when a deploy lands between two
+    ranges of one playback, a file whose bytes changed can be answered from either version at
+    either URL. A client that sends `If-Range` then gets the whole file; one that does not may
+    join ranges of two versions and play neither. Sending other versions' URLs whole prevented
+    that, and was traded for Safari playing them; a file whose bytes did not change has the same
+    tag and bytes in both. No answer advertises ranges: the header is optional and browsers send
+    `Range` without it. The PWA's worker leaves a range to the network, since its cache holds whole
+    files and cannot hold a `206`, and the video or audio a player loads too (a request whose
+    destination is `video` or `audio`): one without a range (Playwright's Linux WebKit sends one
+    first) would otherwise be stored whole, downloading the whole video, which a player does not
+    read back from the cache; its captions and poster are cached like any versioned file. Not
+    chosen: `Accept-Ranges: bytes` on every file (optional, above); an old version's URL sent whole
+    (Safari on iOS would not play it, above); a URL named by each file's own hash rather than the
+    app's version (an unchanged clip would keep its URL across deploys and a server would know
+    which bytes a URL names, but it changes how every asset is named and cached, a change of its
+    own); multipart ranges (no browser player asks for them, and each would be a body Corten
+    writes); slicing an encoded body (the client's offsets name the file, not the encoding); the
+    worker cutting a range from a whole file it cached and answering the `206` itself (code in
+    every app's worker for offline video, which no app here needs;
+    [Limit 5](#limit-offline-fallback) stays).
+
+    Stands on: platform (Apple's Safari Web Content Guide, "Creating Video", says a server hosting
+    media for iOS must answer byte ranges, which iOS uses for random access; with no
+    `Accept-Ranges`, Chromium and Firefox ask for the clip by a `Range` and play it from the
+    `206`, and WebKit reads it whole once and then asks for a range from inside it, each seeking,
+    as card-market's smoke shows on Linux, below; the 8 KB clip comes whole in Chromium's and
+    Firefox's first range, so the smoke does not show them asking for a range from inside it);
+    measured (callgrind, `what_serving_a_file_costs`, which sends no `Range`, so its count is what
+    every file's answer pays, 1,200 requests less 200 over 1,000, five runs each taking turns:
+    11,826.69 (11,825.27 to 11,826.73) instructions a request on `97a63a92` with the test added
+    and 12,024.05 (12,024.05 to 12,025.49) on `92d38464`, with ranges at this version's URL only,
+    +197 (+1.7%); then 12,024.02 (12,023.98 to 12,024.06) on `84719c0f` and 12,026.06 (12,026.01
+    to 12,026.08) on a build whose request path is `a7b1c808`'s, with old URLs ranged too, +2);
+    reasoned (one range per answer and a tag naming the bytes sent keep a client that sends
+    `If-Range` from joining bytes of two files).
+
+    Revisit when: Safari or iOS on real hardware, not tested here, will not play or seek a clip
+    served this way, or a client that matters will not seek without `Accept-Ranges`; a clip is
+    reported playing garbled after a deploy (ranges of two versions joined); a player asks for
+    several ranges; or an app needs a `Media` answer, not a static file, to seek.
+
+    Last checked: 2026-11-10, Apple's guide read and the crate's asset tests on `112422cb`;
+    2026-11-10, card-market's smoke in Playwright 1.64.1 against a build of `4ec25ef4`, on Linux
+    with Chromium, Firefox and WebKit each playing and seeking the clip, and on Windows with
+    Chromium and Firefox; 2026-11-10, the count on `97a63a92` and `92d38464`; 2026-11-10, the
+    count on `84719c0f` and `a7b1c808`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -1198,6 +1261,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    modules as module scripts that hand their exports to the runtime as they run, so their handlers are
    in before `DOMContentLoaded`, and this needs a person faster than the network.
 5. <a id="limit-offline-fallback"></a>Offline is a fallback page plus cached versioned files, not offline data.
+   A video does not play offline: the worker leaves a range, and the video or audio a player
+   loads, to the network ([Choice 32](#choice-asset-ranges)).
 6. <a id="limit-prefetch-reuse"></a>Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
    post). It keeps the 8 newest and aborts the rest (the request, or the body once it answered),
    so hovering does not hold pages for the whole session; with the browser's data saver on it
