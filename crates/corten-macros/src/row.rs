@@ -13,8 +13,8 @@ use crate::{
 
 const USAGE: &str = "Row is derived for a struct, and its id is the field marked #[row(id)]: a String, or another type that derefs to str (implement Row by hand for an enum)";
 
-/// A field's tokens with each invisible group (`Delimiter::None`, which a `macro_rules!` wraps
-/// a `$v:vis` or `$m:meta` it passes in) opened in place, up to the field's name or type.
+/// Tokens with each invisible group (`Delimiter::None`, which a `macro_rules!` wraps a `$v:vis`,
+/// `$m:meta` or `$t:ty` it passes in) opened in place.
 fn opened(tokens: Vec<TokenTree>) -> Vec<TokenTree> {
     let mut out = Vec::with_capacity(tokens.len());
     for token in tokens {
@@ -26,9 +26,32 @@ fn opened(tokens: Vec<TokenTree>) -> Vec<TokenTree> {
     out
 }
 
-/// The serde attribute keys that leave a field out of the JSON a script and a replica read the
-/// key from.
-const SKIPS: [&str; 3] = ["skip", "skip_serializing", "skip_serializing_if"];
+/// The serde attribute keys on the id field that leave it out of the JSON a script reads the key
+/// from, write it as something other than the text `id()` returns, or read it back as something
+/// else in a replica.
+const ID_SERDE: [&str; 8] = [
+    "skip",
+    "skip_serializing",
+    "skip_serializing_if",
+    "skip_deserializing",
+    "with",
+    "serialize_with",
+    "deserialize_with",
+    "flatten",
+];
+
+/// The serde attribute keys on the struct that write the row as another value, so its id field is
+/// not a member of its JSON.
+const ROW_SERDE: [&str; 2] = ["into", "transparent"];
+
+/// The first of `keys` a `#[serde(..)]` attribute's contents name, if any.
+fn serde_key(inner: &[TokenTree], keys: &[&'static str]) -> Option<&'static str> {
+    if !is_ident(inner.first(), "serde") {
+        return None;
+    }
+    let Some(TokenTree::Group(args)) = inner.get(1) else { return None };
+    split(args.stream(), ',').into_iter().map(opened).find_map(|arg| keys.iter().copied().find(|key| is_ident(arg.first(), key)))
+}
 
 pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
     let item = parse_item(input, "Row", true)?;
@@ -43,15 +66,21 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         }
         _ => return err(item.name.span(), USAGE),
     };
-    if let Some(on_type) = item.attrs.iter().find(|g| is_ident(g.stream().into_iter().next().as_ref(), "row")) {
-        return err(on_type.span(), "#[row(id)] goes on the field that identifies the row, not on the struct");
+    for attr in &item.attrs {
+        let inner = opened(attr.stream().into_iter().collect());
+        if is_ident(inner.first(), "row") {
+            return err(attr.span(), "#[row(id)] goes on the field that identifies the row, not on the struct");
+        }
+        if let Some(key) = serde_key(&inner, &ROW_SERDE) {
+            return err(attr.span(), format!("#[serde({key})] writes the row as another value, so its id is not a member of the JSON a script reads the key from: a feed of the type it is written as derives Row on that type"));
+        }
     }
     let mut id: Option<(TokenTree, String)> = None;
     for (index, field) in split(fields.stream(), ',').into_iter().enumerate() {
         let field = opened(field);
         let mut j = 0;
         let mut marked: Option<Span> = None;
-        let mut skipped: Option<Span> = None;
+        let mut skipped: Option<(Span, &str)> = None;
         loop {
             match field.get(j) {
                 Some(TokenTree::Punct(p)) if p.as_char() == '#' => {
@@ -69,16 +98,8 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                                 }
                                 _ => return err(g.span(), "expected #[row(id)], on the field that identifies the row"),
                             }
-                        } else if is_ident(inner.first(), "serde") {
-                            if let Some(TokenTree::Group(args)) = inner.get(1) {
-                                let skips = split(args.stream(), ',')
-                                    .into_iter()
-                                    .map(opened)
-                                    .any(|arg| SKIPS.iter().any(|skip| is_ident(arg.first(), skip)));
-                                if skips {
-                                    skipped = Some(g.span());
-                                }
-                            }
+                        } else if let Some(key) = serde_key(&inner, &ID_SERDE) {
+                            skipped = Some((g.span(), key));
                         }
                     }
                     j += 2;
@@ -93,11 +114,8 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             }
         }
         let Some(span) = marked else { continue };
-        if let Some(skip) = skipped {
-            return err(
-                skip,
-                "the id is the key a script and a replica read from the row's JSON, so it cannot be skipped by serde",
-            );
+        if let Some((at, key)) = skipped {
+            return err(at, format!("#[serde({key})] on the id: the id is the key a script and a replica read from the row's JSON, as the text `id()` returns, so serde writes and reads it as it is"));
         }
         // The member as the code names it, spanned at the field so a wrong type is reported there.
         let member = if named {

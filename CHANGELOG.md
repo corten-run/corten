@@ -2661,10 +2661,12 @@ Corten is pre-1.0, so any minor version may change the API.
     field marked twice, an id that is not text (a type that derefs to `str`: `String`, `Box<str>`,
     `Arc<str>`, `&'static str`, `Cow<'static, str>`), an enum, a unit struct, a `row` attribute on
     the struct, or one other than `#[row(id)]` on a field does not compile, nor does an id serde
-    leaves out of the JSON (`#[serde(skip)]`, `skip_serializing`, `skip_serializing_if`), where a
-    script reads the key; the trait's bounds (`Serialize`, `Clone`, `Send`, `Sync`, `'static`) still
-    hold, each with a `compile_fail` example on the derive. A row a `macro_rules!` declares with the
-    id's visibility or attributes passed in derives it too. The listings-feed, watchlist,
+    leaves out of the JSON, where a script reads the key, or writes or reads as other text than
+    `id()` returns (`skip` and its variants, `with`, `serialize_with`, `deserialize_with`,
+    `flatten`), or a row serde writes as another value (`into`, `transparent`); the trait's bounds
+    (`Serialize`, `Clone`, `Send`, `Sync`, `'static`) still hold, each with a `compile_fail` example
+    on the derive. A row a `macro_rules!` declares with the id's visibility or attributes passed in
+    derives it too, and a generic row bounds its own parameters. The listings-feed, watchlist,
     seller-desk and deck-builder rows, the live benchmark's and `corten-cluster`'s take it; an `impl
     Row` written by hand still works. `corten::feed` is now a module that re-exports `corten-feed`
     and the derive, so every `corten::feed::..` path still resolves. The feed sends the same bytes

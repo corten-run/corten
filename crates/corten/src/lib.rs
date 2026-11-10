@@ -111,6 +111,8 @@ pub mod feed {
     /// derefs to `str`), so `Row` is the derive and the trait at once, as serde's `Serialize` is.
     /// The row's `Clone` and `Serialize` stay in its derive list, where Rust checks them and the
     /// trait's bounds. An enum, or a row whose key is not one field, implements the trait by hand.
+    /// The derive adds no bounds of its own, so a generic row bounds its parameters as the trait
+    /// needs (`T: Clone + Serialize + Send + Sync + 'static`).
     ///
     /// ```
     /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
@@ -196,11 +198,56 @@ pub mod feed {
     /// struct Stock { #[row(id)] ticker: String, views: std::cell::Cell<u32> }
     /// ```
     ///
-    /// An id serde leaves out of the JSON, where a script and a replica read the key:
+    /// An id serde leaves out of the JSON, where a script and a replica read the key, or writes or
+    /// reads as other text than `id()` returns (`skip`, `skip_serializing`, `skip_serializing_if`,
+    /// `skip_deserializing`, `with`, `serialize_with`, `deserialize_with`, `flatten`):
     ///
     /// ```compile_fail
     /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
     /// struct Stock { #[row(id)] #[serde(skip)] ticker: String, price_cents: u32 }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock {
+    ///     #[row(id)]
+    ///     #[serde(skip_serializing_if = "String::is_empty")]
+    ///     ticker: String,
+    /// }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// fn upper<S: serde::Serializer>(id: &str, s: S) -> Result<S::Ok, S::Error> {
+    ///     s.serialize_str(&id.to_uppercase())
+    /// }
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// struct Stock { #[row(id)] #[serde(serialize_with = "upper")] ticker: String }
+    /// ```
+    ///
+    /// A row serde writes as another value (`into`, `transparent`), whose JSON has no id member:
+    ///
+    /// ```compile_fail
+    /// #[derive(Clone, serde::Serialize)]
+    /// struct Plain { n: u32 }
+    /// impl From<Stock> for Plain {
+    ///     fn from(s: Stock) -> Plain { Plain { n: s.n } }
+    /// }
+    /// #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    /// #[serde(into = "Plain")]
+    /// struct Stock { #[row(id)] ticker: String, n: u32 }
+    /// ```
+    ///
+    /// A `row` attribute on the struct that a `macro_rules!` passes in:
+    ///
+    /// ```compile_fail
+    /// macro_rules! row {
+    ///     ($(#[$m:meta])* $name:ident) => {
+    ///         #[derive(Clone, serde::Serialize, corten::feed::Row)]
+    ///         $(#[$m])*
+    ///         struct $name { #[row(id)] ticker: String }
+    ///     };
+    /// }
+    /// row!(#[row(id)] Stock);
     /// ```
     ///
     /// A row that is not `Serialize`:
