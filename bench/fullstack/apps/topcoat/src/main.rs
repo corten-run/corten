@@ -89,7 +89,7 @@ fn matched() -> bool {
 /// Topcoat's defaults already refuse a body over 2 MiB (413) and a cross-site form post (403, its
 /// origin policy), compress, and close a request head left unfinished at 30 s. Its runtime compiles
 /// the expressions it reads from the page's markup with `new Function`, so the CSP has
-/// `'unsafe-eval'`.
+/// `'unsafe-eval'`; the layer runs around every request, so every answer carries that CSP.
 fn profile_layer() -> impl Layer {
     let header =
         |name: HeaderName, value: &'static str| SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value));

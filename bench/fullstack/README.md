@@ -1691,13 +1691,15 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    defaults already refuse a body over 2 MiB (413), refuse a cross-site form post (403, its origin
    policy), compress, and close a request head left unfinished at 30 s. Its runtime compiles the
    expressions it reads from the page's markup with `new Function`, so the page CSP needs
-   `'unsafe-eval'`: without it Chromium blocks the runtime and the listings' sort does nothing
-   (checked in Chromium, the CSP rewritten in the browser); with it the sort works and no CSP
-   violation is reported. Topcoat has no host list, ETag for a rendered answer, liveness or
-   readiness endpoint, connection cap or head size setting (hyper's default limit refuses a 1 MiB
-   header but not a 64 KiB one), and its error answers (a failed read as a 500 `text/plain`, a
-   missing item as a 404 `text/plain`, an empty 405) are the app's and Topcoat's own, which the
-   profile does not change.
+   `'unsafe-eval'`, and since the header layer runs around every request, every answer's CSP carries
+   it (Leptos keeps answers that are not pages on axum-maud's strict policy; the `pageScripts`
+   column reads the page's only): without it Chromium blocks the runtime and the listings' sort does
+   nothing (checked in Chromium, the CSP rewritten in the browser); with it the sort works and no
+   CSP violation is reported. Topcoat has no host list, ETag for a rendered answer, liveness or
+   readiness endpoint, connection cap or head size setting (hyper 1.12's default read buffer,
+   417,792 bytes (about 408 KiB), bounds a request head; the probe's 64 KiB header fits under it),
+   and its error answers (a failed read as a 500 `text/plain`, a missing item as a 404 `text/plain`,
+   an empty 405) are the app's and Topcoat's own, which the profile does not change.
 5. `nextjs`, `aspnet` (and `aspnet-aot`), `fastapi` and `express` are not in it yet: each
    joins with its profile.
 
@@ -1717,7 +1719,9 @@ same 12 and missed the same 12, with two of those answered differently: its fail
 Topcoat, probed the same way from `cb-topcoat` built at `9a17b8ea`
 (`results/conform-matched-topcoat1/conformance.json`), met 13 and missed 11: it meets the
 cross-site post (403) and the unfinished head (closed in 30.0 s) that axum-maud misses, and misses
-the page's script CSP (`'unsafe-eval'`) that axum-maud meets.
+the page's script CSP (`'unsafe-eval'`) that axum-maud meets. Of the misses it shares with
+axum-maud, two are answered differently: its failed reads are a 500 `text/plain` (axum-maud's a
+502) and its JSON 404 is `text/plain` (axum-maud's is empty).
 No load phase has run in the tier yet.
 
 ### The hardening step
