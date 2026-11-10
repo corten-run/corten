@@ -1292,6 +1292,36 @@ rules something out.
     Last checked: 2026-11-09, sizes on `c65c10ec` and `4de159ab` with esbuild 0.28.2 and terser
     5.51.2, and the smoke tests on `10cd394d`.
 
+35. <a id="choice-asset-ranges"></a>**A static file answers one range of its bytes, only at the
+    current version's URL and only as it is stored, and never sends `Accept-Ranges`.** A
+    `<video>` asks for ranges to seek, so a file sent only whole makes a player download what it
+    skips. A `GET` of the current version's URL for a file sent unencoded answers one range as a
+    `206` with its `Content-Range`, a range past the end as a bare `416`, and `If-Range` keeps the
+    range only for the file's own tag compared byte for byte (RFC 9110). Sent whole instead: several
+    ranges or another unit (RFC 9110 lets a server ignore `Range`); a compressed body, whose offsets
+    are not the file's; and an old version's URL or the favicon's, whose bytes may change in a
+    deploy between two ranges, so a player would join two files. No answer advertises ranges: the
+    header is optional, browsers send `Range` without it, and it cost every file's answer. The
+    PWA's worker leaves a range to the network, since its cache holds whole files and cannot hold a
+    `206`. Not chosen: `Accept-Ranges: bytes` on every file (above); multipart ranges (no browser
+    player asks for them, and each would be a body Corten writes); slicing an encoded body (the
+    client's offsets name the file, not the encoding).
+
+    Stands on: platform (with no `Accept-Ranges`, Chromium and Firefox ask `bytes=0-` and WebKit
+    asks a range when it seeks, as card-market's smoke shows for its clip); measured (callgrind,
+    `what_serving_a_file_costs`, 1,200 requests less 200 over 1,000, three runs each: 11,817.03
+    instructions a request on `c65c10ec` and 12,024.05 (12,024.04 to 12,024.09) with ranges,
+    +207; a draft that sent `Accept-Ranges` measured 12,182); reasoned (one range and one version
+    per answer keep a player from joining bytes of two files).
+
+    Revisit when: a client that matters will not seek without `Accept-Ranges` (Safari or iOS on
+    real hardware are not tested here); a player asks for several ranges; or an app needs a
+    `Media` answer, not a static file, to seek.
+
+    Last checked: 2026-11-10, the crate's tests on `3d88dd67` and card-market's smoke in
+    Playwright 1.64.1's Chromium, Firefox and WebKit (WebKit's seek on Linux only), the count on
+    `5adc680b` and `3d88dd67`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -1399,6 +1429,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    modules as module scripts that hand their exports to the runtime as they run, so their handlers are
    in before `DOMContentLoaded`, and this needs a person faster than the network.
 5. <a id="limit-offline-fallback"></a>Offline is a fallback page plus cached versioned files, not offline data.
+   A video does not play offline even when its file is cached: a player asks for ranges, and the
+   worker leaves a range to the network ([Choice 35](#choice-asset-ranges)).
 6. <a id="limit-prefetch-reuse"></a>Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
    post). It keeps the 8 newest and aborts the rest (the request, or the body once it answered),
    so hovering does not hold pages for the whole session; with the browser's data saver on it
