@@ -2607,12 +2607,14 @@ Corten is pre-1.0, so any minor version may change the API.
     and the copies stay the kit's. Nothing changes for an app that keeps its copies. One set up by an
     older kit that takes the new copies adds the two tokens `corten ui add checkboxes --merge` (or
     `radio_group`, or `--force` for a copy without edits) names, as the kit's theme has them,
-    before it starts. The kit theme's two declarations and the two `var()`s in each stylesheet make
-    the ui-gallery's served `components.css` 60,608 bytes where it was 60,471 (gzip 10,039 against
-    10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier
-    size is the served file with the literals put back). The ui-gallery's smoke test checks both
-    groups at the kit's values and at a theme's. Asked for by the Chase Sets pilot, which edited
-    both copies to .5rem
+    before it starts; a copy edited to other values keeps them by taking the kit's `var()` lines
+    and declaring the two tokens at its own values. The kit theme's two declarations and the two
+    `var()`s in each stylesheet make the ui-gallery's served `components.css` 60,608 bytes where it
+    was 60,471 (on the branch at 99c09ad8 against main at c65c10ec, the stylesheets and theme as
+    merged; gzip 10,039 against 10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and
+    brotli's default; the earlier size is the served file with the literals put back). The
+    ui-gallery's smoke test checks both groups at the kit's values and at a theme's. Asked for by
+    the Chase Sets pilot, which edited both copies to .5rem
     ([#1082 Kit RadioGroup and Checkboxes print their fieldset's gap and legend margin as literals kept equal by hand, so a theme with tighter choice lists edits both copies](https://github.com/corten-run/corten/issues/1082)).
 278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
     after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
