@@ -4273,6 +4273,25 @@ Corten is pre-1.0, so any minor version may change the API.
     and `corten ui add card --force` (an unedited copy) or `--merge` (an edited one) takes
     `card.rs` and `card.css`
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
+178. CI runs its checks side by side. The release tests run on a runner of their own
+    (`rust-release`) beside the other Rust checks (`rust-checks`), and the browser smokes run in
+    three groups, each with one engine of the watchlist's smoke and some of the other examples, each
+    building its own images and starting its own servers. Every command runs, and every browser
+    check runs in every engine it ran in before; the watchlist's checks that use no browser now run
+    once in each group, and each engine gets a fresh server. The required checks keep their names:
+    `rust` and `browser` are jobs that pass only when every job under them ran and passed, and fail
+    on one that failed, was cancelled or was skipped; each smoke group fails unless it ran exactly
+    the parts it names, and `browser` fails unless every part is in exactly one group, so a check
+    cannot drop out by a renamed group or a mistyped condition. Over 40 passing pull request runs
+    (39 first attempts) the browser job took a median 1,076 s and the Rust job 989 s, 589 s of it the
+    release tests. Estimated from their step times, the longest smoke group takes about 7 minutes
+    and the Rust path about 10.5 (the release tests on a warm cache; the new jobs' caches start
+    cold), so a change's checks finish in about 11 minutes rather than 18, with 8 jobs in a run, up
+    to 6 at once, rather than 3. Neither the timings nor the failure cases (a job failed, cancelled
+    or skipped, a part dropped) have run on Actions yet; the part checks were run locally against
+    the workflow file
+    ([#1085 CI runs every browser example in sequence, putting a 17-minute path on each change](https://github.com/corten-run/corten/issues/1085),
+    [#1086 CI starts its 9.6-minute release test step only after the rest of the Rust checks](https://github.com/corten-run/corten/issues/1086)).
 
 ### Fixed
 - A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
