@@ -660,54 +660,68 @@ rules something out.
    [#534 A layout value read the way the guide shows starts after the page's own reads, so a full load waits for both, and an extractor cannot read Mode to start it early](https://github.com/corten-run/corten/issues/534)
    (chase-sets at `162ed0c298`, the commit the issue links).
 
-21. <a id="choice-own-extractors"></a>**An app's own extractor implements axum's `FromRequestParts`, named `corten::extract`, not a
-   trait of Corten's.** An app reads a value from the request's head (a visitor's cookie, a
-   started read) with an extractor of its own, and before this it named axum to write one, as it
-   did for a middleware's `Request` and `Response`, a relay's `Body`, an upload's `Bytes` and a
-   listener of its own. A Corten trait in its place cannot reach axum's under it: handlers are
-   still axum's `Handler`, so every argument must implement axum's `FromRequestParts` (the last,
-   `FromRequest`), and Rust's orphan rule forbids the blanket
-   `impl<T: FromHead<S>> FromRequestParts<S> for T` that would bridge the two. Each type would
-   need both impls, Corten's own `Req`, `Caller` and `Params` included, or a derive written per
-   type: a second concept for the same signature (Values, 6). So `corten::extract` names
-   `FromRequestParts`, `OptionalFromRequestParts`, `FromRequest`, `Request` and `State`,
-   `corten::middleware` names `Response` and `IntoResponse`, `corten::answer` names `Body`, and
-   `corten::Bytes` and `corten::Listener` the rest: the same types and traits, so an app imports
-   Corten alone. What this does not buy is independence from axum's versions: the traits' shape
-   is still axum's, and an axum major version that changes it (0.8 dropped `#[async_trait]` and
-   added `OptionalFromRequestParts`) changes an app's extractors with the Corten release that moves to it.
-   That would wait on Corten owning the handler traits, which [Choice 25](#choice-axum-router) declines for now; if
-   Corten ever owns them, they should keep these names, the `Rejection` that makes a response and the
-   `from_request_parts(parts, state)` signature, so impls written against these paths keep
-   compiling. The traits come from `axum-core` (already in axum's tree, kept at axum's version),
-   since axum's own paths also carry axum's derives of the same names when its `macros` feature
-   is on anywhere in the build: Corten's names would then change with another crate's feature, and
-   `corten::FromRef`, the derive and the trait at once, would collide. Nothing on the request
-   path changes: these are re-exports. axum's `Path`, `Query` and `RawQuery` are left unnamed on
-   purpose: a route's path and query are read as its `Params`, and a second reader would be a
-   second way. A handler that takes the whole `Request` reads its body up to a limit of its own
-   with `corten::extract::bytes_up_to`, as an upload's file is read with `File::bytes_up_to`, not
-   axum's `to_bytes`, whose one error is both a body over the limit and one that broke, and
-   which leaves the rest of a body over it unread, so a client still sending can miss the
-   answer; a body too large to hold is read piece by piece with `pieces_up_to`, which reads past
-   it the same way, rather than from the body stream counted by hand. `corten::axum` stays
-   for a stand-in server in a test (its `Router` and `serve`): the stand-in is another server
-   the app calls, not the app, so a Corten name for it would be a second server API for tests
-   alone, and `serve_on` would give the stand-in the app's defaults (its security headers, its
-   shutdown) that the server it stands in for does not have.
+21. <a id="choice-own-extractors"></a>**An app's own extractor implements Corten's `FromRequestParts`, which keeps axum's name,
+    `Rejection` and signature.** An app reads a value from the request's head (a visitor's cookie, a
+    started read) with an extractor of its own. Corten's router now calls handlers through
+    Corten's own `Handler` ([Choice 25](#choice-axum-router), step 3), so the traits it reads
+    arguments with are Corten's too: `corten::extract` names `FromRequestParts`,
+    `OptionalFromRequestParts`, `FromRequest` and `State`, each written in `crate::handler`,
+    with the names, the `type Rejection: IntoResponse` and the
+    `from_request_parts(parts: &mut Parts, state: &S)` signature they had as axum's 0.8 traits. An
+    extractor written against `corten::extract` compiles as it was, and one written against axum's
+    paths compiles with its `use` changed. `Option<T>` and `Result<T, T::Rejection>` read as they
+    did, and so do `String`, `Bytes`, `Body` and the whole `Request` as a handler's last argument.
+    A tuple of extractors no longer reads as one: axum's impls for tuples were a second way to
+    read two values, which an extractor does by reading each in turn, so one that delegated to a
+    tuple changes. Before, these were re-exports of axum's (axum's
+    handlers needed every argument to implement axum's trait, and Rust's orphan rule forbade a
+    trait of Corten's bridged to it), so an axum release that changed the trait changed every
+    app's extractors with it; now the shape is Corten's and changes only with a Corten release
+    that says so. `Request` stays the `http` crate's `Request` over Corten's body,
+    `corten::middleware` names `Response` and `IntoResponse` (still axum-core's until step 4),
+    `corten::answer` names `Body`, and `corten::Bytes` and `corten::Listener` the rest.
+    `FromRef` (the trait and the derive) stays axum-core's: it is a conversion of the routes'
+    state that Corten's `State` reads, nothing on the request path, and leaves with axum. axum's
+    own extractors (`Path`, `Query`, `RawQuery`, `Json`, `Extension`, `ConnectInfo`,
+    `MatchedPath`, `Parts`) implement axum's traits, not these, so a handler that takes one does
+    not compile: a route's path and query are its `Params`, a body its `Json`, `Form` or
+    `Upload`, and the head its `Req`; a second reader of each would be a second way. Before,
+    axum's `Path` and `RawPathParams` compiled and answered `500` to every request on Corten's
+    router, refused at startup by type name; now they fail to compile (`compile_fail` doctests in
+    `extract.rs`). A handler that takes the whole `Request` reads its body up to a limit of its own
+    with `corten::extract::bytes_up_to`, as an upload's file is read with `File::bytes_up_to`, not
+    axum's `to_bytes`, whose one error is both a body over the limit and one that broke, and which
+    leaves the rest of a body over it unread, so a client still sending can miss the answer; a
+    body too large to hold is read piece by piece with `pieces_up_to`. `Bytes`, `String` and Corten's
+    `Json` and `Form` still read the body through axum's readers until step 4, so their limit (2 MiB),
+    refusals and texts are unchanged. `corten::axum` stays for a stand-in server in a test (its
+    `Router` and `serve`): the stand-in is another server the app calls, not the app, so a Corten
+    name for it would be a second server API for tests alone. This lasts while axum is a
+    dependency: when it leaves ([Choice 25](#choice-axum-router), step 4) the re-export goes with
+    it, and a test that wants a stand-in depends on axum itself.
 
-   Stands on: platform (handlers are axum's `Handler`, and Rust's orphan rule forbids bridging a
-   trait of Corten's to axum's); value (a second trait beside axum's for each type would be a second
-   concept, Values 6).
+    Not chosen: new names for the traits (`FromHead`, `FromBody`), which would say what they read
+    better but make every app's extractor change for no behavior; keeping axum's traits as
+    re-exports after Corten owns dispatch, which leaves axum's version in every app's extractor
+    signature for nothing Corten uses; and `#[async_trait]` or boxed futures, which axum 0.8 itself
+    dropped for `impl Future` in the trait.
 
-   Revisit when: Corten owns extraction and dispatch (`FromRequestParts` and the `Handler` impls
-   that call a handler, not only the `RouteHandler` bound it owns now), which [Choice 25](#choice-axum-router) declines for
-   now and says what would reopen it: the orphan rule then no longer stands between them, and these
-   names stay as Corten's own. An axum release that changes `FromRequestParts` reaches apps'
-   extractors with the Corten release that moves to it, a cost this Choice accepts, and is
-   [Choice 25](#choice-axum-router)'s first condition.
+    Stands on: measured (callgrind, release, Corten's handler traits against axum's, step 3
+    against step 2 at `7bba1e2b`: about 100 instructions fewer a staged request with jemalloc
+    and 150 to 170 with glibc, an unstaged one the same; [Choice 25](#choice-axum-router), Stands
+    on);
+    reasoned (the trait's shape is axum 0.8's, so an extractor's `impl` body compiles unchanged;
+    the router calls `Handler` once per request, as it called axum's); value (one way to read
+    each part of a request, Value 5, and a mistake that fails when the app compiles rather than
+    when it answers, Value 4).
 
-   Last checked: 2026-11-06, axum 0.8.9 (`axum-core` 0.5.6) and rustc 1.99.1, at `62eb57f7`.
+    Revisit when: an app needs an extractor that cannot be written with this signature (one that
+    borrows from the request beyond its call, say); or an axum or http release changes what
+    `Parts` holds; or axum leaves ([Choice 25](#choice-axum-router), step 4), which takes `FromRef`
+    and `IntoResponse` with it and reopens where they come from.
+
+    Last checked: 2026-11-09, axum 0.8.9 (`axum-core` 0.5.6) and rustc 1.99.1, Corten's own
+    traits at the commit that adds them ([Choice 25](#choice-axum-router), Last checked).
 
 22. <a id="choice-locale-in-url"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
@@ -804,93 +818,213 @@ rules something out.
    Last checked: 2026-11-06, OpenAPI 3.1.1, which the document declares, as written at `93a16d2b`;
    2026-11-06, OpenAPI 3.2.0's `in: querystring`, as written at `92df8899`.
 
-25. <a id="choice-axum-router"></a>**Matching a path to its route, calling the handler and framing server-sent events stay
-   axum's; the handler bound and axum's features are Corten's.** Corten owns the layer around
-   them: the accept loop and connection limits, its middleware stages, typed routes and
-   `Params`, the readers (`Form`, `Json`, `Upload`), `Upgrade`, and the checks every route
-   passes. What stays axum's is `Router`, `MethodRouter` and matchit, axum's `Handler` impls
-   that read each argument and call the function, and `Sse`.
+25. <a id="choice-axum-router"></a>**Corten's request path is built from parts of its own on hyper, `http`, tokio and
+    matchit: a connection loop, stages, a router, handlers and the readers they take. axum and
+    tower leave it in steps, each measured; until a step lands, the part it replaces stays
+    axum's.** Each part is one of these, and each is built on the one before it:
 
-    Owning them was weighed against correctness first (the order in the README's Values): a router
-    of Corten's would write again what axum's tests already hold it to, `HEAD`, `405` with
-    `Allow`, percent-decoding, nesting and fallbacks, about 4,600 lines of axum 0.8.9's routing,
-    method routing, handler, boxing, matched-path and nested-path modules without their tests, and
-    that risk outranks the speed it could buy. The speed is small: from memory, functions named
-    for axum, tower or matchit are 1.7% of the item page's user instructions and their code
-    inside Corten's is 0.7% more, 2.5% in all, 3.6% counting all of `http::Extensions`, where
-    axum puts the matched path and parameters; on the item's JSON the same rows are 3.8% and
-    about 5%, and on the item-API page 0.2% (bench/fullstack, split by crate). A router of
-    Corten's would still match paths and hand over parameters, so it would save less than that.
-    No prototype router was measured: allocations and copies axum causes are counted in other
-    rows, so these shares are not a ceiling, but a gain of their size would not outweigh the risk
-    above, and only a measured share well past it would (below).
-    Clashes between the routes of one module need no dispatch of Corten's either:
-    `#[corten::routes]` sees every path in its module, and clashes across areas and APIs stay a
-    startup check.
+    1. Transport: tokio's TCP listeners, and the app's own (`corten::Listener`, a TLS step in
+       `serve_wrapped`). UDP is only HTTP/3's, which [Limit 14](#limit-http1) leaves to the proxy.
+    2. Protocol: hyper's HTTP/1.1 reads and writes the connection. It stays: framing is where a
+       server's worst bugs live (request smuggling, chunked bodies, pipelining), hyper is tested
+       for them as Corten could not be, and nothing measured here points at it.
+    3. Vocabulary: the `http` crate's `Request`, `Response` and `HeaderMap`, which hyper, HTTP
+       clients and HTTP/3 libraries share (`corten::http`). Nothing above names the connection's
+       protocol.
+    4. Stages: what goes around a route ([Choice 28](#choice-fixed-stages)), each one a future that
+       wraps the route's, in Corten's one order. A route goes through all of them or says
+       `unstaged` and goes through none, its lane in their place (the host check and the headers
+       every answer needs); nothing reorders them.
+    5. Router: the method and path to a route (matchit), boxing once per request.
+    6. Handlers: a function whose arguments are read from the request and its stages, and whose
+       answer is any `IntoResponse`, a raw `Response` included.
+    7. Typed routes, `#[corten::routes]`, areas, APIs and `App`, which say what each route gets.
 
-    Server-sent events stay axum's for the same reason on a smaller scale: `text/event-stream` is
-    a standard format (multi-line data, comments, retry and keep-alive), axum's encoder writes it,
-    and an encoder of Corten's would be a second copy of it with nothing measured to gain.
+    Today 2 and 3 are hyper's and the `http` crate's, Corten's own code is 1, 4, 5 and 7 (the
+    accept loop and connection limits, the stages, `corten::Router` on matchit, `Params`, the
+    readers `Form`, `Json` and `Upload`, `Upgrade`, and since step 3 the `Handler` impls and
+    `FromRequestParts`), and of 6 only `Sse` is still axum's. Until step 2 the stages sat on tower's `Layer` and `Service`
+    because axum's router took them. That seam was what an app paid for: axum boxed every layered
+    route again and cloned that box on each request, so what went around one route had to be
+    written into its handler to cost nothing more. An `unstaged` route's host check and its API's
+    JSON, written first as a `route_layer` around those routes, cost 9,230 instructions a request
+    against 8,479 written into the route's handler. A prototype pipeline of Corten's own (`prototypes/pipeline` at `7cea4970`, on the branch
+    `codex/pipeline-prototype`, which is not yet pushed or merged, so these numbers cannot yet be
+    checked from the repository) took 5,393 instructions for one JSON request through its router
+    against axum's 8,508, and 9,493 with every default stage against Corten's 17,336. tower's
+    `Service` (`poll_ready`, `&mut self`, a clone per call) is a shape for backpressure that
+    a request's route does not have; it stays only at the app's edge, where `App::layer` takes
+    a tower layer ([Limit 12](#limit-fixed-stages)).
 
-    Two things were Corten's to take without owning dispatch, and it took them:
-    1. **The handler bound.** `#[corten::routes]` names each handler through Corten's
-       `RouteHandler`, whose message is Corten's (`.. cannot serve this route`). It was one impl
-       over every axum `Handler`, so a handler argument no request can fill reported axum's
-       unmet `Handler<_, ()>`, with a hint to use `#[axum::debug_handler]`, at the handler's name,
-       and named no argument; `#[diagnostic::do_not_recommend]` on that impl and moving the bound
-       to the trait did not change that. It is now one impl per arity with axum's own bounds
-       written out (`FromRequestParts` for each argument, `FromRequest` for the last,
-       `IntoResponse` for the result), so the same handler fails Corten's trait, in its words, and
-       a second error names the argument (`Name: FromRequestParts<()>` is not satisfied). The
-       handler is still the same function with axum's `Handler` impl, so nothing on the request
-       path changes (`tests/handler_message.rs` builds such an app and reads both messages).
-    2. **axum's features.** Corten turns on only `http1`, `tokio` (its `serve_on` loop on
-       axum's `Listener`, `ConnectInfo`) and `matched-path`, and `json` with Corten's own
-       `json` (`corten::Json` shares `axum::Json`'s rejection); corten-feed asks for none, so an
-       app with a feed gets the same set. `original-uri` copied every request's URI into its
-       extensions for nothing to read (about 150 of card-market's item page's 83,400
-       instructions at fa597483), and `form`, `query`, `tracing` and `tower-log` serve readers
-       Corten has its own of; without them `log`, `ryu` and `serde_urlencoded` leave the tree.
-       matchit, mime, sync_wrapper and tower are still in it only for axum, and
-       serde_path_to_error with `json`.
+    The steps, in order, each landing only when the one before it has:
+    1. The dispatch suite (`crates/corten/tests/dispatch.rs`): raw HTTP/1.1 to `serve_on` and the
+       answer's bytes, naming no router type, for matching (a segment of text chosen over a
+       parameter, the path before the method, nothing decoded before matching, an empty segment
+       standing for an empty parameter before another segment and for none at the end), `HEAD`, `405` with `Allow` for any
+       method, percent-decoding of parameters, catch-alls, text after a parameter, an area's and
+       an API's prefix, every path under an API's prefix being its own, an API's failures, the
+       host check, and an unstaged route's. It passes on axum now, and every later step passes it
+       unchanged; a case the next step finds missing is added to it first, on axum.
+    2. A router of Corten's on matchit in place of axum's `Router` and `MethodRouter`, and
+       `unstaged` as a route whose stages are left out rather than checks written into its
+       handler. The stages keep the shape they have unless callgrind counts fewer for another:
+       rewritten as combinators on axum's router they cost about 200 to 263 instructions more with
+       jemalloc ([Choice 28](#choice-fixed-stages), Not chosen), so the prototype's one future with
+       no `async` block per stage is measured again on the new router before it replaces them.
+       It lands when the suite passes and callgrind (CONTRIBUTING.md, Pull requests) counts no
+       more on card-market's item page, its JSON and an API request than axum's router does.
+       It has landed. With the router (at `373a10f9`) the suite passes unchanged, and every request
+       measured costs less (jemalloc,
+       median of five runs in process, three over a socket): card-market's item page 79,731
+       instructions against 82,792 and its JSON 59,754 against 63,008; an API request 13,112
+       against 15,726, a page route 18,277 against 21,222, their 404s 12,171 and 18,091 against
+       14,094 and 19,980, and an `unstaged` route 6,932 against 8,479, under axum's plain router
+       in the same build (7,099). Most of it is fewer copies of the request and fewer allocations
+       (`memcpy`, `malloc` and `free` about 1,100 fewer on the API request). The stages kept their
+       shape, now one boxed future the router calls (`router::Stages`) rather than a tower
+       service in a `route_layer`: the prototype's shape, the stages written as combinators with
+       no `async` block of their own, measured on this router (on `8ddeaea2`, the same
+       requests), cost more on every one, an API request 13,226 against 13,120, a page route
+       18,657 against 18,298, one with a middleware 18,788 against 18,583 and their 404s 12,263 and
+       18,458 against 12,171 and 18,091 with jemalloc, and 16 to 298 more with glibc's allocator,
+       so it was not taken. An unstaged route is a route whose stages are left out: the router
+       sends it through a lane (`route::Lane`) in their place, a `Stages` of its own that holds
+       the host check, the headers every unstaged answer gets, the panic catch and, under an API's
+       prefix, the API's JSON, and that its `404` for a segment without the text after its
+       parameter and its `405`, the router's own, meet as its handler's answer does. Its handler
+       is the app's; the lane wraps the handler's boxed future in a box of its own (two boxes, since axum's
+       handler boxed its own future; step 3, below, keeps two). It costs 71 to 86 instructions more than those checks written into the handler: 7,003
+       against 6,932 in the app's routes and 7,068 against 6,982 in an API's module (67 and 82
+       with glibc), within the about 100 [Choice 28](#choice-fixed-stages) allows, which says why
+       it is taken. Staged requests moved by 24 fewer to 8 more, within what two builds differ by.
+       Three other shapes were measured and not taken, each on one build with no control of its
+       own, so the differences are within what two builds can differ by and the choice between
+       them is tentative: the lane boxed as a second future of its own, 110 more than the checks
+       in the handler; a `laned` that moves its answer less, 19 more than the lane; and the lane
+       held by the router's future, outside `Stages`, 55 fewer than the checks in the handler (126
+       fewer than the lane) for an unstaged route but 16 to 60 more for each of six staged
+       requests, all in the same direction, and staged requests are most of an app's. Wall times (in process, seven runs of 200,000 requests) differ by less than
+       their runs do: 859 ns against 839 for an unstaged route, with runs from 768 to 1,064. Until
+       step 3, a handler that took one of axum's readers of what axum's router stored (`Path`,
+       `RawPathParams`, `MatchedPath`), which compiled and would have answered `500` to every
+       request, was refused when its route was made, by its arguments' type names; step 3 refuses
+       it when the app compiles.
+    3. The handler and reader traits Corten's own, keeping axum's names, `Rejection` and
+       `from_request_parts(parts, state)` ([Choice 21](#choice-own-extractors)), so an app's own
+       extractors keep compiling, with a note for each change an app sees.
+       It has landed (`crates/corten/src/handler.rs`): `Handler`, `FromRequestParts`,
+       `OptionalFromRequestParts`, `FromRequest` and `State` are Corten's, one `Handler` impl per
+       arity reading the arguments in axum's order, the head's first and the last from the whole
+       request. The dispatch suite passes unchanged, and so do every crate test and doctest but
+       the message test, whose second error now names Corten's trait in Corten's words. What an
+       app sees is in the changelog: an extractor's `impl` names `corten::extract`, not axum; axum's
+       own extractors (`Path`, `Query`, `Extension`, ..) and `axum::extract::State` no longer fill a
+       handler argument and fail to compile, where `Path` and `RawPathParams` were refused at
+       startup. Measured against step 2 at `7bba1e2b` (callgrind, release, five runs with jemalloc and
+       three with glibc, every run the same), every staged request that reaches a handler costs
+       about 100 fewer with jemalloc and 150 to 170 fewer with glibc, and the rest the same: an API
+       request 13,006 against 13,110 (14,034 against 14,187 with glibc), a page route 18,185
+       against 18,288 (19,490 against 19,655), one with a middleware 18,469 against 18,573
+       (19,771 against 19,938), a staged route beside an unstaged one 18,196 against 18,299
+       (19,520 against 19,677), an unstaged route 7,009 against 7,007 and 7,060 against 7,072 in
+       an API's module (7,813 against 7,811 and 7,866 against 7,878), the 404s, which call no
+       handler of the app's, 12,167 and 18,098 against 12,167 and 18,099, and axum's plain router
+       7,085 (8,099) in both. Two other shapes were measured once each and not
+       taken: the request split into its head and body inside the handler's future rather than
+       before it, 62 more an unstaged request and about 60 more a staged one; and an unstaged
+       route's handler boxed once with its lane (step 2's `call_in`, which makes one box of the two
+       now that the handler's future is not boxed by axum) rather than boxed by itself
+       and again by the lane, 29 more an unstaged request, though staged requests, which it does
+       not touch, moved by 18 too, so the two are within what layout moves and the simpler one,
+       with no `call_in`, is taken. `Bytes`, `Json` and `Form` still read a body with
+       axum's readers until step 4.
+    4. Server-sent events written by Corten (`text/event-stream`, a standard format) and
+       `corten::Listener` a trait of its own; then axum leaves Corten's dependencies, which
+       reopens [Choice 21](#choice-own-extractors)'s `corten::axum` for a test's stand-in server:
+       an app's test that wants one then depends on axum itself.
 
-    What staying costs: an axum major version that changes `Handler`, `FromRequestParts` or
-    `IntoResponse` changes the bounds above and an app's own extractors ([Choice 21](#choice-own-extractors)) with the
-    Corten release that moves to it, and the second error's note is still axum's ("not a valid
-    axum extractor"). This changes if an axum release changes those traits in a way apps see, if
-    axum's share of the item page from memory grows past about 5% (functions named for axum,
-    tower or matchit and their code inside Corten's, 2.5% now; the JSON's 3.8%), or if owning dispatch would catch a
-    mistake that now compiles
-    ([#761 Corten wraps most of axum but still depends on its router, handler traits and SSE, which tie its public API and diagnostics to axum's](https://github.com/corten-run/corten/issues/761)).
+    Not chosen: keeping axum's router and handlers, which this Choice held until the seam above
+    was measured (functions named for axum, tower or matchit were 2.5% of the item page's user
+    instructions, which undercounts what owning dispatch saves, since allocations and copies axum
+    causes are counted in other rows); its reason was correctness, that a router of Corten's
+    would write again what axum's tests hold it to (`HEAD`, `405` with `Allow`,
+    percent-decoding, nesting, fallbacks), and in the prototype four review rounds in a row each
+    found a `HEAD` fault. The suite in step 1 is that risk's answer: those cases are now Corten's
+    tests, read on the wire, before anything replaces axum. Nor stages an app orders itself, as
+    the prototype has them, where nothing checks that the host check comes before an app's
+    middleware; nor replacing hyper, whose reasons are in 2 above; nor a transport of Corten's
+    for UDP or QUIC before HTTP/3 is ([Limit 14](#limit-http1)); nor the server-sent events
+    encoder first, which saves nothing measured and is the smallest of the parts.
 
-    Stands on: bet (axum keeps `Handler`, `FromRequestParts` and `IntoResponse` as apps see them
-    across the releases Corten moves to); measured, one pair of runs, a floor and no prototype
-    (callgrind on card-market's item page from memory, split by crate on main `b79a6b23`: functions
-    named for axum, tower or matchit are 1.7% of its user instructions, 2.5% with their code inside
-    Corten's, and the item's JSON 3.8% by the same measure; allocations and copies axum causes are
-    counted in other rows); measured, three runs each, at the function level only (on `fa597483`,
-    the functions that copy, insert and drop a request's URI ran 339 instructions a request without
-    `original-uri` against 492 with it, 153 fewer, about 0.2% of the item page's 83,400; the whole
-    request's count does not resolve it, with runs differing by up to 450); platform (rustc names
-    the argument no request can fill for one impl per arity with axum's bounds written out, where
-    one impl over every axum `Handler`, with `#[diagnostic::do_not_recommend]` or the bound moved to
-    the trait, did not; `crates/corten/tests/handler_message.rs` checks that today's error names the
-    route in Corten's words and names the argument); platform (`text/event-stream` is a standard
-    format axum's encoder already writes); reasoned (a router of Corten's would write again what
-    axum's tests hold it to, `HEAD`, `405` with `Allow`, percent-decoding, nesting and fallbacks,
-    and `#[corten::routes]` sees every path in its module, so route clashes need no dispatch of
-    Corten's); value (correctness before speed, the order the README's Values give).
+    `#[corten::routes]` names each handler through Corten's `RouteHandler`, one impl per arity
+    with `Handler`'s bounds written out, so a handler argument no request can fill fails Corten's
+    trait in its words and a second error names the argument in Corten's words too ("a request
+    cannot fill `T`", `tests/handler_message.rs`); one impl over every `Handler` reported the
+    unmet `Handler<_, ()>` and named no argument. axum's features are only
+    `http1` and `tokio` (and `json` with Corten's `json`): `original-uri` copied every request's
+    URI for nothing to read (153 instructions a request at `fa597483`), `matched-path` named the
+    route for axum's router, which Corten's now does itself (`corten::middleware::MatchedPath`), and
+    `form`, `query`, `tracing` and `tower-log` serve readers Corten has its own of.
 
-    Revisit when: an axum release changes `Handler`, `FromRequestParts` or `IntoResponse` in a way
-    apps see; axum's share of the item page from memory grows past about 5% (functions named for
-    axum, tower or matchit and their code inside Corten's: 2.5% now, the JSON's 3.8%); or owning
-    dispatch would catch a mistake that now compiles.
+    Stands on: measured (callgrind, release, five runs with jemalloc and three with glibc, every
+    run the same, Corten's handler traits against axum's, step 3 at its commit against step 2 at
+    `7bba1e2b`: staged requests 103 to 104 fewer with jemalloc and 153 to 167 with glibc, an
+    unstaged route and the 404s within 12; on uncommitted variants of it, one run each, the
+    request split inside the handler's future 62 more unstaged and about 60 more staged, and
+    `call_in` 29 more unstaged with staged requests moved 18); measured (callgrind, release, jemalloc and glibc, five runs each in process and
+    three over one keep-alive socket for card-market, Corten's router at `373a10f9` against
+    axum's at `7e897bd6`: every request above costs less, by 1,547 to 3,254 instructions with
+    jemalloc and 1,791 to 4,135 with glibc); measured (callgrind, release, three runs each, every
+    run the same, Corten's router at `8ddeaea2` against an uncommitted variant of it with the
+    stages written as combinators, the variant [Choice 28](#choice-fixed-stages) measured on axum's
+    router carried over: 92 to 367 instructions more a staged request with jemalloc, 16 to 298 with
+    glibc); measured (callgrind, release, five runs each with jemalloc and three with glibc, every
+    run the same, an unstaged route through its lane at `bfa20380` against its checks in its
+    handler at `8ddeaea2`: 7,003 against 6,932 in the app's routes and 7,068 against 6,982 in an
+    API's with jemalloc, 7,812 against 7,745 and 7,879 against 7,797 with glibc; an API request
+    13,110 against 13,120, a page route 18,288 against 18,298, one with a middleware 18,573
+    against 18,583, a staged route beside an unstaged one 18,299 against 18,323, and the 404s
+    12,167 and 18,099 against 12,171 and 18,091; on uncommitted variants, one run each, the lane
+    as a second boxed future 7,042 and the lane held by the router's future 6,877, with staged
+    requests 16 to 60 more; wall times, seven runs each in process with jemalloc, medians 859 ns
+    against 839 unstaged, 882 against 942 in an API's module and 1,989 against 2,066 for an API
+    request, every pair's runs overlapping by more than the difference); measured (callgrind, release, five runs each: an `unstaged` route in the app's
+    routes with its host check in a `route_layer` 9,230 (9,229 to 9,233) instructions a request against 8,479 with its checks in the handler, both
+    with jemalloc, against main `c65c10ec`); measured (callgrind, release, five runs each, the
+    prototype at `7cea4970` on the branch `codex/pipeline-prototype`, not yet pushed or merged, its
+    result files in `prototypes/pipeline/results` there, against axum 0.8.9 and Corten at `f4d340c3`: 5,393 against axum's
+    8,508 for one JSON request in process through a router with no stages, 9,493 with every
+    default stage against Corten's 17,336, and over a loopback socket 12,485 against 15,904;
+    whole pipelines, not the router alone, and the prototype's defaults do less than Corten's: no
+    error page, tag, compression or layout reads); measured, one pair of runs (functions named for
+    axum, tower or matchit 1.7% of the item page's user instructions, 2.5% with their code inside
+    Corten's, the item's JSON 3.8%, on `b79a6b23`); platform (hyper 1.12 reads and writes
+    HTTP/1.1, matchit 0.8 matches paths, and `http` 1 is the type hyper and its clients share);
+    platform (rustc names the argument no request can fill for one impl per arity, where one impl
+    over every axum `Handler` did not); reasoned (the dispatch suite reads only the wire, so it
+    holds a router of Corten's to what axum does without naming either); value (fast and proven
+    fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed, the
+    order the Values give, which is why the suite comes first).
 
-    Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`, and axum's
-    own share at `15e81290`; 2026-11-06, the `original-uri` runs on `fa597483`; 2026-11-06, rustc
-    1.99.1's error for an argument no request fills, held by
-    `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-06, axum 0.8.9's event stream
-    encoder at `62eb57f7`.
+    Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case, or
+    counts more than axum's on any request measured in step 2 (that step then waits, and this
+    Choice says why); an axum release changes `IntoResponse` or `Sse` in a way apps see before
+    step 4 lands; or Corten serves HTTP/2 or HTTP/3 itself
+    ([Limit 14](#limit-http1)), which adds a protocol under 3 and must leave 4 to 7 as they are.
+
+    Last checked: 2026-11-05, the split by crate on `b79a6b23`, recorded at `0154ac63`; 2026-11-06,
+    the `original-uri` runs on `fa597483`; 2026-11-06, rustc 1.99.1's error for an argument no
+    request fills, held by `crates/corten/tests/handler_message.rs` at `84d33d0b`; 2026-11-08,
+    the prototype's runs (`prototypes/pipeline/results/round4.tsv` and `round4-socket.tsv`),
+    the prototype at `7cea4970`; 2026-11-09, the `route_layer` runs, on an uncommitted variant of
+    `3452790a` with the host check and the API's JSON in a `route_layer`; 2026-11-09, the
+    dispatch suite on axum 0.8.9, hyper 1.12.0 and matchit 0.8.4, at `599c302a`; 2026-11-09,
+    Corten's router against axum's, at `373a10f9`, with the suite unchanged; 2026-11-09, the
+    stages as combinators on Corten's router, on the uncommitted variant of `8ddeaea2`, and the
+    unstaged route's lane, at `bfa20380`, with the suite unchanged; 2026-11-10, Corten's handler
+    traits (step 3) at `6d78a069` against step 2 at `7bba1e2b`, with the suite unchanged; 2026-11-09, the lane boxed
+    as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
+    the `laned` variant of `fa0b1525`.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
     `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
@@ -934,9 +1068,19 @@ rules something out.
     takes the `Routes` a `#[corten::routes]` module makes, and `Area::route` and `Api::route` take
     `Methods`, made by Corten's `get`, `post` and the others, which check the same things. A plain
     axum `Router` or method router does not fit any of them, so no route given to the `App` is
-    unchecked (what an app adds to the `Router` that `App::router()` hands out for serving it
-    another way, or answers in a `.layer(l)` around it, is its own). A WebSocket (`Upgrade`)
-    and another server's answer passed on (`Relay`) are such routes too. Not chosen: guards and
+    unchecked (what an app answers in a `.layer(l)` around the `Router` that `App::router()` hands
+    out, or in a server of its own around it, is its own). A WebSocket (`Upgrade`)
+    and another server's answer passed on (`Relay`) are such routes too. A route that says
+    `unstaged` ([Choice 28](#choice-fixed-stages)), in any routes module, meets no stage, so
+    its answer type is not checked; its handler is checked instead to take only what the request line and the app hold
+    (`corten::answer::Unstaged`: the route's `Params`, `Uri`, `Method` and `State`): no `Caller` and no headers, which carry
+    the cookies and credentials, so no input Corten gives it says who is asking (an extractor of
+    the app's own that implements `Unstaged` is the app's to keep so, as with `Anonymous`), and no
+    reader of the body, which no deadline would end there and no same-origin check would keep
+    another site from posting. A module with `caller = T`
+    cannot hold one, and its handlers are a type (`UnstagedMethods`) that only the hidden
+    `__unstaged_route`s of `Routes`, `Area` and `Api` take, so `Area::route` and `Api::route` still
+    take only checked `Methods`. Not chosen: guards and
     a context object checked per request (`App::guard`, `Area::guard`, `App<C>`), which Corten
     had and removed in
     [#81 A route's handler says what it answers, who may call it and how it caches, checked for every route](https://github.com/corten-run/corten/pull/81).
@@ -948,7 +1092,8 @@ rules something out.
     Stands on: reasoned (a handler's arguments and return type are checked where the routes module
     is compiled, so a module's `caller = T`, `Public` and `no_store` hold every handler in it,
     and `Routes` and `Methods` are the only types `App::new`, `Area::route` and `Api::route`
-    take, so no route given to the `App` skips them); bet (most of an app's access rules are
+    take, so no route given to the `App` skips them, an unstaged route's arguments standing in for
+    its answer's); bet (most of an app's access rules are
     about who is asking, which a type can name, and the rest depend on the record, which the
     handler reads anyway); value (mistakes fail at compile time, Value 4).
 
@@ -958,16 +1103,111 @@ rules something out.
 
     Last checked: 2026-11-06, the `compile_fail` doctests that hold `caller = T`
     (`crates/corten/src/route.rs`) and the caller's own (`crates/corten/src/caller.rs`) at
-    `bcd31ffe`.
+    `bcd31ffe`; 2026-11-09, the `unstaged` `compile_fail` doctests in
+    `crates/corten/src/route.rs` (a stage's input, a header reader, a body reader, a
+    `caller = T` module, a path that reaches Corten's own, a method other than `get`,
+    `prefetch`, `/health/live`, `/{*rest}`), at `f703d3f8`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
-    `Middleware` tuple at one place in it.** The stages are `corten::middleware`'s; the app's
-    steps are resolved at compile time. An area's or an API's own steps (`Area::middleware`,
-    `Api::middleware`) run right after the app's, for the requests at its prefix; they are boxed,
-    since which run depends on the path, and an app with none pays nothing for them. Not chosen:
-    hooks at several stages (before routing, after the caller, around the error page), each a
+    `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
+    `corten::middleware`'s; the app's steps are resolved at compile time. An area's or an API's
+    own steps (`Area::middleware`, `Api::middleware`) run right after the app's, for the requests
+    at its prefix; they are boxed, since which run depends on the path, and an app with none pays
+    nothing for them. A route that says `unstaged` where it is declared, in the app's routes
+    module, an area's or an API's, goes through none of the stages, the app's, area's and API's
+    middleware among them, and every other route keeps every stage. It is every stage or no stage, so the
+    order a reader checks is still one, and a flag, as `no_store` is, that names what the route
+    goes without. It is for an answer that must cost what the router alone costs and is the same
+    for everyone who can reach it (a public JSON figure a CDN fronts, a value every client polls),
+    beside pages that need every stage; the stages add about 1.5 times what its handler, the
+    router and the host check cost together (below). What it keeps is none of the stages and is
+    the same for every unstaged route: a lane (`route::Lane`) the router runs in their place, wrapping the handler's boxed future,
+    runs the host check every request meets, so a
+    DNS-rebound page reads it no more than any route, and, under an API's prefix, writes a failure
+    as the API writes every failure there (its Problem Details or `Api::errors` shape), the
+    router's `405` and a segment without its suffix among them, so an API's clients still read
+    every failure under its prefix as JSON; only a failure boxes anything for that. A tower layer
+    around those routes alone (axum's `route_layer`) was built first and measured at 751
+    instructions a request more than the same checks in the handler (jemalloc), since axum boxes a
+    layered route again and clones that box on each request; the lane costs 71 to 86 more than
+    the same checks in the handler (about 1%, which wall times did not show), taken for one place
+    that says what goes around a route: the router holds the app's stages or the route's lane for
+    each path, and its own `404` and `405` meet the lane as the handler's answer does, with no
+    handler of their own. Value 1 still holds with it: the route stays under axum's plain router
+    in the same build and inside the bound below, which is what this Choice holds it to
+    ([Choice 25](#choice-axum-router), step 2, has the shapes measured). Its answer gets `X-Content-Type-Options: nosniff` and its own
+    `Content-Security-Policy: sandbox` beside any the handler set, whatever its type, both
+    added as the lane takes its answer: a browser takes it only as the type it
+    says, a page of the app's cannot load it as a script (`script-src 'self'` trusts every URL of
+    the app's), and a file it sends (an uploaded picture) runs no script on the app's origin; a
+    client that reads it as data sees nothing else change, and a PDF the browser opens still shows
+    in Chrome's, Edge's and Firefox's viewers; an answer that sets a cookie is
+    `private, no-cache` (`no-store` when it says one) with no CDN caching header, so no shared cache hands one
+    visitor's cookie to another; a panic is logged and answered `500` by the lane. It
+    answers `get` alone and its handler reads no body: no same-origin check covers it, a form
+    posted to it needs no preflight, so any site could make its visitors send one, and no deadline
+    would end a slow body. An unstaged route whose path can answer at one of Corten's own paths
+    does not compile where the path alone shows it, and one that can answer under a path the app
+    adds is refused when the app starts, as is one declared outside the module of the innermost
+    area or API whose prefix holds it (where a reader of that module would not see what it
+    skips), one whose parameter can reach an area's or API's prefix, where a staged route is
+    turned away per request and an unstaged one never would be, and one whose path another module
+    routes too (a parameter's name and the text after it not counting, as the router matches),
+    where the methods it lacks would answer with no stage. Not chosen: an app's own tower layer that
+    answers the route's path before the stages (`.layer(l)`), which works today but is outside
+    the routes module: its path is a
+    string, not a typed route, its handler is checked for nothing, and a reader of the routes does
+    not see it; hooks at several stages (before routing, after the caller, around the error page), each a
     place an app's step could run and a reader of the app would have to check; what must see the
     raw request first is a tower layer around the whole app ([Limit 12](#limit-fixed-stages)).
+    Nor presets that keep some stages and drop others, each another order to
+    read and test, with no app yet needing one (`unstaged` is no stage at all, which
+    listings-feed's sequence route uses; its lane chooses nothing, only the checks no route goes
+    without, the same for every unstaged route, [Choice 25](#choice-axum-router), step 2); nor the stages rewritten as combinators, measured
+    on variants that are not in the repository (Stands on): on axum's router about 200 to 360
+    instructions fewer a request with glibc's allocator but about 200 to 263 more with jemalloc,
+    which the images preload, and on Corten's own router more with both, 92 to 367 with jemalloc
+    and 16 to 298 with glibc; nor making the stages cheap
+    enough for such a route instead, since a profile of the staged request (callgrind, jemalloc)
+    spread the 13,266 instructions it costs over a route without them across the stages' own work
+    (the tag's hash and body read, 3,494 of them; the security headers, 2,371; the error page's
+    plumbing, the signal and the boxed future most of the rest), which such a route would still pay;
+    nor refusing an answer
+    type that sends HTML, since a raw `Response`, which an unstaged route exists to allow, carries any
+    content type, and the sandbox keeps such a document from running script; nor sending the
+    answer with no header added, as this Choice first had it, which left a `text/plain` echo of
+    the URL loadable as a script by the app's own pages and an uploaded SVG running script on its
+    origin: correctness comes before the cost (below); nor `Media` setting the headers itself,
+    measured on an API request answering `Media` at 524 instructions more with `nosniff` on every
+    type and 106 more checking its type alone, paid on every route for what only an unstaged one
+    needs; nor adding the sandbox only to a type that runs script, or only when the handler's
+    policy has none, which reads text a handler writes (a list of types, a second header, a
+    `sandbox` that allows the same origin) and so can be fooled, and cost more: an unstaged request
+    measured 8,242 instructions reading them against 8,067 adding both headers always
+    (jemalloc); nor writes or body readers on an unstaged route, which no app has asked for and which
+    no same-origin check or deadline would cover; nor the form this Choice first had,
+    `stages = bare`: a key with one value, whose word was not so (it kept `nosniff`, the sandbox,
+    the cookie rule and the panic catch), with no host check, so its answer had to be one anyone
+    anywhere may read, and refused in an area's or an API's module and under their prefixes, which
+    kept a public figure out of the API it belongs in and made it a rule with exceptions; nor an
+    API's allowed origins (CORS) or deadline on it, which are its stages: a partner's page reads it
+    through a route with stages, or its handler sends `Access-Control-Allow-Origin` itself.
+
+    That host check put an unstaged route 12% over a plain axum router (jemalloc; 10% with
+    glibc), past the about 10% this Choice was to be revisited at. It was: a route the host check
+    did not cover answered a DNS-rebound page, and correctness comes before the 494 instructions
+    (the README's Values), so the check stays, and the bound below is now the 12% it costs with
+    the check (8,479 against 7,559): a change that adds more than the about 100 instructions two
+    builds of the same code differ by (measured on the pipeline prototype, which the repository
+    does not hold) reopens this. The router of Corten's own ([Choice 25](#choice-axum-router),
+    step 2) took it under, not dropping the check: an unstaged route then cost 6,932 instructions
+    against 7,099 for a plain axum router in the same build (jemalloc; 7,745 against 8,117 with
+    glibc). Its checks then left its handler for a lane the router runs in place of its stages,
+    71 more in the app's routes (7,003; 7,812 with glibc) and 86 in an API's module (7,068; 7,879).
+    The bound stays where it was, below: the plain axum router counted the same in both builds
+    (7,085; 8,099 with glibc), so these are the lane's own cost and not a difference between
+    builds, and the next change to an unstaged route has about 29 left in the app's routes and 14
+    in an API's module.
 
     Stands on: measured (callgrind, release, five runs each, on a bench binary that is not in the
     repository, against main `9200aae4`: a request in an area with a pass-through middleware,
@@ -975,12 +1215,60 @@ rules something out.
     outside that area 19,909 to 19,913 against 19,706; an app whose areas and APIs have none runs
     Corten's own code within 18 instructions of before, while its whole request rose from 19,696
     to 19,976 to 19,988 in the allocator with the same allocations, so the same layout effect may
-    be in the request outside the area); reasoned (one place for the app's steps is one
-    order to read, and a tuple resolved at compile time costs no box); value (one way to do each
-    thing, Value 5, and good defaults with easy overrides, Value 7).
+    be in the request outside the area); measured (callgrind, release, the same JSON handler
+    answering `Media`, a request counted as the run of 1,200 less the run of 200 over 1,000, five
+    runs each, this change's request path, the staged variants alternating with main `c65c10ec`,
+    median and range: with jemalloc an unstaged route 8,479 instructions a request in all five
+    runs, 8,537 in an API's module, the same handler through the stages 21,220 (21,218 to 21,228;
+    main 21,307, 21,300 to 21,317), a staged route beside an unstaged one 21,252 (21,245 to
+    21,265), an API request 15,725 against main's 15,813, its 404 14,106 against 14,082 and a
+    page's 404 19,991 against 19,996, and a plain axum router 7,559; with glibc's allocator an
+    unstaged route 9,537 (9,531 to 9,539), 9,589 in an API's module, and a plain axum router
+    8,635. Before the host check (`stages = bare` at `3452790a`) the same route was 7,985 (7,984
+    to 7,986) with jemalloc and 9,040 with glibc, and with the host check and the API's JSON in
+    a `route_layer` 9,230; the 494 the host check adds is mostly its read of `Host` and the
+    match against the app's names (`security::named`, about 400 in the profile)); measured
+    (callgrind, release, five runs each, the same handler on Corten's router at `373a10f9`:
+    unstaged 6,932 with jemalloc and 7,745 with glibc in every run, against 7,099 and 8,117 for a
+    plain axum router in the same build); measured (callgrind, release, five runs each, the same
+    handler through its lane at `bfa20380`: 7,003 with jemalloc in every run and 7,068 in an
+    API's module, against 6,932 and 6,982 with its checks in its handler at `8ddeaea2`, and 7,085
+    for a plain axum router in both builds; 7,812 and 7,879 with glibc, three runs, against 7,745
+    and 7,797, and 8,099 for a plain axum router in both); measured (callgrind, release, three runs each, every run the same, an uncommitted
+    variant of `fa0b1525` whose `laned` adds the headers as it takes the handler's answer: 7,022
+    and 7,083 against 7,003 and 7,068); measured (callgrind, release, three runs each, the stages written as combinators
+    on Corten's router, an uncommitted variant of `8ddeaea2`: 92 to 367 instructions more a
+    staged request with jemalloc and 16 to 298 with glibc); measured
+    (callgrind, inclusive counts by function, jemalloc, one run each, the bench binary at
+    `3452790a`: of the 13,266 instructions the stages add to a request, the tag's hash and body
+    read 3,494, the security headers 2,371, and the error page's plumbing, the signal and the
+    boxed future most of the rest); measured (callgrind, release, the same request path, on an
+    uncommitted variant of main `c65c10ec` with the stages written as combinators on axum's
+    router, which the repository does not hold: about 200 to 360 instructions a request fewer
+    than main with glibc's allocator, about 200 to 263 more with jemalloc); reasoned (one place for the app's steps is
+    one order to read, a tuple resolved at compile time costs no box, and a route that needs none
+    of it says so where it is declared); platform (a PDF sent with a sandbox shows in the viewers of
+    Chrome, Edge and Firefox as one sent without it, probed as Last checked says; Safari's is not
+    run, since the repository's WebKit has no PDF viewer, and WebKit's bug tracker records that it
+    showed nothing for one until a fix in December 2024, which was read, not run); bet (apps have an answer anyone may read whose cost the
+    stages would make about 2.5 times as costly, beside pages that need them all; listings-feed's
+    sequence route, which its failover benchmark reads, is the first use, and no app's in
+    production is yet); value
+    (one way to do each thing, Value 5, and good defaults with easy overrides,
+    Value 7; one place that says what goes around a route, the stages or an unstaged route's lane,
+    for 71 to 86 instructions that keep the route inside the bound below, Value 5 within Value 1).
 
     Revisit when: an app needs a step at a stage the tuple's place cannot reach and a tower
-    layer around the app cannot serve it; or a request outside every area costs more than twice
+    layer around the app cannot serve it; or a route needs some stages and not others, which
+    `unstaged` cannot give (a write, a body, an API's allowed origins or a deadline on it among
+    them); or a
+    browser the runtime supports shows a PDF sent with a sandbox differently from one sent without
+    it; or no
+    app but listings-feed uses `unstaged` by the next minor release; or an unstaged route costs more
+    than about 100 instructions over what it cost with its checks in its handler at `8ddeaea2`
+    with jemalloc, 6,932 in the app's routes and 6,982 in an API's module (7,003 and 7,068
+    through its lane since), against a plain axum router in the same build (7,085 in both), the
+    control that shows whether two builds differ; or a request outside every area costs more than twice
     the about 200 instructions measured here over the build before area middleware (the lookup
     and any layout effect together; layout alone moved a whole request by about 280). Area
     middleware has no switch, so the next check builds current main with the prefix lookup taken
@@ -989,7 +1277,22 @@ rules something out.
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
     (recorded at `04c2393f`; the bench binary was not committed, so the next check writes its
-    own).
+    own); 2026-11-09, the `unstaged` runs on this change against main `c65c10ec` and `stages = bare`
+    at `3452790a` (the bench binary was not committed, so the next check writes its own: the same
+    JSON handler answered in process by an `App` with the route unstaged, in the app's routes and
+    in an API's, by the same `App` with it staged, and by a plain axum `Router`); 2026-11-09, the
+    profile of the staged request against `stages = bare` (callgrind, inclusive counts by
+    function, jemalloc, one run each) on the bench binary built at `3452790a`; 2026-11-08, the
+    stages as combinators on the uncommitted variant of `c65c10ec`; 2026-11-09, a PDF sent `inline` with `Content-Security-Policy: sandbox` shown by
+    the viewers of Chrome 156.0.8078.49, Edge 157.0.4341.42 and Firefox 157.0 (Playwright's, its
+    PDF viewer turned on) as one sent without it (Playwright's WebKit 27.2 has no PDF viewer and
+    downloads both, so Safari was not run), and
+    [WebKit bug 284594](https://bugs.webkit.org/show_bug.cgi?id=284594), fixed in December 2024,
+    was read; 2026-11-09, the unstaged route on Corten's router at `373a10f9` against axum's
+    plain router in the same build ([Choice 25](#choice-axum-router), step 2); 2026-11-09, the
+    unstaged route through its lane at `bfa20380` against its checks in its handler at
+    `8ddeaea2`; 2026-11-09, the stages as combinators on Corten's router, on an uncommitted
+    variant of `8ddeaea2`; 2026-11-09, the `laned` variant of `fa0b1525`.
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
@@ -1246,7 +1549,14 @@ by design; where it is known, a limit says what would lift it or why it is so.
 12. <a id="limit-fixed-stages"></a>The app's own steps run at one place in Corten's fixed order of stages
     ([Choice 28](#choice-fixed-stages)), not as hooks at several: a step that must see the raw
     request before every stage is a tower layer around the whole app (`.layer(l)`), and there is
-    no step for one route, whose needs are its handler's arguments and return type.
+    no step for one route, whose needs are its handler's arguments and return type. A route
+    takes every stage or, with `unstaged`, none: no same-origin check, deadline, middleware,
+    error page, security headers but `nosniff` and `sandbox`, cache rule but `private` on a
+    cookie, or allowed origins, which its handler gives itself if it needs them; the host check
+    and, under an API's prefix, the API's JSON for a failure stay; it answers reads only; a wrong
+    method or a missing suffix at its path is a plain 405 or 404 (the API's JSON under an
+    API's prefix), a failure elsewhere is sent as its handler made it (plain text, not Problem
+    Details), and a panic is logged and answered 500 (plain, or the API's JSON under its prefix).
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel) only over HTTP/1.1 served by
     `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
     and hands over the bytes: frames, message limits, buffering and per-message checks are the
@@ -1326,7 +1636,10 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `target` an `HTMLElement`, so its script narrows (`event instanceof MouseEvent`) where an
     `on:click` written on an `<a>` declares `MouseEvent` and `HTMLAnchorElement`. Typing a prop by
     the event and element it lands on would make each prop name its element's type, and the
-    arguments the call passes (a column, as a Rust type) are checked either way.
+    arguments the call passes (a column, as a Rust type) are checked either way. A handler meant
+    for such a prop takes the wide type too (corten-ui's `rows::sort` and `ordered::link`, which
+    the kit's pagers take as `on:link`), so written on an element of its own it accepts any
+    element: `ordered::link` on a `<button>` compiles, is reported in the console, and does nothing.
 19. <a id="limit-permissions-policy"></a>The `Permissions-Policy` a document is sent (`Feature`) is enforced by Chromium-based browsers
     (measured in Chromium 156: with the location granted, `geolocation=()` refuses it). Firefox 157
     and WebKit 27.2 gave the location under the same header (probed), so in them the features it
