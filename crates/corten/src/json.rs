@@ -1216,9 +1216,34 @@ pub mod __private {
     }
 
     // A field's type, for `ToJson::__well_formed`, resolved as `Field` is: its `ToJson`'s answer,
-    // or true for what serde_json writes (its serializer cannot write broken JSON; a failure
-    // panics before anything is sent).
+    // or true for what serde_json writes. serde_json writes well-formed JSON for a `Serialize` that
+    // follows serde's protocol (every derived one; a failure panics before anything is sent); one
+    // written by hand that calls a map's `serialize_key` twice is not checked by serde_json, and
+    // only a debug build's parse catches it.
     pub struct Type<T: ?Sized>(pub core::marker::PhantomData<T>);
+
+    /// A derived type's `__well_formed`: its fields' answer, or true for a type already being
+    /// asked on this thread, so a type that holds itself (`children: Vec<Node>`) is asked once.
+    /// The outer question still ANDs every field of that type, so the answer is the same. Keyed by
+    /// the type's name, which differs for each generic instance.
+    pub fn well_formed(name: &'static str, fields: impl FnOnce() -> bool) -> bool {
+        use std::cell::RefCell;
+        thread_local! {
+            static ASKING: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+        }
+        struct Done;
+        impl Drop for Done {
+            fn drop(&mut self) {
+                ASKING.with(|asking| asking.borrow_mut().pop());
+            }
+        }
+        if ASKING.with(|asking| asking.borrow().contains(&name)) {
+            return true;
+        }
+        ASKING.with(|asking| asking.borrow_mut().push(name));
+        let _done = Done;
+        fields()
+    }
 
     pub trait WellToJson {
         fn __well_formed(&self) -> bool;

@@ -4296,14 +4296,15 @@ Corten is pre-1.0, so any minor version may change the API.
     `SystemTime` before the epoch) panics in its `ToJson`; for a tool's output the call catches it
     and answers the tool's internal error with the call's `id`, as before, and logs the tool's name
     with the panic's message (a test holds it; an app built with `panic = "abort"` ends instead). A
-    tool output derived over types whose `ToJson` Corten or serde writes goes out unparsed; one that
-    is or holds a `ToJson` or map key (`JsonKey`) written by hand is parsed before it is sent, and
+    tool output derived over types whose `ToJson` Corten or serde writes goes out unparsed (a type
+    that holds itself, a tree, included); one that is or holds a `ToJson` or map key (`JsonKey`)
+    written by hand is parsed before it is sent, and
     one that is not one JSON object is the tool's internal error, logged with the tool's name, the
     output's size and the fault, not its data (a debug build, `corten dev` or tests without
     `--release`, parses every output and answers a bad one with the app's 500 and a log line
     naming the tool). Parsing every output in a release build measured about 92,700 more
     instructions a call (medians 303,500 against 210,762 over three runs, 44% of `tool_cost`'s),
-    which a derived output does not pay. An enum whose `Serialize` is not serde's derive (written
+    which a derived output does not pay; whether to parse is decided once, when the tool is added. An enum whose `Serialize` is not serde's derive (written
     by hand, or `serde_repr`'s number) and that derives `ToJson` writes what its `#[serde(..)]`
     attributes say, its variant's name for a unit variant, as a value and as a map key, not what
     that `Serialize` writes. To keep what its `Serialize` writes, do not derive `ToJson` on it: as

@@ -102,11 +102,13 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         &crate::schema::doc(&item.attrs),
         &schema,
     );
-    // `true && ..` over its fields, each resolved as `value` writes it (ToJson, else serde).
-    let mut well = q("true", &[]);
+    // `true && ..` over its fields, each resolved as `value` writes it (ToJson, else serde),
+    // asked once per type even when a field holds the type again (a tree).
+    let mut fields = q("true", &[]);
     for ty in types {
-        well.extend(q("&& (&::corten::json::__private::Type::<__A0>(::core::marker::PhantomData)).__well_formed()", &[ty]));
+        fields.extend(q("&& (&::corten::json::__private::Type::<__A0>(::core::marker::PhantomData)).__well_formed()", &[ty]));
     }
+    let well = q("::corten::json::__private::well_formed(::core::any::type_name::<Self>(), || __A0)", &[fields]);
     let mut out = q("#[automatically_derived] impl", &[]);
     out.extend(item.impl_generics.clone());
     out.extend(q("::corten::json::ToJson for", &[]));

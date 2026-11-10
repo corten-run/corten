@@ -834,11 +834,11 @@ impl<A: Send + 'static> Tools<A> {
                 // is the tool's internal error, logged with the output's size and the fault, not its
                 // data; a debug build panics instead (the app's 500), so a test stops at it.
                 if let Some(fault) = not_one_object(&output, cfg!(debug_assertions) || !tool.well_formed) {
-                    let error = format!("its output ToJson must write one JSON object; {fault}");
+                    let rule = format!("ToJson must write one JSON object; {fault}");
                     if cfg!(debug_assertions) {
-                        panic!("corten: tool {name}'s output {}", &error["its output ".len()..]);
+                        panic!("corten: tool {name}'s output {rule}");
                     }
-                    return Ok(self.failed(name, ToolError::internal(error)));
+                    return Ok(self.failed(name, ToolError::internal(format!("its output {rule}"))));
                 }
                 // The output as written, and once more as a JSON string for the text block, into
                 // one string sized for both: a large result is not copied as it grows.
@@ -1340,6 +1340,32 @@ mod tests {
         }
         #[derive(crate::json::ToJson)]
         struct Keyed(std::collections::BTreeMap<Key, u8>);
+        // Trees: asked once per type, so these answer rather than recurse forever.
+        #[derive(crate::json::ToJson)]
+        struct Node {
+            name: String,
+            children: Vec<Node>,
+            next: Option<Box<Node>>,
+        }
+        #[derive(crate::json::ToJson)]
+        struct HandNode {
+            children: Vec<HandNode>,
+            leaf: Option<Hand>,
+        }
+        #[derive(crate::json::ToJson)]
+        struct Ping {
+            pong: Vec<Pong>,
+        }
+        #[derive(crate::json::ToJson)]
+        struct Pong {
+            ping: Option<Box<Ping>>,
+            hand: Vec<Hand>,
+        }
+        assert!(<Node>::__well_formed());
+        assert!(<Vec<Node>>::__well_formed());
+        assert!(!<HandNode>::__well_formed());
+        assert!(!<Ping>::__well_formed());
+        assert!(!<Pong>::__well_formed());
         assert!(<Derived<'static, u8>>::__well_formed());
         assert!(<Box<[Derived<'static, Tone>]>>::__well_formed());
         assert!(!<Derived<'static, Hand>>::__well_formed());
