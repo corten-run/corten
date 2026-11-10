@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { allApps } from "./apps.mjs";
-import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -238,6 +238,58 @@ test("rustc's passes and macro statistics are read from its output", () => {
   assert.deepEqual(macros.map((m) => m.macro), ["#[derive(Deserialize)]", "html!", "#[derive(Id)]", "::core::include_bytes!", "::schemars::_private::serde_json::json!"]);
   assert.deepEqual(macros[1], { macro: "html!", uses: 18, lines: 917, bytes: 44913 });
   assert.equal(macros[4].uses, 10);
+});
+
+test("each Rust app's completion point is in its file once, and every app that checks has one", () => {
+  for (const [name, r] of Object.entries(recipes)) {
+    assert.equal(!!r.ra, !!r.check, `${name}: an app the editor's loop checks has a completion point, and only one`);
+    if (!r.ra) continue;
+    assert.equal(r.ra.at.split("|").length, 2, `${name}: one | in ${r.ra.at}`);
+    // The probe types `nope_` at the point and looks for an error naming `nope_<expect>`.
+    assert.ok(r.ra.at.split("|")[1].startsWith(r.ra.expect), `${name}: ${r.ra.at} has ${r.ra.expect} right after the |`);
+    const text = readFileSync(join(repo, contextOf(name), r.edit), "utf8");
+    assert.equal(text.split(r.ra.at.replace("|", "")).length, 2, `${name}: ${r.edit} needs exactly one ${r.ra.at}`);
+  }
+});
+
+test("a Docker rebuild's edit numbers its run, so no two runs write the same file", () => {
+  for (const name of Object.keys(recipes)) {
+    const seen = new Set();
+    for (let run = 1; run <= 6; run += 1) {
+      const { from, to } = runChange(name, run);
+      assert.equal(from, changeOf(name).from);
+      assert.ok(to.includes(`Set the price alert (${run})`), `${name}: ${to}`);
+      seen.add(to);
+    }
+    assert.equal(seen.size, 6, name);
+  }
+});
+
+test("the steps a BuildKit build ran are the ones its plain output did not mark CACHED", () => {
+  const output = [
+    "#1 [internal] load build definition from Dockerfile",
+    "#1 DONE 0.0s",
+    "#5 [build 1/4] FROM docker.io/library/rust:1-bookworm@sha256:abc",
+    "#5 CACHED",
+    "#6 [build 2/4] COPY . .",
+    "#6 DONE 0.4s",
+    "#7 [build 4/4] RUN --mount=type=cache,target=/src/target cargo build --release",
+    "#7 12.1    Compiling card-market v0.1.0 (/src/examples/card-market)",
+    "#7 DONE 40.2s",
+    "#8 [stage-1 3/3] COPY --from=build /out/server /app/server",
+    "#8 CACHED",
+  ].join("\r\n");
+  assert.deepEqual(ranSteps(output), [
+    "[internal] load build definition from Dockerfile",
+    "[build 2/4] COPY . .",
+    "[build 4/4] RUN --mount=type=cache,target=/src/target cargo build --release",
+  ]);
+  assert.deepEqual(ranSteps("#5 [build 4/4] RUN make\n#5 CACHED\n"), []);
+  assert.equal(ranARun(ranSteps(output)), true);
+  // A build after the edit that only copied (the build step cached) did not build.
+  assert.equal(ranARun(["[internal] load build definition from Dockerfile", "[build 2/4] COPY . ."]), false);
+  assert.equal(ranARun(["[build 2/4] COPY ./RUN /src"]), false);
+  assert.deepEqual(compiledIn(output.replace("#7 DONE", "#7 30.5    Compiling card-market-two v0.2.0\r\n#7 DONE")), ["card-market", "card-market-two"]);
 });
 
 test("build.mjs's table has a row for an app with no build step, a built app and a failed one", () => {
