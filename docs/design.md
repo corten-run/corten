@@ -1309,28 +1309,29 @@ rules something out.
     they write now; `Source`, an enum, could not take it, since `FromRef` is derived only for a
     struct with named fields. That is a third way to write state, and a concept to learn that one
     word a type does not earn (Values 5 and 6). The generated code would be the same. `FromRef`
-    deriving `Clone` itself is not chosen either: a type that writes its own `impl Clone` (a
-    generic state whose fields are behind an `Arc`, which `#[derive(Clone)]` would bound on its
-    parameter, as `corten_cluster::Cluster<S>` does, routed as a state by
-    `#[corten::routes(state = Cluster<Items>)]` in its tests and a part of listings-feed's state)
-    would get a second, conflicting impl, and the derive list would no longer say that the type is
-    `Clone`. Not chosen: the attribute; an option on `FromRef` (`#[from_ref(clone)]`), the same
-    second spelling in another place
+    deriving `Clone` itself is not chosen either: a type that writes its own `impl Clone` and
+    derives `FromRef` would get a second, conflicting impl (no routed state does both today, but
+    the shape is real: `corten_cluster::Cluster<S>`, routed as a state by
+    `#[corten::routes(state = Cluster<Items>)]` in its tests, writes its own `Clone` because its
+    fields are behind an `Arc` and `#[derive(Clone)]` would bound it on its parameter), and the
+    derive list would no longer say that the type is `Clone`. Not chosen: the attribute; an option
+    on `FromRef` (`#[from_ref(clone)]`), the same second spelling in another place
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 
-    Stands on: platform (axum 0.8.9's `MethodRouter::with_state`, like its other `MethodRouter`
-    methods, requires `S: Clone`, and axum-core 0.5.6's `impl<T: Clone> FromRef<T> for T` is how a
-    handler takes the whole state, both from `Cargo.lock`; Corten routes on axum's router,
-    [Choice 25](#choice-axum-router)); reasoned (each route takes its own copy of the state, in
-    `routes.rs`'s `Methods::with_state(.., state.clone())`; an impl the derive wrote would
-    conflict with a hand-written `Clone`; and the attribute saves one word on three types while
-    adding a way to write six of the seven); value (one way to do each thing and a small surface,
-    Values 5 and 6).
+    Stands on: reasoned (each route takes its own copy of the state, in `routes.rs`'s
+    `Methods::with_state(.., state.clone())`; an impl the derive wrote would conflict with a
+    hand-written `Clone`; and the attribute saves one word on three types while adding a way to
+    write six of the seven, counts that move with the examples); platform (axum 0.8.9's
+    `MethodRouter::with_state`, like its other `MethodRouter` methods, requires `S: Clone`, and
+    axum-core 0.5.6's `impl<T: Clone> FromRef<T> for T` is how a handler takes the whole state,
+    both from `Cargo.lock`; Corten routes on axum's router, [Choice 25](#choice-axum-router));
+    value (one way to do each thing and a small surface, Values 5 and 6).
 
     Revisit when: a third mechanical impl is derived beside the pair on two or more of the
     examples' routed state types, so an attribute would carry more than two derives' worth; or
     Corten stops giving each route its own copy of the state, and neither axum's `MethodRouter`
-    nor its whole-state `State<S>` requires `S: Clone`, so state no longer needs `Clone`.
+    nor axum-core's `impl<T: Clone> FromRef<T> for T`, through which a handler takes the whole
+    state, requires `S: Clone`, so state no longer needs `Clone`.
 
     Last checked: 2026-11-10, the examples' state types, `from_ref.rs`, `routes.rs`,
     `Methods::with_state`, `corten-cluster`'s tests, and axum 0.8.9 and axum-core 0.5.6 from
