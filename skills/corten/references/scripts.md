@@ -281,7 +281,8 @@ anchor positioning. A `<dialog>` the server can draw `open` (a form it refuses) 
 `on:connect={corten_ui::dialog::modal(target)}`, so it is modal, not just open; one the address
 opens and a link closes (`?selected=..`) gets `dialog::modalClosedBy(target, close, signal)` with
 the link as the `close` ref, so a close request (Escape) goes to its address. A table whose page
-has all its rows sorts in place with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
+has all its rows sorts in place, also when other routes read its order (no round trip; the UI guide
+has the measurement), with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
 `SortHeader` and `data-no-prefetch` on the `<thead>`, the server writing `data-sort` (a price in
 cents, a date) on a cell whose text is not its order (or a `<time datetime>` or `<data value>` in
 it), and the header's `ascending` and `descending` the pages the server sorts each way and `first`
