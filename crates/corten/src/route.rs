@@ -229,10 +229,11 @@ use std::fmt;
 /// Derives [`Route`](trait@Route) for a struct: `#[derive(Route)] #[route("/items/{id}")]`.
 pub use corten_macros::Route;
 
-/// Derives `Display` and `AsRef<str>` for an enum of unit variants as the words serde reads for
-/// them, so a route field of that type (a tab, a sort, a filter, what a redirect says happened)
-/// writes the word its handler reads back, and the words are written once, in
-/// `#[serde(rename_all)]` and `#[serde(rename)]`. A form field of that type works the same way:
+/// Derives `Display`, `AsRef<str>` and [`AttrValue`](crate::view::AttrValue) for an enum of unit
+/// variants as the words serde reads for them, so a route field of that type (a tab, a sort, a
+/// filter, what a redirect says happened) writes the word its handler reads back, and the words are
+/// written once, in `#[serde(rename_all)]` and `#[serde(rename)]`. A form field of that type
+/// works the same way:
 /// an `<option value={Condition::NearMint}>` (or corten-ui's `Choice`) posts the word its
 /// handler's `condition: Condition` reads, and a form with any other word is refused (422), as one
 /// with a value of the wrong kind is.
@@ -251,6 +252,22 @@ pub use corten_macros::Route;
 /// assert_eq!(Orders { tab: Some(Tab::AwaitingLabel) }.href(), "/orders?tab=awaiting-label");
 /// assert_eq!(Orders { tab: Some(Tab::Shipped) }.href(), "/orders?tab=done");
 /// assert_eq!(Tab::Open.as_ref(), "open");
+/// ```
+///
+/// It is an attribute's value too, so an `Option` of it writes the word or leaves the attribute
+/// out:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[derive(Clone, Copy, UrlValue)]
+/// #[serde(rename_all = "kebab-case")]
+/// enum Finish { Weathered, CharcoalGray }
+///
+/// let shown = |finish: Option<Finish>| html! { <div data-finish={finish}></div> }.to_html();
+/// assert_eq!(shown(Some(Finish::CharcoalGray)), r#"<div data-finish="charcoal-gray"></div>"#);
+/// assert_eq!(shown(None), "<div></div>");
+/// assert_eq!(html! { <div data-finish={Finish::Weathered}></div> }.to_html(), r#"<div data-finish="weathered"></div>"#);
 /// ```
 ///
 /// A variant with fields is not one word, and one serde does not read would make a link its
@@ -678,6 +695,351 @@ pub use corten_macros::UrlValue;
 /// # fn main() {}
 /// ```
 ///
+/// A route whose answer must cost as little as the server allows, and is the same for everyone
+/// who can reach it (a public figure a CDN fronts, a value clients poll), says `unstaged`: it goes through
+/// none of the app's stages ([`crate::middleware`]), so no same-origin check, no signal or
+/// deadline, no middleware (the app's, an area's or an API's), no error page, security headers,
+/// `Cache-Control`, tag or compression. The router runs what it keeps around its handler in their
+/// place: the host check every request meets (`421` for a name the app does not answer to), `X-Content-Type-Options:
+/// nosniff` and `Content-Security-Policy: sandbox` on its answer, a panic answered `500`, and,
+/// under an API's prefix, the API's JSON for a failure. Its handler's answer is otherwise sent as
+/// it made it, a raw [`axum::response::Response`] too, and every route beside it keeps every
+/// stage. It answers `get` only, and its handler takes only the request's method and URL
+/// ([`crate::answer::Unstaged`]). It is said in any routes module, the app's, an area's or an
+/// API's:
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, unstaged)]
+///     pub struct Ping;
+///
+///     #[route("/", get = home)]
+///     pub struct Home;
+/// }
+///
+/// #[corten::routes(api = ApiRoot)]
+/// mod api {
+///     #[route("/api")]
+///     pub struct ApiRoot;
+///
+///     #[route("/api/figure", get = figure, unstaged)]
+///     pub struct Figure;
+/// }
+///
+/// async fn ping() -> corten::axum::response::Response {
+///     let text = "text/plain; charset=utf-8";
+///     corten::axum::response::Response::builder().header("content-type", text).body("pong".into()).unwrap()
+/// }
+///
+/// async fn figure() -> corten::axum::response::Response {
+///     let json = "application/json";
+///     corten::axum::response::Response::builder().header("content-type", json).body("42".into()).unwrap()
+/// }
+///
+/// async fn home(req: Req) -> HtmlResult {
+///     req.page(html! { <html><head><title>"Home"</title><Corten /></head><body><main></main></body></html> })
+/// }
+/// # fn main() { let _ = App::new(url::router()).api(api::api).router(); }
+/// ```
+///
+/// A handler there that reads what a stage gives (`Req`, `Signal`, `Nonce`, `Caller`, `ClientIp`)
+/// does not compile:
+///
+/// ```compile_fail,E0277
+/// use corten::prelude::*;
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping(_: Req) -> &'static str {
+///     "pong"
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// Nor one that reads the headers, which carry the visitor's cookies and credentials:
+///
+/// ```compile_fail,E0277
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping(_: corten::http::HeaderMap) -> &'static str {
+///     "pong"
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// Nor one that reads the body (`Bytes`, `Form`, `Json`, `Upload`), which no deadline would end
+/// there and no same-origin check would keep another site from posting:
+///
+/// ```compile_fail,E0277
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping(_: corten::axum::body::Bytes) -> &'static str {
+///     "took"
+/// }
+/// # fn main() { let _ = url::router(); }
+/// ```
+///
+/// It answers reads only (`get`, which `HEAD` takes too), since no same-origin check keeps
+/// another site from sending it a write, and a link to it is never prefetched, since it is not a
+/// page:
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, post = ping, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, prefetch = false, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// Nor is it in a module whose `caller = ..` every route must take:
+///
+/// ```compile_fail
+/// use corten::{http::request::Parts, prelude::*};
+///
+/// #[derive(Clone, Hash)]
+/// struct Staff;
+///
+/// impl<S: Sync> Identify<S> for Staff {
+///     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
+///         Err(Refused::forbidden())
+///     }
+/// }
+///
+/// #[corten::routes(caller = Staff)]
+/// mod url {
+///     #[route("/ping", get = ping, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// Nor one whose path can answer at a path of Corten's own, as far as the path alone shows: a
+/// first segment that is a parameter or catch-all (which can stand at `/corten/`), a path under
+/// `/corten`, or a parameter after `/health`. The app refuses the rest when it starts (a path
+/// under its assets' prefix, the PWA's files, an API's or area's companion routes), and with them
+/// an unstaged route declared outside the module of the innermost area or API whose prefix holds
+/// its path, one whose parameter can reach an area's or API's prefix, and one whose path another
+/// module routes too:
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/{section}/ping", get = ping, unstaged)]
+///     pub struct Ping<'a> {
+///         pub section: &'a str,
+///     }
+/// }
+///
+/// async fn ping(_: corten::Params<url::Ping<'_>>) -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/corten/ping", get = ping, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/health/{check}", get = ping, unstaged)]
+///     pub struct Check<'a> {
+///         pub check: &'a str,
+///     }
+/// }
+///
+/// async fn ping(_: corten::Params<url::Check<'_>>) -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/health/live", get = ping, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/health/ready", get = ping, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/{*rest}", get = ping, unstaged)]
+///     pub struct Rest<'a> {
+///         pub rest: &'a str,
+///     }
+/// }
+///
+/// async fn ping(_: corten::Params<url::Rest<'_>>) -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// `unstaged` takes no value, and it is not said with what only a stage applies (`no_store`,
+/// `rows`, `gives(..)`), twice, or without a handler:
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, unstaged = true)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, no_store, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, rows = u32, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// # use std::future::Future;
+/// use corten::{http::request::Parts, prelude::*, LayoutRead};
+///
+/// struct CartCount;
+/// impl LayoutRead for CartCount {
+///     type Value = u32;
+///     fn start(&self, _: &Parts) -> Option<impl Future<Output = u32> + Send + 'static> {
+///         Some(async { 3 })
+///     }
+///     fn view(count: &u32) -> impl Render + '_ {
+///         html! { {*count} }
+///     }
+/// }
+///
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, gives(CartCount), unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes]
+/// mod url {
+///     #[route("/ping", get = ping, unstaged, unstaged)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
+/// ```compile_fail
+/// #[corten::routes(area = Admin)]
+/// mod admin {
+///     #[route("/admin", unstaged)]
+///     pub struct Admin;
+///
+///     #[route("/admin/ping", get = ping)]
+///     pub struct Ping;
+/// }
+///
+/// async fn ping() -> &'static str {
+///     "pong"
+/// }
+/// # fn main() {}
+/// ```
+///
 /// The routes of an [`crate::App::area`] are a module of their own, `#[corten::routes(area =
 /// Admin)]`, where `Admin` is the route at the area's prefix. Its `area(area)` (`area(area,
 /// state)` with `state = ..`) mounts each route in the area, with its stylesheet, so every route
@@ -797,11 +1159,13 @@ pub use corten_macros::routes;
 #[derive(Clone, Copy)]
 pub(crate) struct NoStoreHandler<H>(pub(crate) H);
 
-impl<H: axum::handler::Handler<T, S>, T, S> axum::handler::Handler<T, S> for NoStoreHandler<H> {
-    type Future = futures_util::future::Map<H::Future, fn(axum::response::Response) -> axum::response::Response>;
-
+impl<H: crate::handler::Handler<T, S>, T, S> crate::handler::Handler<T, S> for NoStoreHandler<H> {
     #[inline]
-    fn call(self, req: axum::extract::Request, state: S) -> Self::Future {
+    fn call(
+        self,
+        req: axum::extract::Request,
+        state: S,
+    ) -> impl std::future::Future<Output = axum::response::Response> + Send + 'static {
         fn apply(mut res: axum::response::Response) -> axum::response::Response {
             crate::cache::Cache::no_store().apply(&mut res);
             res
@@ -2906,7 +3270,7 @@ impl<R: FromUrl + ?Sized> std::ops::DerefMut for Params<R> {
     }
 }
 
-impl<R: FromUrl + ?Sized, S: Send + Sync> axum::extract::FromRequestParts<S> for Params<R>
+impl<R: FromUrl + ?Sized, S: Send + Sync> crate::extract::FromRequestParts<S> for Params<R>
 where
     R::Path: __private::ReadPath,
     R::Params: Send,
@@ -2929,17 +3293,31 @@ impl ParamsRejection {
     fn query(error: crate::form::FormError) -> Self {
         use axum::response::IntoResponse as _;
         let status = axum::http::StatusCode::BAD_REQUEST;
-        // A parameter followed by text is read here rather than by axum's `Path`: said as axum says it.
+        // A path parameter is said as axum's `Path` said it, a query one as its `Query` did.
         let what = if error.is_in_path() { "Invalid URL" } else { "Failed to deserialize query string" };
         let rejection = crate::form::FormRejection::invalid(status, what, error);
         ParamsRejection(Box::new(rejection.into_response()))
     }
 
+    /// The route's parameters cannot be read from the request as it now is: the app's fault.
     #[cold]
-    fn path(rejection: axum::extract::rejection::PathRejection) -> Self {
+    fn unreadable(why: String) -> Self {
         use axum::response::IntoResponse as _;
-        ParamsRejection(Box::new(rejection.into_response()))
+        tracing::error!("corten: {why}");
+        let status = axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+        ParamsRejection(Box::new((status, format!("corten: {why}")).into_response()))
     }
+}
+
+/// A route's path parameters as `T`, a tuple in the order its path names them, from what the
+/// router matched ([`crate::middleware::MatchedPath`]): each percent-decoded, then read as its
+/// type (a 400 when it is not one).
+pub(crate) fn read_path<T: serde::de::DeserializeOwned>(parts: &axum::http::request::Parts) -> Result<T, ParamsRejection> {
+    let matched = parts.extensions.get::<crate::router::MatchedPath>();
+    crate::router::path_params(matched).map_err(|error| match error {
+        crate::router::PathError::Invalid(error) => ParamsRejection::query(error),
+        crate::router::PathError::Unreadable(why) => ParamsRejection::unreadable(why),
+    })
 }
 
 impl axum::response::IntoResponse for ParamsRejection {
@@ -3017,15 +3395,13 @@ pub trait FromUrl {
 ///
 /// It also knows whether one of its handlers is for `GET`, so [`crate::Req::serves`] counts only
 /// routes a redirect can land on.
-pub struct Methods<S = ()>(pub(crate) axum::routing::MethodRouter<S>, pub(crate) bool, pub(crate) Option<Companion>);
+pub struct Methods<S = ()>(pub(crate) crate::router::MethodSet<S>, pub(crate) bool, pub(crate) Option<Companion>);
 
 /// A route Corten serves with one an app mounts, at a path made from that route's: an MCP
 /// endpoint's protected-resource metadata (`agent::Authorization`). Given the
 /// route's path, it answers the companion's path and handlers.
 #[derive(Clone)]
-pub(crate) struct Companion(
-    pub(crate) std::sync::Arc<dyn Fn(&'static str) -> (String, axum::routing::MethodRouter) + Send + Sync>,
-);
+pub(crate) struct Companion(pub(crate) std::sync::Arc<dyn Fn(&'static str) -> (String, crate::router::MethodSet) + Send + Sync>);
 
 impl<S: Clone + Send + Sync + 'static> Methods<S> {
     /// The handlers with the state they take (`State<S>`), for a router without it:
@@ -3044,19 +3420,19 @@ impl<S: Clone + Send + Sync + 'static> Methods<S> {
     /// gives itself, so none of them is started for it. Not a public API.
     #[doc(hidden)]
     pub fn __gives(self, gives: &'static [fn() -> std::any::TypeId]) -> Self {
-        Methods(self.0.layer(Giving { gives, inner: () }), self.1, self.2)
+        Methods(self.0.gives(gives), self.1, self.2)
     }
 
     /// Handlers built here by hand, among them one for `GET`.
     #[cfg(test)]
-    pub(crate) fn reads(router: axum::routing::MethodRouter<S>) -> Self {
-        Methods(router, true, None)
+    pub(crate) fn reads(methods: crate::router::MethodSet<S>) -> Self {
+        Methods(methods, true, None)
     }
 
     /// Handlers built here by hand, none of them for `GET`.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn writes(router: axum::routing::MethodRouter<S>) -> Self {
-        Methods(router, false, None)
+    pub(crate) fn writes(methods: crate::router::MethodSet<S>) -> Self {
+        Methods(methods, false, None)
     }
 }
 
@@ -3068,15 +3444,14 @@ macro_rules! methods {
             pub fn $method<H, T, S>(handler: H) -> Methods<S>
             where
                 H: __private::RouteHandler<T, S> + crate::answer::Signature<T>,
-                <H as __private::RouteHandler<T, S>>::Handler: axum::handler::Handler<T, S>,
-                <<H as __private::RouteHandler<T, S>>::Handler as axum::handler::Handler<T, S>>::Future: Unpin,
+                <H as __private::RouteHandler<T, S>>::Handler: crate::handler::Handler<T, S>,
                 <H as crate::answer::Signature<T>>::Out: crate::answer::Answer + 'static,
                 <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs:
                     crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
                 T: 'static,
                 S: Clone + Send + Sync + 'static,
             {
-                Methods(axum::routing::$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), stringify!($method) == "get", None)
+                Methods(crate::router::$method(__private::endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), stringify!($method) == "get", None)
             }
         )*
 
@@ -3087,8 +3462,7 @@ macro_rules! methods {
                 pub fn $method<H, T>(self, handler: H) -> Self
                 where
                     H: __private::RouteHandler<T, S> + crate::answer::Signature<T>,
-                    <H as __private::RouteHandler<T, S>>::Handler: axum::handler::Handler<T, S>,
-                    <<H as __private::RouteHandler<T, S>>::Handler as axum::handler::Handler<T, S>>::Future: Unpin,
+                    <H as __private::RouteHandler<T, S>>::Handler: crate::handler::Handler<T, S>,
                     <H as crate::answer::Signature<T>>::Out: crate::answer::Answer + 'static,
                     <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs:
                         crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>,
@@ -3118,7 +3492,33 @@ methods!(get, post, put, delete, patch, head, options, trace);
 /// let app = App::new(corten::axum::Router::new().route("/", corten::axum::routing::get(home)));
 /// ```
 #[derive(Default)]
-pub struct Routes(pub(crate) axum::Router, pub(crate) Vec<(&'static str, bool)>);
+pub struct Routes(pub(crate) crate::router::Table, pub(crate) Vec<(&'static str, bool)>, pub(crate) UnstagedRoutes);
+
+/// The routes that say `unstaged`, which `App` serves outside its stages: each one's path as
+/// written, the path it is routed at, its handlers, which `App::router` routes through the
+/// route's [`Lane`], and the prefix of the area or API whose module declares it (none for the app's).
+/// The app's, its areas' and its APIs' are gathered here.
+#[derive(Default)]
+pub(crate) struct UnstagedRoutes(pub(crate) Vec<UnstagedRoute>);
+
+pub(crate) struct UnstagedRoute {
+    pub(crate) written: &'static str,
+    pub(crate) path: &'static str,
+    pub(crate) methods: crate::router::MethodSet,
+    pub(crate) declared_in: Option<&'static str>,
+}
+
+impl UnstagedRoutes {
+    pub(crate) fn add<R: Route + ?Sized>(&mut self, methods: __private::UnstagedMethods, declared_in: Option<&'static str>) {
+        written_checked::<R>();
+        self.0.push(UnstagedRoute { written: R::WRITTEN, path: R::PATH, methods: methods.0, declared_in });
+    }
+
+    /// Each one's path as written.
+    pub(crate) fn paths(&self) -> impl Iterator<Item = &'static str> + '_ {
+        self.0.iter().map(|route| route.written)
+    }
+}
 
 impl Routes {
     /// No routes.
@@ -3131,7 +3531,19 @@ impl Routes {
     pub fn __route<R: Route>(self, methods: Methods) -> Self {
         let mut paths = self.1;
         paths.push((R::WRITTEN, methods.1));
-        Routes(self.0.route(R::PATH, with_suffixes::<R, ()>(methods.0)), paths)
+        Routes(written::<R, ()>(self.0, methods.0), paths, self.2)
+    }
+
+    /// Used by `#[corten::routes]`: `R`'s handlers at its path, a route that says `unstaged`,
+    /// which `App` serves outside its stages. It is not a page (`Req::serves`): no stage gives its
+    /// answer the app's layout. Its handlers are [`__private::UnstagedMethods`], which only the
+    /// `__unstaged_route`s take, so the checks a `Methods` carries are not skipped anywhere else.
+    /// Not a public API.
+    #[doc(hidden)]
+    pub fn __unstaged_route<R: Route>(mut self, methods: __private::UnstagedMethods) -> Self {
+        self.1.push((R::WRITTEN, false));
+        self.2.add::<R>(methods, None);
+        self
     }
 }
 
@@ -3274,11 +3686,11 @@ fn refuse(a: &str, b: &str) -> ! {
     )
 }
 
-/// `methods` for `R`'s path: when a parameter of it is followed by text (`{page}.xml`), a request
-/// whose segment does not end in that text is a 404 before a handler runs, whatever its method. The
-/// route still takes every path of its shape from the router, so another route (a `/{*page}`
-/// catch-all) does not answer `/sitemap/about` either, and the 404 has the route's `MatchedPath`.
-/// A route with none is `methods` as it is.
+/// `methods` at `R`'s path in `table`: when a parameter of it is followed by text (`{page}.xml`),
+/// a request whose segment does not end in that text is a 404 before a handler runs, whatever its
+/// method. The route still takes every path of its shape from the router, so another route (a
+/// `/{*page}` catch-all) does not answer `/sitemap/about` either, and the 404 has the route's
+/// [`crate::middleware::MatchedPath`].
 ///
 /// A `WRITTEN` path that is not `PATH` with text after some parameters does not build:
 ///
@@ -3321,99 +3733,123 @@ fn refuse(a: &str, b: &str) -> ! {
 /// let app = App::new(Routes::new()).area::<Feeds>(|feeds| feeds.route::<Feed>(get(|| async { "feed" })));
 /// # let _ = app.router();
 /// ```
-pub(crate) fn with_suffixes<R: Route + ?Sized, S: Clone + Send + Sync + 'static>(
-    methods: axum::routing::MethodRouter<S>,
-) -> axum::routing::MethodRouter<S> {
+pub(crate) fn written<R: Route + ?Sized, S: Clone + Send + Sync + 'static>(
+    table: crate::router::Table<S>,
+    methods: crate::router::MethodSet<S>,
+) -> crate::router::Table<S> {
+    written_checked::<R>();
+    table.written(R::PATH, R::WRITTEN, methods)
+}
+
+/// Holds `R`'s written path to its routed one, when the app compiles.
+fn written_checked<R: Route + ?Sized>() {
     const {
         assert!(
             written_fits(R::PATH, R::WRITTEN),
             "corten: a route's WRITTEN path is its PATH with text after some parameters (`/sitemap/{{page}}.xml` for `/sitemap/{{page}}`)"
         )
     };
-    if R::WRITTEN == R::PATH {
-        return methods;
+}
+
+/// What a route that says `unstaged` goes through in place of the app's stages, which
+/// `App::router` gives it: the router's own `404` for a segment without the text it writes after
+/// a parameter, its `405`, and its handler's answer all meet it. The host check every request
+/// meets comes first (a name the app does not answer to gets a `421`, and nothing else runs). Every
+/// answer then gets `X-Content-Type-Options: nosniff`, so a browser takes it only as the type it
+/// says (a page of the app's cannot load it as a script, since `script-src 'self'` trusts every
+/// URL of the app's), and a `Content-Security-Policy: sandbox` of its own beside any policy the
+/// handler set, since a browser enforces each: whatever its type, a document it sends (an uploaded
+/// SVG) runs no script on the app's origin. Neither reads the answer's type or policy, so none fools
+/// them; an unstaged route is for data, and an answer whose script must run is not one. An answer
+/// that sets a cookie is `private, no-cache` (`no-store` when it says one), with no CDN's own
+/// caching header, so no shared cache hands one visitor's cookie to another. A handler that panics
+/// is logged with the route's path and answered `500`, as a staged one is, rather than dropping
+/// the connection. Under an API's prefix a failure after the host check is the API's JSON, as
+/// every failure there is. It wraps the handler's boxed future in one box of its own ([`laned`]);
+/// only a failure under an API boxes the JSON it writes.
+pub(crate) struct Lane {
+    pub(crate) hosts: crate::security::HostCheck,
+    /// Under an API's prefix: how the API writes a failure, and whether the app runs under
+    /// `corten dev`, where a 5xx's detail is shown.
+    pub(crate) json: Option<(Option<crate::api::ErrorShape>, bool)>,
+    /// The route's path as written, for the log of a panic.
+    pub(crate) written: &'static str,
+}
+
+impl crate::router::Stages for Lane {
+    #[inline]
+    fn run(self: std::sync::Arc<Self>, req: axum::extract::Request, route: &crate::router::Route) -> crate::router::Answering {
+        if !self.hosts.answers(&req) {
+            let mut res = crate::security::misdirected();
+            res.headers_mut().insert(axum::http::header::CACHE_CONTROL, crate::cache::PRIVATE);
+            return Box::pin(std::future::ready(unstaged_headers(res)));
+        }
+        Box::pin(laned(self, route.call(req)))
     }
-    methods.layer(Suffixed { written: R::WRITTEN, inner: () })
 }
 
-/// [`with_suffixes`]'s layer and service: a 404 unless the path ends each segment as `written`
-/// does. A service of its own rather than `middleware::from_fn`, which boxes a `Next` and a future
-/// of its own on each request (the router still boxes the layered route, as it does any layer).
-#[derive(Clone)]
-struct Suffixed<S> {
-    written: &'static str,
-    inner: S,
-}
-
-impl<S> tower_layer::Layer<S> for Suffixed<()> {
-    type Service = Suffixed<S>;
-
-    fn layer(&self, inner: S) -> Suffixed<S> {
-        Suffixed { written: self.written, inner }
-    }
-}
-
-impl<S> tower_service::Service<axum::extract::Request> for Suffixed<S>
+/// `answering` in `lane`: its answer with [`unstaged_headers`], or a `500` when the handler
+/// panics, and under an API's prefix a failure as the API's JSON.
+async fn laned<F>(lane: std::sync::Arc<Lane>, answering: F) -> axum::response::Response
 where
-    S: tower_service::Service<axum::extract::Request, Response = axum::response::Response>,
+    F: std::future::Future<Output = axum::response::Response>,
 {
-    type Response = axum::response::Response;
-    type Error = S::Error;
-    type Future = futures_util::future::Either<std::future::Ready<Result<Self::Response, S::Error>>, S::Future>;
-
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), S::Error>> {
-        self.inner.poll_ready(cx)
+    use std::{panic::AssertUnwindSafe, task::Poll};
+    let mut answering = std::pin::pin!(answering);
+    let polled = std::future::poll_fn(|cx| match std::panic::catch_unwind(AssertUnwindSafe(|| answering.as_mut().poll(cx))) {
+        Ok(Poll::Pending) => Poll::Pending,
+        Ok(Poll::Ready(res)) => Poll::Ready(Some(res)),
+        Err(panic) => {
+            let message = crate::task::panic_message(&*panic);
+            tracing::error!("corten: {} (unstaged) panicked: {message}", lane.written);
+            Poll::Ready(None)
+        }
+    })
+    .await;
+    let res = polled.unwrap_or_else(|| {
+        axum::response::IntoResponse::into_response((axum::http::StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error"))
+    });
+    let res = unstaged_headers(res);
+    match &lane.json {
+        // Boxed: a failure is rare, and its future would make every answer's larger.
+        Some((shape, dev)) if res.status().is_client_error() || res.status().is_server_error() => {
+            Box::pin(crate::api::json_failure(res, *dev, shape.as_ref())).await
+        }
+        _ => res,
     }
+}
 
-    fn call(&mut self, req: axum::extract::Request) -> Self::Future {
-        if routes_path(self.written, req.uri().path()) {
-            futures_util::future::Either::Right(self.inner.call(req))
-        } else {
-            let missing = axum::response::IntoResponse::into_response(axum::http::StatusCode::NOT_FOUND);
-            futures_util::future::Either::Left(std::future::ready(Ok(missing)))
+/// `res` with `nosniff`, `sandbox`, and no shared caching when it sets a cookie.
+fn unstaged_headers(mut res: axum::response::Response) -> axum::response::Response {
+    use axum::http::{header, HeaderValue};
+    let headers = res.headers_mut();
+    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.append(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox"));
+    if headers.contains_key(header::SET_COOKIE) {
+        let no_store = headers.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes()));
+        headers.insert(header::CACHE_CONTROL, if no_store { crate::cache::NO_STORE } else { crate::cache::PRIVATE });
+        // A CDN reads its own before `Cache-Control`: any `*cache-control` and
+        // `surrogate-control`, as a [`crate::Public`] answer may not set.
+        let cdn: Vec<header::HeaderName> = headers
+            .keys()
+            .filter(|name| {
+                let name = name.as_str();
+                (name.ends_with("cache-control") && name != "cache-control") || name == "surrogate-control"
+            })
+            .cloned()
+            .collect();
+        for name in cdn {
+            headers.remove(name);
         }
     }
+    res
 }
 
-/// [`Methods::__gives`]'s layer and service: marks the request with the reads its page gives, for
-/// [`crate::layout`] to leave unstarted. A service of its own, as [`Suffixed`] is.
-#[derive(Clone)]
-struct Giving<S> {
-    gives: &'static [fn() -> std::any::TypeId],
-    inner: S,
-}
-
-impl<S> tower_layer::Layer<S> for Giving<()> {
-    type Service = Giving<S>;
-
-    fn layer(&self, inner: S) -> Giving<S> {
-        Giving { gives: self.gives, inner }
-    }
-}
-
-impl<S> tower_service::Service<axum::extract::Request> for Giving<S>
-where
-    S: tower_service::Service<axum::extract::Request>,
-{
-    type Response = S::Response;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    fn poll_ready(&mut self, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), S::Error>> {
-        self.inner.poll_ready(cx)
-    }
-
-    fn call(&mut self, mut req: axum::extract::Request) -> Self::Future {
-        req.extensions_mut().insert(crate::layout::Gives(self.gives));
-        self.inner.call(req)
-    }
-}
-
-/// The crate's tests build routers by hand, to test what `App` does with any response.
+/// The crate's tests build routes by hand, to test what `App` does with any response.
 #[cfg(test)]
-impl From<axum::Router> for Routes {
-    fn from(router: axum::Router) -> Self {
-        Routes(router, Vec::new())
+impl From<crate::router::Table> for Routes {
+    fn from(table: crate::router::Table) -> Self {
+        Routes(table, Vec::new(), UnstagedRoutes::default())
     }
 }
 
@@ -3425,7 +3861,7 @@ pub mod __private {
         fmt::{self, Display, Write as _},
     };
 
-    use axum::handler::Handler;
+    use crate::handler::Handler;
 
     use super::{Encode, Methods, REST, SEGMENT};
 
@@ -3444,7 +3880,6 @@ pub mod __private {
                 where
                     H: RouteHandler<T, S> + crate::answer::Signature<T>,
                     <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
-                    <<H as RouteHandler<T, S>>::Handler as Handler<T, S>>::Future: Unpin,
                     <H as crate::answer::Signature<T>>::Out: crate::answer::Answer + 'static,
                     <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Rows: RowsAre<D>,
                     <<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs:
@@ -3453,7 +3888,7 @@ pub mod __private {
                     T: 'static,
                     S: Clone + Send + Sync + 'static,
                 {
-                    Methods(axum::routing::$method(endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), matches!(stringify!($method), "get" | "any"), None)
+                    Methods(crate::router::$method(endpoint(handler, <<<H as crate::answer::Signature<T>>::Out as crate::answer::Answer>::Inputs as crate::answer::Accepts<<H as crate::answer::Signature<T>>::Args>>::SHARED)), matches!(stringify!($method), "get" | "any"), None)
                 }
             )*
 
@@ -3473,7 +3908,6 @@ pub mod __private {
                 where
                     H: RouteHandler<T, S> + crate::answer::Signature<T>,
                     <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
-                    <<H as RouteHandler<T, S>>::Handler as Handler<T, S>>::Future: Unpin,
                     crate::NoStore<<H as crate::answer::Signature<T>>::Out>: crate::answer::Answer + 'static,
                     <crate::NoStore<<H as crate::answer::Signature<T>>::Out> as crate::answer::Answer>::Rows: RowsAre<D>,
                     <crate::NoStore<<H as crate::answer::Signature<T>>::Out> as crate::answer::Answer>::Inputs:
@@ -3488,7 +3922,7 @@ pub mod __private {
                         // Never `Public`: the bound above refuses it.
                         shared: false,
                     };
-                    Methods(axum::routing::$method(endpoint), matches!(stringify!($method), "get" | "any"), None)
+                    Methods(crate::router::$method(endpoint), matches!(stringify!($method), "get" | "any"), None)
                 }
             )*
         };
@@ -3504,6 +3938,37 @@ pub mod __private {
         no_store_trace => trace,
         no_store_any => any
     );
+
+    // A route that says `unstaged`: no stage runs, so the handler takes only what the request
+    // itself carries (`crate::answer::Unstaged`), and what it answers is sent as it is, a raw
+    // `Response` too, with what the route's lane (`super::Lane`) does in place of the stages. Its
+    // route's `Params` (`P`) is still required, as on any route.
+
+    /// An unstaged route's handlers: only the `__unstaged_route`s of `Routes`, `Area` and `Api`
+    /// take them, so a handler checked for its arguments alone cannot reach `Area::route` or
+    /// `Api::route`, which take `Methods`. The app routes them through the route's lane
+    /// ([`super::Lane`]) in place of its stages.
+    pub struct UnstagedMethods<S = ()>(pub(crate) crate::router::MethodSet<S>);
+
+    impl<S: Clone + Send + Sync + 'static> UnstagedMethods<S> {
+        /// The handlers with the state they take, as [`Methods::with_state`].
+        pub fn with_state<S2: 'static>(self, state: S) -> UnstagedMethods<S2> {
+            UnstagedMethods(self.0.with_state(state))
+        }
+    }
+
+    /// An unstaged route's `get`, its only method.
+    #[inline]
+    pub fn unstaged_get<H, T, S, P, J>(handler: H) -> UnstagedMethods<S>
+    where
+        H: RouteHandler<T, S> + crate::answer::Signature<T>,
+        <H as RouteHandler<T, S>>::Handler: Handler<T, S>,
+        <H as crate::answer::Signature<T>>::Args: crate::answer::AllUnstaged + crate::answer::Holds<P, J>,
+        T: 'static,
+        S: Clone + Send + Sync + 'static,
+    {
+        UnstagedMethods(crate::router::get(handler.into_handler()))
+    }
 
     /// A handler's rows (`Self`, [`crate::answer::Answer::Rows`]) are the ones its route names
     /// (`D`).
@@ -3548,15 +4013,7 @@ pub mod __private {
     fn unsuffixed<T: serde::de::DeserializeOwned>(text: &str, suffix: &str) -> Result<T, FormError> {
         let value =
             text.strip_suffix(suffix).ok_or_else(|| FormError::in_path(format!("`{text}` does not end in `{suffix}`")))?;
-        crate::form::de::in_path(value).map_err(|e| {
-            // As axum says it: a primitive's name, never the app's own type path.
-            let ty = std::any::type_name::<T>();
-            FormError::in_path(if ty.contains("::") {
-                format!("{e}")
-            } else {
-                format!("Cannot parse `{value}` to a `{ty}`: {e}")
-            })
-        })
+        crate::form::de::in_path(value).map_err(|e| crate::form::de::not_in_path(value, std::any::type_name::<T>(), e))
     }
 
     /// `T`, named with a lifetime of the `FromUrl` impl, so a bound on it (that a field reads
@@ -4015,12 +4472,10 @@ pub mod __private {
 
     impl<T: serde::de::DeserializeOwned + Send> ReadPath for InPath<T> {
         #[inline]
-        async fn read(parts: &mut axum::http::request::Parts) -> Result<Self, super::ParamsRejection> {
-            use axum::extract::FromRequestParts as _;
-            match axum::extract::Path::<T>::from_request_parts(parts, &()).await {
-                Ok(axum::extract::Path(value)) => Ok(InPath(value)),
-                Err(rejection) => Err(super::ParamsRejection::path(rejection)),
-            }
+        fn read(
+            parts: &mut axum::http::request::Parts,
+        ) -> impl std::future::Future<Output = Result<Self, super::ParamsRejection>> + Send {
+            std::future::ready(super::read_path(parts).map(InPath))
         }
     }
 
@@ -4056,14 +4511,14 @@ pub mod __private {
         fn into_handler(self) -> Self::Handler;
     }
 
-    // One impl per arity, with axum's own bounds written out (and `S: Clone`, which every route
-    // already asks of its state), rather than one over every axum `Handler`: a handler that
-    // misses one of them then fails this trait, in its words, instead of axum's `Handler` bound,
+    // One impl per arity, with the bounds of Corten's `Handler` written out (and `S: Clone`, which
+    // every route already asks of its state), rather than one over every `Handler`: a handler
+    // that misses one of them then fails this trait, in its words, instead of the `Handler` bound,
     // which the compiler would report for a blanket impl.
     impl<F, Fut, S, Res> RouteHandler<((),), S> for F
     where
         F: FnOnce() -> Fut + Clone + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Res> + Send,
+        Fut: std::future::Future<Output = Res> + Send + 'static,
         S: Clone + Send + Sync + 'static,
         Res: axum::response::IntoResponse,
     {
@@ -4079,11 +4534,12 @@ pub mod __private {
             impl<F, Fut, S, Res, M, $($ty,)* $last> RouteHandler<(M, $($ty,)* $last,), S> for F
             where
                 F: FnOnce($($ty,)* $last,) -> Fut + Clone + Send + Sync + 'static,
-                Fut: std::future::Future<Output = Res> + Send,
+                Fut: std::future::Future<Output = Res> + Send + 'static,
                 S: Clone + Send + Sync + 'static,
                 Res: axum::response::IntoResponse,
-                $( $ty: axum::extract::FromRequestParts<S> + Send, )*
-                $last: axum::extract::FromRequest<S, M> + Send,
+                M: 'static,
+                $( $ty: crate::extract::FromRequestParts<S> + Send + 'static, )*
+                $last: crate::extract::FromRequest<S, M> + Send + 'static,
             {
                 type Handler = F;
                 #[inline(always)]
@@ -4337,6 +4793,21 @@ mod tests {
         }
         assert_eq!(r#str::r#type.as_ref(), "type");
         assert_eq!(r#str::Sand.to_string(), "Sand");
+    }
+
+    /// A word written in an attribute is escaped as text is, whichever way it gets there.
+    #[test]
+    fn a_url_value_in_an_attribute_is_escaped() {
+        use crate::prelude::*;
+        #[derive(corten::UrlValue, Clone, Copy)]
+        enum Odd {
+            #[serde(rename = "a\"b&c")]
+            Quoted,
+        }
+        let direct = html! { <i title={Odd::Quoted}></i> }.to_html();
+        let some = html! { <i title={Some(Odd::Quoted)}></i> }.to_html();
+        assert_eq!(direct, r#"<i title="a&quot;b&amp;c"></i>"#);
+        assert_eq!(some, direct);
     }
 
     /// Each word `UrlValue` writes is the one serde reads back as the same variant, under every

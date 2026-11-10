@@ -1,5 +1,6 @@
 //! The page: a seller's draft listing for one card, built from every corten-ui component, wrapped
 //! and styled as a design system would.
+use corten::Href;
 use corten::i18n::{DateStyle, RelativeStyle, TimeStyle};
 use corten::prelude::*;
 use corten_ui::{
@@ -11,9 +12,9 @@ use std::time::SystemTime;
 use crate::app::{CREATED, DRAFT, EXPIRES_IN, LISTED_AGO, Msg, NO_REGION, QTY, RenameForm, SellForm, WEIGHT, url};
 use crate::glyphs;
 use crate::ui::{
-    alert::{AlertEmphasis, FailedAlert},
+    alert::{AlertEmphasis, FailedAlert, FormAlert},
     button::{Button, ButtonSize, ButtonVariant},
-    card::{Card, CardContent, CardFooter, CardHeader},
+    card::{Card, CardContent, CardFooter, CardHeader, CardSize},
     checkbox::Checkbox,
     checkboxes::Checkboxes,
     combobox::Combobox,
@@ -24,6 +25,7 @@ use crate::ui::{
     icon::{self, Icon},
     input::Input,
     input_group::{Adornment, InputGroup},
+    pagination::PreviousNext,
     radio_group::{Radio, RadioGroup},
     segmented::{Segmented, SegmentedWidth},
     sheet::{Sheet, SheetHeader, SheetWidth, Side},
@@ -180,6 +182,45 @@ const LAST_SALES: [LastSale; 3] = [
     },
 ];
 
+/// The month's sales before the last ones, a page of the same table: its pager under the table
+/// keeps the order the table shows.
+const EARLIER_SALES: [LastSale; 3] = [
+    LastSale {
+        on: "2026-10-19",
+        day: "Monday, October 19",
+        buyer: "Katherine Johnson",
+        condition: "Near mint",
+        to: "Hampton, Virginia",
+        cents: 1150,
+        price: "$11.50",
+    },
+    LastSale {
+        on: "2026-10-21",
+        day: "Wednesday, October 21",
+        buyer: "Edsger Dijkstra",
+        condition: "Moderately played",
+        to: "Nuenen, North Brabant",
+        cents: 990,
+        price: "$9.90",
+    },
+    LastSale {
+        on: "2026-10-23",
+        day: "Friday, October 23",
+        buyer: "Barbara Liskov",
+        condition: "Near mint",
+        to: "Boston, Massachusetts",
+        cents: 1225,
+        price: "$12.25",
+    },
+];
+
+/// The `sales` query value of the page of the month's earlier sales.
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
+#[serde(rename_all = "snake_case")]
+pub enum SalesPage {
+    Earlier,
+}
+
 /// The order the month's last sales are in, by the `sold` query value: the page the server sorts,
 /// which a sort header links to; with the script, the header sorts the rows in place
 /// (`corten_ui::rows::sort`) and no request is made. By day, oldest first, by default.
@@ -203,9 +244,9 @@ fn column(sold: Option<SoldBy>, up: SoldBy, down: SoldBy) -> Option<Sort> {
     }
 }
 
-/// The month's last sales in `sold`'s order.
-fn last_sales(sold: Option<SoldBy>) -> Vec<&'static LastSale> {
-    let mut sales: Vec<&LastSale> = LAST_SALES.iter().collect();
+/// The month's last sales, or the ones before them, in `sold`'s order.
+fn last_sales(sold: Option<SoldBy>, earlier: bool) -> Vec<&'static LastSale> {
+    let mut sales: Vec<&LastSale> = if earlier { EARLIER_SALES.iter().collect() } else { LAST_SALES.iter().collect() };
     match sold {
         None | Some(SoldBy::Day) => {}
         Some(SoldBy::DayDown) => sales.reverse(),
@@ -251,6 +292,7 @@ pub fn Gallery<'a>(
     tab: MarketTab,
     period: Period,
     sold: Option<SoldBy>,
+    earlier: bool,
     result: &'a str,
     sale: bool,
     times: Times,
@@ -270,13 +312,18 @@ pub fn Gallery<'a>(
     // Each control's links keep the other's choice: a tab's link the period, a period's the tab.
     let shown_tab = Some(tab).filter(|t| *t != MarketTab::Listings);
     let shown_period = Some(period).filter(|p| *p != Period::Month);
-    let at = move |tab| url::Home { tab, sale: None, period: shown_period, sold };
+    let sales = earlier.then_some(SalesPage::Earlier);
+    let at = move |tab| url::Home { tab, sale: None, period: shown_period, sold, sales };
     let (week, month) = (
-        url::Home { tab: shown_tab, sale: None, period: Some(Period::Week), sold },
-        url::Home { tab: shown_tab, sale: None, period: None, sold },
+        url::Home { tab: shown_tab, sale: None, period: Some(Period::Week), sold, sales },
+        url::Home { tab: shown_tab, sale: None, period: None, sold, sales },
     );
     // Each sort header links to the page sorted by its column; the script sorts in place instead.
-    let sorted = move |by| url::Home { tab: shown_tab, sale: None, period: shown_period, sold: Some(by) };
+    let sorted = move |by| url::Home { tab: shown_tab, sale: None, period: shown_period, sold: Some(by), sales };
+    // The other page of the month's sales, in the order the page was drawn with; its link takes the
+    // order on screen (`ordered::link`), also after a sort in place.
+    let other_sales =
+        url::Home { tab: shown_tab, sale: None, period: shown_period, sold, sales: (!earlier).then_some(SalesPage::Earlier) };
     // With no order chosen the rows are by day, so Sold is drawn sorted.
     let by_day = column(sold.or(Some(SoldBy::Day)), SoldBy::Day, SoldBy::DayDown);
     let by_buyer = column(sold, SoldBy::Buyer, SoldBy::BuyerDown);
@@ -303,7 +350,7 @@ pub fn Gallery<'a>(
             />
         </div>
         <div class={Grid}>
-            <section class={Card {}}>
+            <section class={Card { size: CardSize::Md }}>
                 <header class={CardHeader {}}><h2>"List for sale"</h2></header>
                 <div class={CardContent {}}>
                     <form class={Order} method="post" action={url::Sell} data-patch>
@@ -367,7 +414,7 @@ pub fn Gallery<'a>(
             </section>
             <div class={Aside}>
                 // Built in the markup, so the panels' views live until the group has rendered them.
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}><h2>"Market"</h2></header>
                     <div class={CardContent {}}>
                         <Tabs>
@@ -396,7 +443,7 @@ pub fn Gallery<'a>(
                         </div>
                     </div>
                 </section>
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}><h2>"Sales"</h2></header>
                     <div class={CardContent {}}>
                         <Segmented width={SegmentedWidth::Fit}>
@@ -418,7 +465,13 @@ pub fn Gallery<'a>(
                         <ShownFor choice={&period} values={&[Period::Month]}>
                             <Table layout={TableLayout::Scroll}>
                                 <table id={LastSalesId}>
-                                    <caption>"This month's last sales"</caption>
+                                    <caption>
+                                        if earlier {
+                                            "This month's earlier sales, sorted among themselves"
+                                        } else {
+                                            "This month's last sales, sorted among themselves"
+                                        }
+                                    </caption>
                                     // Each sorts the rows in place, by the day and price each
                                     // cell sorts by and the buyer's name; without the script, the
                                     // link is the page the server sorts. A hover does not fetch that
@@ -457,7 +510,7 @@ pub fn Gallery<'a>(
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        for s in last_sales(sold) {
+                                        for s in last_sales(sold, earlier) {
                                             <tr>
                                                 <td data-sort={s.on}>{s.day}</td>
                                                 <td>{s.buyer}</td>
@@ -469,6 +522,16 @@ pub fn Gallery<'a>(
                                     </tbody>
                                 </table>
                             </Table>
+                            // Its pages read the table's order: each link opens its page in the
+                            // order on screen.
+                            <PreviousNext
+                                label="Sales pages"
+                                previous_label="Later sales"
+                                next_label="Earlier sales"
+                                previous={earlier.then_some(&other_sales as &dyn Href)}
+                                next={(!earlier).then_some(&other_sales as &dyn Href)}
+                                on:link={ordered::link(target, [corten_ui::sorted(&LastSalesId)], signal)}
+                            />
                         </ShownFor>
                         <div>
                             <button
@@ -491,7 +554,7 @@ pub fn Gallery<'a>(
                         </div>
                     </div>
                 </section>
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}><h2>"Activity"</h2></header>
                     <div class={CardContent {}}>
                         <div class={Facts}>
@@ -512,7 +575,7 @@ pub fn Gallery<'a>(
                         </div>
                     </div>
                 </section>
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}><h2>"Draft"</h2></header>
                     <div class={CardContent {}}>
                         <div class={Buttons}>
@@ -555,7 +618,7 @@ pub fn Gallery<'a>(
                     <footer class={CardFooter {}}>
                         <a
                             class={Button { variant: ButtonVariant::Link, size: ButtonSize::Sm }}
-                            href={url::Home { tab: None, sale: Some(Sale::Last), period: None, sold: None }}
+                            href={url::Home { tab: None, sale: Some(Sale::Last), period: None, sold: None, sales: None }}
                             interestfor={LastSaleTipId}
                             aria-describedby={LastSaleTipId}
                         >
@@ -570,7 +633,7 @@ pub fn Gallery<'a>(
                         </a>
                     </footer>
                 </section>
-                <section class={Card {}}>
+                <section class={Card { size: CardSize::Md }}>
                     <header class={CardHeader {}}><h2>"Stock"</h2></header>
                     <div class={CardContent {}}>
                         <Sku sku="ASH-DRAKE-NM" />
@@ -703,7 +766,7 @@ pub fn SaleSheet() -> impl Render {
                 <a
                     class={Button { variant: ButtonVariant::Ghost, size: ButtonSize::Sm }}
                     ref={close}
-                    href={url::Home { tab: None, sale: None, period: None, sold: None }}
+                    href={url::Home { tab: None, sale: None, period: None, sold: None, sales: None }}
                 >
                     "Close"
                 </a>
@@ -798,6 +861,7 @@ pub fn RenameDialog<'a>(name: &'a str, errors: &'a Errors) -> impl Patch {
                 <p>"That did not go through, and may not have been saved. Check and try again."</p>
             </FailedAlert>
             <form class={Rename} method="post" action={url::Rename} data-patch>
+                <FormAlert errors={errors} emphasis={AlertEmphasis::Soft} />
                 <Field id={e.id(f.name)} label="Name" hint="" error={e.message(f.name)}>
                     <input class={Input {}} value={name} {..e.control(f.name)}>
                 </Field>

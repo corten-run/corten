@@ -1,7 +1,8 @@
 # Nightly localized marketplace rounds
 
-The nightly benchmark is `marketplace-v2`, all eighteen adapters, from official **r17**
-onward. `wN` remains for explicit development checks. Old fullstack r16 and catalog c1 are
+The nightly benchmark is `marketplace-v2`, all twenty adapters, from official **r17**
+onward (FastAPI and Express joined after r17, which had eighteen). A round whose app set differs
+from another's is not compared with it: `compare.mjs` gives no deltas across the two. `wN` remains for explicit development checks. Old fullstack r16 and catalog c1 are
 different workloads, not baselines for a new-workload speedup or regression. Do not also run
 the old suite or silently combine its tables with this one.
 
@@ -100,7 +101,7 @@ host and report the provisioning error rather than guessing deletion is safe.
 ## Finished Results
 
 1. Require exit 0, saved archive/checksum, deletion confirmation and report.mjs validation:
-   workload/round/commit match, clean before/after, all eighteen apps, both gates, three full
+   workload/round/commit match, clean before/after, all twenty apps, both gates, three full
    passes of each intended profile, zero request failures/drops and cleanup failures, correct
    counted CPU and aggregates matching saved passes. Incomplete data is never a full baseline.
 2. Hash summary before/after the read-only reporter. Save its generated report as
@@ -173,6 +174,6 @@ once only with logs proving an unrelated network/browser flake. Otherwise leave 
 report the failed condition. Never merge another PR. Confirm merge SHA, update lastFullRound,
 measuredCommit/workload/status done, fetch and detach the clean benchmark checkout at main.
 
-Report titled merged PR, measured commit/CPU/date/profile, eighteen-app throughput table,
+Report titled merged PR, measured commit/CPU/date/profile, twenty-app throughput table,
 Corten CPU/memory/latency/cold rows and pass ranges, compatible comparison or first-baseline
 notice, all warnings and titled regression links. Keep history and other authorized jobs intact.

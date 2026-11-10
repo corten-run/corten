@@ -624,13 +624,22 @@ impl<T: Row> Tx<'_, T> {
 /// a URL encoder escapes.
 pub struct Since(pub Option<Cursor>);
 
+impl Since {
+    /// The cursor `parts` carries, if any. A handler takes `Since` as an argument through
+    /// `corten`, which reads it with this.
+    pub fn read(parts: &Parts) -> Since {
+        let header = parts.headers.get("last-event-id").and_then(|v| v.to_str().ok()).and_then(Cursor::parse);
+        let query = || parts.uri.query()?.split('&').find_map(|pair| pair.strip_prefix("since=")).and_then(Cursor::parse);
+        Since(header.or_else(query))
+    }
+}
+
+/// For an app on axum alone; a Corten app's handler takes it through `corten`.
 impl<S: Send + Sync> FromRequestParts<S> for Since {
     type Rejection = Infallible;
 
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        let header = parts.headers.get("last-event-id").and_then(|v| v.to_str().ok()).and_then(Cursor::parse);
-        let query = || parts.uri.query()?.split('&').find_map(|pair| pair.strip_prefix("since=")).and_then(Cursor::parse);
-        Ok(Since(header.or_else(query)))
+        Ok(Since::read(parts))
     }
 }
 
@@ -866,11 +875,11 @@ mod tests {
     #[tokio::test]
     async fn since_prefers_last_event_id() {
         let req = axum::http::Request::builder().uri("/feed/live?since=aa-3").header("last-event-id", "bb-7").body(()).unwrap();
-        let (mut parts, _) = req.into_parts();
-        let since = Since::from_request_parts(&mut parts, &()).await.unwrap();
+        let (parts, _) = req.into_parts();
+        let since = Since::read(&parts);
         assert_eq!(since.0, Some(Cursor::new("bb", 7)));
-        let (mut parts, _) = axum::http::Request::builder().uri("/x?a=1&since=aa-3").body(()).unwrap().into_parts();
-        assert_eq!(Since::from_request_parts(&mut parts, &()).await.unwrap().0, Some(Cursor::new("aa", 3)));
+        let (parts, _) = axum::http::Request::builder().uri("/x?a=1&since=aa-3").body(()).unwrap().into_parts();
+        assert_eq!(Since::read(&parts).0, Some(Cursor::new("aa", 3)));
     }
 
     /// Every kind of generation `Feed::follow` takes goes live from the cursor its own snapshot
@@ -882,8 +891,8 @@ mod tests {
         for generation in ["g7", "deploy.3", "v1_2", "A.b_9", "0"] {
             let feed = Feed::follow(generation, 4, std::iter::empty::<Item>());
             let uri = format!("/feed/live?since={generation}-4");
-            let (mut parts, _) = axum::http::Request::builder().uri(uri).body(()).unwrap().into_parts();
-            let since = Since::from_request_parts(&mut parts, &()).await.unwrap();
+            let (parts, _) = axum::http::Request::builder().uri(uri).body(()).unwrap().into_parts();
+            let since = Since::read(&parts);
             let text = read_events(&mut feed.live(since).into_response().into_body(), 1).await;
             assert_eq!(text, "retry: 1000\n\n", "{generation}");
         }

@@ -7,11 +7,12 @@
 //! | `POST /sellers/{seller}/market` | the page's form: five market lows move, committed as `/api/feeds/{seller}/market` commits; the rows change when the feed brings it |
 //! | `GET /feeds/{seller}`, `/feeds/{seller}/live` | the seller's listings as a feed (`corten-cluster`): any instance answers, and a client resumes on any of them with the same cursor |
 //! | `POST /api/feeds/{seller}/market` | a write committed with an outbox row in one transaction, at most once per `Idempotency-Key` |
-//! | `GET /api/feeds/{seller}/seq` | the sequence Postgres committed, what every client must reach |
+//! | `GET /api/feeds/{seller}/seq` | the sequence Postgres committed, what every client must reach: the failover benchmark reads it to count what was lost, and it reads only its URL, so it is `unstaged`, served outside the app's stages |
 //! | `GET /api/stats` | this instance: the feeds it holds, their subscribers, whether it runs the relay |
 //!
 //! A route's response names the instance that answered (`X-Instance`, a middleware of the app's),
-//! and `/health/ready` is false while Postgres is out of reach or slow to answer.
+//! except the unstaged sequence's, which meets no middleware, and `/health/ready` is false while
+//! Postgres is out of reach or slow to answer.
 use std::{
     collections::BTreeMap,
     sync::{
@@ -132,7 +133,7 @@ pub mod api {
         pub n: Option<usize>,
     }
 
-    #[route("/api/feeds/{seller}/seq", get = committed_seq)]
+    #[route("/api/feeds/{seller}/seq", get = committed_seq, unstaged)]
     pub struct Seq<'a> {
         pub seller: &'a str,
     }
@@ -282,10 +283,18 @@ async fn write_market(
     Ok(Written { seq: w.seq, committed_at: w.committed_at, replayed: false })
 }
 
-/// The sequence committed in Postgres: the benchmark's source of truth for lost patches.
-async fn committed_seq(State(pool): State<PgPool>, Params(at): Params<api::Seq<'_>>) -> JsonResult<u64> {
-    let seller = at.seller;
-    let seq = corten_cluster::seq(&pool, &seller).await.map_err(unavailable)?;
+/// The sequence committed in Postgres: the benchmark's source of truth for lost patches. It reads
+/// only its URL, so its route is `unstaged`: no deadline, middleware or cache rule of the app's
+/// covers it. It bounds its own wait for Postgres (a 503 after five seconds), a failure is still
+/// the API's JSON, and it changes with every write, so it says nothing keeps it.
+async fn committed_seq(State(pool): State<PgPool>, Params(at): Params<api::Seq<'_>>) -> NoStore<JsonResult<u64>> {
+    NoStore(seq_of(&pool, &at.seller).await)
+}
+
+async fn seq_of(pool: &PgPool, seller: &str) -> JsonResult<u64> {
+    let read = tokio::time::timeout(std::time::Duration::from_secs(5), corten_cluster::seq(pool, seller)).await;
+    let read = read.map_err(|_| Error::new("Postgres did not answer in time").with_status(StatusCode::SERVICE_UNAVAILABLE))?;
+    let seq = read.map_err(unavailable)?;
     Ok(Json(seq.ok_or_else(|| Error::new(format!("no seller {seller}")).with_status(StatusCode::NOT_FOUND))?))
 }
 
