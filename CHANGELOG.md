@@ -5869,7 +5869,12 @@ Corten is pre-1.0, so any minor version may change the API.
     `Option` takes there (tested by building an app). Breaking for an app that implemented
     `AttrValue` on its own `UrlValue` enum, or that implements a trait of its own for every
     `AttrValue` and again for such an enum: both now conflict with the derive's impl.
-    **Migration:** delete the hand-written impl; the derive's writes the same word
+    **Migration:** delete the hand-written impl; the derive's writes the same word. A direct
+    `UrlValue` attribute now goes through `AttrValue` for `str` rather than the `Display` escaper;
+    on the item page, which draws one (`value={Shown::All}`), callgrind counts the same render cost
+    within noise: about 44,500 instructions a page before and after (the 500 benchmark pages
+    rendered three times less once, two runs each: 22,266,202 and 22,244,742 instructions over the
+    500 against 22,223,295 and 22,253,598), and the same 3,677,304 bytes
     ([#1111 Optional UrlValue enum attributes fail where direct enum attributes compile](https://github.com/corten-run/corten/issues/1111)).
 
 ### Documentation
