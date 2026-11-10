@@ -1326,11 +1326,11 @@ rules something out.
     Revisit when: an example app, or an app that reports it, implements `Row` by hand for a key
     made from more than one field, which a mark on one field cannot say.
 
-    Last checked: 2026-11-10, the derive, its `compile_fail` examples, `tests/derived_row.rs` and
-    the rows of the four example apps, the live benchmark and `corten-cluster`, on `5710383f`;
-    2026-11-10, the serde attributes it refuses, tuple structs and its generic rows, by their
-    `compile_fail` examples, each compiled for its own message, on `b8882bda`, the derive's last
-    change.
+    Last checked: 2026-11-10, the derive, its `compile_fail` examples, each compiled for its own
+    message, `tests/derived_row.rs`, and the rows of the four example apps and `corten-cluster` by
+    `cargo clippy --workspace --all-targets`, on `e4e6f870`, the derive's last change; 2026-11-10,
+    the live benchmark's row, outside the workspace, by reading it on `e4e6f870` (it has no serde
+    attribute).
 
 ## Rules
 
