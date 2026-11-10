@@ -224,7 +224,7 @@ pub(crate) fn favicon<S: Clone + Send + Sync + 'static>(assets: Option<&Arc<Asse
             let icon = icon.clone();
             async move {
                 match icon {
-                    Some((assets, path)) => assets.serve(path, &method, &headers, FAVICON_CACHE, true),
+                    Some((assets, path)) => assets.serve(path, &method, &headers, FAVICON_CACHE, true, false),
                     None => {
                         let mut res = (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, NO_FAVICON_CACHE)]).into_response();
                         res.extensions_mut().insert(crate::page::AsIs);
@@ -789,14 +789,25 @@ impl Assets {
             get(move |UrlPath((version, path)): UrlPath<(String, String)>, method: Method, headers: HeaderMap| {
                 let assets = assets.clone();
                 async move {
-                    let cache = if version == assets.version { IMMUTABLE } else { HeaderValue::from_static("no-cache") };
-                    assets.serve(&path, &method, &headers, cache, false)
+                    let current = version == assets.version;
+                    let cache = if current { IMMUTABLE } else { HeaderValue::from_static("no-cache") };
+                    assets.serve(&path, &method, &headers, cache, false, current)
                 }
             }),
         )
     }
 
-    fn serve(&self, path: &str, method: &Method, headers: &HeaderMap, cache: HeaderValue, fixed: bool) -> Response {
+    /// The file at `path`. `fixed` is a URL that outlives a deploy (the favicon's), revalidated
+    /// under a weak tag; `current` a URL whose version is this one, so it names these exact bytes.
+    fn serve(
+        &self,
+        path: &str,
+        method: &Method,
+        headers: &HeaderMap,
+        cache: HeaderValue,
+        fixed: bool,
+        current: bool,
+    ) -> Response {
         let Some(file) = self.files.get(path) else {
             return StatusCode::NOT_FOUND.into_response();
         };
@@ -830,13 +841,15 @@ impl Assets {
         }
         // A range of the file as it is stored, to a GET sent it unencoded (a video seeking): an
         // encoded body's offsets are not the file's, so it is sent whole, and RFC 9110 has every other
-        // method ignore `Range`. `If-Range` holds for this version's own strong tag only (the files
-        // have no date). No `Accept-Ranges`: a browser asks for a range unprompted, and the header
-        // would cost every file's answer (#1133).
+        // method ignore `Range`. Only a URL of this version names these exact bytes: an old
+        // version's URL or the favicon's may name other bytes across a deploy, and a player that
+        // joined ranges of two would play neither, so those are sent whole. `If-Range` holds for
+        // this version's own strong tag only (the files have no date). No `Accept-Ranges`: a
+        // browser asks for a range unprompted, and the header would cost every file's answer (#1133).
         #[cfg(feature = "compress")]
-        let ranged = coding.is_none() && method == Method::GET;
+        let ranged = current && coding.is_none() && method == Method::GET;
         #[cfg(not(feature = "compress"))]
-        let ranged = method == Method::GET;
+        let ranged = current && method == Method::GET;
         let range = match ranged.then(|| headers.get(header::RANGE)).flatten() {
             Some(value) => {
                 let strong = !etag.as_bytes().starts_with(b"W/");
@@ -1317,6 +1330,16 @@ mod tests {
         assert_eq!(body(stale).await.len(), 100);
         let dated = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, "Sun, 08 Nov 2026 00:00:00 GMT")]).await.unwrap();
         assert_eq!(dated.status(), StatusCode::OK, "the files have no date to compare");
+        let huge = get(&[(header::RANGE, "bytes=99999999999999999999-")]).await.unwrap();
+        assert_eq!(huge.status(), StatusCode::OK, "a number past u64 is not parsed, so the whole file is sent");
+        let old = url.replacen(assets.version(), "000000000000", 1);
+        let old = app
+            .clone()
+            .oneshot(Request::get(&old).header(header::RANGE, "bytes=10-19").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(old.status(), StatusCode::OK, "an old version's URL may name other bytes, so it is sent whole");
+        assert_eq!(body(old).await.len(), 100);
         let kept = get(&[(header::RANGE, "bytes=10-19"), (header::IF_NONE_MATCH, tag.to_str().unwrap())]).await.unwrap();
         assert_eq!(kept.status(), StatusCode::NOT_MODIFIED);
         let head = app
@@ -1326,6 +1349,18 @@ mod tests {
             .unwrap();
         assert_eq!(head.status(), StatusCode::OK, "only a GET is answered in part (RFC 9110 14.2)");
         assert!(!head.headers().contains_key(header::CONTENT_RANGE));
+        let root = dir("ranges-empty", &[("empty.vtt", "")]);
+        let empty = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let res = empty
+            .routes::<()>()
+            .oneshot(Request::get(empty.url("empty.vtt")).header(header::RANGE, "bytes=0-").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            (res.status(), &res.headers()[header::CONTENT_RANGE]),
+            (StatusCode::RANGE_NOT_SATISFIABLE, &HeaderValue::from_static("bytes */0")),
+            "no byte of an empty file can be sent"
+        );
     }
 
     /// Captions compressed for the client are sent whole: an encoded body's offsets are not the
@@ -1354,6 +1389,11 @@ mod tests {
         assert_eq!(
             (plain.status(), &plain.headers()[header::CONTENT_TYPE]),
             (StatusCode::PARTIAL_CONTENT, &HeaderValue::from_static("text/vtt; charset=utf-8"))
+        );
+        assert_eq!(
+            plain.headers()[header::VARY],
+            "accept-encoding",
+            "a shared cache keeps the 206 from a client that takes brotli"
         );
     }
 

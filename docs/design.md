@@ -225,7 +225,8 @@ rules something out.
    building, so the crate compiles with every file. The PWA's icons, screenshots and worker
    script are named by their constants too; an image another site serves is a `Uri`.
 
-   Stands on: bet (an app's static files are small enough to compile into its binary); platform (a
+   Stands on: bet (an app's static files are small enough to compile into its binary, a video
+   included: a short clip is, and long or many videos belong in storage of their own); platform (a
    macro cannot ask cargo to watch a directory, so a new file waits for the next build that compiles
    the crate); reasoned (the binary is the whole deploy, and a constant per file makes a removed
    file a compile error).
