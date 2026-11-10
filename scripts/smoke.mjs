@@ -1359,6 +1359,24 @@ async function run(browser) {
   let queueAnswer = { status: 200, body: "" };
   /** @type {string[]} */
   let queueSent = [];
+  // Requests the route has answered or tried to (an aborted one's answer goes nowhere, and counts).
+  let queueAnswered = 0;
+  // The n of each request the page gave up on (an aborted read), which every engine reports as
+  // failed even while the route holds it (net::ERR_ABORTED, NS_BINDING_ABORTED, Load request
+  // cancelled); fulfilling it afterwards does not throw.
+  /** @type {string[]} */
+  let queueRefused = [];
+  const queueGaveUp = (/** @type {import("@playwright/test").Request} */ request) => {
+    if (new URL(request.url()).pathname !== "/queue") return;
+    const fields = request.method() === "GET" ? new URL(request.url()).searchParams : new URLSearchParams(request.postData() ?? "");
+    const n = fields.get("n") ?? "";
+    if (!queueRefused.includes(n)) queueRefused.push(n);
+  };
+  page.on("requestfailed", queueGaveUp);
+  // No answer goes before the case's second press is made, so that press meets the first submit
+  // still out: the check is of the queue and not of two sends, however slow the press.
+  /** @type {Promise<void>} */
+  let queuePressed = Promise.resolve();
   await page.route("**/queue*", async (route) => {
     const request = route.request();
     const fields = request.method() === "GET" ? new URL(request.url()).searchParams : new URLSearchParams(request.postData() ?? "");
@@ -1366,32 +1384,61 @@ async function run(browser) {
     const answer = queueAnswer;
     // The first of two reads answers last, so a read that was not aborted would draw over the newer.
     const late = request.method() === "GET" && fields.get("n") === "1";
+    await queuePressed;
     await new Promise((resolve) => setTimeout(resolve, late ? 1200 : 400));
     const body = answer.body.replace("{n}", fields.get("n") ?? "");
-    await route.fulfill({ status: answer.status, headers: { "content-type": "text/html; charset=utf-8", ...answer.headers }, body }).catch(() => {});
+    await route
+      .fulfill({ status: answer.status, headers: { "content-type": "text/html; charset=utf-8", ...answer.headers }, body })
+      .catch(() => {});
+    queueAnswered += 1;
   });
-  /** Puts the form (in a box a patch can redraw), presses, sets n to 2, presses, and waits. @param {string} form */
-  const queueCase = async (form) => {
+  /**
+   * Puts the form (in a box a patch can redraw), presses, sets n to 2 and presses again, then
+   * waits until `done` says the case's outcome is on the page (6 s at most, and `ended` is false)
+   * and 700 ms more, in which a send the queue must not make would be seen. `status`: the case's
+   * `corten:error`, or null, heard on the form too, so one sent to a form the answer took off the
+   * page is not missed. `refused`: the n of each request the page gave up on.
+   * @param {string} form @param {() => Promise<boolean>} done
+   */
+  const queueCase = async (form, done) => {
     queueSent = [];
+    queueAnswered = 0;
+    queueRefused = [];
+    /** @type {() => void} */
+    let pressed = () => {};
+    queuePressed = new Promise((resolve) => (pressed = resolve));
     await page.evaluate((form) => {
       document.getElementById("queue-box")?.remove();
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}<p id="queue-out"></p></div>`));
+      // The case's corten:error, if it gets one; the listener goes with the case.
+      const w = /** @type {any} */ (window);
+      w.__queueCase?.abort();
+      w.__queueCase = new AbortController();
+      w.__queueError = null;
+      const heard = (/** @type {Event} */ e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status);
+      document.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
+      document.querySelector("#queue-box form")?.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
     }, form);
-    const error = page.evaluate(
-      () => new Promise((resolve) => {
-        document.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true });
-        setTimeout(() => resolve(null), 2500);
-      }),
-    );
     await page.click("#queue-box button");
     await page.fill("#queue-box [name=n]", "2");
-    // Still out when the second press lands, so the check is of the queue and not of two sends.
     const busy = await page.getAttribute("#queue-box form", "aria-busy");
     await page.click("#queue-box button");
-    const status = await error;
+    pressed();
+    const until = Date.now() + 6000;
+    let ended = await done();
+    while (!ended && Date.now() < until) {
+      await page.waitForTimeout(50);
+      ended = await done();
+    }
     await page.waitForTimeout(700);
-    return { sent: queueSent.join(), status, busy };
+    const status = await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__queueCase.abort();
+      return /** @type {number | null} */ (w.__queueError);
+    });
+    return { sent: queueSent.join(), status, busy, ended, refused: queueRefused.join() };
   };
+  const queueOut = () => page.evaluate(() => document.getElementById("queue-out")?.textContent ?? null);
   const queueLogged = errors.length;
   const patchHeaders = { "corten-patch": "1" };
   const queueForm = (/** @type {string} */ method, /** @type {string} */ extra = "") =>
@@ -1400,55 +1447,74 @@ async function run(browser) {
   // A newer GET aborts the older one, whose answer is worth nothing now: the first answers last,
   // and the page keeps the newer's.
   queueAnswer = { status: 200, headers: patchHeaders, body: '<p id="queue-out">read {n}</p>' };
-  const read = await queueCase(queueForm("get"));
-  await page.waitForTimeout(800);
-  check("a newer GET submit aborts the older one", read.sent === "GET 1,GET 2" && (await page.textContent("#queue-out")) === "read 2", `${read.sent}; ${await page.textContent("#queue-out")}`);
+  // Ended once the older's late answer was tried too, so it had its chance to draw.
+  const read = await queueCase(queueForm("get"), async () => queueAnswered === 2 && (await queueOut()) === "read 2");
+  check(
+    "a newer GET submit aborts the older one",
+    read.ended && read.status === null && read.sent === "GET 1,GET 2" && read.refused === "1" && (await queueOut()) === "read 2",
+    `${read.sent}; ${await queueOut()}; ended: ${read.ended}; error: ${read.status}; refused: ${read.refused}`,
+  );
 
   // An answer the runtime does not draw (a proxy's 503) drops the submit that waited.
   queueAnswer = { status: 503, body: "Service Unavailable" };
-  const undrawn = await queueCase(queueForm("post"));
-  check("a submit that waited for an answer the runtime does not draw is not sent", undrawn.sent === "POST 1" && undrawn.status === 503, `${undrawn.sent}; ${undrawn.status}`);
+  const undrawn = await queueCase(queueForm("post"), async () => (await page.evaluate(() => /** @type {any} */ (window).__queueError)) !== null);
+  check(
+    "a submit that waited for an answer the runtime does not draw is not sent",
+    undrawn.ended && undrawn.sent === "POST 1" && undrawn.status === 503,
+    `${undrawn.sent}; ${undrawn.status}; ended: ${undrawn.ended}`,
+  );
 
   // A 5xx patch is drawn, but the write may or may not have applied: the waiting submit drops.
   queueAnswer = { status: 500, headers: patchHeaders, body: '<p id="queue-out">failed</p>' };
-  const failedPatch = await queueCase(queueForm("post"));
+  const failedPatch = await queueCase(queueForm("post"), async () => (await queueOut()) === "failed");
   check(
     "a submit that waited for a 5xx is not sent, and the 5xx's patch is drawn",
-    failedPatch.sent === "POST 1" && (await page.textContent("#queue-out")) === "failed",
-    `${failedPatch.sent}; ${await page.textContent("#queue-out")}`,
+    failedPatch.ended && failedPatch.status === null && failedPatch.sent === "POST 1" && (await queueOut()) === "failed",
+    `${failedPatch.sent}; ${await queueOut()}; ended: ${failedPatch.ended}; error: ${failedPatch.status}`,
   );
 
   // A refusal of the state the write was made against (Errors::refuse, 409) is drawn and drops
   // the waiting submit: the user reads it before anything else goes.
   queueAnswer = { status: 409, headers: patchHeaders, body: '<p id="queue-out">stale</p>' };
-  const stale = await queueCase(queueForm("post"));
+  const stale = await queueCase(queueForm("post"), async () => (await queueOut()) === "stale");
   check(
     "a submit that waited is not sent after a 409 refusal, which is drawn",
-    stale.sent === "POST 1" && (await page.textContent("#queue-out")) === "stale",
-    `${stale.sent}; ${await page.textContent("#queue-out")}`,
+    stale.ended && stale.status === null && stale.sent === "POST 1" && (await queueOut()) === "stale",
+    `${stale.sent}; ${await queueOut()}; ended: ${stale.ended}; error: ${stale.status}`,
   );
 
   // An answer that removes the form drops it.
   queueAnswer = { status: 200, headers: patchHeaders, body: '<template id="queue" data-remove></template>' };
-  const removed = await queueCase(queueForm("post"));
-  check("a submit that waited is not sent when the answer removes its form", removed.sent === "POST 1" && (await page.$("#queue")) === null, removed.sent);
+  const removed = await queueCase(queueForm("post"), async () => (await page.$("#queue")) === null);
+  check(
+    "a submit that waited is not sent when the answer removes its form",
+    removed.ended && removed.status === null && removed.sent === "POST 1" && (await page.$("#queue")) === null,
+    `${removed.sent}; ended: ${removed.ended}; error: ${removed.status}`,
+  );
 
   // A form without an id that the answer took off the page is not found again: its values are
   // the ones from before the answer.
   queueAnswer = { status: 200, headers: patchHeaders, body: '<div id="queue-box"><form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form></div>' };
-  const noId = await queueCase('<form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form>');
-  check("a submit that waited is not sent when its form without an id left the page", noId.sent === "POST 1", noId.sent);
+  // The answer's box has no #queue-out: drawn once it is gone.
+  const noId = await queueCase('<form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form>', async () => (await queueOut()) === null);
+  check(
+    "a submit that waited is not sent when its form without an id left the page",
+    noId.ended && noId.status === null && noId.sent === "POST 1",
+    `${noId.sent}; ended: ${noId.ended}; error: ${noId.status}`,
+  );
 
   // The submit that waited goes under the form's new key: the write's answer renewed it.
-  queueAnswer = { status: 200, headers: patchHeaders, body: '<p id="queue-out">saved</p>' };
-  const keyed = await queueCase(queueForm("post", `<input type="hidden" name="submit" data-submit value="${zero}">`));
+  queueAnswer = { status: 200, headers: patchHeaders, body: '<p id="queue-out">saved {n}</p>' };
+  // Ended once the waiting submit's own answer is drawn.
+  const keyed = await queueCase(queueForm("post", `<input type="hidden" name="submit" data-submit value="${zero}">`), async () => (await queueOut()) === "saved 2");
   const [firstKey, secondKey] = keyed.sent.split(",").map((s) => s.split(" ")[2]);
   check(
     "a submit that waited goes out after the write's answer, under the key the answer renewed",
-    keyed.busy === "true" && keyed.sent.startsWith("POST 1 ") && keyed.sent.includes(",POST 2 ") && firstKey === zero && /^[0-9a-f-]{36}$/.test(secondKey ?? "") && secondKey !== zero,
-    keyed.sent,
+    keyed.ended && keyed.status === null && keyed.busy === "true" && keyed.sent.split(",").length === 2 && keyed.sent.startsWith("POST 1 ") && keyed.sent.includes(",POST 2 ") && firstKey === zero && /^[0-9a-f-]{36}$/.test(secondKey ?? "") && secondKey !== zero,
+    `${keyed.sent}; ended: ${keyed.ended}; error: ${keyed.status}`,
   );
   await page.unroute("**/queue*");
+  page.off("requestfailed", queueGaveUp);
   await page.evaluate(() => document.getElementById("queue-box")?.remove());
   // The browser logs the 503, 500 and 409 the smoke answered; nothing else is expected.
   errors.splice(queueLogged, errors.length, ...errors.slice(queueLogged).filter((e) => !/Failed to load resource/.test(e)));
