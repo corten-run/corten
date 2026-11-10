@@ -1255,6 +1255,41 @@ rules something out.
     without skipping) and a socket probe on Linux in which a backlog of 128 timed out at the 130th
     connection and 511 admitted 200 on each loopback address.
 
+34. <a id="choice-runtime-terser"></a>**The runtime and its modules are minified by esbuild and then by
+    terser.** Every page of every app loads the runtime, so its bytes are paid on each first
+    visit. esbuild bundles each file (the runtime takes in `on.js`), lowers it to ES2022 and
+    minifies it, as before; terser, a development dependency of the repository's tooling that no
+    app installs, minifies that output again, compressing in two passes and renaming the module's
+    top-level names. The runtime on `c65c10ec`, as built (banner included), is 40,884 bytes
+    against 40,991, 14,307 with gzip (level 9) against 14,836, and 12,946 with brotli (level 11)
+    against 13,424: 3.6% less compressed, as Corten serves it, and 0.3% less uncompressed. The
+    saving is terser's renaming: without it, 495 of the 529 bytes with gzip come back. Not
+    chosen: esbuild's minifier alone (above); terser on esbuild's unminified bundle instead
+    (14,373 bytes with gzip and 13,015 with brotli, and 41,468 uncompressed, 477 more than
+    before); terser renaming without compressing (43 bytes more with gzip, 35 with brotli); one
+    pass (12 and 6 bytes more); a third pass (the same bytes as two).
+
+    Stands on: measured (each built file before and after on `c65c10ec`, one build each, the
+    build being deterministic: the runtime 107 bytes less uncompressed, 529 with gzip and 478
+    with brotli; `view.js` 20, 75 and 60 less; `format.js` 11, 8 and 18 less; `upload.js` and
+    `keys.js` within 11 bytes either way, `upload.js` 1 byte more uncompressed and `keys.js` 1
+    more with gzip; again on `4de159ab`, after a change to the runtime's submits: the runtime 105
+    bytes less, 533 with gzip and 532 with brotli, the other files as on `c65c10ec`); measured
+    (the browser smoke tests on
+    the built files of `10cd394d`, one run each, in the engines each runs: the watchlist, also
+    under `corten dev`, card-market, ui-gallery, seller-desk, deck-builder and its preview,
+    auction-room and listings-feed all passed; an earlier build, terser over the unminified
+    bundle, failed one Firefox check that fails under load without it, the feed's reconnect
+    timing, [#1102 The watchlist smoke's Firefox feed backoff check fails under load: a 2 s wait measured over 6 s against a 3.5 s bound](https://github.com/corten-run/corten/issues/1102));
+    value (fewer bytes on every page, Values 1, for a dependency of the tooling only, Values 6).
+
+    Revisit when: esbuild's minifier comes within 1% of the two after compression, so one tool
+    does it and terser goes; or terser's output fails a smoke test in a supported engine that
+    esbuild's alone passes.
+
+    Last checked: 2026-11-09, sizes on `c65c10ec` and `4de159ab` with esbuild 0.28.2 and terser
+    5.51.2, and the smoke tests on `10cd394d`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
