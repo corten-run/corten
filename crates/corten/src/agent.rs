@@ -34,7 +34,22 @@
 //! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
 //! ```
 //!
-//! The same input deriving `FromJson` instead does:
+//! With the opt-in impl it does, its `Deserialize` reading what the hand-written schema describes:
+//!
+//! ```
+//! use corten::{agent::Tools, json::schema::{FromJsonSchema, Generator}};
+//! #[derive(serde::Deserialize)]
+//! struct Adjust { id: String }
+//! impl FromJsonSchema for Adjust {
+//!     fn json_schema(_: &mut Generator) -> serde_json::Value { serde_json::json!({ "type": "object" }) }
+//! }
+//! impl corten::FromJson for Adjust {}
+//! #[derive(corten::ToJson)]
+//! struct Done { ok: bool }
+//! let _ = Tools::new("t", "1").tool("adjust", "Adjust", |(), _: Adjust| async { Ok(Done { ok: true }) });
+//! ```
+//!
+//! The same input deriving `FromJson` instead does too, with nothing written by hand:
 //!
 //! ```
 //! use corten::agent::Tools;

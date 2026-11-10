@@ -4262,7 +4262,8 @@ Corten is pre-1.0, so any minor version may change the API.
     a call on `620bc298`, against 267,820 and 265,852 on `a791d9ba` with `tool_cost` added
     (callgrind, release build, `tool_cost`, each answer checked to be the tool's output, 1,200 calls
     less 200 over 1,000, two runs each). No data-role attribute is added beside `ToJson` and
-    `FromJson`, which already name each type's direction (design Choice 35). **Breaking:** an output
+    `FromJson`, which already name each type's direction ([design Choice
+    35](docs/design.md#choice-json-derives)). **Breaking:** an output
     that implements `Serialize` and `ToJsonSchema` by hand and not `ToJson`, a derived generic
     output whose type argument is not `ToJson`, or an input that is a `Deserialize` (derived by
     serde or written by hand) with a `FromJsonSchema` written by hand and not a `FromJson`, no

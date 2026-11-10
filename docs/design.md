@@ -1331,12 +1331,18 @@ rules something out.
     response type still needed serde's `Serialize` beside `ToJson`: its `outputSchema` came from
     `ToJson`'s schema while its bytes came from `Serialize`, so a hand-written `Serialize` could
     drift from the schema with nothing failing to compile (Value 4). Tool outputs are now bounded
-    on `ToJson`, so one impl writes both (a field of another crate's type inside it is still
+    on `ToJson`, so the one `ToJson` impl, derived or written by hand, writes both (a field of
+    another crate's type inside it is still
     written by serde under a schema written for it, as in any `ToJson` answer) and a tool's output
     is written by the code every other response is (tool inputs are bounded on `FromJson` the same
     way, so an input that derives serde's `Deserialize` beside a schema written by hand does not
     compile, short of the deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson`
-    cannot write takes: written by hand, or serde's for an attribute it refuses):
+    cannot write takes: written by hand, or serde's for an attribute it refuses). What this gives
+    up: a tool output whose `ToJson` falls back to a field's own `Serialize` and fails (another
+    crate's map with a key JSON cannot hold) panics, and the call ends with the app's 500 rather
+    than a JSON-RPC error carrying its `id`, as every other `ToJson` answer already does. It
+    stands because such a value fails for every client the same way, the derive refuses what it
+    cannot write, and a fallible write on this one path would be a second way to write an answer:
 
     ```rust,ignore
     // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
@@ -1374,7 +1380,8 @@ rules something out.
     [Choice 26](#choice-derived-deserialize) covered it.
 
     Last checked: 2026-11-08, the callgrind count on `a791d9ba` and `620bc298`; 2026-11-09, the
-    derives and the agent endpoint's bounds, inputs and outputs, at `e1ecfee0` and after.
+    derives and the agent endpoint's bounds, inputs and outputs, at `7965aeab`, the bounds' last
+    change.
 
 ## Rules
 
