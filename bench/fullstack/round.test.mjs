@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { maxPasses } from "./passes.mjs";
-import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, unit } from "./round.mjs";
+import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -292,4 +292,12 @@ test("an app whose config is fixed at build runs its own image in the matched ti
   assert.deepEqual(matched.other, ["build", "-q", "-t", "cb-axum-maud", "bench/fullstack/apps/axum-maud"], "an app without a matched image builds as before");
   const corten = spawnSync(process.execPath, ["--input-type=module", "-e", 'const a = await import("./apps.mjs"); a.buildArgs("corten", "matched")'], { cwd: import.meta.dirname, encoding: "utf8" });
   assert.match(corten.stderr, /examples\/card-market's, not built by buildArgs/);
+});
+
+test("run-all.mjs runs from one step through another, and the browser suite stops before the builds", () => {
+  assert.deepEqual(stepsUntil("browser", "browser"), { steps: ["browser"], error: null });
+  assert.deepEqual(stepsUntil("cold-start", steps.at(-1) ?? "").steps, steps);
+  assert.deepEqual(stepsUntil("count", "conform").steps, ["count", "conform"]);
+  assert.match(stepsUntil("build", "browser").error ?? "", /until \(browser\) comes before from \(build\)/);
+  assert.match(stepsUntil("browser", "nope").error ?? "", /must each be one of/);
 });

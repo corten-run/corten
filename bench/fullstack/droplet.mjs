@@ -323,7 +323,7 @@ const launch = async () => {
   // The round, as a script its unit runs. Only a full-stack round starts again at boot.
   const command = {
     live: `node run.mjs ${round}; node summarize.mjs ${round}; echo all done`,
-    browser: `. "$HOME/.cargo/env"; node run-all.mjs ${round} 10 browser; cd /bench/bench/browser && node run-all.mjs ${round}`,
+    browser: `. "$HOME/.cargo/env"; node run-all.mjs ${round} 10 browser browser; cd /bench/bench/browser && node run-all.mjs ${round}`,
     fullstack: `exec node run-all.mjs ${round} 10 ${from ?? steps[0]} --unattended`,
     // Each app's phases run against a freshly started app; the step needs no load generator.
     harden: `node harden.mjs ${only ? only.join(",") : "all"} ${round} && echo all done`,
