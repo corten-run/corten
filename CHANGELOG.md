@@ -7023,6 +7023,10 @@ Corten is pre-1.0, so any minor version may change the API.
     checked JavaScript infers, and how to write each check in JavaScript; its advice on sort
     handlers no longer says a union of strings takes any value, since such a call does not compile
     ([#1040 Reassess JSDoc versus TypeScript for component scripts using measured safety and authoring tradeoffs](https://github.com/corten-run/corten/issues/1040)).
+83. The GitHub organization's avatar and the repository's social preview are in `docs/brand/`
+    with `render-github.mjs`, which draws both from the brand pack's SVGs, and
+    `corten-weathering-pack.md` gives their sizes, colors and font
+    ([#1084 The GitHub avatar and social preview made from the brand pack are not in docs/brand, so they cannot be redone from the repository](https://github.com/corten-run/corten/issues/1084)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

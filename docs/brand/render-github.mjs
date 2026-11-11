@@ -1,6 +1,6 @@
 // Renders the GitHub avatar and social preview from the brand pack's SVGs (#1084).
 // Run from the repository root: node docs/brand/render-github.mjs
-import { chromium } from "playwright";
+import { chromium } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -16,7 +16,7 @@ const browser = await chromium.launch();
 async function render(width, height, body, out) {
   const page = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 1 });
   await page.setContent(
-    `<body style="margin:0;width:${width}px;height:${height}px;background:${bone};display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,'Segoe UI',sans-serif">${body}</body>`,
+    `<body style="margin:0;width:${width}px;height:${height}px;background:${bone};display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:'Segoe UI',sans-serif">${body}</body>`,
   );
   await page.waitForLoadState("load");
   await page.screenshot({ path: fileURLToPath(new URL(out, dir)) });
