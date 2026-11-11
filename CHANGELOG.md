@@ -4448,6 +4448,15 @@ Corten is pre-1.0, so any minor version may change the API.
   layer, is about 286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470;
   callgrind, three runs each, within 20 instructions)
   ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
+- The kit's `CardSize::Sm` card's padding is two thirds of the theme's `--card-padding` and its
+  content's gap half of it, where both were fixed numbers (1rem and .75rem, what the kit's theme
+  still gives), so a theme whose `--card-padding` is 1rem or less no longer gets a small card as
+  large as its default one. A theme that sets its own `--card-padding` sees its small cards follow
+  it once the kit's `card.css` is merged: larger than before above 1.5rem (a 2rem theme's go from 1rem
+  to about 1.33rem). No token is added: a copied `card.css` takes it from
+  `corten ui add card --merge`. The ui-gallery smoke checks a small card under a theme with tight
+  cards
+  ([#1151 Kit CardSize::Sm is a fixed 1rem while the default card is the theme's --card-padding, so a theme at or below 1rem gets a small card no smaller than the default](https://github.com/corten-run/corten/issues/1151)).
 - The watchlist smoke's check that a submit button's formaction and formmethod are used waits up
   to 15 seconds for the post's answer and the message it draws, rather than 4 (most of the smoke's
   waits are 5 seconds): a loaded Firefox took longer than 4 and the check read status 0
