@@ -173,11 +173,11 @@ script gets the same formats from `t.js()` (`references/scripts.md`).
 
 ## A data screen
 
-A screen that native clients or agents also read derives `Serialize`, and its fields are the
+A screen that native clients or agents also read derives `ToJson`, and its fields are the
 whole view model, formatted text included:
 
 ```rust
-#[derive(Serialize)]
+#[derive(ToJson)]
 pub struct Home { stocks: Vec<Stock>, message: String }
 
 async fn home(req: Req, State(m): State<Market>) -> HtmlResult {
@@ -230,7 +230,8 @@ audience with `authorization.resource()`; a token missing a scope is
 
 `Json` is the prelude's `corten::Json`: axum's extractor, and a response written in one buffer
 (faster than `axum::Json`; keep the prelude's unless a crate hands you axum's). The response type
-derives `ToJson` next to `Serialize` (`#[derive(Serialize, ToJson)] struct Price ..`); it reads the
+derives `ToJson` (`#[derive(ToJson)] struct Price ..`; `Serialize` only if the app's own code also
+writes it with serde or it is a feed row, and an agent tool's output needs none); it reads the
 same `#[serde(...)]` attributes, and one it cannot write as serde does is a compile error.
 Every failure under the prefix is an RFC 9457 Problem Details document (`application/problem+json`,
 `{"title","status","detail"}`) whatever the client accepts;

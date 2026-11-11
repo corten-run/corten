@@ -4437,6 +4437,65 @@ Corten is pre-1.0, so any minor version may change the API.
     serde_json alone, before and after (callgrind, release build, `read_cost` in
     `examples/card-market`, two runs each)
     ([#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
+173. An agent tool's output (`Tools::tool`, `idempotent_tool`, `read_tool`) is a `ToJson` and is
+    written by it, so it derives `ToJson` alone, as every other JSON answer does, where it needed
+    serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
+    The answer is the same JSON (card-market's agent test checks its bytes against serde's for the
+    item). An `items.get` call costs about 21% fewer instructions: 266,844 a call before (265,376 to
+    267,830) and 211,152 after (211,123 to 211,865), with the same answer, 14,464 bytes on average
+    over the calls counted (callgrind, release build, card-market's `tool_cost`, 1,200 calls less
+    200 over 1,000, medians and ranges of three alternating runs, on `217bce2c` and `6d04bbe6`). No
+    data-role attribute is added beside `ToJson` and `FromJson`, which already name each type's
+    direction ([design Choice 38](docs/design.md#choice-json-derives)). **Breaking:** the type a
+    tool returns must be a `ToJson` and the type it takes a `FromJson`, as must any container around
+    them (a derived struct's own fields still fall back to serde), so what was only `Serialize` or
+    `Deserialize` no longer compiles as one: an output whose `Serialize` is derived by serde or
+    written by hand, with a `ToJsonSchema` written by hand; an input that is a `Deserialize` with a
+    `FromJsonSchema` written by hand; a container (`Box`, a map, `Cow`, `Arc`) whose item or value
+    is one of those or another crate's type; a derived generic type, output or input, whose type
+    argument is not `ToJson` or `FromJson`; an output map whose key is not a `JsonKey` (an app's key
+    type implements `corten::json::JsonKey`, writing the text serde writes for it; an externally
+    tagged enum of unit variants that derives `ToJson` gets one from the derive, so an app's own
+    `impl JsonKey` for one is E0119 and is removed); and an input map whose key is not `String`
+    (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types Corten gives a schema for are
+    `ToJson`, and `FromJson` in their owned forms (`str`, `[T]`, `Path` and `RawValue` boxed or
+    shared), written and read as serde does (`Duration`, `SystemTime`, IP and socket addresses,
+    paths, the `NonZero` integers, `PhantomData`, `serde_json::Number` and, with the `types`
+    feature, `RawValue`), as are `Cow<T>`, `Box<str>`, `Box<Path>` and `Box<[T]>`, the 128-bit
+    integers, sets, `VecDeque`, arrays (read up to 32 items, as serde reads them) and tuples, and
+    `Arc` and `Rc` of a `FromJson`, of `str`, of `Path`, of `[T]` or (with `types`) of `RawValue`,
+    which are read with serde's `rc` feature. Derive `ToJson` or `FromJson`; a `Serialize` or
+    `Deserialize` type that has a schema but is not one (another crate's, or a map of one) goes in a
+    `#[serde(transparent)]` newtype that derives it; only a type whose output schema is written by
+    hand implements `ToJson` by hand beside it (`serde_json::to_writer(&mut *out,
+    &self.0).expect(..)` in a newtype, for another crate's type); an input whose `Deserialize` is
+    not `FromJson`'s takes `impl corten::FromJson for T {}`; an input type the orphan rule keeps an
+    app from implementing it for (a map with other keys) goes in a `#[serde(transparent)]` newtype
+    that derives `FromJson`. `serde_json::Map<String, Value>` is now a `FromJson`, so an input read
+    as any object compiles as before. CI and the Checks build `corten-run` with `json` alone and
+    with `agent` and `feed` alone, as an app takes them, since the workspace turns on serde's `rc`
+    and an app need not. A field whose own `Serialize` fails (a map with a key JSON cannot hold,
+    inside another crate's type, or a std type serde refuses: a path that is not UTF-8, a
+    `SystemTime` before the epoch) panics in its `ToJson`; for a tool's output the call catches it
+    and answers the tool's internal error with the call's `id`, as before, and logs the tool's name
+    with the panic's message (a test holds it; an app built with `panic = "abort"` ends instead). A
+    tool output derived over types whose `ToJson` Corten or serde writes goes out unparsed (a type
+    that holds itself, a tree, included); one that is or holds a `ToJson` or map key (`JsonKey`)
+    written by hand is parsed before it is sent, and
+    one that is not one JSON object is the tool's internal error, logged with the tool's name, the
+    output's size and the fault, not its data (a debug build, `corten dev` or tests without
+    `--release`, parses every output and answers a bad one with the app's 500 and a log line
+    naming the tool). Parsing every output in a release build measured about 92,700 more
+    instructions a call (medians 303,500 against 210,762 over three runs, 44% of `tool_cost`'s),
+    which a derived output does not pay; whether to parse is decided once, when the tool is added.
+    An enum whose `Serialize` is not serde's derive (written by hand, or `serde_repr`'s number) and
+    that derives `ToJson` writes what its `#[serde(..)]` attributes say, its variant's name for a
+    unit variant, as a value and as a map key, not what that `Serialize` writes. To keep what its
+    `Serialize` writes, do not derive `ToJson` on it: as a field it is then written by serde, and as
+    a map key it takes a hand-written `JsonKey` that writes the text serde writes. A tool's output
+    can hold `Raw`, a `ToJson` with any JSON value as its schema; the app guide said it needed
+    `Box<RawValue>`, which only a feed row still does
+    ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 172. The kit's `Card` and `CardPanel` take a `size` (`CardSize::Md`, the theme's `--card-padding`,
     or `Sm`, denser), as `Button`, `Dialog` and `Progress` do, and `CardCompact` is gone: it was a
     class written beside a card (`(Card {}, CardCompact {})`) that compiled alone or beside any

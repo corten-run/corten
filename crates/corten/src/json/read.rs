@@ -40,7 +40,7 @@ use serde_json::{Number, Value};
 /// ```
 #[diagnostic::on_unimplemented(
     message = "`{Self}` is not read from JSON: it is not a `FromJson`",
-    note = "derive FromJson on it; a #[derive(Fields)] or #[derive(UrlValue)] type is one already (a generic one where its Deserialize applies) (deriving FromJson beside them is E0119); a type whose Deserialize borrows from the input cannot be one"
+    note = "derive FromJson on it; a std map whose key is not String (BTreeMap<u32, _>) goes in a #[serde(transparent)] newtype that derives FromJson; a #[derive(Fields)] or #[derive(UrlValue)] type is one already (a generic one where its Deserialize applies) (deriving FromJson beside them is E0119); a type whose Deserialize is written by hand, or by serde for an attribute FromJson refuses, takes `impl corten::FromJson for T {{}}`; a type whose Deserialize borrows from the input cannot be one"
 )]
 pub trait FromJson: DeserializeOwned {
     /// Reads the value at the reader's position. Not a public API.
@@ -682,6 +682,67 @@ impl<T: FromJson> FromJson for Box<T> {
     }
 }
 
+/// Text, read as a `String` is and moved into place.
+impl FromJson for Box<str> {
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        String::__read(r).map(Box::from)
+    }
+}
+
+/// A path, read as a `PathBuf` is and moved into place.
+impl FromJson for Box<std::path::Path> {
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        std::path::PathBuf::__read(r).map(std::path::PathBuf::into_boxed_path)
+    }
+}
+
+/// A list, read as a `Vec` is and moved into place.
+impl<T: FromJson> FromJson for Box<[T]> {
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        Vec::<T>::__read(r).map(Box::from)
+    }
+}
+
+/// Read as its item, as serde's `rc` feature reads it (an app turns that feature on to read one),
+/// for an item that is a `FromJson`, `str`, `Path`, `[T]` of a `FromJson`, or (feature `types`)
+/// `RawValue`.
+impl<T: __private::Shared + ?Sized> FromJson for std::sync::Arc<T>
+where
+    std::sync::Arc<T>: DeserializeOwned,
+{
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        T::__read_arc(r)
+    }
+}
+
+/// Read as its item, as serde's `rc` feature reads it (an app turns that feature on to read one),
+/// for an item that is a `FromJson`, `str`, `Path`, `[T]` of a `FromJson`, or (feature `types`)
+/// `RawValue`.
+impl<T: __private::Shared + ?Sized> FromJson for std::rc::Rc<T>
+where
+    std::rc::Rc<T>: DeserializeOwned,
+{
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        T::__read_rc(r)
+    }
+}
+
+/// Read as its owned form, as serde reads a `Cow`.
+impl<T: ToOwned + ?Sized> FromJson for std::borrow::Cow<'_, T>
+where
+    T::Owned: FromJson,
+{
+    #[inline]
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        T::Owned::__read(r).map(std::borrow::Cow::Owned)
+    }
+}
+
 impl<T: FromJson> FromJson for Vec<T> {
     fn __read(r: &mut Reader<'_>) -> R<Self> {
         let mut out = Vec::new();
@@ -732,6 +793,81 @@ impl<V: FromJson, S: BuildHasher + Default> FromJson for HashMap<String, V, S> {
     }
 }
 
+/// An object read whole, as `Value`'s object: a map whose values are any JSON.
+impl FromJson for serde_json::Map<String, Value> {
+    fn __read(r: &mut Reader<'_>) -> R<Self> {
+        let mut out = serde_json::Map::new();
+        map(r, |k, v| {
+            out.insert(k, v);
+        })?;
+        Ok(out)
+    }
+}
+
+macro_rules! by_serde {
+    ($($t:ty),*) => {$(
+        /// Read by serde_json, as its `Deserialize` reads it.
+        impl FromJson for $t {}
+    )*};
+}
+by_serde!(
+    std::path::PathBuf,
+    std::net::IpAddr,
+    std::net::Ipv4Addr,
+    std::net::Ipv6Addr,
+    std::net::SocketAddr,
+    std::net::SocketAddrV4,
+    std::net::SocketAddrV6,
+    std::time::Duration,
+    std::time::SystemTime,
+    std::num::NonZeroU8,
+    std::num::NonZeroU16,
+    std::num::NonZeroU32,
+    std::num::NonZeroU64,
+    std::num::NonZeroU128,
+    std::num::NonZeroUsize,
+    std::num::NonZeroI8,
+    std::num::NonZeroI16,
+    std::num::NonZeroI32,
+    std::num::NonZeroI64,
+    std::num::NonZeroI128,
+    std::num::NonZeroIsize,
+    serde_json::Number
+);
+
+/// Read as `null`, as serde reads it.
+impl<T: ?Sized> FromJson for std::marker::PhantomData<T> {}
+
+/// Read by serde_json, as serde reads a 128-bit integer.
+impl FromJson for u128 {}
+
+/// Read by serde_json, as serde reads a 128-bit integer.
+impl FromJson for i128 {}
+
+/// Read by serde_json, as serde reads a set.
+impl<T: FromJson> FromJson for std::collections::BTreeSet<T> where Self: DeserializeOwned {}
+
+/// Read by serde_json, as serde reads a set.
+impl<T: FromJson, S> FromJson for std::collections::HashSet<T, S> where Self: DeserializeOwned {}
+
+/// Read by serde_json, as serde reads a list.
+impl<T: FromJson> FromJson for std::collections::VecDeque<T> where Self: DeserializeOwned {}
+
+/// Read by serde_json, as serde reads an array of exactly `N` items.
+impl<T: FromJson, const N: usize> FromJson for [T; N] where Self: DeserializeOwned {}
+
+macro_rules! tuples {
+    ($(($($n:ident),*)),*) => {$(
+        /// Read by serde_json, as serde reads a tuple: an array of exactly its items.
+        impl<$($n: FromJson),*> FromJson for ($($n,)*) {}
+    )*};
+}
+tuples!((A), (A, B), (A, B, C), (A, B, C, D), (A, B, C, D, E), (A, B, C, D, E, F));
+
+/// The value's JSON text, kept as it is.
+#[cfg(feature = "types")]
+impl FromJson for Box<serde_json::value::RawValue> {}
+
 impl FromJson for Value {
     /// Scalars are made here; an array or an object (rarer in a field typed `Value`) by serde_json.
     fn __read(r: &mut Reader<'_>) -> R<Self> {
@@ -776,6 +912,75 @@ pub mod __private {
 
     pub use super::{Fallback, Reader};
     use super::{FromJson, R};
+
+    /// What an `Arc` or `Rc` of it is read through: a `FromJson`, text, a path, a list or (feature
+    /// `types`) a `RawValue`. Not a public API.
+    pub trait Shared {
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>>;
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>>;
+    }
+
+    impl<T: FromJson> Shared for T {
+        #[inline]
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>> {
+            T::__read(r).map(std::sync::Arc::new)
+        }
+
+        #[inline]
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
+            T::__read(r).map(std::rc::Rc::new)
+        }
+    }
+
+    impl Shared for str {
+        #[inline]
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>> {
+            String::__read(r).map(std::sync::Arc::from)
+        }
+
+        #[inline]
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
+            String::__read(r).map(std::rc::Rc::from)
+        }
+    }
+
+    impl Shared for std::path::Path {
+        #[inline]
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>> {
+            std::path::PathBuf::__read(r).map(std::sync::Arc::from)
+        }
+
+        #[inline]
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
+            std::path::PathBuf::__read(r).map(std::rc::Rc::from)
+        }
+    }
+
+    /// Read as a `Box<RawValue>` and moved behind the pointer, as serde's `rc` reads one.
+    #[cfg(feature = "types")]
+    impl Shared for serde_json::value::RawValue {
+        #[inline]
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>> {
+            Box::<serde_json::value::RawValue>::__read(r).map(std::sync::Arc::from)
+        }
+
+        #[inline]
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
+            Box::<serde_json::value::RawValue>::__read(r).map(std::rc::Rc::from)
+        }
+    }
+
+    impl<T: FromJson> Shared for [T] {
+        #[inline]
+        fn __read_arc(r: &mut Reader<'_>) -> R<std::sync::Arc<Self>> {
+            Vec::<T>::__read(r).map(std::sync::Arc::from)
+        }
+
+        #[inline]
+        fn __read_rc(r: &mut Reader<'_>) -> R<std::rc::Rc<Self>> {
+            Vec::<T>::__read(r).map(std::rc::Rc::from)
+        }
+    }
 
     /// `s` read by the reader alone, `None` where it gives up: for tests that show the reader
     /// read a type itself rather than hand it to serde_json.
@@ -1048,6 +1253,71 @@ mod tests {
         assert!(same::<Vec<f32>>("[0.1,16777217,3.4028235e38]"));
     }
 
+    /// The std types a schema is given for, and the pointers serde reads through, read as serde_json
+    /// reads them, alone and inside a container.
+    #[test]
+    fn std_types_with_a_schema_are_serde_json_s() {
+        use std::{
+            borrow::Cow,
+            marker::PhantomData,
+            net::{IpAddr, Ipv4Addr, SocketAddr},
+            num::{NonZeroI8, NonZeroU32},
+            path::PathBuf,
+            rc::Rc,
+            sync::Arc,
+            time::{Duration, SystemTime},
+        };
+        same::<Ipv4Addr>(r#""10.0.0.1""#);
+        same::<Ipv4Addr>(r#""10.0.0""#);
+        same::<IpAddr>(r#""::1""#);
+        same::<SocketAddr>(r#""127.0.0.1:80""#);
+        same::<PathBuf>(r#""a/b""#);
+        same::<Duration>(r#"{"secs":1,"nanos":5}"#);
+        same::<SystemTime>(r#"{"secs_since_epoch":1700000000,"nanos_since_epoch":7}"#);
+        same::<NonZeroU32>("7");
+        same::<NonZeroU32>("0");
+        same::<NonZeroI8>("-8");
+        same::<PhantomData<String>>("null");
+        same::<serde_json::Number>("1.5");
+        same::<BTreeMap<String, Duration>>(r#"{"a":{"secs":1,"nanos":0}}"#);
+        assert!(same::<Arc<Line>>(LINE));
+        assert!(same::<Rc<Vec<u8>>>("[1,2]"));
+        assert!(same::<Cow<'static, str>>(r#""c""#));
+        assert!(same::<Vec<Box<str>>>(r#"["a","\u00e9"]"#));
+        assert!(same::<Arc<str>>(r#""a""#));
+        assert!(same::<Rc<str>>(r#""a""#));
+        assert!(same::<Box<[u8]>>("[1,2]"));
+        same::<Box<std::path::Path>>(r#""a/b""#);
+        same::<Arc<std::path::Path>>(r#""a/b""#);
+        same::<Rc<std::path::Path>>(r#""a""#);
+        same::<BTreeMap<String, Box<std::path::Path>>>(r#"{"x":"c"}"#);
+        assert!(same::<Arc<[String]>>(r#"["a"]"#));
+        assert!(same::<BTreeMap<String, Box<[u8]>>>(r#"{"x":[1]}"#));
+        same::<u128>("340282366920938463463374607431768211455");
+        same::<i128>("-170141183460469231731687303715884105728");
+        same::<BTreeMap<String, u128>>(r#"{"a":1}"#);
+        same::<std::collections::BTreeSet<String>>(r#"["b","a"]"#);
+        same::<std::collections::VecDeque<u8>>("[1,2]");
+        same::<[u8; 2]>("[1,2]");
+        same::<[u8; 2]>("[1]");
+        same::<(f64, String)>(r#"[1.5,"a"]"#);
+        same::<BTreeMap<String, (f64, f64)>>(r#"{"p":[1,2]}"#);
+        let sets: std::collections::HashSet<String> = from_str(r#"["a","b","a"]"#).unwrap();
+        assert_eq!(sets, serde_json::from_str(r#"["a","b","a"]"#).unwrap());
+        assert!(same::<Vec<Cow<'static, [u8]>>>("[[1],[2,3]]"));
+        assert!(same::<BTreeMap<String, Arc<Line>>>(&format!(r#"{{"x":{LINE}}}"#)));
+        #[cfg(feature = "types")]
+        {
+            let raw: BTreeMap<String, Box<serde_json::value::RawValue>> = from_str(r#"{"x": [1, {"a": 2}]}"#).unwrap();
+            assert_eq!(raw["x"].get(), r#"[1, {"a": 2}]"#);
+            let shared: Vec<Arc<serde_json::value::RawValue>> = from_str(r#"[ {"a": 1}, 2]"#).unwrap();
+            let theirs: Vec<Arc<serde_json::value::RawValue>> = serde_json::from_str(r#"[ {"a": 1}, 2]"#).unwrap();
+            assert_eq!(shared.iter().map(|v| v.get()).collect::<Vec<_>>(), theirs.iter().map(|v| v.get()).collect::<Vec<_>>());
+            let one: Rc<serde_json::value::RawValue> = from_str("[1]").unwrap();
+            assert_eq!(one.get(), "[1]");
+        }
+    }
+
     /// A string read or skipped stops where serde_json does at every place in the scan's 16 and 8
     /// byte steps: its closing quote, an escape, or a control character. One the reader can take
     /// (anything but a control character or a bad escape) it takes, so a scan that stopped early
@@ -1108,6 +1378,10 @@ mod tests {
         same::<char>(r#""ab""#);
         same::<Value>(&("[".repeat(127) + &"]".repeat(127)));
         same::<Value>(&("[".repeat(129) + &"]".repeat(129)));
+        // An object read whole, a key written twice keeping its last value.
+        assert!(same::<serde_json::Map<String, Value>>(r#"{"a":1,"b":[true,null],"a":"x"}"#));
+        same::<serde_json::Map<String, Value>>(r#"[1]"#);
+        same::<serde_json::Map<String, Value>>(r#"{"a":}"#);
         same::<Line>(
             &LINE.replace(r#""unknown":[{"x":"\u0041"}]"#, &format!(r#""unknown":{}"#, "[".repeat(130) + &"]".repeat(130))),
         );

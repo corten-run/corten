@@ -73,17 +73,23 @@ JSON Schema (draft 2020-12): a doc comment is the `description` (and a first lin
 carries its `default`. The schemas are compiled only with feature `types` (which `agent` turns on).
 
 A derived type compiles with a field of any type serde writes or reads, since many are never
-described. Describing one whose field, at any depth, has a type with no schema panics naming
-that type: in the test that calls `Types::sync`, or at startup for a tool. Derive `ToJson` (or
-`FromJson`) on the type (a `Fields` or `UrlValue` type has its read schema already), or, for
-another crate's type, implement the trait for a
-`#[serde(transparent)]` newtype around it. In a generic type, a field type that has a schema
-only under a bound the type does not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same
-way: add the bound to the type's where clause. A type a root names directly (`Types::add`, a
-tool's input or output, an event's field) without a schema does not compile. Rust's own types
-that serde writes have one (strings, numbers, `NonZero*`, lists, sets, maps, tuples, `Option`,
-`Box`/`Rc`/`Arc`/`Cow`, `Duration`, `SystemTime`, paths and addresses, `serde_json`'s values and
-`RawValue`, Corten's `Raw` and `Day`). The read side describes what `FromJson` reads, so an enum
-with data in a tool's input, which `FromJson` does not take, has no read schema: implement
-`FromJsonSchema` for it by hand. A declaration is named after the Rust type; a
-`#[serde(rename)]` on the type does not change its JSON, and does not change the name.
+described. Describing one whose field, at any depth, has a type with no schema panics naming that
+type: in the test that calls `Types::sync`, or at startup for a tool. Derive `ToJson` (or
+`FromJson`) on the type (a `Fields` or `UrlValue` type has its read schema already), or, for another
+crate's type, implement the trait for a `#[serde(transparent)]` newtype around it (a newtype that is
+a tool's whole output implements `ToJson` by hand as well, `serde_json::to_writer(&mut *out,
+&self.0).expect(..)`, writing exactly one JSON object: an output that is or holds a `ToJson`
+written by hand is parsed before it is sent, so one that is not one object is the tool's internal
+error, logged with the tool's name, and a debug build answers it with a 500 naming the tool; a
+newtype that is a tool's whole input takes `impl corten::FromJson for T {}` beside its
+`Deserialize`). In a generic type, a field type that has a schema only under a bound the type does
+not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same way: add the bound to the type's where clause. A type a root names
+directly (`Types::add`, a tool's input or output, an event's field) without a schema does not
+compile. Rust's own types that serde writes have one (strings, numbers, `NonZero*`, lists, sets,
+maps, tuples, `Option`, `Box`/`Rc`/`Arc`/`Cow`, `Duration`, `SystemTime`, paths and addresses,
+`serde_json`'s values and `RawValue`, Corten's `Raw` and `Day`). The read side describes what
+`FromJson` reads, so an enum with data in a tool's input, which `FromJson` does not take, has no
+read schema: implement `FromJsonSchema` for it by hand (and, when it is the whole input, which a
+tool bounds on `FromJson`, add `impl corten::FromJson for T {}` beside its `Deserialize`). A
+declaration is named after the Rust type; a `#[serde(rename)]` on the type does not change its JSON,
+and does not change the name.

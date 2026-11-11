@@ -26,7 +26,6 @@ use corten::{
     security::{Policy, Violations},
     seo::{self, SitemapUrl},
 };
-use serde::Serialize;
 
 use crate::{
     api, embeds, grading, items, mcp,
@@ -360,7 +359,7 @@ pub(crate) async fn home(req: Req, State(source): State<Source>) -> Public<HtmlR
 }
 
 /// The trail a search engine shows for a page (schema.org `BreadcrumbList`), as structured data.
-#[derive(Serialize, ToJson)]
+#[derive(ToJson)]
 struct Breadcrumbs {
     #[serde(rename = "@context")]
     context: &'static str,
@@ -370,7 +369,7 @@ struct Breadcrumbs {
     items: Vec<Crumb>,
 }
 
-#[derive(Serialize, ToJson)]
+#[derive(ToJson)]
 struct Crumb {
     #[serde(rename = "@type")]
     kind: &'static str,
@@ -525,7 +524,7 @@ pub(crate) struct CreateAlert {
     target_price: String,
 }
 
-#[derive(Serialize, ToJson)]
+#[derive(ToJson)]
 pub(crate) struct AlertSet {
     message: String,
     /// The partner the alert was set for, when a partner set it; agents do not have one.
@@ -576,7 +575,7 @@ fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
                 let source = read_source.clone();
                 async move {
                     let item = source.item(&input.id).await.map_err(ToolError::internal)?;
-                    // The cached item, serialized where it is: no copy.
+                    // The cached item, written where it is: no copy.
                     item.ok_or_else(|| ToolError::Invalid(format!("no item {}", input.id)))
                 }
             },
@@ -622,6 +621,12 @@ mod tests {
     }
 
     fn app() -> App {
+        super::app_with(fixture(), Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" }, WRITES_PER_MINUTE)
+            .test()
+    }
+
+    /// The items `app` serves.
+    fn fixture() -> Source {
         let offers: Vec<_> = (1..=7)
             .map(|n| json!({ "offer_id": format!("o{n}"), "buyer_display_name": format!("Buyer {n}"), "product_summary": "NM", "quantity_requested": 1, "price_amount": "1.00", "price_currency_code": "USD" }))
             .collect();
@@ -637,8 +642,7 @@ mod tests {
             "offer_demand_matches": offers
         });
         let bare = json!({ "catalog_item_id": "item_10", "title": "Bare", "market_summary": null });
-        let source = Source::fixture(&json!({ "item_9": item, "item_10": bare }).to_string()).unwrap();
-        super::app_with(source, Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" }, WRITES_PER_MINUTE).test()
+        Source::fixture(&json!({ "item_9": item, "item_10": bare }).to_string()).unwrap()
     }
 
     /// The alert form on `item`, posted from the page: the title, the address and the price.
@@ -1020,6 +1024,47 @@ mod tests {
         assert_eq!(read_all(&responses, serde), responses.len());
     }
 
+    /// What an agent's `items.get` call costs, for callgrind: `TOOL_CALLS` calls through `/mcp`,
+    /// one item after another from the fixture, each answered with the item as written by its
+    /// `ToJson`. Build with `cargo test --release -p card-market --no-run`, then run the binary
+    /// twice, `CORTEN_FIXTURE=/path/items.json TOOL_CALLS=200` and `=1200`, under
+    /// `valgrind --tool=callgrind <test binary> --ignored --exact app::tests::tool_cost`: the
+    /// difference over 1,000 is one call, without startup and setup.
+    #[tokio::test]
+    #[ignore]
+    async fn tool_cost() {
+        use corten::{answer::Body, http::Request};
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
+        let source = Source::fixture(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let router = super::app_with(source, Keys { partners: Partners::parse(""), agents: "t" }, WRITES_PER_MINUTE).router();
+        let calls: usize = std::env::var("TOOL_CALLS").expect("TOOL_CALLS").parse().unwrap();
+        let bodies: Vec<String> = (1..=500)
+            .map(|n| {
+                json!({ "jsonrpc": "2.0", "id": n, "method": "tools/call", "params": { "name": "items.get", "arguments": { "id": format!("item_{n}") } } })
+                    .to_string()
+            })
+            .collect();
+        let mut bytes = 0;
+        for body in bodies.iter().cycle().take(calls) {
+            let req = Request::post(mcp::Mcp::PATH)
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .header("authorization", "Bearer t")
+                .body(Body::from(body.clone()))
+                .unwrap();
+            let res = router.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let body = std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes());
+            // A tool error is a 200 too: measure the output written, not the error path. The end
+            // says which, at the same cost whatever the output's size.
+            assert!(body.ends_with(br#","isError":false}}"#), "{}", String::from_utf8_lossy(&body));
+            bytes += body.len();
+        }
+        println!("{calls} calls, {} bytes avg", bytes / calls);
+    }
+
     #[tokio::test]
     #[ignore]
     async fn route_loop() {
@@ -1232,6 +1277,7 @@ mod tests {
             res["result"]["structuredContent"]["message"],
             "Alert set: we will email a@b.c when Pika <Promo> & \"Friends\" drops below $1.00."
         );
+        assert_eq!(res["result"]["structuredContent"].get("partner"), None, "an agent's alert has no partner: {body}");
         // The tools' own refusal keeps its request's id: `Api::errors` leaves a JSON body as it is.
         // A bearer token that was sent and refused is named invalid (RFC 6750).
         let (status, headers, body) = send(call(Some("wrong"), alert)).await;
@@ -1391,6 +1437,12 @@ mod tests {
         let (_, _, body) = send(call(Some("dev-token"), read)).await;
         let res: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(res["result"]["structuredContent"]["listings"].as_array().unwrap().len(), 2);
+        // The output is written by its ToJson: serde's bytes for the item, in the text block and
+        // as is in structuredContent.
+        let text = res["result"]["content"][0]["text"].as_str().unwrap();
+        let item = fixture().item("item_9").await.unwrap().unwrap();
+        assert_eq!(text, serde_json::to_string(&*item).unwrap());
+        assert!(body.contains(&format!(r#""structuredContent":{text}"#)), "{body}");
     }
 
     #[tokio::test]
