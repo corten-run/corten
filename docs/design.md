@@ -138,7 +138,22 @@ rules something out.
 5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
    a handler the script does not export fails to compile at the call. No generated declarations
-   are needed between markup and script, and none can be stale.
+   are needed between markup and script, and none can be stale. Scripts are JavaScript with JSDoc,
+   not TypeScript source: `tsc` checks both, and the call check, the generated declarations and
+   data read at run time are the same either way. The macro already reads TypeScript's type syntax
+   inside JSDoc, so the call check would carry over; what TypeScript source adds is a step before
+   serving: full TypeScript needs code emitted for `enum`, namespaces and parameter properties, so
+   a build step; erasable-only TypeScript (TypeScript 5.8's `erasableSyntaxOnly`) needs a pass that
+   blanks its type syntax (annotations, `as`, `satisfies`, `!`, type parameters and arguments,
+   `interface`, `type`, modifiers, overloads, type-only imports and more) and keeps up with each
+   TypeScript release. Moving every script to TypeScript would still leave one format, so the
+   choice rests on that step, which JavaScript does not need, against the few checks below, each of
+   which JavaScript can be written to get too (a JSDoc type, a rest parameter; a class's only by
+   restating its fields). Stricter checks of a body are `tsc` options, which hold for JavaScript as
+   for TypeScript
+   ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)),
+   and data read at run time is unchecked in either
+   ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
    Stands on: bet (the JSDoc types the compiler reads cover what handlers take: elements and their
    lists, maps and views (`Holds`), events, `AbortSignal`, strings and lists of them, numbers,
@@ -147,13 +162,47 @@ rules something out.
    it cannot check a call against, a set of names written as string literals, any other JSON
    shape or an element or event in another shape, refuses the call rather than taking anything,
    and only `unknown` takes any argument, since it claims nothing the call does not check);
-   reasoned (with the check at the call, no declarations sit between markup and script to go stale);
-   value (a wrong call fails to compile, Values 4).
+   platform (TypeScript 5.9.3 and 7.0.2 check JSDoc types as they check annotations, except where
+   JavaScript infers a type, in the cases probed so far: a property first given after an empty
+   object literal, which a JSDoc type on the object catches; a value whose type nothing fixes (an
+   untyped `new Promise` or `new Set()`, a type parameter no argument decides), `any` in JavaScript
+   and `unknown` in TypeScript, which a JSDoc type fixes; a function called with `new` that sets
+   `this`'s properties, which 5.9.3 accepts in JavaScript and 7.0.2 refuses; a function that reads
+   `arguments`, which 5.9.3 lets take any number of arguments in JavaScript and 7.0.2 does not, and
+   a rest parameter fixes; and a property a class's constructor or method sets first, which
+   JavaScript takes as declared even when the class declares its fields, so a misspelled write is
+   flagged only when `this` is retyped to a typedef that repeats the fields (`@this` on a method, a
+   cast in the constructor), and a read of the misspelled name only when a method other than the
+   constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`);
+   reasoned (with the check at the call, no declarations sit between markup and script to go stale;
+   component behavior is exported functions, not classes; the runtime's one hand-written class,
+   `<corten-live>`, sets only the fields it declares, and the classes it generates, one per view
+   (the macro writes them) and one per typed event (`assets.rs` writes them), are typed by the
+   declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
+   was read, and none's value is used as a type it is not); measured (deck-builder's and
+   seller-desk's largest scripts and three small handlers, converted to TypeScript, surfaced no
+   bug; esbuild 0.28.2's output (`--format=esm`), which stands in for either language since Corten
+   serves esbuild's output for neither, with whitespace and comments removed was the same bytes,
+   17,424 and 4,358, and its plain output differed by comments and the parentheses a JSDoc cast
+   needs, 22,498 against 22,046 for deck-builder; `tsc` on the repository took, on TypeScript
+   5.9.3, 6.6 to 7.3 s with them as JavaScript and 7.6 to 8.7 s as TypeScript, three runs each, not
+   alternated, on a loaded machine, so no difference in time is claimed; no empty object literal
+   given properties later and no function called with `new` is in the repository's scripts, and
+   none reads `arguments`); value (a wrong call fails to compile, Values 4; one authoring format,
+   Values 5, which keeping JavaScript holds without a migration; no build step and no
+   syntax-removal pass in a macro that depends on nothing, Values 6).
 
    Revisit when: an example or a kit component has to take `unknown` where a precise type would
    serve it, because no checked type or generated declaration fits, so a wrong call compiles; or
    JavaScript gains type syntax of its own (TC39's type annotations proposal), which a script
-   could carry in place of JSDoc.
+   could carry in place of JSDoc; or a script needs a check `checkJs` cannot give with a JSDoc type
+   (an object built up a property at a time that cannot be written as a literal or a typed value);
+   or a component or the runtime has a hand-written class, or a function called with `new`, that
+   sets properties it does not declare, or a function that reads `arguments`; or TypeScript stops
+   reading a JSDoc form the scripts use (7.0 dropped several, among them `@enum`, `@class`, Closure
+   function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
+   which they use); or a TypeScript release changes what the probes behind the measured premise
+   show.
 
    Last checked: 2026-11-07, at `cdbe4392`: every parameter a handler in the repository took as
    any JSON value was listed (seven: six typed events imported in a JSDoc `@import`, now each its
@@ -165,7 +214,22 @@ rules something out.
    now take theirs, and an element's `error`, `abort` and `progress` were probed as plain `Event`s
    in Chromium 156, Firefox 157 and WebKit 27.2; a media element's `resize` is one in the HTML
    standard's event table, not probed), held by `scripts/events.mjs`
-   ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
+   ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072));
+   2026-11-10, JSDoc against TypeScript source at `c480d006` with TypeScript 5.9.3: deck-builder's
+   and seller-desk's largest scripts converted by TypeScript's own JSDoc-to-annotation fix (148
+   and 44 edits, two syntax fixes by hand, 0 errors), and the JSDoc in the 33 component, example
+   and template scripts listed (492 `@param`, 84 `@type`, 24 `@typedef`, about 40 casts, 16
+   `@import`), and all 62 scripts `jsconfig.json` checks besides its test fixture, the runtime's
+   included, compiled as TypeScript to find a property first given by assigning it (none: the three
+   such errors were types JSDoc gave that the copy lost), the template's and two kit handlers
+   converted by hand (0 errors), esbuild 0.28.2 run on the converted pair, `tsc` timed three times
+   on each, TypeScript 5.8's release notes read for `erasableSyntaxOnly` and 7.0's for JSDoc, and
+   TypeScript 7.0.2 run on the repository's `jsconfig.json` (0 errors) and on the same probes
+   (the same results as 5.9.3, but for a function called with `new` and a call with more arguments
+   than a function reading `arguments` declares, which 7.0.2 refuses), and the repository's scripts
+   searched for each, the first through the TypeScript copy (no TS2683 or TS7009), the second with
+   `rg` for `arguments` (only in comments)
+   ([#1040 Reassess JSDoc versus TypeScript for component scripts using measured safety and authoring tradeoffs](https://github.com/corten-run/corten/issues/1040)).
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -1556,6 +1620,87 @@ rules something out.
     Last checked: 2026-11-10, the examples' state types, `from_ref.rs`, `routes.rs`,
     `Methods::with_state`, `corten-cluster`'s tests, and axum 0.8.9 and axum-core 0.5.6 from
     `Cargo.lock`, at `97a63a92`.
+
+34. <a id="choice-listen-backlog"></a>**A listener asks the system to hold 511 finished
+    connections, not 128.** `corten::listeners`, and so `serve`, binds each socket with a
+    backlog of 511, the connections whose handshake is done and that the server has not yet
+    accepted, where `TcpListener::bind` asks for 128 (mio's and the standard library's number).
+    Investigating round r17's page timeouts and dropped load iterations
+    ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128))
+    found a burst-connect delay that reproduces, though it is not shown to be what made r17's
+    failures: Linux takes one more than the backlog and drops the next SYN, so that client waits
+    for its resend, about a second. With 1,024 k6 clients
+    starting at once against a page on one CPU, the kernel counted 142 and 485 listen-queue
+    overflows (two runs) and the slowest connect took 1.27 and 2.08 s at 128; at 511 there were
+    none and it took 0.28 and 0.24 s, and 4096 overflowed none either. 511 is Node's default and
+    nginx's on Linux. A deeper queue is not free: past `App::max_connections` connections wait in it
+    for as long as the cap holds, each with what it has sent so far in kernel memory, so the queue
+    is kept no deeper than a burst needs, and 511 is the smallest of the sizes tried that held
+    this one, not a measured minimum. The system caps the number: Linux at `net.core.somaxconn`
+    (4096 since 5.4, 128 before), macOS at `kern.ipc.somaxconn` (128 by default, so there the change
+    takes a raised setting), and Windows 11 held 200 in one run and refused a connection past them.
+    A listener of the app's own (`serve_on`) sets its own backlog.
+    Not chosen: keeping 128 (the overflows and second-long connects above); the system's maximum,
+    `SOMAXCONN` or 4096 (as deep a queue behind `max_connections` as the system allows, for no
+    burst that 511 did not hold); a setting on `App` (a new concept for a number an app that needs
+    another can set on a listener of its own).
+
+    Stands on: measured (k6, 1,024 clients at once against a page on one CPU in Docker Desktop's
+    Linux 6.18 VM, two runs at 128 and at 511, one at 4096, the kernel's `ListenOverflows` and
+    k6's slowest connect; the crate's test
+    `a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit`, 200 connections on each
+    listener with none waiting 900 ms, which a backlog of 128 fails at the 130th); platform (Linux
+    admits backlog + 1 and drops the next SYN, retransmitted after about a second; the caps above;
+    Windows 11's 200 is one run on loopback, and Windows Server and macOS were not tried); reasoned
+    (connections held past `max_connections` cost kernel memory, not measured); value (a burst of
+    users connects at once rather than a second late, Values 1, as a default with no setting to
+    find, Values 7).
+
+    Revisit when: a round or an app sees listen-queue overflows at 511 under a burst a server
+    should take; a platform cap not listed above is found, a listed one changes (a macOS default
+    raised, a Windows that holds more or fewer than 200), or one of them is shown to need a
+    different default; or a measurement of the kernel memory held past `max_connections` shows
+    511 costs more than the bursts it absorbs.
+
+    Last checked: 2026-11-08, the k6 bursts and overflow counts on Docker Desktop's Linux 6.18 VM,
+    against `c65c10ec` (128), `3249bbed` (511) and `1a84048d` (4096); 2026-11-08, Windows 11's 200
+    on loopback, recorded in `c62a8706`; 2026-11-10, the crate's test on `70730b56` (Linux, passed
+    without skipping) and a socket probe on Linux in which a backlog of 128 timed out at the 130th
+    connection and 511 admitted 200 on each loopback address.
+
+35. <a id="choice-runtime-terser"></a>**The runtime and its modules are minified by esbuild and then by
+    terser.** Every page of every app loads the runtime, so its bytes are paid on each first
+    visit. esbuild bundles each file (the runtime takes in `on.js`), lowers it to ES2022 and
+    minifies it, as before; terser, a development dependency of the repository's tooling that no
+    app installs, minifies that output again, compressing in two passes and renaming the module's
+    top-level names. The runtime on `21f9fab3`, as built (banner included), is 40,988 bytes
+    against 41,093, 14,318 with gzip (level 9) against 14,851, and 12,955 with brotli (level 11)
+    against 13,487: 3.6% less with gzip and 3.9% less with brotli, as Corten serves it, and 0.3%
+    less uncompressed. The saving is terser's renaming: on `c65c10ec`, without it, 495 of the 529
+    bytes it saved with gzip came back. Not chosen (measured on `c65c10ec`): esbuild's minifier
+    alone (above); terser on esbuild's unminified bundle instead (14,373 bytes with gzip and
+    13,015 with brotli, and 41,468 uncompressed, 477 more than before); terser renaming without
+    compressing (43 bytes more with gzip, 35 with brotli); one pass (12 and 6 bytes more); a third
+    pass (the same bytes as two).
+
+    Stands on: measured (each built file before and after on `21f9fab3`, one build each, the
+    build being deterministic: the runtime 105 bytes less uncompressed, 533 with gzip and 532
+    with brotli; `view.js` 20, 75 and 60 less; `format.js` 11, 8 and 18 less; `upload.js` and
+    `keys.js` within 11 bytes either way, `upload.js` 1 byte more uncompressed and `keys.js` 1
+    more with gzip; on `c65c10ec` the runtime was 107, 529 and 478 less); measured (the browser
+    smoke tests on the built files of `10cd394d`, one run each, in the engines each runs: the
+    watchlist, also under `corten dev`, card-market, ui-gallery, seller-desk, deck-builder and its
+    preview, auction-room and listings-feed all passed; an earlier build, terser over the
+    unminified bundle, failed one Firefox check that fails under load without it, the feed's
+    reconnect timing, [#1102 The watchlist smoke's Firefox feed backoff check fails under load: a 2 s wait measured over 6 s against a 3.5 s bound](https://github.com/corten-run/corten/issues/1102));
+    value (fewer bytes on every page, Values 1, for a dependency of the tooling only, Values 6).
+
+    Revisit when: esbuild's minifier comes within 1% of the two after compression, so one tool
+    does it and terser goes; or terser's output fails a smoke test in a supported engine that
+    esbuild's alone passes.
+
+    Last checked: 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2 and terser 5.51.2, and the
+    smoke tests on `10cd394d` (and CI's on this change).
 
 ## Rules
 

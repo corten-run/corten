@@ -25,7 +25,7 @@ your routes. Each default can be replaced in one line.
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
-| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
+| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted, up to 511 in each listener's queue on Linux; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, warnings and other `tracing` events at `INFO` and above to stdout, one line each, as `tracing-subscriber`'s `fmt()` writes them without targets (`2026-11-06T21:20:29.018154Z  WARN corten: ...`), in its colors when stdout is a terminal and `NO_COLOR` is unset; control characters other than a tab are escaped in every field, so request text cannot start a line of its own or send the terminal a command; spans are not printed (feature `log`, a subscriber of Corten's own with no dependency) | set your own `tracing` subscriber first (`tracing_subscriber::fmt().init()` for spans, filters such as `RUST_LOG` or JSON lines); `serve` then leaves it alone |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
@@ -97,7 +97,11 @@ with its background thread
 So an app that faces clients directly sets `max_connections` from its container's memory with
 room to spare, sized from the peak repeated floods reach rather than the first: 187 to 197 MiB for
 4,000 here with the background thread, about 48 KiB a connection (sampled a second before each
-flood's hold ended). The Dockerfile `corten new` writes preloads jemalloc in the image's last
+flood's hold ended). Past the cap,
+connections wait in each listener's queue (up to 511 from `corten::listeners` on Linux). By how
+Linux queues them (reasoned, not measured), the kernel keeps what each has sent so far, up to its
+receive buffer, in the host's TCP memory, and charges it to the container when the app accepts
+the connection, so it lands as the cap frees room. The Dockerfile `corten new` writes preloads jemalloc in the image's last
 stage with that background thread and a 64 KiB thread cache, which keeps brotli's buffers between
 responses ([design Choice 23](../design.md#choice-jemalloc-image)). An image of the app's own adds
 the same three lines, before any `USER` line; removing them runs the app on glibc's allocator:
@@ -677,6 +681,15 @@ binds `HOST`:`PORT` (both loopback addresses without `HOST`, port 3000 without `
 that implements `corten::Listener`, with `serve`'s shutdown across all of them
 (tasks told, live streams ended, every listener closed and drained, tasks waited for). A Unix
 socket, or a socket a supervisor hands over, is a listener of the app's own.
+Each of `listeners`' sockets asks the system to hold up to 511 connections that finished their
+handshake but are not yet accepted (Node's default, and nginx's on Linux), not the standard library's
+128 ([design Choice 34](../design.md#choice-listen-backlog)).
+On Linux, which caps it at `net.core.somaxconn` (4096 since 5.4), a burst of clients faster than
+the server accepts them then waits in that queue rather than a second or more for a resent SYN.
+macOS caps it at `kern.ipc.somaxconn`, 128 by default, so there the change takes a raised
+setting. Windows 11 held 200 (one run, a Winsock listener on loopback asking for 511) and refused a
+connection past them, the client seeing the error after about 2 s; Windows Server was not tried.
+A listener of the app's own sets its own.
 
 HTTPS is a step on each connection before HTTP, which `corten::serve_wrapped` takes: the TLS
 handshake. TLS stays the app's choice of library, and so does its configuration. With
