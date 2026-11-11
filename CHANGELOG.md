@@ -2770,12 +2770,14 @@ Corten is pre-1.0, so any minor version may change the API.
     sizes both, since they share the dot's rule. The kit's theme declares it as `.5rem`, so no
     app's look changes; an app with a theme of its own that adds or merges `status_dot` is told the
     token's line, as for the other sizes, and its startup check names `status_dot.css` until the
-    theme declares it. The ui-gallery's smoke test checks both dots are .5rem in the kit's theme
-    and .375rem with the token set so on the root. No request or render cost: the ui-gallery's
-    served `components.css` is 61,493 bytes where it was 61,434 (gzip 10,192 against 10,173, brotli
-    8,985 against 8,963, Node's zlib at gzip level 9 and brotli's default), served by the gallery
-    built from this change and from the commit it was made on, b38f7880. Found by the Chase Sets
-    pilot, whose design system draws its status dots at .375rem
+    theme declares it. A copy edited to another size conflicts on `--merge` at the `.dot` line:
+    take the kit's line and declare the size as the token. The ui-gallery's smoke test checks both
+    dots are .5rem in the kit's theme and .375rem with the token set so on the root. No server
+    request or render cost; measured, the ui-gallery's served `components.css` is 61,493 bytes
+    where it was 61,434 (gzip 10,192 against 10,173, brotli 8,985 against 8,963, Node's zlib at
+    gzip level 9 and brotli's default, one fetch of each fixed file), served by the gallery built
+    from this change and from the commit it was made on, b38f7880. Found by the Chase Sets pilot,
+    whose design system draws its status dots at .375rem
     ([#1199 Kit StatusDot draws its dot at a literal .5rem, so a design system with a smaller status dot edits the copy](https://github.com/corten-run/corten/issues/1199)).
 
 ### Removed
