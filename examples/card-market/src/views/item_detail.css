@@ -21,6 +21,11 @@
    panel, not the page. */
 .panel { background: var(--color-surface); border: 1px solid var(--color-line); border-radius: var(--radius-md); padding: var(--space-5); margin: var(--space-4) 0; box-shadow: var(--shadow-sm); overflow-x: auto; }
 @media (max-width: 40rem) { .panel { padding: var(--space-4); } .panel :is(th, td) { padding-inline: 4px; } }
+/* The listings' sort button only reorders the rows in the browser (ListingSort's script), so
+   without scripts it is not drawn and the table keeps the server's order, cheapest first. The
+   rule sits here, on the panel ListingSort is in, rather than on a class of its own, so the item
+   page's markup, which every bench/fullstack app copies, stays as it is. */
+@media (scripting: none) { .panel > div > button[type="button"] { display: none; } }
 .summary { display: flex; align-items: baseline; flex-wrap: wrap; font-size: var(--font-size-lg); background: var(--color-tint); border-color: transparent; }
 .summary strong { font-size: 28px; letter-spacing: -0.02em; color: var(--color-ink); }
 .summary span { color: var(--color-muted); }

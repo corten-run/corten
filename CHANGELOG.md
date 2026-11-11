@@ -4743,6 +4743,15 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
+- Two examples drew controls that did nothing without JavaScript. card-market's item page no longer
+  draws its listings' sort button when scripts are off (a `scripting: none` rule in
+  `item_detail.css`; the page's markup is unchanged), so the listings show in the server's order,
+  cheapest first. seller-desk's filter is a `GET` form (`?q=`, with a Filter button drawn only
+  without scripts) and its sortable headers are links to the grid sorted by their column
+  (`?sort=`), which the server answers filtered, counted and sorted; with scripts the handlers do
+  it in place as before. Both smokes check the page with scripts off in Chromium, Firefox and
+  WebKit
+  ([#1210 card-market's listing sort and seller-desk's sort headers and filter are drawn without JavaScript and do nothing](https://github.com/corten-run/corten/issues/1210)).
 - A build with the `json` feature and not `types` compiles its tests again (one checked a
   declaration only `types` makes), and CI now builds them; a build without the `log` feature no
   longer warns about an unused import; and the MSRV (1.88) build no longer warns that the code
