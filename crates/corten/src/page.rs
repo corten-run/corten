@@ -12,12 +12,19 @@ use std::{
     },
 };
 
-use crate::extract::{FromRequestParts, Request};
-use axum::{
-    body::Body,
-    http::{header, request::Parts, Extensions, HeaderMap, HeaderName, HeaderValue, StatusCode, Uri},
-    response::{IntoResponse, Response},
-};
+use crate::body::Body;
+use crate::extract::FromRequestParts;
+use crate::handler::Request;
+use crate::response::IntoResponse;
+use crate::response::Response;
+use http::header;
+use http::request::Parts;
+use http::Extensions;
+use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
+use http::StatusCode;
+use http::Uri;
 
 use crate::{
     answer::{HtmlResponse, HtmlResult},
@@ -750,7 +757,7 @@ impl Asked {
     /// What the error page's request needs, and no more: the error page's own `Req` reads the
     /// notice and the rest, so a request that answers without one builds no `Req` here.
     pub(crate) fn new(req: &Request, shared: &Shared, credentials: Credentials, (mode, fetched): (Mode, bool)) -> Self {
-        let head = req.method() == axum::http::Method::HEAD;
+        let head = req.method() == http::Method::HEAD;
         let here =
             if shared.layout_reads.is_empty() { None } else { req.extensions().get::<crate::layout::StartHere>().cloned() };
         Asked {
@@ -786,7 +793,7 @@ impl Asked {
         let (mut parts, ()) = Request::new(()).into_parts();
         parts.uri = uri;
         if head {
-            parts.method = axum::http::Method::HEAD;
+            parts.method = http::Method::HEAD;
         }
         let mode = match mode {
             Mode::Navigation => Some(HeaderValue::from_static("nav")),
@@ -1124,8 +1131,8 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
 
     async fn from_request_parts(parts: &mut Parts, _: &St) -> std::result::Result<Self, Self::Rejection> {
         let shared = parts.extensions.get::<crate::Signal>().and_then(crate::Signal::shared).unwrap_or(&DEFAULT).clone();
-        // A page route (`#[corten::routes]`) started the layout's reads as it was called; a plain
-        // axum handler's start here, after the middleware, beside the handler's own reads.
+        // A page route started the layout's reads as it was called; a route of Corten's own
+        // starts them here, after the middleware, beside the handler's own reads.
         if !shared.layout_reads.is_empty() {
             if let Some(here) = parts.extensions.get::<crate::layout::StartHere>().cloned() {
                 here.extracted(parts);
@@ -1133,14 +1140,7 @@ impl<St: Send + Sync> FromRequestParts<St> for Req {
         }
         // A HEAD request (a link checker, a preview) gets no body, so it leaves the notice for the
         // page's GET.
-        Ok(Req::new(
-            &parts.headers,
-            &parts.extensions,
-            &parts.uri,
-            shared,
-            &parts.method,
-            parts.method != axum::http::Method::HEAD,
-        ))
+        Ok(Req::new(&parts.headers, &parts.extensions, &parts.uri, shared, &parts.method, parts.method != http::Method::HEAD))
     }
 }
 
@@ -1153,11 +1153,11 @@ impl Req {
         extensions: &Extensions,
         uri: &Uri,
         shared: Arc<Shared>,
-        method: &axum::http::Method,
+        method: &http::Method,
         notice: bool,
     ) -> Self {
         let signal: crate::Signal = extensions.get::<crate::Signal>().cloned().unwrap_or_default();
-        let write = !matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
+        let write = !matches!(*method, http::Method::GET | http::Method::HEAD);
         let (mode, fetched) = Mode::asked(headers);
         Req {
             mode,
@@ -1165,7 +1165,7 @@ impl Req {
             uri: uri.clone(),
             accept_language: headers.get(header::ACCEPT_LANGUAGE).cloned(),
             notice: if notice {
-                Notice::of(headers, uri.path(), &signal, shared.plain_notice, *method == axum::http::Method::GET)
+                Notice::of(headers, uri.path(), &signal, shared.plain_notice, *method == http::Method::GET)
             } else {
                 None
             },
@@ -2368,7 +2368,7 @@ impl Req {
 
     /// Whether a redirect to `to` lands on a route of the app's: the route given to
     /// [`crate::App::new`] or to an area that the router picks for its path (the most specific,
-    /// as axum picks it) has a `GET` handler. A return address the app does not serve (a page of
+    /// as the router picks it) has a `GET` handler. A return address the app does not serve (a page of
     /// another app of the product, or none) goes elsewhere; one it serves is `req.redirect(&to)`.
     /// A form's write sent to another origin needs that origin in the form's page's `form-action`
     /// ([`crate::security::Policy::form_action`]), or the browser stops it.
@@ -2562,7 +2562,7 @@ fn unserved_module(name: &str) -> String {
 pub(crate) struct AsIs;
 
 /// Middleware the app installs: a failed request (an [`Error`] from a handler, or an empty error
-/// response such as axum's 404 for an unknown URL or 405 for a wrong method) renders the error
+/// response such as the router's 404 for an unknown URL or 405 for a wrong method) renders the error
 /// page in the request's mode, and the PWA's offline path gets Corten's offline page when the app
 /// has no route for it. A [`Mode::Data`] request, every request on an `api` route and every
 /// failure of a JSON route ([`crate::JsonResult`]) gets the failure as JSON instead
@@ -2609,8 +2609,8 @@ async fn page_or_error<S: crate::app::Steps>(
     signal: &crate::Signal,
     (mode, fetched): (Mode, bool),
 ) -> Response {
-    use axum::body::HttpBody;
-    let offline = req.method() == axum::http::Method::GET && shared.offline.as_deref() == Some(req.uri().path());
+    use http_body::Body as HttpBody;
+    let offline = req.method() == http::Method::GET && shared.offline.as_deref() == Some(req.uri().path());
     // A browser: the runtime (whose whole-page fetch asks for `*/*`), or a document request that
     // asks for HTML (a health probe or a webhook sender does not).
     let browser = fetched || (mode == Mode::Document && accepts_html(req.headers()));
@@ -2674,7 +2674,7 @@ async fn page_or_error<S: crate::app::Steps>(
     // `Retry-After`, `WWW-Authenticate`, `Allow`) goes out with the error page.
     let kept = std::mem::take(res.headers_mut());
     if rejection {
-        let text = axum::body::to_bytes(res.into_body(), 16 * 1024).await.unwrap_or_default();
+        let text = crate::body::to_bytes(res.into_body(), 16 * 1024).await.unwrap_or_default();
         let text = String::from_utf8_lossy(&text);
         tracing::debug!(status = status.as_u16(), "corten: request rejected: {text}");
         failed = Some(crate::Failed(Arc::from(text.trim())));
@@ -2729,7 +2729,7 @@ fn carried(kept: HeaderMap, mut res: Response) -> Response {
     if kept.is_empty() {
         return res;
     }
-    use axum::http::header::Entry;
+    use http::header::Entry;
     let headers = res.headers_mut();
     if kept.get_all(header::CACHE_CONTROL).iter().any(|line| crate::cache::mentions_no_store(line.as_bytes())) {
         headers.insert(header::CACHE_CONTROL, crate::cache::NO_STORE);
@@ -2846,7 +2846,7 @@ async fn within_deadline<S: crate::app::Steps>(
     next: Next<'_, S>,
     deadline: Option<std::time::Duration>,
     signal: &crate::Signal,
-    (method, uri): (&axum::http::Method, &Uri),
+    (method, uri): (&http::Method, &Uri),
 ) -> Response {
     let Some(limit) = deadline else {
         return next.run(req).await;

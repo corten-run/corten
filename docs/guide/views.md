@@ -200,10 +200,9 @@ reload, the page a write redirects to), after the app's and the area's middlewar
 the handler on the request's task, so a full load waits for the longer of the two, not their sum. A
 page route is one whose handler returns a page (`HtmlResult`, `PageOr`, or an app's own answer type
 that wraps one and says so with `const PAGE: bool = true` in its `Answer`); one that returns a file,
-text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. (A plain axum
-handler that takes `Req` starts it whatever it answers, since its answer type is not known there,
-and so does a `PageOr` or `SwitchOr` that answers a file or an upgrade; the read is dropped unused.
-A `Public` answer draws no read's value however it was started.) Once the handler has drawn the
+text or JSON starts nothing, and neither does a `HEAD` or one of Corten's own paths. (A `PageOr`
+or `SwitchOr` that answers a file or an upgrade starts it, since either may answer a page; the read
+is dropped unused. A `Public` answer draws no read's value however it was started.) Once the handler has drawn the
 page, Corten draws the read's `view` where the layout put `later`, before the app's middleware sees
 the page; one read fills every place that names it. A place goes in the `<body>` around `<main>`:
 `<head>` and its `<title>` are sent with each navigation, which does not start the read, so a debug

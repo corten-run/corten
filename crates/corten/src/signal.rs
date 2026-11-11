@@ -35,12 +35,12 @@ use std::{
     task::{Context, Poll},
 };
 
+use crate::body::Body;
 use crate::extract::FromRequestParts;
-use axum::{
-    body::{Body, Bytes, HttpBody},
-    http::request::Parts,
-    response::Response,
-};
+use crate::response::Response;
+use bytes::Bytes;
+use http::request::Parts;
+use http_body::Body as HttpBody;
 use http_body::{Frame, SizeHint};
 use tokio::sync::Notify;
 
@@ -143,19 +143,41 @@ struct Inner {
     /// The app's, for a request it serves: carried here rather than as a request extension of
     /// its own, so the request's extensions stay within their first allocation.
     shared: Option<Arc<crate::page::Shared>>,
+    /// The body limit of the request's app, area or API ([`crate::App::body_limit`]), here for
+    /// the same reason: the limit XOR the default, so a signal made without one (`Default`, 0)
+    /// has the default and every limit, 0 too, is kept.
+    body_limit: usize,
 }
 
 impl Signal {
     /// A request's signal in an app.
-    pub(crate) fn for_app(shared: Arc<crate::page::Shared>) -> Signal {
-        Signal(Arc::new(Inner { shared: Some(shared), ..Inner::default() }))
+    pub(crate) fn for_app(shared: Arc<crate::page::Shared>, body_limit: usize) -> Signal {
+        let body_limit = body_limit ^ crate::extract::BODY_LIMIT;
+        Signal(Arc::new(Inner { shared: Some(shared), body_limit, ..Inner::default() }))
+    }
+
+    /// The most of the request's body the readers take ([`crate::App::body_limit`]).
+    #[inline]
+    pub(crate) fn body_limit(&self) -> usize {
+        self.0.body_limit ^ crate::extract::BODY_LIMIT
+    }
+
+    /// A signal with a body limit and nothing else, for a test of a reader.
+    #[cfg(test)]
+    pub(crate) fn with_body_limit(limit: usize) -> Signal {
+        Signal(Arc::new(Inner { body_limit: limit ^ crate::extract::BODY_LIMIT, ..Inner::default() }))
     }
 
     /// A request's signal in an app that learns its visitors' zones, with the one the browser
     /// reported.
     #[cfg(feature = "zones")]
-    pub(crate) fn for_app_in(shared: Arc<crate::page::Shared>, zone: Option<crate::client::ZoneName>) -> Signal {
-        Signal(Arc::new(Inner { shared: Some(shared), zone, ..Inner::default() }))
+    pub(crate) fn for_app_in(
+        shared: Arc<crate::page::Shared>,
+        zone: Option<crate::client::ZoneName>,
+        body_limit: usize,
+    ) -> Signal {
+        let body_limit = body_limit ^ crate::extract::BODY_LIMIT;
+        Signal(Arc::new(Inner { shared: Some(shared), zone, body_limit, ..Inner::default() }))
     }
 
     /// A task's signal and the handle that begins its shutdown, for a test of an app's task: the
@@ -274,7 +296,7 @@ impl Signal {
     /// waits for the handler up to the [deadline](crate::App::deadline) (none with
     /// `deadline(None)`); once the handler is gone, shutdown waits for the work up to
     /// [`crate::App::shutdown_grace`] and then leaves it to end with the process. Served another
-    /// way than [`crate::serve`] (the router passed to `axum::serve`), the work still runs to its
+    /// way than [`crate::serve`] (an app's own hyper loop around [`crate::App::router`]), the work still runs to its
     /// end and sees the client leave and the deadline, but is not told of shutdown or waited for.
     ///
     /// A step that stopping midway would lose (a paid call whose answer is not recorded yet) is the
@@ -535,9 +557,9 @@ struct Followed {
 
 impl HttpBody for Followed {
     type Data = Bytes;
-    type Error = axum::Error;
+    type Error = crate::body::BoxError;
 
-    fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, axum::Error>>> {
+    fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, crate::body::BoxError>>> {
         // Inside this poll only: the fragments the stream renders as it is read.
         #[cfg(feature = "zones")]
         let entered = self.zone.take().map(crate::i18n::ZoneScope::enter);

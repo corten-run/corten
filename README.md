@@ -284,7 +284,7 @@ In the order to read them; each README says how to run it and where each piece i
 
 | Crate | What it is |
 |---|---|
-| [`corten-run`](crates/corten) | the framework, on axum, whose library is `corten`: `App`, `Req`, `html!`, handlers, the browser runtime |
+| [`corten-run`](crates/corten) | the framework, on hyper, whose library is `corten`: `App`, `Req`, `html!`, handlers, the browser runtime |
 | [`corten-cli`](crates/corten-cli) | the `corten` command: `new`, `dev`, `check`, `build` |
 | [`corten-macros`](crates/corten-macros) | the macros, on `proc_macro` alone (no `syn`) |
 | [`corten-ui`](crates/corten-ui) | optional headless components for widgets the browser lacks |

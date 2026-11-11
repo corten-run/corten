@@ -4,7 +4,7 @@
 //! cached by CDNs (`Public`), an item as JSON for other services and the price-alert
 //! action as an MCP tool for agents, both mounted as JSON-only routes (`App::api`), and a
 //! grading page whose captioned clip the browser seeks by byte ranges (its own area, `/grading`). Partners'
-//! services set alerts with an API key (`Caller<Partner>`), and writes are limited per client
+//! services set alerts with an API key sent as a bearer token (`Caller<Partner>`), and writes are limited per client
 //! address by a middleware on the routes that take them, the item pages' area and the partner
 //! API (`WriteLimit`, `ClientIp`; `PROXIES` behind a load balancer).
 use std::{
@@ -18,9 +18,7 @@ use corten::{
     ClientIp, Error, ForAll, HtmlResponse,
     agent::{ToolError, Tools},
     answer::XRobotsTag,
-    extract::Request,
-    http::{HeaderMap, HeaderValue, Method, StatusCode, request::Parts},
-    middleware::{IntoResponse, Response},
+    http::{HeaderMap, HeaderValue, IntoResponse, Method, Request, Response, StatusCode, header, request::Parts},
     prelude::*,
     pwa::{FormFactor, Manifest, Pwa, Screenshot, Shortcut},
     security::{Policy, Violations},
@@ -154,17 +152,25 @@ impl Partners {
         Partners(Arc::new(pairs.map(|(name, key)| (key.to_string(), Arc::from(name))).collect()))
     }
 
-    /// The header a partner sends its key in, read here and named in the API's document.
-    const HEADER: &'static str = "x-api-key";
-
-    /// The partner whose key the request sends (`X-Api-Key`).
+    /// The partner whose key the request sends.
     fn named(&self, headers: &HeaderMap) -> Option<&Arc<str>> {
-        self.0.get(headers.get(Self::HEADER)?.to_str().ok()?)
+        self.0.get(bearer_token(headers)?)
     }
 }
 
-/// A service that sets alerts for its users, known by the API key it sends (`X-Api-Key`). A
-/// handler that takes `Caller<Partner>` never runs without one: the request is a JSON 401.
+/// The bearer token the request sends (`Authorization: Bearer <token>`, RFC 6750), a partner's key
+/// or an agent's token, whose scheme is matched in any case (RFC 9110 11.1); an empty one is none.
+/// A value that is not ASCII is none here too, where the MCP endpoint, which reads bytes, counts it
+/// as a token sent: RFC 6750's token is ASCII, so either answer is a refusal.
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let (scheme, token) = headers.get(header::AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
+}
+
+/// A service that sets alerts for its users, known by the API key it sends as a bearer token. A
+/// handler that takes `Caller<Partner>` never runs without one: the request is a JSON 401 whose
+/// `WWW-Authenticate` says to send one, and that the one sent is wrong (RFC 6750 3.1).
 #[derive(Clone, Hash)]
 pub(crate) struct Partner {
     pub name: Arc<str>,
@@ -173,16 +179,18 @@ pub(crate) struct Partner {
 /// In the API's OpenAPI document, the key it is known by and the header it is read from.
 impl corten::openapi::Argument for Partner {
     fn describe(operation: &mut corten::openapi::Operation<'_>) {
-        operation.api_key(Partners::HEADER, "The partner's API key.");
+        operation.bearer("The partner's API key.");
     }
 }
 
 impl Identify<ApiState> for Partner {
     async fn identify(parts: &Parts, state: &ApiState) -> Result<Self, Refused> {
-        match state.partners.named(&parts.headers) {
-            Some(name) => Ok(Partner { name: name.clone() }),
-            None => Err(Refused::unauthorized().message("Send a valid partner API key in X-Api-Key.")),
-        }
+        let refused = match (state.partners.named(&parts.headers), bearer_token(&parts.headers)) {
+            (Some(name), _) => return Ok(Partner { name: name.clone() }),
+            (None, None) => Refused::unauthorized(Challenge::bearer("partners")),
+            (None, Some(_)) => Refused::unauthorized(Challenge::bearer("partners").param("error", "invalid_token")),
+        };
+        Err(refused.message("Send a valid partner API key as a bearer token."))
     }
 }
 
@@ -561,12 +569,9 @@ fn rpc_failure(status: StatusCode, message: &str) -> RpcFailure {
 fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
     let read_source = source.clone();
     Tools::new("card-market-item-page", env!("CARGO_PKG_VERSION"))
-        .auth(move |headers| {
-            let token = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-            match token {
-                Some(token) if tokens.iter().any(|known| known == token) => Ok(()),
-                _ => Err(ToolError::Unauthorized),
-            }
+        .auth(move |headers| match bearer_token(headers) {
+            Some(token) if tokens.iter().any(|known| known == token) => Ok(()),
+            _ => Err(ToolError::Unauthorized),
         })
         .read_tool(
             "items.get",
@@ -900,7 +905,7 @@ mod tests {
         use std::time::Instant;
 
         // Measured through the router alone, as `route_loop` measures it beside bare axum.
-        use corten::{answer::Body, http::Request};
+        use corten::http::{Body, Request};
         use http_body_util::BodyExt;
         use tower::ServiceExt;
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
@@ -1033,7 +1038,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn tool_cost() {
-        use corten::{answer::Body, http::Request};
+        use corten::http::{Body, Request};
         use http_body_util::BodyExt;
         use tower::ServiceExt;
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
@@ -1071,38 +1076,46 @@ mod tests {
         use std::time::{Duration, Instant};
 
         // Against axum alone too (`bare-json`), so through the router, not the test client.
-        use corten::{answer::Body, axum::Router, http::Request};
+        use corten::http::{HeaderMap, Request, Response};
         use http_body_util::BodyExt;
-        use tower::{ServiceExt, util::BoxCloneService};
+        use tower::ServiceExt;
+
+        /// Sends `paths` through `router` over and over for `seconds`, each request as `request`
+        /// makes it: how many it sent, in how long, and the headers of the first path's answer.
+        /// Generic, so Corten's router and axum's are each driven with their own body types.
+        async fn drive<S, B, R>(
+            router: S,
+            request: impl Fn(&str) -> Request<B>,
+            paths: &[String],
+            seconds: u64,
+        ) -> (u64, Duration, HeaderMap)
+        where
+            S: tower::Service<Request<B>, Response = Response<R>, Error = std::convert::Infallible> + Clone,
+            R: http_body::Body,
+            R::Error: std::fmt::Debug,
+        {
+            let start = Instant::now();
+            let mut count = 0u64;
+            while start.elapsed() < Duration::from_secs(seconds) {
+                for path in paths {
+                    let res = router.clone().oneshot(request(path)).await.unwrap();
+                    std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes());
+                }
+                count += paths.len() as u64;
+            }
+            let took = start.elapsed();
+            let res = router.oneshot(request(&paths[0])).await.unwrap();
+            (count, took, res.headers().clone())
+        }
+
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
         let source = Source::fixture(&std::fs::read_to_string(path).unwrap()).unwrap();
-        // Corten's router and axum's are different types: each is boxed the same way.
-        type Boxed = BoxCloneService<Request<Body>, corten::middleware::Response, std::convert::Infallible>;
-        fn boxed<S>(service: S) -> Boxed
-        where
-            S: tower::Service<Request<Body>, Response = corten::middleware::Response, Error = std::convert::Infallible>
-                + Clone
-                + Send
-                + 'static,
-            S::Future: Send + 'static,
-        {
-            BoxCloneService::new(service)
-        }
         let target = std::env::var("LOOP_TARGET").unwrap_or_else(|_| "json".into());
         let seconds: u64 = std::env::var("LOOP_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
-        let (router, prefix, mode) = match target.as_str() {
-            "json" => (boxed(super::app(source.clone()).router()), "/api/items/", None),
-            "bare-json" => {
-                // Axum alone, without Corten around the handler: what Corten's layer costs. The
-                // item is read as `item_json` reads it, its id by axum's own `Path`.
-                use corten::axum::extract::{Path, State};
-                let bare = corten::axum::routing::get(|State(source): State<Source>, Path(id): Path<String>| async move {
-                    corten::middleware::IntoResponse::into_response(super::item_view(&source, &id).await)
-                });
-                (boxed(Router::new().route(api::ItemJson::PATH, bare).with_state(source.clone())), "/api/items/", None)
-            }
-            "page" => (boxed(super::app(source.clone()).router()), "/items/", Some("nav")),
-            "document" => (boxed(super::app(source.clone()).router()), "/items/", None),
+        let (prefix, mode) = match target.as_str() {
+            "json" | "bare-json" => ("/api/items/", None),
+            "page" => ("/items/", Some("nav")),
+            "document" => ("/items/", None),
             other => panic!("unknown LOOP_TARGET {other}"),
         };
         // What the client sends: `curl`'s `identity` by default. A browser's names its compressions
@@ -1119,20 +1132,33 @@ mod tests {
             if let Some(mode) = mode {
                 req = req.header("corten", mode);
             }
-            req.body(Body::empty()).unwrap()
+            req
         };
-        let start = Instant::now();
-        let mut count = 0u64;
-        while start.elapsed() < Duration::from_secs(seconds) {
-            for path in &paths {
-                let res = router.clone().oneshot(request(path)).await.unwrap();
-                std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes());
-            }
-            count += paths.len() as u64;
-        }
-        let per = start.elapsed().as_secs_f64() * 1e6 / count as f64;
-        let res = router.clone().oneshot(request(&paths[0])).await.unwrap();
-        let header = |name| res.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or("none").to_owned();
+        let (count, took, headers) = if target == "bare-json" {
+            // Axum alone (its own dependency here, not Corten's), without Corten around the
+            // handler: what Corten's layer costs. The item is read as `item_json` reads it, its
+            // id by axum's own `Path`, and its JSON written as Corten's `Json` writes it, into
+            // axum's body, which boxes it once, as Corten's does. A failure (none in this loop) is
+            // Corten's answer.
+            use axum::extract::{Path, State};
+            let bare = axum::routing::get(|State(source): State<Source>, Path(id): Path<String>| async move {
+                let item = match super::item_view(&source, &id).await {
+                    Ok(corten::Json(item)) => item,
+                    Err(e) => return corten::http::IntoResponse::into_response(e).map(axum::body::Body::new),
+                };
+                let mut res = Response::new(axum::body::Body::from(corten::json::to_vec(&item)));
+                res.headers_mut()
+                    .insert(corten::http::header::CONTENT_TYPE, corten::http::HeaderValue::from_static("application/json"));
+                res
+            });
+            let router = axum::Router::new().route(api::ItemJson::PATH, bare).with_state(source.clone());
+            drive(router, |path| request(path).body(axum::body::Body::empty()).unwrap(), &paths, seconds).await
+        } else {
+            let router = super::app(source.clone()).router();
+            drive(router, |path| request(path).body(corten::http::Body::empty()).unwrap(), &paths, seconds).await
+        };
+        let per = took.as_secs_f64() * 1e6 / count as f64;
+        let header = |name| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("none").to_owned();
         println!("{target} ({encoding}): tag {}, content-encoding {}", header("etag"), header("content-encoding"));
         println!("{target}: {count} requests, {per:.2} us per request");
     }
@@ -1278,12 +1304,26 @@ mod tests {
             "Alert set: we will email a@b.c when Pika <Promo> & \"Friends\" drops below $1.00."
         );
         assert_eq!(res["result"]["structuredContent"].get("partner"), None, "an agent's alert has no partner: {body}");
+        // The scheme is matched in any case (RFC 9110 11.1). The endpoint answers an empty token
+        // as none: told where to get one, with no `invalid_token`.
+        let lower = app.call(Method::POST, &mcp::Mcp).json(&alert).header(header::AUTHORIZATION, "bearer dev-token");
+        let res: serde_json::Value = serde_json::from_str(&send(lower).await.2).unwrap();
+        assert!(res["result"]["structuredContent"]["message"].is_string(), "{res}");
+        for empty in ["Bearer", "Bearer  "] {
+            let (status, headers, _) =
+                send(app.call(Method::POST, &mcp::Mcp).json(&alert).header(header::AUTHORIZATION, empty)).await;
+            assert_eq!(
+                (status, &headers["www-authenticate"]),
+                (StatusCode::UNAUTHORIZED, &r#"Bearer realm="card-market-item-page""#.parse().unwrap()),
+                "{empty:?}"
+            );
+        }
         // The tools' own refusal keeps its request's id: `Api::errors` leaves a JSON body as it is.
         // A bearer token that was sent and refused is named invalid (RFC 6750).
         let (status, headers, body) = send(call(Some("wrong"), alert)).await;
         assert_eq!(
             (status, &headers["www-authenticate"]),
-            (StatusCode::UNAUTHORIZED, &r#"Bearer error="invalid_token""#.parse().unwrap())
+            (StatusCode::UNAUTHORIZED, &r#"Bearer realm="card-market-item-page", error="invalid_token""#.parse().unwrap())
         );
         let res: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!((res["id"].clone(), res["error"]["code"].clone()), (json!(1), json!(-32001)), "{body}");
@@ -1489,11 +1529,11 @@ mod tests {
         assert_eq!(deadline.error.code, -32603, "the deadline's 503 is the server's failure");
     }
 
-    /// A partner's JSON write, with the key `key`.
+    /// A partner's JSON write, with the key `key` as a bearer token.
     fn partner<'c>(app: &'c App, key: Option<&str>, body: &'static str) -> Call<'c, NoForm> {
         let call = app.call(Method::POST, &api::AlertsJson).body("application/json", body);
         match key {
-            Some(key) => call.header(HeaderName::from_static("x-api-key"), key),
+            Some(key) => call.header(header::AUTHORIZATION, &format!("Bearer {key}")),
             None => call,
         }
     }
@@ -1502,15 +1542,21 @@ mod tests {
     async fn a_partner_sets_an_alert_with_its_api_key() {
         let app = app();
         let alert = r#"{"id":"item_9","email":"ada@example.com","target_price":"0.40"}"#;
-        for key in [None, Some("wrong")] {
+        // No key, or an empty one: send one; a wrong one: it is not valid (RFC 6750 3.1).
+        for (key, challenge) in [
+            (None, r#"Bearer realm="partners""#),
+            (Some(""), r#"Bearer realm="partners""#),
+            (Some("wrong"), r#"Bearer realm="partners", error="invalid_token""#),
+        ] {
             let res = partner(&app, key, alert).await;
             assert_eq!(
                 (res.status(), res.text()),
                 (
                     StatusCode::UNAUTHORIZED,
-                    r#"{"title":"Unauthorized","status":401,"detail":"Send a valid partner API key in X-Api-Key."}"#
+                    r#"{"title":"Unauthorized","status":401,"detail":"Send a valid partner API key as a bearer token."}"#
                 )
             );
+            assert_eq!(res.headers()[header::WWW_AUTHENTICATE], challenge, "{key:?}");
         }
         let res = partner(&app, Some("dev-key"), alert).await;
         let (status, headers, body) = read(&res);

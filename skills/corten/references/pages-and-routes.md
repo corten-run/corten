@@ -228,8 +228,9 @@ and Corten serves the RFC 9728 metadata and names it in the 401; the token check
 audience with `authorization.resource()`; a token missing a scope is
 `ToolError::InsufficientScope("a b".into())`, a 403.
 
-`Json` is the prelude's `corten::Json`: axum's extractor, and a response written in one buffer
-(faster than `axum::Json`; keep the prelude's unless a crate hands you axum's). The response type
+`Json` is the prelude's `corten::Json`: a reader that refuses as axum's did (415, 400, 422, 413
+over the body limit, 2 MiB unless `App`, `Area` or `Api::body_limit` sets one, each a
+`corten::extract::BodyRejection`), and a response written in one buffer. The response type
 derives `ToJson` (`#[derive(ToJson)] struct Price ..`; `Serialize` only if the app's own code also
 writes it with serde or it is a feed row, and an agent tool's output needs none); it reads the
 same `#[serde(...)]` attributes, and one it cannot write as serde does is a compile error.
@@ -247,8 +248,9 @@ An API that partners or a client generator read gets an OpenAPI 3.1 document of 
 handler, `#[route("/api/openapi.json")] pub struct ApiDoc;`. It is generated from the routes, the
 handlers' argument and answer types and each route's doc comment (its first paragraph is the
 summary), so never write or edit an OpenAPI file by hand. An extractor of the app's own (a `Caller`'s
-type) implements `corten::openapi::Argument` (`operation.api_key("x-api-key", "..")` or
-`operation.bearer("..")` for its credential, `operation.header(..)` for another header it reads,
+type) implements `corten::openapi::Argument` (`operation.bearer("..")` for a key or token, as the
+401's `Challenge::bearer(realm)` names it; `operation.api_key("x-api-key", "..")` only for an
+existing API's own header, `operation.header(..)` for another header it reads,
 empty otherwise), and an answer type of the app's own implements
 `corten::openapi::Answers`; without it the handler does not compile. A test keeps a copy beside the
 code with `corten::openapi::sync(path, doc.text())`.
@@ -264,7 +266,7 @@ not add an `Origin` check of your own. A URL that is also a page or a relayed an
 returns `Result<JsonResponse, JsonError>`: `Ok(Json(value).into())` or `Ok(relay.into())`. One
 that refuses in another server's error shape `?`s a `JsonResponse` (`Err(refused(status, msg))?`,
 a 4xx or 5xx): it is answered as written. A refusal is that `Err`, not an `Ok`. When a body it
-cannot read is refused in that shape too, it takes `corten::extract::Request` and reads the body
+cannot read is refused in that shape too, it takes `corten::http::Request` and reads the body
 with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over), not
 `Json<T>`. Do not box it
 or write an error enum of your own for clippy's `result_large_err`.
@@ -311,8 +313,9 @@ impl Identify<Db> for Staff {
             Ok(Some(staff)) => Ok(staff),
             Ok(None) => Err(Refused::forbidden()),
             Err(error) => Err(Refused::unavailable(error)),   // the store is down: a 503, not sign-in
-            // An API key: Err(Refused::unauthorized().message("Invalid API key")), and after too many
-            // failures (the app counts them) Err(Refused::too_many(wait)): a 429 with Retry-After.
+            // An API key: Err(Refused::unauthorized(Challenge::bearer("partners"))), a 401 whose
+            // WWW-Authenticate names how to send one, and after too many failures (the app
+            // counts them) Err(Refused::too_many(wait)): a 429 with Retry-After.
         }
     }
 }

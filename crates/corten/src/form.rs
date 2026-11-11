@@ -310,12 +310,12 @@
 
 use std::fmt;
 
-use crate::extract::{FromRequest, Request};
-use axum::{
-    extract::{rejection::RawFormRejection, RawForm},
-    http::{header, HeaderValue, Method, StatusCode},
-    response::{IntoResponse, Response},
-};
+use crate::extract::{BodyRejection, FromRequest};
+use crate::handler::Request;
+use bytes::Bytes;
+use http::{header, HeaderValue, Method, StatusCode};
+
+use crate::response::{IntoResponse, Response};
 use serde::de::DeserializeOwned;
 
 use crate::view::{escape_into, quoted, AttrValue, Attrs, Id, Render};
@@ -344,10 +344,9 @@ pub struct Form<T>(pub T);
 impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Form<T> {
     type Rejection = FormRejection;
 
-    async fn from_request(req: Request, state: &S) -> Result<Self, FormRejection> {
+    async fn from_request(req: Request, _: &S) -> Result<Self, FormRejection> {
         let query = matches!(*req.method(), Method::GET | Method::HEAD);
-        let RawForm(bytes) =
-            <RawForm as axum::extract::FromRequest<S>>::from_request(req, state).await.map_err(FormRejection::Body)?;
+        let bytes = fields(req).await.map_err(FormRejection::Body)?;
         match from_bytes(&bytes) {
             Ok(value) => Ok(Form(value)),
             // As axum's `Form`: a query string that does not fit is a bad request, a body a 422.
@@ -357,13 +356,30 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Form<T> {
     }
 }
 
-/// Why [`Form`] or [`crate::Params`] refused a request: plain text, as axum's rejections are, so a
-/// browser gets the app's error page (the text under it in dev mode) and a JSON client the JSON
-/// error.
+/// A form's fields as sent: a `GET`'s or a `HEAD`'s query string (a `HEAD` asks for what a `GET`
+/// would answer), or any other request's body, which must be `application/x-www-form-urlencoded`
+/// (a 415 otherwise).
+async fn fields(req: Request) -> Result<Bytes, BodyRejection> {
+    if matches!(*req.method(), Method::GET | Method::HEAD) {
+        return Ok(req.uri().query().map_or_else(Bytes::new, |query| Bytes::copy_from_slice(query.as_bytes())));
+    }
+    let kind = req.headers().get(header::CONTENT_TYPE).and_then(|kind| kind.to_str().ok());
+    if !kind.is_some_and(|kind| crate::api::media_type(kind).eq_ignore_ascii_case("application/x-www-form-urlencoded")) {
+        return Err(BodyRejection::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Form requests must have `Content-Type: application/x-www-form-urlencoded`",
+        ));
+    }
+    let limit = crate::extract::body_limit(req.extensions());
+    crate::extract::whole(req.into_body(), limit).await
+}
+
+/// Why [`Form`] or [`crate::Params`] refused a request: plain text, so a browser gets the app's
+/// error page (the text under it in dev mode) and a JSON client the JSON error.
 #[derive(Debug)]
 pub enum FormRejection {
     /// The body could not be read, or a `POST` was not `application/x-www-form-urlencoded`.
-    Body(RawFormRejection),
+    Body(BodyRejection),
     /// The fields did not fit the type: a value of the wrong kind, a missing field, a field sent
     /// twice.
     Invalid(StatusCode, String),
@@ -1374,8 +1390,8 @@ pub enum Refusal {
 
 impl Refusal {
     /// The status the refusal is answered with.
-    pub fn status(self) -> axum::http::StatusCode {
-        use axum::http::StatusCode;
+    pub fn status(self) -> http::StatusCode {
+        use http::StatusCode;
         match self {
             Refusal::Invalid => StatusCode::UNPROCESSABLE_ENTITY,
             Refusal::Conflict => StatusCode::CONFLICT,
@@ -2212,19 +2228,18 @@ impl serde::Serialize for Errors {
 /// A JSON handler `?`s it (`check(&input)?` in a `JsonResult<T>` handler, whose error is a
 /// [`crate::JsonError`]); pages use [`crate::Req::invalid`], which answers this way to data clients.
 #[cfg(feature = "json")]
-impl axum::response::IntoResponse for Errors {
-    fn into_response(self) -> axum::response::Response {
+impl crate::response::IntoResponse for Errors {
+    fn into_response(self) -> crate::response::Response {
         self.response()
     }
 }
 
 #[cfg(feature = "json")]
 impl Errors {
-    pub(crate) fn response(&self) -> axum::response::Response {
-        use axum::{
-            http::{header, HeaderValue},
-            response::IntoResponse,
-        };
+    pub(crate) fn response(&self) -> crate::response::Response {
+        use crate::response::IntoResponse;
+        use http::header;
+        use http::HeaderValue;
         let status = self.refusal.status();
         let mut members = String::new();
         if let Some(form) = &self.form {
@@ -2419,11 +2434,11 @@ mod tests {
     }
 
     fn request(method: &str, uri: &str, content_type: Option<&str>, body: &'static str) -> Request {
-        let mut req = axum::http::Request::builder().method(method).uri(uri);
+        let mut req = http::Request::builder().method(method).uri(uri);
         if let Some(content_type) = content_type {
             req = req.header(header::CONTENT_TYPE, content_type);
         }
-        req.body(axum::body::Body::from(body)).unwrap()
+        req.body(crate::body::Body::from(body)).unwrap()
     }
 
     #[tokio::test]
@@ -2444,6 +2459,14 @@ mod tests {
         assert!(crate::api::is_plain_text(res.headers()));
         let bad_get = Form::<Picks>::from_request(request("GET", "/?page=x", None, ""), &()).await.unwrap_err();
         assert_eq!(bad_get.into_response().status(), StatusCode::BAD_REQUEST);
+
+        // A `HEAD` reads the query as the `GET` it asks about does.
+        let Form(picks): Form<Picks> = Form::from_request(request("HEAD", "/?page=3", None, ""), &()).await.unwrap();
+        assert_eq!(picks.page, Some(3));
+        // The content type is matched in any case, its parameters after it.
+        let upper = Some("Application/X-WWW-Form-URLEncoded; charset=UTF-8");
+        let Form(picks): Form<Picks> = Form::from_request(request("POST", "/", upper, "page=4"), &()).await.unwrap();
+        assert_eq!(picks.page, Some(4));
     }
 
     #[cfg(feature = "json")]

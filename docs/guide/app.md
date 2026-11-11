@@ -123,9 +123,12 @@ and the answer is the client's 408 (`Failure::Failed`, as a stalled upload's `?`
 client that stops sending a form is not told the server was slow. With the defaults the deadline
 (30 seconds) comes before an upload's idle time (`Upload::idle`, a minute), so it is the deadline
 that answers a stalled upload, with that 408. A deadline that passes while a body over an
-`Upload`'s or a `pieces_up_to` limit is read past is the 413 that read gives. Only a request
+`Upload`'s or a `pieces_up_to` limit, or over the limit of `Json`, `Form`, `String` or `Bytes` (`App::body_limit`, 2 MiB unless set),
+is read past is the 413 that read gives. Only a request
 `corten::serve` reads from its connection is marked as waiting for its body; through
-`app.router()` served another way that deadline is the 503 (the 413 still holds). See
+`app.router()` served another way that deadline is the 503 (the 413 still holds). A connection
+loop of the app's own gives each request its client's address as a `corten::PeerAddr` in the
+request's extensions, which `ClientIp` starts from as it does from `serve`'s connection. See
 [Cancellation](cancellation.md).
 
 ```rust,ignore
@@ -567,15 +570,17 @@ array in markup (`class={[Row, Selected]}`, a look's `[Tile, Raised]`) lists not
 get a listed one stays the app's choice, which a drawn page checks.
 
 An app that calls another service over HTTP points it, in a test, at a stand-in started on a
-local port. The stand-in is the other service, not the app, so it is axum's server, named
-through `corten::axum`, and keeps none of the app's defaults (its headers, CSP, shutdown) that
-the service does not have ([design Choice 21](../design.md#choice-own-extractors)):
+local port. The stand-in is the other service, not the app, so it keeps none of the app's
+defaults (its headers, CSP, shutdown) that the service does not have: it is a server of the
+test's own, here axum's as a dev-dependency (`axum = { version = "0.8", default-features = false,
+features = ["http1", "tokio"] }`), since Corten depends on no web framework
+([design Choice 21](../design.md#choice-own-extractors)):
 
 ```rust,ignore
 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
 let origin = format!("http://{}", listener.local_addr().unwrap());
-let stand_in = corten::axum::Router::new().fallback(platform).with_state(calls.clone());
-tokio::spawn(async move { corten::axum::serve(listener, stand_in).await.unwrap() });
+let stand_in = axum::Router::new().fallback(platform).with_state(calls.clone());
+tokio::spawn(async move { axum::serve(listener, stand_in).await.unwrap() });
 let app = app(Config { platform: origin }).test();
 ```
 
@@ -726,8 +731,8 @@ rather than setting `PORT` from the program, which is `unsafe` once threads may 
 
 `App` is one middleware around the routes: the same-origin check, the request signal, the
 deadline, the app's middleware, error pages, security headers and compression run in one future
-per request, in a fixed order (`corten::middleware`). It is a tower layer of its own rather than axum's `from_fn`, which boxes the rest of the
-stack again for every request (about 700 instructions). Corten's own inline tag (the import map) is the same on every page of a deploy, so the
+per request, in a fixed order (`corten::middleware`). It is one future of Corten's own; axum's `from_fn`,
+which Corten used before, boxed the rest of the stack again for every request (about 700 instructions). Corten's own inline tag (the import map) is the same on every page of a deploy, so the
 CSP allows it by its SHA-256 hash, computed once at startup. A nonce is made only when something asks for one
 (`req.nonce()` in the layout, or a handler that takes `Nonce`). A session lookup runs only for a
 handler that takes a `Caller`, so static files, the runtime, the health checks and public pages
@@ -859,7 +864,7 @@ run in order:
 
 ```rust
 use std::time::Duration;
-use corten::{extract::Request, http::HeaderValue, middleware::{IntoResponse, Response}, prelude::*};
+use corten::{http::{HeaderValue, IntoResponse, Request, Response}, prelude::*};
 
 struct RequestId;
 
@@ -904,7 +909,7 @@ every request at its prefix, never by a path the middleware compares. A request 
 never meets it:
 
 ```rust
-# use corten::{extract::Request, middleware::Response, prelude::*};
+# use corten::{http::{Request, Response}, prelude::*};
 # struct WriteLimit;
 # impl Middleware for WriteLimit {
 #     async fn call(&self, req: Request, next: impl Next) -> Response { next.run(req).await }
@@ -957,7 +962,7 @@ answer is otherwise sent as it made it, a raw `Response` too, and every other ro
 stage, so the fast route and a page that needs all of them sit side by side:
 
 ```rust
-use corten::{axum::response::Response, prelude::*};
+use corten::{http::Response, prelude::*};
 
 #[corten::routes]
 mod url {
@@ -1075,13 +1080,15 @@ shutdown, which lets an unstaged route's request run for the longer of the shutd
 app's longest deadline, since it records none of its own.
 
 What it saves, measured with callgrind on a release build answering the same JSON in process
-(five runs with jemalloc and three with glibc, which did not differ): 7,003 instructions a request
-unstaged (7,068 in an API's module) against 18,299 through the stages beside it with jemalloc,
-where a plain axum router takes 7,085, and 7,812 unstaged with glibc's allocator (7,879 in an
-API's module; axum: 8,099). What the route keeps (the host check, the headers above, the panic
+(three runs each with jemalloc and glibc, every run the same): 7,030 instructions a request
+unstaged (7,076 in an API's module) with jemalloc, where a plain axum router takes 7,059 and a
+service of no framework that only answers the JSON 3,190, and 7,834 unstaged with glibc's
+allocator (7,882 in an API's module; axum: 8,073; no framework: 3,568). Through the stages
+beside it the same answer takes 17,723 (18,985 with glibc). What the route keeps (the host check, the headers above, the panic
 catch and an API's JSON) the router runs around its handler in place of the stages, so its 404
-and 405 meet it as its handler's answer does; it costs 71 of those instructions (86 in an API's module; 67 and 82 with glibc)
-over the same checks written into the handler, and wall times did not tell them apart.
+and 405 meet it as its handler's answer does; when that was measured it cost 71 instructions
+more than the same checks written into the handler (86 in an API's module; 67 and 82 with
+glibc), and wall times did not tell them apart.
 The host check, with what
 carries it to the handler, adds 494 to what the route cost without it, about 400 of that the
 check's read of `Host` and its match against the app's names. Corten's own router ([design Choice 25](../design.md#choice-axum-router), step 2) took
@@ -1401,7 +1408,7 @@ A refusal in the app's own shape (a document that does not exist yet,
 `Result<_, JsonError>` stays small), so a helper refuses with `?`, and it is answered as written,
 status, body and cookies. `Ok` is for the route's answers. Its status is a 4xx or 5xx: another
 panics in a debug build, and in release is logged and answered as a 500. A route that keeps
-another server's shape for a body it refuses too takes the whole `corten::extract::Request` and
+another server's shape for a body it refuses too takes the whole `corten::http::Request` and
 reads the body with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over
 `max`), since `Json<T>` refuses before the handler in Corten's shape. Its `Err`, a body that could
 not be read, says why (`error.to_string()`, the log's message) and with what status
@@ -1479,8 +1486,10 @@ one clients reach (from the environment, since it differs in each deployment); t
 from the route type, and one with a parameter or a trailing slash does not compile; mounting the
 endpoint at another route panics at startup. The origin and each issuer must be `https` (or
 `http` on `localhost` or a loopback address), checked when given. Without `authorization`, a
-401 says only `Bearer`, for tokens handed out by hand, and tokens are checked per tool call as
-before. Either way a 401 for a request that sent a token adds `error="invalid_token"`.
+401 names `Bearer` and the endpoint's name as its realm (`mcp` when the name is empty or not
+printable ASCII), for tokens handed out by hand, and tokens are checked per tool call as
+before. Either way a 401 for a request that sent a token adds `error="invalid_token"`; `Bearer`
+with nothing after it counts as no token, so the client is told where to get one.
 
 APIs nest as areas do, so each feature owns its JSON routes as it owns its pages. A feature's
 module has a prefix under the app's (`/api/forecast-calibration` in `/api`), and both are
@@ -1522,7 +1531,7 @@ fn app(pages: Routes) -> App {
 ```
 
 The inner API keeps its routes, their checks and its `state`, and its own settings; what it leaves
-unset (`deadline`, `errors`) it takes from the API around it, whose middleware runs before its
+unset (`deadline`, `body_limit`, `errors`) it takes from the API around it, whose middleware runs before its
 own. A setting the inner API gives replaces the outer one; `deadline(None)` removes an inherited
 deadline, but nothing turns an inherited `errors` off: an inner API under an outer API with
 `errors` writes its failures that way, not as Problem Details. Partner sites are the exception: an inner API allows only the origins it names itself
@@ -1575,9 +1584,11 @@ Under the prefix:
    pages keep refusing that site's writes. The site authenticates with a token: a write from it
    that carries the user's cookies is refused, and no `Access-Control-Allow-Credentials` is sent.
 6. `Json` in the prelude is `corten::Json` (feature `json`). It reads a request body into a
-   `FromJson` (item 8) with the value and the rejections axum's `Json` gives: Corten's reader takes
-   an `application/json` body, and axum (`serde_json`) any other JSON content type and any body the
-   reader gives up on. What it writes is a `ToJson`: derive it (`#[derive(ToJson)]`, also in the
+   `FromJson` (item 8) with the value and the rejections axum's `Json` gave (recorded from axum
+   0.8.9 and held by a test): a body with a JSON content type (`application/json`,
+   `application/problem+json`, either with parameters such as a `charset`) is read by Corten's
+   reader, and by `serde_json` only where that reader gives up, so the content type does not
+   choose the reader. What it writes is a `ToJson`: derive it (`#[derive(ToJson)]`, also in the
    prelude) on the response type. It needs no `Serialize` unless the app's own code writes the type
    with serde or it is a feed row; an agent tool's output is a `ToJson` too, and its input a
    `FromJson`. The derive lays the JSON out when the crate compiles, so a response copies one byte
@@ -1592,9 +1603,7 @@ Under the prefix:
    externally tagged enum of unit variants that derives `ToJson`, or by `impl
    corten::json::JsonKey`, whose `write_key` writes the one JSON string serde writes for it, quotes
    included (an agent tool's output that holds a hand-written `ToJson` or `JsonKey` is parsed
-   before it is sent). `serde_json::Value`
-   is a `ToJson`, as above. axum's `Json` works too, and writes any `Serialize` through `serde_json`
-   and a `BytesMut`.
+   before it is sent). `serde_json::Value` is a `ToJson`, as above.
 7. Numbers are written as serde_json writes them, a whole float as `2.0`
    ([Numbers in JSON](#numbers-in-json)).
 8. To read JSON another service answers, derive `FromJson` (in the prelude) and read it with
@@ -1672,8 +1681,9 @@ crate compiles, so no route is left out or described as less than it is. Corten'
 answers do, a protocol switch's `Upgrade` and `Switch` and a stream's `since` and
 `Last-Event-ID` included. An extractor of the app's own implements `corten::openapi::Argument`,
 empty when the document has nothing to show of it (a session, a pool), with
-`Operation::api_key("x-api-key", "..")` or `Operation::bearer("..")` for the credential it checks
-(a security scheme of the document, which `Option<Caller<..>>` makes optional), or with
+`Operation::bearer("..")` for a key or token it checks, or `Operation::api_key("x-api-key", "..")`
+for a header of an existing API's own, which no 401 challenge can name (each a security scheme
+of the document, which `Option<Caller<..>>` makes optional), or with
 `Operation::header` for another header it reads; for another crate's type, a newtype around it
 implements it. What the types cannot say is described as what it is: a `JsonResponse` or a
 `StatusCode` is a 2XX the handler chooses, a `Relay` or a `Media` any content, a body the
@@ -1874,7 +1884,7 @@ would skip the host check, the app's middleware, `Caller<T>` and the grace that 
 requests and tasks.
 
 1. A binary or XML body (Protobuf, CBOR, MessagePack, XML): a route under `App::api` whose
-   handler takes the whole `corten::extract::Request`, reads the body with
+   handler takes the whole `corten::http::Request`, reads the body with
    `bytes_up_to(request.into_body(), max)` up to the route's own limit, decodes it with the
    format's crate (`prost`, `ciborium`, `rmp-serde`, `quick-xml`), and answers
    `Media::new(content_type, bytes)`, or JSON. Its failures are the API's JSON (`Api::errors`
@@ -1922,8 +1932,8 @@ requests and tasks.
 use std::time::Duration;
 
 use corten::{
-    extract::{bytes_up_to, Request},
-    http::StatusCode,
+    extract::bytes_up_to,
+    http::{Request, StatusCode},
     json::Raw,
     prelude::*,
     Error, Media, Signal,
@@ -1969,7 +1979,8 @@ async fn vendor_event(request: Request) -> corten::Result<StatusCode> {
         .await?
         .ok_or_else(|| Error::status(StatusCode::PAYLOAD_TOO_LARGE))?;
     if !signature.is_some_and(|signature| verify(&body, signature.as_bytes())) {
-        return Err(Error::status(StatusCode::UNAUTHORIZED));
+        // Not a 401: no HTTP authentication scheme would let the vendor send it another way.
+        return Err(Error::status(StatusCode::FORBIDDEN));
     }
     let event: serde_json::Value = serde_json::from_slice(&body).map_err(|_| Error::status(StatusCode::BAD_REQUEST))?;
     // The event's id is recorded, so a repeat is answered as done; slow work goes to a task.
@@ -2099,8 +2110,9 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
 | `identify` says | Page, or a form post without JavaScript | Form patch | Data client, JSON route |
 |---|---|---|---|
 | `Ok(caller)` | the handler runs | the handler runs | the handler runs |
-| `Refused::sign_in(&route)` | 303 to the route (`corten-location` to the runtime's fetch when the route is on another site or names a place) | `corten-location`, and the runtime goes there | JSON 401 |
-| `Refused::unauthorized()`, `Refused::forbidden()` | the error page, `Failure::Refused` (401, 403) | the error page, swapped in | JSON 401, 403 |
+| `Refused::sign_in(&route)` | 303 to the route (`corten-location` to the runtime's fetch when the route is on another site or names a place) | `corten-location`, and the runtime goes there | JSON 401, without `WWW-Authenticate` |
+| `Refused::unauthorized(challenge)` | the error page, `Failure::Refused` (401), with `WWW-Authenticate` | the error page, swapped in, with `WWW-Authenticate` | JSON 401, with `WWW-Authenticate` |
+| `Refused::forbidden()` | the error page, `Failure::Refused` (403) | the error page, swapped in | JSON 403 |
 | `Refused::too_many(wait)` | the error page, `Failure::Refused` (429), with `Retry-After` | the error page, swapped in | JSON 429, with `Retry-After` |
 | `Refused::unavailable(error)` | the error page, `Failure::Unidentified` (503) | the error page, swapped in | JSON 503 |
 
@@ -2114,8 +2126,9 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    nothing is written. Refuse with `Refused::unavailable` when who they are cannot be known
    now (the session store is down), so no one is sent to sign in again for nothing.
 4. Callers of different kinds are different types with their own lookup: `Caller<Viewer>` from
-   a session cookie on the pages, `Caller<Partner>` from an `X-Api-Key` header on a
-   `JsonResult` route, where a missing key is a JSON 401. A type that is a rule over another
+   a session cookie on the pages, `Caller<Partner>` from a key sent as a bearer token
+   (`Authorization: Bearer <key>`) on a `JsonResult` route, where a missing key is a JSON 401
+   with `WWW-Authenticate: Bearer realm="partners"`. A type that is a rule over another
    (staff is a viewer with a role) reads the other in its `identify` with
    `let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;`, so the session is read
    once in the request whichever of the two the handler, a middleware and the error page take.
@@ -2155,6 +2168,22 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    failed attempts is the app's (by address or account, in its own store); `Refused::too_many`
    is how the lookup says the count is reached, checked before the credentials so a locked-out
    client learns nothing about them.
+   A 401 says how to send credentials (RFC 9110 requires it): `Refused::unauthorized` takes the
+   `Challenge` that goes in `WWW-Authenticate`, `Challenge::bearer("partners")` for a key or
+   token in `Authorization` (RFC 6750, whose challenge names a realm), with
+   `.param("error", "invalid_token")` when the one sent is wrong, and no error when the request
+   sent none or another scheme's credentials (RFC 6750 3.1). `Challenge::basic(realm)` makes a
+   browser show its own sign-in prompt. A key in a header of the app's own
+   (`X-Api-Key`) has no scheme to name, so send it as a bearer token; an API whose clients
+   already send that header takes the key as a bearer token too and challenges `Bearer`. Another
+   scheme is a `const` of the app's (`const NEGOTIATE: Challenge = Challenge::new("Negotiate");`),
+   so one that is not a token does not compile (called elsewhere, `new` checks it as it runs);
+   a parameter's value is always sent quoted and in ASCII, and is checked when the challenge is
+   made, so a test that sends a refused request finds a mistake in it; a realm from configuration
+   goes into a `Challenge` the app builds once at startup, keeps in its state and clones for each
+   refusal, so a bad one stops the app from starting. `Refused::sign_in`'s 401
+   to a data client has no challenge: a session cookie has no HTTP authentication scheme. A lookup
+   that also takes a token should refuse a request that sent a wrong one with `unauthorized`.
 8. A check that depends on the record (only the author may edit a draft) stays in the handler,
    which loads the record, and refuses as a lookup does: `Err(Refused::forbidden())?`. That is
    answered as an extractor's refusal (the error page at 403, the layout's reads drawn as for a

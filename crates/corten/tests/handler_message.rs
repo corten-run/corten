@@ -55,9 +55,11 @@ fn a_handler_argument_no_request_fills_is_named_in_cortens_words() {
         assert!(!ok, "a handler taking ({args}) compiled");
         assert!(stderr.contains("cannot serve this route"), "Corten's message for ({args}): {stderr}");
         // The second error names the argument, in Corten's words (the trait's own
-        // `on_unimplemented`), and the trait it lacks is Corten's.
+        // `on_unimplemented`), and the trait it lacks is Corten's: its note is the trait's own, and
+        // with no other trait of that name in the build rustc names it without its path.
         assert!(stderr.contains("a request cannot fill `Name`"), "the argument named for ({args}): {stderr}");
-        assert!(stderr.contains("corten::extract::FromRequestParts<()>"), "Corten's trait for ({args}): {stderr}");
+        assert!(stderr.contains("`FromRequestParts<()>` is not implemented for `Name`"), "the trait for ({args}): {stderr}");
+        assert!(stderr.contains("implements corten::extract::FromRequestParts"), "Corten's trait's note for ({args}): {stderr}");
         assert!(!stderr.contains("debug_handler"), "no axum hint for ({args}): {stderr}");
     }
     let (ok, stderr) = build("req: Req");

@@ -34,7 +34,7 @@
 //! A handler that hides what it answers does not compile:
 //!
 //! ```compile_fail,E0277
-//! use corten::{middleware::Response, prelude::*};
+//! use corten::{http::Response, prelude::*};
 //!
 //! #[corten::routes]
 //! mod url {
@@ -56,19 +56,15 @@ use std::{
 };
 
 use crate::{
-    extract::{Request, State},
-    handler::Handler,
+    body::Body,
+    extract::State,
+    handler::{Handler, Request},
 };
-use axum::{
-    http::{Method, StatusCode, Uri},
-    response::{IntoResponse, Response},
-};
+use http::{Method, StatusCode, Uri};
+
+use crate::response::{IntoResponse, Response};
 
 use crate::{cache::Cache, Error, Req, Signal};
-
-/// A body as it is sent: what a [`Relay`] passes on from another server
-/// (`Body::from_stream(..)`), and what a middleware's [`crate::middleware::Response`] holds.
-pub use axum::body::Body;
 
 /// How a route's failures are answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -225,7 +221,7 @@ impl<For: SetsCookies> HtmlResponse<For> {
     /// ```
     #[must_use]
     pub fn with_cookie(mut self, cookie: crate::security::cookie::SetCookie) -> Self {
-        self.0.headers_mut().append(axum::http::header::SET_COOKIE, cookie.header());
+        self.0.headers_mut().append(http::header::SET_COOKIE, cookie.header());
         self
     }
 }
@@ -462,7 +458,7 @@ impl std::fmt::Debug for JsonResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("JsonResponse")
             .field("status", &self.0.status())
-            .field("content_type", &self.0.headers().get(axum::http::header::CONTENT_TYPE))
+            .field("content_type", &self.0.headers().get(http::header::CONTENT_TYPE))
             .finish_non_exhaustive()
     }
 }
@@ -488,7 +484,7 @@ impl JsonResponse {
     /// `Set-Cookie` header by hand.
     #[must_use]
     pub fn with_cookie(mut self, cookie: crate::security::cookie::SetCookie) -> Self {
-        self.0.headers_mut().append(axum::http::header::SET_COOKIE, cookie.header());
+        self.0.headers_mut().append(http::header::SET_COOKIE, cookie.header());
         self
     }
 }
@@ -523,7 +519,7 @@ impl<T: crate::json::ToJson> From<crate::Json<T>> for JsonResponse {
 /// the route's JSON error.
 ///
 /// ```
-/// use corten::{answer::Body, http::{HeaderMap, StatusCode}, prelude::*, JsonError, JsonResponse, Relay};
+/// use corten::{http::{Body, HeaderMap, StatusCode}, prelude::*, JsonError, JsonResponse, Relay};
 ///
 /// #[derive(ToJson)]
 /// struct Order { id: u32 }
@@ -630,7 +626,7 @@ pub enum JsonError {
     ///     Ok(Json(Batch { batch: id }).with_status(StatusCode::CREATED))
     /// }
     /// # assert_eq!(created(None).unwrap_err().into_response().status(), StatusCode::BAD_REQUEST);
-    /// # use corten::middleware::IntoResponse;
+    /// # use corten::http::IntoResponse;
     /// ```
     ///
     /// A refusal is a client or server error. One with another status is a bug: a debug build
@@ -750,7 +746,7 @@ impl Answer for StatusCode {
 /// (`Set-Cookie`, say) is the route's to decide before it builds the answer.
 ///
 /// ```
-/// use corten::{answer::Body, http::{HeaderMap, StatusCode}, prelude::*, Relay};
+/// use corten::{http::{Body, HeaderMap, StatusCode}, prelude::*, Relay};
 ///
 /// async fn models() -> corten::Result<Relay> {
 ///     // The upstream's answer, from the app's HTTP client: for reqwest,
@@ -764,8 +760,8 @@ pub struct Relay(Response);
 
 impl Relay {
     /// The answer with `status`, `headers` (hop-by-hop ones removed) and `body`.
-    pub fn new(status: StatusCode, mut headers: axum::http::HeaderMap, body: Body) -> Self {
-        use axum::http::header;
+    pub fn new(status: StatusCode, mut headers: http::HeaderMap, body: Body) -> Self {
+        use http::header;
         let named: Vec<String> = headers
             .get_all(header::CONNECTION)
             .iter()
@@ -852,9 +848,10 @@ pub struct Media(Response);
 
 impl Media {
     /// `bytes`, sent as `media_type` (`"image/webp"`), a valid header value.
-    pub fn new(media_type: &'static str, bytes: impl Into<axum::body::Bytes>) -> Self {
-        use axum::http::{header, HeaderValue};
-        let mut res = Response::new(axum::body::Body::from(bytes.into()));
+    pub fn new(media_type: &'static str, bytes: impl Into<bytes::Bytes>) -> Self {
+        use http::header;
+        use http::HeaderValue;
+        let mut res = Response::new(crate::body::Body::from(bytes.into()));
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         Media(res)
     }
@@ -866,7 +863,7 @@ impl Media {
     /// which stops whatever makes it (a database cursor, a channel whose sender then fails).
     ///
     /// ```
-    /// use corten::{prelude::*, Bytes, Media};
+    /// use corten::{http::Bytes, prelude::*, Media};
     /// use futures_util::StreamExt;
     ///
     /// async fn export() -> Media {
@@ -906,7 +903,7 @@ impl Media {
     /// made with the app's own `?` logs the error it holds.
     pub fn stream<S, E>(media_type: &'static str, chunks: S) -> Self
     where
-        S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
+        S: futures_util::Stream<Item = Result<bytes::Bytes, E>> + Send + 'static,
         E: Into<Box<dyn std::error::Error + Send + Sync>> + Send + 'static,
     {
         Media::streamed(media_type, None, chunks)
@@ -920,21 +917,22 @@ impl Media {
     /// stream is never pulled.
     pub fn stream_sized<S, E>(media_type: &'static str, length: u64, chunks: S) -> Self
     where
-        S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
+        S: futures_util::Stream<Item = Result<bytes::Bytes, E>> + Send + 'static,
         E: Into<Box<dyn std::error::Error + Send + Sync>> + Send + 'static,
     {
         let mut media = Media::streamed(media_type, Some(length), chunks);
-        media.0.headers_mut().insert(axum::http::header::CONTENT_LENGTH, axum::http::HeaderValue::from(length));
+        media.0.headers_mut().insert(http::header::CONTENT_LENGTH, http::HeaderValue::from(length));
         media
     }
 
     fn streamed<S, E>(media_type: &'static str, length: Option<u64>, chunks: S) -> Self
     where
-        S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
+        S: futures_util::Stream<Item = Result<bytes::Bytes, E>> + Send + 'static,
         E: Into<Box<dyn std::error::Error + Send + Sync>> + Send + 'static,
     {
-        use axum::http::{header, HeaderValue};
         use futures_util::StreamExt;
+        use http::header;
+        use http::HeaderValue;
         // Each chunk passed on as it comes; a failure, or a length the stream does not keep,
         // logged and ended as an error, which ends the connection without the body's end.
         let checked = futures_util::stream::unfold(Some((Box::pin(chunks), length)), move |state| async move {
@@ -959,7 +957,7 @@ impl Media {
                 },
             }
         });
-        let mut res = Response::new(axum::body::Body::from_stream(checked));
+        let mut res = Response::new(crate::body::Body::from_stream(checked));
         res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
         res.extensions_mut().insert(Streamed);
         Media(res)
@@ -1019,8 +1017,8 @@ impl Media {
 
     fn disposition(mut self, kind: &str, file_name: &str) -> Self {
         let value = disposition(kind, file_name);
-        let value = axum::http::HeaderValue::try_from(value).expect("a disposition is visible ASCII");
-        self.0.headers_mut().insert(axum::http::header::CONTENT_DISPOSITION, value);
+        let value = http::HeaderValue::try_from(value).expect("a disposition is visible ASCII");
+        self.0.headers_mut().insert(http::header::CONTENT_DISPOSITION, value);
         self
     }
 }
@@ -1255,6 +1253,13 @@ impl<T> Answer for corten_feed::FeedResponse<T> {
     type Rows = T;
 }
 
+#[cfg(feature = "feed")]
+impl<T> IntoResponse for corten_feed::FeedResponse<T> {
+    fn into_response(self) -> Response {
+        self.into_http().map(Body::new)
+    }
+}
+
 /// An answer that is the same for everyone, so any cache (a CDN, a proxy) may keep it:
 /// `async fn home(req: Req) -> Public<HtmlResult>`. Its handler may only read inputs that cannot
 /// tell who is asking ([`Anonymous`]), so a `Caller`, a `HeaderMap` or a cookie there does not
@@ -1288,7 +1293,7 @@ pub struct Public<A: Shareable> {
     // Boxed so an answer without them is one word larger, not three (a `Vec` in place measured
     // about 20 instructions a request more).
     #[allow(clippy::box_collection)]
-    headers: Option<Box<Vec<(axum::http::HeaderName, axum::http::HeaderValue)>>>,
+    headers: Option<Box<Vec<(http::HeaderName, http::HeaderValue)>>>,
 }
 
 impl<A: Shareable> Public<A> {
@@ -1431,13 +1436,13 @@ impl<A: Shareable> Public<A> {
     /// }
     /// # let _: Methods = get(home);
     /// ```
-    pub fn header<H: Header>(mut self, value: axum::http::HeaderValue) -> Self {
+    pub fn header<H: Header>(mut self, value: http::HeaderValue) -> Self {
         let name = const {
             assert!(
                 shared_header(H::NAME),
                 "corten: a Public answer cannot set this header: it would make the answer one visitor's, or Corten or the answer sets it (the type named in `header::<..>` below)"
             );
-            axum::http::HeaderName::from_static(H::NAME)
+            http::HeaderName::from_static(H::NAME)
         };
         self.headers.get_or_insert_default().push((name, value));
         self
@@ -2059,7 +2064,7 @@ mod tests {
         for name in ["", "a\u{0}b", "\u{7f}", "日本語.pdf", "tab\there"] {
             let value = disposition("inline", name);
             assert!(value.bytes().all(|b| (0x20..0x7f).contains(&b)), "{value}");
-            assert!(axum::http::HeaderValue::try_from(value).is_ok());
+            assert!(http::HeaderValue::try_from(value).is_ok());
         }
     }
 

@@ -40,10 +40,11 @@
 
 use std::sync::Arc;
 
-use axum::{
-    http::{header, HeaderValue, Uri},
-    response::{IntoResponse, Response},
-};
+use crate::response::IntoResponse;
+use crate::response::Response;
+use http::header;
+use http::HeaderValue;
+use http::Uri;
 
 use crate::{
     assets::{Asset, Assets},
@@ -868,7 +869,7 @@ mod tests {
     const PUSH: Asset = Asset::__embedded("shop::Static", "sw-push.js");
 
     fn assets() -> Assets {
-        let files = ["icons/192.png", "sw-push.js"].map(|f| (f.to_string(), axum::body::Bytes::from_static(b"x"))).to_vec();
+        let files = ["icons/192.png", "sw-push.js"].map(|f| (f.to_string(), bytes::Bytes::from_static(b"x"))).to_vec();
         let mut assets = Assets::build_with(files, &[], &[], "/assets").unwrap();
         assets.owner = Some("shop::Static");
         assets

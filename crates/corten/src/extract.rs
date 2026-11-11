@@ -6,7 +6,7 @@
 //! implements [`OptionalFromRequestParts`] too, so it can take `Option<T>`. An extractor that
 //! reads the body ([`crate::Form`], [`crate::Upload`]) implements [`FromRequest`]. A refusal
 //! (`type Rejection`) is anything that makes a response
-//! ([`crate::middleware::IntoResponse`]). Who is asking is a [`crate::Caller`], found by the caller
+//! ([`crate::http::IntoResponse`]). Who is asking is a [`crate::Caller`], found by the caller
 //! type's [`crate::Identify`], never an extractor written for it. A part of the routes' state is a
 //! [`crate::FromRef`] bound:
 //!
@@ -38,7 +38,7 @@
 //!
 //!     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, StatusCode> {
 //!         let _lists = Lists::from_ref(state);
-//!         let id = cookie::get(&parts.headers, "visitor").ok_or(StatusCode::UNAUTHORIZED)?;
+//!         let id = cookie::get(&parts.headers, "visitor").ok_or(StatusCode::BAD_REQUEST)?;
 //!         Ok(Visitor(id.to_string()))
 //!     }
 //! }
@@ -77,26 +77,9 @@
 //! These are Corten's own traits, with the names, the `Rejection` and the
 //! `from_request_parts(parts, state)` signature they had when they were axum's
 //! (`docs/design.md#choice-own-extractors`), so an extractor written against axum's compiles
-//! against them as it is. axum's own extractors (its `Path`, `Query`, `Extension`) implement
-//! axum's traits, not these, so a handler cannot take one: a route's path and query are its
-//! [`crate::Params`]. A handler that takes one of axum's does not compile:
-//!
-//! ```compile_fail,E0277
-//! use corten::prelude::*;
-//!
-//! #[corten::routes]
-//! mod url {
-//!     #[route("/items", get = items)]
-//!     pub struct Items;
-//! }
-//!
-//! async fn items(corten::axum::Extension(n): corten::axum::Extension<u32>) -> String {
-//!     n.to_string()
-//! }
-//! # fn main() {}
-//! ```
-//!
-//! Nor does axum's `State`, under `no_store` too, which reads its arguments the same way:
+//! against them with its `use` changed. A handler argument that implements neither does not
+//! compile, under `no_store` too, which reads its arguments the same way: a route's path and
+//! query are its [`crate::Params`], and the routes' state is [`State`].
 //!
 //! ```compile_fail,E0277
 //! use corten::prelude::*;
@@ -107,13 +90,15 @@
 //!     pub struct Items;
 //! }
 //!
-//! async fn items(_: corten::axum::extract::State<()>) -> String {
+//! struct Visits(u32);
+//!
+//! async fn items(_: Visits) -> String {
 //!     String::new()
 //! }
 //! # fn main() {}
 //! ```
 //!
-//! The same handler with Corten's `State` compiles:
+//! A handler that takes the routes' state as Corten's `State` compiles:
 //!
 //! ```
 //! use corten::prelude::*;
@@ -157,7 +142,7 @@
 //!     pub struct Notes;
 //! }
 //!
-//! async fn notes(_: corten::Bytes, text: String) -> String {
+//! async fn notes(_: corten::http::Bytes, text: String) -> String {
 //!     text
 //! }
 //! # fn main() {}
@@ -180,7 +165,7 @@
 //! # fn main() { let _ = App::new(url::router()); }
 //! ```
 //!
-//! A handler that takes the whole [`Request`] reads its body with [`bytes_up_to`], up to a limit
+//! A handler that takes the whole [`Request`](crate::http::Request) reads its body with [`bytes_up_to`], up to a limit
 //! of the route's own, and answers a body over it itself.
 //!
 //! A body too large to hold (a file `PUT` as `application/octet-stream`, to an object store or a
@@ -188,23 +173,23 @@
 
 use std::{future::Future, pin::Pin, task::Poll, time::Duration};
 
-pub use crate::handler::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request, State};
-use axum::body::{BodyDataStream, HttpBody};
+pub use crate::handler::{FromRequest, FromRequestParts, OptionalFromRequestParts, State};
 use bytes::Bytes;
 use futures_util::StreamExt;
+use http_body::Body as HttpBody;
 use tokio::time::Sleep;
 
 use crate::{
-    answer::Body,
+    body::{Body, BodyDataStream, BoxError},
     form::upload::{join, KEPT_AS_IT_CAME, READ_PAST, SMALL_PIECE},
     http::StatusCode,
     Error,
 };
 
 /// The whole body, or `None` when it is larger than `max` bytes: for a handler that takes the
-/// [`Request`] and reads its body up to a limit of the route's own, answering a body over it (and
+/// [`Request`](crate::http::Request) and reads its body up to a limit of the route's own, answering a body over it (and
 /// one that does not parse) itself, as a route that keeps another server's error shape must.
-/// `Json`, [`crate::Form`] and [`crate::Bytes`] refuse a body before the handler runs,
+/// `Json`, [`crate::Form`] and [`crate::http::Bytes`] refuse a body before the handler runs,
 /// with the app's limit and Corten's answer. A body over `max` is read past, not kept, up to
 /// 64 MiB past it, so a client still sending reads the handler's answer rather than a closed
 /// connection, as an upload's is ([`crate::form::File::bytes_up_to`]); past that, or when its
@@ -218,7 +203,7 @@ use crate::{
 ///
 #[cfg_attr(feature = "json", doc = "```")]
 #[cfg_attr(not(feature = "json"), doc = "```ignore")]
-/// use corten::{extract::{bytes_up_to, Request}, http::StatusCode, prelude::*, JsonError, JsonResponse};
+/// use corten::{extract::bytes_up_to, http::{Request, StatusCode}, prelude::*, JsonError, JsonResponse};
 ///
 /// /// The largest configuration this route takes.
 /// const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -251,8 +236,20 @@ use crate::{
 /// # fn main() { let _ = App::new(url::router()); }
 /// ```
 pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error> {
-    let past = max.saturating_add(READ_PAST);
-    if body.size_hint().lower() > past as u64 {
+    up_to(body, max, READ_PAST, None).await
+}
+
+/// [`bytes_up_to`], reading at most `past` bytes past `max` before giving up on the client;
+/// `over` marks a wait there for the deadline, as [`read_past`] says.
+async fn up_to(body: Body, max: usize, past: usize, over: Option<Over>) -> Result<Option<Bytes>, Error> {
+    let declared = body.size_hint().lower();
+    if declared > max.saturating_add(past) as u64 {
+        return Ok(None);
+    }
+    let mut stream = body.into_data_stream();
+    // A body that says it is over the limit is read past, not kept, so none of it is copied.
+    if declared > max as u64 {
+        read_past(&mut stream, 0, max.saturating_add(past), &mut Idle::new(None), over).await;
         return Ok(None);
     }
     // As an upload's file is read: a piece of 1 KiB or more is kept as it came, a run of smaller
@@ -261,14 +258,13 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
     let mut pieces: Vec<Bytes> = Vec::new();
     let mut small: Vec<u8> = Vec::new();
     let mut len: usize = 0;
-    let mut stream = body.into_data_stream();
     while let Some(piece) = stream.next().await {
         let piece = piece.map_err(|e| Error::new(e).with_status(StatusCode::BAD_REQUEST))?;
         len = len.saturating_add(piece.len());
         if len > max {
             drop((pieces, small));
             // Read past, so the client reads the answer; a read that breaks here leaves the same.
-            read_past(&mut stream, len, max, &mut Idle::new(None), None).await;
+            read_past(&mut stream, len, max.saturating_add(past), &mut Idle::new(None), over).await;
             return Ok(None);
         }
         if piece.len() >= SMALL_PIECE {
@@ -288,6 +284,81 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
         (1, true) => Bytes::copy_from_slice(&pieces[0]),
         _ => join(&pieces, &small, len),
     }))
+}
+
+/// The most of a body [`crate::http::Bytes`], `String`, [`crate::Json`] and [`crate::Form`] read, and
+/// what an [`crate::Upload`] keeps unless its handler sets another, where neither the app, an area
+/// nor an API sets one ([`crate::App::body_limit`]): 2 MiB.
+pub(crate) const BODY_LIMIT: usize = 2 << 20;
+
+/// The limit of the request with these extensions: the one its app, area or API set, which the
+/// stages put on its [`crate::Signal`], or [`BODY_LIMIT`] for a request without one.
+#[inline]
+pub(crate) fn body_limit(extensions: &http::Extensions) -> usize {
+    extensions.get::<crate::Signal>().map_or(BODY_LIMIT, crate::Signal::body_limit)
+}
+
+/// The whole body, for a reader that refuses the request before the handler runs: over its limit
+/// ([`body_limit`], 2 MiB unless set) a 413, and a body that could not be read a 400. A body over
+/// the limit is read past until twice the limit has arrived, or the limit and 64 MiB (the piece
+/// that crossed it included), so a form a browser is still sending reads the answer; one that says
+/// it is longer is refused before any of it is read. The readers serve every route that takes
+/// one, so what a refused request can cost is kept near what the limit allows.
+/// The caller reads the limit from the request ([`body_limit`]) and gives the body alone, so the
+/// reader's future holds the body, not the request's head.
+pub(crate) async fn whole(body: Body, limit: usize) -> Result<Bytes, BodyRejection> {
+    const FAILED: &str = "Failed to buffer the request body";
+    let past = limit.min(READ_PAST);
+    // A deadline that passes while the rest is read past answers this 413, not a 408 that would
+    // tell the client to send the same body again.
+    match up_to(body, limit, past, Some(Over::Body(limit))).await {
+        Ok(Some(bytes)) => Ok(bytes),
+        Ok(None) => Err(BodyRejection::new(StatusCode::PAYLOAD_TOO_LARGE, format!("{FAILED}: length limit exceeded"))),
+        Err(error) => Err(BodyRejection::new(StatusCode::BAD_REQUEST, format!("{FAILED}: {error}"))),
+    }
+}
+
+/// Why a reader of the whole body refused a request, before its handler ran: plain text at its
+/// status. [`crate::http::Bytes`], `String`, [`crate::Json`] and [`crate::Form`] refuse a body over
+/// the route's limit ([`crate::App::body_limit`], 2 MiB unless set; 413) or one that could not be
+/// read (400); `String` one that is not UTF-8 (400); `Json`
+/// and `Form` one without their content type (415), and `Json` one that does not parse (400) or
+/// whose value does not fit the type (422). A handler that answers it itself takes
+/// `Result<Json<T>, BodyRejection>`.
+#[derive(Debug)]
+pub struct BodyRejection {
+    status: StatusCode,
+    text: std::borrow::Cow<'static, str>,
+}
+
+impl BodyRejection {
+    pub(crate) fn new(status: StatusCode, text: impl Into<std::borrow::Cow<'static, str>>) -> Self {
+        BodyRejection { status, text: text.into() }
+    }
+
+    /// The status it answers with.
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    /// The text it answers with.
+    pub fn body_text(&self) -> String {
+        self.text.to_string()
+    }
+}
+
+impl std::fmt::Display for BodyRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::error::Error for BodyRejection {}
+
+impl crate::http::IntoResponse for BodyRejection {
+    fn into_response(self) -> crate::http::Response {
+        crate::http::IntoResponse::into_response((self.status, self.text))
+    }
 }
 
 /// A body read as it arrives, one piece at a time, up to `max` bytes: for a body too large to
@@ -320,7 +391,7 @@ pub async fn bytes_up_to(body: Body, max: usize) -> Result<Option<Bytes>, Error>
 /// ```
 /// use std::time::Duration;
 ///
-/// use corten::{extract::{pieces_up_to, BodyError, Request}, http::StatusCode, prelude::*, Error};
+/// use corten::{extract::{pieces_up_to, BodyError}, http::{Request, StatusCode}, prelude::*, Error};
 ///
 /// /// The largest file this route takes.
 /// const MAX_BYTES: usize = 1 << 30;
@@ -546,7 +617,8 @@ impl Pieces {
                 // Refused first, so a read past given up on is not begun again.
                 self.end = End::Over;
                 if said <= self.max.saturating_add(READ_PAST) as u64 {
-                    read_past(&mut self.stream, 0, self.max, &mut self.idle, Some(Over::Body(self.max))).await;
+                    let past = self.max.saturating_add(READ_PAST);
+                    read_past(&mut self.stream, 0, past, &mut self.idle, Some(Over::Body(self.max))).await;
                 }
                 return Err(BodyError::TooLarge { limit: self.max });
             }
@@ -572,7 +644,8 @@ impl Pieces {
                 self.read = self.read.saturating_add(piece.len());
                 if self.read > self.max {
                     self.end = End::Over;
-                    read_past(&mut self.stream, self.read, self.max, &mut self.idle, Some(Over::Body(self.max))).await;
+                    let past = self.max.saturating_add(READ_PAST);
+                    read_past(&mut self.stream, self.read, past, &mut self.idle, Some(Over::Body(self.max))).await;
                     return Err(BodyError::TooLarge { limit: self.max });
                 }
                 Ok(Some(piece))
@@ -665,7 +738,7 @@ impl NextPiece<'_> {
 }
 
 impl Future for NextPiece<'_> {
-    type Output = Option<Option<Result<Bytes, axum::Error>>>;
+    type Output = Option<Option<Result<Bytes, BoxError>>>;
 
     #[inline]
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
@@ -714,13 +787,12 @@ impl Drop for NextPiece<'_> {
     }
 }
 
-/// Reads the rest of a body over `max`, keeping nothing, until it ends, breaks, `read` (what
-/// arrived of it before) is 64 MiB past `max`, or no piece comes for `idle`, so a client still
-/// sending reads the answer. `over` marks a wait here for the deadline, which then answers the
+/// Reads the rest of a body over its limit, keeping nothing, until it ends, breaks, `read` (what
+/// arrived of it before) is over `past` (the limit and what is read past it), or no piece comes
+/// for `idle`, so a client still sending reads the answer. `over` marks a wait here for the deadline, which then answers the
 /// read's 413; `None` (for [`bytes_up_to`], whose handler answers in a shape of its own) leaves it
 /// a wait for the body, the 408.
-async fn read_past(stream: &mut BodyDataStream, mut read: usize, max: usize, idle: &mut Idle, over: Option<Over>) {
-    let past = max.saturating_add(READ_PAST);
+async fn read_past(stream: &mut BodyDataStream, mut read: usize, past: usize, idle: &mut Idle, over: Option<Over>) {
     while read <= past {
         let next = idle.next(stream);
         let piece = match over {
@@ -740,7 +812,10 @@ mod tests {
     use futures_util::{stream, StreamExt};
 
     use super::{bytes_up_to, pieces_up_to, BodyError, Pieces};
-    use crate::{answer::Body, http::StatusCode, middleware::IntoResponse, Error};
+    use crate::{
+        http::{Body, IntoResponse, StatusCode},
+        Error,
+    };
 
     /// A body in pieces, with no length up front, as a chunked request sends it.
     fn streamed(pieces: &[&'static str]) -> Body {
@@ -773,6 +848,17 @@ mod tests {
         });
         assert_eq!(bytes_up_to(Body::from_stream(pieces), 5).await.unwrap(), None);
         assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 4);
+    }
+
+    /// A body whose length says it is over the limit (but not past what is read past) is read past
+    /// from its first piece: every piece is read, and the answer is the same as for one that went
+    /// over.
+    #[tokio::test]
+    async fn a_body_declared_over_the_limit_is_read_past() {
+        let read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let pieces = [&b"123"[..], b"456", b"789"].into_iter().map(Bytes::from_static).collect();
+        assert_eq!(bytes_up_to(Body::new(Declared(pieces, read.clone())), 5).await.unwrap(), None);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 3);
     }
 
     /// Reading past stops 64 MiB past the limit, where the connection is closed after the answer:
@@ -813,6 +899,126 @@ mod tests {
         assert_eq!(bytes_up_to(body, 5).await.unwrap(), None);
     }
 
+    /// A reader of the whole body (`Json`, `Form`, `String`, `Bytes`) reads past its 2 MiB by at
+    /// most 2 MiB more: of ten pieces of 1 MiB, the three that went over and two more are read,
+    /// and a body that says it is longer than 4 MiB is refused before any of it is read.
+    #[tokio::test]
+    async fn a_whole_body_reader_reads_past_by_its_own_limit() {
+        let read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = read.clone();
+        let mib = Bytes::from(vec![0; 1 << 20]);
+        let pieces = stream::iter(std::iter::repeat_n(mib, 10)).map(move |p| {
+            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok::<_, std::io::Error>(p)
+        });
+        let refused = super::whole(Body::from_stream(pieces), super::BODY_LIMIT).await.unwrap_err();
+        assert_eq!(refused.into_response().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 5);
+
+        let said = Body::new(Said(4 << 20 | 1));
+        let refused = super::whole(said, super::BODY_LIMIT).await.unwrap_err();
+        assert_eq!(refused.into_response().status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    /// The limit the stages put on a request is the readers', and they read past by it: of ten
+    /// pieces of 1 MiB under a 3 MiB limit, the four that went over and three more are read;
+    /// under 512 KiB the first refuses, reaching twice the limit, and the one that crosses it is read.
+    /// A body whose length says it is over twice a raised limit (4 MiB) is refused unread, and
+    /// one declared at exactly twice is read past.
+    #[tokio::test]
+    async fn a_whole_body_reader_takes_the_requests_limit() {
+        let limited = |limit: usize, pieces: usize| {
+            let read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = read.clone();
+            let mib = Bytes::from(vec![0; 1 << 20]);
+            let body = Body::from_stream(stream::iter(std::iter::repeat_n(mib, pieces)).map(move |p| {
+                counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok::<_, std::io::Error>(p)
+            }));
+            let mut req = crate::http::Request::new(body);
+            req.extensions_mut().insert(crate::Signal::with_body_limit(limit));
+            (req, read)
+        };
+        let (req, _) = limited(3 << 20, 3);
+        assert_eq!(whole_of(req).await.unwrap().len(), 3 << 20, "a body at the limit is read whole");
+        let (req, read) = limited(3 << 20, 10);
+        assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 7);
+        let (req, read) = limited(512 << 10, 10);
+        assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 2);
+        // Over 64 MiB the read past stops at 64 MiB: 66 pieces to cross a 65 MiB limit, then until
+        // 64 MiB more than the limit has arrived (131 without the cap).
+        let (req, read) = limited(65 << 20, 140);
+        assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 130);
+        // Under a raised limit, a body whose length says it is over twice the limit is refused
+        // unread, and one at twice the limit is read past.
+        let declared = |len: usize| {
+            let read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mib = Bytes::from(vec![0; 1 << 20]);
+            let mut pieces: std::collections::VecDeque<Bytes> = std::iter::repeat_n(mib, len >> 20).collect();
+            if len & ((1 << 20) - 1) != 0 {
+                pieces.push_back(Bytes::from(vec![0; len & ((1 << 20) - 1)]));
+            }
+            let mut req = crate::http::Request::new(Body::new(Declared(pieces, read.clone())));
+            req.extensions_mut().insert(crate::Signal::with_body_limit(4 << 20));
+            (req, read)
+        };
+        let (req, read) = declared((8 << 20) + 1);
+        assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 0, "over twice the limit: unread");
+        let (req, read) = declared(8 << 20);
+        assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 8, "at twice the limit: read past");
+    }
+
+    /// The whole body of `req`, at the limit the stages put on it, as a reader takes it.
+    async fn whole_of(req: crate::http::Request) -> Result<Bytes, super::BodyRejection> {
+        let limit = super::body_limit(req.extensions());
+        super::whole(req.into_body(), limit).await
+    }
+
+    /// A body that says how long it is, and fails if it is read.
+    struct Said(u64);
+
+    /// A body that says its length, its pieces' total, and counts the pieces read.
+    struct Declared(std::collections::VecDeque<Bytes>, std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl http_body::Body for Declared {
+        type Data = Bytes;
+        type Error = std::convert::Infallible;
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, std::convert::Infallible>>> {
+            let piece = self.0.pop_front();
+            if piece.is_some() {
+                self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            std::task::Poll::Ready(piece.map(|piece| Ok(http_body::Frame::data(piece))))
+        }
+        fn size_hint(&self) -> http_body::SizeHint {
+            http_body::SizeHint::with_exact(self.0.iter().map(|p| p.len() as u64).sum())
+        }
+    }
+
+    impl http_body::Body for Said {
+        type Data = Bytes;
+        type Error = std::io::Error;
+
+        fn poll_frame(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, std::io::Error>>> {
+            std::task::Poll::Ready(Some(Err(std::io::Error::other("read"))))
+        }
+
+        fn size_hint(&self) -> http_body::SizeHint {
+            http_body::SizeHint::with_exact(self.0)
+        }
+    }
+
     /// A small body that came in one piece is copied out of the buffer it was cut from; a large one
     /// is kept as it came.
     #[tokio::test]
@@ -843,15 +1049,13 @@ mod tests {
         }
     }
 
-    /// What reading a body costs, against axum's `to_bytes` that apps called before: `BODY_READS`
-    /// (200) reads of an 8 KiB body in one piece and of one in 1 KiB pieces, by `READER` (`ours`
-    /// or `axum`). Counted under callgrind at two numbers of reads, the difference over 1,000 is the
+    /// What reading a body costs: `BODY_READS` (200) reads of an 8 KiB body in one piece and of
+    /// one in 1 KiB pieces, by `READER` (`ours`, or `pieces`). Counted under callgrind at two numbers of reads, the difference over 1,000 is the
     /// cost of 1,000 of each.
     #[test]
     #[ignore]
     fn what_reading_a_body_costs() {
         let reads: usize = std::env::var("BODY_READS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
-        let ours = std::env::var("READER").map_or(true, |r| r != "axum");
         // `READER=pieces`: `Pieces` read a byte at a time, each byte waited for (#1030).
         let raw = std::env::var("READER").is_ok_and(|r| r == "pieces");
         let whole = Bytes::from(vec![b'x'; 8 * 1024]);
@@ -885,11 +1089,7 @@ mod tests {
                         drop(body);
                         continue;
                     }
-                    let read = if ours {
-                        bytes_up_to(body, 1 << 20).await.unwrap().unwrap()
-                    } else {
-                        axum::body::to_bytes(body, 1 << 20).await.unwrap()
-                    };
+                    let read = bytes_up_to(body, 1 << 20).await.unwrap().unwrap();
                     assert_eq!(std::hint::black_box(read).len(), 8 * 1024);
                 }
             }
