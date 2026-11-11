@@ -16,17 +16,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The required check `rust`: it passes only when both lanes below ran and passed, and fails on
+  # one that failed, was cancelled or was skipped. The lanes run side by side on runners of their
+  # own, each with its own cache (rust-cache keys by job), so the release tests no longer wait for
+  # the rest.
   rust:
+    needs: [rust-checks, rust-release]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "rust-checks: ${{ needs.rust-checks.result }}, rust-release: ${{ needs.rust-release.result }}"
+          test "${{ needs.rust-checks.result }}" = success && test "${{ needs.rust-release.result }}" = success
+
+  rust-checks:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal --component clippy,rustfmt && rustup default stable
-      # Its own key since the release tests joined this job: a cache saved before holds the debug
-      # build alone, and a cache restored in full is not saved again, so the release build would be
-      # compiled cold on every run.
       - uses: Swatinem/rust-cache@v2
-        with:
-          key: release-tests
       - run: cargo fmt --all --check
       - run: cargo run -q -p corten-cli -- fmt --check crates examples bench
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
@@ -37,7 +45,7 @@ jobs:
       - run: cargo check -p corten-run --no-default-features --features json
       - run: cargo check -p corten-run --no-default-features --features agent,feed
       # corten check type-checks the app's scripts and fails without tsc: the version package.json
-      # pins, on the Node the browser job uses rather than whatever the runner image has.
+      # pins, on the Node the smoke jobs use rather than whatever the runner image has.
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -53,9 +61,18 @@ jobs:
       # target of its own: cargo treats a registry crate as unchanged while its version is, so the
       # cached target could hand it an earlier build of corten-run 0.1.0.
       - run: CARGO_TARGET_DIR="$RUNNER_TEMP/publish" cargo publish --workspace --dry-run --locked
-      # The tests again in release, with debug assertions off: what a deployed app runs, and the
-      # tests of what only a release build does. Last, so the quicker checks above report first;
-      # here rather than in the watchlist image's build, where they held up the smokes (#947).
+
+  # The tests again in release, with debug assertions off: what a deployed app runs, and the tests
+  # of what only a release build does. Not in the watchlist image's build, where they held up the
+  # smokes (#947), and not after the checks above, where they made the job a release build longer
+  # (#1086); `rust` above still requires them.
+  rust-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      # rustfmt: `corten ui add` lays out the copies it writes with it, and its tests run it.
+      - run: rustup toolchain install stable --profile minimal --component rustfmt && rustup default stable
+      - uses: Swatinem/rust-cache@v2
       - run: cargo test --release --workspace --all-features
 
   msrv:
@@ -67,11 +84,65 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --locked --workspace --all-features --all-targets
 
+  # The required check `browser`: it passes only when every smoke group below ran and passed, and
+  # fails on one that failed, was cancelled or was skipped. It also checks the groups themselves:
+  # every smoke step that has a condition names its part there, each part is in exactly one group,
+  # and every part a group names has a step, so a renamed group or a mistyped condition cannot
+  # leave a smoke running nowhere while this stays green.
   browser:
+    needs: smoke
+    if: always()
     runs-on: ubuntu-24.04
-    # A passing run takes about 14 minutes (14.2 to 17.6 in #947's runs); a hung one would hold
-    # the runner for six hours (#317).
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/workflows/ci.yml
+          sparse-checkout-cone-mode: false
+      - name: Every part is in exactly one group, and every part has a step
+        # bash's pipefail, so a yq that fails does not leave both lists empty and equal.
+        shell: bash
+        run: |
+          f=.github/workflows/ci.yml
+          grouped=$(yq '.jobs.smoke.strategy.matrix.include[].parts' "$f" | tr ' ' '\n' | grep . | sort)
+          stepped=$(yq '.jobs.smoke.steps[].if // ""' "$f" | { grep -o "' [a-z-]* '" || true; } | tr -d "' " | sort -u)
+          unnamed=$(yq '.jobs.smoke.steps[] | select(.if != null and (.if | test("'"'"' [a-z-]+ '"'"'") | not)) | .name' "$f")
+          echo "parts in groups:"; echo "$grouped"
+          test -n "$grouped" || { echo "no group names a part"; exit 1; }
+          test -z "$unnamed" || { echo "steps with a condition that names no part: $unnamed"; exit 1; }
+          test -z "$(echo "$grouped" | uniq -d)" || { echo "in more than one group: $(echo "$grouped" | uniq -d)"; exit 1; }
+          test "$grouped" = "$stepped" || { echo "parts with a step: $stepped"; exit 1; }
+      - name: Every group passed
+        run: |
+          echo "smoke: ${{ needs.smoke.result }}"
+          test "${{ needs.smoke.result }}" = success
+
+  # The examples' browser smoke tests, in three groups that run side by side on runners of their
+  # own (#1085): the watchlist's smoke, the longest, split by engine, one engine in each group with
+  # the other examples beside it. Each group builds its own images and starts its own servers, so
+  # no two share a port, a container or a database. Every check runs in every engine it ran in
+  # before; the watchlist's checks that use no browser run in each of its three groups.
+  smoke:
+    name: smoke (${{ matrix.group }})
+    runs-on: ubuntu-24.04
+    # A passing group takes about 7 minutes (estimated); a hung one would hold the runner for six
+    # hours (#317).
     timeout-minutes: 30
+    strategy:
+      # Every group reports, so one failure does not hide another.
+      fail-fast: false
+      matrix:
+        # `parts`: the steps the group runs, each named in its step's condition (`PARTS` below), in
+        # lowercase letters and hyphens, which is all the check in `browser` reads as a part.
+        include:
+          - group: chromium-examples
+            parts: npm-check watchlist-chromium card-market seller-desk deck-builder
+          - group: firefox-feeds
+            parts: watchlist-firefox auction-room listings-feed
+          # watchlist-dev runs the image the watchlist step builds, so it stays in its group.
+          - group: webkit-gallery
+            parts: watchlist-webkit watchlist-dev ui-gallery
+    env:
+      PARTS: " ${{ matrix.parts }} "
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -79,7 +150,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run check
+      - name: npm run check
+        if: contains(env.PARTS, ' npm-check ')
+        run: |
+          npm run check
+          echo npm-check >> "$RUNNER_TEMP/ran"
       # The smoke tests run in Playwright's image, which has the three browsers and the system
       # libraries they need, for the @playwright/test version in package.json. Installing them on
       # the runner (`npx playwright install --with-deps`) fetched about a hundred apt packages from
@@ -94,40 +169,52 @@ jobs:
           # For a test that restarts its server: the runner's docker CLI and socket as well.
           echo "PLAYWRIGHT_WITH_DOCKER=$run -v $(command -v docker):/usr/local/bin/docker:ro -v /var/run/docker.sock:/var/run/docker.sock $image" >> "$GITHUB_ENV"
       - name: watchlist
+        if: contains(env.PARTS, ' watchlist-chromium ') || contains(env.PARTS, ' watchlist-firefox ') || contains(env.PARTS, ' watchlist-webkit ')
         run: |
+          engine=$(echo "$PARTS" | grep -o 'watchlist-[a-z]*' | grep -v watchlist-dev | cut -d- -f2)
           docker build -f examples/watchlist/Dockerfile -t corten-watchlist .
           docker run -d --name corten-watchlist -p 18480:8080 -e SMOKE_TRUSTED_TYPES=1 corten-watchlist
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18480/; do sleep 1; done'
-          $PLAYWRIGHT npm run smoke -- http://localhost:18480
+          $PLAYWRIGHT npm run smoke -- http://localhost:18480 $engine
           docker rm -f corten-watchlist
+          echo "watchlist-$engine" >> "$RUNNER_TEMP/ran"
       - name: watchlist under corten dev
+        if: contains(env.PARTS, ' watchlist-dev ')
         run: |
           docker run -d --name corten-watchlist-dev -p 18483:8080 -e CORTEN_DEV=1 corten-watchlist
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18483/; do sleep 1; done'
           $PLAYWRIGHT_WITH_DOCKER node scripts/smoke-dev.mjs http://localhost:18483 corten-watchlist-dev
           docker rm -f corten-watchlist-dev
+          echo watchlist-dev >> "$RUNNER_TEMP/ran"
       - name: card-market
+        if: contains(env.PARTS, ' card-market ')
         run: |
           docker build -f examples/card-market/Dockerfile -t corten-card-market .
           docker run -d --name corten-card-market -p 18481:8080 -e ITEM_SOURCE=fixture -e FIXTURE_PATH=/fixtures/smoke.json -e AGENT_ORIGINS=http://127.0.0.1:18481 -e EMBED_ORIGINS=http://127.0.0.1:18481 -e PROXIES=172.16.0.0/12,192.168.0.0/16 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token -v "$PWD/examples/card-market/fixtures:/fixtures:ro" corten-card-market
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18481/; do sleep 1; done'
           $PLAYWRIGHT node examples/card-market/smoke.mjs http://localhost:18481
           docker rm -f corten-card-market
+          echo card-market >> "$RUNNER_TEMP/ran"
       - name: ui-gallery
+        if: contains(env.PARTS, ' ui-gallery ')
         run: |
           docker build -f examples/ui-gallery/Dockerfile -t corten-ui-gallery .
           docker run -d --name corten-ui-gallery -p 18482:8080 corten-ui-gallery
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18482/; do sleep 1; done'
           $PLAYWRIGHT node examples/ui-gallery/smoke.mjs http://localhost:18482
           docker rm -f corten-ui-gallery
+          echo ui-gallery >> "$RUNNER_TEMP/ran"
       - name: seller-desk
+        if: contains(env.PARTS, ' seller-desk ')
         run: |
           docker build -f examples/seller-desk/Dockerfile -t corten-seller-desk .
           docker run -d --name corten-seller-desk -p 18484:8080 corten-seller-desk
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18484/; do sleep 1; done'
           $PLAYWRIGHT node examples/seller-desk/smoke.mjs http://localhost:18484
           docker rm -f corten-seller-desk
+          echo seller-desk >> "$RUNNER_TEMP/ran"
       - name: deck-builder
+        if: contains(env.PARTS, ' deck-builder ')
         run: |
           docker build -f examples/deck-builder/Dockerfile -t corten-deck-builder .
           docker run -d --name corten-deck-builder -p 18487:8080 corten-deck-builder
@@ -135,14 +222,18 @@ jobs:
           $PLAYWRIGHT node examples/deck-builder/smoke.mjs http://localhost:18487
           $PLAYWRIGHT node examples/deck-builder/preview-smoke.mjs http://localhost:18487
           docker rm -f corten-deck-builder
+          echo deck-builder >> "$RUNNER_TEMP/ran"
       - name: auction-room
+        if: contains(env.PARTS, ' auction-room ')
         run: |
           docker build -f examples/auction-room/Dockerfile -t corten-auction-room .
           docker run -d --name corten-auction-room -p 18486:8080 -e HOUSE_KEY=smoke-house corten-auction-room
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18486/; do sleep 1; done'
           $PLAYWRIGHT node examples/auction-room/smoke.mjs http://localhost:18486 smoke-house
           docker rm -f corten-auction-room
+          echo auction-room >> "$RUNNER_TEMP/ran"
       - name: listings-feed
+        if: contains(env.PARTS, ' listings-feed ')
         run: |
           docker network create feeds
           docker run -d --name feeds-pg --network feeds -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=feeds postgres:16-alpine
@@ -153,3 +244,11 @@ jobs:
           $PLAYWRIGHT node examples/listings-feed/smoke.mjs http://localhost:18485 || { docker logs corten-listings-feed; docker logs feeds-nats; exit 1; }
           docker rm -f corten-listings-feed feeds-pg feeds-nats
           docker network rm feeds
+          echo listings-feed >> "$RUNNER_TEMP/ran"
+      # Every part the group names ran, and no other.
+      - name: The group ran each of its parts
+        run: |
+          want=$(echo $PARTS | tr ' ' '\n' | sort)
+          ran=$(sort "$RUNNER_TEMP/ran")
+          echo "ran:"; echo "$ran"
+          test "$want" = "$ran"

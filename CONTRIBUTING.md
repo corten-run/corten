@@ -114,7 +114,7 @@ docker network rm feeds
 The first command also compiles every `rust` code block in `README.md` and `docs/guide/` as a
 doctest. Mark a fragment that cannot compile on its own `rust,ignore`, and a complete program
 that serves forever `rust,no_run`. The second's `corten check` runs `--no-script-types`, since
-the Rust image has no Node; CI's `rust` job installs TypeScript and type-checks the new app's
+the Rust image has no Node; CI's `rust-checks` job installs TypeScript and type-checks the new app's
 scripts. The second ends by packaging every published crate and
 building each from its `.crate` file, as crates.io will (`cargo publish --dry-run`). It unpacks
 sources into a throwaway `--tmpfs` over the registry's `src`: the dry run unpacks Corten's own
@@ -123,7 +123,11 @@ any checkout unpacked. It builds them in a target directory of its own for the s
 cargo treats a registry crate as unchanged as long as its version stays the same, so the
 checkout's target volume would hand the dry run an earlier run's build of `corten`. The third
 builds on the oldest supported Rust, `rust-version` in the root `Cargo.toml`. The `CI` workflow
-(`.github/workflows/ci.yml`) runs the same checks on every pull request and push to `main`.
+(`.github/workflows/ci.yml`) runs the same checks on every pull request and push to `main`,
+side by side on runners of their own: the release tests apart from the other Rust checks, and the
+browser smokes in three groups, one engine of the watchlist's smoke in each. The required checks
+`rust` and `browser` pass only when every job under them ran and passed; a new smoke step names
+its part in its condition and in exactly one group's `parts`, or `browser` fails.
 A browser smoke that goes five minutes without finishing a check stops itself (`scripts/stall.mjs`),
 printing the last check it finished and, for the runtime's smoke, the requests still loading; give a
 new smoke script's `check` the same watchdog. Each smoke launches its browser through `steady` (`scripts/steady.mjs`), which
