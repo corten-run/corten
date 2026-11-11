@@ -4564,7 +4564,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `rows(..).at(i)` is `V | undefined`: none past either end, and a negative `i` counts back
     from the last, as an array's `at()`, where it gave a view of no row before. The kit's
     `ComboBox` with no options threw on Enter after Arrow Down; it closes now.
-    `exactOptionalPropertyTypes` is not used (design Choice 38)
+    `exactOptionalPropertyTypes` is not used ([design Choice 39](docs/design.md#choice-script-checks))
     ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)).
 
 ### Fixed
