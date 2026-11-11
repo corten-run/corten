@@ -3588,9 +3588,9 @@ mod tests {
         // A dialog or popover child keeps the browser's margin: auto and width, which center it in
         // the top layer (#1124).
         assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > :where(:not(dialog, [popover])) { margin-block: 0; }"));
-        // StackStart keeps a stack's children their own width: two classes, so it beats .stack and does
-        // nothing beside a Cluster or alone; its cap on a child's width, the word break and a picture's
-        // shape have no specificity, so an app's rule on a child wins.
+        // StackStart keeps a stack's children their own width: it writes the stack's classes and its
+        // own, two classes, so it beats .stack; its cap on a child's width, the word break and a
+        // picture's shape have no specificity, so an app's rule on a child wins.
         assert!(stack.contains(".stack.start { align-items: flex-start; }"), "StackStart's rule");
         assert!(
             stack.contains(":where(.stack.start) > * { overflow-wrap: anywhere; }")

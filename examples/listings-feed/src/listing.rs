@@ -4,8 +4,9 @@ use corten::{ToJson, feed::Row};
 use serde::{Deserialize, Serialize};
 
 /// A seller's listing, what the feed sends.
-#[derive(Clone, Debug, Serialize, Deserialize, ToJson, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, ToJson, PartialEq, Row)]
 pub struct Listing {
+    #[row(id)]
     pub id: String,
     pub title: String,
     pub category: String,
@@ -16,12 +17,6 @@ pub struct Listing {
     pub status: String,
     /// Milliseconds since the Unix epoch; set by the write that last changed the row.
     pub updated_at: u64,
-}
-
-impl Row for Listing {
-    fn id(&self) -> &str {
-        &self.id
-    }
 }
 
 const NAMES: [&str; 12] = [

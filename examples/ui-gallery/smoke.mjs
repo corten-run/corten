@@ -3028,6 +3028,25 @@ async function run(browser) {
     cards.row && cards.end && cards.note && cards.panel === "flex 1.5 1.5 true solid" && cards.compact === 1,
     JSON.stringify(cards),
   );
+  // A theme whose cards are tight keeps a small card smaller than a default one: its padding and
+  // gap follow the theme's --card-padding, not a number of the kit's (#1151).
+  const tight = await orders.evaluate(() => {
+    const root = document.documentElement.style;
+    root.setProperty("--card-padding", ".75rem");
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const small = document.querySelector("[class~='card__card'][class~='card__sm']");
+    const roomy = document.querySelector("[class~='card__card']:not([class~='card__sm'])");
+    const read = (/** @type {Element | null} */ e) => (e ? { pad: parseFloat(getComputedStyle(e).paddingTop) / rem, gap: parseFloat(getComputedStyle(e).rowGap) / rem } : null);
+    const content = small?.querySelector("[class*='card__content']");
+    const out = { small: read(small), roomy: read(roomy), contentGap: content ? parseFloat(getComputedStyle(content).rowGap) / rem : null };
+    root.removeProperty("--card-padding");
+    return out;
+  });
+  check(
+    "Card: under a theme with tight cards (--card-padding .75rem), a CardSize::Sm card's padding is two thirds of it and its content's gap half of it, less than a default card's",
+    tight.small?.pad === 0.5 && tight.small.gap === 0.5 && tight.contentGap === 0.375 && tight.roomy?.pad === 0.75,
+    JSON.stringify(tight),
+  );
   // Sizes are the theme's tokens: one value makes every control a 44 px touch target.
   const heights = await orders.evaluate(() => {
     // In rem, as the tokens are: the page's root font size is its own.
