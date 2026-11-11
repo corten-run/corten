@@ -2,7 +2,7 @@
 //! hardening headers, a same-origin check for writes (CSRF), and session cookie helpers.
 //!
 //! ```ignore
-//! let app = corten::security::Policy::new().script_src("https://js.stripe.com").apply(router);
+//! let app = App::new(routes).policy(corten::security::Policy::new().script_src("https://js.stripe.com"));
 //! ```
 //!
 //! Corten's own inline tag (the import map) is the same on every page of a deploy, so the CSP
@@ -21,13 +21,12 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use crate::extract::{FromRequestParts, Request};
-use axum::{
-    http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
-    middleware::{self, Next},
+use crate::{
+    extract::FromRequestParts,
+    handler::Request,
     response::{IntoResponse, Response},
-    Router,
 };
+use http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 
 #[cfg(feature = "json")]
 mod violations;
@@ -61,9 +60,9 @@ impl<R: crate::Route + crate::route::__private::Posts + ?Sized> ReportTo for R {
     }
 }
 
-impl report_to::Sealed for axum::http::Uri {}
+impl report_to::Sealed for http::Uri {}
 
-impl ReportTo for axum::http::Uri {
+impl ReportTo for http::Uri {
     fn route(&self) -> bool {
         false
     }
@@ -437,7 +436,7 @@ impl Policy {
     ///
     /// impl<S: Sync> Identify<S> for Staff {
     ///     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-    ///         Err(Refused::unauthorized())
+    ///         Err(Refused::unauthorized(Challenge::bearer("staff")))
     ///     }
     /// }
     ///
@@ -466,7 +465,7 @@ impl Policy {
                 || name.ends_with(".localhost")
                 || host.trim_start_matches('[').trim_end_matches(']').parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
         };
-        let ok = match url.parse::<axum::http::Uri>() {
+        let ok = match url.parse::<http::Uri>() {
             Ok(uri) => match (uri.scheme_str(), uri.authority()) {
                 // A route's path; a `Uri` is one elsewhere, with a scheme and a host.
                 (None, None) => endpoint.route() && url.starts_with('/') && !url.starts_with("//"),
@@ -524,31 +523,6 @@ impl Policy {
             csp.push_str("; report-to csp");
         }
         csp
-    }
-
-    /// Wraps every route of `router`: writes from other sites get 403, every response gets the
-    /// headers, and handlers see the request's [`Nonce`]. [`crate::App`] applies its policy
-    /// itself; this is for a router served without one.
-    pub fn apply<S: Clone + Send + Sync + 'static>(self, router: Router<S>) -> Router<S> {
-        let policy = Arc::new(Applied::new(self, &crate::import_map(None, None, None), &[]));
-        router.layer(middleware::from_fn(move |mut req: Request, next: Next| {
-            let policy = policy.clone();
-            async move {
-                if !policy.answers(&req) {
-                    return misdirected();
-                }
-                if let Some(refused) = policy.refuse(req.method(), req.headers(), &[]) {
-                    return refused;
-                }
-                let nonce = NonceSlot::new(0, policy.csp.script_loads);
-                req.extensions_mut().insert(nonce.clone());
-                let swap = crate::page::Mode::of(req.headers()).swaps();
-                let mut res = next.run(req).await;
-                policy.headers(&mut res, Some(&nonce), &policy.csp);
-                policy.document(&mut res, &policy.csp, swap);
-                res
-            }
-        }))
     }
 }
 
@@ -1210,10 +1184,10 @@ pub(crate) fn endpoints(res: &mut Response, csp: &HeaderValue) {
     }
     // One lookup of the name: an answer seldom has a line of its own.
     match res.headers_mut().entry(REPORTING_ENDPOINTS) {
-        axum::http::header::Entry::Vacant(entry) => {
+        http::header::Entry::Vacant(entry) => {
             entry.insert(csp.clone());
         }
-        axum::http::header::Entry::Occupied(mut entry) => {
+        http::header::Entry::Occupied(mut entry) => {
             if !entry.iter().any(|line| names(line.as_bytes(), b"csp")) {
                 entry.append(csp.clone());
             }
@@ -1343,7 +1317,7 @@ impl Applied {
     /// from a link, and a script's own `fetch` is held to `connect-src`. Only the request's
     /// headers are kept; the page and its policy are worked out for a redirect to another address.
     #[cfg(debug_assertions)]
-    pub(crate) fn form_check(&self, method: &Method, uri: &axum::http::Uri, headers: &HeaderMap) -> Option<FormCheck> {
+    pub(crate) fn form_check(&self, method: &Method, uri: &http::Uri, headers: &HeaderMap) -> Option<FormCheck> {
         // A report-only policy stops nothing: the browser reports the redirect and follows it. A
         // form sends only GET and POST, and a GET form cannot be told from a link.
         if self.report_only || *method != Method::POST {
@@ -1441,10 +1415,10 @@ impl Applied {
         headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
         // An answer that brings a stricter policy (a relayed one, a handler's own) keeps it.
         match headers.entry(header::REFERRER_POLICY) {
-            axum::http::header::Entry::Vacant(entry) => {
+            http::header::Entry::Vacant(entry) => {
                 entry.insert(ours.header());
             }
-            axum::http::header::Entry::Occupied(entry) => stricter_referrer(entry, ours),
+            http::header::Entry::Occupied(entry) => stricter_referrer(entry, ours),
         }
         // Who may frame a page is its policy's, whatever its handler, middleware or upstream set: one
         // another origin may frame has none (the header cannot name one).
@@ -1494,7 +1468,7 @@ impl Applied {
         let Some(permissions) = &csp.permissions else {
             return;
         };
-        if let axum::http::header::Entry::Vacant(entry) = res.headers_mut().entry(PERMISSIONS_POLICY) {
+        if let http::header::Entry::Vacant(entry) = res.headers_mut().entry(PERMISSIONS_POLICY) {
             entry.insert(permissions.clone());
             return;
         }
@@ -1521,7 +1495,7 @@ impl Applied {
 /// of both. One the browser would not know is ours.
 #[cold]
 #[inline(never)]
-fn stricter_referrer(mut entry: axum::http::header::OccupiedEntry<'_, HeaderValue>, ours: Sent) {
+fn stricter_referrer(mut entry: http::header::OccupiedEntry<'_, HeaderValue>, ours: Sent) {
     let theirs = Sent::parse(entry.iter());
     entry.insert(theirs.map_or(ours, |theirs| ours.and(theirs)).header());
 }
@@ -1686,7 +1660,7 @@ impl FormPolicy {
 #[derive(Clone)]
 pub(crate) struct FormCheck {
     forms: Arc<FormPolicy>,
-    uri: axum::http::Uri,
+    uri: http::Uri,
     host: Option<HeaderValue>,
     origin: Option<HeaderValue>,
     referer: Option<HeaderValue>,
@@ -1986,7 +1960,9 @@ fn checked(source: &str) -> String {
 
 /// Cookie helpers. Sessions belong to the app; these make the safe flags the default.
 pub mod cookie {
-    use axum::http::{header, HeaderMap, HeaderValue};
+    use http::header;
+    use http::HeaderMap;
+    use http::HeaderValue;
 
     /// The value of cookie `name` in the request, if present.
     pub fn get<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
@@ -2056,7 +2032,7 @@ pub mod cookie {
         ///         InvalidCookie::Name => Error::new(e),
         ///     })
         /// }
-        /// # use corten::middleware::IntoResponse;
+        /// # use corten::http::IntoResponse;
         /// assert!(session("c2Vzc2lvbg").is_ok());
         /// assert_eq!(session("a; b").unwrap_err().into_response().status(), StatusCode::BAD_GATEWAY);
         /// ```

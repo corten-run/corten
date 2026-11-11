@@ -1,10 +1,11 @@
 use super::*;
 use crate::answer::ForOne;
+use crate::body::Body;
 use crate::cache::Cache;
+use crate::http::{self, Request};
 use crate::router::{get, Table};
 use crate::security::cookie::SetCookie;
 use crate::view::{html, Render};
-use axum::{body::Body, http::Request};
 use http_body_util::BodyExt;
 use std::time::Duration;
 use tower::ServiceExt;
@@ -50,6 +51,67 @@ impl Drop for Scratch {
     }
 }
 
+/// A tower layer of the test's own around the app ([`App::layer`]), as an app's own would be:
+/// `f(request, the app inside it)` answers.
+#[derive(Clone)]
+struct OuterFn<F>(F);
+
+#[derive(Clone)]
+struct OuterFnService<F> {
+    f: F,
+    inner: crate::Router,
+}
+
+impl<F: Clone> tower::Layer<crate::Router> for OuterFn<F> {
+    type Service = OuterFnService<F>;
+
+    fn layer(&self, inner: crate::Router) -> Self::Service {
+        OuterFnService { f: self.0.clone(), inner }
+    }
+}
+
+impl<F, Fut> tower::Service<crate::http::Request> for OuterFnService<F>
+where
+    F: Fn(crate::http::Request, crate::Router) -> Fut,
+    Fut: std::future::Future<Output = crate::response::Response> + Send + 'static,
+{
+    type Response = crate::response::Response;
+    type Error = std::convert::Infallible;
+    type Future = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
+
+    fn poll_ready(&mut self, _: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: crate::http::Request) -> Self::Future {
+        let answer = (self.f)(req, self.inner.clone());
+        Box::pin(async move { Ok(answer.await) })
+    }
+}
+
+/// A layer that gives each request the peer address a server would ([`crate::testing::Call::peer`]).
+fn peer(
+    at: std::net::SocketAddr,
+) -> tower::util::MapRequestLayer<impl Fn(crate::http::Request) -> crate::http::Request + Clone + Send + Sync> {
+    tower::util::MapRequestLayer::new(move |mut req: crate::http::Request| {
+        req.extensions_mut().insert(crate::PeerAddr(at));
+        req
+    })
+}
+
+/// Header lines sent as written, a name repeated as HTTP allows: each line appended, none replaced.
+fn appended<V, const N: usize>(lines: [(http::HeaderName, V); N]) -> http::HeaderMap
+where
+    V: TryInto<HeaderValue>,
+    V::Error: std::fmt::Debug,
+{
+    let mut headers = http::HeaderMap::new();
+    for (name, value) in lines {
+        headers.append(name, value.try_into().unwrap());
+    }
+    headers
+}
+
 /// Typed routes with no parameters, for the tests' areas and APIs: `paths! { Api = "/api" }`.
 macro_rules! paths {
     ($($name:ident = $path:tt),* $(,)?) => {$(
@@ -66,7 +128,7 @@ struct Num<T>(T);
 impl<S: Send + Sync, T: serde::de::DeserializeOwned + Send> crate::extract::FromRequestParts<S> for Num<T> {
     type Rejection = crate::ParamsRejection;
 
-    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
         crate::route::read_path::<(T,)>(parts).map(|(value,)| Num(value))
     }
 }
@@ -106,7 +168,7 @@ std::thread_local! {
 struct Viewer(&'static str);
 
 impl<S: Sync> crate::Identify<S> for Viewer {
-    async fn identify(parts: &axum::http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(parts: &http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
         LOOKUPS.with(|n| n.set(n.get() + 1));
         let header = parts.headers.get("viewer").and_then(|v| v.to_str().ok());
         match header.or_else(|| crate::security::cookie::get(&parts.headers, "viewer")) {
@@ -121,9 +183,9 @@ impl<S: Sync> crate::Identify<S> for Viewer {
 struct AsViewer(Option<&'static str>);
 
 impl crate::Middleware for AsViewer {
-    async fn call(&self, mut req: axum::extract::Request, next: impl crate::Next) -> Response {
+    async fn call(&self, mut req: crate::http::Request, next: impl crate::Next) -> Response {
         if let Some(name) = self.0 {
-            req.headers_mut().insert("viewer", axum::http::HeaderValue::from_static(name));
+            req.headers_mut().insert("viewer", http::HeaderValue::from_static(name));
         }
         next.run(req).await
     }
@@ -134,8 +196,9 @@ impl crate::Middleware for AsViewer {
 struct Stamp;
 
 impl crate::Middleware for Stamp {
-    async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> Response {
-        use axum::http::{header, HeaderValue};
+    async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> Response {
+        use http::header;
+        use http::HeaderValue;
         let mut res = if req.headers().contains_key("x-flood") {
             let mut res = crate::Error::status(StatusCode::TOO_MANY_REQUESTS).into_response();
             res.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("7"));
@@ -158,7 +221,7 @@ impl crate::Middleware for Stamp {
 /// what the error page does), in every mode; the error page's own type and `Cache-Control` win.
 #[tokio::test]
 async fn the_error_page_keeps_the_headers_of_the_failure_it_replaces() {
-    use axum::http::header;
+    use http::header;
     async fn must_sign_in() -> crate::Result<&'static str> {
         Err(crate::Refused::sign_in(&caller_url::SignIn))?;
         Ok("never")
@@ -323,7 +386,7 @@ fn meta_content<'a>(html: &'a str, name: &str) -> &'a str {
     &html[start..start + html[start..].find('"').unwrap()]
 }
 
-async fn call(router: impl Into<Router>, method: &str, mode: Option<&str>) -> (StatusCode, axum::http::HeaderMap, String) {
+async fn call(router: impl Into<Router>, method: &str, mode: Option<&str>) -> (StatusCode, http::HeaderMap, String) {
     call_with(router, method, "/", mode, None).await
 }
 
@@ -333,7 +396,7 @@ async fn call_with(
     uri: &str,
     mode: Option<&str>,
     accept: Option<&str>,
-) -> (StatusCode, axum::http::HeaderMap, String) {
+) -> (StatusCode, http::HeaderMap, String) {
     let mut req = Request::builder().method(method).uri(uri);
     if let Some(mode) = mode {
         req = req.header("corten", mode);
@@ -1587,7 +1650,7 @@ async fn the_page_key_follows_the_caller_the_handler_read() {
 struct Seller(Viewer);
 
 impl<S: Sync> crate::Identify<S> for Seller {
-    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(parts: &http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
         let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;
         if viewer.0 == "bob" {
             return Err(crate::Refused::forbidden());
@@ -1601,7 +1664,7 @@ impl<S: Sync> crate::Identify<S> for Seller {
 struct Owner(Seller);
 
 impl<S: Sync> crate::Identify<S> for Owner {
-    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(parts: &http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
         Ok(Owner(Caller::<Seller>::find(parts, state).await?.0))
     }
 }
@@ -1616,7 +1679,7 @@ struct Intake;
 struct Returns;
 
 impl<S: Sync, R: Clone + std::hash::Hash + Send + Sync + 'static> crate::Identify<S> for Permit<R> {
-    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(parts: &http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
         Ok(Permit(Caller::<Viewer>::find(parts, state).await?.0, std::marker::PhantomData))
     }
 }
@@ -1627,7 +1690,7 @@ impl<S: Sync, R: Clone + std::hash::Hash + Send + Sync + 'static> crate::Identif
 struct Member(Viewer, &'static str);
 
 impl<S: Sync> crate::Identify<S> for Member {
-    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(parts: &http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
         let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;
         let org = parts.headers.get("org").and_then(|v| v.to_str().ok()).unwrap_or("none");
         Ok(Member(viewer, org.to_owned().leak()))
@@ -1639,7 +1702,7 @@ impl<S: Sync> crate::Identify<S> for Member {
 struct Bucket;
 
 impl<S: Sync> crate::Identify<S> for Bucket {
-    async fn identify(_: &axum::http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(_: &http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
         tokio::task::yield_now().await;
         Ok(Bucket)
     }
@@ -1650,7 +1713,7 @@ impl<S: Sync> crate::Identify<S> for Bucket {
 struct Person(Viewer);
 
 impl<S: Sync> crate::Identify<S> for Person {
-    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(parts: &http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
         Caller::<Bucket>::find(parts, state).await?;
         Ok(Person(<Viewer as crate::Identify<S>>::identify(parts, state).await?))
     }
@@ -1662,7 +1725,7 @@ struct Joined;
 impl<S: Send + Sync> crate::extract::FromRequestParts<S> for Joined {
     type Rejection = Response;
 
-    async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> std::result::Result<Self, Response> {
+    async fn from_request_parts(parts: &mut http::request::Parts, state: &S) -> std::result::Result<Self, Response> {
         let (seller, bucket) = tokio::join!(Caller::<Seller>::find(parts, state), Caller::<Bucket>::find(parts, state));
         seller.and(bucket).map(|_| Joined).map_err(IntoResponse::into_response)
     }
@@ -1684,7 +1747,7 @@ impl Role for Returns {
 struct Granted<R>(Viewer, std::marker::PhantomData<R>);
 
 impl<S: Sync, R: Role + Clone + std::hash::Hash + Send + Sync + 'static> crate::Identify<S> for Granted<R> {
-    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(parts: &http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
         let Caller(viewer) = Caller::<Viewer>::find(parts, state).await?;
         let roles = parts.headers.get("roles").and_then(|v| v.to_str().ok()).unwrap_or("");
         if !roles.split(',').any(|role| role == R::NAME) {
@@ -1899,11 +1962,11 @@ async fn a_rule_read_by_an_outer_layer_keys_the_page_as_its_base() {
     let outer = App::new(Routes::from(routes()))
         .error_page(test_error_page, ())
         .middleware(AsViewer(Some("ada")))
-        .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
+        .layer(OuterFn(|req: crate::http::Request, next: crate::Router| async move {
             let (mut parts, body) = req.into_parts();
-            parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
+            parts.headers.insert("viewer", http::HeaderValue::from_static("ada"));
             let _ = <Caller<Seller> as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
-            next.run(axum::extract::Request::from_parts(parts, body)).await
+            next.oneshot(crate::http::Request::from_parts(parts, body)).await.unwrap()
         }))
         .router();
     let (_, viewer, _) = call_with(app(routes(), Some("ada")), "GET", "/", Some("nav"), None).await;
@@ -2419,7 +2482,7 @@ async fn a_page_with_a_refresh_header_is_an_error_in_debug_builds() {
         "/",
         get(|req: Req| async move {
             let mut res = req.test_page("Saving", html! { <p>"Saving"</p> })?;
-            res.headers_mut().insert("refresh", axum::http::HeaderValue::from_static("2"));
+            res.headers_mut().insert("refresh", http::HeaderValue::from_static("2"));
             Ok::<_, crate::Error>(res)
         }),
     );
@@ -2444,7 +2507,7 @@ async fn a_write_redirected_outside_form_action_is_an_error_in_debug_builds() {
     use crate::security::Policy;
     let to = |uri: &'static str| {
         crate::router::post(move |req: Req| async move {
-            let uri: axum::http::Uri = uri.parse().unwrap();
+            let uri: http::Uri = uri.parse().unwrap();
             req.redirect::<()>(&uri)
         })
     };
@@ -2459,14 +2522,14 @@ async fn a_write_redirected_outside_form_action_is_an_error_in_debug_builds() {
         .route(
             "/relay",
             crate::router::post(|| async {
-                let mut headers = axum::http::HeaderMap::new();
-                headers.insert(axum::http::header::LOCATION, axum::http::HeaderValue::from_static("https://upstream.example/x"));
+                let mut headers = http::HeaderMap::new();
+                headers.insert(http::header::LOCATION, http::HeaderValue::from_static("https://upstream.example/x"));
                 crate::Relay::new(StatusCode::FOUND, headers, Body::empty())
             }),
         )
         .route(
             "/read",
-            get(|req: Req| async move { req.redirect::<()>(&"https://else.example/".parse::<axum::http::Uri>().unwrap()) }),
+            get(|req: Req| async move { req.redirect::<()>(&"https://else.example/".parse::<http::Uri>().unwrap()) }),
         );
     let policy = Policy::new()
         .form_action("https://pay.example")
@@ -2485,7 +2548,7 @@ async fn a_write_redirected_outside_form_action_is_an_error_in_debug_builds() {
             }
             let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
             let status = res.status();
-            let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+            let body = crate::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
             (status, String::from_utf8(body.to_vec()).unwrap())
         }
     };
@@ -2602,17 +2665,16 @@ async fn a_redirect_outside_form_action_names_the_origin_and_a_sign_in_is_checke
         .route(
             "/go",
             crate::router::post(|req: Req| async move {
-                req.redirect::<()>(&"https://else.example/x?y=1".parse::<axum::http::Uri>().unwrap())
+                req.redirect::<()>(&"https://else.example/x?y=1".parse::<http::Uri>().unwrap())
             }),
         )
         .route("/account", crate::router::post(|_: Caller<Elsewhere>| async { "saved" }))
         .route(
             "/cookie",
             crate::router::post(|| async {
-                use axum::{
-                    http::{header, HeaderValue},
-                    response::IntoResponse,
-                };
+                use crate::response::IntoResponse;
+                use http::header;
+                use http::HeaderValue;
                 let mut res = StatusCode::SEE_OTHER.into_response();
                 let headers = res.headers_mut();
                 headers.insert(header::LOCATION, HeaderValue::from_static("//user:pw@else.example/secret?token=abc"));
@@ -2714,7 +2776,7 @@ async fn only_a_form_post_is_checked_against_form_action() {
     use crate::security::{Policy, Referrer};
     let to = |uri: &'static str| {
         move |req: Req| async move {
-            let uri: axum::http::Uri = uri.parse().unwrap();
+            let uri: http::Uri = uri.parse().unwrap();
             req.redirect::<()>(&uri)
         }
     };
@@ -2760,8 +2822,8 @@ struct Elsewhere;
 
 #[cfg(debug_assertions)]
 impl<S: Sync> crate::Identify<S> for Elsewhere {
-    async fn identify(_: &axum::http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
-        Err(crate::Refused::sign_in(&"https://id.example/sign-in".parse::<axum::http::Uri>().unwrap()))
+    async fn identify(_: &http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
+        Err(crate::Refused::sign_in(&"https://id.example/sign-in".parse::<http::Uri>().unwrap()))
     }
 }
 
@@ -2777,7 +2839,7 @@ mod checkout_url {
 
 #[cfg(debug_assertions)]
 async fn checkout_go(req: Req) -> HtmlResult {
-    req.redirect(&"http://localhost:9999/paid".parse::<axum::http::Uri>().unwrap())
+    req.redirect(&"http://localhost:9999/paid".parse::<http::Uri>().unwrap())
 }
 
 /// A value only the layout shows is read for a full load, not for an answer the runtime swaps in.
@@ -2939,7 +3001,7 @@ async fn the_error_page_of_the_whole_page_after_a_write_redirects_as_its_request
 /// load still gets the 303 or 301.
 #[tokio::test]
 async fn a_redirect_to_another_origin_is_named_to_a_client_navigation() {
-    use axum::http::Uri;
+    use http::Uri;
     let routes = Table::new()
         .route(
             "/away",
@@ -2990,7 +3052,7 @@ async fn the_whole_page_after_a_write_is_drawn_as_a_full_load() {
 #[tokio::test]
 async fn a_redirect_to_a_place_elsewhere_keeps_its_fragment() {
     use crate::route::Elsewhere;
-    use axum::http::Uri;
+    use http::Uri;
     static COMPARE: std::sync::LazyLock<Uri> = std::sync::LazyLock::new(|| Uri::from_static("https://example.com/compare?x=1"));
     let routes = Table::new()
         .route("/old", get(|req: Req| async move { req.moved::<ForOne>(&Elsewhere::at(&COMPARE, "fee-calculator")) }))
@@ -3009,7 +3071,7 @@ async fn a_redirect_to_a_place_elsewhere_keeps_its_fragment() {
 #[test]
 #[should_panic(expected = "Elsewhere::at takes a full URL outside the app")]
 fn a_place_elsewhere_on_a_path_panics_in_debug_builds() {
-    let path = axum::http::Uri::from_static("/items/pika");
+    let path = http::Uri::from_static("/items/pika");
     let _ = crate::route::Elsewhere::at(&path, "place-7");
 }
 
@@ -3387,6 +3449,71 @@ async fn an_area_or_an_api_sets_its_own_deadline() {
     assert_eq!(status("/api/slow").await, StatusCode::OK, "None removes it for the API");
 }
 
+paths! {
+    AdminApi = "/admin/api",
+    AdminApiTake = "/admin/api/take",
+    AdminSmall = "/admin/small",
+    AdminSmallTake = "/admin/small/take",
+    ApiInner = "/api/inner",
+    ApiInnerTake = "/api/inner/take",
+}
+
+/// An area or an API with a body limit of its own: its routes' readers take it, and every other
+/// route keeps the app's. In nested areas the innermost that sets one decides; an area or an API
+/// that sets none takes the one around it.
+#[tokio::test]
+async fn an_area_or_an_api_sets_its_own_body_limit() {
+    let take = || crate::Methods::writes(crate::router::post(|body: crate::http::Bytes| async move { body.len().to_string() }));
+    let router = App::new(Routes::from(Table::new().route("/take", take().0)))
+        .body_limit(1 << 10)
+        .area::<Admin>(|admin| admin.route::<AdminSlow>(take()).body_limit(4 << 10))
+        .area::<AdminQuick>(|quick| quick.route::<AdminQuickSlow>(take()).body_limit(512))
+        .area::<AdminOther>(|other| other.route::<AdminOtherSlow>(take()))
+        .api::<AdminApi>(|api| api.route::<AdminApiTake>(take()))
+        .api::<AdminSmall>(|api| api.route::<AdminSmallTake>(take()).body_limit(512))
+        .api::<ApiRoot>(|api| api.route::<ApiSlow>(take()).body_limit(8 << 10))
+        .api::<ApiInner>(|api| api.route::<ApiInnerTake>(take()))
+        .router();
+    let post = |path: &'static str, len: usize| {
+        let router = router.clone();
+        async move {
+            let req = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from(vec![b'a'; len]))
+                .unwrap();
+            router.oneshot(req).await.unwrap().status()
+        }
+    };
+    assert_eq!(post("/take", 1 << 10).await, StatusCode::OK, "the app's limit is the readers'");
+    assert_eq!(post("/take", 2 << 10).await, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(post("/admin/slow", 3 << 10).await, StatusCode::OK, "the area's own");
+    assert_eq!(post("/admin/slow", 5 << 10).await, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(post("/admin/other/slow", 3 << 10).await, StatusCode::OK, "a nested area without one takes its parent's");
+    assert_eq!(post("/admin/quick/slow", 1 << 10).await, StatusCode::PAYLOAD_TOO_LARGE, "the innermost decides");
+    assert_eq!(post("/admin/api/take", 3 << 10).await, StatusCode::OK, "an API in an area takes the area's");
+    assert_eq!(post("/api/slow", 6 << 10).await, StatusCode::OK, "the API's own");
+    assert_eq!(post("/api/slow", 9 << 10).await, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(post("/admin/small/take", 1 << 10).await, StatusCode::PAYLOAD_TOO_LARGE, "an API's own over its area's");
+    assert_eq!(post("/api/inner/take", 6 << 10).await, StatusCode::OK, "an inner API takes the outer API's");
+    assert_eq!(post("/api/inner/take", 9 << 10).await, StatusCode::PAYLOAD_TOO_LARGE);
+    let default = App::new(Routes::from(Table::new().route("/take", take().0))).router();
+    let req = |len: usize| {
+        Request::builder()
+            .method("POST")
+            .uri("/take")
+            .header("sec-fetch-site", "same-origin")
+            .body(Body::from(vec![b'a'; len]))
+            .unwrap()
+    };
+    assert_eq!(default.clone().oneshot(req(2 << 20)).await.unwrap().status(), StatusCode::OK, "2 MiB unless set");
+    assert_eq!(default.oneshot(req((2 << 20) + 1)).await.unwrap().status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let none = App::new(Routes::from(Table::new().route("/take", take().0))).body_limit(0).router();
+    assert_eq!(none.clone().oneshot(req(0)).await.unwrap().status(), StatusCode::OK, "an empty body fits");
+    assert_eq!(none.oneshot(req(1)).await.unwrap().status(), StatusCode::PAYLOAD_TOO_LARGE, "0 is 0, not the default");
+}
+
 #[cfg(feature = "json")]
 paths! {
     Zone = "/zone",
@@ -3414,7 +3541,7 @@ async fn call_with_header(
     method: &str,
     path: &str,
     header: (&str, &str),
-) -> (StatusCode, axum::http::HeaderMap, String) {
+) -> (StatusCode, http::HeaderMap, String) {
     call_with_headers(router, method, path, &[header]).await
 }
 
@@ -3424,7 +3551,7 @@ async fn call_with_headers(
     method: &str,
     path: &str,
     headers: &[(&str, &str)],
-) -> (StatusCode, axum::http::HeaderMap, String) {
+) -> (StatusCode, http::HeaderMap, String) {
     let mut req = Request::builder().method(method).uri(path);
     for (name, value) in headers {
         req = req.header(*name, *value);
@@ -3439,7 +3566,7 @@ async fn call_with_headers(
 #[tokio::test]
 async fn nested_apis_take_what_they_leave_unset_from_the_nearest() {
     let steps = || {
-        crate::Methods::reads(get(|headers: axum::http::HeaderMap| async move {
+        crate::Methods::reads(get(|headers: http::HeaderMap| async move {
             tokio::time::sleep(Duration::from_millis(if headers.contains_key("x-slow") { 200 } else { 0 })).await;
             headers.get("x-steps").map_or(String::new(), |v| v.to_str().unwrap().to_string())
         }))
@@ -3736,7 +3863,7 @@ struct ApiRest<'a> {
 #[tokio::test]
 async fn an_api_nests_in_another() {
     let steps = || {
-        crate::Methods::reads(get(|headers: axum::http::HeaderMap| async move {
+        crate::Methods::reads(get(|headers: http::HeaderMap| async move {
             tokio::time::sleep(Duration::from_millis(if headers.contains_key("x-slow") { 200 } else { 0 })).await;
             headers.get("x-steps").map_or(String::new(), |v| v.to_str().unwrap().to_string())
         }))
@@ -3787,7 +3914,7 @@ async fn an_api_nests_in_another() {
     let (_, headers, _) = get_with("/api/items/7/more", None).await;
     assert_eq!(
         (&headers["x-saw-steps"], headers.get("x-saw-route")),
-        (&"app api items".parse::<axum::http::HeaderValue>().unwrap(), None)
+        (&"app api items".parse::<http::HeaderValue>().unwrap(), None)
     );
     let (_, headers, _) = get_with("/api/items/7", None).await;
     assert_eq!(headers.get("x-saw-route").map(|v| v.to_str().unwrap()), Some("/api/items/{id}"), "a route of its own is named");
@@ -3845,7 +3972,7 @@ static AHEAD_FINISHED: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomi
 impl<S: Sync> crate::extract::FromRequestParts<S> for StartedAhead {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(parts: &mut axum::http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut http::request::Parts, _: &S) -> Result<Self, Self::Rejection> {
         let panics = parts.uri.path().ends_with("/panics");
         Ok(StartedAhead(crate::Ahead::start(async move {
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -3908,18 +4035,26 @@ async fn a_page_catch_all_does_not_answer_under_an_api() {
     let (status, headers, body) = call_with(router.clone(), "GET", "/api/items/7/more", None, None).await;
     assert_eq!(
         (status, &headers["content-type"]),
-        (StatusCode::NOT_FOUND, &"application/problem+json".parse::<axum::http::HeaderValue>().unwrap()),
+        (StatusCode::NOT_FOUND, &"application/problem+json".parse::<http::HeaderValue>().unwrap()),
         "{body}"
     );
     assert_eq!(call_with(router, "GET", "/api/items/7", None, None).await.2, "item");
 }
 
-/// Served under another router's prefix (axum's `Router::nest_service`, which takes the prefix
-/// off the path), an API's routes are still its own, and a path outside them still gets its 404.
+/// Served under another router's prefix by one that takes the prefix off the path (as axum's
+/// `Router::nest_service` does), an API's routes are still its own, and a path outside them still
+/// gets its 404.
 #[cfg(feature = "json")]
 #[tokio::test]
 async fn an_api_answers_under_router_nest() {
-    let call = |router: axum::Router, uri: &'static str| async move {
+    let nest = |prefix: &'static str, app: crate::Router| {
+        app.layer(tower::util::MapRequestLayer::new(move |mut req: crate::http::Request| {
+            let inner = req.uri().path().strip_prefix(prefix).expect("under the prefix").to_string();
+            *req.uri_mut() = inner.parse().unwrap();
+            req
+        }))
+    };
+    let call = |router: crate::Router, uri: &'static str| async move {
         let res = router.oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
         let status = res.status();
         (status, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
@@ -3929,7 +4064,7 @@ async fn an_api_answers_under_router_nest() {
         .api::<ApiRoot>(|api| api.route::<ApiRest>(crate::Methods::reads(get(|| async { "rest" }))))
         .api::<ApiItems>(|items| items.route::<ApiItem>(crate::Methods::reads(get(|| async { "item" }))))
         .router();
-    let router = axum::Router::new().nest_service("/outer", app);
+    let router = nest("/outer", app);
     assert_eq!(call(router.clone(), "/outer/api/items/7").await.1, "item");
     assert_eq!(call(router.clone(), "/outer/api/other").await.1, "rest");
     assert_eq!(call(router, "/outer/api/items/7/more").await.0, StatusCode::NOT_FOUND);
@@ -3939,7 +4074,7 @@ async fn an_api_answers_under_router_nest() {
         .api::<Everything>(|root| root.route::<EverythingRest>(crate::Methods::reads(get(|| async { "root" }))))
         .api::<ApiRoot>(|api| api)
         .router();
-    let router = axum::Router::new().nest_service("/api", app);
+    let router = nest("/api", app);
     assert_eq!(call(router.clone(), "/api/elsewhere").await.1, "root");
     assert_eq!(call(router, "/api/api/other").await.0, StatusCode::NOT_FOUND);
 }
@@ -3948,12 +4083,10 @@ async fn an_api_answers_under_router_nest() {
 struct Saw;
 
 impl crate::Middleware for Saw {
-    async fn call(&self, req: Request<Body>, next: impl crate::Next) -> axum::response::Response {
+    async fn call(&self, req: Request<Body>, next: impl crate::Next) -> crate::response::Response {
         let steps = req.headers().get("x-steps").cloned();
-        let route = req
-            .extensions()
-            .get::<crate::middleware::MatchedPath>()
-            .map(|m| m.as_str().parse::<axum::http::HeaderValue>().unwrap());
+        let route =
+            req.extensions().get::<crate::middleware::MatchedPath>().map(|m| m.as_str().parse::<http::HeaderValue>().unwrap());
         let mut res = next.run(req).await;
         if let Some(steps) = steps {
             res.headers_mut().insert("x-saw-steps", steps);
@@ -3970,8 +4103,8 @@ impl crate::Middleware for Saw {
 struct Step(&'static str, bool);
 
 impl crate::Middleware for Step {
-    async fn call(&self, mut req: Request<Body>, next: impl crate::Next) -> axum::response::Response {
-        use axum::response::IntoResponse;
+    async fn call(&self, mut req: Request<Body>, next: impl crate::Next) -> crate::response::Response {
+        use crate::response::IntoResponse;
         let steps = req.headers().get("x-steps").map(|v| format!("{} {}", v.to_str().unwrap(), self.0));
         let steps = steps.unwrap_or_else(|| self.0.to_string());
         req.headers_mut().insert("x-steps", steps.parse().unwrap());
@@ -3988,7 +4121,7 @@ impl crate::Middleware for Step {
 #[tokio::test]
 async fn an_area_or_an_api_has_middleware_of_its_own() {
     let steps = || {
-        crate::Methods::reads(get(|headers: axum::http::HeaderMap| async move {
+        crate::Methods::reads(get(|headers: http::HeaderMap| async move {
             headers.get("x-steps").map_or(String::new(), |v| v.to_str().unwrap().to_string())
         }))
     };
@@ -4031,16 +4164,10 @@ async fn an_area_or_an_api_has_middleware_of_its_own() {
         }
     };
     let (status, headers, body) = flood("/admin/slow", "text/html").await;
-    assert_eq!(
-        (status, &headers["retry-after"]),
-        (StatusCode::TOO_MANY_REQUESTS, &"8".parse::<axum::http::HeaderValue>().unwrap())
-    );
+    assert_eq!((status, &headers["retry-after"]), (StatusCode::TOO_MANY_REQUESTS, &"8".parse::<http::HeaderValue>().unwrap()));
     assert!(headers["content-type"].to_str().unwrap().starts_with("text/html"), "a browser gets the error page: {headers:?}");
     let (status, headers, body2) = flood("/api/slow", "text/html").await;
-    assert_eq!(
-        (status, &headers["retry-after"]),
-        (StatusCode::TOO_MANY_REQUESTS, &"8".parse::<axum::http::HeaderValue>().unwrap())
-    );
+    assert_eq!((status, &headers["retry-after"]), (StatusCode::TOO_MANY_REQUESTS, &"8".parse::<http::HeaderValue>().unwrap()));
     assert_eq!(body2, r#"{"title":"Too Many Requests","status":429}"#, "JSON under an API");
     let (status, _, _) = flood("/admin/nope", "text/html").await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "an unknown URL under the area meets its middleware");
@@ -4060,7 +4187,7 @@ async fn an_area_or_an_api_has_middleware_of_its_own() {
 async fn a_middleware_reads_the_client_address() {
     struct Seen;
     impl crate::Middleware for Seen {
-        async fn call(&self, mut req: Request<Body>, next: impl crate::Next) -> axum::response::Response {
+        async fn call(&self, mut req: Request<Body>, next: impl crate::Next) -> crate::response::Response {
             let ip = crate::ClientIp::of(&mut req).map_or("none".to_string(), |crate::ClientIp(ip)| ip.to_string());
             req.headers_mut().insert("x-ip", ip.parse().unwrap());
             next.run(req).await
@@ -4068,7 +4195,7 @@ async fn a_middleware_reads_the_client_address() {
     }
     let routes = Table::new().route(
         "/",
-        get(|headers: axum::http::HeaderMap, ip: Option<crate::ClientIp>| async move {
+        get(|headers: http::HeaderMap, ip: Option<crate::ClientIp>| async move {
             format!(
                 "{} {}",
                 headers["x-ip"].to_str().unwrap(),
@@ -4076,10 +4203,8 @@ async fn a_middleware_reads_the_client_address() {
             )
         }),
     );
-    let router = App::new(Routes::from(routes))
-        .middleware(Seen)
-        .router()
-        .layer(axum::extract::connect_info::MockConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 8], 1))));
+    let router =
+        App::new(Routes::from(routes)).middleware(Seen).router().layer(peer(std::net::SocketAddr::from(([203, 0, 113, 8], 1))));
     let (status, headers, body) = call_with(router, "GET", "/", None, Some("text/html")).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "203.0.113.8 203.0.113.8"), "the same address both ways");
     assert_eq!(headers["cache-control"], "private, no-cache", "an answer for one address is private");
@@ -4144,7 +4269,9 @@ async fn api_routes_have_their_own_csp_and_pages_get_a_nonce_only_when_they_use_
 async fn a_handler_that_takes_the_nonce_gets_the_one_in_the_csp() {
     let routes = Table::new().route(
         "/raw",
-        get(|nonce: security::Nonce| async move { axum::response::Html(format!(r#"<script nonce="{}">1</script>"#, nonce.0)) }),
+        get(|nonce: security::Nonce| async move {
+            ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], format!(r#"<script nonce="{}">1</script>"#, nonce.0))
+        }),
     );
     let (_, headers, body) = call_with(App::new(Routes::from(routes)).router(), "GET", "/raw", None, None).await;
     let nonce = body.split(r#"nonce=""#).nth(1).unwrap().split('"').next().unwrap();
@@ -4172,7 +4299,7 @@ async fn a_caller_is_looked_up_only_by_the_handlers_that_read_it_and_once() {
 struct Slow(&'static str);
 
 impl<S: Sync> crate::Identify<S> for Slow {
-    async fn identify(_: &axum::http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(_: &http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
         LOOKUPS.with(|n| n.set(n.get() + 1));
         tokio::task::yield_now().await;
         Ok(Slow("ada"))
@@ -4185,7 +4312,7 @@ struct TwoAtOnce;
 impl<S: Sync + Send> crate::extract::FromRequestParts<S> for TwoAtOnce {
     type Rejection = Response;
 
-    async fn from_request_parts(parts: &mut axum::http::request::Parts, state: &S) -> std::result::Result<Self, Response> {
+    async fn from_request_parts(parts: &mut http::request::Parts, state: &S) -> std::result::Result<Self, Response> {
         let (a, b) = tokio::join!(Caller::<Slow>::find(parts, state), Caller::<Slow>::find(parts, state));
         a.and(b).map(|_| TwoAtOnce).map_err(IntoResponse::into_response)
     }
@@ -4219,11 +4346,11 @@ async fn a_layer_outside_the_app_shares_the_lookup_with_the_handler() {
     let routes = Table::new().route("/", get(|Caller(v): Caller<Viewer>| async move { v.0 }));
     let router = App::new(Routes::from(routes))
         .middleware(AsViewer(Some("ada")))
-        .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
+        .layer(OuterFn(|req: crate::http::Request, next: crate::Router| async move {
             let (mut parts, body) = req.into_parts();
-            parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
+            parts.headers.insert("viewer", http::HeaderValue::from_static("ada"));
             let _ = <Caller<Viewer> as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
-            next.run(axum::extract::Request::from_parts(parts, body)).await
+            next.oneshot(crate::http::Request::from_parts(parts, body)).await.unwrap()
         }))
         .router();
     LOOKUPS.with(|n| n.set(0));
@@ -4237,12 +4364,12 @@ async fn a_layer_outside_the_app_shares_the_lookup_with_the_handler() {
 async fn a_middleware_that_reads_the_caller_shares_the_lookup() {
     struct Logs;
     impl crate::Middleware for Logs {
-        async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> Response {
             let (mut parts, body) = req.into_parts();
-            parts.headers.insert("viewer", axum::http::HeaderValue::from_static("ada"));
+            parts.headers.insert("viewer", http::HeaderValue::from_static("ada"));
             let who = Caller::<Viewer>::find(&parts, &()).await.map(|Caller(v)| v.0).unwrap_or("no one");
-            let mut res = next.run(axum::extract::Request::from_parts(parts, body)).await;
-            res.headers_mut().insert("x-who", axum::http::HeaderValue::from_static(who));
+            let mut res = next.run(crate::http::Request::from_parts(parts, body)).await;
+            res.headers_mut().insert("x-who", http::HeaderValue::from_static(who));
             res
         }
     }
@@ -4335,12 +4462,12 @@ async fn an_api_writes_the_failures_corten_answers_in_its_own_shape() {
 struct Keyed;
 
 impl<S: Sync> crate::Identify<S> for Keyed {
-    async fn identify(parts: &axum::http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
-        match parts.headers.get("x-api-key").map(|v| v.as_bytes()) {
-            Some(b"k1") => Ok(Keyed),
-            Some(b"locked") => Err(crate::Refused::too_many(std::time::Duration::from_millis(1500))
+    async fn identify(parts: &http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
+        match parts.headers.get("authorization").map(|v| v.as_bytes()) {
+            Some(b"Bearer k1") => Ok(Keyed),
+            Some(b"Bearer locked") => Err(crate::Refused::too_many(std::time::Duration::from_millis(1500))
                 .message("Too many failed attempts; try again later")),
-            _ => Err(crate::Refused::unauthorized().message("Invalid API key")),
+            _ => Err(crate::Refused::unauthorized(crate::Challenge::bearer("keys")).message("Invalid API key")),
         }
     }
 }
@@ -4349,7 +4476,8 @@ impl<S: Sync> crate::Identify<S> for Keyed {
 #[route("/api/keyed")]
 struct ApiKeyed;
 
-/// A refusal says why, in the API's own shape, and a lockout is a 429 that says when to try again.
+/// A refusal says why, in the API's own shape, a 401 says how to send credentials
+/// (`WWW-Authenticate`, RFC 9110 15.5.2), and a lockout is a 429 that says when to try again.
 #[cfg(feature = "json")]
 #[tokio::test]
 async fn a_refusal_tells_the_client_why_and_when_to_try_again() {
@@ -4361,22 +4489,28 @@ async fn a_refusal_tells_the_client_why_and_when_to_try_again() {
     let keyed = |key: Option<&'static str>| {
         let mut req = Request::get("/api/keyed");
         if let Some(key) = key {
-            req = req.header("x-api-key", key);
+            req = req.header("authorization", format!("Bearer {key}"));
         }
         let router = router.clone();
         async move {
             let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
-            let (status, retry) = (res.status().as_u16(), res.headers().get("retry-after").cloned());
-            (status, retry, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+            let header = |name| res.headers().get(name).map(|v: &http::HeaderValue| v.to_str().unwrap().to_string());
+            let (status, retry, challenge) = (res.status().as_u16(), header("retry-after"), header("www-authenticate"));
+            (status, retry, challenge, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
         }
     };
-    assert_eq!(keyed(Some("k1")).await, (200, None, "ok".to_string()));
+    assert_eq!(keyed(Some("k1")).await, (200, None, None, "ok".to_string()));
     assert_eq!(
         keyed(None).await,
-        (401, None, r#"{"type":"error","error":{"code":401,"message":"Invalid API key"}}"#.to_string())
+        (
+            401,
+            None,
+            Some(r#"Bearer realm="keys""#.to_string()),
+            r#"{"type":"error","error":{"code":401,"message":"Invalid API key"}}"#.to_string()
+        )
     );
-    let (status, retry, body) = keyed(Some("locked")).await;
-    assert_eq!((status, retry.as_ref().map(|v| v.to_str().unwrap())), (429, Some("2")), "whole seconds, rounded up");
+    let (status, retry, challenge, body) = keyed(Some("locked")).await;
+    assert_eq!((status, retry.as_deref(), challenge), (429, Some("2"), None), "whole seconds, rounded up");
     assert_eq!(body, r#"{"type":"error","error":{"code":429,"message":"Too many failed attempts; try again later"}}"#);
 }
 
@@ -4389,11 +4523,12 @@ struct ApiRefuses;
 #[cfg(feature = "json")]
 #[tokio::test]
 async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
-    async fn refuses(headers: axum::http::HeaderMap) -> crate::Result<&'static str> {
+    async fn refuses(headers: http::HeaderMap) -> crate::Result<&'static str> {
         let refused = match headers.get("x-case").map(|v| v.as_bytes()) {
             Some(b"forbid") => crate::Refused::forbidden().message("Not your item"),
             Some(b"lock") => crate::Refused::too_many(std::time::Duration::from_millis(1500)).message("Slow down"),
             Some(b"down") => crate::Refused::unavailable("the session store is down"),
+            Some(b"key") => crate::Refused::unauthorized(crate::Challenge::basic("shop")).message("Bad key"),
             _ => return Ok("ok"),
         };
         Err(refused.into())
@@ -4408,11 +4543,15 @@ async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
         ("forbid", 403, None, "Not your item"),
         ("lock", 429, Some("2"), "Slow down"),
         ("down", 503, None, "Service Unavailable"),
+        ("key", 401, None, "Bad key"),
     ] {
         let req = Request::get("/api/refuses").header("x-case", case).body(Body::empty()).unwrap();
         let res = router.clone().oneshot(req).await.unwrap();
         let got = (res.status().as_u16(), res.headers().get("retry-after").map(|v| v.to_str().unwrap().to_owned()));
         assert_eq!(got, (status, retry.map(str::to_owned)), "{case}");
+        let challenge = res.headers().get("www-authenticate").map(|v| v.to_str().unwrap().to_owned());
+        let want = (status == 401).then(|| r#"Basic realm="shop""#.to_owned());
+        assert_eq!(challenge, want, "a handler's own 401 keeps its challenge: {case}");
         let body = res.into_body().collect().await.unwrap().to_bytes();
         let want = format!(r#"{{"type":"error","error":{{"code":{status},"message":{message:?}}}}}"#);
         assert_eq!(String::from_utf8(body.to_vec()).unwrap(), want, "{case}");
@@ -5040,8 +5179,8 @@ async fn unstaged_ping() -> &'static str {
 }
 
 /// The raw request in and a raw response out, its headers the handler's alone.
-async fn unstaged_raw(at: crate::Params<unstaged_url::Raw>, method: axum::http::Method) -> axum::response::Response {
-    axum::response::Response::builder()
+async fn unstaged_raw(at: crate::Params<unstaged_url::Raw>, method: http::Method) -> crate::response::Response {
+    crate::response::Response::builder()
         .status(StatusCode::IM_A_TEAPOT)
         .header("x-raw", format!("{method} {}", at.id))
         .body(Body::from("raw"))
@@ -5053,13 +5192,13 @@ async fn unstaged_feed(feed: crate::Params<unstaged_url::Feed<'_>>) -> String {
 }
 
 /// The rest of what an unstaged handler may take: the request's `Uri` and the app's state.
-async fn unstaged_where(at: crate::Params<unstaged_url::Where>, uri: axum::http::Uri, _: crate::extract::State<()>) -> String {
+async fn unstaged_where(at: crate::Params<unstaged_url::Where>, uri: http::Uri, _: crate::extract::State<()>) -> String {
     format!("{} {uri}", at.id)
 }
 
 /// A document with headers of its own, which the ones an unstaged route adds do not replace.
-async fn unstaged_framed() -> axum::response::Response {
-    axum::response::Response::builder()
+async fn unstaged_framed() -> crate::response::Response {
+    crate::response::Response::builder()
         .header("content-type", "text/html")
         .header("content-security-policy", "frame-ancestors 'none'")
         .header("x-content-type-options", "nosniff")
@@ -5068,13 +5207,16 @@ async fn unstaged_framed() -> axum::response::Response {
 }
 
 /// A cookie set with nothing said of caching.
-async fn unstaged_cookie() -> axum::response::Response {
-    axum::response::Response::builder().header("set-cookie", "seen=1").body(Body::from("seen")).unwrap()
+async fn unstaged_cookie() -> crate::response::Response {
+    crate::response::Response::builder().header("set-cookie", "seen=1").body(Body::from("seen")).unwrap()
 }
 
 /// A type a browser may read as the last of a list, HTML.
-async fn unstaged_listed() -> axum::response::Response {
-    axum::response::Response::builder().header("content-type", "text/plain, text/html").body(Body::from("<p>listed</p>")).unwrap()
+async fn unstaged_listed() -> crate::response::Response {
+    crate::response::Response::builder()
+        .header("content-type", "text/plain, text/html")
+        .body(Body::from("<p>listed</p>"))
+        .unwrap()
 }
 
 /// An unstaged handler for any route with a parameter.
@@ -5092,8 +5234,8 @@ async fn unstaged_boom() -> &'static str {
 }
 
 /// A cookie set on an answer that says it is private, with a CDN's header that says otherwise.
-async fn unstaged_private_cookie() -> axum::response::Response {
-    axum::response::Response::builder()
+async fn unstaged_private_cookie() -> crate::response::Response {
+    crate::response::Response::builder()
         .header("set-cookie", "id=fresh")
         .header("cache-control", "private=\"x-id\", no-store")
         .header("cdn-cache-control", "max-age=600")
@@ -5102,8 +5244,8 @@ async fn unstaged_private_cookie() -> axum::response::Response {
 }
 
 /// A cookie set on an answer that says a shared cache may keep it.
-async fn unstaged_shared_cookie() -> axum::response::Response {
-    axum::response::Response::builder()
+async fn unstaged_shared_cookie() -> crate::response::Response {
+    crate::response::Response::builder()
         .header("set-cookie", "id=fresh")
         .header("cache-control", "public, max-age=60")
         .header("cdn-cache-control", "max-age=600")
@@ -5306,9 +5448,9 @@ fn a_route_matches_a_path_segment_by_segment() {
 #[tokio::test]
 async fn a_layer_around_the_app_goes_around_an_unstaged_route() {
     let router = App::new(unstaged_url::router())
-        .layer(axum::middleware::from_fn(|req: axum::extract::Request, next: axum::middleware::Next| async move {
-            let mut res = next.run(req).await;
-            res.headers_mut().insert("x-outer", axum::http::HeaderValue::from_static("1"));
+        .layer(OuterFn(|req: crate::http::Request, next: crate::Router| async move {
+            let mut res = next.oneshot(req).await.unwrap();
+            res.headers_mut().insert("x-outer", http::HeaderValue::from_static("1"));
             res
         }))
         .router();
@@ -5322,7 +5464,7 @@ async fn call_with_any(
     method: &str,
     uri: &str,
     headers: &[(&str, &str)],
-) -> (StatusCode, axum::http::HeaderMap, String) {
+) -> (StatusCode, http::HeaderMap, String) {
     let mut req = Request::builder().method(method).uri(uri);
     for (name, value) in headers {
         req = req.header(*name, *value);
@@ -6370,7 +6512,7 @@ fn cached_routes() -> Table {
             "/lines",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "max-age=60"), (header::CACHE_CONTROL, "no-store")];
-                (StatusCode::BAD_REQUEST, axum::response::AppendHeaders(lines), "")
+                (StatusCode::BAD_REQUEST, appended(lines), "")
             }),
         )
         .route("/statement/other", get(|| async { NoStore(Err::<StatusCode, Error>(Error::not_found())) }))
@@ -6391,7 +6533,7 @@ fn cached_routes() -> Table {
                     (header::CACHE_CONTROL, "private=\"set-cookie\""),
                     (header::SET_COOKIE, "seen=1"),
                 ];
-                (axum::response::AppendHeaders(lines), "limited")
+                (appended(lines), "limited")
             }),
         )
         .route(
@@ -6864,7 +7006,7 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
     let rows = move |pulled: Arc<AtomicUsize>| {
         futures_util::stream::iter(0..4).map(move |i| {
             pulled.fetch_add(1, Ordering::SeqCst);
-            Ok::<_, std::io::Error>(crate::Bytes::from(row(i)))
+            Ok::<_, std::io::Error>(crate::http::Bytes::from(row(i)))
         })
     };
     let (export, sized) = (pulled.clone(), pulled.clone());
@@ -6886,27 +7028,33 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
         .route(
             "/empty",
             get(|| async {
-                crate::Media::stream("text/csv", futures_util::stream::empty::<Result<crate::Bytes, std::io::Error>>())
+                crate::Media::stream("text/csv", futures_util::stream::empty::<Result<crate::http::Bytes, std::io::Error>>())
             }),
         )
         .route(
             "/empty-sized",
             get(|| async {
-                crate::Media::stream_sized("text/csv", 0, futures_util::stream::empty::<Result<crate::Bytes, std::io::Error>>())
+                crate::Media::stream_sized(
+                    "text/csv",
+                    0,
+                    futures_util::stream::empty::<Result<crate::http::Bytes, std::io::Error>>(),
+                )
             }),
         )
         .route(
             "/small",
             get(|| async {
-                let rows =
-                    futures_util::stream::iter(["a,1\n", "b,2\n"].map(|row| Ok::<_, std::io::Error>(crate::Bytes::from(row))));
+                let rows = futures_util::stream::iter(
+                    ["a,1\n", "b,2\n"].map(|row| Ok::<_, std::io::Error>(crate::http::Bytes::from(row))),
+                );
                 crate::Media::stream_sized("text/csv", 8, rows)
             }),
         )
         .route(
             "/picture",
             get(|| async {
-                let png = futures_util::stream::once(async { Ok::<_, std::io::Error>(crate::Bytes::from(vec![7u8; 4096])) });
+                let png =
+                    futures_util::stream::once(async { Ok::<_, std::io::Error>(crate::http::Bytes::from(vec![7u8; 4096])) });
                 Public::new(Duration::from_secs(60), crate::Media::stream("image/png", png))
             }),
         );
@@ -7016,7 +7164,7 @@ async fn a_body_read_as_it_arrives_is_read_before_it_ends_and_refused_where_a_br
     let (first, mut got_first) = tokio::sync::mpsc::unbounded_channel::<usize>();
     let routes = Table::new().route(
         "/up",
-        crate::router::put(move |request: crate::extract::Request| {
+        crate::router::put(move |request: crate::http::Request| {
             let first = first.clone();
             async move {
                 let mut pieces = crate::extract::pieces_up_to(request.into_body(), MAX);
@@ -7107,7 +7255,7 @@ async fn what_a_large_upload_costs() {
     };
     let routes = Table::new().route(
         "/up",
-        crate::router::put(|request: crate::extract::Request| async move {
+        crate::router::put(|request: crate::http::Request| async move {
             let mut pieces = crate::extract::pieces_up_to(request.into_body(), usize::MAX);
             let (mut stored, mut largest) = (0usize, 0usize);
             while let Some(piece) = pieces.chunk().await? {
@@ -7156,7 +7304,7 @@ async fn a_body_trickled_in_on_a_route_with_no_deadline_is_a_408() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let routes = Table::new().route(
         "/up",
-        crate::router::put(|request: crate::extract::Request| async move {
+        crate::router::put(|request: crate::http::Request| async move {
             let mut pieces = crate::extract::pieces_up_to(request.into_body(), usize::MAX).idle(Duration::from_millis(500));
             let mut stored = 0;
             while let Some(piece) = pieces.chunk().await? {
@@ -7220,7 +7368,7 @@ async fn what_a_large_download_costs() {
             .unwrap_or(0)
     };
     // 64 KiB chunks of CSV-like text, made as they are asked for.
-    let chunk = |i: usize| crate::Bytes::from(format!("{i:>10},Pikachu,Base Set,Near Mint,1999\n").repeat(64 * 1024 / 46));
+    let chunk = |i: usize| crate::http::Bytes::from(format!("{i:>10},Pikachu,Base Set,Near Mint,1999\n").repeat(64 * 1024 / 46));
     let chunks = mib * 1024 * 1024 / chunk(0).len();
     let routes = Table::new().route(
         "/export",
@@ -7290,10 +7438,10 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
             self.0.store(true, Ordering::SeqCst);
         }
     }
-    fn then(error: Option<&'static str>) -> impl futures_util::Stream<Item = Result<crate::Bytes, &'static str>> + Send {
+    fn then(error: Option<&'static str>) -> impl futures_util::Stream<Item = Result<crate::http::Bytes, &'static str>> + Send {
         futures_util::stream::unfold(0, move |step| async move {
             match step {
-                0 => Some((Ok(crate::Bytes::from_static(b"abc")), 1)),
+                0 => Some((Ok(crate::http::Bytes::from_static(b"abc")), 1)),
                 1 => {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     error.map(|error| (Err(error), 2))
@@ -7318,10 +7466,10 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
                             let go = go.clone();
                             async move {
                                 match step {
-                                    0 => Some((Ok::<_, std::io::Error>(crate::Bytes::from_static(b"first")), 1)),
+                                    0 => Some((Ok::<_, std::io::Error>(crate::http::Bytes::from_static(b"first")), 1)),
                                     1 => {
                                         go.notified().await;
-                                        Some((Ok(crate::Bytes::from_static(b"rest")), 2))
+                                        Some((Ok(crate::http::Bytes::from_static(b"rest")), 2))
                                     }
                                     _ => None,
                                 }
@@ -7337,7 +7485,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
                 get(move || {
                     let (made, guard) = (made.clone(), Dropped(dropped.clone()));
                     async move {
-                        let chunk = crate::Bytes::from(vec![b'x'; 64 * 1024]);
+                        let chunk = crate::http::Bytes::from(vec![b'x'; 64 * 1024]);
                         crate::Media::stream(
                             "application/octet-stream",
                             futures_util::stream::repeat_with(move || {
@@ -7363,7 +7511,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
                         if part == "def" {
                             tokio::time::sleep(Duration::from_millis(100)).await;
                         }
-                        Ok::<_, &str>(crate::Bytes::from(part))
+                        Ok::<_, &str>(crate::http::Bytes::from(part))
                     });
                     crate::Media::stream_sized("application/octet-stream", 5, chunks)
                 }),
@@ -7526,11 +7674,11 @@ async fn a_failure_under_no_store_is_not_stored() {
 
 async fn slips(crate::Params(at): crate::Params<no_store_url::Slips<'_>>) -> HtmlResult {
     let kept = at.id.parse::<u32>().map_err(|_| Error::status(StatusCode::BAD_REQUEST))?;
-    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("slips {kept}"))))
+    Ok(crate::answer::HtmlResponse::new(crate::response::IntoResponse::into_response(format!("slips {kept}"))))
 }
 
 async fn my_slips(Caller(viewer): Caller<Viewer>) -> HtmlResult {
-    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("slips of {}", viewer.0))))
+    Ok(crate::answer::HtmlResponse::new(crate::response::IntoResponse::into_response(format!("slips of {}", viewer.0))))
 }
 
 async fn void_slip(Caller(_): Caller<Viewer>) -> HtmlResult {
@@ -7569,7 +7717,7 @@ async fn a_json_route_that_says_no_store_keeps_its_refusals_out_of_caches() {
 }
 
 async fn slip_total(crate::Params(at): crate::Params<no_store_url::Total>) -> HtmlResult {
-    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("total {}", at.id))))
+    Ok(crate::answer::HtmlResponse::new(crate::response::IntoResponse::into_response(format!("total {}", at.id))))
 }
 
 #[crate::routes]
@@ -7592,7 +7740,7 @@ mod no_store_url {
 }
 
 async fn rotate_key(Caller(viewer): Caller<Viewer>) -> HtmlResult {
-    Ok(crate::answer::HtmlResponse::new(axum::response::IntoResponse::into_response(format!("new key of {}", viewer.0))))
+    Ok(crate::answer::HtmlResponse::new(crate::response::IntoResponse::into_response(format!("new key of {}", viewer.0))))
 }
 
 /// `no_store(post)`: only the write's answer, and a write its extractors refuse, are `no-store`; the
@@ -7707,7 +7855,7 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
             "/second-line",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "public, max-age=600"), (header::CACHE_CONTROL, "no-store")];
-                (axum::response::AppendHeaders(lines), "second")
+                (appended(lines), "second")
             }),
         )
         .route(
@@ -7719,7 +7867,7 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
                     (header::CACHE_CONTROL, odd),
                     (header::SET_COOKIE, HeaderValue::from_static("seen=1")),
                 ];
-                (axum::response::AppendHeaders(lines), "odd")
+                (appended(lines), "odd")
             }),
         )
         .route(
@@ -7727,7 +7875,7 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
             get(|| async {
                 let lines =
                     [(header::CACHE_CONTROL, "public, max-age=600, no-cache=\"a, no-store, b\""), (header::SET_COOKIE, "seen=1")];
-                (axum::response::AppendHeaders(lines), "quoted")
+                (appended(lines), "quoted")
             }),
         )
         .route(
@@ -7744,14 +7892,14 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
                     (header::CACHE_CONTROL, "public, max-age=600, no-cache=\"a\\\", no-store, b\""),
                     (header::SET_COOKIE, "seen=1"),
                 ];
-                (axum::response::AppendHeaders(lines), "escaped")
+                (appended(lines), "escaped")
             }),
         )
         .route(
             "/private-then-no-store",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "private, max-age=600"), (header::CACHE_CONTROL, "no-store")];
-                (axum::response::AppendHeaders(lines), "both")
+                (appended(lines), "both")
             }),
         )
         .route(
@@ -7762,7 +7910,7 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
                     (header::CACHE_CONTROL, "private"),
                     (header::SET_COOKIE, "seen=1"),
                 ];
-                (axum::response::AppendHeaders(lines), "later")
+                (appended(lines), "later")
             }),
         )
         .route(
@@ -7773,14 +7921,14 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
                     (header::CACHE_CONTROL, "public, s-maxage=600"),
                     (header::SET_COOKIE, "seen=1"),
                 ];
-                (axum::response::AppendHeaders(lines), "both")
+                (appended(lines), "both")
             }),
         )
         .route(
             "/no-store-and-more",
             get(|| async {
                 let line = [(header::CACHE_CONTROL, "public, s-maxage=600, x=\"\\\"\", no-store")];
-                (axum::response::AppendHeaders(line), "more")
+                (appended(line), "more")
             }),
         )
         .route(
@@ -7788,49 +7936,49 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
             get(|| async {
                 let lines =
                     [(header::CACHE_CONTROL, "public, s-maxage=600, x=\"\\\"\", private"), (header::SET_COOKIE, "seen=1")];
-                (axum::response::AppendHeaders(lines), "quoted")
+                (appended(lines), "quoted")
             }),
         )
         .route(
             "/must-understand",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "must-understand, no-store"), (header::SET_COOKIE, "seen=1")];
-                (axum::response::AppendHeaders(lines), "kept by a cache that knows a 200")
+                (appended(lines), "kept by a cache that knows a 200")
             }),
         )
         .route(
             "/must-understand-shared",
             get(|| async {
                 let line = [(header::CACHE_CONTROL, "max-age=60, must-understand, no-store")];
-                (axum::response::AppendHeaders(line), "kept only by a cache that knows a 200")
+                (appended(line), "kept only by a cache that knows a 200")
             }),
         )
         .route(
             "/must-understand-valued",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "no-store, must-understand=1, max-age=600"), (header::SET_COOKIE, "seen=1")];
-                (axum::response::AppendHeaders(lines), "valued")
+                (appended(lines), "valued")
             }),
         )
         .route(
             "/private-must-understand",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "private, no-store, must-understand"), (header::SET_COOKIE, "seen=1")];
-                (axum::response::AppendHeaders(lines), "private")
+                (appended(lines), "private")
             }),
         )
         .route(
             "/private-valued-must-understand",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "private, no-store=1, must-understand"), (header::SET_COOKIE, "seen=1")];
-                (axum::response::AppendHeaders(lines), "private")
+                (appended(lines), "private")
             }),
         )
         .route(
             "/upper-valued",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "public, max-age=600, No-Store=1"), (header::SET_COOKIE, "seen=1")];
-                (axum::response::AppendHeaders(lines), "upper")
+                (appended(lines), "upper")
             }),
         )
         .route(
@@ -7845,7 +7993,7 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
             get(|| async {
                 let odd = HeaderValue::from_bytes(b"public, max-age=600, no-store, x=\xE9").unwrap();
                 let lines = [(header::CACHE_CONTROL, odd), (header::SET_COOKIE, HeaderValue::from_static("seen=1"))];
-                (axum::response::AppendHeaders(lines), "odd")
+                (appended(lines), "odd")
             }),
         )
         .route(
@@ -7853,28 +8001,28 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
             get(|| async {
                 let odd = HeaderValue::from_bytes(b"public, s-maxage=600, private, x=\xE9").unwrap();
                 let lines = [(header::CACHE_CONTROL, odd), (header::SET_COOKIE, HeaderValue::from_static("seen=1"))];
-                (axum::response::AppendHeaders(lines), "odd")
+                (appended(lines), "odd")
             }),
         )
         .route(
             "/unquoted-limited",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "public, max-age=600, private=set-cookie"), (header::SET_COOKIE, "seen=1")];
-                (axum::response::AppendHeaders(lines), "limited")
+                (appended(lines), "limited")
             }),
         )
         .route(
             "/no-transform",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "no-transform"), (header::CACHE_CONTROL, "no-store")];
-                (axum::response::AppendHeaders(lines), "both")
+                (appended(lines), "both")
             }),
         )
         .route(
             "/limited-first",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "private=\"set-cookie\", max-age=600"), (header::SET_COOKIE, "seen=1")];
-                (axum::response::AppendHeaders(lines), "limited")
+                (appended(lines), "limited")
             }),
         );
     let router = app(router, Some("ann"));
@@ -8081,7 +8229,7 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
                         let t: ZoneMsg = req.t();
                         let page =
                             req.test_page("Shared", html! { <p>{t.date_time(at, DateStyle::Medium, TimeStyle::Short)}</p> })?;
-                        Ok::<_, Error>(([(axum::http::header::CACHE_CONTROL, "public, max-age=60")], page))
+                        Ok::<_, Error>(([(http::header::CACHE_CONTROL, "public, max-age=60")], page))
                     }),
                 )
                 // Through Corten's handler check, which knows the answer is `Public`.
@@ -8166,7 +8314,7 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
     // cannot lose that it is `Public`: the request's signal holds it.
     struct Rebuild;
     impl crate::Middleware for Rebuild {
-        async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> Response {
             let (parts, body) = next.run(req).await.into_parts();
             let mut res = Response::new(body);
             *res.status_mut() = parts.status;
@@ -8243,7 +8391,7 @@ std::thread_local! {
 struct Staff(&'static str);
 
 impl<S: Sync> crate::Identify<S> for Staff {
-    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(parts: &http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
         let Caller(Viewer(name)) = Caller::<Viewer>::find(parts, state).await?;
         match name {
             "ada" | "bob" => Ok(Staff(name)),
@@ -8257,10 +8405,10 @@ impl<S: Sync> crate::Identify<S> for Staff {
 struct Partner(&'static str);
 
 impl<S: Sync> crate::Identify<S> for Partner {
-    async fn identify(parts: &axum::http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
-        match parts.headers.get("x-api-key").map(|v| v.as_bytes()) {
-            Some(b"k1") => Ok(Partner("acme")),
-            _ => Err(crate::Refused::unauthorized()),
+    async fn identify(parts: &http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
+        match parts.headers.get("authorization").map(|v| v.as_bytes()) {
+            Some(b"Bearer k1") => Ok(Partner("acme")),
+            _ => Err(crate::Refused::unauthorized(crate::Challenge::bearer("partners"))),
         }
     }
 }
@@ -8367,7 +8515,7 @@ fn caller_app() -> Router {
 struct Auditor;
 
 impl<S: Sync> crate::Identify<S> for Auditor {
-    async fn identify(parts: &axum::http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
+    async fn identify(parts: &http::request::Parts, state: &S) -> std::result::Result<Self, crate::Refused> {
         let Viewer(name) = <Viewer as crate::Identify<S>>::identify(parts, state).await?;
         match name {
             "ada" | "carol" => Ok(Auditor),
@@ -8420,7 +8568,7 @@ mod wide_url {
     }
 }
 
-type M = axum::http::Method;
+type M = http::Method;
 
 #[allow(clippy::too_many_arguments)]
 async fn wide(
@@ -8503,7 +8651,7 @@ struct ReadsSecond;
 impl crate::extract::FromRequestParts<Reads> for ReadsFirst {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(_: &mut axum::http::request::Parts, reads: &Reads) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(_: &mut http::request::Parts, reads: &Reads) -> Result<Self, Self::Rejection> {
         reads.add("first");
         Ok(ReadsFirst)
     }
@@ -8512,7 +8660,7 @@ impl crate::extract::FromRequestParts<Reads> for ReadsFirst {
 impl crate::extract::FromRequestParts<Reads> for Refuses {
     type Rejection = StatusCode;
 
-    async fn from_request_parts(_: &mut axum::http::request::Parts, reads: &Reads) -> Result<Self, StatusCode> {
+    async fn from_request_parts(_: &mut http::request::Parts, reads: &Reads) -> Result<Self, StatusCode> {
         reads.add("refuses");
         Err(StatusCode::IM_A_TEAPOT)
     }
@@ -8521,7 +8669,7 @@ impl crate::extract::FromRequestParts<Reads> for Refuses {
 impl crate::extract::FromRequestParts<Reads> for ReadsSecond {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(_: &mut axum::http::request::Parts, reads: &Reads) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(_: &mut http::request::Parts, reads: &Reads) -> Result<Self, Self::Rejection> {
         reads.add("second");
         Ok(ReadsSecond)
     }
@@ -8542,7 +8690,7 @@ async fn a_handlers_arguments_are_read_in_order_and_the_first_refusal_answers() 
         });
         Request::new(Body::from_stream(body))
     };
-    let answer = |response: crate::middleware::Response| async move {
+    let answer = |response: crate::http::Response| async move {
         let (parts, body) = response.into_parts();
         (parts.status, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
     };
@@ -8564,7 +8712,7 @@ async fn a_handlers_arguments_are_read_in_order_and_the_first_refusal_answers() 
     assert_eq!(answer(response).await, (StatusCode::OK, "418 text".to_string()));
     assert_eq!(reads.take(), ["first", "refuses", "body"]);
 
-    let whole = |text: Result<String, axum::extract::rejection::StringRejection>| async move {
+    let whole = |text: Result<String, crate::extract::BodyRejection>| async move {
         text.map_err(|refusal| refusal.status().as_u16().to_string()).unwrap_or_else(|code| code)
     };
     let response = Handler::call(whole, Request::new(Body::from(vec![0xff])), reads.clone()).await;
@@ -8585,7 +8733,7 @@ async fn guarded(
     uri: &str,
     viewer: Option<&str>,
     headers: &[(&str, &str)],
-) -> (StatusCode, axum::http::HeaderMap, String) {
+) -> (StatusCode, http::HeaderMap, String) {
     let mut req = Request::builder().method(method).uri(uri);
     if let Some(viewer) = viewer {
         req = req.header("viewer", viewer);
@@ -8726,7 +8874,8 @@ async fn a_found_caller_reaches_the_handler() {
 async fn reading_a_caller_makes_the_answer_private_and_a_public_one_is_shared() {
     let router = caller_app();
     assert_eq!(cache_control(&router, "/catalog/1", &[]).await, "public, max-age=60");
-    assert_eq!(cache_control(&router, "/catalog/1", &[("x-api-key", "k1")]).await, "public, max-age=60");
+    assert_eq!(cache_control(&router, "/catalog/1", &[("x-request-id", "k1")]).await, "public, max-age=60");
+    assert_eq!(cache_control(&router, "/catalog/1", &[("authorization", "Bearer k1")]).await, "private, no-cache");
     assert_eq!(cache_control(&router, "/catalog/1", &[("cookie", "session=abc")]).await, "private, no-cache");
     assert_eq!(cache_control(&router, "/catalog/nope", &[]).await, "private, no-cache", "a failure is never shared");
     // A handler that reads a caller cannot return `Public` (that does not compile). A response that
@@ -8740,8 +8889,8 @@ async fn reading_a_caller_makes_the_answer_private_and_a_public_one_is_shared() 
         ),
     ))
     .router();
-    assert_eq!(cache_control(&leaky, "/rates", &[("x-api-key", "k1")]).await, "private, no-cache");
-    assert_eq!(cache_control(&leaky, "/by-hand", &[("x-api-key", "k1")]).await, "private, no-cache");
+    assert_eq!(cache_control(&leaky, "/rates", &[("authorization", "Bearer k1")]).await, "private, no-cache");
+    assert_eq!(cache_control(&leaky, "/by-hand", &[("authorization", "Bearer k1")]).await, "private, no-cache");
 }
 
 #[tokio::test]
@@ -8752,7 +8901,12 @@ async fn a_caller_with_nowhere_to_sign_in_is_a_401_page() {
     let (status, res, body) = guarded(&router, "GET", "/partner", None, &[("accept", "text/html")]).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!res.contains_key("location") && body.contains("Something went wrong"), "{body}");
-    let (status, _, body) = guarded(&router, "GET", "/partner", None, &[("x-api-key", "k1")]).await;
+    assert_eq!(res["www-authenticate"], r#"Bearer realm="partners""#, "the error page keeps the challenge every 401 sends");
+    let (status, res, _) = guarded(&router, "GET", "/partner", None, &[("corten", "action")]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(res.contains_key("corten-page"), "a form patch gets the error page to swap in");
+    assert_eq!(res["www-authenticate"], r#"Bearer realm="partners""#, "and so does the page swapped in");
+    let (status, _, body) = guarded(&router, "GET", "/partner", None, &[("authorization", "Bearer k1")]).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "acme"));
 }
 
@@ -8798,6 +8952,7 @@ async fn a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors(
     let (status, res, body) = guarded(&router, "GET", "/mine", None, &[("accept", "application/json")]).await;
     assert_eq!((status, &body[..]), (StatusCode::UNAUTHORIZED, r#"{"title":"Unauthorized","status":401}"#), "a data client");
     assert_eq!(res["content-type"], "application/problem+json");
+    assert!(!res.contains_key("www-authenticate"), "a session cookie has no scheme to name");
 
     let (status, res, _) = guarded(&router, "GET", "/moved", None, &[("accept", "text/html")]).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "the status with_status gave");
@@ -8844,11 +8999,12 @@ async fn a_json_route_answers_every_failure_as_json_whatever_the_client_accepts(
         let (status, res, body) = guarded(&router, "GET", "/api/price/7", None, headers).await;
         assert_eq!((status, &body[..]), (StatusCode::UNAUTHORIZED, r#"{"title":"Unauthorized","status":401}"#), "{accept:?}");
         assert_eq!(res["content-type"], "application/problem+json");
+        assert_eq!(res["www-authenticate"], r#"Bearer realm="partners""#, "{accept:?}");
         let (status, _, body) = guarded(&router, "GET", "/api/price/abc", None, headers).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{accept:?}");
         assert!(body.starts_with(r#"{"title":"Bad Request","status":400,"#), "a path that does not parse: {body}");
     }
-    let (status, res, body) = guarded(&router, "GET", "/api/price/7", None, &[("x-api-key", "k1")]).await;
+    let (status, res, body) = guarded(&router, "GET", "/api/price/7", None, &[("authorization", "Bearer k1")]).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, r#"{"id":7,"partner":"acme"}"#));
     assert_eq!(res["cache-control"], "private, no-cache");
 }
@@ -9071,7 +9227,8 @@ async fn a_request_head_is_held_only_as_large_as_the_app_allows() {
 /// chunks while the client reads is not cut, and `None` holds the stalled connection.
 #[tokio::test]
 async fn an_answer_waits_for_its_client_only_as_long_as_the_app_allows() {
-    use axum::body::{Body, Bytes};
+    use crate::body::Body;
+    use bytes::Bytes;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let serve = |app: App| async move {
@@ -9564,7 +9721,7 @@ async fn an_upgrade_route_switches_for_its_own_origin_and_refuses_other_sites() 
         .route(
             "/tunnel",
             get(|upgrade: Upgrade| async move {
-                let mut headers = axum::http::HeaderMap::new();
+                let mut headers = http::HeaderMap::new();
                 headers.insert("x-upstream", "yes".parse().unwrap());
                 Ok::<Switch, crate::Error>(upgrade.switch(headers, echo))
             }),
@@ -9673,7 +9830,7 @@ struct ApiWs;
 #[tokio::test]
 async fn a_relay_is_not_compressed_by_the_app() {
     fn upstream(content_type: &'static str, body: Body) -> crate::Relay {
-        let mut headers = axum::http::HeaderMap::new();
+        let mut headers = http::HeaderMap::new();
         headers.insert("content-type", content_type.parse().unwrap());
         crate::Relay::new(StatusCode::OK, headers, body)
     }
@@ -9682,12 +9839,12 @@ async fn a_relay_is_not_compressed_by_the_app() {
     let (p, e, own) = (page.clone(), events.clone(), page.clone());
     let router = App::new(Routes::from(
         Table::new()
-            .route("/own", get(move || async move { axum::response::Html(own) }))
+            .route("/own", get(move || async move { ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], own) }))
             .route("/page", get(move || async move { upstream("text/html; charset=utf-8", Body::from(p)) }))
             .route(
                 "/stream",
                 get(move || async move {
-                    let chunk = Ok::<_, std::convert::Infallible>(axum::body::Bytes::from(e));
+                    let chunk = Ok::<_, std::convert::Infallible>(bytes::Bytes::from(e));
                     upstream("text/event-stream", Body::from_stream(futures_util::stream::iter([chunk])))
                 }),
             ),
@@ -9702,7 +9859,7 @@ async fn a_relay_is_not_compressed_by_the_app() {
             "{path}: {:?}",
             res.headers()
         );
-        let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        let body = crate::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
         assert_eq!(&body[..], sent.as_bytes(), "{path}");
     }
     // The same body as the app's own answer is compressed, so the app does compress.
@@ -9727,7 +9884,7 @@ async fn half(crate::Params(at): crate::Params<half_url::Half>) -> Result<crate:
     if at.status == 200 {
         return Ok(Json(Quote { id: 7, partner: "own" }).into());
     }
-    let mut headers = axum::http::HeaderMap::new();
+    let mut headers = http::HeaderMap::new();
     headers.insert("content-type", "application/json".parse().unwrap());
     headers.insert("content-security-policy", "default-src 'self'".parse().unwrap());
     let body = format!(r#"{{"from":"upstream","pad":"{}"}}"#, "x".repeat(4000));
@@ -9753,7 +9910,7 @@ async fn a_json_route_passes_a_relay_on_as_the_upstream_gave_it() {
             assert_eq!(res.headers()["content-type"], "application/json", "{accept:?}");
             assert_eq!(res.headers()["content-security-policy"], "default-src 'self'", "{accept:?}");
             assert!(!res.headers().contains_key("content-encoding"), "{accept:?}: {:?}", res.headers());
-            let body = axum::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
+            let body = crate::body::to_bytes(res.into_body(), usize::MAX).await.unwrap();
             assert!(body.starts_with(br#"{"from":"upstream""#), "{accept:?} {status}");
         }
     }
@@ -9766,7 +9923,7 @@ async fn a_json_route_passes_a_relay_on_as_the_upstream_gave_it() {
 #[tokio::test]
 async fn a_relay_passes_the_upstreams_answer_on() {
     fn upstream(status: StatusCode) -> crate::Relay {
-        let mut headers = axum::http::HeaderMap::new();
+        let mut headers = http::HeaderMap::new();
         headers.insert("content-type", "text/plain".parse().unwrap());
         headers.insert("connection", "keep-alive, x-hop".parse().unwrap());
         headers.insert("x-hop", "1".parse().unwrap());
@@ -9796,7 +9953,7 @@ async fn a_relay_passes_the_upstreams_answer_on() {
     // A relayed page keeps the upstream's own CSP, which its scripts were written for; without one
     // the app's applies.
     let page = |csp: Option<&'static str>| {
-        let mut headers = axum::http::HeaderMap::new();
+        let mut headers = http::HeaderMap::new();
         headers.insert("content-type", "text/html".parse().unwrap());
         if let Some(csp) = csp {
             headers.insert("content-security-policy", csp.parse().unwrap());
@@ -9823,7 +9980,7 @@ async fn a_relay_passes_the_upstreams_answer_on() {
         get(move || {
             let body = Body::from_stream(stream.lock().unwrap().take().unwrap());
             async move {
-                let mut headers = axum::http::HeaderMap::new();
+                let mut headers = http::HeaderMap::new();
                 headers.insert("content-type", "text/event-stream".parse().unwrap());
                 crate::Relay::new(StatusCode::OK, headers, body)
             }
@@ -9882,10 +10039,9 @@ async fn the_client_ip_is_the_peer_or_what_a_trusted_proxy_forwards() {
 }
 
 /// Without a connection (a test's `oneshot`), `ClientIp` is a 500 that says why and
-/// `Option<ClientIp>` is `None`; axum's `MockConnectInfo` gives it one.
+/// `Option<ClientIp>` is `None`; a layer that gives the request its peer gives it one.
 #[tokio::test]
 async fn without_a_connection_there_is_no_client_ip() {
-    use axum::extract::connect_info::MockConnectInfo;
     let routes = || {
         Table::new()
             .route("/ip", get(|crate::ClientIp(ip): crate::ClientIp| async move { ip.to_string() }))
@@ -9896,8 +10052,7 @@ async fn without_a_connection_there_is_no_client_ip() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     let (status, _, body) = call_with(router, "GET", "/maybe", None, None).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "None"));
-    let mocked =
-        App::new(Routes::from(routes())).router().layer(MockConnectInfo(std::net::SocketAddr::from(([203, 0, 113, 9], 4711))));
+    let mocked = App::new(Routes::from(routes())).router().layer(peer(std::net::SocketAddr::from(([203, 0, 113, 9], 4711))));
     let (status, _, body) = call_with(mocked, "GET", "/ip", None, None).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "203.0.113.9"));
 }
@@ -10129,19 +10284,19 @@ async fn serves_router_page(_: crate::Params<serves_router_url::Page>) -> &'stat
     serves_page().await
 }
 
-async fn serves_item(_: crate::Params<serves_url::Item>, req: Req, uri: axum::http::Uri) -> String {
+async fn serves_item(_: crate::Params<serves_url::Item>, req: Req, uri: http::Uri) -> String {
     serves_check(req, uri).await
 }
 
-async fn serves_files(_: crate::Params<serves_url::Files>, req: Req, uri: axum::http::Uri) -> String {
+async fn serves_files(_: crate::Params<serves_url::Files>, req: Req, uri: http::Uri) -> String {
     serves_check(req, uri).await
 }
 
-async fn serves_cart_line(_: crate::Params<serves_url::CartLine>, req: Req, uri: axum::http::Uri) -> String {
+async fn serves_cart_line(_: crate::Params<serves_url::CartLine>, req: Req, uri: http::Uri) -> String {
     serves_check(req, uri).await
 }
 
-async fn serves_any(_: crate::Params<serves_catch_url::Page>, req: Req, uri: axum::http::Uri) -> String {
+async fn serves_any(_: crate::Params<serves_catch_url::Page>, req: Req, uri: http::Uri) -> String {
     serves_check(req, uri).await
 }
 
@@ -10177,7 +10332,7 @@ async fn serves_agrees_with_the_router() {
 }
 
 /// A redirect to the return address in `?p=`, or to `/check` when it is not on this site.
-async fn serves_go(req: Req, uri: axum::http::Uri) -> HtmlResult {
+async fn serves_go(req: Req, uri: http::Uri) -> HtmlResult {
     let p = form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()).find(|(k, _)| k == "p").map(|(_, v)| v.into_owned());
     match p.as_deref().and_then(crate::Local::parse) {
         Some(local) => req.redirect(&local),
@@ -10186,7 +10341,7 @@ async fn serves_go(req: Req, uri: axum::http::Uri) -> HtmlResult {
 }
 
 /// Whether the app serves the path in `?p=`: "local served", "local elsewhere" or "not local".
-async fn serves_check(req: Req, uri: axum::http::Uri) -> String {
+async fn serves_check(req: Req, uri: http::Uri) -> String {
     let p = form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()).find(|(k, _)| k == "p").map(|(_, v)| v.into_owned());
     match p.as_deref().and_then(crate::route::Local::parse) {
         Some(local) if req.serves(&local) => "local served".into(),
@@ -10248,7 +10403,7 @@ async fn an_app_says_whether_it_serves_a_return_address() {
 #[tokio::test]
 async fn a_public_answer_takes_a_header_and_is_still_compressed() {
     use crate::answer::{Link, XRobotsTag};
-    use axum::http::HeaderValue;
+    use http::HeaderValue;
     let text = "# Example\n".repeat(400);
     let body = text.clone();
     let router = App::new(Routes::from(
@@ -10307,7 +10462,7 @@ mod policy_url {
 }
 
 /// Where the tests' pages send what their CSP blocks.
-async fn policy_reports(_: axum::body::Bytes) -> StatusCode {
+async fn policy_reports(_: bytes::Bytes) -> StatusCode {
     StatusCode::NO_CONTENT
 }
 
@@ -10387,7 +10542,7 @@ async fn an_area_lets_the_origins_it_names_frame_its_pages() {
 #[tokio::test]
 async fn who_may_frame_a_page_is_enforced_whatever_else_its_answer_or_policy_does() {
     let relayed = || {
-        let mut headers = axum::http::HeaderMap::new();
+        let mut headers = http::HeaderMap::new();
         headers.insert("content-type", "text/html".parse().unwrap());
         headers.insert("content-security-policy", "frame-ancestors *".parse().unwrap());
         headers.insert("x-frame-options", "SAMEORIGIN".parse().unwrap());
@@ -10396,8 +10551,13 @@ async fn who_may_frame_a_page_is_enforced_whatever_else_its_answer_or_policy_doe
     let app = |policy: crate::security::Policy| {
         App::new(Routes::from(
             Table::new()
-                .route("/", get(|| async { axum::response::Html("<p>home</p>") }))
-                .route("/own", get(|| async { ([(header::X_FRAME_OPTIONS, "DENY")], axum::response::Html("<p>own</p>")) }))
+                .route("/", get(|| async { ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], "<p>home</p>") }))
+                .route(
+                    "/own",
+                    get(|| async {
+                        ([(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::X_FRAME_OPTIONS, "DENY")], "<p>own</p>")
+                    }),
+                )
                 .route("/relayed", get(move || async move { relayed() })),
         ))
         .policy(policy)
@@ -10407,7 +10567,7 @@ async fn who_may_frame_a_page_is_enforced_whatever_else_its_answer_or_policy_doe
         })
         .router()
     };
-    let all = |headers: &axum::http::HeaderMap, name: axum::http::HeaderName| -> Vec<String> {
+    let all = |headers: &http::HeaderMap, name: http::HeaderName| -> Vec<String> {
         headers.get_all(name).iter().map(|v| v.to_str().unwrap().to_string()).collect()
     };
     let partner = || crate::security::Policy::new().frame_ancestors("https://partner.example");
@@ -10522,7 +10682,7 @@ const DENIED: &str = "accelerometer=(), bluetooth=(), camera=(), display-capture
 /// data).
 async fn features<S>(router: &S, path: &str, mode: Option<&str>) -> Option<String>
 where
-    S: tower::Service<Request<Body>, Response = axum::response::Response, Error = std::convert::Infallible> + Clone,
+    S: tower::Service<Request<Body>, Response = crate::response::Response, Error = std::convert::Infallible> + Clone,
 {
     let mut req = Request::get(path);
     match mode {
@@ -10536,16 +10696,16 @@ where
 
 /// A relayed page that brings a `Permissions-Policy` of its own.
 async fn relayed_page() -> crate::Relay {
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("text/html; charset=utf-8"));
-    headers.insert("permissions-policy", axum::http::HeaderValue::from_static("camera=(self)"));
+    let mut headers = http::HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, http::HeaderValue::from_static("text/html; charset=utf-8"));
+    headers.insert("permissions-policy", http::HeaderValue::from_static("camera=(self)"));
     crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
 }
 
 /// A relayed page with none, its type written in capitals.
 async fn relayed_bare() -> crate::Relay {
-    let mut headers = axum::http::HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, axum::http::HeaderValue::from_static("Text/HTML"));
+    let mut headers = http::HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, http::HeaderValue::from_static("Text/HTML"));
     crate::Relay::new(StatusCode::OK, headers, Body::from("<!doctype html><title>Relayed</title>"))
 }
 
@@ -10563,7 +10723,7 @@ async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document
             "/own",
             get(|req: Req| async move {
                 let mut res = req.test_page("Own", html! { <p>"own"</p> }).into_response();
-                res.headers_mut().append("reporting-endpoints", axum::http::HeaderValue::from_static(r#"default="/r""#));
+                res.headers_mut().append("reporting-endpoints", http::HeaderValue::from_static(r#"default="/r""#));
                 res
             }),
         )
@@ -10571,7 +10731,7 @@ async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document
             "/own-csp",
             get(|req: Req| async move {
                 let mut res = req.test_page("Own", html! { <p>"own"</p> }).into_response();
-                res.headers_mut().append("reporting-endpoints", axum::http::HeaderValue::from_static(r#"csp="/elsewhere""#));
+                res.headers_mut().append("reporting-endpoints", http::HeaderValue::from_static(r#"csp="/elsewhere""#));
                 res
             }),
         );
@@ -10634,7 +10794,7 @@ async fn a_report_endpoint_is_named_by_every_page_s_csp_and_sent_with_a_document
 fn a_report_endpoint_a_browser_would_not_use_is_refused() {
     use crate::security::Policy;
     let takes = |url: &'static str| {
-        let uri: axum::http::Uri = url.parse().expect("a URI");
+        let uri: http::Uri = url.parse().expect("a URI");
         std::panic::catch_unwind(|| Policy::new().report_to(&uri)).is_ok()
     };
     assert!(std::panic::catch_unwind(|| Policy::new().report_to(&policy_url::CspReports)).is_ok());
@@ -10759,10 +10919,10 @@ async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
 struct DenyMore;
 
 impl crate::Middleware for DenyMore {
-    async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> axum::response::Response {
+    async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
         let mut res = next.run(req).await;
-        res.headers_mut().append("permissions-policy", axum::http::HeaderValue::from_static("fullscreen=()"));
-        res.headers_mut().append("permissions-policy", axum::http::HeaderValue::from_static("camera=()"));
+        res.headers_mut().append("permissions-policy", http::HeaderValue::from_static("fullscreen=()"));
+        res.headers_mut().append("permissions-policy", http::HeaderValue::from_static("camera=()"));
         res
     }
 }
@@ -11025,7 +11185,7 @@ async fn a_refused_write_s_signal_ends_with_its_page_and_holds_the_visitor_s_zon
             )
             .router();
         let mut req = refused();
-        req.headers_mut().insert("cookie", axum::http::HeaderValue::from_static("corten-zone=America/Chicago"));
+        req.headers_mut().insert("cookie", http::HeaderValue::from_static("corten-zone=America/Chicago"));
         let res = router.oneshot(req).await.unwrap();
         assert_eq!(res.status(), StatusCode::FORBIDDEN);
         let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
@@ -11033,10 +11193,10 @@ async fn a_refused_write_s_signal_ends_with_its_page_and_holds_the_visitor_s_zon
     }
 }
 
-/// A cross-site write a browser sent is refused with the error page, a full document; a router
-/// under `Policy::apply` sends the header on its documents too; and an app's own header is kept.
+/// A cross-site write a browser sent is refused with the error page, a full document; a route's
+/// own document gets the header too, a page swap it says it is does not; and an app's own header is kept.
 #[tokio::test]
-async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_policy() {
+async fn a_refused_write_the_app_s_policy_and_its_own_header_send_permissions_policy() {
     let router = App::new(policy_url::router()).router();
     let req = Request::post("/")
         .header("origin", "https://evil.example")
@@ -11059,13 +11219,12 @@ async fn a_refused_write_policy_apply_and_the_app_s_own_header_send_permissions_
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
     assert_eq!(res.headers().get("permissions-policy"), None, "a refused patch");
 
-    let applied = crate::security::Policy::new().apply(
-        axum::Router::new().fallback_service(Router::from(
-            Table::new()
-                .route("/", get(|| async { axum::response::Html("<!doctype html><title>A</title>") }))
-                .route("/says-swap", get(|| async { ([("content-type", "text/html"), ("corten-page", "1")], "<p>x</p>") })),
-        )),
-    );
+    let applied = App::new(Routes::from(
+        Table::new()
+            .route("/", get(|| async { ([("content-type", "text/html; charset=utf-8")], "<!doctype html><title>A</title>") }))
+            .route("/says-swap", get(|| async { ([("content-type", "text/html"), ("corten-page", "1")], "<p>x</p>") })),
+    ))
+    .router();
     assert_eq!(features(&applied, "/", None).await.as_deref(), Some(DENIED));
     assert_eq!(
         features(&applied, "/", Some("nav")).await.as_deref(),
@@ -11109,12 +11268,7 @@ struct KeyedWrite {
 /// an error, a write, an API's answer, the runtime.
 #[tokio::test]
 async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modified() {
-    async fn send(
-        router: Router,
-        method: &str,
-        uri: &str,
-        headers: &[(&str, &str)],
-    ) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    async fn send(router: Router, method: &str, uri: &str, headers: &[(&str, &str)]) -> (StatusCode, http::HeaderMap, Vec<u8>) {
         // As a browser asks, unless the case says otherwise.
         let mut req = Request::builder().method(method).uri(uri);
         if !headers.iter().any(|(name, _)| *name == "accept-encoding") {
@@ -11146,11 +11300,11 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     async fn plain_patch(req: Req) -> HtmlResult {
         req.patch(html! { <p id={MsgId}>"read again"</p> })
     }
-    fn html(extra: &[(&'static str, &'static str)]) -> axum::response::Response {
-        use axum::response::IntoResponse;
-        let mut res = axum::response::Html("<p>same</p>").into_response();
+    fn html(extra: &[(&'static str, &'static str)]) -> crate::response::Response {
+        use crate::response::IntoResponse;
+        let mut res = ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], "<p>same</p>").into_response();
         for (name, value) in extra {
-            res.headers_mut().insert(*name, axum::http::HeaderValue::from_static(value));
+            res.headers_mut().insert(*name, http::HeaderValue::from_static(value));
         }
         res
     }
@@ -11176,7 +11330,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         .route(
             "/stream",
             get(|| async {
-                let chunk = Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(b"<p>streamed</p>"));
+                let chunk = Ok::<_, std::convert::Infallible>(bytes::Bytes::from_static(b"<p>streamed</p>"));
                 ([(header::CONTENT_TYPE, "text/html")], Body::from_stream(futures_util::stream::iter([chunk])))
             }),
         );
@@ -11187,7 +11341,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
             .api(|routes| api_module::api(routes, 100))
             .router()
     };
-    let tag_of = |headers: &axum::http::HeaderMap| headers.get("etag").map(|v| v.to_str().unwrap().to_string());
+    let tag_of = |headers: &http::HeaderMap| headers.get("etag").map(|v| v.to_str().unwrap().to_string());
 
     let (status, headers, body) = send(router(), "GET", "/", &[]).await;
     assert_eq!(status, StatusCode::OK);
@@ -11249,7 +11403,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
 
     // An answer compression sends as it is (an image, `no-transform`) is tagged too, its 304 saving
     // the body, and a 304 that does not vary on the coding is not made to.
-    let vary = |h: &axum::http::HeaderMap| h.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect::<Vec<_>>();
+    let vary = |h: &http::HeaderMap| h.get_all("vary").iter().map(|v| v.to_str().unwrap().to_string()).collect::<Vec<_>>();
     for uri in ["/picture", "/whole", "/export"] {
         let (_, first, _) = send(router(), "GET", uri, &[]).await;
         let (status, headers, body) = send(router(), "GET", uri, &[("if-none-match", &tag_of(&first).expect(uri))]).await;
@@ -11326,9 +11480,9 @@ async fn big_policy_page(req: Req) -> HtmlResult {
 struct AddRequestId;
 
 impl crate::Middleware for AddRequestId {
-    async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> axum::response::Response {
+    async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
         let mut res = next.run(req).await;
-        res.headers_mut().insert("x-request-id", axum::http::HeaderValue::from_static("0123456789abcdef"));
+        res.headers_mut().insert("x-request-id", http::HeaderValue::from_static("0123456789abcdef"));
         res
     }
 }
@@ -11384,7 +11538,7 @@ async fn a_page_s_header_map_holds_permissions_policy_without_growing() {
         Feature::WindowManagement,
     ];
     let none = || every.into_iter().fold(Policy::new(), Policy::allow_feature);
-    let reserved = axum::http::HeaderMap::<axum::http::HeaderValue>::with_capacity(13).capacity();
+    let reserved = http::HeaderMap::<http::HeaderValue>::with_capacity(13).capacity();
     // A page starts with this capacity, so ending with it means the map never grew (12 slots grown
     // once end at the same size).
     let start = crate::page::html_response(StatusCode::OK, String::new(), None);
@@ -11636,12 +11790,12 @@ mod referrer_url {
 
 /// An answer that brings a policy of its own, as a relayed service's does.
 async fn relayed(Params(at): Params<referrer_url::Relayed<'_>>) -> crate::Result<crate::Relay> {
-    let mut headers = axum::http::HeaderMap::new();
+    let mut headers = http::HeaderMap::new();
     // `|` between lines of their own.
     for line in at.policy.split('|') {
-        headers.append(header::REFERRER_POLICY, axum::http::HeaderValue::from_str(line).unwrap());
+        headers.append(header::REFERRER_POLICY, http::HeaderValue::from_str(line).unwrap());
     }
-    headers.insert(header::LOCATION, axum::http::HeaderValue::from_static("https://elsewhere.example/cb?code=1"));
+    headers.insert(header::LOCATION, http::HeaderValue::from_static("https://elsewhere.example/cb?code=1"));
     Ok(crate::Relay::new(StatusCode::FOUND, headers, Body::empty()))
 }
 
@@ -11839,7 +11993,7 @@ mod layout_reads {
     impl LayoutRead for CartCount {
         type Value = u32;
 
-        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+        fn start(&self, _: &http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
             self.started.fetch_add(1, Ordering::SeqCst);
             let (delay, finished) = (self.delay, self.finished.clone());
             Some(async move {
@@ -11862,7 +12016,7 @@ mod layout_reads {
 
         fn start(
             &self,
-            parts: &axum::http::request::Parts,
+            parts: &http::request::Parts,
         ) -> Option<impl std::future::Future<Output = Option<&'static str>> + Send + 'static> {
             let parts = parts.clone();
             Some(async move { Caller::<Viewer>::find(&parts, &()).await.ok().map(|Caller(Viewer(name))| name) })
@@ -11879,7 +12033,7 @@ mod layout_reads {
     impl LayoutRead for Unread {
         type Value = ();
 
-        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
+        fn start(&self, _: &http::request::Parts) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
             Some(async {})
         }
 
@@ -12353,7 +12507,7 @@ mod layout_reads {
     impl LayoutRead for PanicsAtStart {
         type Value = u32;
 
-        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+        fn start(&self, _: &http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
             panic!("no tenant on the head");
             #[allow(unreachable_code)]
             Some(async { 0 })
@@ -12420,7 +12574,7 @@ mod layout_reads {
 
         fn start(
             &self,
-            parts: &axum::http::request::Parts,
+            parts: &http::request::Parts,
         ) -> Option<impl std::future::Future<Output = &'static str> + Send + 'static> {
             let mut parts = parts.clone();
             Some(async move {
@@ -12441,7 +12595,7 @@ mod layout_reads {
     impl LayoutRead for SignOut {
         type Value = ();
 
-        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
+        fn start(&self, _: &http::request::Parts) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
             Some(async {})
         }
 
@@ -12488,7 +12642,7 @@ mod layout_reads {
     struct Holds(Arc<()>);
 
     impl crate::Middleware for Holds {
-        async fn call(&self, mut req: axum::extract::Request, next: impl crate::Next) -> Response {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::Next) -> Response {
             req.extensions_mut().insert(self.0.clone());
             next.run(req).await
         }
@@ -12547,7 +12701,7 @@ mod layout_reads {
         let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
         let (status, headers, body) = call_with(router, "POST", "/form", None, Some("text/html")).await;
         assert!(status.is_success() && body.contains(r#"<span class="count">3</span>"#), "{status} {body}");
-        assert_eq!(headers[axum::http::header::CACHE_CONTROL], "private, no-cache");
+        assert_eq!(headers[http::header::CACHE_CONTROL], "private, no-cache");
 
         let slow = CartCount { delay: Duration::from_secs(5), ..CartCount::default() };
         let routes =
@@ -12562,12 +12716,12 @@ mod layout_reads {
 
     #[tokio::test]
     async fn a_public_answer_draws_no_ones_value_whatever_started_the_read() {
-        // A plain axum handler takes `Req`, which starts the reads before its answer is known.
+        // A route of Corten's own takes `Req`, which starts the reads before its answer is known.
         let routes = Table::new().route("/", get(for_all));
         let router = App::new(Routes::from(routes)).layout_read(CartCount::default()).layout_read(SignedIn).router();
         let (status, headers, body) = call(router, "GET", None).await;
         assert!(status.is_success() && !body.contains("count") && !body.contains("corten-later"), "{body}");
-        assert!(headers[axum::http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+        assert!(headers[http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
     }
 
     /// A count whose view panics.
@@ -12588,7 +12742,7 @@ mod layout_reads {
     impl LayoutRead for BrokenView {
         type Value = u32;
 
-        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+        fn start(&self, _: &http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
             Some(async { 1 })
         }
 
@@ -12741,7 +12895,7 @@ mod layout_reads {
         let (_, headers, ada) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/who", None, None).await;
         assert!(ada.contains("<b>ada</b>"), "{ada}");
         assert_eq!(headers["corten-shell"], meta_content(&ada, "corten-shell"), "the header and the document agree");
-        assert_eq!(headers[axum::http::header::CACHE_CONTROL], "private, no-cache");
+        assert_eq!(headers[http::header::CACHE_CONTROL], "private, no-cache");
         // A navigation does not start the read, so the read's caller is not in the key: the same
         // key, so the runtime swaps the next page in rather than loading it in full.
         let (_, nav, _) = call_with(shop(CartCount::default(), Duration::ZERO), "GET", "/who", Some("nav"), None).await;
@@ -12762,7 +12916,7 @@ mod layout_reads {
             assert!(!body.contains("corten-later"), "{method} {uri}: {body}");
             if uri == "/public" {
                 assert!(body.contains("<header>Cart </header>"), "a Public page draws no one's count: {body}");
-                assert!(headers[axum::http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
+                assert!(headers[http::header::CACHE_CONTROL].to_str().unwrap().starts_with("public"), "{headers:?}");
             }
         }
         assert_eq!(count.started.load(Ordering::SeqCst), 0);
@@ -12787,7 +12941,7 @@ mod layout_reads {
     struct Rebuild;
 
     impl crate::Middleware for Rebuild {
-        async fn call(&self, req: axum::extract::Request, next: impl crate::Next) -> Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> Response {
             let (head, body) = next.run(req).await.into_parts();
             let bytes = body.collect().await.unwrap().to_bytes();
             let mut res = Response::new(Body::from(bytes));
@@ -12803,7 +12957,7 @@ mod layout_reads {
     impl LayoutRead for CartFill {
         type Value = f64;
 
-        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = f64> + Send + 'static> {
+        fn start(&self, _: &http::request::Parts) -> Option<impl std::future::Future<Output = f64> + Send + 'static> {
             Some(async { 40.0 })
         }
 
@@ -12857,7 +13011,7 @@ mod layout_reads {
     impl LayoutRead for Broken {
         type Value = u32;
 
-        fn start(&self, _: &axum::http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
+        fn start(&self, _: &http::request::Parts) -> Option<impl std::future::Future<Output = u32> + Send + 'static> {
             Some(async { panic!("the cart store") })
         }
 
@@ -12995,8 +13149,8 @@ mod layout_reads {
     /// An answer type of the app's own that wraps a page and does not say it is one.
     struct Wrapped(HtmlResponse);
 
-    impl axum::response::IntoResponse for Wrapped {
-        fn into_response(self) -> axum::response::Response {
+    impl crate::response::IntoResponse for Wrapped {
+        fn into_response(self) -> crate::response::Response {
             self.0.into_response()
         }
     }
@@ -13089,7 +13243,7 @@ mod layout_reads {
     struct SlowAfter;
 
     impl crate::Middleware for SlowAfter {
-        async fn call(&self, req: axum::extract::Request, next: impl crate::middleware::Next) -> axum::response::Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
             let res = next.run(req).await;
             tokio::time::sleep(Duration::from_millis(300)).await;
             res
@@ -13100,9 +13254,9 @@ mod layout_reads {
     struct RefuseAfter;
 
     impl crate::Middleware for RefuseAfter {
-        async fn call(&self, req: axum::extract::Request, next: impl crate::middleware::Next) -> axum::response::Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
             let _ = next.run(req).await;
-            axum::response::IntoResponse::into_response(StatusCode::FORBIDDEN)
+            crate::response::IntoResponse::into_response(StatusCode::FORBIDDEN)
         }
     }
 
@@ -13111,9 +13265,9 @@ mod layout_reads {
     struct ForbidAfter;
 
     impl crate::Middleware for ForbidAfter {
-        async fn call(&self, req: axum::extract::Request, next: impl crate::middleware::Next) -> axum::response::Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
             let _ = next.run(req).await;
-            axum::response::IntoResponse::into_response(crate::Refused::forbidden())
+            crate::response::IntoResponse::into_response(crate::Refused::forbidden())
         }
     }
 
@@ -13156,7 +13310,7 @@ mod layout_reads {
                 // The page's own reads, longer than the count's.
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 let _ = &req;
-                axum::response::Redirect::to("/")
+                (StatusCode::SEE_OTHER, [(header::LOCATION, "/")])
             }),
         );
         let router = App::new(Routes::from(routes))
@@ -13245,7 +13399,7 @@ mod layout_reads {
             get(|req: Req| async move {
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 let _ = &req;
-                axum::response::Redirect::to("/")
+                (StatusCode::SEE_OTHER, [(header::LOCATION, "/")])
             }),
         );
         let count = CartCount { delay: Duration::from_millis(20), ..CartCount::default() };
@@ -13296,7 +13450,7 @@ mod layout_reads {
                 "/away",
                 get(|req: Req| async move {
                     let _ = &req;
-                    axum::response::Redirect::to("/")
+                    (StatusCode::SEE_OTHER, [(header::LOCATION, "/")])
                 }),
             )
             .route("/none", shell(false))
@@ -13413,11 +13567,9 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
     assert!(dropped.contains("given up on after"), "{dropped}");
     assert_eq!(logged(100, true), "");
     assert!(crate::page::is_prefetch(
-        &[(axum::http::HeaderName::from_static("purpose"), axum::http::HeaderValue::from_static("prefetch"))]
-            .into_iter()
-            .collect()
+        &[(http::HeaderName::from_static("purpose"), http::HeaderValue::from_static("prefetch"))].into_iter().collect()
     ));
-    assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
+    assert!(!crate::page::is_prefetch(&http::HeaderMap::new()));
 }
 
 /// A failure is logged with each cause under its message (a reset connection under a client's
@@ -13473,14 +13625,15 @@ async fn a_failed_stream_is_logged_with_each_cause_under_it() {
             get(|| async {
                 let reset = Failed("connection reset", None);
                 let failed = Failed("error reading rows", Some(Box::new(reset)));
-                let chunks = futures_util::stream::iter([Ok(crate::Bytes::from_static(b"a,1\n")), Err(failed)]);
+                let chunks = futures_util::stream::iter([Ok(crate::http::Bytes::from_static(b"a,1\n")), Err(failed)]);
                 crate::Media::stream("application/octet-stream", chunks)
             }),
         )
         .route(
             "/message",
             get(|| async {
-                let chunks = futures_util::stream::iter([Ok(crate::Bytes::from_static(b"a,1\n")), Err("the store went away")]);
+                let chunks =
+                    futures_util::stream::iter([Ok(crate::http::Bytes::from_static(b"a,1\n")), Err("the store went away")]);
                 crate::Media::stream("application/octet-stream", chunks)
             }),
         )
@@ -13490,7 +13643,7 @@ async fn a_failed_stream_is_logged_with_each_cause_under_it() {
             "/corten",
             get(|| async {
                 let gone = Failed("the cursor closed", Some(Box::new(Failed("connection reset", None))));
-                let chunks = futures_util::stream::iter([Ok(crate::Bytes::from_static(b"a,1\n")), Err(Error::from(gone))]);
+                let chunks = futures_util::stream::iter([Ok(crate::http::Bytes::from_static(b"a,1\n")), Err(Error::from(gone))]);
                 crate::Media::stream("application/octet-stream", chunks)
             }),
         );
@@ -13516,7 +13669,7 @@ async fn a_failed_stream_is_logged_with_each_cause_under_it() {
 /// the two cannot drift apart.
 #[test]
 fn an_error_says_its_message_and_status() {
-    let sign_in: axum::http::Uri = "https://id.example/sign-in".parse().unwrap();
+    let sign_in: http::Uri = "https://id.example/sign-in".parse().unwrap();
     /// What it is, how it is made, its message and its status.
     type Case = (&'static str, Box<dyn Fn() -> Error>, &'static str, StatusCode);
     let cases: Vec<Case> = vec![
@@ -13601,8 +13754,8 @@ async fn a_connect_answered_with_success_has_no_body() {
 async fn path_parameters_are_read_from_the_path_matched() {
     struct Rewrite;
     impl crate::Middleware for Rewrite {
-        async fn call(&self, mut req: Request<Body>, next: impl crate::Next) -> axum::response::Response {
-            *req.uri_mut() = axum::http::Uri::from_static("/n/123456");
+        async fn call(&self, mut req: Request<Body>, next: impl crate::Next) -> crate::response::Response {
+            *req.uri_mut() = http::Uri::from_static("/n/123456");
             next.run(req).await
         }
     }
@@ -13612,7 +13765,7 @@ async fn path_parameters_are_read_from_the_path_matched() {
             .route("/s/{s}", get(|Num(s): Num<String>| async move { s }))
             .route(
                 "/two/{a}",
-                get(|req: crate::extract::Request| async move {
+                get(|req: crate::http::Request| async move {
                     match crate::route::read_path::<(u32, u32)>(&req.into_parts().0) {
                         Ok(_) => StatusCode::OK.into_response(),
                         Err(rejection) => rejection.into_response(),
@@ -13620,7 +13773,7 @@ async fn path_parameters_are_read_from_the_path_matched() {
                 }),
             )
     };
-    use axum::response::IntoResponse;
+    use crate::response::IntoResponse;
     let app = App::new(Routes::from(routes())).middleware(Rewrite).router();
     let (status, _, body) = call_with(app, "GET", "/n/7", None, None).await;
     assert_eq!((status, body.as_str()), (StatusCode::OK, "7"));
@@ -13656,7 +13809,7 @@ async fn an_app_layer_is_made_once_outside_the_router() {
     let routes =
         Table::new().route("/", get(|| async { "hi" })).route("/other", get(|| async { "other" }).post(|| async { "posted" }));
     let router = App::new(Routes::from(routes))
-        .layer(tower::util::MapResponseLayer::new(|res: axum::response::Response| {
+        .layer(tower::util::MapResponseLayer::new(|res: crate::response::Response| {
             res.map(|_| Body::from("changed by the layer"))
         }))
         .layer(tower::util::MapRequestLayer::new(move |req: Request<Body>| {

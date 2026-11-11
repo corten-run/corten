@@ -1,6 +1,5 @@
 //! `drain` is process-wide, so it gets its own test binary.
-use axum::body::Body;
-use corten_feed::{drain, Cursor, Feed, Row, Since};
+use corten_feed::{drain, Cursor, Feed, FeedBody, Row, Since};
 use http_body_util::BodyExt;
 use serde::Serialize;
 
@@ -15,7 +14,7 @@ impl Row for Item {
     }
 }
 
-async fn next_frame(body: &mut Body) -> Option<String> {
+async fn next_frame(body: &mut FeedBody) -> Option<String> {
     let frame = tokio::time::timeout(std::time::Duration::from_secs(2), body.frame()).await.expect("stream answered in time")?;
     Some(String::from_utf8(frame.unwrap().into_data().unwrap().to_vec()).unwrap())
 }

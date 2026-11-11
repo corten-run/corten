@@ -40,11 +40,12 @@
 //! it sets on a failure (a request id, `Retry-After`) stays on the error page. A middleware that
 //! turns a request away answers with a [`crate::Refused`] (`Refused::too_many(wait)`,
 //! `Refused::forbidden()`), answered in the request's mode as a [`crate::Caller`]'s refusal is:
-//! the error page for a browser, JSON for an API or a data client, `Retry-After` on a 429.
+//! the error page for a browser, JSON for an API or a data client, `Retry-After` on a 429 and the
+//! challenge in `WWW-Authenticate` on a 401.
 //!
 //! ```
 //! use std::time::Duration;
-//! use corten::{extract::Request, http::HeaderValue, middleware::{IntoResponse, Response}, prelude::*};
+//! use corten::{http::{HeaderValue, IntoResponse, Request, Response}, prelude::*};
 //!
 //! struct RequestId;
 //!
@@ -76,7 +77,7 @@
 //! a route that says `unstaged`, which meets none), never by a path compared in the middleware:
 //!
 //! ```
-//! # use corten::{extract::Request, middleware::{IntoResponse, Response}, prelude::*};
+//! # use corten::{http::{IntoResponse, Request, Response}, prelude::*};
 //! # struct RateLimit;
 //! # impl Middleware for RateLimit {
 //! #     async fn call(&self, req: Request, next: impl Next) -> Response { next.run(req).await }
@@ -104,12 +105,9 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
+use crate::http::Request;
+use crate::response::{IntoResponse, Response};
 pub use crate::router::MatchedPath;
-use axum::extract::Request;
-/// What a middleware answers, and how it makes one of anything else
-/// (`Refused::too_many(wait).into_response()`, `StatusCode::FORBIDDEN.into_response()`). It takes
-/// the whole request, [`crate::extract::Request`].
-pub use axum::response::{IntoResponse, Response};
 use futures_util::future::Either;
 
 /// The rest of the request after a middleware: the next middleware, then the handler.
@@ -250,7 +248,7 @@ fn handle(route: Option<crate::router::Route>, req: Request) -> impl Future<Outp
     let here = req.extensions().get::<crate::layout::StartHere>().cloned();
     let answer = match route {
         Some(route) => Either::Left(route.call(req)),
-        None => Either::Right(std::future::ready(axum::response::IntoResponse::into_response(axum::http::StatusCode::NOT_FOUND))),
+        None => Either::Right(std::future::ready(IntoResponse::into_response(http::StatusCode::NOT_FOUND))),
     };
     match here {
         None => Either::Left(answer),

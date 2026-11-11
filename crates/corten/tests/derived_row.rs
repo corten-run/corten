@@ -115,13 +115,13 @@ fn the_id_is_the_marked_field() {
     assert_eq!(Tagged { key: "t".into(), value: vec![1u8] }.id(), "t");
 }
 
-async fn body(response: impl corten::axum::response::IntoResponse) -> String {
+async fn body(response: impl corten::http::IntoResponse) -> String {
     let bytes = response.into_response().into_body().collect().await.unwrap().to_bytes();
     String::from_utf8(bytes.to_vec()).unwrap()
 }
 
 /// The live stream's first frames: the retry line and the replayed patch.
-async fn first_frames(mut stream: corten::axum::body::Body) -> String {
+async fn first_frames(mut stream: corten::feed::FeedBody) -> String {
     let mut text = String::new();
     while !text.contains("data: ") {
         let frame = tokio::time::timeout(std::time::Duration::from_secs(2), stream.frame()).await.expect("answered in time");

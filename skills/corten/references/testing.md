@@ -69,5 +69,6 @@ mod tests {
    `examples/` reach it. A fixture recorder that calls a live service is an example or a binary,
    never a test. See the app guide, Testing an app.
 6. A service the app calls over HTTP is, in a test, a stand-in on a local port that the app's
-   configuration points at: `corten::axum::Router` and `corten::axum::serve` (the one place an app
-   names `corten::axum`), never `corten::serve_on`, which would give it the app's defaults.
+   configuration points at: a server of the test's own, `axum::Router` and `axum::serve` with axum
+   as a dev-dependency (the one place an app names axum; Corten does not depend on it), never
+   `corten::serve_on`, which would give it the app's defaults.

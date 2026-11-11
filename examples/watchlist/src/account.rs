@@ -5,8 +5,8 @@ use std::{
 };
 
 use corten::{
-    Bytes, Error, Media,
-    http::{StatusCode, request::Parts},
+    Error, Media,
+    http::{Bytes, StatusCode, request::Parts},
     prelude::*,
     security::{
         Nonce,

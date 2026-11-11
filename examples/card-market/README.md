@@ -28,7 +28,7 @@ docker run --rm -p 3000:8080 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token c
 |---|---|---|
 | `API_BASE` | the item API the pages read | the demo catalog built in (`fixtures/demo.json`) |
 | `ITEM_SOURCE=fixture`, `FIXTURE_PATH` | items from a JSON file of API responses, loaded at startup (benchmarks): mount one, such as `fixtures/smoke.json` (`-e ITEM_SOURCE=fixture -e FIXTURE_PATH=/fixtures/smoke.json -v "$PWD/examples/card-market/fixtures:/fixtures:ro"`) | `fixtures/items.json` in the working directory |
-| `API_KEYS` | partners that may set alerts through `/api/alerts`, sending the key in `X-Api-Key`: `name=key,name=key` | no partner may |
+| `API_KEYS` | partners that may set alerts through `/api/alerts`, sending the key as a bearer token (`Authorization: Bearer <key>`): `name=key,name=key` | no partner may |
 | `AGENT_TOKENS` | tokens for the MCP endpoint `/mcp`, sent as `Authorization: Bearer <token>`, comma separated | no agent may |
 | `AGENT_ORIGINS` | origins whose pages may call `/mcp` from the browser (CORS), comma separated | none |
 | `EMBED_ORIGINS` | origins whose pages may frame an item's card (`/embed/items/{id}`), comma separated; no other page may be framed | none |

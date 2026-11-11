@@ -5076,7 +5076,7 @@ async function run(browser) {
   await page.waitForFunction(() => document.title === "Stocks | Watchlist");
   check("data-reload loads the whole document", await page.evaluate(() => (/** @type {any} */ (window)).__marker === undefined));
 
-  // A multipart form is sent as FormData. /watch reads a URL-encoded form, so axum rejects it with
+  // A multipart form is sent as FormData. /watch reads a URL-encoded form, so `Form` rejects it with
   // plain text, which a browser never sees: it gets the app's error page.
   await page.waitForSelector(`${live}[data-status="live"]`, { timeout: 5000 }).catch(() => {});
   /** @type {string[]} */

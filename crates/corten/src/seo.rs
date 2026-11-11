@@ -26,10 +26,10 @@
 
 use std::time::Duration;
 
-use axum::{
-    http::{header, HeaderValue},
-    response::{IntoResponse, Response},
-};
+use crate::response::IntoResponse;
+use crate::response::Response;
+use http::header;
+use http::HeaderValue;
 
 use crate::{
     answer::{Answer, AnyInputs, Format},

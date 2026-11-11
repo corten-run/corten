@@ -95,8 +95,8 @@ for as long as it takes): a slow step that ignores the signal holds shutdown tha
 handler is gone, `serve` waits for the work after the app's tasks, within the same
 `App::shutdown_grace`; past it the work is left to end with the process, and logged. A panic in
 the work is the handler's while the handler awaits it, and is logged once it is gone. An app that
-serves its router another way (`axum::serve`) runs the work to its end, but it is not told of
-shutdown or waited for. The work takes what it uses by value (it is `Send +
+serves its router another way (its own hyper loop around `App::router`) runs the work to its end,
+but it is not told of shutdown or waited for. The work takes what it uses by value (it is `Send +
 'static`). Keep only what must finish in it: the rest of the handler is still dropped when the
 client leaves, which is what stops it.
 

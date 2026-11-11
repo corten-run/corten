@@ -42,11 +42,16 @@
 
 use std::marker::PhantomData;
 
-use axum::{
-    body::{Body, HttpBody},
-    http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
-    response::{IntoResponse, Response},
-};
+use crate::body::Body;
+use crate::response::IntoResponse;
+use crate::response::Response;
+use http::header;
+use http::HeaderMap;
+use http::HeaderName;
+use http::HeaderValue;
+use http::Method;
+use http::StatusCode;
+use http_body::Body as HttpBody;
 
 use crate::{
     html::json_string,
@@ -63,6 +68,7 @@ pub struct Api<P> {
     with_text: Vec<&'static str>,
     pub(crate) origins: Vec<String>,
     deadline: Option<Option<std::time::Duration>>,
+    body_limit: Option<usize>,
     errors: Option<ErrorShape>,
     middleware: Vec<std::sync::Arc<dyn crate::middleware::Erased>>,
     /// Routes Corten serves outside the prefix with one of these (`route::Companion`).
@@ -91,6 +97,7 @@ impl<P: Prefix> Api<P> {
             with_text: Vec::new(),
             origins: Vec::new(),
             deadline: None,
+            body_limit: None,
             errors: None,
             middleware: Vec::new(),
             companions: Vec::new(),
@@ -231,12 +238,24 @@ impl<P: Prefix> Api<P> {
         self
     }
 
+    /// The most of a request body, in bytes, that [`crate::http::Bytes`], `String`, [`crate::Json`] and
+    /// [`crate::Form`] read under the prefix, and what an [`crate::Upload`] keeps unless its
+    /// handler sets its own, in place of the limit of the API or area around it, or
+    /// [`crate::App::body_limit`] (unset, it takes theirs; see [`crate::App::api`]):
+    /// `.body_limit(16 << 20)` for an API that takes large documents, so the rest of the app keeps
+    /// its smaller one. Over it the answer is the JSON 413. A raised limit is held for a slow client
+    /// until the deadline ([`Api::deadline`]), so an API that raises one keeps a deadline.
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = Some(bytes);
+        self
+    }
+
     /// The JSON every failure Corten answers under the prefix is written as, in place of the
     /// Problem Details document (sent as `application/json` then), for an API that speaks another
     /// protocol's error shape:
     /// an unknown URL (404), a wrong method (405, with `Allow`), a cross-site write (403), the
-    /// deadline (503), a request an extractor rejects, a `Caller` that refuses (401 or 403, with
-    /// `WWW-Authenticate`) and a handler's `Error`. `message` is what the client may be told: a
+    /// deadline (503), a request an extractor rejects, a `Caller` that refuses (401, with its
+    /// `WWW-Authenticate`, or 403) and a handler's `Error`. `message` is what the client may be told: a
     /// 4xx's message, a 5xx's reason (and its message under `corten dev`). A failure with a JSON
     /// body of the handler's own, and a [`crate::Relay`]'s, pass through as they are, and so
     /// does the 422 of the input's field errors (or the 409 or 410 of a refusal, `Errors::refuse`;
@@ -308,6 +327,9 @@ pub(crate) struct Mount {
     /// Its deadline ([`Api::deadline`]): its own, else, once the router is built, that of the
     /// nearest API or area around it that set one.
     pub deadline: Option<Option<std::time::Duration>>,
+    /// Its body limit ([`Api::body_limit`]): its own, else, once the router is built, that of the
+    /// nearest API or area around it that set one.
+    pub body_limit: Option<usize>,
     /// How its failures are written ([`Api::errors`]): its own, else the nearest API's around it.
     pub errors: Option<ErrorShape>,
     /// Its middleware ([`Api::middleware`]), in the order it runs: once the router is built, the
@@ -333,6 +355,7 @@ impl Mount {
             prefix,
             origins: api.origins.clone(),
             deadline: api.deadline,
+            body_limit: api.body_limit,
             errors: api.errors.clone(),
             middleware: api.middleware.iter().cloned().collect(),
             written: api.written.clone(),
@@ -356,12 +379,15 @@ impl Mount {
         under(&self.prefix, path)
     }
 
-    /// Takes what this API, inside `outer`, leaves unset from it (deadline, error shape; never its
+    /// Takes what this API, inside `outer`, leaves unset from it (deadline, body limit, error shape; never its
     /// origins), and runs `outer`'s middleware before its own, as a nested area does.
     /// `outer` has already taken its own enclosing API's.
     pub fn inherit(&mut self, outer: &Mount) {
         if self.deadline.is_none() {
             self.deadline = outer.deadline;
+        }
+        if self.body_limit.is_none() {
+            self.body_limit = outer.body_limit;
         }
         if self.errors.is_none() {
             self.errors = outer.errors.clone();
@@ -534,7 +560,7 @@ pub(crate) async fn json_failure(res: Response, dev: bool, shape: Option<&ErrorS
     let detail = match failed {
         Some(message) => Some(message.to_string()),
         None if text => {
-            let bytes = axum::body::to_bytes(body, 16 * 1024).await.unwrap_or_default();
+            let bytes = crate::body::to_bytes(body, 16 * 1024).await.unwrap_or_default();
             let text = String::from_utf8_lossy(&bytes).trim().to_string();
             if status.is_server_error() {
                 tracing::error!(status = status.as_u16(), "corten: request failed: {text}");

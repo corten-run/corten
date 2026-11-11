@@ -2,28 +2,25 @@
 
 use std::{convert::Infallible, future::Future, marker::PhantomData, pin::Pin, sync::Arc, time::Duration};
 
-use axum::{
-    extract::Request,
-    http::header,
-    response::{
-        sse::{Event, KeepAlive, Sse},
-        Response,
-    },
-};
 use futures_util::{stream, StreamExt};
+use http::header;
 
 use crate::{
     api::{Api, Mount},
     assets::Assets,
     cache::{self, Seen},
     client::Peer,
+    handler::Request,
+    listener::Listener,
     middleware::Middleware,
     page::{self, default_error_page, error_page_fn, Asked, Credentials, ErrorPageFn, Failure, Shared},
     pwa::Pwa,
+    response::Response,
     route::{Methods, Prefix, Route as TypedRoute, Routes},
     router::{get, Route, Router, Table},
     security::{Applied, NonceSlot, Policy},
     signal::{self, Watch},
+    sse::Event,
     task::{Finishing, Running, Task},
     Mode, Signal,
 };
@@ -69,6 +66,7 @@ pub struct Area<P> {
     with_text: Vec<&'static str>,
     components: Vec<crate::Component>,
     deadline: Option<Option<Duration>>,
+    body_limit: Option<usize>,
     sources: crate::security::Sources,
     middleware: Vec<Arc<dyn crate::middleware::Erased>>,
     /// Corten's own routes served with its routes (an MCP endpoint's metadata), outside its
@@ -200,6 +198,19 @@ impl<P: Prefix> Area<P> {
         self
     }
 
+    /// The most of a request body, in bytes, that [`crate::http::Bytes`], `String`, [`crate::Json`] and
+    /// [`crate::Form`] read at the prefix or under it, and what an [`crate::Upload`] keeps unless
+    /// its handler sets its own, in place of [`App::body_limit`]: `.body_limit(64 << 10)` for an
+    /// area of short forms, or `.body_limit(16 << 20)` for one that takes large documents, so
+    /// every other page keeps the app's. Over it the answer is a 413. In nested areas the
+    /// innermost that sets one decides, and an [`App::api`] under the prefix with no limit of its
+    /// own, nor one from an API around it, takes it too. A raised limit is held for a slow client
+    /// until the deadline ([`Area::deadline`]), so a prefix that raises one keeps a deadline.
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = Some(bytes);
+        self
+    }
+
     /// A step of the area's own in each request at its prefix or under it (a write limit, an
     /// audit log): its routes but one that says `unstaged`, its nested areas' and an unknown URL
     /// there, as with its
@@ -281,6 +292,7 @@ struct Placed {
     companions: Vec<String>,
     components: Vec<crate::Component>,
     deadline: Option<Option<Duration>>,
+    body_limit: Option<usize>,
     sources: crate::security::Sources,
     middleware: Vec<Arc<dyn crate::middleware::Erased>>,
 }
@@ -337,6 +349,7 @@ pub struct App<M = ()> {
     components: Vec<crate::Component>,
     areas: Vec<Placed>,
     deadline: Option<Duration>,
+    body_limit: usize,
     apis: Vec<(Mount, Table)>,
     /// The APIs' route paths as written, checked with the pages' when the router is built.
     api_paths: Vec<&'static str>,
@@ -471,6 +484,7 @@ impl App {
             components: Vec::new(),
             areas: Vec::new(),
             deadline: Some(DEADLINE),
+            body_limit: crate::extract::BODY_LIMIT,
             apis: Vec::new(),
             api_paths: Vec::new(),
             tasks: Vec::new(),
@@ -510,6 +524,7 @@ impl App {
             components: self.components,
             areas: self.areas,
             deadline: self.deadline,
+            body_limit: self.body_limit,
             apis: self.apis,
             api_paths: self.api_paths,
             tasks: self.tasks,
@@ -563,6 +578,7 @@ impl<M: Middleware> App<M> {
             with_text: Vec::new(),
             components: Vec::new(),
             deadline: None,
+            body_limit: None,
             sources: crate::security::Sources::default(),
             middleware: Vec::new(),
             companions: Vec::new(),
@@ -582,6 +598,7 @@ impl<M: Middleware> App<M> {
             companions,
             components: area.components,
             deadline: area.deadline,
+            body_limit: area.body_limit,
             sources: area.sources,
             middleware: area.middleware,
         });
@@ -675,6 +692,24 @@ impl<M: Middleware> App<M> {
     /// not lift it for every page.
     pub fn deadline(mut self, deadline: impl Into<Option<Duration>>) -> Self {
         self.deadline = deadline.into();
+        self
+    }
+
+    /// The most of a request body, in bytes, that [`crate::http::Bytes`], `String`, [`crate::Json`] and
+    /// [`crate::Form`] read, and what an [`crate::Upload`] keeps unless its handler sets its own
+    /// ([`crate::Upload::limit`]): 2 MiB unless set. Over it the answer is a 413 (before the
+    /// handler runs for the readers, at the read that crosses it for an `Upload`), and the rest of
+    /// the body is read past by up to the limit again (at most 64 MiB) so a browser still sending
+    /// sees it (an `Upload` reads past by up to 64 MiB whatever its limit). The readers wait for a
+    /// slow client until the deadline, not an idle time as an `Upload` does, so a raised limit
+    /// keeps one ([`App::deadline`]); a proxy in front needs a body limit of at least twice the
+    /// app's, or the limit and 64 MiB where uploads take it (see the deploy guide). An area or an API whose
+    /// routes take more, or should take less, sets its own ([`Area::body_limit`],
+    /// [`Api::body_limit`]), so one route that takes large documents does not raise it for every
+    /// page. A handler that takes the whole request reads its body at a limit of its own
+    /// ([`crate::extract::bytes_up_to`]); an unstaged route reads no body.
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = bytes;
         self
     }
 
@@ -1009,7 +1044,7 @@ impl<M: Middleware> App<M> {
     where
         L: tower_layer::Layer<Router> + Send + 'static,
         L::Service: tower_service::Service<Request> + Clone + Send + Sync + 'static,
-        <L::Service as tower_service::Service<Request>>::Response: axum::response::IntoResponse + 'static,
+        <L::Service as tower_service::Service<Request>>::Response: crate::response::IntoResponse + 'static,
         <L::Service as tower_service::Service<Request>>::Error: Into<Infallible> + 'static,
         <L::Service as tower_service::Service<Request>>::Future: Send + 'static,
     {
@@ -1060,7 +1095,8 @@ impl<M: Middleware> App<M> {
     /// The finished router: the app's routes with everything around them, its
     /// [layers](App::layer) included. For serving it another way, and for a test that sends what
     /// [`App::test`]'s client does not (a live stream it reads as it comes); it starts none of the
-    /// app's [tasks](App::task).
+    /// app's [tasks](App::task). A connection loop of the app's own gives each request the client's
+    /// address as a [`crate::PeerAddr`] in its extensions, which [`crate::ClientIp`] starts from.
     pub fn router(mut self) -> Router {
         let dev = self.dev.unwrap_or_else(|| std::env::var_os("CORTEN_DEV").is_some());
         let bounds = self.drain().each;
@@ -1186,9 +1222,9 @@ impl<M: Middleware> App<M> {
             routes = routes.route(
                 "/corten/dev",
                 get(move || {
-                    let first = Event::default().retry(Duration::from_millis(250)).data(boot.clone());
-                    let events = stream::once(async move { Ok::<_, std::convert::Infallible>(first) }).chain(stream::pending());
-                    async move { Sse::new(events).keep_alive(KeepAlive::default()) }
+                    let first = Event::new().retry(Duration::from_millis(250)).data(&boot);
+                    let events = stream::once(async move { first }).chain(stream::pending());
+                    async move { crate::sse::response(events) }
                 }),
             );
             // The runtime's checks that only a developer needs (js/dev.js), as the source: no
@@ -1282,7 +1318,7 @@ impl<M: Middleware> App<M> {
         }
         shared.dev = dev;
         shared.layout_reads = self.layout_reads.into();
-        // The same path routed in two places (the app's routes and an area's) is one route to axum,
+        // The same path routed in two places (the app's routes and an area's) is one route to the router,
         // with the methods of both.
         let mut pages: Vec<(&'static str, bool)> = Vec::new();
         let written: Vec<&str> = self
@@ -1340,6 +1376,10 @@ impl<M: Middleware> App<M> {
         let mut area_deadlines: Vec<(&'static str, Option<Duration>)> =
             self.areas.iter().filter_map(|area| Some((area.prefix, area.deadline?))).collect();
         area_deadlines.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
+        // And their own body limit, the same way.
+        let mut area_limits: Vec<(&'static str, usize)> =
+            self.areas.iter().filter_map(|area| Some((area.prefix, area.body_limit?))).collect();
+        area_limits.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
         // Each area's middleware with every enclosing area's, the outermost first; the innermost
         // area first, so the first under a path decides. Empty unless an area has some.
         let mut area_middleware: Vec<(&'static str, crate::middleware::Stack)> = self
@@ -1369,6 +1409,10 @@ impl<M: Middleware> App<M> {
             if mount.deadline.is_none() {
                 mount.deadline =
                     area_deadlines.iter().find(|(prefix, _)| crate::api::under(prefix, &mount.prefix)).map(|(_, d)| *d);
+            }
+            if mount.body_limit.is_none() {
+                mount.body_limit =
+                    area_limits.iter().find(|(prefix, _)| crate::api::under(prefix, &mount.prefix)).map(|(_, l)| *l);
             }
         }
         // The routes that say `unstaged`, each through a lane of its own in place of the stages,
@@ -1404,6 +1448,8 @@ impl<M: Middleware> App<M> {
                     shared: Arc::new(shared),
                     deadline: self.deadline,
                     area_deadlines,
+                    body_limit: self.body_limit,
+                    area_limits,
                     bounds,
                     policy,
                     mounts,
@@ -1473,7 +1519,7 @@ pub async fn listeners(port: u16) -> std::io::Result<Vec<tokio::net::TcpListener
     bind(host.as_deref(), port).await
 }
 
-/// [`serve`] on listeners of the app's own: anything that implements axum's
+/// [`serve`] on listeners of the app's own: anything that implements
 /// [`Listener`](crate::Listener), such as a Unix socket or a socket a supervisor hands
 /// over. Shutdown is `serve`'s, across all of them: on Ctrl-C or `SIGTERM` the app's tasks are
 /// told, live streams end, every listener closes and finishes its requests, and it returns once
@@ -1482,7 +1528,7 @@ pub async fn listeners(port: u16) -> std::io::Result<Vec<tokio::net::TcpListener
 /// connection over would have it outside them.
 pub async fn serve_on<L, M>(listeners: Vec<L>, app: App<M>) -> std::io::Result<()>
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     M: Middleware,
 {
@@ -1507,7 +1553,7 @@ where
 /// The step's error is not read: the connection closes.
 pub async fn serve_wrapped<L, W, F, Io, E, M>(listeners: Vec<L>, wrap: W, app: App<M>) -> std::io::Result<()>
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
     F: Future<Output = Result<Io, E>> + Send + 'static,
@@ -1538,7 +1584,7 @@ pub(crate) async fn run<L, W, F, Io, E, M>(
     stop: impl Future<Output = ()>,
 ) -> std::io::Result<()>
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
     F: Future<Output = Result<Io, E>> + Send + 'static,
@@ -1639,7 +1685,7 @@ pub(crate) async fn serve_router<L, W, F, Io, E>(
     stop: impl Future<Output = ()>,
 ) -> std::io::Result<()>
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: std::fmt::Debug + 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
     F: Future<Output = Result<Io, E>> + Send + 'static,
@@ -1726,7 +1772,7 @@ async fn serve_listener<L, W, F, Io, E>(
     mut stop: tokio::sync::watch::Receiver<Option<Closing>>,
 ) -> std::io::Result<usize>
 where
-    L: axum::serve::Listener,
+    L: Listener,
     L::Addr: 'static,
     W: Fn(L::Io) -> F + Send + Sync + 'static,
     F: Future<Output = Result<Io, E>> + Send + 'static,
@@ -1828,7 +1874,7 @@ struct Connection {
 }
 
 impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connection {
-    type Response = axum::http::Response<crate::watch::Answered>;
+    type Response = http::Response<crate::watch::Answered>;
     type Error = std::convert::Infallible;
     type Future = crate::watch::Answer<crate::client::WithPeer<<Router as tower_service::Service<Request>>::Future>>;
 
@@ -1838,7 +1884,7 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
 
     fn call(&mut self, req: hyper::Request<hyper::body::Incoming>) -> Self::Future {
         // Marks a read of the body that waits for the client, for the deadline (#1061).
-        let req = req.map(|body| axum::body::Body::new(crate::extract::Arriving(body)));
+        let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
         if let Some(bound) = &self.bound {
             bound.arrived();
@@ -1977,6 +2023,10 @@ struct Layer<S> {
     deadline: Option<Duration>,
     /// [`Area::deadline`]s, innermost prefix first; empty unless an area set one.
     area_deadlines: Vec<(&'static str, Option<Duration>)>,
+    /// [`App::body_limit`].
+    body_limit: usize,
+    /// [`Area::body_limit`]s, innermost prefix first; empty unless an area set one.
+    area_limits: Vec<(&'static str, usize)>,
     /// Each connection keeps its request's deadline for shutdown ([`Drain::each`]).
     bounds: bool,
     policy: Applied,
@@ -2029,6 +2079,14 @@ impl<S: Steps> Layer<S> {
         if self.bounds {
             crate::client::answering(deadline);
         }
+        // The body limit, the same way, carried by the request's signal.
+        let body_limit = match mount {
+            Some(mount) => mount.body_limit.unwrap_or(self.body_limit),
+            None if own || self.area_limits.is_empty() => self.body_limit,
+            None => {
+                self.area_limits.iter().find(|(prefix, _)| crate::api::under(prefix, path)).map_or(self.body_limit, |(_, l)| *l)
+            }
+        };
         // The middleware of the area or API the request is in, where one has some.
         let scope = self.steps.scope(mount, own, path);
         if let Some(mount) = mount {
@@ -2092,9 +2150,9 @@ impl<S: Steps> Layer<S> {
         // nothing.
         let tagged = !own
             && mount.is_none()
-            && matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD)
+            && matches!(*req.method(), http::Method::GET | http::Method::HEAD)
             && (worth_a_tag || req.headers().contains_key(header::IF_NONE_MATCH));
-        let has: Vec<axum::http::HeaderValue> = match tagged {
+        let has: Vec<http::HeaderValue> = match tagged {
             true => req.headers().get_all(header::IF_NONE_MATCH).iter().cloned().collect(),
             false => Vec::new(),
         };
@@ -2104,7 +2162,7 @@ impl<S: Steps> Layer<S> {
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let (mut res, caller, (mode, fetched)) = self.run(req, route, mount, deadline, scope).await;
+        let (mut res, caller, (mode, fetched)) = self.run(req, route, mount, deadline, body_limit, scope).await;
         #[cfg(debug_assertions)]
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;
@@ -2112,7 +2170,7 @@ impl<S: Steps> Layer<S> {
         // The outer route's `Allow` (the router adds it to a method that route lacks) would list
         // methods the path does not have: none has any here, whatever answered.
         if foreign {
-            res.headers_mut().insert(header::ALLOW, axum::http::HeaderValue::from_static(""));
+            res.headers_mut().insert(header::ALLOW, http::HeaderValue::from_static(""));
         }
         // First: the security headers reserve room for `Cache-Control` and `Vary` too.
         self.policy.headers(&mut res, nonce.as_ref(), csp);
@@ -2155,7 +2213,7 @@ impl<S: Steps> Layer<S> {
         }
         // Refused before `run` gives the request its signal: the error page reads the app's
         // state (its static files, head tags, import map, the visitor's zone) from it.
-        let watch = Watch(self.signal(req.headers()));
+        let watch = Watch(self.signal(req.headers(), crate::extract::BODY_LIMIT));
         req.extensions_mut().insert(watch.0.clone());
         Some((Asked::new(req, &self.shared, Credentials::of(req.headers()), (mode, fetched)), watch))
     }
@@ -2172,14 +2230,14 @@ impl<S: Steps> Layer<S> {
     /// A request's signal in this app: the app's state, and the zone the browser reported when
     /// the app learns its visitors' zones (`req.zone()`; with `zoned_dates` the page and a live
     /// part's fragments are written in it, none for a `Public` answer, `Signal::zone`).
-    fn signal(&self, headers: &axum::http::HeaderMap) -> Signal {
+    fn signal(&self, headers: &http::HeaderMap, body_limit: usize) -> Signal {
         #[cfg(feature = "zones")]
         if self.shared.client_zone {
-            return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(headers));
+            return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(headers), body_limit);
         }
         #[cfg(not(feature = "zones"))]
         let _ = headers;
-        Signal::for_app(self.shared.clone())
+        Signal::for_app(self.shared.clone(), body_limit)
     }
 
     /// The response, whether anything read who is asking, and the request's mode with whether the
@@ -2190,11 +2248,12 @@ impl<S: Steps> Layer<S> {
         route: Option<Route>,
         api: Option<&Mount>,
         deadline: Option<Duration>,
+        body_limit: usize,
         scope: S::Scope<'a>,
     ) -> (Response, bool, (Mode, bool)) {
         // Dropped with this future if the client leaves first; then the response's. The zone the
         // browser reported is read once, here.
-        let watch = Watch(self.signal(req.headers()));
+        let watch = Watch(self.signal(req.headers(), body_limit));
         req.extensions_mut().insert(watch.0.clone());
         let mode = page::Mode::asked(req.headers());
         let next = Next { steps: &self.steps, scope, route };
@@ -2284,7 +2343,7 @@ struct StaticFiles {
     /// The `embed!` struct, which its files name.
     owner: &'static str,
     /// Its files, as compiled in.
-    files: fn() -> Vec<(String, axum::body::Bytes)>,
+    files: fn() -> Vec<(String, bytes::Bytes)>,
 }
 
 #[cfg(test)]
@@ -2314,7 +2373,7 @@ mod tests {
         assert_eq!(bound.drain(drain, false), drain.grace, "the next request, not known yet");
     }
 
-    fn none() -> Vec<(String, axum::body::Bytes)> {
+    fn none() -> Vec<(String, bytes::Bytes)> {
         Vec::new()
     }
 

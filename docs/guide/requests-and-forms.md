@@ -6,22 +6,36 @@
 
 ### HTTP types
 
-A status, a method, a header or a URL outside the app is named from `corten::http`
-(`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the `header` constants,
-`Uri`, `request::Parts`): the `http` crate's types, which hyper, axum and HTTP clients share, so
-an app's code names them without naming the server library under Corten. The rest of what an
-app names about a request is Corten's too: an extractor of its own implements
-`corten::extract::FromRequestParts` (with `FromRef` for a part of the state, beside the derive of
-the same name), a middleware takes `corten::extract::Request` and answers a
-`corten::middleware::Response` (`IntoResponse` makes one of a `Refused` or a status), a relay's
-body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a
-`corten::Listener`, and a test sends its requests with `app.test()`. The extractor and handler
+The HTTP types an app names are in one module, `corten::http`: a status, a method, a header or
+a URL outside the app (`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the
+`header` constants, `Uri`, `request::Parts`), the `http` crate's types, which hyper and HTTP
+clients share, so an app's code names them without naming the server library under Corten;
+and the body, request and response Corten builds on them: `Request` (what a middleware or a
+handler takes whole), `Response` (what it answers), `IntoResponse` (which makes one of a
+`Refused`, a status or a tuple of them), `IntoResponseParts`, `Body` (a relay's) and `Bytes`
+(a body's bytes, shared rather than copied). The rest of what an app names about a request is
+Corten's too: an extractor of its own implements `corten::extract::FromRequestParts` (with
+`FromRef` for a part of the state, beside the derive of the same name), a listener of its own is
+a `corten::Listener`, and a test sends its requests with `app.test()`. The extractor and handler
 traits and `State` are Corten's own, with the names, the `Rejection` and the
 `from_request_parts(parts, state)` signature they had as axum's, so an extractor written against
-axum's compiles against them with its `use` changed; `Request`, `Response` and `Body` are the
-`http` crate's and axum's types, named from Corten so the app imports one crate
-([design Choice 21](../design.md#choice-own-extractors)). axum's own extractors (`Path`,
-`Query`, `Json`, `Extension`, `ConnectInfo`, `Parts`) are not handler arguments: a route's path
+axum's compiles against them with its `use` changed; `Request` and `Response` are the `http`
+crate's with Corten's `Body`, and `IntoResponse` is Corten's, so the app imports one crate and
+Corten depends on no web framework ([design Choice 21](../design.md#choice-own-extractors)).
+A body read whole (`Bytes`, `String`, `Json`, `Form`) is refused over its limit with a 413 (the
+rest read past until twice the limit has arrived, at most 64 MiB past it, so a browser still
+sending reads it, and refused unread when its length says it is longer than that), or with a 400
+when it cannot be read. The limit is 2 MiB unless the app, an area or an API sets its own, as it
+sets a deadline: `App::body_limit`, `Area::body_limit`, `Api::body_limit` (in bytes; the
+innermost area or API that sets one decides), so `.api(|api| api.body_limit(16 << 20))` takes
+large documents there while every page keeps 2 MiB, and an `Upload` keeps the same limit unless
+its handler sets `upload.limit`; the refusal is a `corten::extract::BodyRejection`, plain text
+as axum's were, so a handler that takes `Result<Json<T>, BodyRejection>` answers it itself.
+axum's own extractors (`Path`,
+`Query`, `Json`, `Extension`, `ConnectInfo`, `Parts`) are not handler arguments, since they
+implement axum's traits and Rust's orphan rule keeps an app from implementing Corten's for
+them (a type that implements neither does not compile, `corten::extract`'s `compile_fail`
+example): a route's path
 and query are its `Params`, a body its `Json` or `Form`, and the whole head its `Req`. A handler
 that answers a refusal itself takes `Result<T, T::Rejection>`, as `Option<T>` goes without a
 value; an extractor of the app's own that needs two others reads each in turn, since a tuple of
@@ -41,8 +55,8 @@ breaks is a 400; each is a
 `corten::extract::BodyError` to match or pass on with `?`. The handler removes what it wrote of a
 body it does not finish, and puts the route in an API with a `deadline` that leaves time to read
 it, which shutdown also waits for. A file in a form is `Upload`'s `chunk()` (Files, below). A route's
-path and query are read as its `Params`, never another way. `corten::axum` stays for a stand-in
-server in a test (its `Router` and `serve`; [Testing an app](app.md#testing-an-app)).
+path and query are read as its `Params`, never another way. A test's stand-in for another
+service is a server of the test's own, not Corten ([Testing an app](app.md#testing-an-app)).
 
 ### Request modes
 
@@ -1155,7 +1169,7 @@ struct NewListing { title: String, price: u32, photos: Files }
 
 async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
     let f = NewListing::FIELDS;
-    upload.limit(60 << 20); // what the request keeps; 2 MiB unless set
+    upload.limit(60 << 20); // what the request keeps; the route's body_limit (2 MiB) unless set
     let (mut photos, mut errors) = (Vec::new(), Errors::new());
     while let Some(mut file) = upload.next_file().await? {
         if !file.is(f.photos) { continue }
