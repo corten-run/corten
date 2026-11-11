@@ -3390,16 +3390,17 @@ async function run(browser) {
   /**
    * Subscribes to a feed of the smoke's own at `/feed/{name}` and counts what it asks for: the
    * `n`th stream is answered `stream(n)` (a body, or a status with no stream), or sent to
-   * `forward`, and the `n`th snapshot `snapshot(n)`'s status (200: epoch `a`, seq 1, no rows).
+   * `forward`, and the `n`th snapshot `snapshot(n)`'s status (200: epoch `a`, seq 1, no rows, or
+   * `body(n)`).
    * @param {string} name @param {(n: number) => string | { status: number }} stream
-   * @param {{ forward?: string, snapshot?: (n: number) => number }} [options]
+   * @param {{ forward?: string, snapshot?: (n: number) => number, body?: (n: number) => string }} [options]
    */
-  const feedTimes = async (name, stream, { forward, snapshot } = {}) => {
+  const feedTimes = async (name, stream, { forward, snapshot, body } = {}) => {
     const times = { snapshots: /** @type {number[]} */ ([]), streams: 0, streamsAt: /** @type {number[]} */ ([]), since: /** @type {(string | null)[]} */ ([]) };
     await page.route(`**/feed/${name}`, (route) => {
       times.snapshots.push(Date.now());
       const status = snapshot?.(times.snapshots.length) ?? 200;
-      return route.fulfill({ status, contentType: "application/json", body: status === 200 ? '{"epoch":"a","seq":1,"rows":[]}' : "{}" });
+      return route.fulfill({ status, contentType: "application/json", body: status === 200 ? (body?.(times.snapshots.length) ?? '{"epoch":"a","seq":1,"rows":[]}') : "{}" });
     });
     await page.route(`**/feed/${name}/live*`, (route) => {
       times.streams += 1;
@@ -3415,10 +3416,10 @@ async function run(browser) {
       const w = /** @type {any} */ (window);
       w.__feeds ??= {};
       const stop = new AbortController();
-      const feed = (w.__feeds[name] = { stop, states: /** @type {string[]} */ ([]), patches: /** @type {number[]} */ ([]) });
+      const feed = (w.__feeds[name] = { stop, states: /** @type {string[]} */ ([]), patches: /** @type {number[]} */ ([]), snapshots: 0 });
       subscribe(
         `/feed/${name}`,
-        { snapshot() {}, patch: (/** @type {unknown} */ _, /** @type {number} */ seq) => feed.patches.push(seq), status: (/** @type {string} */ s) => feed.states.push(s) },
+        { snapshot: () => void (feed.snapshots += 1), patch: (/** @type {unknown} */ _, /** @type {number} */ seq) => feed.patches.push(seq), status: (/** @type {string} */ s) => feed.states.push(s) },
         { signal: stop.signal },
       );
     }, name);
@@ -3431,6 +3432,8 @@ async function run(browser) {
       feed.stop.abort();
       return /** @type {string} */ (feed.states.join(" "));
     }, name);
+  /** How many snapshots the subscription handed to `snapshot`. @param {string} name */
+  const feedSnapshots = (name) => page.evaluate((name) => /** @type {number} */ ((/** @type {any} */ (window)).__feeds[name].snapshots), name);
   /** The seqs the subscription handed to `patch`. @param {string} name */
   const feedPatches = (name) => page.evaluate((name) => /** @type {number[]} */ ((/** @type {any} */ (window)).__feeds[name].patches), name);
   /** Waits until the subscription has gone live `times` times. @param {string} name @param {number} times */
@@ -3586,13 +3589,63 @@ async function run(browser) {
     retriedFeed.snapshots.length === 2 && retriedGap >= 900 && retriedGap < 1900 && retriedFeed.streams === 1 && retriedStates.startsWith("syncing live"),
     `${retriedFeed.snapshots.length} snapshots, +${retriedGap} ms, ${retriedFeed.streams} streams; ${retriedStates}`,
   );
+  // An answer that is JSON but not a snapshot (no epoch) is a failed snapshot: never handed to the
+  // script, logged, and fetched again after 1 s (#1039).
+  const malformedFeed = await feedTimes("malformed", () => "retry: 60000\n\n", { body: (n) => (n === 1 ? '{"seq":1,"rows":[]}' : '{"epoch":"a","seq":1,"rows":[]}') });
+  await feedLive("malformed", 1, 60000);
+  const malformedSnapshots = await feedSnapshots("malformed");
+  const malformedStates = await stopFeed("malformed");
+  await unrouteFeed("malformed");
+  const malformedGap = malformedFeed.snapshots.length === 2 ? malformedFeed.snapshots[1] - malformedFeed.snapshots[0] : NaN;
+  check(
+    "a snapshot that is not one is not handed to the script, and is fetched again no sooner than 1 s",
+    malformedFeed.snapshots.length === 2 && malformedSnapshots === 1 && malformedGap >= 900 && malformedFeed.streams === 1 && malformedStates.startsWith("syncing live"),
+    `${malformedFeed.snapshots.length} fetched, ${malformedSnapshots} handed on, +${malformedGap} ms, ${malformedFeed.streams} streams; ${malformedStates}`,
+  );
+  // A patch that is not one (not JSON, then an upsert with no value) lost its write: the snapshot
+  // is loaded again, after 1 s and then 2 s while the next stream's patch is not one either, and a
+  // good patch after that is applied (#1039). Its stream is closed, so the browser does not resume it.
+  const rejectedFeed = await feedTimes("rejected", (n) =>
+    n === 1
+      ? "event: patch\nid: a-2\ndata: <html>\n\n"
+      : n === 2
+        ? 'event: patch\nid: a-2\ndata: {"seq":2,"changes":[{"op":"upsert","id":"x"}]}\n\n'
+        : `retry: 60000\n\n${patchEvent(2)}`,
+  );
+  await feedLive("rejected", 3, 60000);
+  // The third stream's patch comes in a task after it opens.
+  await page.waitForFunction((name) => (/** @type {any} */ (window)).__feeds[name].patches.length > 0, "rejected", { timeout: 5000 }).catch(() => {});
+  const rejectedPatches = await feedPatches("rejected");
+  const rejectedStates = await stopFeed("rejected");
+  await unrouteFeed("rejected");
+  const rejectedGaps = rejectedFeed.snapshots.slice(1).map((at, i) => at - rejectedFeed.snapshots[i]);
+  // Each wait is bounded below only: a loaded browser runs a timer late, as #1102 found.
+  check(
+    "a patch that is not one is not handed to the script: the snapshot loads again no sooner than 1 s, then 2 s, and the next good patch applies",
+    rejectedFeed.snapshots.length === 3 &&
+      rejectedFeed.streams === 3 &&
+      rejectedGaps[0] >= 900 &&
+      rejectedGaps[1] >= 1900 &&
+      rejectedPatches.join() === "2" &&
+      rejectedStates.startsWith("syncing live syncing live syncing live"),
+    `${rejectedFeed.snapshots.length} snapshots, ${rejectedFeed.streams} streams, ${rejectedGaps.map((g) => `+${g} ms`).join(", ")}, patches ${rejectedPatches.join(",")}; ${rejectedStates}`,
+  );
   // The browsers' own errors for the 503 streams and the 500 snapshot are the point of these
   // checks, not faults, and the runtime logs the failed snapshot once (Firefox gives the logged
   // error's text as `Error`, so there it is known by coming from the runtime).
   located = false;
   const feedErrors = errors.slice(feedsLogged).filter((e) => !/(can.t establish a connection to the server at|Failed to load resource: .* at) \S+\/feed\/(failed|retried)\b/.test(e));
-  const snapshotLogged = feedErrors.filter((e) => /^(Error: )?corten: feed \/feed\/retried answered 500\b|^Error at \S+\/corten\.js$/.test(e));
-  check("a snapshot that fails is logged once", snapshotLogged.length === 1, feedErrors.join(" | ") || "nothing logged");
+  const snapshotLogged = feedErrors.filter((e) =>
+    /^(Error: )?corten: feed \/feed\/(retried answered 500|malformed sent no snapshot|rejected sent a bad patch)\b|^Error at \S+\/corten\.js$/.test(e),
+  );
+  const logged = (/** @type {RegExp} */ text) => snapshotLogged.filter((e) => text.test(e)).length;
+  check(
+    "a snapshot that fails, one that is not a snapshot and each patch that is not one are logged once",
+    snapshotLogged.length === 4 &&
+      // Firefox gives each as `Error`, from the runtime.
+      (snapshotLogged.every((e) => e.startsWith("Error at ")) || (logged(/retried answered 500/) === 1 && logged(/malformed sent no snapshot/) === 1 && logged(/rejected sent a bad patch/) === 2)),
+    feedErrors.join(" | ") || "nothing logged",
+  );
   const feedOthers = feedErrors.filter((e) => !snapshotLogged.includes(e));
   // Checked here, while their text names where each came from, and not again at the end.
   check("the feed checks log no other console error", feedOthers.length === 0, feedOthers.join(" | "));

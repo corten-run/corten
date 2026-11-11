@@ -93,7 +93,11 @@ export function failed(event, dialog, said) {
  */
 function leave(close) {
   const href = close.href;
-  const navigation = /** @type {any} */ (window).navigation;
+  // The Navigation API's parts this uses, where the browser has it (TypeScript's DOM library does
+  // not declare it yet).
+  const navigation = /** @type {Window & { navigation?: { currentEntry: { index: number } | null, entries(): { url: string | null }[], back(): unknown, navigate(url: string, options: { history: "replace" }): unknown } }} */ (
+    window
+  ).navigation;
   if (!navigation) return location.replace(href);
   const at = navigation.currentEntry?.index ?? -1;
   if (at > 0 && navigation.entries()[at - 1]?.url === href) navigation.back();
