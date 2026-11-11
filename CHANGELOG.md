@@ -2849,9 +2849,7 @@ Corten is pre-1.0, so any minor version may change the API.
     Which one). Design Limit 17, which recorded that they were untyped, is gone, so Limits 18 to 24
     are now 17 to 23, and the other entries here that cite them say the new numbers
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
-14. axum, from Corten's dependencies (design Choice 25, step 4), and with it what named axum. An
-    app that never named axum still breaks on the paths of Corten's own HTTP types, which moved to
-    `corten::http` (Changed, its first entry), so start there. And with it:
+14. axum, from Corten's dependencies (design Choice 25, step 4), and with it what named axum:
     `corten::axum` (a test's stand-in for another service depends on a server of its own: add
     `axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }` as a
     dev-dependency, with `"json"` among the features when the stand-in reads or answers
@@ -2873,7 +2871,9 @@ Corten is pre-1.0, so any minor version may change the API.
     tuple that starts with `response::Parts` or `Response<()>`, takes up to 8 parts where axum
     took 16, and `corten::Listener` has no
     `tap_io`: a listener written for `axum::serve` implements `corten::Listener` (the same two
-    methods) to be given to `serve_on`.
+    methods) to be given to `serve_on`. An app that never named axum still breaks on the paths
+    of Corten's own HTTP types, which moved to `corten::http` (Changed, the `corten::http`
+    entry): fix those imports first.
 
 ### Changed
 
@@ -2884,10 +2884,9 @@ Corten is pre-1.0, so any minor version may change the API.
   `corten::middleware::{IntoResponse, Response, ..}` and `corten::Bytes`. Those paths are gone:
   change the `use` (`use corten::http::{Body, IntoResponse, Request, Response};`). The types are
   the same; `corten::http::Request` and `Response` with no type argument are over `Body`, as
-  the old paths were. `MatchedPath` stays in `corten::middleware`. Fix the imports first: an
-  unresolved `corten::extract::Request` also shows up as many E0277 errors at the handlers' body
-  reads (the size of `[u8]` cannot be known), which go away with the import; an app's port saw 65
-  errors from three imports.
+  the old paths were. `MatchedPath` stays in `corten::middleware`. Fix the imports first: the
+  first port of an app to this release also saw dozens of E0277 errors at its handlers' body reads
+  (the size of `[u8]` cannot be known), which say nothing of the imports and went away with them.
 
 - `Refused::unauthorized` takes the `Challenge` its 401 sends in `WWW-Authenticate`, which RFC
   9110 requires on a 401 and which it never sent: `Refused::unauthorized(Challenge::bearer(realm))`,
@@ -2910,8 +2909,8 @@ Corten is pre-1.0, so any minor version may change the API.
 - axum is no longer one of Corten's dependencies (design Choice 25, step 4, and Choice 21). The
   body (`corten::http::Body`), `IntoResponse`, `IntoResponseParts`, the readers of a whole
   body, the server-sent events writer and `Listener` are Corten's own, with axum's names and
-  shapes; the dispatch suite passes unchanged. What it removed is under Removed (14). What an
-  app sees:
+  shapes; the dispatch suite passes unchanged. What it removed is under Removed (14), and the
+  paths an app names them by are in the `corten::http` entry. What an app sees:
   1. `Bytes`, `String`, `Json` and `Form` refuse a body with
      `corten::extract::BodyRejection` (plain text) in place of axum's `BytesRejection`,
      `StringRejection` and `JsonRejection`, with the same statuses (413 over the 2 MiB limit,
