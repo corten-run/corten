@@ -1492,6 +1492,18 @@ printable ASCII), for tokens handed out by hand, and tokens are checked per tool
 before. Either way a 401 for a request that sent a token adds `error="invalid_token"`; `Bearer`
 with nothing after it counts as no token, so the client is told where to get one.
 
+The endpoint speaks the MCP revisions in `agent::PROTOCOL_VERSIONS` (`2025-11-25`, `2025-06-18`
+and `2025-03-26`). A request whose `MCP-Protocol-Version` header names another, or that sends the
+header twice, is answered `400 Bad Request` with a JSON-RPC error that has no `id` (`-32600`, a
+message naming the revisions it speaks), as both revisions that define the header require; a
+request without the header is read as `2025-03-26`, which they say to assume. The header is
+checked before the message is read and before the token, as a body that is not JSON is answered
+before the token: a request in a revision the endpoint does not speak cannot be served whoever
+sends it, and an `initialize` without the header, which a client sends before a revision is agreed,
+is still told where to get a token. The code is JSON-RPC's own rather than one a later revision
+defines (`-32022` in `2026-07-28`), so a client that tries a later revision first reads the 400 as
+an earlier server's, as that revision says, and falls back to `initialize`.
+
 APIs nest as areas do, so each feature owns its JSON routes as it owns its pages. A feature's
 module has a prefix under the app's (`/api/forecast-calibration` in `/api`), and both are
 mounted:

@@ -171,6 +171,7 @@ use crate::response::Response;
 use bytes::Bytes;
 use http::header;
 use http::HeaderMap;
+use http::HeaderName;
 use http::HeaderValue;
 use http::StatusCode;
 use serde_json::{json, Value};
@@ -180,8 +181,13 @@ use crate::json::{
     FromJson, ToJson,
 };
 
-/// Protocol revisions this server speaks, newest first.
+/// Protocol revisions this server speaks, newest first. A request whose `MCP-Protocol-Version`
+/// names another is answered 400 before its message is read.
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
+
+/// The header a client names its revision in, on each request after `initialize` (MCP
+/// 2025-06-18 and 2025-11-25, Transports, "Protocol Version Header").
+const PROTOCOL_VERSION_HEADER: HeaderName = HeaderName::from_static("mcp-protocol-version");
 
 /// Why a tool call failed.
 #[derive(Debug)]
@@ -678,6 +684,13 @@ impl<A: Send + 'static> Tools<A> {
     }
 
     async fn handle(&self, headers: HeaderMap, body: &[u8]) -> Response {
+        // A revision the endpoint does not speak cannot be served whoever sends it, so it is
+        // answered before the message is read and before the token, as a body that is not JSON
+        // is; an `initialize` without the header, sent before a revision is agreed, still learns
+        // where to get a token. Without the header the request is 2025-03-26's, which it speaks.
+        if !speaks(&headers) {
+            return unsupported_version();
+        }
         let message: Value = match serde_json::from_slice(body) {
             Ok(value) => value,
             Err(_) => return reply(Value::Null, Err((-32700, "parse error".into()))),
@@ -906,6 +919,29 @@ fn not_one_object(output: &str, parse: bool) -> Option<String> {
     None
 }
 
+/// Whether the request's `MCP-Protocol-Version`, when it sent one, names a revision this server
+/// speaks. Sent twice, it names none.
+fn speaks(headers: &HeaderMap) -> bool {
+    let mut sent = headers.get_all(PROTOCOL_VERSION_HEADER).iter();
+    match (sent.next(), sent.next()) {
+        (None, _) => true,
+        (Some(version), None) => PROTOCOL_VERSIONS.iter().any(|v| v.as_bytes() == version.as_bytes()),
+        (Some(_), Some(_)) => false,
+    }
+}
+
+/// The 400 for a revision this server does not speak: a JSON-RPC error with no `id`, as the
+/// transport allows for a request it does not accept, since the message is not read. The code is
+/// JSON-RPC's own, not one a later revision defines, so a client that tried a later revision
+/// first takes this for an earlier server and falls back to `initialize` (MCP 2026-07-28,
+/// Streamable HTTP, "Backward Compatibility").
+fn unsupported_version() -> Response {
+    let message = format!("unsupported MCP-Protocol-Version; this server speaks {}", PROTOCOL_VERSIONS.join(", "));
+    let mut res = json_response(json!({ "jsonrpc": "2.0", "error": { "code": -32600, "message": message } }).to_string());
+    *res.status_mut() = StatusCode::BAD_REQUEST;
+    res
+}
+
 /// Whether the request sent a bearer token (RFC 6750: another scheme's credentials are no token).
 /// `Bearer` with nothing after it, which RFC 6750 (2.1) does not allow, is taken as none too, so
 /// the client is told where to get one rather than that it sent a bad one (Corten's reading).
@@ -1033,6 +1069,52 @@ mod tests {
         assert_eq!(res["result"]["protocolVersion"], PROTOCOL_VERSIONS[0]);
         let (status, _) = rpc(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }), false).await;
         assert_eq!(status, StatusCode::ACCEPTED);
+    }
+
+    /// A request naming a revision the endpoint does not speak in `MCP-Protocol-Version` is a
+    /// 400 with a JSON-RPC error and no `id`, before its message is read or its token checked; one
+    /// naming none is taken as 2025-03-26, which it speaks (MCP 2025-06-18 and 2025-11-25,
+    /// Transports, "Protocol Version Header").
+    #[tokio::test]
+    async fn an_unsupported_protocol_version_header_is_a_bad_request() {
+        let request = |versions: &[&str], body: &str| {
+            let mut req = Request::post("/mcp").header("content-type", "application/json");
+            for version in versions {
+                req = req.header("mcp-protocol-version", *version);
+            }
+            req.body(Body::from(body.to_owned())).unwrap()
+        };
+        let list = &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+        for versions in [&["2025-11-25"][..], &["2025-06-18"], &["2025-03-26"], &[]] {
+            let (status, _, body) = send(&app(), request(versions, list)).await;
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!((status, body["id"].clone()), (StatusCode::OK, json!(1)), "{versions:?}");
+            assert_eq!(body["result"]["tools"].as_array().map(Vec::len), Some(2), "{versions:?}");
+        }
+        let refused = |versions: &'static [&'static str], body: String| {
+            let app = app();
+            async move {
+                let (status, headers, text) = send(&app, request(versions, &body)).await;
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{versions:?}: {text}");
+                assert_eq!(headers["content-type"], "application/json", "{versions:?}");
+                let body: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(body["error"]["code"], -32600, "{versions:?}");
+                assert!(body["error"]["message"].as_str().unwrap().contains("MCP-Protocol-Version"), "{versions:?}");
+                assert!(body.get("id").is_none() && body.get("result").is_none(), "{versions:?}: {text}");
+            }
+        };
+        for versions in [&["2024-11-05"][..], &["nonsense"], &["2099-01-01"], &[""], &["2025-11-25", "2025-06-18"]] {
+            refused(versions, list.clone()).await;
+        }
+        // Whatever the message: a notification, or a body that is not JSON.
+        refused(&["nonsense"], json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string()).await;
+        refused(&["nonsense"], "{".to_owned()).await;
+        // An endpoint that takes a token on every request refuses the revision before the token.
+        let protected = protected(Some(Authorization::new::<Mcp>("https://cards.example", "https://auth.example")));
+        let (status, _, _) = send(&protected, request(&["nonsense"], list)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "the revision comes before the token");
+        let (status, _, _) = send(&protected, request(&["2025-11-25"], list)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "a revision it speaks is then told where to get a token");
     }
 
     #[tokio::test]

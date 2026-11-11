@@ -5,6 +5,15 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+### Fixed
+
+- The MCP endpoint (`agent::Tools`) answers a request whose `MCP-Protocol-Version` header names a
+  revision it does not speak, or that sends the header twice, with `400 Bad Request` and a JSON-RPC
+  error with no `id` (`-32600`), before it reads the message or checks the token, as MCP
+  2025-06-18 and 2025-11-25 require; it answered such a request as one of its own revisions, with
+  a 200. A request without the header is still read as 2025-03-26
+  ([#1231 The MCP endpoint ignores the MCP-Protocol-Version header, so a request naming a revision Corten does not speak gets a 200 where both revisions it lists require a 400](https://github.com/corten-run/corten/issues/1231)).
+
 ## 0.2.0 (2026-11-11)
 
 The first release of all seven crates, published together by the Release workflow. The main crate's
