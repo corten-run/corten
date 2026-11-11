@@ -1,33 +1,36 @@
 import { maxConnections } from "./conformance.mjs";
 
-// The apps under test: one image each, same page, same data, same port inside the container. An
-// app with `pages: false` serves only the item as JSON, so it takes part in the JSON steps alone.
+// The apps under test: one image each (two for an app whose matched build is its own,
+// `matchedImage`), same page, same data, same port inside the container. An app with
+// `pages: false` serves only the item as JSON, so it takes part in the JSON steps alone.
 // `matched: true`: one of the matched tier's apps (README, "The matched tier"), set once the app
 // starts with the production profile under PROFILE=matched. The tier's membership (README, "The
-// matched tier") also names nextjs, leptos, aspnet (with aspnet-aot for the JSON), topcoat, fastapi
-// and express; each joins with its profile.
+// matched tier") also names fastapi and express; each joins with its profile.
 const catalog = {
   corten: { image: "cb-corten", port: 18410, label: "Corten 0.1 (Rust, axum, html! views)", matched: true },
-  nextjs: { image: "cb-nextjs", port: 18411, label: "Next.js 16.4 (App Router, RSC)" },
+  // Next.js fixes its config when it builds, so the matched tier runs an image of its own, built with
+  // --build-arg PROFILE=matched (`matchedImage`); the defaults tier's is built as before.
+  nextjs: { image: "cb-nextjs", port: 18411, label: "Next.js 16.4 (App Router, RSC)", matched: true, matchedImage: "cb-nextjs-matched" },
   "tanstack-start": { image: "cb-tanstack-start", port: 18412, label: "TanStack Start 1.169 (React 19, Nitro)" },
   sveltekit: { image: "cb-sveltekit", port: 18413, label: "SvelteKit 3.1 (Svelte 5, adapter-node)" },
   "react-router": { image: "cb-react-router", port: 18414, label: "React Router 7.18 + Express" },
-  leptos: { image: "cb-leptos", port: 18415, label: "Leptos 0.8 (Rust, SSR + WASM hydration)" },
+  leptos: { image: "cb-leptos", port: 18415, label: "Leptos 0.8 (Rust, SSR + WASM hydration)", matched: true },
   django: { image: "cb-django", port: 18416, label: "Django 6.1 (Python, gunicorn, htmx)" },
   rails: { image: "cb-rails", port: 18417, label: "Rails 8.1 (Ruby, Puma, YJIT, Turbo)" },
   laravel: { image: "cb-laravel", port: 18418, label: "Laravel 13 (PHP, Octane on FrankenPHP, Livewire)" },
-  aspnet: { image: "cb-aspnet", port: 18419, label: "ASP.NET Core 10 Razor Pages (C#, Kestrel, htmx)" },
+  // `matchedJson: false`: in the matched tier its JSON phases are another app's (aspnet-aot's).
+  aspnet: { image: "cb-aspnet", port: 18419, label: "ASP.NET Core 10 Razor Pages (C#, Kestrel, htmx)", matched: true, matchedJson: false },
   spring: { image: "cb-spring", port: 18420, label: "Spring Boot 4.1 (Java 25, Thymeleaf, htmx)" },
   phoenix: { image: "cb-phoenix", port: 18421, label: "Phoenix 1.8 LiveView (Elixir)" },
   astro: { image: "cb-astro", port: 18422, label: "Astro 7 (Node adapter, client router)" },
   nuxt: { image: "cb-nuxt", port: 18423, label: "Nuxt 4 (Vue 3, Nitro)" },
-  topcoat: { image: "cb-topcoat", port: 18424, label: "Topcoat 0.11 (Rust, view! components, shards)" },
+  topcoat: { image: "cb-topcoat", port: 18424, label: "Topcoat 0.11 (Rust, view! components, shards)", matched: true },
   "axum-maud": { image: "cb-axum-maud", port: 18427, label: "axum 0.8 + Maud 0.27 (Rust, htmx)", matched: true },
   gin: { image: "cb-gin", port: 18425, label: "Gin 1.12 (Go, templ, htmx)" },
   drogon: { image: "cb-drogon", port: 18426, label: "Drogon 1.9 (C++, CSP views, htmx)" },
   fastapi: { image: "cb-fastapi", port: 18429, label: "FastAPI 0.162 (Python, uvicorn, Jinja2, htmx)" },
   express: { image: "cb-express", port: 18430, label: "Express 5.3 (Node, EJS, htmx)" },
-  "aspnet-aot": { image: "cb-aspnet-aot", port: 18428, label: "ASP.NET Core 10 minimal API, native AOT (C#, JSON only)", pages: false },
+  "aspnet-aot": { image: "cb-aspnet-aot", port: 18428, label: "ASP.NET Core 10 minimal API, native AOT (C#, JSON only)", pages: false, matched: true },
 };
 
 /**
@@ -58,11 +61,24 @@ for (const name of only ?? []) if (tier === "matched" && !(/** @type {{ matched?
 if (only && !only.includes("corten")) throw new Error("BENCH_APPS must include corten, the reference");
 /** Every app, whatever BENCH_APPS names (the tests check the catalog as a whole). */
 export const allApps = catalog;
+/** An app as the matched tier runs it: from its matched image where it has one. */
+const inMatched = (/** @type {{ image: string, matchedImage?: string }} */ app) => (app.matchedImage ? { ...app, image: app.matchedImage } : app);
 /** The apps of the tier a round runs. */
-export const tierApps = tier === "matched" ? Object.fromEntries(Object.entries(catalog).filter(([, app]) => /** @type {{ matched?: boolean }} */ (app).matched)) : catalog;
+export const tierApps = tier === "matched" ? Object.fromEntries(Object.entries(catalog).filter(([, app]) => /** @type {{ matched?: boolean }} */ (app).matched).map(([name, app]) => [name, inMatched(app)])) : catalog;
+/** The `docker build` arguments for an app's image in a tier, from the repository root (droplet.mjs). */
+export const buildArgs = (/** @type {string} */ name, /** @type {string} */ forTier) => {
+  if (name === "corten") throw new Error("corten's image is examples/card-market's, not built by buildArgs");
+  /** @type {{ image: string, matchedImage?: string }} */
+  const app = catalog[/** @type {keyof typeof catalog} */ (name)] ?? { image: `cb-${name}` };
+  return forTier === "matched" && app.matchedImage
+    ? ["build", "-q", "--build-arg", "PROFILE=matched", "-t", app.matchedImage, `bench/fullstack/apps/${name}`]
+    : ["build", "-q", "-t", app.image, `bench/fullstack/apps/${name}`];
+};
 export const apps = only ? Object.fromEntries(Object.entries(tierApps).filter(([name]) => only.includes(name))) : tierApps;
 /** The apps that render the pages: every step that loads one (parity, look, bytes, browser, cold start's probe, the page phases). */
 export const pageApps = Object.fromEntries(Object.entries(apps).filter(([, app]) => app.pages !== false));
+/** The page apps the round's JSON phases leave out: in the matched tier, those whose JSON is another app's (`matchedJson: false`). */
+export const pageOnly = tier === "matched" ? Object.keys(pageApps).filter((name) => /** @type {{ matchedJson?: boolean }} */ (pageApps[name]).matchedJson === false) : [];
 /** The path that shows an app is up: its item page, or for a JSON-only app the item as JSON. */
 export const readyPath = (/** @type {{ pages?: boolean }} */ app) => (app.pages === false ? "/api/items/item_1" : "/items/item_1");
 

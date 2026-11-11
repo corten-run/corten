@@ -8,7 +8,36 @@ use leptos_router::{
 
 use crate::model::{sort_listings, ContentLine, ItemView, Listing, Offer};
 
+/// Whether the app runs with the matched tier's production profile (`PROFILE=matched`,
+/// bench/fullstack/README.md, "The matched tier").
+#[cfg(feature = "ssr")]
+pub fn matched() -> bool {
+    static MATCHED: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("PROFILE").as_deref() == Ok("matched"));
+    *MATCHED
+}
+
+/// The profile's CSP for an answer that is not a page (axum-maud's). A page's, in `shell`, is the
+/// same but for its `script-src`: keep the two alike.
+#[cfg(feature = "ssr")]
+pub const CSP_REST: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+
 pub fn shell(options: LeptosOptions) -> impl IntoView {
+    // A page's CSP lets its own scripts run by the nonce Leptos makes for each response (its
+    // `nonce` feature, which leptos_axum turns on) and puts on the hydration scripts it writes.
+    // It is sent as a header through `ResponseOptions` rather than the `<Meta http-equiv>` tag
+    // Leptos's nonce docs show, since a meta CSP ignores `frame-ancestors`.
+    #[cfg(feature = "ssr")]
+    if matched() {
+        if let (Some(response), Some(nonce)) = (use_context::<leptos_axum::ResponseOptions>(), leptos::nonce::use_nonce()) {
+            let csp = format!(
+                "default-src 'self'; script-src 'self' 'nonce-{nonce}' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+            );
+            response.insert_header(
+                axum::http::header::CONTENT_SECURITY_POLICY,
+                axum::http::HeaderValue::from_str(&csp).expect("a nonce is base64"),
+            );
+        }
+    }
     view! {
         <!DOCTYPE html>
         <html lang="en">
