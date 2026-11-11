@@ -259,3 +259,21 @@ test("the matched tier starts its apps with the profile and only its apps; the d
   assert.match(appsUnder({ BENCH_TIER: "matched", BENCH_APPS: "corten,gin" }).stderr, /names gin, which is not in the matched tier/);
   assert.match(appsUnder({ BENCH_TIER: "fast" }).stderr, /BENCH_TIER is defaults or matched/);
 });
+
+test("an app whose config is fixed at build runs its own image in the matched tier, built with the profile", async () => {
+  const under = (/** @type {Record<string, string>} */ env) => {
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", 'const a = await import("./apps.mjs"); console.log(JSON.stringify({ image: a.tierApps.nextjs.image, run: a.runArgs("nextjs", a.tierApps.nextjs, "api", "/f").at(-1), build: a.buildArgs("nextjs", a.tier), other: a.buildArgs("axum-maud", a.tier) }))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "BENCH_TIER" && k !== "BENCH_APPS")), ...env } });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  const defaults = under({});
+  assert.equal(defaults.image, "cb-nextjs");
+  assert.deepEqual(defaults.build, ["build", "-q", "-t", "cb-nextjs", "bench/fullstack/apps/nextjs"]);
+  const matched = under({ BENCH_TIER: "matched" });
+  assert.equal(matched.image, "cb-nextjs-matched");
+  assert.equal(matched.run, "cb-nextjs-matched");
+  assert.deepEqual(matched.build, ["build", "-q", "--build-arg", "PROFILE=matched", "-t", "cb-nextjs-matched", "bench/fullstack/apps/nextjs"]);
+  assert.deepEqual(matched.other, ["build", "-q", "-t", "cb-axum-maud", "bench/fullstack/apps/axum-maud"], "an app without a matched image builds as before");
+  const corten = spawnSync(process.execPath, ["--input-type=module", "-e", 'const a = await import("./apps.mjs"); a.buildArgs("corten", "matched")'], { cwd: import.meta.dirname, encoding: "utf8" });
+  assert.match(corten.stderr, /examples\/card-market's, not built by buildArgs/);
+});
