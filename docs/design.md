@@ -2748,3 +2748,15 @@ by design; where it is known, a limit says what would lift it or why it is so.
     [#1130 Expose opt-in browser diagnostics for action responses and live HTML patches](https://github.com/corten-run/corten/issues/1130)).
     It lifts when apps need the received payload in the page for their users, not their
     developers, or when Chromium's panel stops showing an event stream's messages.
+26. <a id="limit-origin-scheme"></a>Without `Policy::hsts`, a write or a WebSocket handshake that carries no `Sec-Fetch-Site`
+    (every handshake from Chromium and Firefox, and any write from a plain-http page, to which
+    browsers send none) is held to its `Origin`'s name and port against `Host`, not its scheme: a
+    plain-http page on the app's host passes against the app served over HTTPS
+    ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
+    The app cannot tell which scheme it is served over: a proxy or CDN in front usually ends TLS
+    and sends plain HTTP on, and the app reads no `X-Forwarded-Proto`, which anyone can send to an
+    app that does not list its proxies. With `hsts` the app says it is HTTPS only, and the
+    `Origin` must then be `https` or loopback. It lifts when the app knows its scheme for itself:
+    a forwarded scheme read only from the proxies `Policy::proxy` lists (as `ClientIp` reads
+    `X-Forwarded-For`), or the connection's own TLS state when `serve_wrapped` ends TLS in the
+    app.

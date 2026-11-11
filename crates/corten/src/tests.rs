@@ -6804,6 +6804,11 @@ fn a_plain_origin_is_http_off_loopback() {
         assert!(!plain(origin), "{origin}");
     }
     assert!(!crate::page::plain_origin(&HeaderMap::new()), "no Origin: not a browser's write");
+    // A default port is the same written or left out, as in the same-origin check.
+    assert!(with("http://lan", "lan:80", None));
+    assert!(with("http://lan:80", "lan", None));
+    assert!(!with("http://lan", "lan:8080", None));
+    assert!(!with("http://localhost", "localhost:80", None));
     // A browser that counts the origin as secure (a policy for an internal tool) sends
     // `Sec-Fetch-Site`, takes a `Secure` cookie and is not read the plain one.
     assert!(!with("http://automation.lan:3001", "automation.lan:3001", Some("same-origin")));
@@ -9880,9 +9885,14 @@ async fn a_handshake_without_sec_fetch_site_is_held_to_the_scheme_under_hsts() {
     assert_eq!(status(https_only.clone(), "http://app.example", "app.example").await, refused, "a plain-http page");
     assert_eq!(status(https_only.clone(), "https://app.example", "app.example").await, open);
     assert_eq!(status(https_only.clone(), "https://app.example", "app.example:443").await, open, "the default port");
-    assert_eq!(status(https_only, "https://app.example", "app.example:8443").await, refused, "another port");
+    assert_eq!(status(https_only.clone(), "https://app.example", "app.example:8443").await, refused, "another port");
+    // Loopback is secure over plain http, and Chromium and Firefox send no `Sec-Fetch-Site` there.
+    assert_eq!(status(https_only.clone(), "http://localhost:3000", "localhost:3000").await, open, "loopback");
+    assert_eq!(status(https_only.clone(), "http://192.168.1.5", "192.168.1.5").await, refused, "a LAN page");
+    assert_eq!(status(https_only, "capacitor://localhost", "localhost").await, refused, "an app's own scheme");
     // Without hsts the app cannot tell its public scheme behind a proxy that ends TLS.
     assert_eq!(status(either.clone(), "http://app.example", "app.example").await, open);
+    assert_eq!(status(either.clone(), "http://192.168.1.5", "192.168.1.5").await, open);
     assert_eq!(status(either.clone(), "https://app.example", "app.example").await, open);
     assert_eq!(status(either.clone(), "http://app.example", "app.example:80").await, open, "the default port");
     assert_eq!(status(either, "http://app.example:443", "app.example").await, refused, "not http's default port");

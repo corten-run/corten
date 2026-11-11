@@ -849,9 +849,10 @@ pub(crate) struct Shared {
     /// [`crate::App::zoned_dates`]: dates are written in the visitor's zone while Corten renders.
     #[cfg(feature = "zones")]
     pub zoned_dates: bool,
-    /// The app is HTTPS only ([`crate::security::Policy::hsts`]): a WebSocket handshake's
-    /// `Origin` must be `https` ([`crate::upgrade::Upgrade`]), and a redirect's notice never
-    /// rides in [`PLAIN_NOTICE_COOKIE`].
+    /// The app is HTTPS only ([`crate::security::Policy::hsts`]): when there is no
+    /// `Sec-Fetch-Site`, a WebSocket handshake's `Origin` must be `https` or loopback
+    /// ([`crate::upgrade::Upgrade`]), and a redirect's notice never rides in
+    /// [`PLAIN_NOTICE_COOKIE`].
     pub https_only: bool,
     /// Dev mode: error pages show the error.
     pub dev: bool,
@@ -1065,25 +1066,15 @@ fn notice_cookie(headers: &HeaderMap, plain: bool) -> Option<(&str, Gone)> {
 /// (`localhost`, a name under it, `127.0.0.0/8`, `[::1]`), which a browser does not count as
 /// secure, so it refuses a `Secure` cookie from it: no `Sec-Fetch-Site` (which the page reading
 /// the notice is held to as well), and an `Origin` of this host, as the same-origin check on a
-/// write without that header requires ([`crate::security::Policy::same_origin`]).
+/// write without that header requires ([`crate::security::Policy::same_origin`]), a default
+/// port written or left out alike.
 pub(crate) fn plain_origin(headers: &HeaderMap) -> bool {
     if headers.contains_key("sec-fetch-site") {
         return false;
     }
-    let Some(origin) = headers.get(header::ORIGIN).map(HeaderValue::as_bytes) else { return false };
-    let Some(rest) = origin.strip_prefix(b"http://") else { return false };
-    if !headers.get(header::HOST).is_some_and(|host| host.as_bytes().eq_ignore_ascii_case(rest)) {
-        return false;
-    }
-    let host = match rest.first() {
-        Some(b'[') => return !rest.starts_with(b"[::1]"),
-        _ => rest.split(|&b| b == b':').next().unwrap_or_default(),
-    };
-    let host = host.strip_suffix(b".").unwrap_or(host);
-    let loopback = host.eq_ignore_ascii_case(b"localhost")
-        || (host.len() > 10 && host[host.len() - 10..].eq_ignore_ascii_case(b".localhost"))
-        || std::str::from_utf8(host).ok().and_then(|h| h.parse::<std::net::Ipv4Addr>().ok()).is_some_and(|ip| ip.is_loopback());
-    !loopback
+    let text = |name| headers.get(name).and_then(|v: &HeaderValue| v.to_str().ok());
+    let (Some(origin), Some(host)) = (text(header::ORIGIN), text(header::HOST)) else { return false };
+    matches!(crate::security::on_host(origin, host), Some(("http", at)) if !crate::security::loopback(at))
 }
 
 /// The page a notice is for, as its cookie names it: a hash of the path with its escapes decoded,

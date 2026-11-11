@@ -274,7 +274,13 @@ impl Policy {
         self
     }
 
-    /// Sends `Strict-Transport-Security` (one year, subdomains). Only for sites served over HTTPS.
+    /// Says the app is served only over HTTPS. It sends `Strict-Transport-Security` (one year,
+    /// subdomains); a write or a WebSocket handshake with no `Sec-Fetch-Site` must come from an
+    /// `https` page on the request's host (or a loopback one, which browsers count as secure),
+    /// so a plain-http page there is refused as another site's ([`Policy::same_origin`]); and a
+    /// redirect's notice always rides in the `__Host-` cookie. Set it whenever the app is served
+    /// only over HTTPS, even when a proxy or CDN in front already sends the header: without it the
+    /// app cannot tell which scheme it is served over, and that check does not compare the scheme.
     pub fn hsts(mut self) -> Self {
         self.hsts = true;
         self
@@ -1515,11 +1521,12 @@ pub(crate) fn allowed(headers: &HeaderMap, origins: &[String]) -> bool {
 impl Policy {
     /// CSRF check for writes. Every current browser sends `Sec-Fetch-Site`, which page script
     /// cannot set: `same-origin` is accepted as is (so a proxy that rewrites `Host` cannot break
-    /// writes) and anything cross-site is refused. Older browsers send only `Origin`, which must
-    /// then match `Host`: the same name and port (a missing one is the scheme's default), and
-    /// over `https` when the app is HTTPS only ([`Policy::hsts`]). A request with neither header
-    /// is not from a browser (a native app, an agent, a webhook); those authenticate with tokens,
-    /// not ambient cookies, so it passes.
+    /// writes) and anything cross-site is refused. A browser sends it only to a secure origin
+    /// (and Chromium and Firefox not on a WebSocket handshake); older browsers not at all. Then
+    /// `Origin` must be an `http` or `https` origin on `Host`: the same name and port (a missing
+    /// one is the scheme's default), and over `https`, or on loopback, when the app is HTTPS only
+    /// ([`Policy::hsts`]). A request with neither header is not from a browser (a native app, an
+    /// agent, a webhook); those authenticate with tokens, not ambient cookies, so it passes.
     pub fn same_origin(&self, method: &Method, headers: &HeaderMap) -> bool {
         if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
             return true;
@@ -1558,50 +1565,61 @@ pub(crate) fn write_allowed(allowed: &[String], https_only: bool, headers: &Head
     match origin {
         None => true,
         Some(origin) if origin == "null" => false,
-        Some(origin) => origin_of_host(origin, https_only, headers.get(header::HOST)),
+        Some(origin) => origin_of_host(&origin, https_only, headers.get(header::HOST)),
     }
 }
 
-/// Whether `origin` (an `Origin` header) is the origin the request was sent to, by its `Host`:
-/// the same name and port, a port left out being its scheme's default (`http` 80, `https` 443),
-/// and over `https` when the app is `https_only`. An origin is a scheme, a host and a port
-/// (RFC 6454), so one with a user, a path or a query is no page's. Without `https_only` the
-/// scheme is not compared: behind a proxy that ends TLS the app cannot tell which it is served
-/// over, so a plain-http page on its host passes.
-/// Out of line: only a request without `Sec-Fetch-Site` comes here.
+/// Whether `origin` (an `Origin` header) is a page's on the request's `Host` ([`on_host`]), over
+/// `https` or loopback when the app is `https_only`. Without `https_only` the scheme is not
+/// compared: behind a proxy that ends TLS the app cannot tell which it is served over, so a
+/// plain-http page on its host passes (docs/design.md#limit-origin-scheme). Out of line: only a
+/// request without `Sec-Fetch-Site` comes here.
 #[cold]
 #[inline(never)]
-fn origin_of_host(origin: String, https_only: bool, host: Option<&HeaderValue>) -> bool {
-    use http::uri::{Authority, Uri};
-    let Ok(origin) = Uri::try_from(origin) else { return false };
-    let (Some(scheme), Some(theirs)) = (origin.scheme_str(), origin.authority()) else { return false };
-    if (https_only && !scheme.eq_ignore_ascii_case("https")) || origin.path_and_query().is_some_and(|p| p.as_str() != "/") {
-        return false;
+fn origin_of_host(origin: &str, https_only: bool, host: Option<&HeaderValue>) -> bool {
+    let host = host.and_then(|host| host.to_str().ok()).unwrap_or("");
+    match on_host(origin, host) {
+        Some(("https", _)) => true,
+        Some((_, at)) => !https_only || loopback(at),
+        None => false,
     }
-    let Some(ours) = host.and_then(|host| Authority::try_from(host.as_bytes()).ok()) else { return false };
-    let default = if scheme.eq_ignore_ascii_case("https") {
-        Some(443)
+}
+
+/// `origin` (an `Origin` header) when it is a page's on `host` (a `Host` header): its scheme,
+/// `http` or `https`, and its `host[:port]`. The name and port must be `host`'s, a port left out
+/// being the scheme's default (`https://app.example` is on `app.example:443`). `None` for another
+/// scheme (an app's own, `capacitor://localhost`, is no page on this host) or an origin with a
+/// user, a path or a query, which no page's has (RFC 6454).
+pub(crate) fn on_host<'a>(origin: &'a str, host: &str) -> Option<(&'static str, &'a str)> {
+    let (scheme, at) = origin.trim_end_matches('/').split_once("://")?;
+    let scheme = if scheme.eq_ignore_ascii_case("https") {
+        "https"
     } else if scheme.eq_ignore_ascii_case("http") {
-        Some(80)
+        "http"
     } else {
-        None
+        return None;
     };
-    // `None` for a user (`user@host`) or a port that is not one. With no user, what follows the
-    // host is nothing or `:` and the port.
-    let port = |authority: &Authority| {
-        let all = authority.as_str();
-        if all.contains('@') {
-            return None;
-        }
-        match &all[authority.host().len()..] {
-            "" | ":" => Some(default),
-            port => port.strip_prefix(':').and_then(|port| port.parse::<u16>().ok()).map(Some),
-        }
-    };
-    match (port(theirs), port(&ours)) {
-        (Some(theirs_port), Some(ours_port)) => theirs_port == ours_port && theirs.host().eq_ignore_ascii_case(ours.host()),
-        _ => false,
+    if at.is_empty() || at.contains(['@', '/', '\\', '?', '#']) {
+        return None;
     }
+    // `name:` is the name on the default port too.
+    fn bare<'s>(scheme: &str, at: &'s str) -> &'s str {
+        without_default_port(Some(scheme), at.strip_suffix(':').unwrap_or(at))
+    }
+    bare(scheme, at).eq_ignore_ascii_case(bare(scheme, host)).then_some((scheme, at))
+}
+
+/// Whether `at` (`host[:port]`) is loopback, which a browser counts as secure over plain `http`:
+/// `localhost`, a name under it, `127.0.0.0/8` or `[::1]`.
+pub(crate) fn loopback(at: &str) -> bool {
+    let (host, _) = split_port(at);
+    if host.starts_with('[') {
+        return host == "[::1]";
+    }
+    let host = host.strip_suffix('.').unwrap_or(host).as_bytes();
+    host.eq_ignore_ascii_case(b"localhost")
+        || (host.len() > 10 && host[host.len() - 10..].eq_ignore_ascii_case(b".localhost"))
+        || std::str::from_utf8(host).ok().and_then(|h| h.parse::<std::net::Ipv4Addr>().ok()).is_some_and(|ip| ip.is_loopback())
 }
 
 /// True when `host` (a `Host` header: a name or an address, and maybe a port) is `localhost` or a
@@ -1808,7 +1826,6 @@ impl Own {
 }
 
 /// `host:port` without the port when it is `scheme`'s default.
-#[cfg(debug_assertions)]
 fn without_default_port<'a>(scheme: Option<&str>, at: &'a str) -> &'a str {
     match (split_port(at), scheme) {
         ((host, Some(port)), Some(scheme)) if Some(port) == default_port(scheme) => host,
@@ -1927,7 +1944,6 @@ fn is_scheme(scheme: &str) -> bool {
 }
 
 /// `host:port` as its host and port (`[::1]:3000`, `*.example.com:*`).
-#[cfg(debug_assertions)]
 fn split_port(at: &str) -> (&str, Option<&str>) {
     let colon =
         if at.starts_with('[') { at.find(']').and_then(|end| at[end..].find(':').map(|c| end + c)) } else { at.rfind(':') };
@@ -1937,7 +1953,6 @@ fn split_port(at: &str) -> (&str, Option<&str>) {
     }
 }
 
-#[cfg(debug_assertions)]
 fn default_port(scheme: &str) -> Option<&'static str> {
     match scheme {
         "http" | "ws" => Some("80"),
@@ -2337,6 +2352,34 @@ mod tests {
         assert!(!write(&either, "http://app.example", "app.example:443"));
         assert!(!write(&https_only, "http://app.example:443", "app.example:443"), "the scheme, not only the port");
         assert!(!https_only.same_origin(&post, &headers(&[("origin", "https://app.example")])), "no Host to match");
+
+        // Under hsts a plain-http page is refused unless it is on loopback, which a browser
+        // counts as secure but sends no `Sec-Fetch-Site` from over plain http.
+        for (origin, host) in [
+            ("http://localhost:3000", "localhost:3000"),
+            ("http://127.0.0.1:8080", "127.0.0.1:8080"),
+            ("http://[::1]:3000", "[::1]:3000"),
+            ("http://app.localhost", "app.localhost:80"),
+            ("HTTP://LOCALHOST", "localhost"),
+        ] {
+            assert!(write(&https_only, origin, host), "{origin} on {host}");
+        }
+        for (origin, host) in [
+            ("http://192.168.1.5", "192.168.1.5"),
+            ("http://automation.lan:3001", "automation.lan:3001"),
+            ("http://localhost.lan", "localhost.lan"),
+            ("http://[fe80::1]", "[fe80::1]"),
+        ] {
+            assert!(!write(&https_only, origin, host), "{origin} on {host}");
+            assert!(write(&either, origin, host), "{origin} on {host}");
+        }
+        assert!(!write(&https_only, "http://localhost:3000", "localhost:3001"), "loopback on another port");
+        // Another scheme (an app's own) is no page on this host.
+        for policy in [&https_only, &either] {
+            assert!(!write(policy, "capacitor://localhost", "localhost"));
+            assert!(!write(policy, "app://app.example", "app.example"));
+            assert!(!write(policy, "ws://app.example", "app.example"));
+        }
     }
 
     #[test]

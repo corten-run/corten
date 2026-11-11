@@ -1791,17 +1791,22 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
 1. The handshake is a `GET` that carries the user's cookies with no CORS check, so it is held to
    what a write is: the app's own pages, a site `Policy::allow_origin` names (under an API, its
    `Api::allow_origin` sites too, without cookies), or a client that is not a browser. Another
-   site's page gets a 403. Chromium and Firefox send no `Sec-Fetch-Site` on a handshake (nor do
-   browsers too old to send it on a write), so there the `Origin` must be the request's `Host`:
-   the same name and port, a port left out being its scheme's default (80 for `http`, 443 for
-   `https`, so `https://app.example` is `Host: app.example:443`). Under `Policy::hsts` its scheme
-   must be `https` too, so a plain-http page on the app's host (a server on port 80, or the
-   app's own name before the browser has cached HSTS) cannot open a socket to the HTTPS app,
-   which the user's `Secure` cookies would go to. Without `hsts` the scheme is not compared and
-   such a page passes: behind a proxy that ends TLS the app cannot tell which scheme it is
-   served over (it reads no `X-Forwarded-Proto`), so an app served over HTTPS says so with
-   `hsts`. A route whose callers must not be browsers at all refuses them in its `Identify` (a
-   request with `Origin` or `Sec-Fetch-Site`).
+   site's page gets a 403. A browser sends `Sec-Fetch-Site` only to a secure origin, Chromium
+   and Firefox not on a handshake at all, and browsers too old for it not on a write; then the
+   `Origin` must be an `http` or `https` origin on the request's `Host`: the same name and port,
+   a port left out being its scheme's default (80 for `http`, 443 for `https`, so
+   `https://app.example` is `Host: app.example:443`). Another scheme (an app's own,
+   `capacitor://localhost`) is refused. Under `Policy::hsts` the `Origin` must also be `https`,
+   or loopback (`localhost`, a name under it, `127.0.0.0/8`, `[::1]`), which browsers count as
+   secure over plain `http`. So an app with `hsts` refuses every write and handshake from a
+   plain-http page other than loopback, in every browser: a server on its host's port 80, its
+   own name before the browser has cached HSTS, and also the app itself reached as
+   `http://192.168.1.5` or `http://tool.lan`, so an app served that way must not set `hsts`.
+   Without `hsts` the scheme is not compared and such a page passes: behind a proxy that ends TLS
+   the app cannot tell which scheme it is served over (it reads no `X-Forwarded-Proto`;
+   [design Limit 26](../design.md#limit-origin-scheme)), so an app served only over HTTPS says
+   so with `hsts`. A route whose callers must not be browsers at all refuses them in its
+   `Identify` (a request with `Origin` or `Sec-Fetch-Site`).
 2. A request that does not ask to switch gets a 426, and a route that does not take `Upgrade`
    never switches: only an `Upgrade` makes the 101, so a socket opens only where a route
    declared one. A URL that is a socket and also something else (a page, or a gateway's relayed
