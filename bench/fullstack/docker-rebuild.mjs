@@ -25,9 +25,9 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { compiledIn, contextOf, dockerfileOf, median, ranARun, ranSteps, recipes, runChange } from "./builds.mjs";
+import { compiledIn, contextOf, copyFilter, dockerfileOf, median, ranARun, ranSteps, recipes, runChange } from "./builds.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..");
@@ -110,7 +110,7 @@ for (const name of apps) {
     // The context as it is on disk, with its Dockerfile when that is outside it (card-market's is
     // inside the repository root, its context).
     const left = relContext === "." ? new Set([...skip, "bench"]) : skip;
-    cpSync(join(repo, relContext), context, { recursive: true, filter: (src) => !left.has(basename(src)) });
+    cpSync(join(repo, relContext), context, { recursive: true, filter: copyFilter(join(repo, relContext), left) });
     if (!existsSync(dockerfile)) cpSync(join(repo, dockerfileOf(name)), dockerfile);
     const original = readFileSync(editFile, "utf8");
     const at = (/** @type {number} */ i) => {

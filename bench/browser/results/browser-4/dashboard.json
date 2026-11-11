@@ -1,0 +1,56 @@
+{
+  "date": "2026-11-11T15:06:44.118Z",
+  "chromium": "156.0.8078.4",
+  "iterations": 30,
+  "apps": {
+    "dashboard-vanilla": {
+      "jsGzipB": 432,
+      "tick 20": "0.1 / 15.4",
+      "tick 200": "0.3 / 15.4",
+      "heapKB": 1211,
+      "errors": 0
+    },
+    "dashboard-view": {
+      "jsGzipB": 17889,
+      "tick 20": "0.2 / 15.5",
+      "tick 200": "0.4 / 15.5",
+      "heapKB": 1395,
+      "errors": 0
+    },
+    "dashboard-solid": {
+      "jsGzipB": 7328,
+      "tick 20": "0.2 / 15.5",
+      "tick 200": "0.7 / 15.3",
+      "heapKB": 1804,
+      "errors": 0
+    },
+    "dashboard-react": {
+      "jsGzipB": 69409,
+      "tick 20": "0.35 / 15.6",
+      "tick 200": "0.6 / 15.4",
+      "heapKB": 2513,
+      "errors": 0
+    },
+    "dashboard-svelte": {
+      "jsGzipB": 19835,
+      "tick 20": "0.3 / 15.65",
+      "tick 200": "0.8 / 15.5",
+      "heapKB": 1848,
+      "errors": 0
+    },
+    "dashboard-vue": {
+      "jsGzipB": 25893,
+      "tick 20": "0.5 / 15.7",
+      "tick 200": "1 / 15.5",
+      "heapKB": 1930,
+      "errors": 0
+    },
+    "dashboard-remix": {
+      "jsGzipB": 28647,
+      "tick 20": "1.6 / 15.5",
+      "tick 200": "12.55 / 16.4",
+      "heapKB": 2101,
+      "errors": 0
+    }
+  }
+}

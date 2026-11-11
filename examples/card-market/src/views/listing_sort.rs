@@ -10,7 +10,9 @@ use crate::{
 /// (`listing_sort.js`, the same order `sort_listings` gives). Each row carries the cents it sorts
 /// by in `data-cents`: the script only reorders the rows the server drew, which a `data-`
 /// attribute is for; a `#[component(view)]` is for rows a script writes or makes (the scripts
-/// guide, Views), and would add the views module to the page.
+/// guide, Views), and would add the views module to the page. The button does nothing without a
+/// script, so it is not drawn then (a `scripting: none` rule in `item_detail.css`), and the table
+/// keeps the server's order.
 #[component(js)]
 pub fn ListingSort<'a>(t: Msg, listings: &'a [&'a Listing]) -> impl Render {
     let (rows, ascending, descending) = refs();

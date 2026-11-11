@@ -137,9 +137,9 @@ export function filter(input, found, sel) {
   for (const row of rows(sel.body, InventoryRow)) {
     let text = texts.get(row.el);
     if (text === undefined) texts.set(row.el, (text = `${row.name} ${row.set}`.toLocaleLowerCase()));
-    row.el.hidden = query !== "" && !text.includes(query);
+    row.hidden = query !== "" && !text.includes(query);
     total += 1;
-    if (!row.el.hidden) shown += 1;
+    if (!row.hidden) shown += 1;
   }
   showFound(found, shown, total, query !== "");
   tally(sel);
@@ -172,36 +172,49 @@ function showFound(found, shown, total, filtering) {
   found.shown.hidden = !filtering;
 }
 
-// One handler per column, so the markup names a column the compiler knows.
-
-/** @param {HTMLButtonElement} button @param {Holds<InventoryRow, HTMLTableSectionElement>} body */
-export function sortByName(button, body) {
-  sort(button, body, "name");
+/**
+ * The filter form is sent only without JavaScript (the server filters the page); with it, the
+ * rows filter as the seller types, and Enter keeps the page.
+ * @param {SubmitEvent} event
+ */
+export function stay(event) {
+  event.preventDefault();
 }
 
-/** @param {HTMLButtonElement} button @param {Holds<InventoryRow, HTMLTableSectionElement>} body */
-export function sortBySet(button, body) {
-  sort(button, body, "set");
+// One handler per column, so the markup names a column the compiler knows. Each header is a link
+// to the page sorted by its column, for a browser without JavaScript.
+
+/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<InventoryRow, HTMLTableSectionElement>} body */
+export function sortByName(event, link, body) {
+  sort(event, link, body, "name");
 }
 
-/** @param {HTMLButtonElement} button @param {Holds<InventoryRow, HTMLTableSectionElement>} body */
-export function sortByQty(button, body) {
-  sort(button, body, "qty");
+/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<InventoryRow, HTMLTableSectionElement>} body */
+export function sortBySet(event, link, body) {
+  sort(event, link, body, "set");
 }
 
-/** @param {HTMLButtonElement} button @param {Holds<InventoryRow, HTMLTableSectionElement>} body */
-export function sortByPrice(button, body) {
-  sort(button, body, "price");
+/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<InventoryRow, HTMLTableSectionElement>} body */
+export function sortByQty(event, link, body) {
+  sort(event, link, body, "qty");
+}
+
+/** @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<InventoryRow, HTMLTableSectionElement>} body */
+export function sortByPrice(event, link, body) {
+  sort(event, link, body, "price");
 }
 
 /**
  * Sorts the rows by one of their fields, ascending then descending: text in the page's
- * language's order, numbers as numbers.
- * @param {HTMLButtonElement} button @param {Holds<InventoryRow, HTMLTableSectionElement>} body
+ * language's order, numbers as numbers. A click that opens the link elsewhere (a modifier key, a
+ * middle click) is left to the browser.
+ * @param {MouseEvent} event @param {HTMLAnchorElement} link @param {Holds<InventoryRow, HTMLTableSectionElement>} body
  * @param {"name" | "set" | "qty" | "price"} by
  */
-function sort(button, body, by) {
-  const th = /** @type {HTMLTableCellElement} */ (button.closest("th"));
+function sort(event, link, body, by) {
+  if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return;
+  event.preventDefault();
+  const th = /** @type {HTMLTableCellElement} */ (link.closest("th"));
   const descending = th.getAttribute("aria-sort") === "ascending";
   for (const other of Array.from(th.parentElement?.children ?? [])) other.removeAttribute("aria-sort");
   th.setAttribute("aria-sort", descending ? "descending" : "ascending");

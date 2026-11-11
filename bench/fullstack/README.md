@@ -453,6 +453,62 @@ Cold start rose from 7.7 to 8.6 ms; desktop and phone interactive changed from
 61 to 59 ms and 474 to 468 ms. No other Corten metric crosses the single-round regression
 thresholds, and the trend detector reports no drift or warning. These runs do not establish a cause.
 
+### Browser pass at 3fb4b1ac (round browser-4, 2026-11-11)
+
+`droplet.mjs browser-4 --suite browser` reran parity, bytes and the browser timing for all
+twenty apps on a c-8 droplet (Xeon Platinum 8358, not the 8280 of browser-3), with Corten at
+3fb4b1ac. Every browser run worked, and parity passed on 17 pages for every app. Corten's item page
+loads 15.0 KB of JavaScript (gzip, three files; browser-3 6.9 KB in four). All rows are in
+[results/browser-4](results/browser-4); the browser table in
+[docs/performance.md](../../docs/performance.md#in-the-browser) is still round r16's. The round
+did not run as `droplet.mjs` intends; in order, from `run.log`:
+
+1. `fixtures/items.json` was missing on the droplet, so six apps did not answer on the first
+   start (13:41 UTC). The operator copied the file onto the droplet and restarted the unit at
+   13:53 UTC
+   ([#1217 bench: refuse a round whose fixtures/items.json is missing or unusable, before creating a droplet](https://github.com/corten-run/corten/pull/1217)).
+2. After the browser pass the suite went on into the build step, which it should not run
+   ([#1221 bench: the browser suite runs the browser step alone, so the client-heavy pass fits its unit](https://github.com/corten-run/corten/pull/1221)).
+   At about 14:57 UTC the operator sent SIGTERM to `run-all.mjs` and `build.mjs`, after corten,
+   leptos and topcoat had built and partway through axum-maud; that let the unit's chained
+   `cd bench/browser && node run-all.mjs` start (14:57:57) before the operator stopped the unit.
+   `build.json`, `rust-analyzer.json` and `docker-rebuild.json` are partial, and Corten's docker
+   rebuild failed (ENOENT for `examples/card-market/src/views/alert.rs` in the copy it builds)
+   ([#1226 bench: docker-rebuild copies a context whose own directory is named bench, as a droplet's repository is](https://github.com/corten-run/corten/pull/1226)),
+   so none of them is a result of this round.
+3. A one-off script ran `summarize.mjs browser-4` by hand (the `summary exit 0` line), so
+   `summary.json` and `summary.txt` are made from those partial results; their browser rows come
+   from the complete `browser.json`. The same script started `bench/browser`'s pass: its
+   `build.mjs` failed because `cargo` was not on `PATH`, its `run.mjs` failed without the
+   `out/sizes.json` that build writes, and the operator stopped the unit while its `ssr.mjs` ran.
+   A second one-off unit ran that pass to completion at 15:06:53 UTC
+   ([bench/browser's README](../browser/README.md#on-linux-against-the-most-used-frameworks-round-browser-4)).
+
+A selection, median (p90):
+
+| App | Interactive | LCP | Blocking time | Form action | Client navigation | JS heap |
+|---|---|---|---|---|---|---|
+| Desktop | | | | | | |
+| corten | 49 (55) ms | 56 ms | 0 ms | 74 ms | 12 (13) ms | 1.6 MB |
+| aspnet | 40 (42) ms | 60 ms | 0 ms | 75 ms | 13 (14) ms | 1.7 MB |
+| django | 38 (41) ms | 60 ms | 0 ms | 75 ms | 17 (18) ms | 1.7 MB |
+| astro | 48 (52) ms | 56 ms | 0 ms | 75 ms | 13 (14) ms | 1.6 MB |
+| nextjs | 131 (135) ms | 64 ms | 0 ms | 73 ms | 71 (85) ms | 3.4 MB |
+| leptos | 103 (105) ms | 60 ms | 0 ms | 74 ms | 20 (20) ms | 2 MB |
+| tanstack-start | 113 (116) ms | 68 ms | 0 ms | 71 ms | 22 (24) ms | 2.9 MB |
+| Mobile (4x CPU, 150 ms RTT, 1.6 Mbps) | | | | | | |
+| corten | 456 (467) ms | 444 ms | 0 ms | 264 ms | 193 (194) ms | 1.6 MB |
+| aspnet | 439 (440) ms | 408 ms | 0 ms | 264 ms | 232 (237) ms | 1.7 MB |
+| django | 445 (448) ms | 408 ms | 0 ms | 271 ms | 232 (241) ms | 1.7 MB |
+| astro | 653 (662) ms | 492 ms | 1 ms | 290 ms | 222 (227) ms | 1.6 MB |
+| nextjs | 1347 (1356) ms | 408 ms | 99 ms | 266 ms | 473 (483) ms | 3.3 MB |
+| leptos | 2890 (2894) ms | 428 ms | 55 ms | 266 ms | 238 (239) ms | 2 MB |
+| tanstack-start | 2371 (2385) ms | 512 ms | 71 ms | 272 ms | 332 (338) ms | 2.9 MB |
+
+One run each. The CPU model (8358 against 8280), Chromium (156 against 148) and Corten (its item
+page's JavaScript 15.0 KB against 6.9 KB) all changed between browser-3 and this round, so a
+difference between the two cannot be put down to any one of them.
+
 ### Browser pass after the many-rows change (round browser-3, 2026-10-23)
 
 `droplet.mjs browser-3 --suite browser` reran parity, bytes and the browser timing for all
@@ -2079,6 +2135,10 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
 The commands below are for the legacy workload and diagnostics, not the current nightly.
 Official r17 and later nightly rounds use [marketplace v2](../marketplace/nightly.md);
 use a distinct diagnostic identity here to avoid mixing the baselines.
+
+A round serves its items from `fixtures/items.json`, which git does not keep: a fresh checkout
+writes it with `fixtures/fetch.mjs` (below) or copies one, and `droplet.mjs` refuses to start a
+round without it.
 
 ```sh
 # On a fresh droplet, created and destroyed for the run (needs doctl and an SSH key there):

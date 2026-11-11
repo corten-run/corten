@@ -2666,7 +2666,8 @@ Corten is pre-1.0, so any minor version may change the API.
     what a hosted CI runner restoring a cache gets. Since BuildKit exports no cache mount, it
     rebuilds an app whose Dockerfile copies its source before building, as both of these do, about
     as if from clean. Only those two apps run by default, for time, and the README says what the
-    others' Dockerfiles do instead. The results are in `results/dev-loop`, and `summarize.mjs`
+    others' Dockerfiles do instead. `docker-rebuild.mjs` copies a context whose own directory is named
+    `bench`, as a droplet's repository root is. The results are in `results/dev-loop`, and `summarize.mjs`
     prints both.
     The time from a save to the page showing it under each stack's development server is not
     measured, and the bench README says why
@@ -4748,6 +4749,20 @@ Corten is pre-1.0, so any minor version may change the API.
   ran the builds too (8 to 22 minutes each for the first three apps on a c-8, under a 240-minute
   budget), so it could not reach the client-heavy pass within its three-hour unit. `run-all.mjs`
   takes the last step to run (`until`) after `from`.
+- Two examples drew controls that did nothing without JavaScript. card-market's item page no longer
+  draws its listings' sort button when scripts are off (a `scripting: none` rule in
+  `item_detail.css`; the page's markup is unchanged), so the listings show in the server's order,
+  cheapest first. seller-desk's filter is a `GET` form (`?q=`, with a Filter button drawn only
+  without scripts) and its sortable headers are links to the grid sorted by their column
+  (`?sort=`), which the server answers filtered, counted and sorted; with scripts the handlers do
+  it in place as before. Both smokes check the page with scripts off in Chromium, Firefox and
+  WebKit
+  ([#1210 card-market's listing sort and seller-desk's sort headers and filter are drawn without JavaScript and do nothing](https://github.com/corten-run/corten/issues/1210)).
+- `bench/fullstack/droplet.mjs` refuses to start a full-stack, browser or hardening round when
+  `bench/fullstack/fixtures/items.json` is missing, empty, not JSON or without `item_1`, before it
+  creates a droplet. Git does not keep the file, so a round started from a fresh checkout ran an
+  item API that exited at once, and every app waited out its two-minute start with every page
+  failing.
 - A build with the `json` feature and not `types` compiles its tests again (one checked a
   declaration only `types` makes), and CI now builds them; a build without the `log` feature no
   longer warns about an unused import; and the MSRV (1.88) build no longer warns that the code
@@ -7169,6 +7184,13 @@ Corten is pre-1.0, so any minor version may change the API.
     with `render-github.mjs`, which draws both from the brand pack's SVGs, and
     `corten-weathering-pack.md` gives their sizes, colors and font
     ([#1084 The GitHub avatar and social preview made from the brand pack are not in docs/brand, so they cannot be redone from the repository](https://github.com/corten-run/corten/issues/1084)).
+84. The client-heavy table in `docs/performance.md`, the README's takeover row and design Choices
+    4 and 9 are from round browser-4 (2026-11-11, `3fb4b1ac`, Xeon Platinum 8358): views take over
+    1,000 server-rendered rows in 10.2 ms (6.0 in browser-3, which ran on a Xeon Platinum 8280,
+    Chromium 148 rather than 156 and an older runtime, so the rise is not yet explained), still
+    ahead of Solid's 16.2 in this one round, and the page sends 17.9 KB of JavaScript (gzip), not 8.6
+    ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222);
+    [#833 The client-heavy table in docs/performance.md is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/corten-run/corten/issues/833)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

@@ -2,7 +2,7 @@
 //!
 //! | Route | Piece |
 //! |---|---|
-//! | `GET /` | the inventory grid: selection, shift-click ranges, select all, filter, sort, inline price edits, a confirm dialog, live stock levels |
+//! | `GET /` | the inventory grid: selection, shift-click ranges, select all, filter, sort, inline price edits, a confirm dialog, live stock levels; `?q=` filters and `?sort=` sorts it for a browser without JavaScript |
 //! | `POST /items/{id}/price` | a price cell's form: the cell as a patch, or 422 with the error |
 //! | `POST /archive` | the selected rows, archived once per submit key: a patch that removes their rows, and a status line |
 //! | `GET /statement` | what the stock is worth, by set: an answer nothing may keep (`no_store`) |
@@ -227,8 +227,13 @@ impl Middleware for ServerTiming {
 /// Every URL the app serves and links to, with the handlers that serve it, which share the desk.
 #[corten::routes(state = Desk)]
 pub mod url {
+    /// The grid. The query filters and sorts it for a browser without JavaScript.
     #[route("/", get = home)]
-    pub struct Home;
+    #[derive(Default)]
+    pub struct Home {
+        #[route(query)]
+        pub view: super::GridQuery,
+    }
 
     #[route("/items/{id}/price", post = set_price)]
     pub struct SetPrice<'a> {
@@ -257,12 +262,54 @@ async fn levels_live(State(desk): State<Desk>, since: Since) -> FeedResponse<Lev
     desk.levels.live(since)
 }
 
-async fn home(req: Req, State(desk): State<Desk>) -> HtmlResult {
+/// How the grid is shown without JavaScript: a filter and an order. With it, the grid filters and
+/// sorts as the seller types and clicks, with no request.
+#[derive(Clone, Default, Route, Fields)]
+#[route(query)]
+pub struct GridQuery {
+    pub q: Option<String>,
+    pub sort: Option<Sort>,
+}
+
+/// The grid's order: a column, ascending.
+#[derive(Clone, Copy, PartialEq, Debug, UrlValue)]
+#[serde(rename_all = "kebab-case")]
+pub enum Sort {
+    Name,
+    Set,
+    Qty,
+    Price,
+}
+
+async fn home(req: Req, State(desk): State<Desk>, Params(at): Params<url::Home>) -> HtmlResult {
     let qty = desk.quantities();
     let items = desk.items.lock().expect("items").clone();
-    let lines: Vec<Line> = items.iter().filter(|i| !i.archived).map(|item| Line { item, qty: qty[&item.id] }).collect();
-    let view = views::desk(&lines, req.t());
+    let lines = lines(&items, &qty, &at.view);
+    let view = views::desk(&lines, &at.view, req.t());
     req.page(html! { <views::Layout req={&req} title="Inventory">{view}</views::Layout> })
+}
+
+/// The items still listed, as the query shows them: the rows the filter does not match are drawn
+/// `hidden` (the script shows them again when the filter changes), in the order the query asks.
+fn lines<'a>(items: &'a [Item], qty: &HashMap<String, u32>, view: &GridQuery) -> Vec<Line<'a>> {
+    let query = view.q.as_deref().unwrap_or("").trim().to_lowercase();
+    let mut lines: Vec<Line> = items
+        .iter()
+        .filter(|i| !i.archived)
+        .map(|item| Line {
+            item,
+            qty: qty[&item.id],
+            hidden: !query.is_empty() && !format!("{} {}", item.name, item.set).to_lowercase().contains(&query),
+        })
+        .collect();
+    match view.sort {
+        Some(Sort::Name) => lines.sort_by_cached_key(|l| l.item.name.to_lowercase()),
+        Some(Sort::Set) => lines.sort_by_cached_key(|l| l.item.set.to_lowercase()),
+        Some(Sort::Qty) => lines.sort_by_key(|l| l.qty),
+        Some(Sort::Price) => lines.sort_by_key(|l| l.item.price_cents),
+        None => {}
+    }
+    lines
 }
 
 #[derive(Fields)]
@@ -287,7 +334,7 @@ async fn set_price(
         let mut errors = Errors::new();
         errors.add(f.price, "Enter a price above zero, like 12.50.");
         let cell = PriceCell { id: &id, cents: None, typed: &input.price, errors: &errors };
-        return req.invalid(&errors, cell, || async { req.redirect(&url::Home) }).await;
+        return req.invalid(&errors, cell, || async { req.redirect(&url::Home::default()) }).await;
     };
     {
         let mut items = desk.items.lock().expect("items");
@@ -296,7 +343,7 @@ async fn set_price(
     }
     let none = Errors::new();
     let cell = PriceCell { id: &id, cents: Some(cents), typed: "", errors: &none };
-    req.patch_or(cell, || async { req.redirect(&url::Home) }).await
+    req.patch_or(cell, || async { req.redirect(&url::Home::default()) }).await
 }
 
 #[derive(Fields)]
@@ -336,7 +383,7 @@ async fn archive(req: Req, State(desk): State<Desk>, Form(input): Form<ArchiveIn
         <ItemCount t={t} count={left} />
         <StatusLine text={&t.status_archived(done.len()).to_string()} />
     };
-    req.patch_or(removed, || async { req.redirect(&url::Home) }).await
+    req.patch_or(removed, || async { req.redirect(&url::Home::default()) }).await
 }
 
 /// What the listed stock is worth, by set. Amounts a seller would not want left in a shared
@@ -514,7 +561,7 @@ mod tests {
     #[tokio::test]
     async fn the_desk_renders_every_row_with_its_handlers() {
         let desk = Desk::new(20);
-        let res = client(&desk).get(&url::Home).await;
+        let res = client(&desk).get(&url::Home::default()).await;
         assert_eq!(res.status(), StatusCode::OK);
         let html = res.text();
         assert_eq!(html.matches(r#"<tr data-key=""#).count(), 20, "every row is an InventoryRow, keyed by its item: {html}");
@@ -565,7 +612,7 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("Archived 2 items."), "{html}");
-        let page = app.get(&url::Home).await;
+        let page = app.get(&url::Home::default()).await;
         let page = page.text();
         assert_eq!(page.matches(r#"<tr data-key=""#).count(), 3);
         assert!(page.contains(r#"<input type="hidden" name="submit" data-submit value=""#), "the form carries a key: {page}");
@@ -580,7 +627,7 @@ mod tests {
         let again = archive(&app, &["i00001", "i00002"], &key).await;
         assert_eq!(first, again, "a resend is answered with what the first did");
         assert!(again.1.contains("Archived 1 item."), "{}", again.1);
-        let page = app.get(&url::Home).await;
+        let page = app.get(&url::Home::default()).await;
         assert_eq!(page.text().matches(r#"<tr data-key=""#).count(), 4, "i00002 is still listed");
         let (_, next) = archive(&app, &["i00002"], &submit_key()).await;
         assert!(next.contains("Archived 1 item."), "a new key is a new submit: {next}");
@@ -606,18 +653,52 @@ mod tests {
             ),
             "a total of every set: {html}"
         );
-        let res = app.get(&url::Home).await;
+        let res = app.get(&url::Home::default()).await;
         let home = res.text();
         assert!(home.contains(r#"<p id="item-count""#) && home.contains(">10 items</p>"), "the grid's count: {home}");
         let timing = res.headers()["server-timing"].to_str().unwrap();
         assert!(timing.starts_with("app;dur="), "{timing}");
     }
 
+    #[tokio::test]
+    async fn without_javascript_the_query_filters_and_sorts_the_grid() {
+        let desk = Desk::new(30);
+        let at = url::Home { view: GridQuery { q: Some("Tidebreak".into()), sort: Some(Sort::Name) } };
+        let res = client(&desk).get(&at).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let html = res.text();
+        let rows: Vec<&str> = html.split(r#"<tr data-key=""#).skip(1).collect();
+        assert_eq!(rows.len(), 30, "every row is drawn, so the script can show them again: {html}");
+        let shown: Vec<&str> = rows.iter().copied().filter(|row| !row[..row.find('>').unwrap()].contains(" hidden")).collect();
+        assert!(!shown.is_empty() && shown.len() < 30, "the filter hides the rows of other sets: {}", shown.len());
+        assert!(shown.iter().all(|row| row.contains("<td>Tidebreak</td>")), "{html}");
+        let names: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                let name = &row[row.find("<span>").unwrap() + 6..];
+                name[..name.find('<').unwrap()].to_lowercase()
+            })
+            .collect();
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "sorted by name: {names:?}");
+        assert!(html.contains(r#"<th aria-sort="ascending"><a href="/?q=Tidebreak&amp;sort=name""#), "{html}");
+        assert!(
+            html.contains(r#"value="Tidebreak""#) && html.contains(r#"<input type="hidden" name="sort" value="name">"#),
+            "{html}"
+        );
+        assert!(html.contains(r#"class="inventory-grid__empty" hidden>"#), "rows match, so no note: {html}");
+        assert!(html.contains(&format!(r#"<output data-ref="shown">{} of 30 shown</output>"#, shown.len())), "{html}");
+        let empty = url::Home { view: GridQuery { q: Some("no such card".into()), sort: None } };
+        let res = client(&desk).get(&empty).await;
+        let none = res.text();
+        assert!(none.contains(r#"class="inventory-grid__empty">No items"#), "{none}");
+    }
+
     #[test]
     fn a_row_at_quantity_zero_is_marked_sold_out() {
         let desk = Desk::new(2);
         let items = desk.items.lock().unwrap().clone();
-        let html = |qty| views::desk(&[Line { item: &items[0], qty }], Msg::default()).to_html();
+        let html =
+            |qty| views::desk(&[Line { item: &items[0], qty, hidden: false }], &GridQuery::default(), Msg::default()).to_html();
         assert!(html(0).contains("data-sold-out"), "{}", html(0));
         assert!(!html(3).contains("data-sold-out"), "{}", html(3));
     }
@@ -630,12 +711,13 @@ mod tests {
             let desk = Desk::new(rows);
             let qty = desk.quantities();
             let items = desk.items.lock().unwrap().clone();
-            let lines: Vec<Line> = items.iter().map(|item| Line { item, qty: qty[&item.id] }).collect();
-            let html = views::desk(&lines, Msg::default()).to_html();
+            let lines: Vec<Line> = items.iter().map(|item| Line { item, qty: qty[&item.id], hidden: false }).collect();
+            let view = GridQuery::default();
+            let html = views::desk(&lines, &view, Msg::default()).to_html();
             let rounds = 200;
             let start = std::time::Instant::now();
             for _ in 0..rounds {
-                std::hint::black_box(views::desk(std::hint::black_box(&lines), Msg::default()).to_html());
+                std::hint::black_box(views::desk(std::hint::black_box(&lines), &view, Msg::default()).to_html());
             }
             let us = start.elapsed().as_secs_f64() * 1e6 / rounds as f64;
             let handlers: usize = html.matches(" data-on=\"").count();

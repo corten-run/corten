@@ -2,7 +2,7 @@
 use corten::{Component, prelude::*};
 
 use crate::{
-    app::{Item, url},
+    app::{GridQuery, Item, url},
     text::Msg,
     ui::nav_bar::{NavBar, NavBrand, NavSections},
 };
@@ -35,6 +35,8 @@ pub const COMPONENTS: &[Component] = &[InventoryGrid, InventoryRow, ItemCount, P
 pub struct Line<'a> {
     pub item: &'a Item,
     pub qty: u32,
+    /// Drawn `hidden`: the page's filter (`?q=`) does not match it.
+    pub hidden: bool,
 }
 
 /// The document around every page.
@@ -53,9 +55,9 @@ pub fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
             </head>
             <body>
                 <header class={NavBar {}}>
-                    <a class={NavBrand {}} href={url::Home}>"Seller desk"</a>
+                    <a class={NavBrand {}} href={url::Home::default()}>"Seller desk"</a>
                     <nav class={NavSections {}} aria-label="Sections">
-                        <a {..req.nav(&url::Home)}>"Inventory"</a>
+                        <a {..req.nav(&url::Home::default())}>"Inventory"</a>
                         <a {..req.nav(&url::Statement)}>"Statement"</a>
                     </nav>
                 </header>
@@ -83,7 +85,7 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
         <Layout req={&req} title={title}>
             <h1>{title}</h1>
             <p>{text}</p>
-            <p><a href={url::Home}>"Back to the inventory"</a></p>
+            <p><a href={url::Home::default()}>"Back to the inventory"</a></p>
             if let Some(detail) = failure.detail() {
                 <pre>{detail}</pre>
             }
@@ -91,11 +93,11 @@ pub async fn error_page(failure: Failure, req: Req) -> HtmlResult {
     })
 }
 
-pub fn desk<'a>(lines: &'a [Line<'a>], t: Msg) -> impl Render + 'a {
+pub fn desk<'a>(lines: &'a [Line<'a>], view: &'a GridQuery, t: Msg) -> impl Render + 'a {
     html! {
         <h1>"Inventory"</h1>
         <StatusLine text="" />
-        <InventoryGrid lines={lines} t={t} />
+        <InventoryGrid lines={lines} view={view} t={t} />
     }
 }
 

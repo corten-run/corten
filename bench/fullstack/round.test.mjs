@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { maxPasses } from "./passes.mjs";
-import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
+import { browserSuite, buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fixtureError, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, stepsUntil, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -304,4 +304,14 @@ test("run-all.mjs runs from one step through another, and the browser suite stop
   assert.deepEqual(stepsUntil("count", "conform").steps, ["count", "conform"]);
   assert.match(stepsUntil("build", "browser").error ?? "", /until \(browser\) comes before from \(build\)/);
   assert.match(stepsUntil("browser", "nope").error ?? "", /must each be one of/);
+});
+
+test("a round that serves items refuses a missing, empty or itemless fixture, and the live suite needs none", () => {
+  const good = JSON.stringify({ item_1: { id: "item_1" } });
+  for (const suite of ["fullstack", "browser", "harden"]) {
+    assert.match(fixtureError(suite, null) ?? "", /is missing: an? [\w-]+ round serves its items from it.*Copy one from a checkout that has it/);
+    for (const bad of ["", "{", "[]", "null", JSON.stringify({ item_2: {} })]) assert.match(fixtureError(suite, bad) ?? "", /empty, not JSON or has no item_1/, bad);
+    assert.equal(fixtureError(suite, good), null);
+  }
+  assert.equal(fixtureError("live", null), null);
 });
