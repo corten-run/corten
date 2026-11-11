@@ -304,7 +304,9 @@ export const contextOf = (/** @type {string} */ name) => recipes[name].context |
 /**
  * The cpSync filter that copies the directory `from` without the entries named in `skip`. The
  * directory itself is always copied, whatever its name: on a droplet the repository is /bench, and
- * the repository root's context leaves out "bench", which once skipped the whole copy (browser-4).
+ * the repository root's context leaves out "bench", which skipped the whole copy (a droplet round on
+ * 2026-11-11 failed reading the file to edit, ENOENT). Names are skipped at any depth, not only at
+ * the root as .dockerignore does.
  * @param {string} from
  * @param {Set<string>} skip
  */

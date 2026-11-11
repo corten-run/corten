@@ -1,7 +1,7 @@
 // Tests for builds.mjs: node --test bench/fullstack/builds.test.mjs (npm run check runs it).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { join } from "node:path";
@@ -322,11 +322,23 @@ test("build.mjs's table has a row for an app with no build step, a built app and
 
 test("a context is copied whatever its own directory is named, without the entries it skips", () => {
   const skip = new Set(["bench", "target"]);
-  for (const repo of ["/bench", "/src/corten"]) {
-    const keep = copyFilter(repo, skip);
-    assert.equal(keep(repo), true, repo);
-    assert.equal(keep(join(repo, "examples", "card-market", "src", "views", "alert.rs")), true, repo);
-    assert.equal(keep(join(repo, "bench")), false, repo);
-    assert.equal(keep(join(repo, "target")), false, repo);
+  for (const root of ["/bench", "/src/corten"]) {
+    const keep = copyFilter(root, skip);
+    assert.equal(keep(root), true, root);
+    assert.equal(keep(join(root, "examples", "card-market", "src", "views", "alert.rs")), true, root);
+    assert.equal(keep(join(root, "bench")), false, root);
+    assert.equal(keep(join(root, "target")), false, root);
   }
+  // The real copy, of a root named bench, as docker-rebuild.mjs makes it.
+  const scratch = mkdtempSync(join(tmpdir(), "copy-filter-"));
+  const from = join(scratch, "bench");
+  mkdirSync(join(from, "examples"), { recursive: true });
+  mkdirSync(join(from, "bench"), { recursive: true });
+  writeFileSync(join(from, "examples", "a.rs"), "a");
+  writeFileSync(join(from, "bench", "b.txt"), "b");
+  const to = join(scratch, "copy");
+  cpSync(from, to, { recursive: true, filter: copyFilter(from, skip) });
+  assert.deepEqual(readdirSync(to).sort(), ["examples"]);
+  assert.equal(readFileSync(join(to, "examples", "a.rs"), "utf8"), "a");
+  rmSync(scratch, { recursive: true, force: true });
 });

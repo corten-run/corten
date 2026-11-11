@@ -2666,7 +2666,8 @@ Corten is pre-1.0, so any minor version may change the API.
     what a hosted CI runner restoring a cache gets. Since BuildKit exports no cache mount, it
     rebuilds an app whose Dockerfile copies its source before building, as both of these do, about
     as if from clean. Only those two apps run by default, for time, and the README says what the
-    others' Dockerfiles do instead. The results are in `results/dev-loop`, and `summarize.mjs`
+    others' Dockerfiles do instead. It copies a context whose own directory is named `bench`, as a
+    droplet's repository root is. The results are in `results/dev-loop`, and `summarize.mjs`
     prints both.
     The time from a save to the page showing it under each stack's development server is not
     measured, and the bench README says why
@@ -4743,9 +4744,6 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
-- `bench/fullstack/docker-rebuild.mjs` measures Corten on a droplet again. Corten's context is
-  the repository root, which a droplet keeps at `/bench`, and the copy left out every entry named
-  `bench`, the root included, so the copy was empty and the edit failed (`ENOENT`, browser-4).
 - A build with the `json` feature and not `types` compiles its tests again (one checked a
   declaration only `types` makes), and CI now builds them; a build without the `log` feature no
   longer warns about an unused import; and the MSRV (1.88) build no longer warns that the code
