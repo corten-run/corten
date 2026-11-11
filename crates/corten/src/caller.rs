@@ -638,6 +638,8 @@ mod tests {
     #[test]
     fn a_challenge_is_its_scheme_then_its_parameters_quoted() {
         assert_eq!(Challenge::bearer("partners").0, r#"Bearer realm="partners""#);
+        const NEGOTIATE: Challenge = Challenge::new("Negotiate");
+        assert_eq!(NEGOTIATE.0, "Negotiate");
         let challenge = Challenge::bearer("partners").param("error", "invalid_token");
         assert_eq!(challenge.0, r#"Bearer realm="partners", error="invalid_token""#);
         assert_eq!(Challenge::basic(r#"say "hi" \ go"#).0, r#"Basic realm="say \"hi\" \\ go""#);

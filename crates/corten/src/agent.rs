@@ -970,6 +970,26 @@ mod tests {
         crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router()
     }
 
+    /// Without an [`Authorization`], a 401 names the endpoint as its realm, and `mcp` when its
+    /// name cannot be one (RFC 6750 3: `Bearer` is followed by a parameter).
+    #[tokio::test]
+    async fn a_refusal_names_the_endpoint_as_its_realm() {
+        for (name, realm) in [("inventory tools", "inventory tools"), ("caf\u{e9}", "mcp"), ("", "mcp")] {
+            let tools = Tools::new(name, "1.0").auth(|_| Err::<Agent, _>(ToolError::Unauthorized)).tool(
+                "inventory.adjust",
+                "Adjust quantity",
+                |_: Agent, input: Adjust| async move { Ok(Adjusted { id: input.id, quantity: input.delta }) },
+            );
+            let app = crate::App::new(crate::Routes::new()).api::<Mcp>(|api| api.route::<Mcp>(tools.route())).router();
+            let (status, headers, _) = send(&app, adjust(None)).await;
+            assert_eq!(
+                (status, headers["www-authenticate"].to_str().unwrap()),
+                (StatusCode::UNAUTHORIZED, &*format!(r#"Bearer realm="{realm}""#)),
+                "{name:?}"
+            );
+        }
+    }
+
     async fn send(app: &Router, req: Request<Body>) -> (StatusCode, HeaderMap, String) {
         let res = app.clone().oneshot(req).await.unwrap();
         let (parts, body) = res.into_parts();

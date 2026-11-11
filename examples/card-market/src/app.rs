@@ -145,10 +145,11 @@ impl Partners {
     }
 
     /// The key the request sends as a bearer token (`Authorization: Bearer <key>`, RFC 6750),
-    /// whose scheme is matched in any case.
+    /// whose scheme is matched in any case; an empty one is no key.
     fn sent(headers: &HeaderMap) -> Option<&str> {
         let (scheme, key) = headers.get(header::AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
-        scheme.eq_ignore_ascii_case("bearer").then_some(key.trim())
+        let key = key.trim();
+        (scheme.eq_ignore_ascii_case("bearer") && !key.is_empty()).then_some(key)
     }
 
     /// The partner whose key the request sends.
@@ -1396,10 +1397,12 @@ mod tests {
     async fn a_partner_sets_an_alert_with_its_api_key() {
         let app = app();
         let alert = r#"{"id":"item_9","email":"ada@example.com","target_price":"0.40"}"#;
-        // No key: send one; a wrong one: it is not valid (RFC 6750 3.1).
-        for (key, challenge) in
-            [(None, r#"Bearer realm="partners""#), (Some("wrong"), r#"Bearer realm="partners", error="invalid_token""#)]
-        {
+        // No key, or an empty one: send one; a wrong one: it is not valid (RFC 6750 3.1).
+        for (key, challenge) in [
+            (None, r#"Bearer realm="partners""#),
+            (Some(""), r#"Bearer realm="partners""#),
+            (Some("wrong"), r#"Bearer realm="partners", error="invalid_token""#),
+        ] {
             let res = partner(&app, key, alert).await;
             assert_eq!(
                 (res.status(), res.text()),
