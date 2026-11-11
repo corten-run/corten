@@ -242,26 +242,39 @@ try {
       return null;
     };
     /**
-     * Sends `message` and reads the notifications until one has its body. Under load Chromium now
-     * and then drops a notification the worker showed: its trace has the push dispatched and the
-     * handler's `waitUntil` settled (`DidHandlePushEvent` COMPLETED), and `getNotifications()`
-     * never lists it, for either push (#1202: 14 of about 550 local runs, none shown late). A
-     * message not shown in 5 s is sent once more, and the detail says which send showed it.
+     * Sends `message` and reads the notifications until one has its body, sending it once more
+     * (when `tries` allows) if none does in 5 s. Under load Chromium now and then loses a
+     * notification the worker showed: its trace has the push dispatched and the handler's
+     * `waitUntil` settled (`DidHandlePushEvent` COMPLETED), and `getNotifications()` never lists it,
+     * even 30 s later (#1202: 20 of about 670 local runs, 15 of them the second push of the run;
+     * none shown late). What it saw is the detail: the notification and the send that showed it,
+     * or how many sends showed nothing.
      * @param {{ title?: string, body: string, url: unknown }} message
+     * @param {number} tries
      */
-    const shown = async (message) => {
+    const sendUntilShown = async (message, tries) => {
       if (registrationId === null) return null;
-      for (let send = 1; send <= 2; send += 1) {
+      for (let attempt = 1; attempt <= tries; attempt += 1) {
         await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify(message) });
         const found = await shownWith(message.body);
-        if (found) return { ...found, send };
+        if (found) return { ...found, attempt };
       }
-      return null;
+      return { missed: tries };
     };
-    const first = await shown({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
+    const first = await sendUntilShown({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" }, 2);
     check("a push message shows a notification", first?.title === "Price drop" && first?.url === "/items/item_5", registrationId === null ? "no registration id" : JSON.stringify(first));
-    const odd = await shown({ body: "Card Name 7 is back", url: 5 });
+    const odd = await sendUntilShown({ body: "Card Name 7 is back", url: 5 }, 2);
     check("a push message with no title and a url that is not text shows untitled and opens /", odd?.title === "" && odd?.url === "/", JSON.stringify(odd));
+    // A second send is taken only from a loss as rare as Chromium's (about 1 push in 70 locally):
+    // after one, a new message must show on its first send, so a worker that drops every other
+    // push still fails here. One that drops pushes at random passes more often than before (half
+    // of them: about 2 runs in 5, from 1 in 4), which the detail's `attempt` still shows. Chromium
+    // can lose this third push too (2 of 30 locally), so a run fails without cause about 1 time in
+    // 500 (a resend in 1 run in 35, then this loss), where it failed about 1 time in 35.
+    if (first?.attempt === 2 || odd?.attempt === 2) {
+      const after = await sendUntilShown({ title: "Back in stock", body: "Card Name 9 is back", url: "/items/item_9" }, 1);
+      check("after a push was sent twice, the next shows on its first send", after?.attempt === 1, JSON.stringify(after));
+    }
   } finally {
     await full.close();
   }
