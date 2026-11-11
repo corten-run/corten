@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { allApps } from "./apps.mjs";
 import { edgeBase, edgeBound, edgeCores, edgeOffset, nginxConf } from "./edge.mjs";
 
 const apps = /** @type {[string, { port: number }][]} */ ([["corten", { port: 18410 }], ["axum-maud", { port: 18427 }]]);
@@ -38,4 +41,24 @@ test("the edge's cores are counted from BENCH_EDGE_CPUS, and a phase that used 9
   assert.equal(edgeBound(359, 4), false);
   assert.equal(edgeBound(360, 4), true);
   assert.equal(edgeBound(null, 4), null, "a phase reached directly says nothing");
+});
+
+test("Next.js's matched build allows the origin a browser posts its server action from through the edge", () => {
+  // Next.js fixes serverActions.allowedOrigins when it builds, so its Dockerfile names the edge's host
+  // and passes it to the build, whose config lists it only under the profile.
+  const dockerfile = readFileSync(new URL("apps/nextjs/Dockerfile", import.meta.url), "utf8");
+  const host = new URL(edgeBase(allApps.nextjs, "outside")).host;
+  assert.equal(/^ARG EDGE_HOST=(\S+)$/m.exec(dockerfile)?.[1], host);
+  // A build argument is in the environment of the RUN lines after it, so the build reads both.
+  assert.match(dockerfile, /^ARG PROFILE=\nARG EDGE_HOST=\S+\nRUN npm run build$/m);
+  const config = (/** @type {Record<string, string>} */ env) => {
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", 'const c = (await import("./apps/nextjs/next.config.mjs")).default; console.log(JSON.stringify({ origins: c.experimental?.serverActions?.allowedOrigins ?? null, proxy: c.pageExtensions ?? null, headers: typeof c.headers }))'], { cwd: import.meta.dirname, encoding: "utf8", env: { PATH: process.env.PATH ?? "", ...env } });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  const matched = config({ PROFILE: "matched", EDGE_HOST: host });
+  assert.deepEqual(matched.origins, [host]);
+  assert.ok(matched.proxy.includes("matched.ts"), "the matched build takes proxy.matched.ts");
+  assert.equal(matched.headers, "function");
+  assert.deepEqual(config({ PROFILE: "", EDGE_HOST: host }), { origins: null, proxy: null, headers: "undefined" }, "the defaults build's config is as before");
 });

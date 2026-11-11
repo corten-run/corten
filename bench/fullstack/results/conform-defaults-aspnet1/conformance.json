@@ -1,0 +1,399 @@
+{
+  "format": 2,
+  "tier": "defaults",
+  "commit": "2fa883a63006e5b7309de32be74279353530e963",
+  "dirty": false,
+  "imagesFrom": null,
+  "date": "2026-11-09T14:01:32.457Z",
+  "apps": [
+    "aspnet",
+    "aspnet-aot"
+  ],
+  "results": {
+    "aspnet": {
+      "image": "sha256:a5fdb4fc515cdee9c59577b71c00bddecde48c7c32f7798bf2c7325544018647",
+      "probes": {
+        "pages": true,
+        "page": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-cache, no-store",
+            "x-frame-options": "SAMEORIGIN",
+            "set-cookie": [
+              ".AspNetCore.Antiforgery.VyLW6ORzMgk=CfDJ8LYJb__5KhBErpEV84w-M5uwgMIHwCMz1PFN7N7R33o6ZvuRWpRrsNOM0Q_WieV8hApVwkPmXJxOexB23SRhe3PKcrLvaCxRPYDC7cS9cwDYn31XV01WCsqVopwXTYV4o-qLy1dDZwx93q3wkwwF18M; path=/; samesite=strict; httponly"
+            ]
+          },
+          "bodyLength": 8149,
+          "ms": 42
+        },
+        "pageBr": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-cache, no-store",
+            "x-frame-options": "SAMEORIGIN",
+            "set-cookie": [
+              ".AspNetCore.Antiforgery.VyLW6ORzMgk=CfDJ8LYJb__5KhBErpEV84w-M5slJ_qr5Gbx_uSq90JAjL1fC5xa1aBf1fuoabcZC7JY8GXHzKYQUjZhF7f3F_FB8LUUaf666d7BGkNPbDmM5TVZlTdHhyRY0qtWa6w2IJgdgklU4EXiK-WHNjMh9-K9o-8; path=/; samesite=strict; httponly"
+            ]
+          },
+          "bodyLength": 8149,
+          "ms": 40
+        },
+        "pageAgain": null,
+        "json": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "bodyLength": 8839,
+          "ms": 34
+        },
+        "jsonBr": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "bodyLength": 8839,
+          "ms": 32
+        },
+        "jsonGzip": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "bodyLength": 8839,
+          "ms": 54
+        },
+        "head": {
+          "status": 405,
+          "headers": {},
+          "bodyLength": 0,
+          "ms": 29
+        },
+        "json404": {
+          "status": 404,
+          "headers": {},
+          "bodyLength": 0,
+          "ms": 27
+        },
+        "json405": {
+          "status": 405,
+          "headers": {},
+          "bodyLength": 0,
+          "ms": 21
+        },
+        "page404": {
+          "status": 404,
+          "headers": {
+            "content-type": "text/html; charset=utf-8"
+          },
+          "bodyLength": 622,
+          "ms": 27
+        },
+        "page500": {
+          "status": 500,
+          "headers": {},
+          "bodyLength": 0,
+          "ms": 42
+        },
+        "json500": {
+          "status": 500,
+          "headers": {},
+          "bodyLength": 0,
+          "ms": 33
+        },
+        "badHost": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8"
+          },
+          "bodyLength": 8839,
+          "ms": 52
+        },
+        "bigHead": {
+          "status": 431,
+          "headers": {},
+          "bodyLength": 0,
+          "ms": 28
+        },
+        "formPath": "/items/item_5",
+        "ownPost": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-cache, no-store"
+          },
+          "bodyLength": 8236,
+          "ms": 91
+        },
+        "crossSite": {
+          "status": 400,
+          "headers": {},
+          "bodyLength": 0,
+          "ms": 20
+        },
+        "bigBody": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-cache, no-store"
+          },
+          "bodyLength": 8190,
+          "ms": 68
+        },
+        "afterBig": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-cache, no-store",
+            "x-frame-options": "SAMEORIGIN",
+            "set-cookie": [
+              ".AspNetCore.Antiforgery.VyLW6ORzMgk=CfDJ8LYJb__5KhBErpEV84w-M5tKAovA6-tjOene8_88fUADOgCQypNZ3FZP3hfNNUzEXVboXek526ZQt4Ka_CjoR4_ZrI2QUbWa0nwvcXzMsSYsD1ezoJvDzSuoRlpuEPunE8pOraee61lJoQlMrbh6l9g; path=/; samesite=strict; httponly"
+            ]
+          },
+          "bodyLength": 8149,
+          "ms": 47
+        },
+        "logLines": "0",
+        "live": null,
+        "readyPath": null,
+        "slow": {
+          "timedOut": true,
+          "ms": 45027
+        },
+        "readyDown": null
+      },
+      "row": {
+        "pageHeaders": "missing csp, nosniff, referrer, opener",
+        "pageScripts": "no CSP",
+        "permissions": "no",
+        "pageCache": "no-cache, no-store",
+        "etag": "no ETag",
+        "pageCompression": "none",
+        "crossSite": "400",
+        "bigBody": "200",
+        "page404": "404 html",
+        "page500": "500 empty",
+        "jsonHeaders": "none",
+        "jsonCache": "none",
+        "jsonCompression": "none; none",
+        "json404": "404 empty",
+        "json405": "405 empty",
+        "json500": "500 empty",
+        "head": "405",
+        "host": "200",
+        "bigHead": "431",
+        "logLines": "0",
+        "live": "none",
+        "readyDown": "no readiness endpoint",
+        "deadline": "held 45 s",
+        "unmet": [
+          "pageHeaders",
+          "pageScripts",
+          "permissions",
+          "etag",
+          "pageCompression",
+          "bigBody",
+          "page500",
+          "jsonHeaders",
+          "jsonCache",
+          "jsonCompression",
+          "json404",
+          "json405",
+          "json500",
+          "head",
+          "host",
+          "live",
+          "readyDown",
+          "deadline"
+        ]
+      }
+    },
+    "aspnet-aot": {
+      "image": "sha256:b2706bcc0eb17f18014ae6c706cd6177af61c37e64cae85506c6866b5b12b31d",
+      "probes": {
+        "pages": false,
+        "page": null,
+        "pageBr": null,
+        "pageAgain": null,
+        "json": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 8839,
+          "ms": 56
+        },
+        "jsonBr": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-encoding": "br",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 2066,
+          "ms": 47
+        },
+        "jsonGzip": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "content-encoding": "gzip",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 2301,
+          "ms": 37
+        },
+        "head": {
+          "status": 200,
+          "headers": {
+            "content-type": "application/json; charset=utf-8",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 0,
+          "ms": 42
+        },
+        "json404": {
+          "status": 404,
+          "headers": {
+            "content-type": "application/problem+json",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 163,
+          "ms": 25
+        },
+        "json405": {
+          "status": 405,
+          "headers": {
+            "content-type": "application/problem+json",
+            "cache-control": "private, no-cache",
+            "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 172,
+          "ms": 42
+        },
+        "page404": null,
+        "page500": null,
+        "json500": {
+          "status": 500,
+          "headers": {
+            "content-type": "application/problem+json",
+            "cache-control": "no-cache,no-store"
+          },
+          "bodyLength": 202,
+          "ms": 41
+        },
+        "badHost": {
+          "status": 400,
+          "headers": {
+            "content-type": "text/html"
+          },
+          "bodyLength": 334,
+          "ms": 35
+        },
+        "bigHead": {
+          "status": 431,
+          "headers": {},
+          "bodyLength": 0,
+          "ms": 26
+        },
+        "logLines": "0",
+        "live": {
+          "status": 200,
+          "headers": {
+            "content-type": "text/plain",
+            "cache-control": "no-store, no-cache",
+            "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 7,
+          "ms": 45,
+          "path": "/health/live"
+        },
+        "readyPath": "/health/ready",
+        "slow": {
+          "status": 503,
+          "headers": {
+            "content-type": "application/problem+json"
+          },
+          "bodyLength": 173,
+          "ms": 10041
+        },
+        "readyDown": {
+          "status": 503,
+          "headers": {
+            "content-type": "text/plain",
+            "cache-control": "no-store, no-cache",
+            "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+            "x-content-type-options": "nosniff",
+            "referrer-policy": "strict-origin-when-cross-origin",
+            "x-frame-options": "DENY",
+            "cross-origin-opener-policy": "same-origin"
+          },
+          "bodyLength": 9,
+          "ms": 2030
+        }
+      },
+      "row": {
+        "pageHeaders": "n/a",
+        "pageScripts": "n/a",
+        "permissions": "n/a",
+        "pageCache": "n/a",
+        "etag": "n/a",
+        "pageCompression": "n/a",
+        "crossSite": "n/a",
+        "bigBody": "n/a",
+        "page404": "n/a",
+        "page500": "n/a",
+        "jsonHeaders": "all",
+        "jsonCache": "private, no-cache",
+        "jsonCompression": "br; gzip",
+        "json404": "404 problem+json",
+        "json405": "405 problem+json",
+        "json500": "500 problem+json",
+        "head": "200",
+        "host": "400",
+        "bigHead": "431",
+        "logLines": "0",
+        "live": "/health/live 200",
+        "readyDown": "/health/ready 503 in 2.0 s",
+        "deadline": "503 in 10.0 s",
+        "unmet": []
+      }
+    }
+  }
+}

@@ -1,14 +1,14 @@
 diff --git a/crates/corten/src/page.rs b/crates/corten/src/page.rs
-index 9bb5796e..3c3b1da0 100644
+index 4425297c..7a071501 100644
 --- a/crates/corten/src/page.rs
 +++ b/crates/corten/src/page.rs
-@@ -2475,6 +2475,11 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
+@@ -2576,6 +2576,11 @@ pub(crate) async fn render_errors<S: crate::app::Steps>(
      api: Option<&crate::api::Mount>,
-     mode: Mode,
+     (mode, fetched): (Mode, bool),
  ) -> Response {
 +    // Ablation: the handler's answer as it is, never an error page or a JSON failure (nor a layout read's, which card-market has none of).
 +    if true {
-+        let _ = (shared, api, mode);
++        let _ = (shared, api, mode, fetched);
 +        return run(req, next, deadline, signal).await;
 +    }
      if api.is_some() || mode == Mode::Data {
