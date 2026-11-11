@@ -4550,7 +4550,7 @@ Corten is pre-1.0, so any minor version may change the API.
     digits in half
     ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
-170. Scripts are type-checked with `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`,
+179. Scripts are type-checked with `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`,
     `allowUnreachableCode: false` and `noUncheckedSideEffectImports` as well as `strict`, by
     `corten check` and by Corten's own `npm run check`, and a test fails when the settings differ:
     an array's element or a record's value read by index is `T | undefined` until the script
