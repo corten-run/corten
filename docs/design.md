@@ -1166,16 +1166,18 @@ rules something out.
     neither `Bearer` nor `Basic` (a `Challenge::new` outside a `const` is checked as it runs),
     with parameters always sent as quoted strings and checked when the refusal is made (a
     challenge is built where the request is refused, so a mistake in a literal shows on the first
-    refused request, which an app's tests send; [Rule 8](#rule-compile-errors) gives way here,
-    since a realm and its parameters are as often built from configuration, as the MCP endpoint's
-    are from its origin and scopes, and a `const` form would be a second way to write one). The
-    MCP endpoint without an `Authorization` names itself as the realm. A 401 sends one challenge,
-    with parameters and no token68 (`Negotiate <data>`); a client offered two schemes at once
-    (RFC 9110 11.6.1 allows a list) is not one an app has needed. Of the 401s `Refused` makes,
-    `sign_in`'s to a data client is the one that falls short of RFC 9110: it carries no
-    challenge, since a session cookie has no HTTP authentication scheme to name
-    ([Limit 11](#limit-caller-types); a 401 an app writes by hand, `Error::status`, is its own). A key sent in a
-    header of the app's own (`X-Api-Key`) has no scheme either, so an API that keeps one for
+    refused request, which an app's tests send; [Rule 8](#rule-compile-errors) gives way here
+    because Corten has no startup point for an app's challenges, and a `const` form would be a
+    second way to write one: an app whose realm comes from configuration builds its `Challenge`
+    once at startup and clones it, which fails at startup). The MCP endpoint builds its own from
+    its origin and scopes when it is mounted, and without an `Authorization` names itself as the
+    realm, or `mcp` when its name, which is also its `serverInfo` and may be any text, cannot be
+    one. A 401 sends one challenge, with parameters and no token68 (`Negotiate <data>`); a client
+    offered two schemes at once (RFC 9110 11.6.1 allows a list) is not one an app has needed.
+    Of the 401s `Refused` makes, `sign_in`'s to a data client is the one that falls short of
+    RFC 9110: it carries no challenge, since a session cookie has no HTTP authentication scheme
+    to name ([Limit 11](#limit-caller-types); a 401 an app writes by hand, `Error::status`, is
+    its own). A key sent in a header of the app's own (`X-Api-Key`) has no scheme either, so an API that keeps one for
     clients that already send it also takes the key as a bearer token and challenges `Bearer`.
     Not chosen for the type: `unauthorized()` sending `Bearer` by default, which would have
     kept every caller compiling but named a scheme for an app that takes another; a `BEARER`
@@ -1229,18 +1231,21 @@ rules something out.
     take, so no route given to the `App` skips them, an unstaged route's arguments standing in for
     its answer's); bet (most of an app's access rules are
     about who is asking, which a type can name, and the rest depend on the record, which the
-    handler reads anyway); bet (a challenge's realm and error code are literals, so checking
-    them when a refusal is made finds a mistake in the first test that refuses a request, and a
-    value from a store or a request is the app's to clean); platform (RFC 9110 15.5.2: a 401
+    handler reads anyway); bet (a challenge's realm and error code are literals, or configuration an app builds one
+    `Challenge` from at startup, so checking them when a challenge is made finds a mistake in the
+    first test that refuses a request or when the app starts, and a value from a store or a
+    request is the app's to clean); platform (RFC 9110 15.5.2: a 401
     MUST send `WWW-Authenticate`; RFC 6750 (3) for Bearer's parameters; RFC 7617 (2) for Basic's
     realm; IANA's HTTP Authentication Scheme Registry, which has no scheme
     for a session cookie); value (mistakes fail at compile time, Value 4: a
-    route's caller and a challenge's scheme; a challenge's realm and parameters are the bet above).
+    route's caller, and a challenge's scheme in a `const`; a challenge's realm and parameters are
+    the bet above).
 
     Revisit when: an app needs an access rule a type cannot name and a handler cannot check
     without repeating it in every handler of a module; or a way to give the `App` a route is
     found that does not pass `Routes` or `Methods`; or an HTTP authentication scheme for a
-    session cookie is registered, which `Refused::sign_in`'s 401 would then name.
+    session cookie is registered, which `Refused::sign_in`'s 401 would then name; or an app needs
+    two challenges on one 401, or a token68 one.
 
     Last checked: 2026-11-06, the `compile_fail` doctests that hold `caller = T`
     (`crates/corten/src/route.rs`) and the caller's own (`crates/corten/src/caller.rs`) at
@@ -1254,7 +1259,9 @@ rules something out.
     page swapped in and a middleware's refusal keep it, at `2d6b88d0`; 2026-11-10, those tests
     with a realm on every Bearer challenge and Basic through a handler and a middleware, the
     MCP endpoint's realm and 400 challenge (`crates/corten/src/agent.rs`), and the
-    `compile_fail` doctest that holds `Challenge::new("bearer")` out, at `075bda73`.
+    `compile_fail` doctest that holds `Challenge::new("bearer")` out, at `075bda73`; 2026-11-10,
+    the tests of the MCP endpoint's `mcp` realm, of a scheme `Challenge::new` makes in a `const`,
+    and of card-market's empty bearer token, at `7d743d7a`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
@@ -1717,8 +1724,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     the compiler evaluates only when it generates code: when it builds the app (`cargo build`,
     `cargo test`, `corten check`), not under `cargo check` alone. `Refused::sign_in`'s 401 to a
     data client carries no `WWW-Authenticate`, short of RFC 9110 (15.5.2), since a session cookie
-    has no HTTP authentication scheme to name; a lookup that also takes a token answers a wrong
-    one with `unauthorized`, which carries one.
+    has no HTTP authentication scheme to name; a lookup that also takes a token should answer a
+    wrong one with `unauthorized`, which carries one.
 12. <a id="limit-fixed-stages"></a>The app's own steps run at one place in Corten's fixed order of stages
     ([Choice 28](#choice-fixed-stages)), not as hooks at several: a step that must see the raw
     request before every stage is a tower layer around the whole app (`.layer(l)`), and there is

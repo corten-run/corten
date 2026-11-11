@@ -2649,8 +2649,8 @@ Corten is pre-1.0, so any minor version may change the API.
   is in the prelude with `Challenge::bearer(realm)` (RFC 6750 asks for a parameter after the
   scheme) and `Challenge::basic(realm)` (RFC 7617 requires the realm); another scheme is
   `Challenge::new(scheme)`, which in a `const` of the app's does not compile when the scheme is
-  not a token or is `Bearer` or `Basic`, which take theirs from `bearer` and `basic` (elsewhere it
-  panics as it runs). A parameter's value is sent quoted and must be ASCII. The JSON 401, the
+  not a token or is `Bearer` or `Basic`, which take their realm from `bearer` and `basic`
+  (elsewhere it panics as it runs). A parameter's value is sent quoted and must be ASCII. The JSON 401, the
   error page and the page swapped in all carry it. An app that called `Refused::unauthorized()`
   passes the scheme its clients send credentials in. `Refused::sign_in`'s 401 to a data client
   still has none, since a session cookie has no scheme (design Choice 27, Limit 11). The MCP

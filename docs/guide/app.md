@@ -2113,7 +2113,7 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    a parameter's value is always sent quoted and in ASCII, and is checked when the refusal is
    made, so a test that sends a refused request finds a mistake in it. `Refused::sign_in`'s 401
    to a data client has no challenge: a session cookie has no HTTP authentication scheme. A lookup
-   that also takes a token refuses a request that sent one with `unauthorized`.
+   that also takes a token should refuse a request that sent a wrong one with `unauthorized`.
 8. A check that depends on the record (only the author may edit a draft) stays in the handler,
    which loads the record, and refuses as a lookup does: `Err(Refused::forbidden())?`. That is
    answered as an extractor's refusal (the error page at 403, the layout's reads drawn as for a

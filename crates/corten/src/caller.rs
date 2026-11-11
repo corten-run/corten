@@ -256,9 +256,9 @@ impl Refused {
 ///         // The scheme is matched in any case (RFC 9110 11.1).
 ///         let sent = parts.headers.get("authorization").and_then(|v| v.to_str().ok());
 ///         let key = sent.and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"));
-///         match key.map(|(_, key)| key) {
-///             // No key, or another scheme's credentials: say how to send one, and no error
-///             // (RFC 6750 3.1).
+///         match key.map(|(_, key)| key.trim()).filter(|key| !key.is_empty()) {
+///             // No key (an empty one too), or another scheme's credentials: say how to send one,
+///             // and no error (RFC 6750 3.1).
 ///             None => Err(Refused::unauthorized(Challenge::bearer("partners"))),
 ///             // A real app looks the key up here.
 ///             Some("dev-key") => Ok(Partner { name: "dev".into() }),

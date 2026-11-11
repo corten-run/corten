@@ -639,7 +639,8 @@ impl<A: Send + 'static> Tools<A> {
     /// The 401: the challenge, and `error="invalid_token"` when the request sent one (RFC 6750
     /// 3.1; a request with no bearer token, or another scheme's credentials, is told only where
     /// to get one). Without an [`Authorization`] its realm is the endpoint's name, or `mcp` when
-    /// the name is not printable ASCII, since RFC 6750 (3) has `Bearer` followed by a parameter.
+    /// the name is empty or not printable ASCII, since RFC 6750 (3) has `Bearer` followed by a
+    /// parameter.
     fn unauthorized(&self, id: Value, sent: bool) -> Response {
         let mut res = reply(id, Err((-32001, "unauthorized".into())));
         *res.status_mut() = StatusCode::UNAUTHORIZED;
@@ -752,11 +753,12 @@ impl<A: Send + 'static> Tools<A> {
     }
 }
 
-/// Whether the request sent a bearer token (RFC 6750: another scheme's credentials are no token).
+/// Whether the request sent a bearer token (RFC 6750: another scheme's credentials, or `Bearer`
+/// with nothing after it, are no token).
 fn bearer(headers: &HeaderMap) -> bool {
     headers.get(header::AUTHORIZATION).is_some_and(|value| {
         let value = value.as_bytes();
-        value.len() > 7 && value[..7].eq_ignore_ascii_case(b"bearer ")
+        value.len() > 7 && value[..7].eq_ignore_ascii_case(b"bearer ") && !value[7..].trim_ascii().is_empty()
     })
 }
 
