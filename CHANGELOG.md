@@ -4403,6 +4403,19 @@ Corten is pre-1.0, so any minor version may change the API.
     and `corten ui add card --force` (an unedited copy) or `--merge` (an edited one) takes
     `card.rs` and `card.css`
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
+175. The watchlist smoke's seven submit-queue cases each wait for their own outcome (the
+    patch drawn, the form gone, the `corten:error`, the older read's late answer tried) and then
+    700 ms, in which a send the queue must not make would be seen, where each waited 2.5 seconds
+    for a `corten:error` that six of them never get. The fixture holds each case's first answer
+    until its second press is made, so the press meets the first submit still out however slow it
+    is, and the six cases with no error now check that none came. The queue's checks take 10 to 13
+    seconds per browser where they took 21.4 to 22 (the smoke's own times for the section: Firefox
+    11.3 to 12.7 against 21.9 to 22.0, four runs and three, alternated; Chromium 10.1 and 10.9
+    against 21.4 twice, WebKit 12.0 against 21.5 twice). A runtime that drew an aborted read, sent
+    after a 5xx, a 409 or a removed form, or kept the old submit key still fails the same checks
+    (c65c10ec's runtime with those rules taken out, in Chromium and Firefox), and the aborted read
+    is now checked to have been cancelled in the browser and not only to be undrawn
+    ([#1087 Watchlist queue smokes wait for a 2.5-second error timeout on six non-error outcomes](https://github.com/corten-run/corten/issues/1087)).
 177. An integer of 100 or more that markup or a message writes (`{count}`) goes into the page two
     digits at a time, one `push_str` of a pair from a table in place of one `push` a digit. The
     text is unchanged. Measured with callgrind (release build, three alternated runs each, 500
@@ -4450,9 +4463,17 @@ Corten is pre-1.0, so any minor version may change the API.
 - A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
   feed load, relay or JetStream consumer, is logged as the error itself, so Corten's log line
   adds each source's message (`error.sources`): an HTTP client's "error sending request" now
-  names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
-  message
+  names the reset or timeout beneath it
   ([#1127 Benchmark r17: Corten returns two HTTP 500s fetching upstream during page load](https://github.com/corten-run/corten/issues/1127)).
+- A streamed download's failed chunk (`Media::stream`, `Media::stream_sized`) is logged as the
+  error itself too, each cause under its message, where it was logged by its message alone. A
+  chunk's error is now anything `Error::new` takes, `Into<Box<dyn std::error::Error + Send +
+  Sync>>`, where it was any `Display + Send`: an error type, a `String`, a `&str` or a
+  `corten::Error` compiles as before, the last now logged as the error it holds (`corten::Error`
+  converts into that box). Breaking: a chunk error of the app's that only implements `Display`, or
+  is not `Sync`, does not compile; implement `std::error::Error` for it, or map it with
+  `.map_err(|e| e.to_string())`, which logs the message alone
+  ([#1153 A streamed download's failure is logged by its message alone: Media::stream takes E: Display, not E: Error](https://github.com/corten-run/corten/issues/1153)).
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
   flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
@@ -4476,6 +4497,15 @@ Corten is pre-1.0, so any minor version may change the API.
   layer, is about 286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470;
   callgrind, three runs each, within 20 instructions)
   ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
+- The kit's `CardSize::Sm` card's padding is two thirds of the theme's `--card-padding` and its
+  content's gap half of it, where both were fixed numbers (1rem and .75rem, what the kit's theme
+  still gives), so a theme whose `--card-padding` is 1rem or less no longer gets a small card as
+  large as its default one. A theme that sets its own `--card-padding` sees its small cards follow
+  it once the kit's `card.css` is merged: larger than before above 1.5rem (a 2rem theme's go from 1rem
+  to about 1.33rem). No token is added: a copied `card.css` takes it from
+  `corten ui add card --merge`. The ui-gallery smoke checks a small card under a theme with tight
+  cards
+  ([#1151 Kit CardSize::Sm is a fixed 1rem while the default card is the theme's --card-padding, so a theme at or below 1rem gets a small card no smaller than the default](https://github.com/corten-run/corten/issues/1151)).
 - The watchlist smoke's check that a submit button's formaction and formmethod are used waits up
   to 15 seconds for the post's answer and the message it draws, rather than 4 (most of the smoke's
   waits are 5 seconds): a loaded Firefox took longer than 4 and the check read status 0
