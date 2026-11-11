@@ -2302,10 +2302,10 @@ mod tests {
             "Sec-Fetch-Site still decides when it is sent"
         );
         assert!(
-            Policy::new().hsts().allow_origin("http://legacy.example").same_origin(
-                &post,
-                &headers(&[("origin", "http://legacy.example"), ("host", "app.example")])
-            ),
+            Policy::new()
+                .hsts()
+                .allow_origin("http://legacy.example")
+                .same_origin(&post, &headers(&[("origin", "http://legacy.example"), ("host", "app.example")])),
             "an origin the app allows is its own choice"
         );
 

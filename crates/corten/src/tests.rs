@@ -6895,8 +6895,9 @@ async fn a_notice_written_over_plain_http_on_the_lan_reaches_its_page() {
     // An app that says it is HTTPS only (`Policy::hsts`) never sets nor reads the plain one: the
     // write from a plain-http page that would set it is refused there, as another site's (#1212).
     let https_app = |policy: crate::security::Policy| {
-        let routes =
-            Table::new().route("/", crate::router::post(|req: Req| async move { req.redirect_with_notice(&Done, "Saved.") })).route(
+        let routes = Table::new()
+            .route("/", crate::router::post(|req: Req| async move { req.redirect_with_notice(&Done, "Saved.") }))
+            .route(
                 "/done",
                 get(|req: Req| async move {
                     let notice = req.notice();
