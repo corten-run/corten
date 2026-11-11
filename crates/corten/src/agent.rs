@@ -75,8 +75,8 @@
 //! as is, so the browser and the agent share one definition and one set of rules.
 //!
 //! Agents authenticate the way any other client does: a bearer token, never ambient cookies.
-//! [`Tools::auth`] runs once per call, reads the token with [`crate::caller::bearer`], and its
-//! result is handed to the tool:
+//! The check given to [`Tools::auth`] runs once per call (read the token with
+//! [`crate::caller::bearer`]), and its result is handed to the tool:
 //!
 //! ```
 //! use corten::{agent::{ToolError, Tools}, caller, prelude::*};
@@ -756,7 +756,7 @@ impl<A: Send + 'static> Tools<A> {
     /// could not check (its provider is down), 500 (logged) for anything else. Never the answer.
     fn refused(&self, id: Value, error: ToolError, headers: &HeaderMap) -> Response {
         let (status, message) = match error {
-            ToolError::Unauthorized => return self.unauthorized(id, crate::caller::bearer(headers).is_some()),
+            ToolError::Unauthorized => return self.unauthorized(id, sent_bearer(headers)),
             ToolError::InsufficientScope(scope) => return self.forbidden(id, &scope),
             // A malformed request (RFC 6750 3.1), told so in the challenge.
             ToolError::Invalid(message) => {
@@ -927,6 +927,18 @@ fn not_one_object(output: &str, parse: bool) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether the request used the bearer method, for RFC 6750 3.1's choice of error: `Bearer` and a
+/// space in any case, then something other than whitespace. A token that is malformed, not ASCII
+/// included (which [`crate::caller::bearer`] cannot hand an app as text), was still sent, so its 401
+/// says `error="invalid_token"`; `Bearer` with nothing after it, which RFC 6750 (2.1) does not
+/// allow, is taken as no token, so the client is told where to get one.
+fn sent_bearer(headers: &HeaderMap) -> bool {
+    headers.get(header::AUTHORIZATION).is_some_and(|value| {
+        let value = value.as_bytes();
+        value.len() > 7 && value[..7].eq_ignore_ascii_case(b"bearer ") && !value[7..].trim_ascii().is_empty()
+    })
 }
 
 enum CallError {
@@ -1576,15 +1588,23 @@ mod tests {
         assert_eq!(authorization.resource(), "https://cards.example/mcp", "what the token check compares the audience with");
         let app = protected(Some(authorization));
         // Other credentials than a bearer token are no token, nor is `Bearer` with only
-        // whitespace after it, nor a value outside visible ASCII (`corten::caller::bearer`):
-        // told where to get one, nothing more.
+        // whitespace after it: told where to get one, nothing more. A token outside visible ASCII,
+        // which `caller::bearer` does not read, was sent: the check refuses it and the 401 says it
+        // is invalid (RFC 6750 3.1).
         let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": {} } });
-        for sent in [&b"Basic YTpi"[..], b"Bearer", b"Bearer   ", b"Bearer \t", "Bearer caf\u{e9}".as_bytes()] {
+        for (sent, invalid) in [
+            (&b"Basic YTpi"[..], false),
+            (b"Bearer", false),
+            (b"Bearer   ", false),
+            (b"Bearer \t", false),
+            ("Bearer caf\u{e9}".as_bytes(), true),
+            (b"bearer caf\xe9", true),
+        ] {
             let sent = HeaderValue::from_bytes(sent).unwrap();
             let req = Request::post("/mcp").header("content-type", "application/json").header("authorization", &sent);
             let (status, headers, _) = send(&app, req.body(Body::from(call.to_string())).unwrap()).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{sent:?}");
-            assert!(!headers["www-authenticate"].to_str().unwrap().contains("invalid_token"), "{sent:?}: {headers:?}");
+            assert_eq!(headers["www-authenticate"].to_str().unwrap().contains("invalid_token"), invalid, "{sent:?}: {headers:?}");
         }
         let (status, headers, body) = send(&app, adjust(None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);

@@ -392,16 +392,23 @@ impl Challenge {
 /// The scheme is matched in any case (RFC 9110 11.1) and followed by one or more spaces, and the
 /// token is trimmed of spaces and tabs. It is `None` without an `Authorization`, for another
 /// scheme's credentials (`Basic YTpi`), and for `Bearer` with no token after it, which RFC 6750
-/// does not allow, so the client is told how to send one rather than that the one it sent is
-/// wrong. A value with a byte outside visible ASCII is `None` too: RFC 6750's token is ASCII, and
-/// such a byte (obs-text, RFC 9110 5.5) has no character set to read it by, so it is no key or
-/// token the app gave out, and the client is told how to send one.
+/// does not allow. It is `None` too for credentials it cannot read as one token: a value with a
+/// byte outside visible ASCII (RFC 6750's token is ASCII, and such a byte, obs-text in RFC 9110
+/// 5.5, has no character set to read it by), and two `Authorization` lines, which RFC 9110 (5.3)
+/// does not let a client send, since two readers could each take a different one. An app that
+/// wants RFC 6750's `error="invalid_token"` for those treats an `Authorization` that is present
+/// but unreadable as a malformed token, as the MCP endpoint does for one that starts `Bearer `.
 ///
 /// The token is not checked against RFC 6750's `b64token` syntax: whether it is one the app knows
 /// is the lookup's to say, and a malformed one is refused there as a wrong one,
 /// `error="invalid_token"`, which RFC 6750 (3.1) names for a malformed token too.
 pub fn bearer(headers: &HeaderMap) -> Option<&str> {
-    let (scheme, token) = headers.get(http::header::AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
+    let mut sent = headers.get_all(http::header::AUTHORIZATION).iter();
+    let value = sent.next()?;
+    if sent.next().is_some() {
+        return None;
+    }
+    let (scheme, token) = value.to_str().ok()?.split_once(' ')?;
     let token = token.trim_ascii();
     (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
 }
@@ -669,10 +676,10 @@ mod tests {
     /// RFC 6750 2.1's credentials, with the scheme in any case (RFC 9110 11.1).
     #[test]
     fn a_bearer_token_is_read_from_its_credentials() {
-        let read = |sent: Option<&[u8]>| {
+        let read = |sent: &[&[u8]]| {
             let mut headers = HeaderMap::new();
-            if let Some(sent) = sent {
-                headers.insert(AUTHORIZATION, HeaderValue::from_bytes(sent).unwrap());
+            for line in sent {
+                headers.append(AUTHORIZATION, HeaderValue::from_bytes(line).unwrap());
             }
             super::bearer(&headers).map(str::to_owned)
         };
@@ -697,9 +704,12 @@ mod tests {
             ("Bearer caf\u{e9}".as_bytes(), None),
             (b"Bearer caf\xe9", None),
         ] {
-            assert_eq!(read(Some(sent)).as_deref(), token, "{:?}", String::from_utf8_lossy(sent));
+            assert_eq!(read(&[sent]).as_deref(), token, "{:?}", String::from_utf8_lossy(sent));
         }
-        assert_eq!(read(None), None);
+        assert_eq!(read(&[]), None);
+        // Two lines (RFC 9110 5.3 allows one): neither is taken, whichever is first.
+        assert_eq!(read(&[b"Bearer t", b"Bearer u"]), None);
+        assert_eq!(read(&[b"Bearer t", b"Basic YTpi"]), None);
     }
 
     #[test]
