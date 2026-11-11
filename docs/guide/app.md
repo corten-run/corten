@@ -573,7 +573,8 @@ An app that calls another service over HTTP points it, in a test, at a stand-in 
 local port. The stand-in is the other service, not the app, so it keeps none of the app's
 defaults (its headers, CSP, shutdown) that the service does not have: it is a server of the
 test's own, here axum's as a dev-dependency (`axum = { version = "0.8", default-features = false,
-features = ["http1", "tokio"] }`), since Corten depends on no web framework
+features = ["http1", "tokio"] }`, and `"json"` for a stand-in that reads or answers
+`axum::Json`), since Corten depends on no web framework
 ([design Choice 21](../design.md#choice-own-extractors)):
 
 ```rust,ignore
