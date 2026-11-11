@@ -103,14 +103,20 @@ host and report the provisioning error rather than guessing deletion is safe.
 
 1. Require exit 0, saved archive/checksum, deletion confirmation and report.mjs validation:
    workload/round/commit match, clean before/after, all twenty apps, both gates, three full
-   passes of each intended profile, no harness, parity or cleanup failure, correct counted CPU
-   and aggregates matching saved passes. Incomplete data is never a full baseline. Requests an
+   passes of each intended profile (fewer only where the app's container stopped, below), no
+   harness, parity or cleanup failure, correct counted CPU and aggregates matching saved
+   passes. Incomplete data is never a full baseline. Requests an
    app answered with anything but a 200 or timed out on, and fixed-rate iterations it could not
    start, are its measured outcome under the profile, not a run failure: each such phase is
    recorded with its failure rate and drops, the later phases still run, and the report marks
    it (#1128). Report each marked stage beside the numbers; never retry it away or drop the
-   app. A 200 of the wrong content type, an app that stopped or ran out of memory, an upstream
-   error answer, or a phase in which no request succeeded still fails the run.
+   app. An app container that exits or is OOM-killed during a load phase, warmup included, is
+   that app's outcome too: the stop is recorded with its pass, phase, exit code and OOM kill,
+   that profile's later phases and passes do not run, every other app and profile keeps its
+   results, and each stage that lost a pass is marked `(stopped: n of 3 passes)` with a line
+   naming the stop. A 200 of the wrong content type, an app that stops during its cold start
+   (before any load), an upstream error answer, or a phase in which no request succeeded still
+   fails the run.
 2. Hash summary before/after the read-only reporter. Save its generated report as
    results/rN/report.md and exact SHA as commit.txt. Preserve raw logs/checks/image provenance.
    Collection keeps the result folder outside Git in the round-control evidence directory.
@@ -157,9 +163,11 @@ medians/ranges and unchanged-app median changes. No causal claim from one round.
    test failing. Invalid/failed runs are failures, not successful slower baselines.
 6. A Corten stage in compare.mjs's newOutcomes: more passes with an app outcome than the
    baseline, any failed request or dropped iteration where the baseline had none in any pass,
-   or a failure or drop range wholly above a nonzero baseline's (overlapping ranges are not a
-   difference). A Corten stage that fails any request is a regression from a baseline in which
-   it failed none, whatever the percentages.
+   a failure or drop range wholly above a nonzero baseline's (overlapping ranges are not a
+   difference), or a stage its container stopped in where the baseline's did not. A Corten
+   stage that fails any request, or whose container stops, is a regression from a baseline in
+   which it did neither, whatever the percentages. A stage stopped in either round has no
+   deltas.
 
 Inspect open automation-created v2 regression issues in state, then repository issue search;
 comment exact new numbers on a matching metric rather than duplicate it. Otherwise create one
@@ -181,7 +189,7 @@ only with every check SUCCESS, mergeable state, no unresolved independent-review
 passed docs validation, and diff limited to marketplace/results/rN plus root README, CHANGELOG,
 docs/performance and marketplace README. Valid regressions do not block truthful results;
 incomplete/invalid data does. A harness, parity, cleanup or load-run failure leaves results
-partial, no success PR; a stage marked as an app outcome does not.
+partial, no success PR; a stage marked as an app outcome or as stopped does not.
 
 On conflicts rebase only the automation's bench/rN, keep main's text and reapply measured
 numbers, force-with-lease only that branch, review again and wait for CI. Retry a failed CI job

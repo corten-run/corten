@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { aggregate, cpuSettings, imageProvenance, inventory, parseArgs, phases, readOutcome, resultSchema, sources, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { appStop, cpuSettings, imageProvenance, inventory, parseArgs, phases, profileStop, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { workload } from "./contract.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
@@ -76,6 +76,13 @@ async function command(binary, args, { timeout = 30000, file, cleanup = false } 
 }
 const docker = (args, opts) => command("docker", args, opts);
 const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
+// The app's container stopped during a load phase: its outcome under the profile, not a failure.
+class AppStopped extends Error {
+  constructor(stop) {
+    super(`app container ${stop.oomKilled ? "OOM-killed" : "exited"} during ${stop.phase} (exit ${stop.exitCode}, OOMKilled ${stop.oomKilled})`);
+    this.stop = stop;
+  }
+}
 const fail = (app, source, stage, error) => {
   const failure = { app, source, stage, error: error.stack ?? String(error) };
   summary.failures.push(failure);
@@ -167,7 +174,7 @@ async function cpu(containers) {
   const usage = JSON.parse(await docker(["exec", cpuName, "node", "/bench/catalog/cgroup.mjs", ...ids.map(([, id]) => id)], { timeout: 15000 }));
   return Object.fromEntries(ids.map(([name, id]) => { assert.ok(Number.isSafeInteger(usage[id]), "missing CPU counter"); return [name, usage[id]]; }));
 }
-async function load(name, target, phase, seconds, raw) {
+async function load(name, target, phase, seconds, raw, pass) {
   const container = `${runId}-k6`;
   const output = join(raw, `${phase}.json`);
   const env = [...(target === "page" ? ["-e", `LOCALE=${summary.currentLocale}`] : []), "-e", `BASE=http://${name}:8080`, "-e", `TARGET=${target}`, "-e", `DURATION=${seconds}s`, "-e", `MODE=${phase === "fixed" ? "fixed" : "closed"}`,
@@ -189,7 +196,12 @@ async function load(name, target, phase, seconds, raw) {
   finally {
     try { if (sampler) stats = await sampler.stop(); } catch (e) { runError ??= e; }
   }
-  try { if (samples.length && Object.keys(before).length) after = await cpu(samples); }
+  // Whether the app stopped (exited, or was killed at its 1 GiB) is read first: its CPU counter and
+  // stats go with its container, so their errors are then the stop's consequence (#1128).
+  let stop = null;
+  try { stop = appStop((await inspect(name)).State, pass, phase); }
+  catch (e) { runError ??= e; }
+  try { if (!stop && samples.length && Object.keys(before).length) after = await cpu(samples); }
   catch (e) { runError ??= e; }
   try {
     // Preserve failed k6 summaries as well as stderr. An absent summary never passes.
@@ -197,10 +209,16 @@ async function load(name, target, phase, seconds, raw) {
     catch (e) { runError ??= e; }
     const counters = Object.fromEntries(samples.filter((n) => before[n] !== undefined && after[n] !== undefined).map((n) => { assert.ok(after[n] >= before[n], "CPU counter moved backwards"); return [n, { usec: after[n] - before[n] }]; }));
     writeFileSync(join(raw, `${phase}-cpu.json`), JSON.stringify(counters, null, 2));
+    if (stop) {
+      if (runError) log(`${name} ${phase}: after the app stopped: ${String(runError.message ?? runError).split("\n")[0]}`);
+      // An upstream error answer may be what stopped the app: that stays the harness's failure.
+      if (reads) {
+        const errors = upstreamErrors(reads, await upstreamCounters());
+        assert.equal(errors, 0, `the upstream answered ${errors} record reads with an error during ${phase}, and the app stopped: a harness failure, not the app's outcome`);
+      }
+      throw new AppStopped(stop);
+    }
     if (runError) throw runError;
-    // An app that exited or was killed (its 1 GiB) has no outcome to record: the run fails.
-    const state = (await inspect(name)).State;
-    assert.ok(state.Running && !state.OOMKilled, `app container stopped during ${phase} (exit ${state.ExitCode}, OOMKilled ${state.OOMKilled})`);
     const metrics = readOutcome(JSON.parse(readFileSync(output, "utf8")));
     if (reads) {
       const errors = upstreamErrors(reads, await upstreamCounters());
@@ -328,6 +346,9 @@ try {
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
     for (let pass = 1; pass <= options.passes; pass++) for (const { key, source, locale, target } of timedProfiles) for (const app of rotate(options.apps, Math.floor((pass - 1) * options.apps.length / options.passes))) {
       const entry = summary.apps[app];
+      // A profile in which the app's container stopped runs no later pass (#1128).
+      const stopped = profileStop(entry.runs[key] ?? []);
+      if (stopped) { log(`skipping ${app} ${source} ${target} pass ${pass}: its container stopped in pass ${stopped.pass} during ${stopped.phase}`); continue; }
       const name = `${runId}-${app}`;
       const raw = join(folder, source, app, `p${pass}-${locale ?? "neutral"}-${target}`);
       mkdirSync(raw);
@@ -339,23 +360,24 @@ try {
         log(`cold ${app} ${source} ${target} pass ${pass}`);
         run.cold = await coldStart(name, source, target, entry.imageId, raw);
         log(`warmup ${app} ${source} ${target} pass ${pass}`);
-        run.warmup = await load(name, target, "warmup", options.warmup, raw);
+        run.warmup = await load(name, target, "warmup", options.warmup, raw, pass);
         for (const phase of phases) {
           log(`${app} ${source} ${target} ${phase} pass ${pass}`);
-          run.phases[phase] = await load(name, target, phase, options.duration, raw);
+          run.phases[phase] = await load(name, target, phase, options.duration, raw, pass);
           save();
         }
         run.complete = true;
-      } catch (e) { run.failed = e.message; fail(app, source, `load ${target} pass ${pass}`, e); }
+      } catch (e) {
+        // The app's outcome, recorded with why; its later phases and passes of this profile do not run.
+        if (e instanceof AppStopped) { run.stopped = e.stop; log(`${app} ${source} ${target} pass ${pass}: app outcome, ${e.message}; later phases and passes of this profile skipped`); }
+        else { run.failed = e.message; fail(app, source, `load ${target} pass ${pass}`, e); }
+      }
       finally {
         try { writeFileSync(join(raw, "app.log"), await docker(["logs", name])); } catch (e) { fail(app, source, "app logs", e); }
         await remove(name);
       }
       run.finishedAt = new Date().toISOString();
-      for (const phase of phases) {
-        const runs = entry.runs[key].filter((r) => r.phases[phase]).map((r) => r.phases[phase]);
-        (entry.phases[key] ??= {})[phase] = { ...aggregate(runs), asked: options.passes };
-      }
+      for (const phase of phases) (entry.phases[key] ??= {})[phase] = stageAggregate(entry.runs[key], phase, options.passes);
       save();
     }
   }

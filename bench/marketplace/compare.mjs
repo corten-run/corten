@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
 import { apps } from "./contract.mjs";
-import { aggregateCold, phases, roundIdentity, timedProfiles } from "./run-contract.mjs";
+import { aggregateCold, phases, profileStop, roundIdentity, timedProfiles } from "./run-contract.mjs";
 import { validateSummary } from "./report.mjs";
 
 const hostFields = ["cpu", "onlineCpus", "platform", "release", "node", "docker"];
@@ -46,6 +46,11 @@ export function comparisonKey(s) {
  * baseline had none in any pass, or a failure or drop range wholly above the baseline's. A
  * reference stage with an outcome in either round is left out of the cohort and named in that
  * cohort group's outcomeApps. Incompatible evidence has an empty newOutcomes.
+ * Each row and cold row also has stopped {baseline, current}: the stop record (pass, phase,
+ * exitCode, oomKilled) when the app's container stopped during a load phase and that stage lost
+ * passes to it, else null (#1128). A stopped stage is an outcome, not a number: its row has
+ * metrics null, it is in newOutcomes when the baseline's stage had no stop, and a reference app's
+ * stopped stage or cold row is left out of the cohort and named in outcomeApps.
  * Equal measurement options, fixture, result schema, CPU model/topology/placement,
  * host software and load/upstream images are required. Build flags are not measures.
  */
@@ -89,17 +94,23 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   // baseline has no percent change). Above a nonzero baseline, only a range wholly above it counts.
   const worse = (was, now) => (was.max === 0 && now.max > 0) || now.min > was.max;
   for (const app of comparedApps) for (const { key } of timedProfiles) for (const phase of phases) {
-    const row = { app, profile: key, phase, metrics: {}, warnings: [] };
-    for (const metric of ["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond", "failedRate"]) {
-      const a = baseline.apps[app].phases[key][phase][metric], b = current.apps[app].phases[key][phase][metric];
-      row.metrics[metric] = delta(a, b);
-    }
     const was = baseline.apps[app].phases[key][phase], now = current.apps[app].phases[key][phase];
+    const row = { app, profile: key, phase, metrics: {}, warnings: [] };
+    row.stopped = { baseline: was.stopped, current: now.stopped };
     row.appOutcomes = { baseline: was.appOutcomes, current: now.appOutcomes };
-    if (now.appOutcomes > was.appOutcomes || worse(was.failedRate, now.failedRate) || worse(was.dropped, now.dropped))
-      result.newOutcomes.push({ app, profile: key, phase, appOutcomes: row.appOutcomes, failedRate: { baseline: was.failedRate, current: now.failedRate }, dropped: { baseline: was.dropped, current: now.dropped } });
+    const outcome = { app, profile: key, phase, appOutcomes: row.appOutcomes, failedRate: { baseline: was.failedRate, current: now.failedRate }, dropped: { baseline: was.dropped, current: now.dropped }, stopped: row.stopped };
+    if (was.stopped || now.stopped) {
+      // A stage the app stopped in has fewer passes, or none: an outcome, not a comparable number.
+      row.metrics = null;
+      if (!was.stopped) result.newOutcomes.push(outcome);
+    } else {
+      for (const metric of ["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond", "failedRate"]) row.metrics[metric] = delta(was[metric], now[metric]);
+      if (now.appOutcomes > was.appOutcomes || worse(was.failedRate, now.failedRate) || worse(was.dropped, now.dropped)) result.newOutcomes.push(outcome);
+    }
     for (const [name, summary] of [["baseline", baseline], ["current", current]]) for (const run of summary.apps[app].runs[key]) {
+      if (run.stopped && row.stopped[name]) row.warnings.push(`${name} pass ${run.pass}: app container ${run.stopped.oomKilled ? "OOM-killed" : `exited (code ${run.stopped.exitCode})`} during ${run.stopped.phase}; the profile's later phases and passes were not run.`);
       const p = run.phases[phase];
+      if (!p) continue;
       if (p.appOutcome) row.warnings.push(`${name} pass ${run.pass}: app outcome, ${p.failed} of ${p.requests} requests failed and ${p.dropped} iterations dropped; its numbers include them.`);
       if (p.upstream?.highCpu) row.warnings.push(`${name} pass ${run.pass}: busy upstream may limit throughput.`);
       if (phase !== "fixed" && p.cpuAvgPct < 95) row.warnings.push(`${name} pass ${run.pass}: app saturation not demonstrated.`);
@@ -107,13 +118,16 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
     result.rows.push(row);
   }
   for (const app of comparedApps) for (const { key } of timedProfiles) {
-    const a = aggregateCold(baseline.apps[app].runs[key]), b = aggregateCold(current.apps[app].runs[key]);
-    result.cold.push({ app, profile: key, metrics: Object.fromEntries(Object.keys(a).map((metric) => [metric, delta(a[metric], b[metric])])) });
+    const was = baseline.apps[app].runs[key], now = current.apps[app].runs[key];
+    const a = aggregateCold(was), b = aggregateCold(now);
+    // Cold starts are measured in every pass that ran; a stop leaves fewer of them.
+    result.cold.push({ app, profile: key, metrics: Object.fromEntries(Object.keys(a).map((metric) => [metric, delta(a[metric], b[metric])])),
+      stopped: { baseline: profileStop(was), current: profileStop(now) } });
   }
   const summarizeCohort = (rows) => {
     const groups = new Map();
-    // A reference app's stage with an app outcome in either round is left out of the cohort and named.
-    const outcomeRows = rows.filter((r) => r.app !== "corten" && (r.appOutcomes?.baseline || r.appOutcomes?.current));
+    // A reference app's stage with an app outcome or a stop in either round is left out of the cohort and named.
+    const outcomeRows = rows.filter((r) => r.app !== "corten" && (r.appOutcomes?.baseline || r.appOutcomes?.current || r.stopped.baseline || r.stopped.current));
     for (const row of rows.filter((r) => r.app !== "corten" && !outcomeRows.includes(r))) {
       const groupKey = `${row.profile}/${row.phase ?? "cold"}`;
       if (!groups.has(groupKey)) groups.set(groupKey, { profile: row.profile, ...(row.phase ? { phase: row.phase } : {}), metrics: {} });
@@ -124,8 +138,8 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
       }
     }
     for (const row of outcomeRows) {
-      const groupKey = `${row.profile}/${row.phase}`;
-      if (!groups.has(groupKey)) groups.set(groupKey, { profile: row.profile, phase: row.phase, metrics: {} });
+      const groupKey = `${row.profile}/${row.phase ?? "cold"}`;
+      if (!groups.has(groupKey)) groups.set(groupKey, { profile: row.profile, ...(row.phase ? { phase: row.phase } : {}), metrics: {} });
       (groups.get(groupKey).outcomeApps ??= []).push(row.app);
     }
     return [...groups.values()].map((group) => ({ ...group, metrics: Object.fromEntries(Object.entries(group.metrics).map(([metric, entries]) => {

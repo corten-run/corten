@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { cpuSettings, imageProvenance, inventory, parseArgs, readOutcome, resultSchema, roundIdentity, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { appStop, cpuSettings, imageProvenance, inventory, parseArgs, profileStop, readOutcome, resultSchema, roundIdentity, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 test("versioned round namespace and safe defaults", () => {
   assert.match(inventory.nextjs.label, /Pages Router/);
   assert.doesNotMatch(inventory.phoenix.label, /LiveView/);
@@ -20,7 +20,7 @@ test("versioned round namespace and safe defaults", () => {
 });
 
 test("timed schema has six localized pages and exactly two locale-neutral JSON profiles", () => {
-  assert.equal(resultSchema, "marketplace-results/v3");
+  assert.equal(resultSchema, "marketplace-results/v4");
   assert.equal(timedProfiles.length, 8);
   assert.equal(new Set(timedProfiles.map((p) => p.key)).size, 8);
   for (const source of ["fixture", "api"]) {
@@ -76,4 +76,26 @@ test("an upstream error answer during a phase is counted, so the run fails on it
   assert.equal(upstreamErrors({ answers: { 200: 10 } }, { answers: { 200: 50 } }), 0);
   assert.equal(upstreamErrors({ answers: { 200: 10, 503: 1 } }, { answers: { 200: 50, 503: 3, 404: 1 } }), 3);
   for (const [a, b] of [[{ answers: { 200: 10 } }, { answers: { 200: 9 } }], [{}, { answers: {} }], [{ answers: { 200: -1 } }, { answers: { 200: 1 } }]]) assert.throws(() => upstreamErrors(a, b));
+});
+test("an app container that exits or is OOM-killed during a load phase is a recorded stop, with why (#1128)", () => {
+  assert.equal(appStop({ Running: true, OOMKilled: false, ExitCode: 0 }, 1, "sat64"), null);
+  assert.deepEqual(appStop({ Running: false, OOMKilled: true, ExitCode: 137 }, 2, "sat256"), { pass: 2, phase: "sat256", exitCode: 137, oomKilled: true });
+  assert.deepEqual(appStop({ Running: false, OOMKilled: false, ExitCode: 1 }, 1, "warmup"), { pass: 1, phase: "warmup", exitCode: 1, oomKilled: false });
+  // a process killed at the limit while the container keeps running is a stop too
+  assert.deepEqual(appStop({ Running: true, OOMKilled: true, ExitCode: 0 }, 3, "fixed"), { pass: 3, phase: "fixed", exitCode: null, oomKilled: true });
+  for (const [state, pass, phase] of [[undefined, 1, "fixed"], [{ Running: "false", OOMKilled: false, ExitCode: 1 }, 1, "fixed"], [{ Running: false, OOMKilled: false }, 1, "fixed"],
+    [{ Running: false, OOMKilled: false, ExitCode: 1 }, 1, "cold"], [{ Running: false, OOMKilled: false, ExitCode: 1 }, 0, "fixed"]]) assert.throws(() => appStop(state, pass, phase));
+});
+test("a stop ends its profile: each stage that lost a pass to it carries the stop, the others do not (#1128)", () => {
+  const m = { requests: 10, rps: 10, p50: 1, p95: 1, p99: 1, cpuUsec: 1e6, perCpuSecond: 10, memAvgMiB: 1, memMaxMiB: 1, cpuAvgPct: 100, cpuMaxPct: 100, failedRate: 0, dropped: 0, appOutcome: false };
+  const full = (pass) => ({ pass, phases: { fixed: m, sat64: m, sat256: m } });
+  const stopped = (pass, phase, ran) => ({ pass, phases: Object.fromEntries(ran.map((p) => [p, m])), stopped: { pass, phase, exitCode: 137, oomKilled: true } });
+  const view = (runs) => Object.fromEntries(["fixed", "sat64", "sat256"].map((p) => { const a = stageAggregate(runs, p, 3); return [p, [a.passes, a.stopped?.phase ?? null]]; }));
+  assert.deepEqual(view([full(1), full(2), full(3)]), { fixed: [3, null], sat64: [3, null], sat256: [3, null] });
+  assert.deepEqual(view([full(1), full(2), stopped(3, "sat256", ["fixed", "sat64"])]), { fixed: [3, null], sat64: [3, null], sat256: [2, "sat256"] });
+  assert.deepEqual(view([full(1), stopped(2, "sat64", ["fixed"])]), { fixed: [2, "sat64"], sat64: [1, "sat64"], sat256: [1, "sat64"] });
+  assert.deepEqual(view([stopped(1, "warmup", [])]), { fixed: [0, "warmup"], sat64: [0, "warmup"], sat256: [0, "warmup"] });
+  assert.equal(stageAggregate([stopped(1, "warmup", [])], "fixed", 3).rps, null, "a stage with no measured pass has no number");
+  assert.equal(profileStop([full(1)]), null);
+  assert.deepEqual(profileStop([full(1), stopped(2, "fixed", [])]), { pass: 2, phase: "fixed", exitCode: 137, oomKilled: true });
 });

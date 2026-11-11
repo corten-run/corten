@@ -110,10 +110,15 @@ missing profiles or passes, failed cleanup and aggregates that disagree with sav
 phase in which an app answered requests with anything but a 200 or timed out on them, or could
 not keep the fixed rate, is the app's result, not a failed run: it is saved with its failure
 rate and dropped iterations, the later phases still run, and the report marks the stage with
-`*` and lists each one. Still failures: a phase with no k6 summary or in which no request
-succeeded, a 200 of the wrong content type, an app container that stopped or ran out of memory,
-and any error answer from the upstream to a record read. Results written this way
-are schema `marketplace-results/v3`.
+`*` and lists each one. An app container that exits or is OOM-killed during a load phase
+(warmup included) is the app's result as well: the run records the stop's pass, phase, exit
+code and OOM kill, does not run that profile's later phases and passes, and keeps every other
+app's and profile's results; the report marks each stage that lost a pass
+`(stopped: n of 3 passes)` with a line naming the stop, and a full baseline may have fewer
+than three passes only there. Still failures: a phase with no k6 summary or in which no request
+succeeded, a 200 of the wrong content type, an app container that stopped during its cold start
+(before any load), and any error answer from the upstream to a record read. Results written
+this way are schema `marketplace-results/v4`; the reporter reads only that schema.
 The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
 
 The deterministic fixture is 500 new rich trading-card records, not the old marketplace

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { aggregate as catalogAggregate, cpuSettings as catalogCpuSettings, parseArgs as catalogArgs, sources } from "../catalog/contract.mjs";
+import { aggregate as catalogAggregate, cpuSettings as catalogCpuSettings, parseArgs as catalogArgs, phases, sources } from "../catalog/contract.mjs";
 import { allApps } from "../fullstack/apps.mjs";
 import { spread } from "../fullstack/passes.mjs";
 import { apps, locales } from "./contract.mjs";
@@ -15,7 +15,10 @@ export { phases, sources, targets } from "../catalog/contract.mjs";
 // Each publishable key has three passes and fixed/sat64/sat256 phases. JSON has locale:null,
 // never an en-US/fr-FR/de-DE alias. Browser parity still covers all locales.
 // v3: a phase records what the app failed to serve (readOutcome) instead of failing the run.
-export const resultSchema = "marketplace-results/v3";
+// v4: an app container that stops during a load phase is that app's recorded outcome
+// (run.stopped, appStop): the profile's later phases and passes do not run, so it can have fewer
+// than three passes, and each stage that lost a pass carries the stop (stageAggregate).
+export const resultSchema = "marketplace-results/v4";
 export const timedProfiles = sources.flatMap((source) => [
   ...locales.map((locale) => ({ key: `${source}-${locale}-page`, source, locale, target: "page" })),
   { key: `${source}-neutral-json`, source, locale: null, target: "json" },
@@ -76,6 +79,30 @@ export function aggregate(runs) {
     failedRate: spread(runs.map((r) => r.failedRate)),
     dropped: spread(runs.map((r) => r.dropped)),
     appOutcomes: runs.filter((r) => r.appOutcome).length };
+}
+// A pass's load phases in the order they run: warmup, then the measured phases.
+export const loadPhases = ["warmup", ...phases];
+// Whether the app's container stopped during a load phase, from its Docker State after the phase:
+// it exited, or a process in it was killed for exceeding the 1 GiB limit (#1128). Either is the
+// app's outcome under the profile, recorded, not a failed round. Null while it runs normally.
+// exitCode is null when the container still runs after an OOM kill of one of its processes.
+export function appStop(state, pass, phase) {
+  assert.ok(loadPhases.includes(phase), `not a load phase: ${phase}`);
+  assert.ok(Number.isSafeInteger(pass) && pass > 0, "a stop needs its pass");
+  assert.ok(typeof state?.Running === "boolean" && typeof state.OOMKilled === "boolean", "app container state missing");
+  if (state.Running && !state.OOMKilled) return null;
+  assert.ok(state.Running || Number.isSafeInteger(state.ExitCode), "a stopped app container has no exit code");
+  return { pass, phase, exitCode: state.Running ? null : state.ExitCode, oomKilled: state.OOMKilled };
+}
+// The stop that ended a profile's passes, or null. Only the last run of a profile can have one.
+export const profileStop = (runs) => runs.find((r) => r.stopped)?.stopped ?? null;
+// A stage's aggregate over the passes that measured it. A stage the profile's stop kept a pass
+// from (the stopped phase and those after it in that pass, every phase of the passes after it)
+// carries the stop record: the report's mark and compare.mjs's outcome come from it.
+export function stageAggregate(runs, phase, asked) {
+  const stop = profileStop(runs);
+  const lost = stop && (stop.pass < asked || loadPhases.indexOf(phase) >= loadPhases.indexOf(stop.phase));
+  return { ...aggregate(runs.filter((r) => r.phases[phase]).map((r) => r.phases[phase])), asked, stopped: lost ? { ...stop } : null };
 }
 // The single upstream's answers to record reads in a phase, from its counters before and after.
 // Any but a 200 is the harness failing the app, not the app's outcome, so the run fails on it.
