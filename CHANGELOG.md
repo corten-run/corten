@@ -2666,8 +2666,8 @@ Corten is pre-1.0, so any minor version may change the API.
     what a hosted CI runner restoring a cache gets. Since BuildKit exports no cache mount, it
     rebuilds an app whose Dockerfile copies its source before building, as both of these do, about
     as if from clean. Only those two apps run by default, for time, and the README says what the
-    others' Dockerfiles do instead. It copies a context whose own directory is named `bench`, as a
-    droplet's repository root is. The results are in `results/dev-loop`, and `summarize.mjs`
+    others' Dockerfiles do instead. `docker-rebuild.mjs` copies a context whose own directory is named
+    `bench`, as a droplet's repository root is. The results are in `results/dev-loop`, and `summarize.mjs`
     prints both.
     The time from a save to the page showing it under each stack's development server is not
     measured, and the bench README says why
