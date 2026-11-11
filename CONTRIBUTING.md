@@ -263,23 +263,30 @@ Every published crate (all of `crates/`) shares the version in `[workspace.packa
 released together; the examples have `publish = false`. Pushing a tag `vX.Y.Z` runs the
 `Release` workflow (`.github/workflows/release.yml`): the checks, a `corten` binary for each
 platform, `cargo publish --workspace` (each crate after the ones it depends on), then a GitHub
-release with the binaries and the version's `CHANGELOG.md` section as its notes. It stops before
-publishing when the tag, the workspace version and the changelog disagree.
+release with the binaries and the version's `CHANGELOG.md` section as its notes (attached as
+`CHANGELOG-X.Y.Z.md`, and linked from the notes, when it is longer than a GitHub release allows).
+It stops before publishing when the tag, the workspace version and the changelog disagree.
 
 1. Check that every crate in `crates/` is on crates.io. For one that is not, follow
    [Before a release that adds a crate](#before-a-release-that-adds-a-crate) first.
 2. In one pull request, set `version` in `[workspace.package]` and the same version on every
    `corten*` line of `[workspace.dependencies]`, then rename `## Unreleased` in `CHANGELOG.md`
-   to `## X.Y.Z (YYYY-MM-DD)` and start a new empty `## Unreleased` above it. A release before
-   1.0 that changes the API bumps the minor version.
+   to `## X.Y.Z (YYYY-MM-DD)` and start a new empty `## Unreleased` above it. The version is
+   also in `Cargo.lock`, in the lockfiles of the benchmark apps built from `crates/`
+   (`bench/catalog/corten` and `bench/marketplace/corten`, built with `--locked`, and
+   `bench/live/apps/corten`; `cargo metadata --manifest-path <app>/Cargo.toml` rewrites each), in
+   `crates/corten/tests/openapi.json` (the test that checks it rewrites it) and in the README's
+   Status. A release before 1.0 that changes the API bumps the minor version.
 3. Merge it, then tag that commit on `main` and push the tag:
    `git tag -a vX.Y.Z -m "Corten X.Y.Z"` and `git push origin vX.Y.Z`.
 4. Approve the `release` environment when the workflow asks.
 
-A crate whose trusted publisher was added before the repository moved to `corten-run` still
-names the old owner's repository, and crates.io refuses the workflow until it is edited: before
-the next release, check each published crate's Settings on crates.io and point its publisher at
-`corten-run/corten`.
+Once [Before a release that adds a crate](#before-a-release-that-adds-a-crate) is done for it,
+every published crate has a trusted publisher and accepts trusted publishing only, so only
+`release.yml`, approved in the `release` environment, can publish a version. It is owned by the
+account that first published it and by the `github:corten-run:maintainers` team, so a crate
+does not depend on one account to publish or yank; a team owner cannot add or remove owners, so
+that stays with the user owners.
 
 The framework's package is `corten-run` and its library `corten` (`[lib] name` in
 `crates/corten/Cargo.toml`), so apps and the paths `corten-macros` generates still name it
@@ -306,7 +313,19 @@ were not on crates.io, while the other four were at 0.1.0.
 2. In the repository settings, create the environment `release` with yourself as a required
    reviewer, and add a secret `CARGO_REGISTRY_TOKEN` to it: a crates.io token with the
    `publish-new` and `publish-update` scopes, expiring in a few days.
-3. Release as above. Then, for each crate that did not have one, open its Settings on crates.io,
-   add a trusted publisher (GitHub, repository `corten-run/corten`, workflow `release.yml`,
-   environment `release`), delete the secret and revoke the token. Later releases authenticate
-   through `rust-lang/crates-io-auth-action` with no stored token.
+3. A crate that accepts trusted publishing only refuses the token, and the workflow publishes
+   every crate in the run with the token when the secret is set (one run has one credential, and
+   a new crate may depend on crates published in the same run). So for this release, open each
+   crate already on crates.io, in its Settings, and allow token publishing again.
+4. Release as above. Then, on crates.io, for each crate:
+   1. Give it one trusted publisher: GitHub, repository `corten-run/corten`, workflow
+      `release.yml`, environment `release`. Correct or remove one that names anything else (the
+      old owner's repository, before the move to `corten-run`): the next release would publish
+      the crates before it and stop there.
+   2. Turn on trusted publishing only, including on the crates step 3 opened.
+   3. If `github:corten-run:maintainers` is not an owner, add it, keeping your own account as an
+      owner: `cargo owner --add github:corten-run:maintainers <crate>`, with a token that has the
+      `change-owners` scope. crates.io adds a team only for a member of it, and only once it has
+      been granted access to the `corten-run` organization on GitHub.
+5. Delete the secret and revoke the token. Later releases authenticate through
+   `rust-lang/crates-io-auth-action` with no stored token.
