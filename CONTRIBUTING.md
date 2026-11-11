@@ -67,6 +67,13 @@ the code does not have. The folder name must be one Docker accepts in a volume n
 digits, `_`, `.` and `-`). The registry volume, `corten-cargo`, holds only downloaded crates and
 is shared. When you remove a checkout, remove its two volumes too.
 
+`npm run check` fails on a commit `docs/`, `README.md` or `CONTRIBUTING.md` cites that the clone
+does not have (`scripts/design-refs.mjs`), so it needs the whole history and the tags
+`refs/tags/evidence/<sha>`, which keep cited commits no branch has. A plain `git clone` has both,
+but `git fetch` brings a new evidence tag only with `--tags`; when the check names a commit, run
+`git fetch origin "+refs/tags/evidence/*:refs/tags/evidence/*"` (in a shallow clone, with
+`--unshallow`).
+
 ```powershell
 $checkout = Split-Path -Leaf $PWD
 docker run --rm -v "${PWD}:/src" -v corten-cargo:/usr/local/cargo/registry -v "corten-target-${checkout}:/target" -e CARGO_TARGET_DIR=/target -w /src rust:1-bookworm sh -c "rustup component add clippy rustfmt >/dev/null 2>&1; cargo fmt --all --check && cargo run -q -p corten-cli -- fmt --check crates examples bench && cargo clippy --workspace --all-features --all-targets -- -D warnings && cargo test --workspace --all-features && cargo test --release --workspace --all-features"
@@ -215,6 +222,10 @@ establish a general ranking.
    Measure release builds and alternate runs of the two. Give the tool, the number of runs and
    their median and range; when one build's runs vary more than the two builds differ, say so
    instead of reporting a difference.
+   A number cited in `docs/`, `README.md` or `CONTRIBUTING.md` names the commit it ran on, in
+   backticks. A commit no branch that merges will keep (a prototype's, or one on a branch remade
+   before it merged) is pushed as an annotated tag `evidence/<sha>` saying what it backs, since
+   `npm run check` fails on a cited commit the clone lacks.
 3. Update the guide in `docs/guide/` that describes the behavior, and add a line to
    `CHANGELOG.md` under Unreleased.
 4. Commit messages say what changed and why, in plain sentences.
