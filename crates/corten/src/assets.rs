@@ -787,7 +787,7 @@ impl Assets {
         let assets = self.clone();
         Table::new().route(
             &format!("{}/{{version}}/{{*path}}", self.mount),
-            get(move |req: crate::extract::Request| {
+            get(move |req: crate::http::Request| {
                 let assets = assets.clone();
                 async move {
                     let (parts, _) = req.into_parts();

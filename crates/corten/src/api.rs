@@ -238,7 +238,7 @@ impl<P: Prefix> Api<P> {
         self
     }
 
-    /// The most of a request body, in bytes, that [`crate::Bytes`], `String`, [`crate::Json`] and
+    /// The most of a request body, in bytes, that [`crate::http::Bytes`], `String`, [`crate::Json`] and
     /// [`crate::Form`] read under the prefix, and what an [`crate::Upload`] keeps unless its
     /// handler sets its own, in place of the limit of the API or area around it, or
     /// [`crate::App::body_limit`] (unset, it takes theirs; see [`crate::App::api`]):

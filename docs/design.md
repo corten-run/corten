@@ -677,8 +677,8 @@ rules something out.
     trait of Corten's bridged to it), so an axum release that changed the trait changed every
     app's extractors with it; now the shape is Corten's and changes only with a Corten release
     that says so. `Request` and `Response` are the `http` crate's over Corten's own body
-    (`corten::answer::Body`), `corten::middleware` names `IntoResponse` and `IntoResponseParts`,
-    Corten's since step 4 with axum-core's names and shapes, and `corten::Bytes` and
+    (`corten::http::Body`), `corten::http` names `IntoResponse` and `IntoResponseParts`,
+    Corten's since step 4 with axum-core's names and shapes, and `corten::http::Bytes` and
     `corten::Listener` the rest. `FromRef` (the trait and the derive) is Corten's too: a
     conversion of the routes' state that Corten's `State` reads, with the impl for the state
     itself that axum-core's had. axum's
@@ -879,9 +879,17 @@ rules something out.
     2. Protocol: hyper's HTTP/1.1 reads and writes the connection. It stays: framing is where a
        server's worst bugs live (request smuggling, chunked bodies, pipelining), hyper is tested
        for them as Corten could not be, and nothing measured here points at it.
-    3. Vocabulary: the `http` crate's `Request`, `Response` and `HeaderMap`, which hyper, HTTP
-       clients and HTTP/3 libraries share (`corten::http`). Nothing above names the connection's
-       protocol.
+    3. Vocabulary: one module, `corten::http`: the `http` crate's types (`StatusCode`,
+       `HeaderMap`, `Uri`), which hyper, HTTP clients and HTTP/3 libraries share, and what Corten
+       builds on them: `Body` (and `BodyDataStream`), `Request` and `Response` over it, `Bytes`,
+       and `IntoResponse`, `IntoResponseParts` and `ResponseParts`, which are Corten's contract
+       for how a handler answers rather than shared ones, kept here so an app imports one module
+       for a request and its answer. Nothing above names the connection's protocol, and an app
+       names this layer from one place; the crate defines each type where it is used (the body in
+       `body`, the request in `handler`, the response in `response`) and the module gathers them.
+       Until it was one module, an app named the body from `answer`, the request from `extract`
+       and the response from `middleware`. `MatchedPath` stays in `middleware`: it is the
+       route's pattern, which the router gives, not HTTP's.
     4. Stages: what goes around a route ([Choice 28](#choice-fixed-stages)), each one a future that
        wraps the route's, in Corten's one order. A route goes through all of them or says
        `unstaged` and goes through none, its lane in their place (the host check and the headers
@@ -996,7 +1004,7 @@ rules something out.
        `corten::Listener` a trait of its own; then axum leaves Corten's dependencies, which
        reopens [Choice 21](#choice-own-extractors)'s `corten::axum` for a test's stand-in server:
        an app's test that wants one then depends on axum itself.
-       It has landed. The body (`corten::answer::Body`), `IntoResponse` and `IntoResponseParts`,
+       It has landed. The body (`corten::http::Body`), `IntoResponse` and `IntoResponseParts`,
        the readers of a whole body, the server-sent events writer and `Listener` are Corten's, and
        `corten::axum`, `compress::apply` and `Policy::apply` are gone: compression and the
        security headers are stages `App` puts around every route, and a route with neither is

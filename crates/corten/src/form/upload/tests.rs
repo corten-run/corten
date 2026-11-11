@@ -1175,7 +1175,7 @@ async fn the_deadline_is_the_servers_503_when_the_handler_is_not_waiting_for_the
 /// the deadline is the 413 its read gives too (#1061).
 #[tokio::test(start_paused = true)]
 async fn a_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413() {
-    async fn store(request: crate::extract::Request) -> crate::Result<String> {
+    async fn store(request: crate::http::Request) -> crate::Result<String> {
         let mut pieces = crate::extract::pieces_up_to(request.into_body(), 1024);
         while pieces.chunk().await?.is_some() {}
         Ok("stored".into())
@@ -1198,7 +1198,7 @@ async fn a_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413() {
 /// read past from there, and the deadline during that read is the 413 too (#1061).
 #[tokio::test(start_paused = true)]
 async fn a_chunked_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413() {
-    async fn store(request: crate::extract::Request) -> crate::Result<String> {
+    async fn store(request: crate::http::Request) -> crate::Result<String> {
         let mut pieces = crate::extract::pieces_up_to(request.into_body(), 1024);
         while pieces.chunk().await?.is_some() {}
         Ok("stored".into())
@@ -1218,7 +1218,7 @@ async fn a_chunked_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413
 /// for the body (#1061).
 #[tokio::test(start_paused = true)]
 async fn a_body_bytes_up_to_reads_past_at_the_deadline_is_the_clients_408() {
-    async fn own(request: crate::extract::Request) -> crate::Result<(crate::http::StatusCode, &'static str)> {
+    async fn own(request: crate::http::Request) -> crate::Result<(crate::http::StatusCode, &'static str)> {
         Ok(match crate::extract::bytes_up_to(request.into_body(), 1024).await? {
             Some(_) => (crate::http::StatusCode::OK, "kept"),
             None => (crate::http::StatusCode::UNPROCESSABLE_ENTITY, "too long"),

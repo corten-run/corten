@@ -17,9 +17,7 @@ use corten::{
     ClientIp, Error, ForAll, HtmlResponse,
     agent::{ToolError, Tools},
     answer::XRobotsTag,
-    extract::Request,
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header, request::Parts},
-    middleware::{IntoResponse, Response},
+    http::{HeaderMap, HeaderValue, IntoResponse, Method, Request, Response, StatusCode, header, request::Parts},
     prelude::*,
     pwa::{FormFactor, Manifest, Pwa, Screenshot, Shortcut},
     security::{Policy, Violations},
@@ -821,7 +819,7 @@ mod tests {
         use std::time::Instant;
 
         // Measured through the router alone, as `route_loop` measures it beside bare axum.
-        use corten::{answer::Body, http::Request};
+        use corten::http::{Body, Request};
         use http_body_util::BodyExt;
         use tower::ServiceExt;
         let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
@@ -1019,7 +1017,7 @@ mod tests {
             let bare = axum::routing::get(|State(source): State<Source>, Path(id): Path<String>| async move {
                 let item = match super::item_view(&source, &id).await {
                     Ok(corten::Json(item)) => item,
-                    Err(e) => return corten::middleware::IntoResponse::into_response(e).map(axum::body::Body::new),
+                    Err(e) => return corten::http::IntoResponse::into_response(e).map(axum::body::Body::new),
                 };
                 let mut res = Response::new(axum::body::Body::from(corten::json::to_vec(&item)));
                 res.headers_mut()
@@ -1030,7 +1028,7 @@ mod tests {
             drive(router, |path| request(path).body(axum::body::Body::empty()).unwrap(), &paths, seconds).await
         } else {
             let router = super::app(source.clone()).router();
-            drive(router, |path| request(path).body(corten::answer::Body::empty()).unwrap(), &paths, seconds).await
+            drive(router, |path| request(path).body(corten::http::Body::empty()).unwrap(), &paths, seconds).await
         };
         let per = took.as_secs_f64() * 1e6 / count as f64;
         let header = |name| headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("none").to_owned();

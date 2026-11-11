@@ -4,7 +4,8 @@
 use std::{borrow::Cow, marker::PhantomData, time::Duration};
 
 use crate::body::BodyDataStream;
-use crate::extract::{FromRequest, Request};
+use crate::extract::FromRequest;
+use crate::handler::Request;
 use crate::response::IntoResponse;
 use crate::response::Response;
 use bytes::Bytes;

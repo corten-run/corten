@@ -46,8 +46,8 @@
 //! answer that sets a cookie out of shared caches and, under an API's prefix, the API's JSON
 //! failures.
 //!
-//! Modules: [`answer`] (what a route answers), [`caller`] (who is asking), [`middleware`],
-//! [`api`] (JSON-only routes), [`cache`] (HTTP caching), [`view`] (markup), [`script`]
+//! Modules: [`http`] (requests, responses and bodies), [`answer`] (what a route answers),
+//! [`caller`] (who is asking), [`middleware`], [`api`] (JSON-only routes), [`cache`] (HTTP caching), [`view`] (markup), [`script`]
 //! (handlers: behavior in the browser), [`style`] (component stylesheets and design tokens), [`route`] (typed links),
 //! [`i18n`] (typed messages), [`security`], [`assets`], [`pwa`], [`form`], [`seo`].
 //! Features: `json` (handler values, data screens), `feed` (live rows), `types` (TypeScript
@@ -123,6 +123,7 @@ pub mod extract;
 pub mod form;
 mod handler;
 mod html;
+pub mod http;
 pub mod i18n;
 #[cfg(feature = "json")]
 pub mod json;
@@ -157,8 +158,8 @@ use std::{
     sync::{Arc, LazyLock},
 };
 
+use ::http::{header, HeaderMap, HeaderValue, StatusCode};
 use futures_util::{Stream, StreamExt};
-use http::{header, HeaderMap, HeaderValue, StatusCode};
 
 use crate::{
     response::{IntoResponse, Response},
@@ -173,9 +174,6 @@ pub use answer::{
 pub use answer::{JsonError, JsonResponse, JsonResult};
 pub use api::Api;
 pub use app::{listeners, serve, serve_on, serve_wrapped, App, Area};
-/// The bytes of a body or an upload, shared rather than copied: what
-/// [`form::File::bytes_up_to`] gives and [`Media::new`] takes.
-pub use bytes::Bytes;
 pub use caller::{Caller, Challenge, Identify, Refused};
 pub use client::{ClientIp, ClientZone, PeerAddr};
 /// Form field names as constants: `#[derive(Fields)] struct AlertInput { email: String }`
@@ -360,10 +358,6 @@ pub use corten_macros::FromRef;
 pub use form::{Bounds, Entry, Errors, FieldName, Files, Form, Refusal, SubmitKey, Upload, UploadError, Within};
 pub use handler::FromRef;
 pub use html::escape;
-/// The HTTP vocabulary an app names (`StatusCode`, `HeaderMap`, `HeaderValue`, `Uri`,
-/// `request::Parts`): the `http` crate hyper, tower and HTTP clients share, so an app's code
-/// names the same types its HTTP client does.
-pub use http;
 #[cfg(feature = "json")]
 pub use json::{FromJson, Json, ToJson};
 pub use layout::{later, Later, LayoutRead};
@@ -884,7 +878,7 @@ impl Error {
     ///     let name = [(7, "Ada")].into_iter().find(|(n, _)| *n == id).map(|(_, name)| name);
     ///     name.ok_or_else(Error::not_found)
     /// }
-    /// # use corten::middleware::IntoResponse;
+    /// # use corten::http::IntoResponse;
     /// assert_eq!(find(8).unwrap_err().into_response().status(), StatusCode::NOT_FOUND);
     /// ```
     pub fn not_found() -> Self {
@@ -947,7 +941,7 @@ impl<E: std::error::Error + Send + Sync + 'static> From<E> for Error {
 ///     }
 ///     Ok(())
 /// }
-/// # use corten::middleware::IntoResponse;
+/// # use corten::http::IntoResponse;
 /// assert_eq!(owned(1, 2).unwrap_err().into_response().status(), StatusCode::FORBIDDEN);
 /// ```
 impl From<Refused> for Error {

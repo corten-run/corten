@@ -23,10 +23,8 @@ use std::{
 
 use corten::{
     Error,
-    extract::Request,
     feed::{Change, FeedResponse, Since},
-    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
-    middleware::Response,
+    http::{HeaderMap, HeaderName, HeaderValue, Request, Response, StatusCode},
     prelude::*,
 };
 use corten_cluster::{Begin, Cluster, Source};

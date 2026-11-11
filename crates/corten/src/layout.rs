@@ -546,7 +546,7 @@ impl StartHere {
     /// As a route is called: a page's `GET` starts each of the app's reads, a write keeps the
     /// request's head for a page it may draw, and a `HEAD`, a JSON answer or a `Public` one (the
     /// same for everyone, so never one visitor's count) starts none.
-    pub(crate) fn arrive(&self, req: &mut crate::extract::Request, page: bool, public: bool) {
+    pub(crate) fn arrive(&self, req: &mut crate::http::Request, page: bool, public: bool) {
         let mut here = self.lock();
         if here.state != State::Waiting {
             return;
@@ -557,7 +557,7 @@ impl StartHere {
         }
         let (mut parts, body) = std::mem::take(req).into_parts();
         here.at_route(&mut parts);
-        *req = crate::extract::Request::from_parts(parts, body);
+        *req = crate::http::Request::from_parts(parts, body);
     }
 
     /// As a handler takes [`crate::Req`]: for a route of Corten's own, which is not an app's

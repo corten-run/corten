@@ -652,7 +652,7 @@ pub(crate) fn encoded_headers(headers: &mut HeaderMap, content_type: &str, codin
 mod tests {
     use super::*;
     use crate::{
-        extract::Request,
+        http::Request,
         router::{get, Table},
     };
     use http_body_util::BodyExt;

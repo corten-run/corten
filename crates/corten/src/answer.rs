@@ -34,7 +34,7 @@
 //! A handler that hides what it answers does not compile:
 //!
 //! ```compile_fail,E0277
-//! use corten::{middleware::Response, prelude::*};
+//! use corten::{http::Response, prelude::*};
 //!
 //! #[corten::routes]
 //! mod url {
@@ -56,16 +56,15 @@ use std::{
 };
 
 use crate::{
-    extract::{Request, State},
-    handler::Handler,
+    body::Body,
+    extract::State,
+    handler::{Handler, Request},
 };
 use http::{Method, StatusCode, Uri};
 
 use crate::response::{IntoResponse, Response};
 
 use crate::{cache::Cache, Error, Req, Signal};
-
-pub use crate::body::{Body, BodyDataStream};
 
 /// How a route's failures are answered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -520,7 +519,7 @@ impl<T: crate::json::ToJson> From<crate::Json<T>> for JsonResponse {
 /// the route's JSON error.
 ///
 /// ```
-/// use corten::{answer::Body, http::{HeaderMap, StatusCode}, prelude::*, JsonError, JsonResponse, Relay};
+/// use corten::{http::{Body, HeaderMap, StatusCode}, prelude::*, JsonError, JsonResponse, Relay};
 ///
 /// #[derive(ToJson)]
 /// struct Order { id: u32 }
@@ -627,7 +626,7 @@ pub enum JsonError {
     ///     Ok(Json(Batch { batch: id }).with_status(StatusCode::CREATED))
     /// }
     /// # assert_eq!(created(None).unwrap_err().into_response().status(), StatusCode::BAD_REQUEST);
-    /// # use corten::middleware::IntoResponse;
+    /// # use corten::http::IntoResponse;
     /// ```
     ///
     /// A refusal is a client or server error. One with another status is a bug: a debug build
@@ -747,7 +746,7 @@ impl Answer for StatusCode {
 /// (`Set-Cookie`, say) is the route's to decide before it builds the answer.
 ///
 /// ```
-/// use corten::{answer::Body, http::{HeaderMap, StatusCode}, prelude::*, Relay};
+/// use corten::{http::{Body, HeaderMap, StatusCode}, prelude::*, Relay};
 ///
 /// async fn models() -> corten::Result<Relay> {
 ///     // The upstream's answer, from the app's HTTP client: for reqwest,
@@ -864,7 +863,7 @@ impl Media {
     /// which stops whatever makes it (a database cursor, a channel whose sender then fails).
     ///
     /// ```
-    /// use corten::{prelude::*, Bytes, Media};
+    /// use corten::{http::Bytes, prelude::*, Media};
     /// use futures_util::StreamExt;
     ///
     /// async fn export() -> Media {

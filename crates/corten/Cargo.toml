@@ -17,7 +17,7 @@ readme = "../../README.md"
 name = "corten"
 
 [dependencies]
-# A body's bytes (`corten::Bytes`, hyper's), and a multipart body's pieces joined in room it
+# A body's bytes (`corten::http::Bytes`, hyper's), and a multipart body's pieces joined in room it
 # reuses, so one sent a few bytes at a time does not allocate per piece.
 bytes = "1"
 corten-macros.workspace = true
@@ -27,7 +27,7 @@ getrandom = "0.3"
 # The HTTP vocabulary (`StatusCode`, `HeaderMap`, `Uri`, `request::Parts`), which apps name as
 # `corten::http`, the crate hyper and HTTP clients share.
 http = "1"
-# The body trait hyper reads and writes (`corten::answer::Body` implements it).
+# The body trait hyper reads and writes (`corten::http::Body` implements it).
 http-body = "1"
 # Already in hyper's tree: the projections `Body`'s wrappers and the event stream's pacing need,
 # without `unsafe` in Corten.

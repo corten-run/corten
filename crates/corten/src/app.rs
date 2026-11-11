@@ -10,7 +10,7 @@ use crate::{
     assets::Assets,
     cache::{self, Seen},
     client::Peer,
-    extract::Request,
+    handler::Request,
     listener::Listener,
     middleware::Middleware,
     page::{self, default_error_page, error_page_fn, Asked, Credentials, ErrorPageFn, Failure, Shared},
@@ -198,7 +198,7 @@ impl<P: Prefix> Area<P> {
         self
     }
 
-    /// The most of a request body, in bytes, that [`crate::Bytes`], `String`, [`crate::Json`] and
+    /// The most of a request body, in bytes, that [`crate::http::Bytes`], `String`, [`crate::Json`] and
     /// [`crate::Form`] read at the prefix or under it, and what an [`crate::Upload`] keeps unless
     /// its handler sets its own, in place of [`App::body_limit`]: `.body_limit(64 << 10)` for an
     /// area of short forms, or `.body_limit(16 << 20)` for one that takes large documents, so
@@ -695,7 +695,7 @@ impl<M: Middleware> App<M> {
         self
     }
 
-    /// The most of a request body, in bytes, that [`crate::Bytes`], `String`, [`crate::Json`] and
+    /// The most of a request body, in bytes, that [`crate::http::Bytes`], `String`, [`crate::Json`] and
     /// [`crate::Form`] read, and what an [`crate::Upload`] keeps unless its handler sets its own
     /// ([`crate::Upload::limit`]): 2 MiB unless set. Over it the answer is a 413 (before the
     /// handler runs for the readers, at the read that crosses it for an `Upload`), and the rest of

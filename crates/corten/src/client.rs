@@ -59,7 +59,7 @@ impl ClientIp {
     /// The address of who sent `req`, for a [`crate::Middleware`] (a limit by address), the
     /// same as a handler that takes `Option<ClientIp>` gets: `None` when it cannot be known.
     /// The answer is then private to that address, as a handler's would be.
-    pub fn of(req: &mut crate::extract::Request) -> Option<Self> {
+    pub fn of(req: &mut crate::http::Request) -> Option<Self> {
         let (found, fresh) = Self::look(req.extensions(), req.headers());
         if fresh {
             req.extensions_mut().insert(Found(found));

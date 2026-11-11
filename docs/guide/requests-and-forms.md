@@ -6,16 +6,17 @@
 
 ### HTTP types
 
-A status, a method, a header or a URL outside the app is named from `corten::http`
-(`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the `header` constants,
-`Uri`, `request::Parts`): the `http` crate's types, which hyper and HTTP clients share, so an
-app's code names them without naming the server library under Corten. The rest of what an
-app names about a request is Corten's too: an extractor of its own implements
-`corten::extract::FromRequestParts` (with `FromRef` for a part of the state, beside the derive of
-the same name), a middleware takes `corten::extract::Request` and answers a
-`corten::middleware::Response` (`IntoResponse` makes one of a `Refused` or a status), a relay's
-body is `corten::answer::Body`, an upload's bytes are `corten::Bytes`, a listener of its own is a
-`corten::Listener`, and a test sends its requests with `app.test()`. The extractor and handler
+The HTTP types an app names are in one module, `corten::http`: a status, a method, a header or
+a URL outside the app (`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the
+`header` constants, `Uri`, `request::Parts`), the `http` crate's types, which hyper and HTTP
+clients share, so an app's code names them without naming the server library under Corten;
+and the body, request and response Corten builds on them: `Request` (what a middleware or a
+handler takes whole), `Response` (what it answers), `IntoResponse` (which makes one of a
+`Refused`, a status or a tuple of them), `IntoResponseParts`, `Body` (a relay's) and `Bytes`
+(a body's bytes, shared rather than copied). The rest of what an app names about a request is
+Corten's too: an extractor of its own implements `corten::extract::FromRequestParts` (with
+`FromRef` for a part of the state, beside the derive of the same name), a listener of its own is
+a `corten::Listener`, and a test sends its requests with `app.test()`. The extractor and handler
 traits and `State` are Corten's own, with the names, the `Rejection` and the
 `from_request_parts(parts, state)` signature they had as axum's, so an extractor written against
 axum's compiles against them with its `use` changed; `Request` and `Response` are the `http`

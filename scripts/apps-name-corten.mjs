@@ -17,7 +17,7 @@ const allowed = new Map([
     [
       "use axum::extract::{Path, State};",
       "let bare = axum::routing::get(|State(source): State<Source>, Path(id): Path<String>| async move {",
-      "Err(e) => return corten::middleware::IntoResponse::into_response(e).map(axum::body::Body::new),",
+      "Err(e) => return corten::http::IntoResponse::into_response(e).map(axum::body::Body::new),",
       "let mut res = Response::new(axum::body::Body::from(corten::json::to_vec(&item)));",
       "let router = axum::Router::new().route(api::ItemJson::PATH, bare).with_state(source.clone());",
       "drive(router, |path| request(path).body(axum::body::Body::empty()).unwrap(), &paths, seconds).await",
@@ -55,7 +55,7 @@ for (const file of files) {
     if (allowed.get(file)?.includes(line.trim())) return;
     if (testFile(file) && standIn(line)) return;
     const stand = testFile(file) ? " (a test's stand-in server writes axum::Router::new() and axum::serve as paths)" : "";
-    problems.push(`${file}:${i + 1}: names axum (${line.trim()}); use corten::extract (bytes_up_to for a whole body), corten::middleware, corten::answer::Body or corten::Bytes${stand}`);
+    problems.push(`${file}:${i + 1}: names axum (${line.trim()}); use corten::extract (bytes_up_to for a whole body) or corten::http (Body, Bytes, Request, Response, IntoResponse)${stand}`);
   });
 }
 

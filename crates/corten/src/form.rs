@@ -310,7 +310,8 @@
 
 use std::fmt;
 
-use crate::extract::{BodyRejection, FromRequest, Request};
+use crate::extract::{BodyRejection, FromRequest};
+use crate::handler::Request;
 use bytes::Bytes;
 use http::{header, HeaderValue, Method, StatusCode};
 
