@@ -1,0 +1,2071 @@
+{
+ "image": "corten-card-market-p1011",
+ "image_id": "sha256:8c7d22f00dd50bb6fefdd2b646e95edf87e7dd8a59b7dcb60c260389a9dbbd79",
+ "runs": 3,
+ "floods": 8,
+ "variants": {
+  "jemalloc": [],
+  "jemalloc-bg": [
+   "-e",
+   "MALLOC_CONF=background_thread:true"
+  ],
+  "glibc": [
+   "-e",
+   "LD_PRELOAD="
+  ],
+  "glibc-arena2": [
+   "-e",
+   "LD_PRELOAD=",
+   "-e",
+   "GLIBC_TUNABLES=glibc.malloc.arena_max=2:glibc.malloc.trim_threshold=131072"
+  ],
+  "glibc-arena1": [
+   "-e",
+   "LD_PRELOAD=",
+   "-e",
+   "GLIBC_TUNABLES=glibc.malloc.arena_max=1:glibc.malloc.trim_threshold=131072"
+  ]
+ },
+ "results": [
+  {
+   "variant": "jemalloc",
+   "run": 1,
+   "rest": {
+    "current": 8.4,
+    "anon": 6.4,
+    "file": 0
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 183.7,
+      "anon": 166.5,
+      "file": 0
+     },
+     "after": {
+      "current": 133.7,
+      "anon": 131.2,
+      "file": 0
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 221,
+      "anon": 204,
+      "file": 0.1
+     },
+     "after": {
+      "current": 84.2,
+      "anon": 82,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 199.5,
+      "anon": 182,
+      "file": 0.3
+     },
+     "after": {
+      "current": 148.1,
+      "anon": 145.6,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 197.3,
+      "anon": 175.6,
+      "file": 0.3
+     },
+     "after": {
+      "current": 119.7,
+      "anon": 117.1,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 196.5,
+      "anon": 179.1,
+      "file": 0.3
+     },
+     "after": {
+      "current": 115.2,
+      "anon": 112.6,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 208.4,
+      "anon": 187.9,
+      "file": 3.5
+     },
+     "after": {
+      "current": 160,
+      "anon": 154.1,
+      "file": 3.6
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 209.4,
+      "anon": 188.3,
+      "file": 4.2
+     },
+     "after": {
+      "current": 75.8,
+      "anon": 69.5,
+      "file": 4.2
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 192,
+      "anon": 170.4,
+      "file": 4.2
+     },
+     "after": {
+      "current": 121.4,
+      "anon": 114.8,
+      "file": 4.2
+     }
+    }
+   ],
+   "end": {
+    "current": 120.7,
+    "anon": 114.5,
+    "file": 4.2
+   }
+  },
+  {
+   "variant": "jemalloc-bg",
+   "run": 1,
+   "rest": {
+    "current": 8.5,
+    "anon": 6.7,
+    "file": 0
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 184.9,
+      "anon": 167.2,
+      "file": 0.1
+     },
+     "after": {
+      "current": 63.4,
+      "anon": 58.3,
+      "file": 0.1
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 180.2,
+      "anon": 162.9,
+      "file": 0.3
+     },
+     "after": {
+      "current": 72.5,
+      "anon": 69.6,
+      "file": 0.8
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 184.6,
+      "anon": 166.5,
+      "file": 0.8
+     },
+     "after": {
+      "current": 65.7,
+      "anon": 62.4,
+      "file": 1.3
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 184.2,
+      "anon": 166.1,
+      "file": 1.3
+     },
+     "after": {
+      "current": 61.4,
+      "anon": 58.1,
+      "file": 1.3
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 186.6,
+      "anon": 168.3,
+      "file": 1.3
+     },
+     "after": {
+      "current": 50,
+      "anon": 46.7,
+      "file": 1.3
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 184,
+      "anon": 163.9,
+      "file": 1.3
+     },
+     "after": {
+      "current": 74.5,
+      "anon": 71.1,
+      "file": 1.3
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 181.5,
+      "anon": 162.9,
+      "file": 1.3
+     },
+     "after": {
+      "current": 54.8,
+      "anon": 51.3,
+      "file": 1.3
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 183.9,
+      "anon": 165.3,
+      "file": 1.3
+     },
+     "after": {
+      "current": 64.7,
+      "anon": 60.7,
+      "file": 1.3
+     }
+    }
+   ],
+   "end": {
+    "current": 7.3,
+    "anon": 4.4,
+    "file": 1.3
+   }
+  },
+  {
+   "variant": "glibc",
+   "run": 1,
+   "rest": {
+    "current": 3.4,
+    "anon": 1.2,
+    "file": 0.3
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 184.1,
+      "anon": 181.4,
+      "file": 0.6
+     },
+     "after": {
+      "current": 184.7,
+      "anon": 181.4,
+      "file": 0.6
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 309.9,
+      "anon": 291.4,
+      "file": 1.6
+     },
+     "after": {
+      "current": 294,
+      "anon": 288.2,
+      "file": 2.3
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 363.8,
+      "anon": 344.1,
+      "file": 2.6
+     },
+     "after": {
+      "current": 349.2,
+      "anon": 344.1,
+      "file": 2.6
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 408.6,
+      "anon": 388.4,
+      "file": 3.3
+     },
+     "after": {
+      "current": 394.1,
+      "anon": 388.4,
+      "file": 3.3
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 437.4,
+      "anon": 412.1,
+      "file": 4.2
+     },
+     "after": {
+      "current": 423,
+      "anon": 416.3,
+      "file": 4.2
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 452.5,
+      "anon": 431.1,
+      "file": 4.2
+     },
+     "after": {
+      "current": 437.8,
+      "anon": 431.1,
+      "file": 4.2
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 459.2,
+      "anon": 435.7,
+      "file": 5.8
+     },
+     "after": {
+      "current": 444.8,
+      "anon": 435.7,
+      "file": 6.8
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 466.2,
+      "anon": 442.1,
+      "file": 6.8
+     },
+     "after": {
+      "current": 452,
+      "anon": 442.1,
+      "file": 6.8
+     }
+    }
+   ],
+   "end": {
+    "current": 455.1,
+    "anon": 446,
+    "file": 6.8
+   }
+  },
+  {
+   "variant": "glibc-arena2",
+   "run": 1,
+   "rest": {
+    "current": 3,
+    "anon": 1.2,
+    "file": 0.3
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 206.3,
+      "anon": 184.2,
+      "file": 0.4
+     },
+     "after": {
+      "current": 180,
+      "anon": 177.3,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 293.3,
+      "anon": 276.2,
+      "file": 0.4
+     },
+     "after": {
+      "current": 264.5,
+      "anon": 261.2,
+      "file": 1.1
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 357.4,
+      "anon": 338.6,
+      "file": 1.1
+     },
+     "after": {
+      "current": 325.1,
+      "anon": 321.3,
+      "file": 1.1
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 376.9,
+      "anon": 357,
+      "file": 2.2
+     },
+     "after": {
+      "current": 362,
+      "anon": 357,
+      "file": 2.2
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 403.2,
+      "anon": 384.1,
+      "file": 2.2
+     },
+     "after": {
+      "current": 361.3,
+      "anon": 357.1,
+      "file": 2.2
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 394,
+      "anon": 375,
+      "file": 2.2
+     },
+     "after": {
+      "current": 373.6,
+      "anon": 369.3,
+      "file": 2.2
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 416.2,
+      "anon": 393.9,
+      "file": 2.2
+     },
+     "after": {
+      "current": 379.5,
+      "anon": 375.3,
+      "file": 2.2
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 415,
+      "anon": 395.9,
+      "file": 2.2
+     },
+     "after": {
+      "current": 396.2,
+      "anon": 391.4,
+      "file": 2.2
+     }
+    }
+   ],
+   "end": {
+    "current": 400.2,
+    "anon": 395.6,
+    "file": 2.2
+   }
+  },
+  {
+   "variant": "glibc-arena1",
+   "run": 1,
+   "rest": {
+    "current": 3.1,
+    "anon": 1.1,
+    "file": 0.5
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 202.1,
+      "anon": 184.2,
+      "file": 0.5
+     },
+     "after": {
+      "current": 182.8,
+      "anon": 179.4,
+      "file": 0.5
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 309.4,
+      "anon": 290.5,
+      "file": 0.5
+     },
+     "after": {
+      "current": 290.6,
+      "anon": 287.9,
+      "file": 0.5
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 371.3,
+      "anon": 353.4,
+      "file": 0.7
+     },
+     "after": {
+      "current": 354.5,
+      "anon": 350.1,
+      "file": 2
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 407.9,
+      "anon": 388.7,
+      "file": 2
+     },
+     "after": {
+      "current": 393.6,
+      "anon": 388.7,
+      "file": 2.6
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 439.1,
+      "anon": 419.2,
+      "file": 2.7
+     },
+     "after": {
+      "current": 423.1,
+      "anon": 416.9,
+      "file": 3.6
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 455,
+      "anon": 434,
+      "file": 3.7
+     },
+     "after": {
+      "current": 444.6,
+      "anon": 438.3,
+      "file": 4
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 459.5,
+      "anon": 438.4,
+      "file": 4.1
+     },
+     "after": {
+      "current": 444.9,
+      "anon": 438.3,
+      "file": 4.1
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 460.4,
+      "anon": 439.2,
+      "file": 4.1
+     },
+     "after": {
+      "current": 448.3,
+      "anon": 438.8,
+      "file": 6.8
+     }
+    }
+   ],
+   "end": {
+    "current": 451.8,
+    "anon": 438.8,
+    "file": 6.7
+   }
+  },
+  {
+   "variant": "jemalloc",
+   "run": 2,
+   "rest": {
+    "current": 8.5,
+    "anon": 2.5,
+    "file": 4.8
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 192.8,
+      "anon": 168.4,
+      "file": 7.6
+     },
+     "after": {
+      "current": 137.3,
+      "anon": 126.3,
+      "file": 9
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 215,
+      "anon": 188.5,
+      "file": 9.1
+     },
+     "after": {
+      "current": 151.8,
+      "anon": 139.6,
+      "file": 9.1
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 200.4,
+      "anon": 174.4,
+      "file": 9
+     },
+     "after": {
+      "current": 133.9,
+      "anon": 122.2,
+      "file": 9.1
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 203.4,
+      "anon": 176.8,
+      "file": 9.1
+     },
+     "after": {
+      "current": 127.8,
+      "anon": 116.1,
+      "file": 9.1
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 202.4,
+      "anon": 175.6,
+      "file": 9.1
+     },
+     "after": {
+      "current": 138.1,
+      "anon": 126.4,
+      "file": 9.1
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 206.3,
+      "anon": 180,
+      "file": 9.1
+     },
+     "after": {
+      "current": 145.4,
+      "anon": 133.8,
+      "file": 9.1
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 217.4,
+      "anon": 191,
+      "file": 8.9
+     },
+     "after": {
+      "current": 71.3,
+      "anon": 60.5,
+      "file": 9
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 208.2,
+      "anon": 181.8,
+      "file": 9
+     },
+     "after": {
+      "current": 138.8,
+      "anon": 127.5,
+      "file": 9
+     }
+    }
+   ],
+   "end": {
+    "current": 138.9,
+    "anon": 127.5,
+    "file": 9
+   }
+  },
+  {
+   "variant": "jemalloc-bg",
+   "run": 2,
+   "rest": {
+    "current": 4.6,
+    "anon": 2.5,
+    "file": 0.3
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 186.3,
+      "anon": 168.7,
+      "file": 0.3
+     },
+     "after": {
+      "current": 48.2,
+      "anon": 45.4,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 187.5,
+      "anon": 170.4,
+      "file": 0.3
+     },
+     "after": {
+      "current": 66.6,
+      "anon": 64.1,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 186.2,
+      "anon": 168.8,
+      "file": 0.3
+     },
+     "after": {
+      "current": 57,
+      "anon": 54.8,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 182,
+      "anon": 164.2,
+      "file": 0.3
+     },
+     "after": {
+      "current": 59.7,
+      "anon": 57.2,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 185.5,
+      "anon": 167.8,
+      "file": 0.3
+     },
+     "after": {
+      "current": 52.4,
+      "anon": 50,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 185.2,
+      "anon": 167.2,
+      "file": 0.3
+     },
+     "after": {
+      "current": 64.6,
+      "anon": 62.1,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 183,
+      "anon": 165.8,
+      "file": 0.3
+     },
+     "after": {
+      "current": 62.9,
+      "anon": 60.8,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 185,
+      "anon": 167.6,
+      "file": 0.3
+     },
+     "after": {
+      "current": 61.8,
+      "anon": 54.8,
+      "file": 0.3
+     }
+    }
+   ],
+   "end": {
+    "current": 7,
+    "anon": 4.6,
+    "file": 0.3
+   }
+  },
+  {
+   "variant": "glibc",
+   "run": 2,
+   "rest": {
+    "current": 5.3,
+    "anon": 1.2,
+    "file": 2.6
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 188.5,
+      "anon": 182.7,
+      "file": 2.9
+     },
+     "after": {
+      "current": 188.6,
+      "anon": 182.7,
+      "file": 2.9
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 314.5,
+      "anon": 294.1,
+      "file": 2.9
+     },
+     "after": {
+      "current": 296.6,
+      "anon": 291,
+      "file": 2.9
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 372.3,
+      "anon": 352.1,
+      "file": 2.9
+     },
+     "after": {
+      "current": 358.2,
+      "anon": 352.1,
+      "file": 2.9
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 404.5,
+      "anon": 384.2,
+      "file": 2.9
+     },
+     "after": {
+      "current": 389.5,
+      "anon": 384.2,
+      "file": 2.9
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 427.6,
+      "anon": 407.1,
+      "file": 2.9
+     },
+     "after": {
+      "current": 412.4,
+      "anon": 407,
+      "file": 2.9
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 444.9,
+      "anon": 424,
+      "file": 2.9
+     },
+     "after": {
+      "current": 431.7,
+      "anon": 426,
+      "file": 2.9
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 456.5,
+      "anon": 436.5,
+      "file": 2.9
+     },
+     "after": {
+      "current": 441.4,
+      "anon": 436.2,
+      "file": 2.9
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 461.5,
+      "anon": 441.7,
+      "file": 2.9
+     },
+     "after": {
+      "current": 447.1,
+      "anon": 441.8,
+      "file": 2.9
+     }
+    }
+   ],
+   "end": {
+    "current": 446.6,
+    "anon": 441.4,
+    "file": 2.9
+   }
+  },
+  {
+   "variant": "glibc-arena2",
+   "run": 2,
+   "rest": {
+    "current": 7,
+    "anon": 5.4,
+    "file": 0.3
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 205.9,
+      "anon": 188.5,
+      "file": 0.3
+     },
+     "after": {
+      "current": 171.1,
+      "anon": 168.6,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 280.9,
+      "anon": 263.6,
+      "file": 0.3
+     },
+     "after": {
+      "current": 262.3,
+      "anon": 259.2,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 326.2,
+      "anon": 309.1,
+      "file": 0.3
+     },
+     "after": {
+      "current": 302,
+      "anon": 299.6,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 357.4,
+      "anon": 339.9,
+      "file": 0.3
+     },
+     "after": {
+      "current": 328.8,
+      "anon": 322.1,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 378,
+      "anon": 360.5,
+      "file": 0.3
+     },
+     "after": {
+      "current": 358.5,
+      "anon": 355.9,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 405,
+      "anon": 387.4,
+      "file": 0.3
+     },
+     "after": {
+      "current": 378.1,
+      "anon": 375,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 410.8,
+      "anon": 393.1,
+      "file": 0.3
+     },
+     "after": {
+      "current": 387.4,
+      "anon": 385,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 423.3,
+      "anon": 406.2,
+      "file": 0.3
+     },
+     "after": {
+      "current": 406.9,
+      "anon": 403.8,
+      "file": 0.3
+     }
+    }
+   ],
+   "end": {
+    "current": 407.1,
+    "anon": 399.9,
+    "file": 0.8
+   }
+  },
+  {
+   "variant": "glibc-arena1",
+   "run": 2,
+   "rest": {
+    "current": 4.4,
+    "anon": 1.1,
+    "file": 1.6
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 202,
+      "anon": 183.4,
+      "file": 2.2
+     },
+     "after": {
+      "current": 188.3,
+      "anon": 182.9,
+      "file": 3.1
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 299.4,
+      "anon": 275.1,
+      "file": 3.2
+     },
+     "after": {
+      "current": 280.7,
+      "anon": 275.1,
+      "file": 3.7
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 348.2,
+      "anon": 327.4,
+      "file": 3.7
+     },
+     "after": {
+      "current": 329.4,
+      "anon": 323.5,
+      "file": 3.7
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 388.8,
+      "anon": 367.7,
+      "file": 3.7
+     },
+     "after": {
+      "current": 368.1,
+      "anon": 360.7,
+      "file": 4.2
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 387.8,
+      "anon": 366.6,
+      "file": 4.2
+     },
+     "after": {
+      "current": 369.3,
+      "anon": 362.4,
+      "file": 4.4
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 399.9,
+      "anon": 378.7,
+      "file": 4.4
+     },
+     "after": {
+      "current": 383.3,
+      "anon": 376.3,
+      "file": 4.4
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 401.8,
+      "anon": 380.2,
+      "file": 4.4
+     },
+     "after": {
+      "current": 386.4,
+      "anon": 376,
+      "file": 4.4
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 408.8,
+      "anon": 382.9,
+      "file": 4.4
+     },
+     "after": {
+      "current": 393.9,
+      "anon": 387.2,
+      "file": 4.4
+     }
+    }
+   ],
+   "end": {
+    "current": 393.4,
+    "anon": 386.8,
+    "file": 4.4
+   }
+  },
+  {
+   "variant": "jemalloc",
+   "run": 3,
+   "rest": {
+    "current": 9.4,
+    "anon": 6.4,
+    "file": 1.5
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 185.4,
+      "anon": 166.7,
+      "file": 1.5
+     },
+     "after": {
+      "current": 152.8,
+      "anon": 148.7,
+      "file": 1.5
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 224,
+      "anon": 205.4,
+      "file": 1.5
+     },
+     "after": {
+      "current": 76.9,
+      "anon": 73.2,
+      "file": 1.5
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 190.9,
+      "anon": 172.3,
+      "file": 1.5
+     },
+     "after": {
+      "current": 138.1,
+      "anon": 134,
+      "file": 1.5
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 200.2,
+      "anon": 181.6,
+      "file": 1.5
+     },
+     "after": {
+      "current": 101.3,
+      "anon": 97.1,
+      "file": 1.5
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 202.2,
+      "anon": 183.4,
+      "file": 1.5
+     },
+     "after": {
+      "current": 147.3,
+      "anon": 143.1,
+      "file": 1.5
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 204.4,
+      "anon": 185.5,
+      "file": 1.5
+     },
+     "after": {
+      "current": 113.6,
+      "anon": 109.4,
+      "file": 1.5
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 205.4,
+      "anon": 186.4,
+      "file": 1.5
+     },
+     "after": {
+      "current": 137.1,
+      "anon": 133.6,
+      "file": 1.5
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 227.4,
+      "anon": 208.7,
+      "file": 1.5
+     },
+     "after": {
+      "current": 113.3,
+      "anon": 109.7,
+      "file": 1.5
+     }
+    }
+   ],
+   "end": {
+    "current": 117.5,
+    "anon": 113.6,
+    "file": 1.5
+   }
+  },
+  {
+   "variant": "jemalloc-bg",
+   "run": 3,
+   "rest": {
+    "current": 9.1,
+    "anon": 6.7,
+    "file": 0.3
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 183.4,
+      "anon": 165.6,
+      "file": 0.3
+     },
+     "after": {
+      "current": 68.2,
+      "anon": 65.3,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 186.1,
+      "anon": 168.1,
+      "file": 0.3
+     },
+     "after": {
+      "current": 61.1,
+      "anon": 58,
+      "file": 0.3
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 190.2,
+      "anon": 172.6,
+      "file": 0.4
+     },
+     "after": {
+      "current": 71.7,
+      "anon": 68.8,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 182.1,
+      "anon": 164.5,
+      "file": 0.4
+     },
+     "after": {
+      "current": 51.1,
+      "anon": 48.7,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 181.7,
+      "anon": 164.1,
+      "file": 0.4
+     },
+     "after": {
+      "current": 69.5,
+      "anon": 62.6,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 186.9,
+      "anon": 169.1,
+      "file": 0.4
+     },
+     "after": {
+      "current": 68.3,
+      "anon": 65.3,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 184.2,
+      "anon": 166,
+      "file": 0.4
+     },
+     "after": {
+      "current": 68,
+      "anon": 61,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 188.4,
+      "anon": 166.3,
+      "file": 0.4
+     },
+     "after": {
+      "current": 64.8,
+      "anon": 61.6,
+      "file": 0.4
+     }
+    }
+   ],
+   "end": {
+    "current": 10.8,
+    "anon": 8.3,
+    "file": 0.4
+   }
+  },
+  {
+   "variant": "glibc",
+   "run": 3,
+   "rest": {
+    "current": 7.6,
+    "anon": 5,
+    "file": 0.4
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 199.6,
+      "anon": 181.9,
+      "file": 0.4
+     },
+     "after": {
+      "current": 183.9,
+      "anon": 181,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 296.4,
+      "anon": 279.2,
+      "file": 0.4
+     },
+     "after": {
+      "current": 281.4,
+      "anon": 278.5,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 351.9,
+      "anon": 334,
+      "file": 0.4
+     },
+     "after": {
+      "current": 327.5,
+      "anon": 324.6,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 376.4,
+      "anon": 359,
+      "file": 0.4
+     },
+     "after": {
+      "current": 362.1,
+      "anon": 359.4,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 391.7,
+      "anon": 374,
+      "file": 1.1
+     },
+     "after": {
+      "current": 382.9,
+      "anon": 378.2,
+      "file": 2.5
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 405.3,
+      "anon": 385.1,
+      "file": 2.6
+     },
+     "after": {
+      "current": 390.3,
+      "anon": 385.1,
+      "file": 2.6
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 410.9,
+      "anon": 391.3,
+      "file": 2.6
+     },
+     "after": {
+      "current": 400.4,
+      "anon": 395.6,
+      "file": 2.6
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 418,
+      "anon": 397.8,
+      "file": 2.6
+     },
+     "after": {
+      "current": 400.1,
+      "anon": 393.6,
+      "file": 4.3
+     }
+    }
+   ],
+   "end": {
+    "current": 406.1,
+    "anon": 397.8,
+    "file": 5.9
+   }
+  },
+  {
+   "variant": "glibc-arena2",
+   "run": 3,
+   "rest": {
+    "current": 9.7,
+    "anon": 5.4,
+    "file": 2.7
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 189,
+      "anon": 180.3,
+      "file": 3.7
+     },
+     "after": {
+      "current": 186.4,
+      "anon": 180.3,
+      "file": 3.7
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 286.7,
+      "anon": 266.3,
+      "file": 3.7
+     },
+     "after": {
+      "current": 275.9,
+      "anon": 269.9,
+      "file": 3.7
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 332.6,
+      "anon": 311.7,
+      "file": 3.7
+     },
+     "after": {
+      "current": 317.5,
+      "anon": 311.7,
+      "file": 3.7
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 357.1,
+      "anon": 336.6,
+      "file": 3.7
+     },
+     "after": {
+      "current": 340.4,
+      "anon": 334.3,
+      "file": 3.7
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 389.3,
+      "anon": 368.3,
+      "file": 3.7
+     },
+     "after": {
+      "current": 358.9,
+      "anon": 352.8,
+      "file": 3.7
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 386.7,
+      "anon": 366.3,
+      "file": 3.7
+     },
+     "after": {
+      "current": 370.1,
+      "anon": 363.6,
+      "file": 3.7
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 390.5,
+      "anon": 369.3,
+      "file": 3.7
+     },
+     "after": {
+      "current": 379.6,
+      "anon": 373.2,
+      "file": 3.7
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 397.1,
+      "anon": 376.2,
+      "file": 3.7
+     },
+     "after": {
+      "current": 382.3,
+      "anon": 376.3,
+      "file": 3.7
+     }
+    }
+   ],
+   "end": {
+    "current": 382.2,
+    "anon": 375.8,
+    "file": 3.7
+   }
+  },
+  {
+   "variant": "glibc-arena1",
+   "run": 3,
+   "rest": {
+    "current": 2.9,
+    "anon": 1.1,
+    "file": 0.4
+   },
+   "floods": [
+    {
+     "flood": 1,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 201.2,
+      "anon": 183.7,
+      "file": 0.4
+     },
+     "after": {
+      "current": 181.4,
+      "anon": 178.8,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 2,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 297.9,
+      "anon": 280,
+      "file": 0.4
+     },
+     "after": {
+      "current": 286.7,
+      "anon": 283.9,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 3,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 357.5,
+      "anon": 340,
+      "file": 0.4
+     },
+     "after": {
+      "current": 343.1,
+      "anon": 340,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 4,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 389.8,
+      "anon": 371.8,
+      "file": 0.4
+     },
+     "after": {
+      "current": 374.9,
+      "anon": 371.9,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 5,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 401.2,
+      "anon": 383.6,
+      "file": 0.4
+     },
+     "after": {
+      "current": 390.9,
+      "anon": 387.5,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 6,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 415.1,
+      "anon": 397.1,
+      "file": 0.4
+     },
+     "after": {
+      "current": 395.7,
+      "anon": 392.9,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 7,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 415.3,
+      "anon": 397.6,
+      "file": 0.4
+     },
+     "after": {
+      "current": 400.6,
+      "anon": 397.6,
+      "file": 0.4
+     }
+    },
+    {
+     "flood": 8,
+     "opened": 4000,
+     "closedByServer": 0,
+     "held": {
+      "current": 422.4,
+      "anon": 404.7,
+      "file": 0.4
+     },
+     "after": {
+      "current": 407.5,
+      "anon": 403.4,
+      "file": 0.4
+     }
+    }
+   ],
+   "end": {
+    "current": 403.2,
+    "anon": 400.5,
+    "file": 0.4
+   }
+  }
+ ]
+}

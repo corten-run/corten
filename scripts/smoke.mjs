@@ -1515,14 +1515,15 @@ async function run(browser) {
   );
   // The message already says Acme from the keyed form, so the check waits for this post's own
   // answer: otherwise a slow post (Firefox) is still going out during the next check, which
-  // counts the posts it sees (#161).
+  // counts the posts it sees (#161). It waits 15 s, past the 5 s most of the smoke's waits take,
+  // because a loaded Firefox has taken over 4 s to answer this post (#1149).
   const viaButton = page
-    .waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 4000 })
+    .waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 15_000 })
     .then(async (r) => (await r.finished(), r.status()))
     .catch(() => 0);
   await page.click("#via-button button");
   const viaButtonStatus = await viaButton;
-  await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"), null, { timeout: 4000 }).catch(() => {});
+  await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"), null, { timeout: 15_000 }).catch(() => {});
   check(
     "a submit button's formaction and formmethod are used",
     viaButtonStatus === 200 && ((await page.textContent("#watch-message")) ?? "").startsWith("Watching Acme Corp"),
@@ -1739,9 +1740,16 @@ async function run(browser) {
   // A data-patch form's submit marks the button that sent it busy with the form, one outside the
   // form (`form=`) too, until the answer is drawn; a newer submit by another button takes the
   // marks, and the first button's goes (#1063).
+  // A's read is answered only once B's marks are read, so B replaces a read still on its way.
+  /** @type {() => void} */
+  let answerA = () => {};
+  /** @type {Promise<unknown>} */
+  let heldA = Promise.resolve();
+  const holdA = () => (heldA = new Promise((resolve) => (answerA = () => resolve(undefined))));
+  holdA();
   await page.route("**/busy-read*", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 600));
     const by = new URL(route.request().url()).searchParams.get("by");
+    if (by === "a") await heldA;
     await route.fulfill({ headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body: `<p id="busy-said">read ${by}</p>` }).catch(() => {});
   });
   await page.evaluate(() =>
@@ -1751,10 +1759,22 @@ async function run(browser) {
     ),
   );
   const busyMarks = () => page.evaluate(() => ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
-  await page.click("#busy-a");
-  const whileA = await busyMarks();
-  await page.click("#busy-b");
-  const whileB = await busyMarks();
+  // Each click and the read of the marks in one task: the marks are moved by the submit itself,
+  // not by A's read settling later (#1108).
+  /** @param {string} id */
+  const clickAndMarks = (id) =>
+    page.evaluate((id) => {
+      document.getElementById(id)?.click();
+      return ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
+    }, id);
+  let whileA = "";
+  let whileB = "";
+  try {
+    whileA = await clickAndMarks("busy-a");
+    whileB = await clickAndMarks("busy-b");
+  } finally {
+    answerA();
+  }
   await page.waitForFunction(() => document.querySelector("#busy-said")?.textContent === "read b", null, { timeout: 5000 }).catch(() => {});
   const busyAfter = await busyMarks();
   check(
@@ -1762,6 +1782,31 @@ async function run(browser) {
     whileA === "true,true,-" && whileB === "true,-,true" && busyAfter === "-,-,-",
     `${whileA} | ${whileB} | ${busyAfter}`,
   );
+  // A navigation abandons a read on its way, which drops its marks at once, not when its own code
+  // next runs (#1108). The page navigates to its own address, so the check stays on this page.
+  const abandonName = "a submit a navigation abandons drops its marks at once";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(abandonName, "without the Navigation API a navigation is a full load");
+  else {
+    holdA();
+    /** @type {string[]} */
+    let abandoned = [];
+    try {
+      abandoned = await page.evaluate(() => {
+        const marks = () => ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
+        document.getElementById("busy-a")?.click();
+        const before = marks();
+        /** @type {any} */ (window).navigation.navigate(location.pathname + location.search);
+        return [before, marks()];
+      });
+    } finally {
+      answerA();
+    }
+    // The checks after this one draw into <main>, so this one fails if the page has not swapped.
+    const swapped = await page
+      .waitForFunction(() => !document.getElementById("busy-said") && !document.querySelector("main")?.hasAttribute("aria-busy"), null, { timeout: 10000 })
+      .then(() => true, () => false);
+    check(abandonName, swapped && abandoned[0] === "true,true,-" && abandoned[1] === "-,-,-", `${abandoned.join(" -> ")}${swapped ? "" : ", the page did not swap within 10 s"}`);
+  }
   await page.unroute("**/busy-read*");
   await page.evaluate(() => ["busy-form", "busy-said", "busy-a", "busy-b"].forEach((id) => document.getElementById(id)?.remove()));
 
@@ -1804,8 +1849,12 @@ async function run(browser) {
     `${whileWrite} | ${afterWrites}`,
   );
   const redirectName = "a write that sends the browser to another page keeps its button busy until that page is in";
+  // The feed sources before the write: a write that swaps the page in brings the component a new one.
+  const feedsBeforeGo = (await feedSources()).length;
+  let goSwapped = false;
   if (!(await page.evaluate(() => "navigation" in window))) skip(redirectName, "without the Navigation API the browser loads that page in full");
   else {
+    goSwapped = true;
     await page.click("#busy-wgo");
     const goBusy = await page.evaluate(() => /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"));
     await page
@@ -1827,7 +1876,20 @@ async function run(browser) {
   // The sector links beside <main> are marked `page`: each navigation brings the page's.
   const sectors = () => page.$$eval("#sector-nav a", (links) => links.length);
   check("a layout element marked page is the page's: no sector links outside the news", (await sectors()) === 0);
-  check("one feed stream while the component is on the page", (await openFeeds()) === 1);
+  // When the page has just swapped back to /, its component may not have opened its feed yet and
+  // the one it left may not be closed, so the state is awaited rather than read once (#1134): the
+  // newest feed source open, every earlier one closed, and a new one if the page was swapped in.
+  const oneFeed = await page
+    .waitForFunction(
+      (/** @type {number} */ min) => {
+        const feeds = /** @type {EventSource[]} */ ((/** @type {any} */ (window)).__sources.filter((/** @type {EventSource} */ s) => s.url.includes("/feed/")));
+        return feeds.length >= min && feeds.at(-1)?.readyState !== EventSource.CLOSED && feeds.slice(0, -1).every((s) => s.readyState === EventSource.CLOSED);
+      },
+      Math.max(1, feedsBeforeGo + (goSwapped ? 1 : 0)),
+      { timeout: 5000 },
+    )
+    .then(() => true, () => false);
+  check("one feed stream while the component is on the page", oneFeed, `${await openFeeds()} open of ${JSON.stringify(await feedSources())}, ${feedsBeforeGo} before the write, ${goSwapped ? "swapped in" : "not swapped"}`);
   // The news page's disclaimer is in an area (Area::components): its stylesheet loads before the page is
   // swapped in, so the note is styled the moment it joins the page.
   await page.evaluate(() => {
@@ -2707,6 +2769,21 @@ async function run(browser) {
     const scripted = { id: await scriptPage.inputValue("#alert-form select"), above: await scriptPage.inputValue("#alert-form input[name=above]") };
     check("back to a page puts back what the user chose and not a value a script set", scripted.id === "SOLR" && scripted.above === "", JSON.stringify(scripted));
     await scriptPage.context().close();
+    // A value a script set and then dispatched input and change for, as a typed field sends, is.
+    const toldPage = await changed((body) => body);
+    await toldPage.evaluate(() => {
+      const above = /** @type {HTMLInputElement} */ (document.querySelector("#alert-form input[name=above]"));
+      above.value = "7";
+      above.dispatchEvent(new Event("input", { bubbles: true }));
+      above.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await toldPage.click('header nav a[href="/news"]');
+    await toldPage.waitForFunction(() => document.title === "News | Watchlist");
+    await toldPage.goBack();
+    await toldPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form") && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const told = await toldPage.inputValue("#alert-form input[name=above]");
+    check("back to a page puts back a value a script set and dispatched input and change for", told === "7", told);
+    await toldPage.context().close();
     // A form with a control named like one of a form's own methods is still read by the form's:
     // leaving it swaps the page in and Back puts back what was typed. (Playwright's own select
     // and checks call getAttribute on the form, so only the text field is typed in, by keys.)
@@ -2868,6 +2945,7 @@ async function run(browser) {
       "back to a page puts back a checkbox and a radio, and leaves a select whose options changed and a checkbox whose value changed as the server draws them",
       "back to a page puts back no file, the other fields before the page's elements connect",
       "back to a page puts back what the user chose and not a value a script set",
+      "back to a page puts back a value a script set and dispatched input and change for",
       "back to a page puts back what was typed in a form with a control named getAttribute",
       "back to a page puts back what was typed in more fields than are looked up one by one",
       "back to a page puts back what was typed there after a link the server sent elsewhere",
