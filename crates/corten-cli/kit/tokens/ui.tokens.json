@@ -24,6 +24,7 @@
   "border": { "$type": "color", "$value": { "colorSpace": "srgb", "components": [0.9059, 0.898, 0.8941], "hex": "#e7e5e4" } },
   "input": { "$type": "color", "$value": { "colorSpace": "srgb", "components": [0.5686, 0.5412, 0.5216], "hex": "#918a85" } },
   "ring": { "$type": "color", "$value": { "colorSpace": "srgb", "components": [0.7059, 0.2784, 0.1216], "hex": "#b4471f" } },
+  "tab-selected-color": { "$type": "color", "$value": "{foreground}" },
   "radius": { "$type": "dimension", "$value": { "value": 0.625, "unit": "rem" } },
   "control-height": { "$type": "dimension", "$value": { "value": 2.25, "unit": "rem" } },
   "control-height-sm": { "$type": "dimension", "$value": { "value": 2, "unit": "rem" } },
@@ -35,6 +36,8 @@
   "control-width-lg": { "$type": "dimension", "$value": { "value": 24, "unit": "rem" } },
   "card-padding": { "$type": "dimension", "$value": { "value": 1.5, "unit": "rem" } },
   "card-heading-font-size": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } },
+  "choice-list-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } },
+  "choice-list-legend-gap": { "$type": "dimension", "$value": { "value": 0.75, "unit": "rem" } },
   "stat-label-font-size": { "$type": "dimension", "$value": { "value": 0.875, "unit": "rem" } },
   "stat-label-font-weight": { "$type": "fontWeight", "$value": 500 },
   "stat-label-tracking": { "$type": "number", "$value": 0 },
@@ -42,6 +45,7 @@
   "stat-value-font-size-narrow": { "$type": "dimension", "$value": { "value": 1.25, "unit": "rem" } },
   "stat-value-font-weight": { "$type": "fontWeight", "$value": 600 },
   "stat-value-tracking": { "$type": "number", "$value": -0.01 },
+  "tab-font-weight": { "$type": "fontWeight", "$value": 500 },
   "toasts-inset-bottom": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } },
   "$extensions": { "run.corten": { "breakpoints": { "wide": { "value": 40, "unit": "rem" } } } }
 }

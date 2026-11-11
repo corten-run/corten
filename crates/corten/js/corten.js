@@ -2529,9 +2529,10 @@ navigation?.addEventListener("currententrychange", () => {
 });
 
 /**
- * The fields the user typed or chose in (`input`, `change`) since `<main>` was drawn, and those
- * the runtime gave the user's state back to: the only ones `remember` reads, so leaving a page of
- * many fields costs nothing for those left as drawn. A value a script sets fires neither.
+ * The fields an `input` or `change` was seen on (the user's, or one a script dispatched) since
+ * `<main>` was drawn, and those the runtime gave the user's state back to: the only ones
+ * `remember` reads, so leaving a page of many fields costs nothing for those left as drawn. A
+ * value a script sets fires neither unless the script dispatches them.
  * @type {Set<Element>}
  */
 const typedFields = new Set();
@@ -2762,7 +2763,6 @@ async function send(form, submitter, sends) {
     return;
   }
   if (previous?.key === key) return;
-  previous?.controller.abort();
   const sent = sentState(form);
   const controller = new AbortController();
   const { signal } = controller;
@@ -2771,6 +2771,11 @@ async function send(form, submitter, sends) {
   // ends.
   const mine = {};
   const busy = submitter ? [form, submitter] : [form];
+  // Cleared at once when it is abandoned (a newer submit of the form, a navigation), not when its
+  // own code next runs, after its fetch rejects or once what it waits on to draw has loaded (#1108).
+  signal.addEventListener("abort", () => {
+    for (const el of busy) if (busyBy.get(el) === mine) formCall(el, "removeAttribute", "aria-busy");
+  });
   const pending = { key, controller, write: method !== "GET", next: /** @type {HTMLElement | null | undefined} */ (undefined), mine, busy, by: submitter };
   const leftAt = left;
   submits.set(form, pending);
@@ -2785,6 +2790,9 @@ async function send(form, submitter, sends) {
     init.headers = { corten: "action", "content-type": plain ? "text/plain" : "application/x-www-form-urlencoded" };
   }
   for (const el of busy) busyBy.set(el, mine), formCall(el, "setAttribute", "aria-busy", "true");
+  // The submit this one replaces ends once this one holds the marks they share, so the form and a
+  // button sending again are not cleared and marked again.
+  previous?.controller.abort();
   // A write can change any page, so nothing fetched before it is reused, nor anything prefetched
   // while it was on its way (which may predate it, or use up a notice it sets).
   const forget = () => {

@@ -19,6 +19,17 @@ test("every app with pages has a recipe, and every recipe an app", () => {
   assert.deepEqual(Object.keys(recipes).sort(), pageApps.sort());
 });
 
+test("a matched round builds Next.js as the tier's image is built, with the Dockerfile's arguments", () => {
+  const nextjsEnv = (/** @type {Record<string, string>} */ env) => {
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", 'const b = await import("./builds.mjs"); console.log(JSON.stringify(b.recipes.nextjs.env))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "BENCH_TIER" && k !== "BENCH_APPS" && k !== "BENCH_EDGE")), ...env } });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  assert.deepEqual(nextjsEnv({}), { NEXT_TELEMETRY_DISABLED: "1" });
+  const dockerfile = readFileSync(join(repo, "bench/fullstack/apps/nextjs/Dockerfile"), "utf8");
+  assert.deepEqual(nextjsEnv({ BENCH_TIER: "matched" }), { NEXT_TELEMETRY_DISABLED: "1", PROFILE: "matched", EDGE_HOST: /^ARG EDGE_HOST=(\S+)$/m.exec(dockerfile)?.[1] });
+});
+
 test("the apps that build first are the ones with a development build", () => {
   assert.deepEqual([...compiledFirst].sort(), Object.keys(recipes).filter((n) => recipes[n].dev).sort());
 });
@@ -63,18 +74,36 @@ test("the source image starts from the toolchain and copies the context", () => 
   assert.match(sourceDockerfile("gin"), /^FROM bb-tools-gin\nRUN apk add [^\n]+\nWORKDIR \/src\nCOPY \. \.\n$/);
 });
 
-test("each app's edited file is touched by its own name, whatever the shell would read in it", { skip: spawnSync("bash", ["-c", "true"]).status !== 0 && "no bash here" }, () => {
+// Whether bash runs, asked twice: on Windows it is a WSL start, which can fail once under load.
+const hasBash = () => spawnSync("bash", ["-c", "true"]).status === 0 || spawnSync("bash", ["-c", "true"]).status === 0;
+
+test("each app's edited file is touched by its own name, whatever the shell would read in it", { skip: !hasBash() && "no bash here" }, () => {
   const dir = mkdtempSync(join(tmpdir(), "corten-touch-"));
-  for (const [name, r] of Object.entries(recipes)) {
+  const apps = Object.entries(recipes);
+  // One bash for every app, each in a subshell in its own directory, as a step runs, with a path
+  // relative to it: on Windows each bash is a WSL start, and one per app is the probable cause of
+  // the test failing now and then under load, exiting 1 with nothing on stderr. Each app's name is
+  // printed before its commands, so one whose quoting breaks the script's parse is the last named.
+  // The script is on stdin: Windows passes a command line on to WSL's bash changed.
+  let script = "echo started\n";
+  for (const [name, r] of apps) {
     const file = join(dir, name, r.edit);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, "x");
     utimesSync(file, 1, 1);
-    // bash in the app's directory, as a step runs, with a path relative to it.
-    // On stdin: Windows passes a command line on to bash (WSL's) changed.
     const where = join(dir, name).replace(/\\/g, "/");
-    const run = spawnSync("bash", ["-s"], { input: `cd '${where}' 2>/dev/null || cd "$(wslpath '${where}')" || exit 9\n${touchThen(r.edit, "true")}\n`, encoding: "utf8" });
-    assert.equal(run.status, 0, `${name}: ${run.stderr}`);
+    script += `echo "app ${name}"\n(cd '${where}' 2>/dev/null || cd "$(wslpath '${where}')" || exit 9\n${touchThen(r.edit, "true")}\n) || echo "failed ${name} $?"\n`;
+  }
+  let run = spawnSync("bash", ["-s"], { input: script, encoding: "utf8" });
+  // A bash that never ran the script (no "started") is asked once more, which only covers a
+  // failed start (the probable cause of the failures, not confirmed); a failed touch is not.
+  if (!/^started$/m.test(run.stdout)) run = spawnSync("bash", ["-s"], { input: script, encoding: "utf8" });
+  assert.match(run.stdout, /^started$/m, `bash did not start (status ${run.status}): ${run.stderr}`);
+  const last = [...run.stdout.matchAll(/^app (.+)$/gm)].at(-1)?.[1] ?? "its start, before any app";
+  assert.equal(run.status, 0, `the script stopped at ${last}: ${run.stdout}${run.stderr}`);
+  for (const [name, r] of apps) {
+    const file = join(dir, name, r.edit);
+    assert.doesNotMatch(run.stdout, new RegExp(`^failed ${name} `, "m"), `${name}: ${run.stdout}${run.stderr}`);
     assert.ok(statSync(file).mtimeMs > 1000, `${name}: ${r.edit} was not touched`);
     assert.deepEqual(readdirSync(dirname(file)), [r.edit.split("/").at(-1)], `${name}: the touch made another file`);
   }

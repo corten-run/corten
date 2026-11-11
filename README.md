@@ -30,7 +30,7 @@ AI agents.
   so a page works before its scripts load, and without them.
 - **Plain JavaScript where it is fastest.** Behavior is a function in a script next to its
   component, called from the markup by name. No WASM, no virtual DOM, no hydration.
-  A 14.7 KB (gzip) runtime.
+  A 14.2 KB (gzip) runtime.
 - **Partial updates from the same handler.** A form marked `data-patch` gets back only the
   elements that changed; without JavaScript the same handler answers with the whole page.
 - **Live data.** `<corten-live>` fragments and keyed feeds stream numbered patches over
