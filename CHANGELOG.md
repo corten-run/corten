@@ -4386,6 +4386,19 @@ Corten is pre-1.0, so any minor version may change the API.
     one) takes `stack.rs` and `stack.css` ([#1126 Kit StackStart compiles alone or beside a Cluster
     and does nothing there, since it is a class beside Stack's rather than an option of the
     look](https://github.com/corten-run/corten/issues/1126)).
+175. The watchlist smoke's seven submit-queue cases each wait for their own outcome (the
+    patch drawn, the form gone, the `corten:error`, the older read's late answer tried) and then
+    700 ms, in which a send the queue must not make would be seen, where each waited 2.5 seconds
+    for a `corten:error` that six of them never get. The fixture holds each case's first answer
+    until its second press is made, so the press meets the first submit still out however slow it
+    is, and the six cases with no error now check that none came. The queue's checks take 10 to 13
+    seconds per browser where they took 21.4 to 22 (the smoke's own times for the section: Firefox
+    11.3 to 12.7 against 21.9 to 22.0, four runs and three, alternated; Chromium 10.1 and 10.9
+    against 21.4 twice, WebKit 12.0 against 21.5 twice). A runtime that drew an aborted read, sent
+    after a 5xx, a 409 or a removed form, or kept the old submit key still fails the same checks
+    (c65c10ec's runtime with those rules taken out, in Chromium and Firefox), and the aborted read
+    is now checked to have been cancelled in the browser and not only to be undrawn
+    ([#1087 Watchlist queue smokes wait for a 2.5-second error timeout on six non-error outcomes](https://github.com/corten-run/corten/issues/1087)).
 177. An integer of 100 or more that markup or a message writes (`{count}`) goes into the page two
     digits at a time, one `push_str` of a pair from a table in place of one `push` a digit. The
     text is unchanged. Measured with callgrind (release build, three alternated runs each, 500
@@ -4433,9 +4446,17 @@ Corten is pre-1.0, so any minor version may change the API.
 - A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
   feed load, relay or JetStream consumer, is logged as the error itself, so Corten's log line
   adds each source's message (`error.sources`): an HTTP client's "error sending request" now
-  names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
-  message
+  names the reset or timeout beneath it
   ([#1127 Benchmark r17: Corten returns two HTTP 500s fetching upstream during page load](https://github.com/corten-run/corten/issues/1127)).
+- A streamed download's failed chunk (`Media::stream`, `Media::stream_sized`) is logged as the
+  error itself too, each cause under its message, where it was logged by its message alone. A
+  chunk's error is now anything `Error::new` takes, `Into<Box<dyn std::error::Error + Send +
+  Sync>>`, where it was any `Display + Send`: an error type, a `String`, a `&str` or a
+  `corten::Error` compiles as before, the last now logged as the error it holds (`corten::Error`
+  converts into that box). Breaking: a chunk error of the app's that only implements `Display`, or
+  is not `Sync`, does not compile; implement `std::error::Error` for it, or map it with
+  `.map_err(|e| e.to_string())`, which logs the message alone
+  ([#1153 A streamed download's failure is logged by its message alone: Media::stream takes E: Display, not E: Error](https://github.com/corten-run/corten/issues/1153)).
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
   flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
@@ -6136,6 +6157,26 @@ Corten is pre-1.0, so any minor version may change the API.
     the gallery built from this change and from the commit it was merged onto, 71c0361a. Found by
     the Chase Sets pilot, which set `margin: auto` on its reviews page's dialog
     ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
+199. A handler call in the markup takes any number of arguments, where one with more than 12 did not
+    compile and named a private `Args` trait. A call of up to 12 is the tuple it was; past 12 the
+    generated call holds two halves, each a tuple or two halves again, so its nesting grows with the
+    logarithm of the count and stays far inside the compiler's recursion limit. Each argument is
+    checked against its parameter as before (a `compile_fail` doctest passes a number for the
+    fourteenth of sixteen, and a test builds that call and checks the error is Corten's, at the
+    argument, with no headline about `Args` or `Both`), the markup written is the same, and a
+    doctest checks every argument of a call of 25 (twelve, then halves of six and seven) in its
+    place. A call of 12 or fewer generates the same tokens as before, so an app with no longer call
+    compiles as it did. Measured with callgrind (release build, instructions per render as 1,200
+    renders less 200 over 1,000, three runs of each build, the before build's runs first, ranges
+    over the runs; before is c65c10ec with this change's two cost tests and `Wide` added, after is
+    the change built on it): a component with two handler calls, of one and three arguments
+    (`script::tests::what_a_handler_call_costs`), 2,696 (2,695.9 to 2,696.1) then 2,696 (2,695.9 to
+    2,697.3); one with a call of 12 (`what_a_long_handler_call_costs`), 4,569 (4,568.9 to 4,569.0)
+    then 4,610 (4,609.9 to 4,610.0) in a test binary that also builds the 16-argument component,
+    and 4,569 (4,569.0 to 4,569.1, two runs) with that component left out. So a call of 12 drew 41
+    instructions more (0.9%) in a binary that also has a longer call; what in that binary causes it
+    was not isolated
+    ([#1100 JavaScript handler bindings have an undocumented 12-argument ceiling and expose a private Args error](https://github.com/corten-run/corten/issues/1100)).
 222. `bench/fullstack/builds.test.mjs`'s touch test runs every app's touch in one bash, each in a
     subshell in the app's directory, where it started a bash per app: on Windows each is a WSL
     start, and the test failed now and then under load with `1 !== 0` and nothing on stderr. A
