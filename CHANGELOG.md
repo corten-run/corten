@@ -6,6 +6,15 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- Static files with `mp4`, `webm` and `vtt` names are sent as `video/mp4`, `video/webm` and
+  `text/vtt`, and a `GET` of a versioned URL, this version's or an old one's, for a file sent as it
+  is stored answers a single byte `Range` with a `206` (a bare `416` past its end, the whole file
+  for several ranges, a `HEAD` or the favicon), honoring `If-Range` for its strong ETag, so a
+  native `<video>` with captions plays and seeks from `embed!`; the PWA's service worker leaves a
+  range, and the video or audio a player loads, to the network. Card market's `/grading` page
+  shows a captioned clip, linked from each category; it is an area with its own stylesheet, so the
+  pages and the components' stylesheet the benchmark compares are unchanged
+  ([#1133 Serve embedded video and caption assets with standard MIME types and byte-range responses](https://github.com/corten-run/corten/issues/1133)).
 - `Policy::frame_ancestors` and `Sources::frame_ancestors` let the sites they name show the
   pages in a frame, the app's or an area's only, which no site may by default; such a page is sent
   no `X-Frame-Options`, or `SAMEORIGIN` for `'self'` alone, and keeps its `frame-ancestors`

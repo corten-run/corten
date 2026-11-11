@@ -3,7 +3,7 @@ use corten::{Component, prelude::*};
 
 use std::sync::Arc;
 
-use crate::{model::ItemView, routes, source::Shelf, text::Msg, theme};
+use crate::{grading, model::ItemView, routes, source::Shelf, text::Msg, theme};
 
 corten::assets::embed! {
     /// The files in `static/`, compiled into the program: `Static::STYLE_CSS` is `static/style.css`.
@@ -11,6 +11,7 @@ corten::assets::embed! {
 }
 
 mod alert;
+mod condition_guide;
 mod item_card;
 mod item_detail;
 mod item_list;
@@ -20,6 +21,7 @@ mod price;
 mod site_header;
 
 pub use alert::{AlertForm, AlertFormView, AlertMessage};
+pub use condition_guide::ConditionGuide;
 pub use item_card::ItemCard;
 pub use item_detail::{ItemDetail, ItemPage};
 pub use item_list::ItemList;
@@ -64,6 +66,7 @@ pub fn category<'a>(req: &'a Req, t: Msg, title: &'a str, items: &'a [Arc<ItemVi
     html! {
         <h1>{title}</h1>
         if !items.is_empty() { <ItemList req={req} t={t} shelf={Shelf::Items(items)} /> }
+        <p><a href={grading::Grading}>{t.grading_title()}</a></p>
         <p><a href={routes::Home}>{t.category_back()}</a></p>
     }
 }

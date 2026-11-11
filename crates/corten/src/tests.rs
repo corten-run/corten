@@ -10819,6 +10819,44 @@ async fn the_favicon_path_is_the_static_directory_s_icon() {
     }
 }
 
+/// Through the app, a range of a static file's versioned URL is the bytes asked for and a range
+/// past its end is a bare 416 naming the file's length, not the app's error page, whatever the
+/// client accepts; the favicon's URL, which may name other bytes after a deploy, is sent whole
+/// (#1133).
+#[tokio::test]
+async fn a_range_through_the_app_is_answered_as_the_file_server_answers_it() {
+    let router = App::new(policy_url::router()).assets(RefusedStatic).error_page(asset_error_page, ()).router();
+    let bytes = &include_bytes!("assets/fixture/style.css")[..];
+    // The stylesheet's versioned URL, from the error page its layout draws.
+    let refused = Request::post("/")
+        .header("origin", "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let page = router.clone().oneshot(refused).await.unwrap().into_body().collect().await.unwrap().to_bytes();
+    let page = String::from_utf8(page.to_vec()).unwrap();
+    let href = page.split(r#"<link rel="stylesheet" href=""#).nth(1).and_then(|rest| rest.split('"').next()).unwrap();
+    let ranged = |url: &str, range: &'static str| {
+        let req = Request::get(url).header(header::RANGE, range).header(header::ACCEPT, "text/html");
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    let part = ranged(href, "bytes=2-3").await.unwrap();
+    assert_eq!(part.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(part.headers()[header::CONTENT_RANGE], format!("bytes 2-3/{}", bytes.len()));
+    assert_eq!(&part.into_body().collect().await.unwrap().to_bytes()[..], &bytes[2..4]);
+    let past = ranged(href, "bytes=100-").await.unwrap();
+    assert_eq!(past.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(past.headers()[header::CONTENT_RANGE], format!("bytes */{}", bytes.len()));
+    assert!(past.into_body().collect().await.unwrap().to_bytes().is_empty(), "no error page");
+    let icon = App::new(policy_url::router()).assets(IconStatic).router();
+    let req = Request::get("/favicon.ico").header(header::RANGE, "bytes=2-3").body(Body::empty()).unwrap();
+    let whole = icon.oneshot(req).await.unwrap();
+    assert_eq!(whole.status(), StatusCode::OK, "the favicon's URL is sent whole");
+    let icon_bytes = &include_bytes!("assets/favicon-ico/favicon.ico")[..];
+    assert_eq!(whole.into_body().collect().await.unwrap().to_bytes().len(), icon_bytes.len());
+}
+
 /// An API at `/` leaves `/favicon.ico` to Corten, the icon or the empty 404 whatever the client
 /// accepts, unless the API has a route there (#1056).
 #[tokio::test]
