@@ -7,6 +7,23 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no
+  longer closes a tunnel once the timeout has passed from when it opened, whether it is carrying
+  traffic or idle: as on a WebSocket, idle limits on the tunnel are the route's, and
+  `App::send_timeout` still ends a write that waits on it. A refused `CONNECT` is an answer like
+  any other, closed once idle past the timeout. Before, the tunnel's empty `200` marked the
+  connection idle at once, and a downstream proxy measured hundreds of streams cut at 29 to 31 s
+  under the default 30 s
+  ([#1218 A CONNECT answered 2xx goes idle like a plain answer, so the header timeout cuts the tunnel mid-stream (only a 101 stays busy)](https://github.com/corten-run/corten/issues/1218)).
+- Each TCP connection Corten accepts (`serve`, and `serve_on` or `serve_wrapped` with tokio's
+  `TcpListener`) has Nagle's algorithm off (`TCP_NODELAY`), as Go's `net/http` and nginx do, so
+  a feed's patches or a live element's fragments made one after another are no longer held for
+  the acknowledgement of the last one. Through nginx with the app in a container of its own, the
+  second of ten small events made back to back on a reused connection came 42.5 and 43.0 ms (the
+  medians of two runs) after the first, the other eight with it; with the option set, -0.1 ms,
+  and a request costs the same instructions; a listener of the app's own keeps its choice (design
+  Choice 41, `bench/nodelay`)
+  ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
 - The MCP endpoint (`agent::Tools`) answers a request whose `MCP-Protocol-Version` header names a
   revision it does not speak, or that sends the header twice, with `400 Bad Request` and a JSON-RPC
   error with no `id` (`-32600`), before it reads the message or checks the token, as MCP

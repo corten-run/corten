@@ -980,9 +980,13 @@ impl<M: Middleware> App<M> {
     /// before [`serve`] closes it: 30 seconds unless set, from when the connection opens or its
     /// last answer was sent. A client that opens connections and never finishes a request
     /// cannot hold them, and an idle keep-alive connection is closed after it too. A request
-    /// whose head has arrived is not bounded by it: a long upload, a live stream and a WebSocket
-    /// are the [deadline](App::deadline)'s and their own, with [`App::send_timeout`] for their
-    /// writes. `None` removes it, for a server that only a proxy which buffers heads reaches.
+    /// whose head has arrived is not bounded by it: a long upload and a live stream are the
+    /// [deadline](App::deadline)'s and their own, with [`App::send_timeout`] for their writes. A
+    /// connection that switches (a WebSocket's `101`, or a tunnel's `2xx` to `CONNECT`) is the
+    /// route's: neither this nor the deadline, which covers only the handler, bounds it, and
+    /// [`App::send_timeout`] bounds only a write that waits, so how long one may sit idle is the
+    /// route's to decide. `None` removes it, for a server that only a proxy which buffers heads
+    /// reaches.
     pub fn header_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
         self.connections.header_timeout = timeout.into();
         self
@@ -1022,6 +1026,9 @@ impl<M: Middleware> App<M> {
     /// The most connections [`serve`] holds open at once, across its listeners (no limit unless
     /// set). At the limit it accepts no more until one closes; the operating system queues the
     /// rest. Bounds what many idle or slow clients can hold of the process's sockets and memory.
+    /// A switched connection (a WebSocket after its `101`, a tunnel after a `2xx` to `CONNECT`)
+    /// stops counting once it switches, so the cap does not bound those; a route that accepts
+    /// them limits them itself (`docs/design.md#limit-protocol-switch`).
     pub fn max_connections(mut self, max: usize) -> Self {
         assert!(max > 0, "corten: max_connections is at least 1");
         self.connections.max = Some(max);
@@ -1886,12 +1893,13 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
         // Marks a read of the body that waits for the client, for the deadline (#1061).
         let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
+        let connect = req.method() == http::Method::CONNECT;
         if let Some(bound) = &self.bound {
             bound.arrived();
         }
         let call = tower_service::Service::<Request>::call(&mut self.router, req);
         let inner = crate::client::WithPeer::new(self.peer, self.bound.clone(), call);
-        crate::watch::Answer { inner, watch }
+        crate::watch::Answer { inner, watch, connect }
     }
 }
 
