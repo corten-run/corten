@@ -222,8 +222,6 @@ const NOTICE_GONE: [&[u8]; 2] = [b"__Host-corten-notice=;", b"corten-notice=;"];
 /// of a shared one when the response may differ between users.
 pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     // One lookup for the usual response, which says nothing.
-    // `personal`: what an answer that may differ between users is sent instead of a header that
-    // would let a cache keep it.
     match res.headers_mut().entry(header::CACHE_CONTROL) {
         header::Entry::Vacant(entry) => {
             entry.insert(PRIVATE);
