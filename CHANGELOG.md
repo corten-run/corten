@@ -25,6 +25,17 @@ Corten is pre-1.0, so any minor version may change the API.
   Choice 41, `bench/nodelay`)
   ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
 
+### Documentation
+
+- `npm run check` fails on a commit cited in backticks in `docs/`, `README.md` or
+  `CONTRIBUTING.md` that the clone does not have, naming its file, line and commit and the fetch
+  that brings the evidence tags (`refs/tags/evidence/<sha>`, which keep cited commits no branch
+  has); a shallow clone fails once, saying to fetch the whole history. CI's `npm-check` group
+  checks out the whole history, and with it every tag. Another repository's commit is written
+  `owner/repo@sha`, as GitHub writes one, and `scripts/choices.mjs` takes that form as a Last
+  checked commit
+  ([#1219 Twelve commits design.md cites as evidence for Choices 25, 26 and 38 and Limit 21 are not on GitHub, so their numbers cannot be taken again](https://github.com/corten-run/corten/issues/1219)).
+
 ## 0.2.0 (2026-11-11)
 
 The first release of all seven crates, published together by the Release workflow. The main crate's
