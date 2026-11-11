@@ -4382,6 +4382,13 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
 ### Fixed
+- The ui-gallery smoke's check that keyboard focus never lands under a dialog's or sheet's sticky
+  header now reads a focused row only after it has held its place for two animation frames (at
+  most 120). WebKit scrolls a focused row into view over a few frames, and a row read mid-scroll
+  sat up to 28 px under the header before settling 248 px below it, so the check failed about once
+  in 30 runs on a branch that did not touch it. It waits on frames, not a timer, and a row still
+  moving after 120 frames fails the check rather than being read as settled
+  ([#1150 The ui-gallery smoke's WebKit 'focus never under it' check fails now and then on a change that does not touch the kit](https://github.com/corten-run/corten/issues/1150)).
 - The watchlist smoke waits up to 5 seconds, after the page swaps back to `/`, for the newest feed
   stream to be open and every earlier one closed, and prints the streams it saw, rather than
   counting them once right after the swap, when the new page's stream may not be opened yet or the
