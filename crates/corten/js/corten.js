@@ -626,8 +626,8 @@ const connected = new Set();
 
 /**
  * Wires the markup under `root`: imports the modules its handlers name, listens for their events
- * and runs `on:connect` handlers. The names of the refs in it go in `names`; with none (the first
- * page, whose refs are looked up when a handler first asks for one) they are not read.
+ * and runs `on:connect` handlers. The names of the refs in it go in `names`, which the caller counts
+ * as changed; with none they are not read.
  * @param {Element} root
  * @param {Set<string> | null} names
  * @param {boolean} [inside] only what is inside `root` joined the page
@@ -3074,8 +3074,8 @@ customElements.define(
 );
 
 markCurrent();
-// The first page's ref names would go nowhere: its refs are looked up when a handler first asks for
-// one. A page of rows has thousands.
+// No names: nothing counts the first page's as changed (they went into a set nothing read), and a
+// page of rows has thousands.
 scan(document.documentElement, null);
 serve(document);
 readAgainLater();

@@ -3726,6 +3726,39 @@ async function run(browser) {
     openedState.count === "3" && openedState.modal && openedState.plain && openedState.more && openedState.pop && openedState.served === false && openedState.focused === "opened-in",
     JSON.stringify(openedState),
   );
+  // A dialog the server drew open in the page as it loaded, which the user left open: a patch that
+  // sends it closed closes it, which takes what the load recorded of it (unrecorded, the open
+  // dialog would count as the user's and stay open).
+  {
+    const loadedPage = await (await browser.newContext()).newPage();
+    const part = (/** @type {string} */ open) => `<section id="loaded-dialog-part"><dialog id="loaded-dialog"${open}><p>Sent open</p></dialog></section>`;
+    await loadedPage.route(
+      (url) => url.pathname === "/news",
+      async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        // Fetched uncompressed: Playwright does not decode zstd, which Firefox asks for.
+        const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+        const headers = res.headers();
+        delete headers["content-encoding"];
+        delete headers["content-length"];
+        await route.fulfill({ status: res.status(), headers, body: (await res.text()).replace(/(<main\b[^>]*>)/, `$1${part(" open")}`) });
+      },
+    );
+    await loadedPage.goto(`${base}/news`);
+    const loadedDialog = await loadedPage.evaluate(async (closed) => {
+      const { patch } = await import("corten");
+      const open = () => /** @type {HTMLDialogElement | null} */ (document.getElementById("loaded-dialog"))?.open;
+      const before = open();
+      await patch(__html(closed));
+      return { before, after: open() };
+    }, part(""));
+    check(
+      "a patch closes a dialog the loaded page drew open when the server sends it closed",
+      loadedDialog.before === true && loadedDialog.after === false,
+      JSON.stringify(loadedDialog),
+    );
+    await loadedPage.context().close();
+  }
   // A table with a menu on every row: a patch of it keeps the one details (found by its place in
   // its row) and the one popover (by id) the user opened, and the rest stay as the server sent them.
   const menus = await page.evaluate(async () => {
@@ -4165,7 +4198,8 @@ async function run(browser) {
         JSON.stringify({ before, swapped, after, keptErrors }),
       );
       await keptPage.context().close();
-    } else skip("a data-keep-place form with controls named closest, scrollTo, focus and the like keeps its scroll and focus through the swap", noSwaps);    // A group the server drew open in the page as it loaded, closed by the user: the swap keeps it
+    } else skip("a data-keep-place form with controls named closest, scrollTo, focus and the like keeps its scroll and focus through the swap", noSwaps);
+    // A group the server drew open in the page as it loaded, closed by the user: the swap keeps it
     // closed though the new page draws it open too, which takes what the load recorded of it.
     const loadedGroupCheck = "a data-keep-place swap keeps closed a group the loaded page drew open and the user closed";
     if (swaps) {
