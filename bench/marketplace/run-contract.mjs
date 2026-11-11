@@ -101,6 +101,55 @@ export function appStop(state, pass, phase) {
 }
 // The stop that ended a profile's passes, or null. Only the last run of a profile can have one.
 export const profileStop = (runs) => runs.find((r) => r.stopped)?.stopped ?? null;
+// Whether stop a came before stop b: an earlier pass, or an earlier load phase in the same pass.
+export const stopsEarlier = (a, b) => a.pass < b.pass || (a.pass === b.pass && loadPhases.indexOf(a.phase) < loadPhases.indexOf(b.phase));
+// A profile's cold starts lost passes to its stop only when a later pass did not run: the
+// stopped pass's cold start was measured before its load. Then its cold numbers are not three passes.
+export const coldStop = (runs, asked) => (runs.length < asked ? profileStop(runs) : null);
+
+// Steps of a load phase whose error the app's stop explains when the error came after the app
+// finished: its CPU counter and its docker stats go with its container. The stats sampler running
+// past its deadline, k6 failing to start or finish, a missing summary, or anything else does not.
+const explainedSteps = new Set(["cpu", "stats"]);
+// Docker actions on the app container that mean something other than the app ended it: the
+// harness itself does none of these to the app during a phase (remove() runs after it).
+const outsideActions = new Set(["kill", "stop", "start", "restart", "pause", "unpause"]);
+/**
+ * How a load phase ended, from what run.mjs saw after it (#1128). Returns the app's stop record
+ * when its container stopped and nothing else explains it, null when the app ran through the
+ * phase and nothing failed, and throws for anything that fails the round.
+ * @param {object} seen
+ * @param {number} seen.pass @param {string} seen.phase
+ * @param {object|null} seen.app the app container's Docker State, null when it could not be read
+ * @param {{step: string, error: Error, at: string}[]} [seen.errors] what failed during the phase, and when
+ * @param {{name: string, startedAt: string, state: object|null}[]} [seen.sidecars] containers the
+ *   phase depends on (the CPU counter sidecar, and the upstream for an API profile), with the
+ *   StartedAt recorded when each was created; read only when the app stopped
+ * @param {{action: string}[]} [seen.events] Docker events for the app container during the phase
+ * @param {object|null} [seen.summary] the phase's k6 summary, when it was saved
+ */
+export function phaseEnd({ pass, phase, app, errors = [], sidecars = [], events = [], summary = null }) {
+  const stop = app ? appStop(app, pass, phase) : null;
+  if (!stop) {
+    if (errors.length) throw errors[0].error;
+    assert.ok(app, "app container state unavailable");
+    return null;
+  }
+  const harness = `during ${phase}, and the app container stopped: a harness failure, not the app's outcome`;
+  for (const s of sidecars) assert.ok(s.state?.Running === true && s.state.StartedAt === s.startedAt, `${s.name} stopped or restarted ${harness}`);
+  assert.ok(!app.Error, `Docker reported an error for the app container (${app.Error}) ${harness}`);
+  const outside = events.find((e) => outsideActions.has(e.action));
+  assert.ok(!outside, `Docker ${outside?.action} on the app container ${harness}`);
+  // An exited container's FinishedAt; a container still running after an OOM kill explains nothing.
+  const finished = stop.exitCode === null ? Infinity : Date.parse(app.FinishedAt);
+  assert.ok(!Number.isNaN(finished), "a stopped app container has no FinishedAt");
+  const unexplained = errors.find((e) => !(explainedSteps.has(e.step) && !/exceeded its deadline/.test(e.error?.message ?? "") && Date.parse(e.at) >= finished));
+  if (unexplained) throw unexplained.error;
+  // A 200 of the wrong content type before the app stopped is still a parity failure.
+  const kind = summary?.root_group?.checks?.["marketplace content type"];
+  assert.ok(!kind?.fails, `a 200 had the wrong content type under load before the app stopped (${kind?.fails}): a parity failure, not an outcome`);
+  return stop;
+}
 // A stage's aggregate over the passes that measured it. A stage the profile's stop kept a pass
 // from (the stopped phase and those after it in that pass, every phase of the passes after it)
 // carries the stop record: the report's mark and compare.mjs's outcome come from it.

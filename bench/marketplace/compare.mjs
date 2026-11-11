@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
 import { apps } from "./contract.mjs";
-import { aggregateCold, phases, profileStop, resultSchema, roundIdentity, timedProfiles } from "./run-contract.mjs";
+import { aggregateCold, coldStop, phases, resultSchema, roundIdentity, stopsEarlier, timedProfiles } from "./run-contract.mjs";
 import { validateSummary } from "./report.mjs";
 
 const hostFields = ["cpu", "onlineCpus", "platform", "release", "node", "docker"];
@@ -49,10 +49,14 @@ export function comparisonKey(s) {
  * reference stage with an outcome in either round is left out of the cohort and named in that
  * cohort group's outcomeApps. Incompatible evidence has an empty newOutcomes.
  * Each row and cold row also has stopped {baseline, current}: the stop record (pass, phase,
- * exitCode, oomKilled) when the app's container stopped during a load phase and that stage lost
- * passes to it, else null (#1128). A stopped stage is an outcome, not a number: its row has
- * metrics null, it is in newOutcomes when the baseline's stage had no stop, and a reference app's
- * stopped stage or cold row is left out of the cohort and named in outcomeApps.
+ * exitCode, oomKilled) when the app's container stopped during a load phase and that stage, or
+ * that profile's cold starts, lost passes to it, else null (#1128). A cold start is measured before
+ * its pass's load, so cold rows lose passes only when a later pass did not run. A stopped stage or
+ * cold row is an outcome, not a number, for Corten and the references alike: it has metrics null,
+ * and a reference app's is left out of the cohort and named in outcomeApps. A stopped stage is in
+ * newOutcomes when the baseline's stage had no stop, or when the current stop is earlier than the
+ * baseline's: the stage has fewer measured passes, or the stop came in an earlier pass, or an
+ * earlier phase of the same pass.
  * Equal measurement options, fixture, CPU model/topology/placement, host software and
  * load/upstream images are required, and both summaries in a schema the reporter reads (v3 or
  * v4: a v3 round, which failed on any stopped app, compares as a v4 round with no stop). Build
@@ -107,7 +111,7 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
     if (was.stopped || now.stopped) {
       // A stage the app stopped in has fewer passes, or none: an outcome, not a comparable number.
       row.metrics = null;
-      if (!was.stopped) result.newOutcomes.push(outcome);
+      if (now.stopped && (!was.stopped || now.passes < was.passes || stopsEarlier(now.stopped, was.stopped))) result.newOutcomes.push(outcome);
     } else {
       for (const metric of ["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond", "failedRate"]) row.metrics[metric] = delta(was[metric], now[metric]);
       if (now.appOutcomes > was.appOutcomes || worse(was.failedRate, now.failedRate) || worse(was.dropped, now.dropped)) result.newOutcomes.push(outcome);
@@ -124,10 +128,12 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   }
   for (const app of comparedApps) for (const { key } of timedProfiles) {
     const was = baseline.apps[app].runs[key], now = current.apps[app].runs[key];
+    // Cold starts are measured in every pass that ran: a stop loses them only when a later pass did
+    // not run, and then they are not three passes, so no delta.
+    const stopped = { baseline: coldStop(was, 3), current: coldStop(now, 3) };
     const a = aggregateCold(was), b = aggregateCold(now);
-    // Cold starts are measured in every pass that ran; a stop leaves fewer of them.
-    result.cold.push({ app, profile: key, metrics: Object.fromEntries(Object.keys(a).map((metric) => [metric, delta(a[metric], b[metric])])),
-      stopped: { baseline: profileStop(was), current: profileStop(now) } });
+    result.cold.push({ app, profile: key, stopped,
+      metrics: stopped.baseline || stopped.current ? null : Object.fromEntries(Object.keys(a).map((metric) => [metric, delta(a[metric], b[metric])])) });
   }
   const summarizeCohort = (rows) => {
     const groups = new Map();

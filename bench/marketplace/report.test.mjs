@@ -346,10 +346,13 @@ test("an app whose container stops under load is that app's recorded outcome, an
   assert.deepEqual(p.sat64.stopped, { pass: 2, phase: "sat64", exitCode: 137, oomKilled: true });
   const text = report(s);
   const en = text.split("## en-US\n")[1].split("\n## ")[0];
-  assert.ok(en.includes("| rails (stopped: 2 of 3 passes) | 1000.00 [1000.00-1000.00] |"), "the cold starts keep the passes before the stop, marked");
-  assert.ok(en.includes("| rails (stopped: 2 of 3 passes) | 1001.00 [1001.00-1002.00] |"), "so does the fixed stage");
-  assert.ok(en.includes("| rails (stopped: 1 of 3 passes) | 1001.00 [1001.00-1001.00] |"));
-  assert.ok(en.includes("App stopped: rails fixture-en-US-page sat64: its container was OOM-killed at its 1 GiB limit (exit code 137) during sat64 in pass 2."));
+  // fewer than three passes say what the number is: of two the lower pass, of one that pass
+  assert.ok(en.includes("| rails (stopped: 2 of 3 passes; the lower pass, not a median) | 1000.00 [1000.00-1000.00] |"), "the cold starts keep the passes before the stop, marked");
+  assert.ok(en.includes("| rails (stopped: 2 of 3 passes; the lower pass, not a median) | 1001.00 [1001.00-1002.00] |"), "so does the fixed stage");
+  assert.ok(en.includes("| rails (stopped: 1 of 3 passes; one pass, no range) | 1001.00 [1001.00-1001.00] |"));
+  assert.ok(text.includes("except in a row marked stopped, which has fewer"), "the header does not call every number a three-pass median");
+  assert.ok(en.includes("App stopped: rails fixture-en-US-page sat64: its container was OOM-killed (exit code 137) during sat64 in pass 2."));
+  assert.doesNotMatch(text, /GiB limit/, "OOMKilled does not say whose limit was hit");
   assert.equal(en.match(/^App stopped: rails /gm).length, 3, "every stage that lost a pass names the stop");
   assert.doesNotMatch(en, /\| (corten|nextjs|phoenix)[^|]*stopped/, "other apps keep their results unmarked");
   assert.doesNotMatch(text.split("## fr-FR\n")[1].split("\n## ")[0], /stopped:/, "the app's other profiles still ran");
@@ -387,9 +390,20 @@ test("a stage the app stopped in is an outcome, not a comparable number, and new
   assert.equal(row(result, "corten", "sat64").metrics.rps.percentChange, 0, "the stages it served in every pass still compare");
   const group = result.cohort.rows.find((g) => g.profile === "fixture-en-US-page" && g.phase === "sat256");
   assert.deepEqual(group.outcomeApps, ["rails"]); assert.equal(group.metrics.rps.apps, 1);
-  const cold = result.cold.find((c) => c.app === "corten" && c.profile === "fixture-en-US-page");
-  assert.deepEqual(cold.stopped.current, { pass: 3, phase: "sat256", exitCode: 137, oomKilled: true });
-  assert.deepEqual(result.cohort.cold.find((g) => g.profile === "fixture-en-US-page").outcomeApps, ["rails"]);
+  // a pass-3 stop came after all three cold starts were measured: the cold rows still compare
+  const cold = (r, app) => r.cold.find((c) => c.app === app && c.profile === "fixture-en-US-page");
+  assert.deepEqual(cold(result, "corten").stopped, { baseline: null, current: null });
+  assert.equal(cold(result, "corten").metrics.first200MsFromContainerStart.percentChange, 0);
+  const coldGroup = (r) => r.cohort.cold.find((g) => g.profile === "fixture-en-US-page");
+  assert.equal(coldGroup(result).outcomeApps, undefined); assert.equal(coldGroup(result).metrics.first200MsFromContainerStart.apps, 2);
+  // a pass-2 stop lost the third cold start: no cold number, for Corten and the cohort alike
+  const earlier = structuredClone(old); earlier.round = earlier.options.round = "r18";
+  stopProfile(earlier, "corten", "fixture-en-US-page", 2, "fixed", oom);
+  stopProfile(earlier, "rails", "fixture-en-US-page", 2, "fixed", oom);
+  const lost = compare(earlier, old, { unchangedApps: ["rails", "nextjs"] });
+  assert.deepEqual(cold(lost, "corten").stopped.current, { pass: 2, phase: "fixed", exitCode: 137, oomKilled: true });
+  assert.equal(cold(lost, "corten").metrics, null);
+  assert.deepEqual(coldGroup(lost).outcomeApps, ["rails"]); assert.equal(coldGroup(lost).metrics.first200MsFromContainerStart.apps, 1);
   // the same stop in the baseline is not new; a stop only in the baseline is neither new nor a number
   const later = structuredClone(current); later.round = later.options.round = "r19";
   const again = compare(later, current);
@@ -405,6 +419,18 @@ test("a stage the app stopped in is an outcome, not a comparable number, and new
   const dies = structuredClone(old); dies.round = dies.options.round = "r20";
   stopProfile(dies, "corten", "fixture-en-US-page", 1, "warmup", oom);
   assert.deepEqual(compare(dies, failing).newOutcomes.map((o) => o.phase), ["fixed", "sat64", "sat256"]);
+});
+
+test("a stop earlier than the baseline's is a new outcome; the same or a later one is not (#1128)", () => {
+  const round = (name, pass, phase) => { const v = synthetic(); v.round = v.options.round = name; if (pass) stopProfile(v, "corten", "fixture-en-US-page", pass, phase, oom); return v; };
+  const news = (current, baseline) => compare(current, baseline).newOutcomes.filter((o) => o.app === "corten").map((o) => o.phase);
+  const base = round("r19", 3, "sat256");
+  assert.deepEqual(news(round("r20", 3, "sat256"), base), [], "the same stop");
+  assert.deepEqual(news(round("r20", 3, "sat64"), base), ["sat64", "sat256"], "an earlier phase in the same pass: sat64 newly stopped, sat256 stopped earlier");
+  assert.deepEqual(news(round("r20", 2, "sat256"), base), ["fixed", "sat64", "sat256"], "an earlier pass: every stage lost more passes");
+  assert.deepEqual(news(round("r20", 1, "warmup"), round("r19", 1, "sat64")), ["fixed", "sat64", "sat256"], "same pass, earlier phase, even where both stages have no pass");
+  assert.deepEqual(news(round("r20", 3, "sat256"), round("r19", 2, "sat64")), [], "a later stop is not new");
+  assert.deepEqual(news(round("r20"), base), [], "no stop now is not new");
 });
 
 // A summary as a v3 round (r19, at main 25acd6a7) writes it: no stop records, and aggregates

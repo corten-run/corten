@@ -114,9 +114,13 @@ host and report the provisioning error rather than guessing deletion is safe.
    that app's outcome too: the stop is recorded with its pass, phase, exit code and OOM kill,
    that profile's later phases and passes do not run, every other app and profile keeps its
    results, and each stage that lost a pass is marked `(stopped: n of 3 passes)` with a line
-   naming the stop. A 200 of the wrong content type, an app that stops during its cold start
-   (before any load), an upstream error answer, or a phase in which no request succeeded still
-   fails the run.
+   naming the stop; of two passes its number is the lower one, not a median. A stop counts as
+   the app's only when the CPU counter sidecar and, for an HTTP-source profile, the upstream are
+   the same containers still running, Docker recorded no kill, stop or restart of the app during
+   the phase, and nothing failed that the stop does not explain (its CPU counter and stats
+   going with it); otherwise it is a harness failure. A 200 of the wrong content type, before
+   or without a stop, an app that stops during its cold start (before any load), an upstream
+   error answer, or a phase in which no request succeeded still fails the run.
 2. Hash summary before/after the read-only reporter. Save its generated report as
    results/rN/report.md and exact SHA as commit.txt. Preserve raw logs/checks/image provenance.
    Collection keeps the result folder outside Git in the round-control evidence directory.
@@ -168,10 +172,12 @@ medians/ranges and unchanged-app median changes. No causal claim from one round.
 6. A Corten stage in compare.mjs's newOutcomes: more passes with an app outcome than the
    baseline, any failed request or dropped iteration where the baseline had none in any pass,
    a failure or drop range wholly above a nonzero baseline's (overlapping ranges are not a
-   difference), or a stage its container stopped in where the baseline's did not. A Corten
-   stage that fails any request, or whose container stops, is a regression from a baseline in
-   which it did neither, whatever the percentages. A stage stopped in either round has no
-   deltas.
+   difference), or a stage its container stopped in where the baseline's did not or stopped
+   later (the stage has fewer passes, or the stop came in an earlier pass or an earlier phase
+   of the same pass). A Corten stage that fails any request, or whose container stops, is a
+   regression from a baseline in which it did neither, whatever the percentages. A stage
+   stopped in either round has no deltas, and neither do the cold starts of a profile that lost
+   a pass to a stop.
 
 Inspect open automation-created v2 regression issues in state, then repository issue search;
 comment exact new numbers on a matching metric rather than duplicate it. Otherwise create one

@@ -2890,13 +2890,16 @@ Corten is pre-1.0, so any minor version may change the API.
 - In a marketplace v2 benchmark round, an app container that exits or is OOM-killed during a
   load phase (warmup included) is that app's recorded outcome, where it used to fail the whole
   round: the stop's pass, phase, exit code and OOM kill are saved, that profile's later phases
-  and passes are skipped, and every other app keeps its results. The report marks each stage
-  that lost a pass `(stopped: n of 3 passes)` with a line naming the stop and refuses a summary
-  whose marks and stop records disagree; `compare.mjs` gives such a stage no deltas and lists it
-  in `newOutcomes` when the baseline's stage had no stop. A stop during cold start, before any
-  load, still fails the round. Results are schema `marketplace-results/v4`; `report.mjs` and
-  `compare.mjs` still read a `marketplace-results/v3` summary as v4 with no stop records, so a v3
-  round validates and is a compatible baseline for v4 rounds
+  and passes are skipped, and every other app keeps its results. It is the app's only while the
+  CPU counter sidecar and the upstream are the same running containers, Docker recorded no kill,
+  stop or restart of the app, and nothing failed that the stop does not explain; otherwise, and
+  for a stop during cold start, before any load, the round still fails. The report marks each
+  stage that lost a pass `(stopped: n of 3 passes)` with a line naming the stop and refuses a
+  summary whose marks and stop records disagree; `compare.mjs` gives such a stage, and the cold
+  starts of a profile that lost a pass, no deltas, and lists the stage in `newOutcomes` when the
+  baseline's stage had no stop or a later one. Results are schema `marketplace-results/v4`;
+  `report.mjs` and `compare.mjs` still read a `marketplace-results/v3` summary as v4 with no stop
+  records, so a v3 round validates and is a compatible baseline for v4 rounds
   ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128)).
 
 - A `Public` answer costs less to send: the last check of its `Cache-Control` copies the

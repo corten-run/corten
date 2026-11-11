@@ -34,7 +34,12 @@ function stopEvidence(run) {
   assert.equal(run.warmup !== undefined, stop.phase !== "warmup", "a stopped run has warmup evidence only when it stopped after warmup");
   assert.deepEqual(Object.keys(run.phases).sort(), loadPhases.slice(1, loadPhases.indexOf(stop.phase)).sort(), "a stopped run has only the phases before its stop");
 }
-const stopText = (s) => `its container ${s.oomKilled ? `was OOM-killed at its 1 GiB limit (${s.exitCode === null ? "a process in it; the container kept running" : `exit code ${s.exitCode}`})` : `exited with code ${s.exitCode}`} during ${s.phase} in pass ${s.pass}`;
+// Docker's OOMKilled does not say whose limit was hit (the container's 1 GiB, or the host's), so the
+// text does not either.
+const stopText = (s) => `its container ${s.oomKilled ? `was OOM-killed (${s.exitCode === null ? "a process in it; the container kept running" : `exit code ${s.exitCode}`})` : `exited with code ${s.exitCode}`} during ${s.phase} in pass ${s.pass}`;
+// A stage the app's stop left with fewer than three passes says what its number is: of two passes
+// the "median" is the lower one (spread), and one pass has no range.
+const stoppedMark = (n, asked) => n >= asked ? "" : ` (stopped: ${n} of ${asked} passes${n === 2 ? "; the lower pass, not a median" : n === 1 ? "; one pass, no range" : ""})`;
 function statsEvidence(p) {
   finite(p.cpuAvgPct); finite(p.cpuMaxPct); assert.ok(p.cpuMaxPct >= p.cpuAvgPct);
   finite(p.memAvgMiB, Number.MIN_VALUE); finite(p.memMaxMiB, p.memAvgMiB);
@@ -126,7 +131,7 @@ export function report(s) {
   const lines = [`# Marketplace v2 ${s.round}${identity.kind === "development" ? " (development)" : ""}`, "",
     `Commit: \`${s.commit}\`. Schema: \`${s.schema}\`${s.schema === v3Schema ? " (read as v4: a v3 round has no stop records, since an app that stopped failed it)" : ""}. CPU: ${s.host.cpu} (online CPUs ${s.host.onlineCpus}).`,
     "A new localized baseline, not a change from marketplace r16 or catalog c1.", "",
-    "Every number is the median [min-max] of three measured passes, not a confidence interval. Overlapping ranges do not establish a speed difference.",
+    "Every number is the median [min-max] of three measured passes, not a confidence interval, except in a row marked stopped, which has fewer: of two passes it is the lower one, of one pass that pass. Overlapping ranges do not establish a speed difference.",
     "Pages cover all three locales; JSON is locale-neutral and timed once per source/pass. All twenty apps pass both sources and twelve browser profiles before any load.",
     `Fixed load asks for ${s.options.rate} requests/second. Closed-loop 64/256-user results are observed throughput and latency, not proven maximum capacity. Warmup ${s.options.warmup}s; each phase ${s.options.duration}s; identity encoding.`,
     "CPU % is sampled app-container usage (100% = one core). CPU us/request and requests/CPU-second use counted whole-container cgroup CPU, not instructions or handler-only time. CPU % and steady memory average the central 15%-95% of samples; peak memory is the sampled maximum, not an unsampled high-water mark.",
@@ -147,7 +152,7 @@ export function report(s) {
         "| Framework | First 200 from container start ms | Successful request ms |", "|---|---:|---:|");
       for (const app of apps) {
         const runs = s.apps[app].runs[key], cold = aggregateCold(runs);
-        const mark = runs.length < 3 ? ` (stopped: ${runs.length} of 3 passes)` : "";
+        const mark = stoppedMark(runs.length, 3);
         lines.push(`| ${label(s.apps[app].label)}${mark} | ${cell(cold.first200MsFromContainerStart)} | ${cell(cold.successfulRequestMs)} |`);
       }
       for (const app of apps) for (const r of s.apps[app].runs[key]) if (r.warmup?.appOutcome) lines.push("", `App outcome in warmup (not measured): ${app} ${key} pass ${r.pass}: ${outcomeText(r.warmup)}.`);
@@ -157,7 +162,7 @@ export function report(s) {
           "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
         for (const app of apps) {
           const p = s.apps[app].phases[key][phase];
-          const mark = (p.appOutcomes ? ` * (${p.appOutcomes} of ${p.passes} passes)` : "") + (p.stopped ? ` (stopped: ${p.passes} of ${p.asked} passes)` : "");
+          const mark = (p.appOutcomes ? ` * (${p.appOutcomes} of ${p.passes} passes)` : "") + (p.stopped ? stoppedMark(p.passes, p.asked) : "");
           const metrics = ["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond"];
           const failed = p.passes ? { median: p.failedRate.median * 100, min: p.failedRate.min * 100, max: p.failedRate.max * 100 } : null;
           lines.push(`| ${label(s.apps[app].label)}${mark} | ${p.passes ? `${metrics.map((metric) => cell(p[metric])).join(" | ")} | ${cell(failed)}` : Array(metrics.length + 1).fill("-").join(" | ")} |`);

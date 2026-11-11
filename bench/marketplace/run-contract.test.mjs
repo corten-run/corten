@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { appStop, cpuSettings, imageProvenance, inventory, parseArgs, profileStop, readOutcome, resultSchema, roundIdentity, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { appStop, cpuSettings, imageProvenance, inventory, parseArgs, phaseEnd, profileStop, readOutcome, resultSchema, roundIdentity, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 test("versioned round namespace and safe defaults", () => {
   assert.match(inventory.nextjs.label, /Pages Router/);
   assert.doesNotMatch(inventory.phoenix.label, /LiveView/);
@@ -98,4 +98,41 @@ test("a stop ends its profile: each stage that lost a pass to it carries the sto
   assert.equal(stageAggregate([stopped(1, "warmup", [])], "fixed", 3).rps, null, "a stage with no measured pass has no number");
   assert.equal(profileStop([full(1)]), null);
   assert.deepEqual(profileStop([full(1), stopped(2, "fixed", [])]), { pass: 2, phase: "fixed", exitCode: 137, oomKilled: true });
+});
+test("a phase ends in the app's stop only when nothing else the phase depends on changed or failed (#1128)", () => {
+  const finished = "2026-01-01T00:00:10.000Z", after = "2026-01-01T00:00:12.000Z", before = "2026-01-01T00:00:05.000Z";
+  const exited = { Running: false, OOMKilled: true, ExitCode: 137, Error: "", FinishedAt: finished };
+  const alive = (name, startedAt = "2026-01-01T00:00:00Z") => ({ name, startedAt, state: { Running: true, StartedAt: startedAt } });
+  const sidecars = [alive("cpu"), alive("upstream")];
+  const error = (step, message, at = after) => ({ step, error: new Error(message), at });
+  const seen = (more = {}) => ({ pass: 2, phase: "sat64", app: exited, sidecars, events: [{ action: "oom" }, { action: "die" }], errors: [], summary: null, ...more });
+  const stop = { pass: 2, phase: "sat64", exitCode: 137, oomKilled: true };
+  // the app running normally: no stop, and any error still fails the round
+  assert.equal(phaseEnd({ pass: 1, phase: "fixed", app: { Running: true, OOMKilled: false } }), null);
+  assert.throws(() => phaseEnd({ pass: 1, phase: "fixed", app: { Running: true, OOMKilled: false }, errors: [error("k6", "k6 timeout")] }), /k6 timeout/);
+  assert.throws(() => phaseEnd({ pass: 1, phase: "fixed", app: null, errors: [error("inspect", "no such container")] }), /no such container/);
+  // the container stopped and the sidecars are the same running containers: the app's outcome
+  assert.deepEqual(phaseEnd(seen()), stop);
+  // its CPU counter and stats failing after it finished are explained by the stop
+  assert.deepEqual(phaseEnd(seen({ errors: [error("stats", "docker stats stopped early: 1"), error("cpu", "missing CPU counter")] })), stop);
+  const content = (fails) => ({ root_group: { checks: { "marketplace status 200": { passes: 90, fails: 10 }, "marketplace content type": { passes: 90, fails } } } });
+  assert.deepEqual(phaseEnd(seen({ summary: content(0) })), stop);
+  for (const [change, message] of [
+    // restarted: running again, with a StartedAt other than the one recorded at creation
+    [{ sidecars: [{ name: "cpu", startedAt: "2026-01-01T00:00:00Z", state: { Running: true, StartedAt: "2026-01-01T00:00:09Z" } }, alive("upstream")] }, /cpu stopped or restarted/],
+    [{ sidecars: [alive("cpu"), { name: "upstream", startedAt: "2026-01-01T00:00:00Z", state: { Running: false, StartedAt: "2026-01-01T00:00:00Z" } }] }, /upstream stopped or restarted/],
+    [{ sidecars: [{ name: "cpu", startedAt: "2026-01-01T00:00:00Z", state: null }] }, /cpu stopped or restarted/],
+    [{ events: [{ action: "kill" }, { action: "die" }] }, /Docker kill on the app container/],
+    [{ app: { ...exited, Error: "daemon shutdown" } }, /Docker reported an error/],
+    // errors the stop does not explain still fail the round
+    [{ errors: [error("k6", "docker start -a: timeout after 40000 ms")] }, /timeout/],
+    [{ errors: [error("k6", "docker create: exit 125")] }, /exit 125/],
+    [{ errors: [error("summary", "no such file")] }, /no such file/],
+    [{ errors: [error("stats", "stats sampler exceeded its deadline")] }, /deadline/],
+    [{ errors: [error("cpu", "exec failed", before)] }, /exec failed/],
+    // a container still running after an OOM kill explains no stats error
+    [{ app: { Running: true, OOMKilled: true, ExitCode: 0, Error: "" }, errors: [error("stats", "bad sample")] }, /bad sample/],
+    // a 200 of the wrong content type before the crash is a parity failure
+    [{ summary: content(3) }, /wrong content type/],
+  ]) assert.throws(() => phaseEnd(seen(change)), message);
 });
