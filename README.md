@@ -294,7 +294,7 @@ In the order to read them; each README says how to run it and where each piece i
 
 ## Status
 
-Corten is 0.1: usable and tested, on Rust 1.88 or later, and built for
+Corten is 0.2: usable and tested, on Rust 1.88 or later, and built for
 [Chase Sets](https://chasesets.com). The API will change before 1.0; [CHANGELOG.md](CHANGELOG.md)
 lists what changed. A release publishes every crate at one version on crates.io and attaches a
 prebuilt `corten` for Linux, macOS and Windows to the GitHub release. The framework's package is
