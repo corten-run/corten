@@ -110,10 +110,24 @@ missing profiles or passes, failed cleanup and aggregates that disagree with sav
 phase in which an app answered requests with anything but a 200 or timed out on them, or could
 not keep the fixed rate, is the app's result, not a failed run: it is saved with its failure
 rate and dropped iterations, the later phases still run, and the report marks the stage with
-`*` and lists each one. Still failures: a phase with no k6 summary or in which no request
-succeeded, a 200 of the wrong content type, an app container that stopped or ran out of memory,
-and any error answer from the upstream to a record read. Results written this way
-are schema `marketplace-results/v3`.
+`*` and lists each one. An app container that exits or is OOM-killed during a load phase
+(warmup included) is the app's result as well: the run records the stop's pass, phase, exit
+code and OOM kill, does not run that profile's later phases and passes, and keeps every other
+app's and profile's results; the report marks each stage that lost a pass
+`(stopped: n of 3 passes)` with a line naming the stop, and a full baseline may have fewer
+than three passes only there; of two passes each number is the lower of its column's two
+values, not a median. The stop is the app's only when the container stopped after the phase
+began, the CPU counter sidecar and, for the HTTP source, the upstream are the same running
+containers, Docker recorded no kill, stop or restart of the app, and nothing failed that the
+stop does not explain (only docker stats errors stamped after the app finished); otherwise the
+run fails.
+Still failures: a phase with no k6 summary or in which no request succeeded, a 200 of the wrong
+content type (before a stop too), an app container that stopped during its cold start or before
+a phase began (after its first 200, before warmup or between phases), and any error answer
+from the upstream to a record read. Results written
+this way are schema `marketplace-results/v4`. The reporter and `compare.mjs` also read a
+`marketplace-results/v3` summary, as v4 with no stop records (under v3 an app that stopped
+failed the round), so a v3 round compares with v4 rounds; any other schema is rejected.
 The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
 
 The deterministic fixture is 500 new rich trading-card records, not the old marketplace

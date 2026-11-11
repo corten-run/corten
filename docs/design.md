@@ -124,11 +124,29 @@ rules something out.
    Remix in 16.2 to 131 ms; Solid, the nearest, takes 1.6 times as long, against 3.3 times in
    round browser-3, 19.6 ms against 6.0 on another CPU, Chromium and runtime. Each is one round of
    a number that has moved between runs: browser-2 measured 29.5 ms for views and three reruns of
-   that step 4.9, 20.7 and 6.3 ms. In browser-4 the browser painted a frame before views were
-   ready on about half the loads, which takeover leaves out (a median of none in browser-3), and
+   that step 4.9, 20.7 and 6.3 ms. In browser-4 about half the loads had a long frame of
+   rendering before views were ready, which takeover leaves out (a median of none in browser-3), and
    the page, though ready sooner than in browser-3 as every app's was, was ready after Svelte's and
-   Vue's, where in browser-3 it was the first framework ready; why takeover rose is open in
-   [#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222));
+   Vue's, where in browser-3 it was the first framework ready. Part of that rise was the runtime's
+   own evaluation at load, measured on one Intel Core i9-10885H laptop with browser-4's Chromium
+   (156.0.8078.4), `bench/browser/ssr.mjs` and performance marks in copies of the page: taking
+   turns with `77002fe`, the round's commit took over 4.24 ms slower (standard deviation 1.03) in
+   8 pairs of 30 loads and 2.96 ms slower (0.62) in 4 more, Solid -0.19 and -0.20 ms, and its
+   evaluation, the median of the loads with no long frame, was 9.4 ms against 5.9 (+3.5 ms, no
+   spread recorded), spent in four startup steps that did work nothing used or did it the slow way
+   (reading every `data-ref`'s name, a `details, dialog` query over the whole page, the layout
+   snapshot's regular expressions, and looking for missing meta tags through the whole page). The
+   round's median load had a long frame, on which takeover reads about 9 ms higher, so part of 6.0
+   to 10.2 ms is probably that.
+   [#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) cut that evaluation: in another session on the same laptop and Chromium, against a base
+   (`8c2a1b71`) with the round's runtime, evaluation fell 4.14 ms (standard deviation 0.16; base
+   10.15 ms, 9.90 to 10.70, against 6.00, 5.90 to 6.40, medians of 6 runs of 30 loads each), and
+   the takeover of the loads with no long frame 3.91 ms (standard deviation 2.40) over 8 pairs of
+   30 loads, with Solid, the control, at -0.31 ms (standard deviation 0.85). The two sessions
+   measured the same runtime at 9.4 and 10.15 ms, so their differences compare (+3.5 ms, then
+   -4.14), not their levels. The round's 10.2 ms is the number until the next browser round
+   measures takeover again
+   ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)));
    reasoned (nested branches need the same typed-template check and CSP custom-property
    application as rows; centralizing those does not require tracking application state); value
    (one way to give an element behavior, Values 5).
@@ -144,7 +162,10 @@ rules something out.
    Last checked: 2026-11-11, the client-heavy table, round browser-4 on a Xeon Platinum 8358, on
    `3fb4b1ac`; 2026-10-23, round browser-3 on a Xeon Platinum 8280, on `77002fe`; 2026-10-23,
    browser-2 and its three reruns, recorded in the browser benchmark's README at `0cda9827`;
-   2026-11-06, nested deck preview and connected-tree measurements on `fc09b98d`.
+   2026-11-11, an A/B of `3fb4b1ac` against `77002fe` with `bench/browser/ssr.mjs` on an Intel
+   Core i9-10885H laptop, Chromium 156.0.8078.4; 2026-11-11, paired runs of `8c2a1b71` against
+   `8c9e84fd` (the startup change), the same laptop and Chromium; 2026-11-06, nested deck preview
+   and connected-tree measurements on `fc09b98d`.
 
 5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
@@ -330,9 +351,19 @@ rules something out.
    frameworks measured, Solid next at 16.2 ms; the client-heavy table in performance.md, median of
    30 loads, round browser-4. That is one round of a number that has moved between runs (browser-2
    measured 29.5 ms, three reruns of it 4.9, 20.7 and 6.3), and it rose from browser-3's 6.0 ms
-   on another CPU, Chromium and runtime while the browser now paints a frame before views are
-   ready on about half the loads and the page is ready after Svelte's and Vue's; why is open in
-   [#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222));
+   on another CPU, Chromium and runtime while about half the loads now have a long frame of
+   rendering before views are ready and the page is ready after Svelte's and Vue's. Part of that
+   rise was the runtime's own evaluation at load, measured with `bench/browser/ssr.mjs` on one
+   Intel Core i9-10885H laptop with browser-4's Chromium (156.0.8078.4): taking turns with
+   `77002fe`, the round's commit took over 4.24 ms slower (standard deviation 1.03) in 8 pairs of
+   30 loads and 2.96 ms slower (0.62) in 4 more, and its evaluation was 9.4 ms against 5.9 (+3.5 ms,
+   medians of the loads with no long frame, no spread recorded); the round's median load had a long
+   frame, which probably accounts for part of the rest.
+   [#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) cut evaluation by 4.14 ms (standard deviation 0.16, 6 runs of 30 loads) in another session
+   on the same laptop and Chromium, from a base (`8c2a1b71`) with the round's runtime at 10.15 ms to
+   the change's 6.00; the sessions' levels differ, so their differences compare. The next browser
+   round measures takeover again
+   ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)));
    value (Values 1: the work goes where it is fastest for the user).
 
    Revisit when: Values 1 changes. A case measured against the scripts guide's table (Server or
@@ -340,7 +371,10 @@ rules something out.
 
    Last checked: 2026-11-11, round browser-4 on a Xeon Platinum 8358, on `3fb4b1ac`; 2026-10-23,
    round browser-3 on a Xeon Platinum 8280, on `77002fe`; 2026-10-23, browser-2 and its three
-   reruns, recorded in the browser benchmark's README at `0cda9827`.
+   reruns, recorded in the browser benchmark's README at `0cda9827`; 2026-11-11, an A/B of
+   `3fb4b1ac` against `77002fe` with `bench/browser/ssr.mjs` on an Intel Core i9-10885H laptop,
+   Chromium 156.0.8078.4; 2026-11-11, paired runs of `8c2a1b71` against `8c9e84fd` (the startup
+   change), the same laptop and Chromium.
 
 10. <a id="choice-app-owns-document"></a>**The document is a component the app owns, not a shell Corten configures.** A page hands
    `req.page` its whole document, the app's layout with the page in it, and the head is markup
@@ -1849,9 +1883,10 @@ rules something out.
     derives that each say one thing, not a state attribute that writes both.** `Clone` says the
     state can be copied, which routing and a handler that takes the whole state both need:
     `#[corten::routes(state = Shared)]` gives each route its own copy
-    (`Methods::with_state(.., state.clone())`, which takes an `S: Clone`, as axum's
-    `MethodRouter::with_state` it calls does), and a handler's `State<Shared>` goes through
-    axum-core's `impl<T: Clone> FromRef<T> for T`. `FromRef` says each field can be taken alone:
+    (`Methods::with_state(.., state.clone())`, which takes an `S: Clone` because Corten's router
+    binds a copy of the state into each of a route's method slots, `router.rs`'s
+    `MethodSet::with_state`), and a handler's `State<Shared>` goes through `handler.rs`'s
+    `impl<T: Clone> FromRef<T> for T`. `FromRef` says each field can be taken alone:
     it gives each field its own extractor (`State<Market>`), which clones that field and needs no
     `Clone` of the containing type. The six examples with shared state route seven state types:
     three derive both (watchlist's `Shared`, card-market's `ApiState` and listings-feed's
@@ -1874,23 +1909,31 @@ rules something out.
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 
     Stands on: reasoned (each route takes its own copy of the state, in `routes.rs`'s
-    `Methods::with_state(.., state.clone())`; an impl the derive wrote would conflict with a
-    hand-written `Clone`; and the attribute saves one word on three types while adding a way to
-    write six of the seven, counts that move with the examples); platform (axum 0.8.9's
-    `MethodRouter::with_state`, like its other `MethodRouter` methods, requires `S: Clone`, and
-    axum-core 0.5.6's `impl<T: Clone> FromRef<T> for T` is how a handler takes the whole state,
-    both from `Cargo.lock`; Corten routes on axum's router, [Choice 25](#choice-axum-router));
-    value (one way to do each thing and a small surface, Values 5 and 6).
+    `Methods::with_state(.., state.clone())`, Corten's router clones it again into each method
+    slot, `router.rs`'s `MethodSet::with_state`, and once more for each request, `router.rs`'s
+    `Handled::call`, since `handler.rs`'s `Handler::call` takes the state by value, all bounded
+    `S: Clone`; a handler takes the whole state through `handler.rs`'s
+    `impl<T: Clone> FromRef<T> for T`; both are Corten's own since axum left,
+    [Choice 25](#choice-axum-router), step 4, so `Clone` is Corten's decision, not a platform's;
+    an impl the derive wrote would conflict with a hand-written `Clone`; and the attribute saves
+    one word on three types while adding a way to write six of the seven, counts that move with
+    the examples); value (one way to do each thing and a small surface, Values 5 and 6).
 
     Revisit when: a third mechanical impl is derived beside the pair on two or more of the
     examples' routed state types, so an attribute would carry more than two derives' worth; or
-    Corten stops giving each route its own copy of the state, and neither axum's `MethodRouter`
-    nor axum-core's `impl<T: Clone> FromRef<T> for T`, through which a handler takes the whole
-    state, requires `S: Clone`, so state no longer needs `Clone`.
+    Corten stops copying the state into each route (the routes macro) and into each method slot
+    and request (the router) (a handler given `&S` or one shared `Arc`, say), and `handler.rs`'s
+    `impl<T: Clone> FromRef<T> for T`, through which a handler takes the whole state, stops
+    requiring `Clone`, so state no longer needs `Clone`.
 
     Last checked: 2026-11-10, the examples' state types, `from_ref.rs`, `routes.rs`,
-    `Methods::with_state`, `corten-cluster`'s tests, and axum 0.8.9 and axum-core 0.5.6 from
-    `Cargo.lock`, at `97a63a92`.
+    `Methods::with_state` and `corten-cluster`'s tests, at `97a63a92` (then also axum 0.8.9 and
+    axum-core 0.5.6 from `Cargo.lock`, the platform premise this Choice no longer has);
+    2026-11-11, with axum gone, `router.rs`'s `MethodSet::with_state` and `Slot::bind` (one
+    clone per method slot) and `Handled::call` (one per request), `corten`'s `route.rs`'s
+    `Methods::with_state`, `handler.rs`'s `Handler::call` and `FromRef` blanket impl, each
+    bounded `Clone` or taking the state by value, and no crate under `crates/` depending on axum,
+    at `25acd6a7`.
 
 34. <a id="choice-listen-backlog"></a>**A listener asks the system to hold 511 finished
     connections, not 128.** `corten::listeners`, and so `serve`, binds each socket with a

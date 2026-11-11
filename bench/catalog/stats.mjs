@@ -19,7 +19,10 @@ export function summarizeSamples(samples) {
 export function sampleStats(names, file, seconds) {
   const child = spawn("docker", ["stats", "--format", "{{json .}}", ...names], { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   const samples = Object.fromEntries(names.map((n) => [n, []]));
+  // Each error with when it happened: the marketplace runner tells one after an app's container
+  // stopped from one before it (#1128). stop() throws them joined, as it always has.
   const errors = [];
+  const failed = (message) => errors.push({ message, at: new Date().toISOString() });
   let buffer = "";
   let raw = "";
   let stopping = false;
@@ -36,14 +39,14 @@ export function sampleStats(names, file, seconds) {
         const s = JSON.parse(line);
         if (!samples[s.Name]) throw new Error(`unexpected stats container ${s.Name}`);
         samples[s.Name].push({ t: Date.now(), cpu: parseFloat(s.CPUPerc), mem: memoryMiB(s.MemUsage.split("/")[0]) });
-      } catch (e) { errors.push(e.message); }
+      } catch (e) { failed(e.message); }
     }
   });
-  child.stderr.on("data", (chunk) => { if (!stopping) errors.push(chunk.toString()); });
-  child.on("error", (error) => errors.push(error.message));
+  child.stderr.on("data", (chunk) => { if (!stopping) failed(chunk.toString()); });
+  child.on("error", (error) => failed(error.message));
   let closed = false;
-  const done = new Promise((resolve) => child.on("close", (code) => { closed = true; if (!stopping) errors.push(`docker stats stopped early: ${code}`); resolve(); }));
-  const timer = setTimeout(() => { errors.push("stats sampler exceeded its deadline"); child.kill(); }, seconds * 1000);
+  const done = new Promise((resolve) => child.on("close", (code) => { closed = true; if (!stopping) failed(`docker stats stopped early: ${code}`); resolve(); }));
+  const timer = setTimeout(() => { failed("stats sampler exceeded its deadline"); child.kill(); }, seconds * 1000);
   return {
     async stop() {
       stopping = true;
@@ -53,7 +56,7 @@ export function sampleStats(names, file, seconds) {
       await done;
       clearTimeout(kill);
       writeFileSync(file, raw);
-      if (errors.length) throw new Error(errors.join("; "));
+      if (errors.length) throw Object.assign(new Error(errors.map((e) => e.message).join("; ")), { errors });
       const summary = Object.fromEntries(names.map((name) => [name, summarizeSamples(samples[name])]));
       writeFileSync(`${file}.json`, JSON.stringify({ summary, samples }, null, 2));
       return summary;
