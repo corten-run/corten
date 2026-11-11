@@ -370,7 +370,8 @@ async fn fields(req: Request) -> Result<Bytes, BodyRejection> {
             "Form requests must have `Content-Type: application/x-www-form-urlencoded`",
         ));
     }
-    crate::extract::whole(req.into_body()).await
+    let limit = crate::extract::body_limit(req.extensions());
+    crate::extract::whole(req.into_body(), limit).await
 }
 
 /// Why [`Form`] or [`crate::Params`] refused a request: plain text, so a browser gets the app's

@@ -22,9 +22,14 @@ traits and `State` are Corten's own, with the names, the `Rejection` and the
 axum's compiles against them with its `use` changed; `Request` and `Response` are the `http`
 crate's with Corten's `Body`, and `IntoResponse` is Corten's, so the app imports one crate and
 Corten depends on no web framework ([design Choice 21](../design.md#choice-own-extractors)).
-A body read whole (`Bytes`, `String`, `Json`, `Form`) is refused over 2 MiB with a 413 (the rest
-read past until 4 MiB has arrived, so a browser still sending reads it, and refused unread when
-its length says it is longer than that), or with a 400 when it cannot be read; the refusal is a `corten::extract::BodyRejection`, plain text
+A body read whole (`Bytes`, `String`, `Json`, `Form`) is refused over its limit with a 413 (the
+rest read past until twice the limit has arrived, at most 64 MiB past it, so a browser still
+sending reads it, and refused unread when its length says it is longer than that), or with a 400
+when it cannot be read. The limit is 2 MiB unless the app, an area or an API sets its own, as it
+sets a deadline: `App::body_limit`, `Area::body_limit`, `Api::body_limit` (in bytes; the
+innermost area or API that sets one decides), so `.api(|api| api.body_limit(16 << 20))` takes
+large documents there while every page keeps 2 MiB, and an `Upload` keeps the same limit unless
+its handler sets `upload.limit`; the refusal is a `corten::extract::BodyRejection`, plain text
 as axum's were, so a handler that takes `Result<Json<T>, BodyRejection>` answers it itself.
 axum's own extractors (`Path`,
 `Query`, `Json`, `Extension`, `ConnectInfo`, `Parts`) are not handler arguments, since they
@@ -1141,7 +1146,7 @@ struct NewListing { title: String, price: u32, photos: Files }
 
 async fn create(req: Req, mut upload: Upload<NewListing>) -> HtmlResult {
     let f = NewListing::FIELDS;
-    upload.limit(60 << 20); // what the request keeps; 2 MiB unless set
+    upload.limit(60 << 20); // what the request keeps; the route's body_limit (2 MiB) unless set
     let (mut photos, mut errors) = (Vec::new(), Errors::new());
     while let Some(mut file) = upload.next_file().await? {
         if !file.is(f.photos) { continue }
