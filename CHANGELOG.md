@@ -5,13 +5,6 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
-## 0.2.0 (2026-11-11)
-
-The first release of all seven crates, published together by the Release workflow. The main crate's
-package is `corten-run` (its library is still `corten`). Version 0.1.0 of `corten-protocol`,
-`corten-macros`, `corten-feed` and `corten-cli` was published by hand from `2976f158` only to hold
-their names, and has no tag or release.
-
 ### Added
 
 - `corten::caller::bearer(&headers)` reads the token of RFC 6750's bearer credentials
@@ -23,6 +16,16 @@ their names, and has no tag or release.
   `Challenge` and `Tools::auth` examples (now a compiled doctest, where it called an `auth::bearer`
   that does not exist) and card-market's partners and agents read with it in place of their own
   parsers ([#1225 Corten tells an API to take its key as a bearer token but gives it no reader, so each app parses Authorization by hand and the agent docs call an auth::bearer that does not exist](https://github.com/corten-run/corten/issues/1225)).
+
+## 0.2.0 (2026-11-11)
+
+The first release of all seven crates, published together by the Release workflow. The main crate's
+package is `corten-run` (its library is still `corten`). Version 0.1.0 of `corten-protocol`,
+`corten-macros`, `corten-feed` and `corten-cli` was published by hand from `2976f158` only to hold
+their names, and has no tag or release.
+
+### Added
+
 - Static files with `mp4`, `webm` and `vtt` names are sent as `video/mp4`, `video/webm` and
   `text/vtt`, and a `GET` of a versioned URL, this version's or an old one's, for a file sent as it
   is stored answers a single byte `Range` with a `206` (a bare `416` past its end, the whole file

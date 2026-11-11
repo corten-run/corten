@@ -1489,7 +1489,10 @@ rules something out.
     the tests of the MCP endpoint's `mcp` realm, of a scheme `Challenge::new` makes in a `const`,
     and of card-market's empty bearer token, at `7d743d7a`; 2026-11-10, the MCP endpoint's test
     of `Bearer` alone or with only whitespace after it, and card-market's agents with a lowercase
-    scheme and its partners' empty key, at `ea4aff53`.
+    scheme and its partners' empty key, at `ea4aff53`; 2026-11-11, the test of `caller::bearer`'s
+    credentials (`crates/corten/src/caller.rs`: the scheme in any case, two spaces, `Bearer` alone
+    or with whitespace, `Basic`, a value outside visible ASCII) and the MCP endpoint's of a value
+    outside visible ASCII (`crates/corten/src/agent.rs`), at `751e26bb`, the commit that adds them.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
