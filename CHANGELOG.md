@@ -4375,6 +4375,19 @@ Corten is pre-1.0, so any minor version may change the API.
     and `corten ui add card --force` (an unedited copy) or `--merge` (an edited one) takes
     `card.rs` and `card.css`
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
+175. The watchlist smoke's seven submit-queue cases each wait for their own outcome (the
+    patch drawn, the form gone, the `corten:error`, the older read's late answer tried) and then
+    700 ms, in which a send the queue must not make would be seen, where each waited 2.5 seconds
+    for a `corten:error` that six of them never get. The fixture holds each case's first answer
+    until its second press is made, so the press meets the first submit still out however slow it
+    is, and the six cases with no error now check that none came. The queue's checks take 10 to 13
+    seconds per browser where they took 21.4 to 22 (the smoke's own times for the section: Firefox
+    11.3 to 12.7 against 21.9 to 22.0, four runs and three, alternated; Chromium 10.1 and 10.9
+    against 21.4 twice, WebKit 12.0 against 21.5 twice). A runtime that drew an aborted read, sent
+    after a 5xx, a 409 or a removed form, or kept the old submit key still fails the same checks
+    (c65c10ec's runtime with those rules taken out, in Chromium and Firefox), and the aborted read
+    is now checked to have been cancelled in the browser and not only to be undrawn
+    ([#1087 Watchlist queue smokes wait for a 2.5-second error timeout on six non-error outcomes](https://github.com/corten-run/corten/issues/1087)).
 177. An integer of 100 or more that markup or a message writes (`{count}`) goes into the page two
     digits at a time, one `push_str` of a pair from a table in place of one `push` a digit. The
     text is unchanged. Measured with callgrind (release build, three alternated runs each, 500
