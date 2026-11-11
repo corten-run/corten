@@ -18,71 +18,88 @@
 // (`?plain=1`) is not written today and not handled. Not read: CHANGELOG.md (a record of what
 // each release said), choices.test.mjs's fixtures and this file.
 //
-// And each commit the Markdown in docs/, README.md and CONTRIBUTING.md cites, where the evidence
-// the Choices and Limits and the published numbers rest on is dated: a code span of 7 to 40 hex
-// digits alone (`f56bef59`), the form scripts/choices.mjs reads a Last checked commit in, names a
-// commit this clone has (`git cat-file --batch-check` on `<sha>^{commit}`), so a number can be
-// taken again on the commit it was taken on. A cited commit no branch keeps is pushed under
-// refs/tags/evidence/<sha>. Another repository's commit is written as GitHub writes one,
-// `owner/repo@sha`, and is not resolved. A shallow clone fails once, saying to fetch the whole
-// history and the evidence tags, not once for each commit it cut off. Not read for commits: other
-// Markdown (bench/fullstack/README.md cites commits GitHub does not have yet) and code, where a
-// code span of hex digits is as often a number.
+// And each commit the repository's Markdown cites: a code span of 7 to 40 hex digits alone
+// (`f56bef59`), the form scripts/choices.mjs reads a Last checked commit in, names a commit on
+// HEAD's history (main's, or a branch's that merges into it) or under refs/tags/evidence/, which
+// keeps a cited commit no branch has (`evidence/<name>`, usually the commit's short name). So a
+// number can be taken again on the commit it was taken on, from a clone of corten-run/corten: a
+// commit the clone has but GitHub does not keep (one never pushed, or only on a side branch)
+// fails too. A hex code span that is not a commit fails the same way, and is written without
+// backticks or with its algorithm (`sha256:...`). Another repository's commit is written as GitHub
+// writes one, `owner/repo@sha`, and is not read, but that form naming Corten (`*/corten@sha`)
+// fails: Corten's own commit is written alone, so it is checked. A shallow clone fails once,
+// saying to fetch the whole history and the evidence tags, not once for each commit it cut off.
+// Not read for commits: code, where a code span of hex digits is as often a number, and
+// bench/fullstack/README.md (below).
 // Run by npm run check.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** A commit cited in Markdown: a code span of 7 to 40 hex digits alone. */
-const COMMIT = /`([0-9a-f]{7,40})`/g;
-/** Whether the commits the tracked file `file` cites are resolved. @param {string} file */
-const dated = (file) => file === "README.md" || file === "CONTRIBUTING.md" || (file.startsWith("docs/") && file.endsWith(".md"));
-/** The tags that keep cited commits no branch has. */
-const EVIDENCE = '"+refs/tags/evidence/*:refs/tags/evidence/*"';
+/** A commit cited in Markdown: a code span of 7 to 40 hex digits alone, or one written as a
+ * repository named corten's (`corten-run/corten@sha`), which is refused. */
+const COMMIT = /`(?:([\w.-]+\/corten)@)?([0-9a-f]{7,40})`/g;
+// Markdown whose commits are not checked: bench/fullstack/README.md cites three that GitHub does
+// not have, issue #1260 ("bench/fullstack/README.md cites three commits GitHub does not have
+// (2fa883a6, 1e1fb7be, eedbcc2a), outside the cited-commit check"). CHANGELOG.md is not read at all.
+const UNCHECKED = ["bench/fullstack/README.md"];
+/** Fetches the evidence tags from corten-run/corten itself, which a fork's origin may lack. */
+const FETCH = 'https://github.com/corten-run/corten.git "+refs/tags/evidence/*:refs/tags/evidence/*"';
 
 /**
- * Each commit the Markdown `text` cites, with its line (from 1).
- * @param {string} text @returns {{ line: number, sha: string }[]}
+ * Each commit the Markdown `text` cites, with its line (from 1), and the repository it was
+ * written as, when it was written as one named corten's.
+ * @param {string} text @returns {{ line: number, sha: string, as?: string }[]}
  */
 export function cited(text) {
-  return text.split(/\r?\n/).flatMap((line, i) => [...line.matchAll(COMMIT)].map((m) => ({ line: i + 1, sha: String(m[1]) })));
+  return text.split(/\r?\n/).flatMap((line, i) =>
+    [...line.matchAll(COMMIT)].map((m) => ({ line: i + 1, sha: String(m[2]), ...(m[1] ? { as: m[1] } : {}) })),
+  );
 }
 
 /**
  * The problems with the commits cited at `found` (`at` is `file:line`) in the clone at `root`:
- * one for a shallow clone, which cannot show them, or one for each citation of a commit the clone
- * lacks or of digits that start more than one object's name, and then how to fetch the evidence.
- * @param {string} root @param {{ at: string, sha: string }[]} found @returns {string[]}
+ * one for a shallow clone, which cannot show them, or one for each citation that writes Corten's
+ * commit as a repository's, names no commit on HEAD's history or under an evidence tag, or starts
+ * more than one's name, and then how to fetch the evidence tags.
+ * @param {string} root @param {{ at: string, sha: string, as?: string }[]} found @returns {string[]}
  */
 export function unresolved(root, found) {
   if (found.length === 0) return [];
-  // git's own stderr (`expected commit type` for a blob's name) is not the check's to show.
-  const git = (/** @type {string[]} */ args, input = "") => execFileSync("git", args, { cwd: root, encoding: "utf8", input, stdio: "pipe" });
+  const git = (/** @type {string[]} */ args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe", maxBuffer: 1 << 26 });
+  /** @type {string[]} */
+  const problems = [];
+  const own = found.filter((c) => !c.as);
+  for (const { at, sha, as } of found) {
+    if (as) problems.push(`${at}: \`${as}@${sha}\` names Corten's own commit; write it as \`${sha}\`, so it is checked`);
+  }
+  if (own.length === 0) return problems;
   if (git(["rev-parse", "--is-shallow-repository"]).trim() === "true") {
     return [
-      `this clone is shallow, so it cannot show that it has the ${found.length} commits cited; fetch the whole history and the evidence tags: git fetch --unshallow origin ${EVIDENCE}`,
+      ...problems,
+      `this clone is shallow, so it cannot show the ${own.length} commits cited; fetch the whole history and the evidence tags: git fetch --unshallow ${FETCH}`,
     ];
   }
-  const shas = [...new Set(found.map((c) => c.sha))];
-  // One answer a line, in order: `<full sha> commit <size>`, or `<sha>^{commit} missing` (also a
-  // name that is not a commit's) or `... ambiguous`.
-  const answers = git(["cat-file", "--batch-check"], shas.map((sha) => `${sha}^{commit}\n`).join("")).split("\n");
-  const answer = new Map(shas.map((sha, i) => [sha, answers[i]?.split(" ")[1]]));
-  const problems = [];
+  // Every commit on HEAD's history or an evidence tag's, by its full name. A cited name is one's
+  // start; a few thousand names, matched against a few hundred citations.
+  const reachable = git(["rev-list", "HEAD", "--glob=refs/tags/evidence/*"]).split("\n").filter(Boolean);
+  /** @type {Map<string, number>} */
+  const matches = new Map();
+  for (const sha of new Set(own.map((c) => c.sha))) matches.set(sha, reachable.filter((name) => name.startsWith(sha)).length);
   let missing = false;
-  for (const { at, sha } of found) {
-    const kind = answer.get(sha);
-    if (kind === "commit") continue;
-    if (kind === "ambiguous") problems.push(`${at}: \`${sha}\` starts more than one object's name; cite more of its digits`);
+  for (const { at, sha } of own) {
+    const n = matches.get(sha);
+    if (n === 1) continue;
+    if (n) problems.push(`${at}: \`${sha}\` starts the names of ${n} commits; cite more of its digits`);
     else {
-      problems.push(`${at}: \`${sha}\` is not a commit this clone has`);
+      problems.push(`${at}: \`${sha}\` is not a commit on HEAD's history or under refs/tags/evidence/`);
       missing = true;
     }
   }
   if (missing) {
     problems.push(
-      `a cited commit is one on GitHub, on main or under refs/tags/evidence/<sha> (another repository's is written \`owner/repo@sha\`); fetch the evidence tags: git fetch origin ${EVIDENCE}`,
+      `a cited commit is on main (or this branch) or kept under refs/tags/evidence/<name>; fetch the evidence tags: git fetch ${FETCH}. Hex that is not a commit is written without backticks, or with its algorithm (\`sha256:...\`)`,
     );
   }
   return problems;
@@ -142,7 +159,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const capital = /\b(?:Choices?|Limits?|Rules?),? \d+\b/;
   const lowerDesign = /\bdesign (?:choices?|rules?|limits?),? \d+\b/i;
   let links = 0;
-  /** Each commit the Markdown cites. @type {{ at: string, sha: string }[]} */
+  /** Each commit the Markdown cites. @type {{ at: string, sha: string, as?: string }[]} */
   const commits = [];
   for (const file of files) {
     // A tracked file deleted in the working tree but not staged is still listed.
@@ -181,7 +198,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     /** @type {string | null} */
     let fence = null;
     const source = readFileSync(join(root, file), "utf8");
-    if (dated(file)) commits.push(...cited(source).map(({ line, sha }) => ({ at: `${file}:${line}`, sha })));
+    if (markdown && !UNCHECKED.includes(file)) commits.push(...cited(source).map((c) => ({ ...c, at: `${file}:${c.line}` })));
     const lines = source.split(/\r?\n/);
     /** Each line with its citations taken out, or null when it is not read. @type {(string | null)[]} */
     const rests = lines.map((line, i) => {
@@ -277,15 +294,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     });
   }
   if (files.length < 100 || links < 20) problems.push(`found only ${files.length} files and ${links} citations of design.md's items`);
-  // About 200 when this was written: fewer means the files or the form were missed, not that the
+  // About 220 when this was written: fewer means the files or the form were missed, not that the
   // citations went.
-  if (commits.length < 100) problems.push(`found only ${commits.length} citations of commits in docs/, README.md and CONTRIBUTING.md`);
+  if (commits.length < 100) problems.push(`found only ${commits.length} citations of commits in the Markdown`);
   problems.push(...unresolved(root, commits));
   if (problems.length) {
     console.error(`design-refs: ${problems.length} problem(s)\n${problems.join("\n")}`);
     process.exit(1);
   }
   console.log(
-    `design-refs: ${links} citations of ${[...anchors.values()].reduce((n, items) => n + items.size, 0)} items, in ${files.length} files; ${commits.length} citations of ${new Set(commits.map((c) => c.sha)).size} commits, each one this clone has`,
+    `design-refs: ${links} citations of ${[...anchors.values()].reduce((n, items) => n + items.size, 0)} items, in ${files.length} files; ${commits.length} citations of ${new Set(commits.map((c) => c.sha)).size} commits, each one on HEAD's history or under an evidence tag`,
   );
 }

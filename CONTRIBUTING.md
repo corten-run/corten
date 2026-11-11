@@ -68,12 +68,13 @@ the code does not have. The folder name must be one Docker accepts in a volume n
 digits, `_`, `.` and `-`). The registry volume, `corten-cargo`, holds only downloaded crates and
 is shared. When you remove a checkout, remove its two volumes too.
 
-`npm run check` fails on a commit `docs/`, `README.md` or `CONTRIBUTING.md` cites that the clone
-does not have (`scripts/design-refs.mjs`), so it needs the whole history and the tags
-`refs/tags/evidence/<sha>`, which keep cited commits no branch has. A plain `git clone` has both,
-but `git fetch` brings a new evidence tag only with `--tags`; when the check names a commit, run
-`git fetch origin "+refs/tags/evidence/*:refs/tags/evidence/*"` (in a shallow clone, with
-`--unshallow`).
+`npm run check` fails on a commit the Markdown cites that is not on the checkout's history or
+under `refs/tags/evidence/` (`scripts/design-refs.mjs`), so it needs the whole history and those
+tags, which keep cited commits no branch has. A plain `git clone` of corten-run/corten has both,
+but a fork's clone may lack the tags, and `git fetch` brings a new one only with `--tags`; when
+the check names a commit, run
+`git fetch https://github.com/corten-run/corten.git "+refs/tags/evidence/*:refs/tags/evidence/*"`
+(in a shallow clone, with `--unshallow`).
 
 ```powershell
 $checkout = Split-Path -Leaf $PWD
@@ -223,10 +224,11 @@ establish a general ranking.
    Measure release builds and alternate runs of the two. Give the tool, the number of runs and
    their median and range; when one build's runs vary more than the two builds differ, say so
    instead of reporting a difference.
-   A number cited in `docs/`, `README.md` or `CONTRIBUTING.md` names the commit it ran on, in
-   backticks. A commit no branch that merges will keep (a prototype's, or one on a branch remade
-   before it merged) is pushed as an annotated tag `evidence/<sha>` saying what it backs, since
-   `npm run check` fails on a cited commit the clone lacks.
+   A number cited in the repository's Markdown names the commit it ran on, in backticks. A commit
+   no branch that merges will keep (a prototype's, or one on a branch remade before it merged) is
+   pushed to corten-run/corten as an annotated tag `evidence/<name>` (usually the commit's short
+   name) saying what it backs, since `npm run check` fails on a cited commit that is not on the
+   checkout's history or under an evidence tag.
 3. Update the guide in `docs/guide/` that describes the behavior, and add a line to
    `CHANGELOG.md` under Unreleased.
 4. Commit messages say what changed and why, in plain sentences.

@@ -51,9 +51,9 @@ the pull request that moves it says how, so the next check can repeat it; an old
 to check next. `npm run check` refuses a Choice without all three, a premise of a kind not listed
 here or a value before another kind, a Last checked entry without a date no later than today and a
 commit or versions, and Choices out of order (`scripts/choices.mjs`). A commit is cited in
-backticks, another repository's as GitHub writes it (`owner/repo@sha`), and one of Corten's is on
-GitHub: on `main`, or, when no branch keeps it, under `refs/tags/evidence/<sha>`; `npm run check`
-fails on one the clone does not have (`scripts/design-refs.mjs`).
+backticks, another repository's as GitHub writes it (`owner/repo@sha`), and one of Corten's alone,
+on GitHub: on `main`, or, when no branch keeps it, under `refs/tags/evidence/<name>` (usually its
+short name); `npm run check` fails on one that is on neither (`scripts/design-refs.mjs`).
 
 The Rules and Limits below have none of the three: a Rule applies the values to code and changes
 with them, and a Limit is what Corten does not do, saying, where it is known, what would lift it
