@@ -158,10 +158,7 @@ impl Cache {
     /// Sets the response's `Cache-Control` to this, as [`settle`] reads it.
     pub(crate) fn apply(self, res: &mut Response) {
         res.headers_mut().insert(header::CACHE_CONTROL, self.header());
-        res.extensions_mut().insert(Typed);
-        if self.kind == Kind::Immutable {
-            res.extensions_mut().insert(Named);
-        }
+        res.extensions_mut().insert(Typed { named: self.kind == Kind::Immutable });
     }
 }
 
@@ -170,18 +167,18 @@ impl IntoResponseParts for Cache {
 
     fn into_response_parts(self, mut res: ResponseParts) -> Result<ResponseParts, Self::Error> {
         res.headers_mut().insert(header::CACHE_CONTROL, self.header());
-        res.extensions_mut().insert(Typed);
+        res.extensions_mut().insert(Typed { named: false });
         Ok(res)
     }
 }
 
 /// Marks a `Cache-Control` that came from [`Cache`], which [`settle`] checks against the request.
+/// One extension, not two, since each costs a lookup.
 #[derive(Clone, Copy)]
-struct Typed;
-
-/// Marks a [`Cache::immutable`] answer: its URL names it, so the request's cookies do not change it.
-#[derive(Clone, Copy)]
-struct Named;
+struct Typed {
+    /// A [`Cache::immutable`] answer: its URL names it, so the request's cookies do not change it.
+    named: bool,
+}
 
 /// The default for what the app renders.
 pub(crate) const PRIVATE: HeaderValue = HeaderValue::from_static("private, no-cache");
@@ -227,7 +224,7 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
     // One lookup for the usual response, which says nothing.
     // `personal`: what an answer that may differ between users is sent instead of a header that
     // would let a cache keep it.
-    let (text, personal) = match res.headers_mut().entry(header::CACHE_CONTROL) {
+    match res.headers_mut().entry(header::CACHE_CONTROL) {
         header::Entry::Vacant(entry) => {
             entry.insert(PRIVATE);
             return;
@@ -277,14 +274,19 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
             if private && plain && !(must_understand && entry.iter().any(|line| mentions_no_store(line.as_bytes()))) {
                 return;
             }
-            // A personal answer whose header is replaced below gets `no-store` if any reader
-            // could find one in it (`no-store=1`, inside a quoted value, with `must-understand`):
-            // stricter than `private, no-cache` for every reading.
-            let personal = if entry.iter().any(|line| mentions_no_store(line.as_bytes())) { NO_STORE } else { PRIVATE };
-            (entry.get().to_str().unwrap_or("").to_string(), personal)
+        }
+    }
+    // A personal answer whose header is replaced below gets `no-store` if any reader could find
+    // one in it (`no-store=1`, inside a quoted value, with `must-understand`): stricter than
+    // `private, no-cache` for every reading. Read only when the header is replaced.
+    let personal = |headers: &HeaderMap| {
+        if headers.get_all(header::CACHE_CONTROL).iter().any(|line| mentions_no_store(line.as_bytes())) {
+            NO_STORE
+        } else {
+            PRIVATE
         }
     };
-    let typed = res.extensions().get::<Typed>().is_some();
+    let typed = res.extensions().get::<Typed>().copied();
     let headers = res.headers_mut();
     let bug = if seen.nonce {
         Some("its HTML has this request's CSP nonce (req.nonce() in the layout, or a handler that takes Nonce)")
@@ -301,22 +303,19 @@ pub(crate) fn settle(res: &mut Response, seen: Seen, path: &str) {
         if seen.dev {
             tracing::warn!("corten: {path} is marked for shared caches, but {bug}, so it was sent private, no-cache (or no-store, if its header names it)");
         }
-        headers.insert(header::CACHE_CONTROL, personal);
+        headers.insert(header::CACHE_CONTROL, personal(headers));
         return;
     }
-    let named = res.extensions().get::<Named>().is_some();
-    let headers = res.headers_mut();
-    if seen.caller || (typed && seen.credentials && !named) {
-        headers.insert(header::CACHE_CONTROL, personal);
+    if seen.caller || typed.is_some_and(|typed| seen.credentials && !typed.named) {
+        headers.insert(header::CACHE_CONTROL, personal(headers));
         return;
     }
-    if !typed {
-        return;
-    }
+    let Some(typed) = typed else { return };
     if seen.partial {
-        headers.insert(header::CACHE_CONTROL, private(&text));
+        let browser = private(headers.get(header::CACHE_CONTROL).and_then(|v| v.to_str().ok()).unwrap_or(""));
+        headers.insert(header::CACHE_CONTROL, browser);
     }
-    if !named {
+    if !typed.named {
         headers.append(header::VARY, HeaderValue::from_static("cookie"));
     }
 }
@@ -576,7 +575,7 @@ mod tests {
             res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static(cache));
         }
         if typed {
-            res.extensions_mut().insert(Typed);
+            res.extensions_mut().insert(Typed { named: false });
         }
         if cookie {
             res.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_static("a=b"));
