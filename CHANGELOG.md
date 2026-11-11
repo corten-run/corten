@@ -279,20 +279,21 @@ Corten is pre-1.0, so any minor version may change the API.
     call; this checks its body. An app with scripts needs `tsc` (Changed 158). Asked for by the
     Chase Sets pilot
     ([#20 corten check does not type-check an app's scripts](https://github.com/todd-skelton/corten/issues/20)).
-34. `#[derive(FromJson)]`, `corten::json::from_slice` and `from_str` (feature `json`, the derive in the
-    prelude): JSON read by Corten's reader, which matches each key against the type's fields, makes
-    each value straight from the text and skips (validating) the rest. Where it meets anything it
-    does not follow (an escaped key, a missing or duplicate field, a number it does not parse
+34. `#[derive(FromJson)]`, `corten::json::from_slice` and `from_str` (feature `json`, the derive
+    in the prelude): JSON read by Corten's reader, which matches each key against the type's fields,
+    makes each value straight from the text and skips (validating) the rest. Where it meets anything
+    it does not follow (an escaped key, a missing or duplicate field, a number it does not parse
     itself) serde_json reads the text instead, so the value and every error are serde_json's; it
-    needs `Deserialize` next to it for that. It reads `rename`, `rename_all`, `alias`, `default`,
-    `skip`, `skip_deserializing`, `deny_unknown_fields` and `transparent`; one it cannot follow, or
-    an enum with data, does not compile, and a field of a type with only `Deserialize` is read by
-    serde_json from its own text. `examples/item-page` reads its item API's response with it:
-    measured in process (`perf_event`, user-mode instructions, release build, the 500 benchmark
-    responses of 55 KB), 878,078 instructions a response through serde_json and 698,733 through
-    `FromJson` (-20.4%), 913,151 and 733,130 with the conversion into the view model;
-    `render_cost` (median of 3) reads one in 304.8 µs through serde_json and 185.5 µs. Its
-    `render_cost` checks the 500 responses read the same both ways.
+    needs `Deserialize` next to it for that (it writes the `Deserialize` itself since Changed 170).
+    It reads `rename`, `rename_all`, `alias`, `default`, `skip`, `skip_deserializing`,
+    `deny_unknown_fields` and `transparent`; one it cannot follow, or an enum with data, does not
+    compile, and a field of a type with only `Deserialize` is read by serde_json from its own text.
+    `examples/item-page` reads its item API's response with it: measured in process (`perf_event`,
+    user-mode instructions, release build, the 500 benchmark responses of 55 KB), 878,078
+    instructions a response through serde_json and 698,733 through `FromJson` (-20.4%), 913,151 and
+    733,130 with the conversion into the view model; `render_cost` (median of 3) reads one in 304.8
+    µs through serde_json and 185.5 µs. Its `render_cost` checks the 500 responses read the same
+    both ways.
 35. Live streams are compressed (feature `compress`). A `corten::live` or feed response to a client
     that accepts zstd or gzip is one compressed stream per connection, flushed after every event,
     with the context kept between events; never brotli
@@ -3066,15 +3067,16 @@ Corten is pre-1.0, so any minor version may change the API.
     16.0 µs after).
 35. The JSON a request reads or answers with goes through Corten's own JSON code where it still
     went through `serde_json`: the `Json` extractor needs `T: FromJson` (derive it next to
-    `Deserialize`) and reads an `application/json` body with Corten's reader, leaving any other
-    JSON content type, and any body the reader gives up on, to axum, so the value and every
-    rejection are axum's; `req.screen`'s data, `Meta::json_ld` and a handler argument of a JSDoc
-    type Corten does not check need `ToJson` instead of `Serialize`, with the same bytes out.
-    Measured on the benchmark's 500 items (`perf_event`, user-mode instructions, release build,
-    lowest of each run's passes, three runs within 0.5%): reading an item API response (55 KB)
-    through the extractor 1,616,862 before and 725,531 after (-55%; axum's `Json` tracks the path
-    to an error as it reads), `json_ld` of the item's view model 106,164 and 50,265 (-53%), and a
-    whole `Accept: application/json` request for a `req.screen` of it 123,664 and 69,200 (-44%).
+    `Deserialize`; since Changed 170, `FromJson` alone) and reads an `application/json` body with
+    Corten's reader, leaving any other JSON content type, and any body the reader gives up on, to
+    axum, so the value and every rejection are axum's; `req.screen`'s data, `Meta::json_ld` and a
+    handler argument of a JSDoc type Corten does not check need `ToJson` instead of `Serialize`,
+    with the same bytes out. Measured on the benchmark's 500 items (`perf_event`, user-mode
+    instructions, release build, lowest of each run's passes, three runs within 0.5%): reading an
+    item API response (55 KB) through the extractor 1,616,862 before and 725,531 after (-55%; axum's
+    `Json` tracks the path to an error as it reads), `json_ld` of the item's view model 106,164 and
+    50,265 (-53%), and a whole `Accept: application/json` request for a `req.screen` of it 123,664
+    and 69,200 (-44%).
 36. `FromJson` reads with less work per value: skipping a value tests for whitespace with one
     compare where it tested four, a number no longer skips whitespace its caller already skipped,
     and a struct with a container `#[serde(default)]` is read over that default (each field written
@@ -4401,6 +4403,99 @@ Corten is pre-1.0, so any minor version may change the API.
     counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
     every row and removes its app however the run ends
     ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
+170. `#[derive(FromJson)]` writes the type's serde `Deserialize` too, from the same
+    `#[serde(..)]` its reader reads, so a type read from JSON derives one thing. The impl is
+    serde_derive's for the shapes and attributes `FromJson` reads (named, tuple, newtype and unit
+    structs, `transparent`, enums of unit variants; names, aliases, defaults, `skip`,
+    `deny_unknown_fields`, `expecting`, `bound`): `tests/derived_deserialize.rs` reads each shape
+    with it and with serde's derive and compares values, errors and the names passed to the
+    deserializer, and through Corten's reader too. A type whose `Deserialize` is written by hand, or
+    derived by serde for an attribute `FromJson` refuses (`flatten`), becomes a `FromJson` with an
+    empty `impl corten::FromJson for T {}`, read by serde_json: alone, in serde_json's one pass;
+    inside a derived type or a `Vec`, from its own text, which the reader finds first.
+    `#[derive(Fields)]` and `#[derive(UrlValue)]`, which write the type's `Deserialize` already, now
+    write its `FromJson` (feature `json`) and schema (`types`) too, so a form's input is read from
+    JSON, and is an agent tool's input, as it is, and a query's list of a `UrlValue` is described by
+    its words. A generic one is a `FromJson` wherever its `Deserialize` applies, read by serde_json
+    rather than Corten's reader (nested in another value, read twice: the reader finds its text and
+    serde_json reads it), so a generic form that derived `FromJson` beside `Fields` before, and was
+    read by the reader, is now read by serde_json; a `UrlValue` enum with `#[serde(other)]` reads
+    any other word as that variant (the reader gives up on the whole text there, and serde_json
+    reads it again) and is described as any string; a form input whose fields borrow from the input
+    cannot be a `FromJson`, which reads owned values. A generic `#[derive(FromJson)]` type is a
+    `FromJson` wherever its `Deserialize` applies, so one with a defaulted field holding its
+    parameter (`Vec<T>`), which failed to compile beside serde's derive, compiles and is read by
+    Corten's reader; a defaulted bare `T` is still refused. `#[serde(other)]` on
+    `#[derive(FromJson)]` names `UrlValue` as the derive that reads it. A type that needs `FromJson`
+    and lacks it is told the ways to get one in the compiler's note. An enum with a shift in a
+    discriminant (`B = 1 << 1`) is read whole by `UrlValue` and `FromJson` (and `ToJson` splits its
+    variants the same way): the shift hid the variants after it. **Migration:** take `Deserialize`
+    out of a derive list that has `FromJson`, and `FromJson` out of one that has `Fields` or
+    `UrlValue`, and remove a hand-written `impl FromJson` or `impl FromJsonSchema` for a `Fields` or
+    `UrlValue` type: each is now a second impl (E0119). Reading the benchmark's 500 item API
+    responses costs the same: 265,550,044 instructions through `FromJson` and 438,766,522 through
+    serde_json alone, before and after (callgrind, release build, `read_cost` in
+    `examples/card-market`, two runs each)
+    ([#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
+173. An agent tool's output (`Tools::tool`, `idempotent_tool`, `read_tool`) is a `ToJson` and is
+    written by it, so it derives `ToJson` alone, as every other JSON answer does, where it needed
+    serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
+    The answer is the same JSON (card-market's agent test checks its bytes against serde's for the
+    item). An `items.get` call costs about 21% fewer instructions: 266,844 a call before (265,376 to
+    267,830) and 211,152 after (211,123 to 211,865), with the same answer, 14,464 bytes on average
+    over the calls counted (callgrind, release build, card-market's `tool_cost`, 1,200 calls less
+    200 over 1,000, medians and ranges of three alternating runs, on `217bce2c` and `6d04bbe6`). No
+    data-role attribute is added beside `ToJson` and `FromJson`, which already name each type's
+    direction ([design Choice 38](docs/design.md#choice-json-derives)). **Breaking:** the type a
+    tool returns must be a `ToJson` and the type it takes a `FromJson`, as must any container around
+    them (a derived struct's own fields still fall back to serde), so what was only `Serialize` or
+    `Deserialize` no longer compiles as one: an output whose `Serialize` is derived by serde or
+    written by hand, with a `ToJsonSchema` written by hand; an input that is a `Deserialize` with a
+    `FromJsonSchema` written by hand; a container (`Box`, a map, `Cow`, `Arc`) whose item or value
+    is one of those or another crate's type; a derived generic type, output or input, whose type
+    argument is not `ToJson` or `FromJson`; an output map whose key is not a `JsonKey` (an app's key
+    type implements `corten::json::JsonKey`, writing the text serde writes for it; an externally
+    tagged enum of unit variants that derives `ToJson` gets one from the derive, so an app's own
+    `impl JsonKey` for one is E0119 and is removed); and an input map whose key is not `String`
+    (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types Corten gives a schema for are
+    `ToJson`, and `FromJson` in their owned forms (`str`, `[T]`, `Path` and `RawValue` boxed or
+    shared), written and read as serde does (`Duration`, `SystemTime`, IP and socket addresses,
+    paths, the `NonZero` integers, `PhantomData`, `serde_json::Number` and, with the `types`
+    feature, `RawValue`), as are `Cow<T>`, `Box<str>`, `Box<Path>` and `Box<[T]>`, the 128-bit
+    integers, sets, `VecDeque`, arrays (read up to 32 items, as serde reads them) and tuples, and
+    `Arc` and `Rc` of a `FromJson`, of `str`, of `Path`, of `[T]` or (with `types`) of `RawValue`,
+    which are read with serde's `rc` feature. Derive `ToJson` or `FromJson`; a `Serialize` or
+    `Deserialize` type that has a schema but is not one (another crate's, or a map of one) goes in a
+    `#[serde(transparent)]` newtype that derives it; only a type whose output schema is written by
+    hand implements `ToJson` by hand beside it (`serde_json::to_writer(&mut *out,
+    &self.0).expect(..)` in a newtype, for another crate's type); an input whose `Deserialize` is
+    not `FromJson`'s takes `impl corten::FromJson for T {}`; an input type the orphan rule keeps an
+    app from implementing it for (a map with other keys) goes in a `#[serde(transparent)]` newtype
+    that derives `FromJson`. `serde_json::Map<String, Value>` is now a `FromJson`, so an input read
+    as any object compiles as before. CI and the Checks build `corten-run` with `json` alone and
+    with `agent` and `feed` alone, as an app takes them, since the workspace turns on serde's `rc`
+    and an app need not. A field whose own `Serialize` fails (a map with a key JSON cannot hold,
+    inside another crate's type, or a std type serde refuses: a path that is not UTF-8, a
+    `SystemTime` before the epoch) panics in its `ToJson`; for a tool's output the call catches it
+    and answers the tool's internal error with the call's `id`, as before, and logs the tool's name
+    with the panic's message (a test holds it; an app built with `panic = "abort"` ends instead). A
+    tool output derived over types whose `ToJson` Corten or serde writes goes out unparsed (a type
+    that holds itself, a tree, included); one that is or holds a `ToJson` or map key (`JsonKey`)
+    written by hand is parsed before it is sent, and
+    one that is not one JSON object is the tool's internal error, logged with the tool's name, the
+    output's size and the fault, not its data (a debug build, `corten dev` or tests without
+    `--release`, parses every output and answers a bad one with the app's 500 and a log line
+    naming the tool). Parsing every output in a release build measured about 92,700 more
+    instructions a call (medians 303,500 against 210,762 over three runs, 44% of `tool_cost`'s),
+    which a derived output does not pay; whether to parse is decided once, when the tool is added.
+    An enum whose `Serialize` is not serde's derive (written by hand, or `serde_repr`'s number) and
+    that derives `ToJson` writes what its `#[serde(..)]` attributes say, its variant's name for a
+    unit variant, as a value and as a map key, not what that `Serialize` writes. To keep what its
+    `Serialize` writes, do not derive `ToJson` on it: as a field it is then written by serde, and as
+    a map key it takes a hand-written `JsonKey` that writes the text serde writes. A tool's output
+    can hold `Raw`, a `ToJson` with any JSON value as its schema; the app guide said it needed
+    `Box<RawValue>`, which only a feed row still does
+    ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 172. The kit's `Card` and `CardPanel` take a `size` (`CardSize::Md`, the theme's `--card-padding`,
     or `Sm`, denser), as `Button`, `Dialog` and `Progress` do, and `CardCompact` is gone: it was a
     class written beside a card (`(Card {}, CardCompact {})`) that compiled alone or beside any
@@ -4469,7 +4564,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `rows(..).at(i)` is `V | undefined`: none past either end, and a negative `i` counts back
     from the last, as an array's `at()`, where it gave a view of no row before. The kit's
     `ComboBox` with no options threw on Enter after Arrow Down; it closes now.
-    `exactOptionalPropertyTypes` is not used (design Choice 38)
+    `exactOptionalPropertyTypes` is not used ([design Choice 39](docs/design.md#choice-script-checks))
     ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)).
 171. `subscribe()` checks the envelope of what a feed sends: a snapshot's `epoch`, `seq` and
     `rows`, and a patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An
@@ -4482,7 +4577,7 @@ Corten is pre-1.0, so any minor version may change the API.
     `npm run check` fails on an explicit `any` or a `@ts-ignore` in them. card-market's push
     worker shows a message with no title as an empty title, where it showed "undefined", and opens
     `/` for a `url` that is not text. The runtime's gzip size grows by 202 bytes, 129 of them the
-    feed's checks (design Choice 39)
+    feed's checks ([design Choice 40](docs/design.md#choice-script-boundaries))
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed

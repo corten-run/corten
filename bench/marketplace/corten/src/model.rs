@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, corten::FromJson, corten::ToJson)]
+use serde::Serialize;
+#[derive(Clone, Debug, PartialEq, Serialize, corten::FromJson, corten::ToJson)]
 pub struct Record {
     pub id: String,
     pub title: String,
@@ -16,23 +16,23 @@ pub struct Record {
     pub contents: Vec<ContentLine>,
     pub included_in: Vec<ContentLine>,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, corten::FromJson, corten::ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, corten::FromJson, corten::ToJson)]
 pub struct Category {
     pub name: String,
     pub slug: String,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, corten::FromJson, corten::ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, corten::FromJson, corten::ToJson)]
 pub struct Field {
     pub name: String,
     pub value: String,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, corten::FromJson, corten::ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, corten::FromJson, corten::ToJson)]
 pub struct Summary {
     pub lowest_minor: Option<i64>,
     pub count: u64,
     pub quantity: u64,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, corten::FromJson, corten::ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, corten::FromJson, corten::ToJson)]
 pub struct Listing {
     pub id: String,
     pub seller: String,
@@ -43,7 +43,7 @@ pub struct Listing {
     pub quantity: u64,
     pub price_minor: Option<i64>,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, corten::FromJson, corten::ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, corten::FromJson, corten::ToJson)]
 pub struct Offer {
     pub id: String,
     pub buyer: String,
@@ -51,7 +51,7 @@ pub struct Offer {
     pub quantity: u64,
     pub price_minor: Option<i64>,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, corten::FromJson, corten::ToJson)]
+#[derive(Clone, Debug, PartialEq, Serialize, corten::FromJson, corten::ToJson)]
 pub struct ContentLine {
     pub id: String,
     pub item_id: String,

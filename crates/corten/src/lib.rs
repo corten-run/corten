@@ -83,6 +83,24 @@ macro_rules! __if_types {
     ($($item:tt)*) => {};
 }
 
+/// What `#[derive(Fields)]` and `#[derive(UrlValue)]` wrap their `FromJson` impl in: kept with
+/// the `json` feature, dropped without it. Not a public API.
+#[cfg(feature = "json")]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __if_json {
+    ($($item:tt)*) => { $($item)* };
+}
+
+/// What `#[derive(Fields)]` and `#[derive(UrlValue)]` wrap their `FromJson` impl in: kept with
+/// the `json` feature, dropped without it. Not a public API.
+#[cfg(not(feature = "json"))]
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __if_json {
+    ($($item:tt)*) => {};
+}
+
 /// What `#[corten::routes(api = .., openapi = ..)]` builds its document in: the document with the
 /// `types` feature, an error that names the feature without it. Not a public API.
 #[cfg(feature = "types")]
@@ -558,7 +576,13 @@ pub use client::{ClientIp, ClientZone};
 ///
 /// The derive also reads the form: it implements serde's `Deserialize` as serde's derive would
 /// from the same `#[serde(..)]`, so the names posted and the names read are one list and the
-/// struct derives nothing else for [`Form`]:
+/// struct derives nothing else for [`Form`]. With the `json` feature it is a
+/// [`FromJson`](json::FromJson) too, and with `types` it has its schema, so the same struct is
+/// a JSON body or an agent tool's input, and `FromJson` beside it is a second impl (E0119). A
+/// generic struct is one wherever its `Deserialize` applies (`Offer<u32>`), read by serde_json
+/// rather than Corten's reader. One whose
+/// fields borrow from the input (a `&'a str`, a `#[serde(borrow)]`) cannot be one, since
+/// `FromJson` reads owned values.
 ///
 /// ```
 /// use corten::prelude::*;
