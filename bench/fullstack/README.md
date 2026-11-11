@@ -98,7 +98,9 @@ security headers and `Cache-Control: private, no-cache`, a 10-second deadline an
 compression when asked (brotli and gzip; Corten also offers zstd), a host allow-list (`HOSTS`),
 and `/health/live` and `/health/ready` (ready while the item API answers). It differs in what
 ASP.NET Core does differently: a host it does not know gets a 400 HTML page without the security
-headers, before the app's middleware (Corten: 421 with its headers), a problem body carries ASP.NET Core's `type` and
+headers, before the app's middleware (Corten: 421 with its headers), its exception handler's 500
+and request timeout's 503 clear the answer and go without them, a problem body carries
+ASP.NET Core's `type` and
 `trace_id`, the host list has no rule for "any IP address", a whole number in a double is
 written `9` where Corten writes `9.0` (218 bytes fewer over the fixture's 3.34 MB of JSON;
 otherwise the bytes are the same for every fixture item), text with HTML's characters (`<`, `&`,
@@ -953,8 +955,9 @@ User instructions only (callgrind does not see the kernel's), on glibc's allocat
 crate bundles, where the rounds' image preloads jemalloc and links Debian's libzstd
 ([design Choice 23](../../docs/design.md#choice-jemalloc-image) puts this page at about 83,000
 under jemalloc against 87,000), so these are the rounds' request shape, not their configuration.
-Requests per CPU-second under load were not measured, which needs a droplet round ([#1052 No number says what each of Corten's production defaults costs in requests per CPU-second under load, only in instructions on one connection](https://github.com/corten-run/corten/issues/1052)) ([cost-by-default.sh](cost-by-default.sh), split by [cost-by-default.mjs](cost-by-default.mjs);
-results and each build's answer headers in [results/defaults1](results/defaults1/)). The headers
+These counts are [cost-by-default.sh](cost-by-default.sh)'s, split by [cost-by-default.mjs](cost-by-default.mjs)
+(results and each build's answer headers in [results/defaults1](results/defaults1/)); requests per
+CPU-second under load are [below](#what-each-production-default-costs-under-load-c-8-droplet-2026-11-08). The headers
 show what four patches remove: the security headers patch seven headers on the page and five on
 the JSON, the `Cache-Control` patch that header, the `ETag` patch the page's tag for a browser
 (nothing else is tagged), and the compression patch `Vary: accept-encoding`, with
@@ -1010,6 +1013,88 @@ would leave Corten's rows as they are; what the same features cost the other app
 own framework's middleware, is not measured here. This runs outside rounds, Corten alone, when
 a default changes
 ([#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)).
+
+### What each production default costs under load (c-8 droplet, 2026-11-08)
+
+The same nine builds, as a round's image makes them (card-market's Dockerfile: release, jemalloc
+preloaded, Debian's libzstd), each served the item page and its JSON from memory on the app's one
+pinned CPU of a fresh c-8 droplet, with `ab.mjs` running them one after another, three rounds, each
+phase after a warmup: a fixed 300 requests a second and 64 users, with `Accept-Encoding: identity`
+and with a browser's. CPU is the app's cgroup's; no request failed. A default's cost is the CPU a
+request takes in the build as it is less in the build without it, round by round, median (range) of
+the three ([cost-under-load.sh](cost-under-load.sh), split by
+[cost-under-load.mjs](cost-under-load.mjs); [results/cost-under-load](results/cost-under-load/)).
+Round to round a build moves by about 3 microseconds (median) and up to 9 in either phase, so a row
+whose range crosses zero says no cost that can be seen. Each round ran the build as it is first and
+the others after it in one order, so a drift within a round reads as a cost (or, if later slots run
+faster, a saving) on every row: for a browser's page at 64 users the build as it is was the slowest
+of the nine in two rounds of three, and every default there shows a cost. `ab.mjs` now starts each
+round one image later, which would remove a cost on the first slot alone (when no image runs first
+in half the rounds or more) but not a drift across the round, which needs the build as it is beside
+each variant; this data shows neither clearly. k6 had four load CPUs (`BENCH_LOAD_CPUS=4-7`), not
+the six a round gives an app serving from memory (`BENCH_FIXTURE_LOAD_CPUS`, which `ab.mjs` uses
+now). What the run kept of its setting is the droplet's script and CPU (`run.sh` and `host.txt` in
+the results: a Xeon Platinum 8168, `BENCH_APP_CPUS=1`, `AB_ROUNDS=3`); its source was sent as a copy
+of a working tree, so the images and results carry no record of the commit (the tree's head was
+`e6d5b61c` by the operator's note, which nothing here can check). Beside them are every phase's k6
+and stats files (`raw.tar.xz`). `cost-under-load.sh` now labels the images and writes `source.txt`
+beside the results (a new run belongs in an `OUT` of its own, so it is not read with this one's
+`run.sh`). The page's 37.5 microseconds on `identity` are about a fifth below the r16 round's 47
+(21,195 a CPU-second), from the same cgroup counter and CPU model. r16's image preloaded no jemalloc
+(it came to card-market's Dockerfile after r16's commit), and
+[Choice 23](../../docs/design.md#choice-jemalloc-image) counts about 83,000 instructions a page with
+it against 87,000 without; the droplet, the commit, the round's settings and k6's phase and cores
+differ too, and which of them accounts for the gap was not measured.
+
+At 64 users, CPU microseconds a request (the app's CPU was 86-101% busy: k6, on its four CPUs,
+did not keep it saturated, so these are CPU a request, not the most it can serve):
+
+| Default removed | Page, `identity` | Page, browser | JSON, `identity` | JSON, browser |
+|---|---|---|---|---|
+| None: requests per CPU-second | 26,656 (25,385-26,693) | 11,722 (11,715-12,754) | 31,813 (29,817-32,015) | 17,604 (16,925-17,823) |
+| None: CPU microseconds a request | 37.5 | 85.3 | 31.4 | 56.8 |
+| Security headers and the CSP | 0.8 (-1.6 to 2.4) | 9.5 (-0.9 to 11.1) | 1.4 (-0.01 to 3.8) | 2.8 (2.1-3.4) |
+| The host check and the same-origin write check | 0.6 (-0.1 to 2.5) | 1.8 (-1.5 to 5.5) | 0.1 (-0.4 to 2.1) | -3.2 (-7.2 to 3.8) |
+| The deadline and the panic catch | -1.3 (-1.6 to -0.7) | 3.5 (-1.0 to 6.7) | -0.4 (-1.6 to 0.8) | -1.8 (-3.8 to -0.8) |
+| Compression | 1.8 (1.7-4.0) | 45.1 (36.5-45.3) | 0.7 (-1.9 to 2.2) | 25.2 (24.6-27.2) |
+| The `ETag` | 1.8 (-1.9 to 2.4) | 6.1 (4.3-6.5) | -0.5 (-0.9 to 1.2) | -3.9 (-4.0 to -0.1) |
+| Setting `Cache-Control` | 0.5 (-0.2 to 2.4) | 4.9 (-0.3 to 9.4) | 0.9 (-2.2 to 2.8) | -1.0 (-1.8 to -0.05) |
+| Error pages and problem+json (on a success) | 0.1 (-0.9 to 2.3) | 0.4 (-2.6 to 1.4) | -0.2 (-1.5 to 1.4) | -1.6 (-4.4 to 3.7) |
+| The header and send timeouts' connection watch | -0.2 (-3.0 to 0.7) | 5.6 (-4.2 to 8.0) | -1.0 (-3.7 to 2.3) | 0.5 (-0.4 to 2.1) |
+
+At a fixed 300 a second (the server is mostly idle, and waking for each request costs more than
+serving it, so these are what a lightly loaded server spends a request):
+
+| Default removed | Page, `identity` | Page, browser | JSON, `identity` | JSON, browser |
+|---|---|---|---|---|
+| None: requests per CPU-second | 7,124 (7,120-7,242) | 5,514 (5,327-5,606) | 8,083 (7,976-8,091) | 6,455 (6,437-6,628) |
+| None: CPU microseconds a request | 140.4 | 181.4 | 123.7 | 154.9 |
+| Security headers and the CSP | 3.3 (2.2-3.5) | 4.7 (-1.1 to 8.1) | 0.5 (-1.2 to 3.6) | -0.1 (-2.3 to 3.6) |
+| The host check and the same-origin write check | -0.6 (-0.9 to 0.3) | 0.5 (-2.3 to 8.7) | -0.4 (-1.4 to 2.5) | 3.0 (-2.5 to 3.2) |
+| The deadline and the panic catch | 1.0 (-0.7 to 1.4) | 3.7 (3.2-10.9) | -0.8 (-1.0 to 0.8) | -1.3 (-7.6 to 3.3) |
+| Compression | 3.0 (3.0-5.1) | 36.3 (35.1-45.1) | 1.6 (0.3-4.4) | 31.5 (30.5-34.2) |
+| The `ETag` | -2.9 (-4.7 to 1.2) | 7.6 (1.7-8.3) | -1.5 (-1.6 to -0.5) | -1.0 (-3.5 to 1.3) |
+| Setting `Cache-Control` | -0.1 (-0.4 to 4.3) | 3.2 (-6.6 to 7.5) | 1.6 (1.4-2.1) | 3.2 (-2.7 to 6.1) |
+| Error pages and problem+json (on a success) | 1.5 (-3.2 to 2.6) | 1.1 (-5.1 to 8.2) | -3.4 (-3.6 to -1.1) | 1.2 (-5.4 to 1.3) |
+| The header and send timeouts' connection watch | -0.9 (-4.1 to 2.5) | 1.0 (-7.7 to 7.7) | 0.3 (0.2-1.4) | 2.7 (-3.0 to 2.8) |
+
+Compression is the one default whose cost under load is larger than the run's noise and its order:
+for a browser it is 45 of the page's 85 microseconds at 64 users (53%, so the page serves 11,700
+requests a CPU-second compressed against 24,900 without) and 25 of the JSON's 57 (44%), less than
+the share callgrind counts above (68% and 72% of user instructions), likely in part because these
+include the kernel's part of a request, which callgrind does not count, though jemalloc and Debian's
+libzstd differ from the callgrind builds too and were not separated. The page's `ETag` for a browser
+measures 6.1 (4.3-6.5) microseconds at 64 users, but every other default in that column measures 0.4
+to 9.5, so this run does not separate it from the order; callgrind's 7.7% of the page's instructions
+is the evidence for it. Every other cell is under 10 microseconds. Of those 58 (the 64 less
+compression and the page's `ETag`, each for a browser), 14 have a range clear of zero, 6 of them
+below it, a saving that removing work cannot make, so a range clear of zero by a few microseconds is
+within these runs' drift. The instruction counts fit: callgrind gives the security headers 5.5% of
+an `identity` page and compression 3.2%, about 2 and 1.2 of its 37.5 microseconds, at the edge of
+what these runs resolve. On the rounds' `identity` requests no default is seen to cost more than a
+few microseconds of CPU. What the bytes compression saves are worth to a client is outside this
+measure; an app short of CPU behind a proxy that compresses can build without the `compress` feature
+([the defaults](../../docs/guide/app.md)).
 
 ### Corten before and after its type and performance pass (Docker Desktop, 2026-10-21)
 
@@ -1299,9 +1384,11 @@ three runs:
      kind of request its median and p99 latency and its answers by class (2xx and 3xx, 429, other
      4xx, 5xx, none), with the app's CPU and peak memory over the phase (`mixed.mjs`;
      `<app>-mixed.json`, and `-cpu`, `-stats` and `-form` beside it). It adds about 2 minutes
-     an app a pass (estimated). It runs in both tiers; only in the matched tier has every app a
-     deadline, and the deadlines differ (card-market's and axum-maud's are 10 s), so the late
-     items' latency is each app's own deadline, not a comparison of speed. The matched profile has
+     an app a pass (estimated). It runs in both tiers; only in the matched tier is a deadline part
+     of every app's profile, though not every app meets it (Next.js has no setting for one and
+     holds a hung read past 45 s), and the deadlines differ (card-market's and axum-maud's are
+     10 s), so the late items' latency is each app's own deadline, or the item API's 40 s delay
+     where it has none, not a comparison of speed. The matched profile has
      no write limit, so only an app with one of its own answers 429, and k6 keeps no cache, so the
      phase does not see a `Cache-Control` policy at work (the feature matrix checks each app's).
      Late items come from `item-api/server.mjs`, the bench host's item API; the Rust item API a
@@ -1566,7 +1653,13 @@ column reads the headers on an error answer, so an app that sends its error answ
 profile's headers shows that only in its item below and in the measured paragraph after the list), and no app is tuned beyond
 the profile. "Provides" is a middleware, a setting or a builder option of the framework or of the
 companion its documentation points to for it (tower-http for axum); a part that needs the app to
-write its own handler, error mapper or server loop is left out, as the defaults tier leaves it. The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
+write its own handler, error mapper or server loop is left out, as the defaults tier leaves it;
+code the framework's own documentation gives for a part, written as it gives it, counts as provided
+(Next.js's Proxy for a nonce CSP, ASP.NET Core's inline middleware that appends a header). Topcoat's
+documentation gives such code for headers on its error answers (a layer that queues them with
+`response_headers`), which its app does not use yet; no counted column reads those headers, so its
+row is the same either way.
+The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
 rule (Corten; axum-maud, the anchor every tier shares; the three best on the tier's own measure
 and the four most used in the Stack Overflow survey, on r13 and the 2026 survey ASP.NET Core,
 Topcoat and Leptos, and Next.js, ASP.NET Core, FastAPI and Express; ASP.NET Core as its Razor Pages
@@ -1625,8 +1718,82 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    which Topcoat's prefetch reads as usable for 0 ms: under the profile a prefetched link is
    rendered again when it is followed after the prefetch's headers arrived (the browser phases click
    without hovering, so they do not prefetch).
-5. `nextjs`, `aspnet` (and `aspnet-aot`), `fastapi` and `express` are not in it yet: each
-   joins with its profile.
+5. `nextjs`: Next.js fixes its config when it builds, so the tier runs an image of its own,
+   `cb-nextjs-matched`, built with `--build-arg PROFILE=matched` (`buildArgs` in `apps.mjs`, which
+   `droplet.mjs` builds from, and the build step's recipe in a matched round, `builds.mjs`); the
+   defaults tier's `cb-nextjs` is built from the same config as before. That build adds axum-maud's
+   security headers to every answer, and its CSP and `Cache-Control: private, no-cache` to the
+   JSON, from `next.config.mjs`'s `headers()`, and the pages' CSP from a Proxy (`proxy.matched.ts`,
+   Next.js's file for code that runs before a route, which only that build takes, through
+   `pageExtensions`), the code Next.js's Content Security Policy guide gives: a nonce for each
+   response, which Next.js writes on the scripts of a page it renders for the request, so the item
+   page hydrates under a strict policy (checked in Chromium through the edge: all 11 scripts have
+   the nonce, no violation, and the sort, "show all" and the alert work). The App Router's pages
+   were already rendered for each request, as a nonce needs; the Proxy leaves out the JSON, the
+   static files, bench/live's stream and the Pages Router's marketplace pages, which are not in the
+   tier and would need `_document` to write the nonce. The 404 page Next.js prerenders
+   (`/_not-found`, for an unknown path) gets the policy but not the nonce, which needs a page
+   rendered for the request, so its 10 scripts are blocked (measured); its text and links work
+   without them, and the tier measures no script there. Next.js refuses a server action whose
+   Origin is not the request's host, and the edge sends the app its container name as Host, so the
+   build lists the edge's host in `serverActions.allowedOrigins` (the Dockerfile's `EDGE_HOST`,
+   which `edge.test.mjs` checks against the edge's port and the built config), as a deploy names
+   its own domain; that refusal and the 1 MB body limit on a server action were already defaults (a
+   500, counted as refused). Next.js's own compression (`compress`, on by default) gzips the pages
+   but not the route handler's JSON, and its ETag (`generateEtags`) is on no page rendered for the
+   request; it has no setting for a JSON 405 or 500 (a route handler's are empty), a host list,
+   liveness or readiness, a deadline, or the Node server's header timeout (Node's `headersTimeout`
+   is 60 s, and the standalone server sets only `keepAliveTimeout`) or connection cap
+   (`server.maxConnections`, which it does not set), so those columns stay unmet.
+6. `aspnet`: a matched round runs the Razor Pages app in the page phases and `aspnet-aot` in the
+   JSON ones (`matchedJson: false` in `apps.mjs` keeps the Razor Pages app out of those; both are in
+   cold start, the counts and the matrix). `PROFILE=matched` turns on the profile in `Program.cs`,
+   each part ASP.NET Core's own middleware or setting; without it the app starts as before, and its
+   defaults-tier matrix is unchanged (every cell as r16's, measured at `2fa883a6`:
+   `results/conform-defaults-aspnet1/conformance.json`), though it gains the template's `/Error`
+   page. Kestrel takes `MAX_CONNECTIONS` as `MaxConcurrentConnections` and a 2 MiB request body
+   limit (`MaxRequestBodySize`; its default is 30 MB), and its request head timeout is already 30 s.
+   The host filter (`AddHostFiltering`) lists localhost, the loopback addresses and `HOSTS`
+   (`.example.com` as the domain and its subdomains) and answers others 400; Corten also answers to
+   any IP address. A middleware written as ASP.NET Core's documentation sets a header ("Control
+   headers in C# code": append it, then call the next) adds axum-maud's security headers; the
+   exception handler clears the headers before it answers, so its 500s go without them (the counted
+   columns read headers on the 200 answers, as for Topcoat). The same middleware under `/api` adds
+   `Cache-Control: private, no-cache` to the JSON. The pages have none of their own: one with a post
+   form (the item and marketplace pages) gets its antiforgery token's `no-cache, no-store`, the
+   static files keep their own (a second, appended, would conflict), and the others (the index and
+   catalog) go without: the response cache attribute sets one on a page model's class, which would
+   change them in the defaults tier too, and registered for every page under the profile
+   (`Conventions.ConfigureFilter` with `Location = Client`) it wrote nothing (tried: the index still
+   answered without `Cache-Control`), since the filter it makes is an MVC action filter, which a
+   page does not run; the page version is internal and made only from an attribute on the page's own
+   class. The response compression middleware sends Brotli or gzip. Under `/api` the exception
+   handler and status code pages answer with problem details (`AddProblemDetails`); elsewhere the
+   exception handler runs the request again as the template's error page (`Pages/Error.cshtml`),
+   with `UseRouting` after it as the template places it: the handler clears the failed request's
+   endpoint before it runs it again, and routing placed before it would not route the request again.
+   The health checks middleware answers `/health/live` and `/health/ready`, and the JSON routes
+   answer `HEAD` as well as `GET`. The item API's clients give up after 10 s (`HttpClient.Timeout`),
+   card-market's deadline: ASP.NET Core's request timeout (`UseRequestTimeouts`) cancels only code
+   that reads the request's token, which the app's reads do not take, so the client's own timeout is
+   the framework setting that reaches them (the defaults tier keeps HttpClient's 100 s). Its timeout
+   is an exception, so the page and the JSON answer 500 at 10 s, where Corten answers 503. Left out:
+   the ETag (ASP.NET Core writes one for static files, and has no setting for one on a rendered page
+   or the JSON) and a readiness that knows the item API (a health check of the app's own). The image
+   grows by 9 KB (`docker image inspect`: 230,581,450 bytes at `2fa883a6` against 230,572,093 built
+   at `1e1fb7be`, the commit before the profile). `aspnet-aot` was written for round aot1 with its
+   headers, deadline and health endpoints in both tiers; the profile adds only `MAX_CONNECTIONS` as
+   Kestrel's cap. Its headers moved, in both tiers, to the same documented middleware, so its
+   exception handler's 500 and its request timeout's 503 (both clear the answer first) now go
+   without them, and the 503 without its `Cache-Control` too, where before they had them (the 200s,
+   and the 404 and 405, keep them, so no cell of either tier changed). Its readiness that knows the
+   item API is a health check of its own (`ItemsReachable`), which the rule leaves out of the Razor
+   Pages app: it meets that column by code the tier would not add. The alert form (with its
+   antiforgery token), the sort and "show all" work in Chromium through the edge, with one
+   `style-src` violation, htmx's indicator styles in a `<style>` element, which `style-src 'self'`
+   blocks (checked at `2fa883a6` with Playwright's Chromium: the sort reorders the prices, "show
+   all" shows 25 offers, the alert posts a 200 and shows its message).
+7. `fastapi` and `express` are not in it yet: each joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1649,6 +1816,17 @@ axum-maud, three are answered differently: its failed reads are a 500 `text/plai
 502) and its JSON 404 is `text/plain` (axum-maud's is empty). Not counted: its six error answers
 (the JSON 404, the 405, both failed reads, the 403 and the 413) go without the profile's headers,
 where axum-maud's answers to the same four carry them.
+Next.js, from `cb-nextjs-matched` built at `eedbcc2a`
+(`results/conform-matched-nextjs1/conformance.json`), met 14 and missed 10: the ETag, the JSON's
+compression (none), 405 and failed read (empty), the unknown Host (200), liveness and readiness,
+the item API's deadline and the unfinished head (each held 45 s), and the cap (served with 1,050
+held).
+ASP.NET Core's Razor Pages app, from `cb-aspnet` built at `2fa883a6`
+(`results/conform-matched-aspnet1/conformance.json`), met 22 and missed 2: the ETag, and
+readiness with the item API hung (200); its deadline is a 500 in 10.3 s. aspnet-aot, from
+`cb-aspnet-aot` built at the same commit, met all 14 of its columns that are not about pages
+(its readiness 503 in 2.0 s, its deadline 503 in 10.1 s), 13 by the tier's rule, since its
+readiness is a health check of its own.
 No load phase has run in the tier yet.
 
 ### The hardening step
@@ -1923,6 +2101,8 @@ docker build -f examples/card-market/Dockerfile -t cb-corten .
 for app in nextjs tanstack-start sveltekit react-router leptos topcoat axum-maud gin drogon django rails laravel aspnet aspnet-aot spring phoenix astro nuxt; do
   docker build -t cb-$app bench/fullstack/apps/$app
 done
+# The matched tier builds Next.js again, as `buildArgs` in apps.mjs says:
+docker build --build-arg PROFILE=matched -t cb-nextjs-matched bench/fullstack/apps/nextjs
 node bench/fullstack/fixtures/fetch.mjs http://localhost:18400   # or any {"item_1": {...}} file
 cd bench/fullstack && node run-all.mjs legacy1 10   # BENCH_APPS=corten,aspnet-aot for only those
 node conform.mjs [apps] [round]   # the feature matrix above (on the bench network; removes its containers when done)
@@ -1947,6 +2127,11 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
+# The same builds' requests per CPU-second under load (a round's image of each, ab.mjs on pinned
+# cores; on a c-8, the app on CPU 1 and k6 on 2-7; without them the app gets --cpus 1 unpinned),
+# then each cost; a new run goes in an OUT of its own, not the committed results/cost-under-load:
+OUT=results/cost-under-load-<date> BENCH_APP_CPUS=1 BENCH_FIXTURE_LOAD_CPUS=2-7 AB_ROUNDS=3 bash bench/fullstack/cost-under-load.sh
+node bench/fullstack/cost-under-load.mjs bench/fullstack/results/cost-under-load-<date>/summary.json
 # One app before and after, alternating (identity, a browser's encodings, brotli alone; AB_ROUNDS=3,
 # AB_ENCODINGS=br for some), and the memory floods of unfinished heads leave, by allocator setting
 # (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some); the committed

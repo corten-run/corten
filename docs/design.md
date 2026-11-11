@@ -1621,6 +1621,87 @@ rules something out.
     `Methods::with_state`, `corten-cluster`'s tests, and axum 0.8.9 and axum-core 0.5.6 from
     `Cargo.lock`, at `97a63a92`.
 
+34. <a id="choice-listen-backlog"></a>**A listener asks the system to hold 511 finished
+    connections, not 128.** `corten::listeners`, and so `serve`, binds each socket with a
+    backlog of 511, the connections whose handshake is done and that the server has not yet
+    accepted, where `TcpListener::bind` asks for 128 (mio's and the standard library's number).
+    Investigating round r17's page timeouts and dropped load iterations
+    ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128))
+    found a burst-connect delay that reproduces, though it is not shown to be what made r17's
+    failures: Linux takes one more than the backlog and drops the next SYN, so that client waits
+    for its resend, about a second. With 1,024 k6 clients
+    starting at once against a page on one CPU, the kernel counted 142 and 485 listen-queue
+    overflows (two runs) and the slowest connect took 1.27 and 2.08 s at 128; at 511 there were
+    none and it took 0.28 and 0.24 s, and 4096 overflowed none either. 511 is Node's default and
+    nginx's on Linux. A deeper queue is not free: past `App::max_connections` connections wait in it
+    for as long as the cap holds, each with what it has sent so far in kernel memory, so the queue
+    is kept no deeper than a burst needs, and 511 is the smallest of the sizes tried that held
+    this one, not a measured minimum. The system caps the number: Linux at `net.core.somaxconn`
+    (4096 since 5.4, 128 before), macOS at `kern.ipc.somaxconn` (128 by default, so there the change
+    takes a raised setting), and Windows 11 held 200 in one run and refused a connection past them.
+    A listener of the app's own (`serve_on`) sets its own backlog.
+    Not chosen: keeping 128 (the overflows and second-long connects above); the system's maximum,
+    `SOMAXCONN` or 4096 (as deep a queue behind `max_connections` as the system allows, for no
+    burst that 511 did not hold); a setting on `App` (a new concept for a number an app that needs
+    another can set on a listener of its own).
+
+    Stands on: measured (k6, 1,024 clients at once against a page on one CPU in Docker Desktop's
+    Linux 6.18 VM, two runs at 128 and at 511, one at 4096, the kernel's `ListenOverflows` and
+    k6's slowest connect; the crate's test
+    `a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit`, 200 connections on each
+    listener with none waiting 900 ms, which a backlog of 128 fails at the 130th); platform (Linux
+    admits backlog + 1 and drops the next SYN, retransmitted after about a second; the caps above;
+    Windows 11's 200 is one run on loopback, and Windows Server and macOS were not tried); reasoned
+    (connections held past `max_connections` cost kernel memory, not measured); value (a burst of
+    users connects at once rather than a second late, Values 1, as a default with no setting to
+    find, Values 7).
+
+    Revisit when: a round or an app sees listen-queue overflows at 511 under a burst a server
+    should take; a platform cap not listed above is found, a listed one changes (a macOS default
+    raised, a Windows that holds more or fewer than 200), or one of them is shown to need a
+    different default; or a measurement of the kernel memory held past `max_connections` shows
+    511 costs more than the bursts it absorbs.
+
+    Last checked: 2026-11-08, the k6 bursts and overflow counts on Docker Desktop's Linux 6.18 VM,
+    against `c65c10ec` (128), `3249bbed` (511) and `1a84048d` (4096); 2026-11-08, Windows 11's 200
+    on loopback, recorded in `c62a8706`; 2026-11-10, the crate's test on `70730b56` (Linux, passed
+    without skipping) and a socket probe on Linux in which a backlog of 128 timed out at the 130th
+    connection and 511 admitted 200 on each loopback address.
+
+35. <a id="choice-runtime-terser"></a>**The runtime and its modules are minified by esbuild and then by
+    terser.** Every page of every app loads the runtime, so its bytes are paid on each first
+    visit. esbuild bundles each file (the runtime takes in `on.js`), lowers it to ES2022 and
+    minifies it, as before; terser, a development dependency of the repository's tooling that no
+    app installs, minifies that output again, compressing in two passes and renaming the module's
+    top-level names. The runtime on `21f9fab3`, as built (banner included), is 40,988 bytes
+    against 41,093, 14,318 with gzip (level 9) against 14,851, and 12,955 with brotli (level 11)
+    against 13,487: 3.6% less with gzip and 3.9% less with brotli, as Corten serves it, and 0.3%
+    less uncompressed. The saving is terser's renaming: on `c65c10ec`, without it, 495 of the 529
+    bytes it saved with gzip came back. Not chosen (measured on `c65c10ec`): esbuild's minifier
+    alone (above); terser on esbuild's unminified bundle instead (14,373 bytes with gzip and
+    13,015 with brotli, and 41,468 uncompressed, 477 more than before); terser renaming without
+    compressing (43 bytes more with gzip, 35 with brotli); one pass (12 and 6 bytes more); a third
+    pass (the same bytes as two).
+
+    Stands on: measured (each built file before and after on `21f9fab3`, one build each, the
+    build being deterministic: the runtime 105 bytes less uncompressed, 533 with gzip and 532
+    with brotli; `view.js` 20, 75 and 60 less; `format.js` 11, 8 and 18 less; `upload.js` and
+    `keys.js` within 11 bytes either way, `upload.js` 1 byte more uncompressed and `keys.js` 1
+    more with gzip; on `c65c10ec` the runtime was 107, 529 and 478 less); measured (the browser
+    smoke tests on the built files of `10cd394d`, one run each, in the engines each runs: the
+    watchlist, also under `corten dev`, card-market, ui-gallery, seller-desk, deck-builder and its
+    preview, auction-room and listings-feed all passed; an earlier build, terser over the
+    unminified bundle, failed one Firefox check that fails under load without it, the feed's
+    reconnect timing, [#1102 The watchlist smoke's Firefox feed backoff check fails under load: a 2 s wait measured over 6 s against a 3.5 s bound](https://github.com/corten-run/corten/issues/1102));
+    value (fewer bytes on every page, Values 1, for a dependency of the tooling only, Values 6).
+
+    Revisit when: esbuild's minifier comes within 1% of the two after compression, so one tool
+    does it and terser goes; or terser's output fails a smoke test in a supported engine that
+    esbuild's alone passes.
+
+    Last checked: 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2 and terser 5.51.2, and the
+    smoke tests on `10cd394d` (and CI's on this change).
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
