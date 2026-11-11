@@ -6174,6 +6174,26 @@ Corten is pre-1.0, so any minor version may change the API.
     the gallery built from this change and from the commit it was merged onto, 71c0361a. Found by
     the Chase Sets pilot, which set `margin: auto` on its reviews page's dialog
     ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
+199. A handler call in the markup takes any number of arguments, where one with more than 12 did not
+    compile and named a private `Args` trait. A call of up to 12 is the tuple it was; past 12 the
+    generated call holds two halves, each a tuple or two halves again, so its nesting grows with the
+    logarithm of the count and stays far inside the compiler's recursion limit. Each argument is
+    checked against its parameter as before (a `compile_fail` doctest passes a number for the
+    fourteenth of sixteen, and a test builds that call and checks the error is Corten's, at the
+    argument, with no headline about `Args` or `Both`), the markup written is the same, and a
+    doctest checks every argument of a call of 25 (twelve, then halves of six and seven) in its
+    place. A call of 12 or fewer generates the same tokens as before, so an app with no longer call
+    compiles as it did. Measured with callgrind (release build, instructions per render as 1,200
+    renders less 200 over 1,000, three runs of each build, the before build's runs first, ranges
+    over the runs; before is c65c10ec with this change's two cost tests and `Wide` added, after is
+    the change built on it): a component with two handler calls, of one and three arguments
+    (`script::tests::what_a_handler_call_costs`), 2,696 (2,695.9 to 2,696.1) then 2,696 (2,695.9 to
+    2,697.3); one with a call of 12 (`what_a_long_handler_call_costs`), 4,569 (4,568.9 to 4,569.0)
+    then 4,610 (4,609.9 to 4,610.0) in a test binary that also builds the 16-argument component,
+    and 4,569 (4,569.0 to 4,569.1, two runs) with that component left out. So a call of 12 drew 41
+    instructions more (0.9%) in a binary that also has a longer call; what in that binary causes it
+    was not isolated
+    ([#1100 JavaScript handler bindings have an undocumented 12-argument ceiling and expose a private Args error](https://github.com/corten-run/corten/issues/1100)).
 222. `bench/fullstack/builds.test.mjs`'s touch test runs every app's touch in one bash, each in a
     subshell in the app's directory, where it started a bash per app: on Windows each is a WSL
     start, and the test failed now and then under load with `1 !== 0` and nothing on stderr. A
