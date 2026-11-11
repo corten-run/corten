@@ -4550,6 +4550,23 @@ Corten is pre-1.0, so any minor version may change the API.
     digits in half
     ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
+170. Scripts are type-checked with `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`,
+    `allowUnreachableCode: false` and `noUncheckedSideEffectImports` as well as `strict`, by
+    `corten check` and by Corten's own `npm run check`, and a test fails when the settings differ:
+    an array's element or a record's value read by index is `T | undefined` until the script
+    checks it, a `switch` case that runs into the next one is an error, as are code after a
+    `return` and `import "./file.js"` naming a module that does not exist. An app cannot turn one
+    off (`--no-script-types` leaves every script unchecked). An app's script that reads by index
+    without a check fails `corten check` until it does (`for (const x of xs)`, `const [first] =
+    xs`, or a check of what it read). So do the kit's scripts an app copied before this with
+    `corten ui add` (`relative_time`, `choice`, `combo_box`, `tab_group` and `menu_button`):
+    take the new ones with `corten ui add <name> --merge`.
+    `rows(..).at(i)` is `V | undefined`: none past either end, and a negative `i` counts back
+    from the last, as an array's `at()`, where it gave a view of no row before. The kit's
+    `ComboBox` with no options threw on Enter after Arrow Down; it closes now.
+    `exactOptionalPropertyTypes` is not used ([design Choice 39](docs/design.md#choice-script-checks))
+    ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)).
+
 ### Fixed
 - When a watchlist smoke run fails on a Playwright call (a page load past its 30 s timeout, say),
   the report numbers each request still loading by its context and page, sends the same GETs again

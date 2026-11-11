@@ -420,14 +420,17 @@ try {
     for (let i = 1; i < 200; i += 2) list.remove(list.get(`k${i}`));
     const left = Array.from(list, (/** @type {any} */ row) => row.el.getAttribute("data-key"));
     const removed = left.length === 100 && left.every((k, i) => k === `k${i * 2}`) && !list.get("k1") && list.indexOf(list.get("k4")) === 2;
+    // at() as an array's: none past either end, a negative index counting back from the last.
+    const ends = list.at(list.length) === undefined && list.at(-list.length - 1) === undefined
+      && list.at(-1)?.el === parent.lastElementChild && list.at(-list.length)?.el === parent.firstElementChild;
     // Set as a handler would after an await: the next get() is in a later task.
     list.at(0).el.setAttribute("data-key", "renamed");
     await new Promise((resolve) => setTimeout(resolve, 0));
     const renamed = list.get("renamed")?.el === parent.firstElementChild && !list.get("k0");
     parent.remove();
-    return removed && renamed ? "ok" : JSON.stringify({ first: left.slice(0, 4), left: left.length, removed, renamed });
+    return removed && ends && renamed ? "ok" : JSON.stringify({ first: left.slice(0, 4), left: left.length, removed, ends, renamed });
   });
-  check("rows() removes rows found by key, and finds a row by a key set on it since", byKey === "ok", byKey);
+  check("rows() removes rows found by key, finds a row by a key set on it since, and at() gives none past either end", byKey === "ok", byKey);
 
   // A page the runtime swaps in fetches what its handler modules import (the grid's corten/views,
   // the price cell's corten/events) with those modules, as a full load's head does, not once each

@@ -1950,6 +1950,72 @@ rules something out.
     parsed, trees, cycles and twelve types that all hold each other included (the agent test of that
     name), at `d4aca597`.
 
+39. <a id="choice-script-checks"></a>**Scripts are type-checked with `strict`, `noUncheckedIndexedAccess`,
+    `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and
+    `noUncheckedSideEffectImports`, not `exactOptionalPropertyTypes`.** `strict` is not every
+    check `tsc` has. Each of the type-checking options it leaves out (below, chosen or not) was
+    tried alone on the runtime, the kit, the examples, the template and the typing fixture before
+    any was turned on.
+    `noUncheckedIndexedAccess` makes an element read from an array, or a value from a record, by
+    index `T | undefined` until the code checks it. It found 76 such reads, two of them bugs: the
+    kit's `ComboBox` with no options threw on Enter after Arrow Down, and `rows(..).at(i)` past
+    the end gave a view of no row (it is now `undefined` there, as an array's `at()` is,
+    negative indexes counting back from the last as they do there). The other 74 were reads a
+    loop's bound, a length check or the server's own data kept in range. Outside the runtime's
+    hot loops they were rewritten to need no index (`for .. of`, destructuring) or given a
+    check; inside them (`view.js`'s loops over rows, `scan`'s over the refs a change adds) they
+    keep the loop they had and cast what they read, with a comment saying what keeps it in range,
+    since `rows()` with those loops rewritten timed slower (below) and a cast costs nothing once
+    minified. A message's parts and the templates the server writes for a format are cast too,
+    for another reason: the server writes them in a shape it checks, so a read the cast covers
+    cannot miss (not timed). The
+    runtime's minified build (esbuild then terser, gzip level 9, against `39060950`): `corten.js`
+    14,594 to 14,592 bytes, `format.js` 1,486 to 1,499, and `view.js` 2,186 to 2,196, `at()`'s
+    check of the ends.
+    `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and
+    `noUncheckedSideEffectImports` each found nothing and cost nothing; a case that runs into the
+    next one, code after a `return` and a side-effect import of a module that is not there are
+    mistakes the compiler can see. An app, the repository and the browser benchmark's view apps
+    are checked the same way: `corten check` writes the app's config with a copy of the
+    repository's `jsconfig.json`'s options, and a test fails when any of the three differ.
+    Not chosen: `exactOptionalPropertyTypes`, which tells a property left out from one set to
+    `undefined` (5 errors, none a bug: two were `addEventListener`'s `{ signal }` with
+    `signal` possibly `undefined`, which Web IDL reads as left out, and three were Corten's own
+    option types, which would need `| undefined` written on each property; the difference it
+    checks is one neither a DOM option object nor JSON makes, so it costs annotations and
+    catches nothing here); `noPropertyAccessFromIndexSignature` (48 errors, reads such as
+    `el.dataset.value` to be written `el.dataset["value"]`, a style that catches nothing a
+    record's `T | undefined` does not); `noImplicitReturns` (3, all functions meant to give
+    `undefined` on one path, which `strict` already makes each caller handle);
+    `noImplicitOverride` (no class overrides anything); and `noUnusedLocals` (0),
+    `noUnusedParameters` (1, a handler's `event` named for the reader) and
+    `allowUnusedLabels: false` (0), which are lint, not safety: an unused name or label runs as
+    written.
+
+    Stands on: measured (`tsc` 5.9.3 with each option alone over `jsconfig.json`'s files on
+    `34138ae5`, the counts above, and the minified sizes before
+    and after on `39060950`, one build each, the build being deterministic); measured (Chromium through Playwright 1.64.1 on a busy Windows workstation, `bench/browser/rows-ab.mjs` (run
+    before it was committed), `rows()` with 1,000 rows, paired medians of 41 samples taking
+    turns with `c65c10ec`'s `view.js`: with its loops rewritten not to index
+    (`bench/browser/view-unindexed.js` in `f6885eca`, tag `evidence/script-checks-1038`), keeping some rows and making the rest
+    was 4.3% to 13.7% slower in seven of seven runs, where `c65c10ec` against itself was -3.0%
+    to 4.7%; the noise is too large to time the cast loops, which minify to the code they were,
+    `at()` aside); platform (Web IDL converts a dictionary member that is `undefined` as one
+    that is not present, and `JSON.stringify` leaves out a property whose value is
+    `undefined`); reasoned (a read past the end the checker cannot see is a `TypeError` far
+    from the read, as the `ComboBox`'s was); value (Mistakes fail at compile time, Values 4, after the user's speed,
+    Values 1, which is why the hot loops cast instead).
+
+    Revisit when: lib.dom's option dictionaries accept `undefined` under
+    `exactOptionalPropertyTypes` and a script of Corten's comes to tell a property left out from
+    one set to `undefined`, a TypeScript release adds a check that `strict` leaves out, or a
+    timing on a quiet host shows the hot loops rewritten not to index cost nothing (their casts
+    could then go).
+
+    Last checked: 2026-11-11, TypeScript 5.9.3 on `34138ae5` and the change, the
+    sizes against `39060950` (esbuild 0.28.2, terser 5.51.2), and the timings in Chromium
+    (Playwright 1.64.1) on 2026-11-08.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

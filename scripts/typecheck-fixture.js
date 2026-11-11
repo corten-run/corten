@@ -7,6 +7,8 @@
 import { keep, subscribe } from "corten";
 import { shortcut } from "corten/keys";
 import { rows, view } from "corten/views";
+// @ts-expect-error noUncheckedSideEffectImports: an import run only for its effects names a module that exists.
+import "./no-such-module.js";
 // @ts-expect-error The unreleased prototype name is not a second public API.
 import { show } from "corten/views";
 // @ts-expect-error The runtime takes a module's exports from the line Corten appends; it exports no hook for it.
@@ -137,6 +139,9 @@ class Cell {
 export function ladders(cells) {
   const list = rows(cells, Cell);
   list.swap(0, 1);
+  list.at(-1)?.ladder.toFixed();
+  // @ts-expect-error at() gives none past the end of the rows, as an array's at() does.
+  list.at(0).ladder;
   // @ts-expect-error get() finds a row by its key: the view has none.
   list.get("a");
   // @ts-expect-error replace() keeps rows by their key: the view has none.
@@ -158,4 +163,25 @@ export function branch(host, template, plain) {
   }
   // @ts-expect-error A template holding a different view is not a Cell template.
   view(host, Other, template);
+}
+
+// The checks beyond strict (docs/guide/scripts.md, What the compiler checks).
+/** @param {string[]} names @param {Record<string, number>} counts @param {"a" | "b"} kind */
+export function beyondStrict(names, counts, kind) {
+  const [first] = names;
+  // @ts-expect-error noUncheckedIndexedAccess: an array may not reach the index read.
+  names[0].length;
+  // @ts-expect-error noUncheckedIndexedAccess: a record may not have the key read.
+  counts.sold.toFixed();
+  let n = (first?.length ?? 0) + (counts.sold ?? 0);
+  switch (kind) {
+    // @ts-expect-error noFallthroughCasesInSwitch: a case that runs into the next one is a mistake.
+    case "a":
+      n += 1;
+    case "b":
+      n += 2;
+  }
+  return n;
+  // @ts-expect-error allowUnreachableCode: code after a return never runs.
+  n += 3;
 }

@@ -77,7 +77,7 @@ function speaks(format, locale) {
 /** The unit `ms` (from now; negative: before) is written in, and its size in milliseconds. @param {number} ms */
 function unitOf(ms) {
   const seconds = Math.floor(Math.abs(ms) / 1000);
-  const [unit, size] = UNITS.find(([, size]) => seconds >= size) ?? UNITS[UNITS.length - 1];
+  const [unit, size] = UNITS.find(([, size]) => seconds >= size) ?? UNITS[3];
   return { unit, step: size * 1000 };
 }
 
@@ -128,8 +128,9 @@ function enqueue(time, entry) {
   let i = queue.push(item) - 1;
   while (i > 0) {
     const up = (i - 1) >> 1;
-    if (queue[up].next <= item.next) break;
-    queue[i] = queue[up];
+    const parent = queue[up];
+    if (!parent || parent.next <= item.next) break;
+    queue[i] = parent;
     i = up;
   }
   queue[i] = item;
@@ -138,15 +139,16 @@ function enqueue(time, entry) {
 /** Takes the soonest item off the queue. */
 function dequeue() {
   const top = queue[0];
-  const last = /** @type {typeof top} */ (queue.pop());
-  if (queue.length) {
+  const last = queue.pop();
+  if (queue.length && last) {
     let i = 0;
     for (;;) {
       let child = 2 * i + 1;
-      if (child >= queue.length) break;
-      if (child + 1 < queue.length && queue[child + 1].next < queue[child].next) child += 1;
-      if (queue[child].next >= last.next) break;
-      queue[i] = queue[child];
+      let next = queue[child];
+      const right = queue[child + 1];
+      if (next && right && right.next < next.next) [child, next] = [child + 1, right];
+      if (!next || next.next >= last.next) break;
+      queue[i] = next;
       i = child;
     }
     queue[i] = last;
@@ -175,15 +177,16 @@ function tick(all = false) {
     }
     queue = [...live].map(([time, entry]) => ({ next: entry.next, time, entry })).sort((a, b) => a.next - b.next);
   } else {
-    while (queue.length && (queue[0].next <= now || !current(queue[0]))) {
-      const item = dequeue();
+    for (let item = queue[0]; item && (item.next <= now || !current(item)); item = queue[0]) {
+      dequeue();
       if (!current(item)) continue;
       draw(item.time, now);
       item.entry.next = now + untilChange(item.entry.at, now);
       enqueue(item.time, item.entry);
     }
   }
-  if (queue.length) setTimer(queue[0].next, now);
+  const first = queue[0];
+  if (first) setTimer(first.next, now);
 }
 
 /** Once a page has a relative time: read the clock again when the page comes back. */

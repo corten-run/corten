@@ -174,7 +174,7 @@ function inPlace(root) {
     const closedState = dialog ? "[open],[hidden]" : ":popover-open,[hidden]";
     // The class as the component's file writes it (`.filters`, which Corten prefixes:
     // `.search-page__filters`), from the rule's own selector.
-    const cls = [...drawn.selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1]).find((c) => el.classList.contains(c))?.split("__").pop();
+    const cls = [...drawn.selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1] ?? "").find((c) => el.classList.contains(c))?.split("__").pop();
     const named = cls ? "." + cls : el.localName + (el.id ? "#" + el.id : "");
     console.warn(`corten: ${el.id || el.localName} is a closed ${dialog ? "dialog" : "popover"} that \`${drawn.written}\` in \`${drawn.condition}\` gives display: ${drawn.display}, which components.css keeps hidden while it is closed. To draw it in place there, give it a rule of its own in that query, \`${named}:not(${closedState}) { display: ${drawn.display} !important }\`; if it is the open ${dialog ? "dialog" : "popover"}'s look, write it as \`${named}${state}\``, el);
   }
