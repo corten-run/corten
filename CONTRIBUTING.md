@@ -264,17 +264,16 @@ released together; the examples have `publish = false`. Pushing a tag `vX.Y.Z` r
 platform, `cargo publish --workspace` (each crate after the ones it depends on), then a GitHub
 release with the binaries and the version's `CHANGELOG.md` section as its notes (attached as
 `CHANGELOG-X.Y.Z.md`, and linked from the notes, when it is longer than a GitHub release allows).
-It stops before
-publishing when the tag, the workspace version and the changelog disagree.
+It stops before publishing when the tag, the workspace version and the changelog disagree.
 
 1. Check that every crate in `crates/` is on crates.io. For one that is not, follow
    [Before a release that adds a crate](#before-a-release-that-adds-a-crate) first.
 2. In one pull request, set `version` in `[workspace.package]` and the same version on every
    `corten*` line of `[workspace.dependencies]`, then rename `## Unreleased` in `CHANGELOG.md`
    to `## X.Y.Z (YYYY-MM-DD)` and start a new empty `## Unreleased` above it. The version is
-   also in `Cargo.lock`, in the lockfiles of the benchmark apps built from `crates/` with
-   `--locked` (`bench/catalog/corten`, `bench/marketplace/corten` and `bench/live/apps/corten`;
-   `cargo metadata --manifest-path <app>/Cargo.toml` rewrites each), in
+   also in `Cargo.lock`, in the lockfiles of the benchmark apps built from `crates/`
+   (`bench/catalog/corten` and `bench/marketplace/corten`, built with `--locked`, and
+   `bench/live/apps/corten`; `cargo metadata --manifest-path <app>/Cargo.toml` rewrites each), in
    `crates/corten/tests/openapi.json` (the test that checks it rewrites it) and in the README's
    Status. A release before 1.0 that changes the API bumps the minor version.
 3. Merge it, then tag that commit on `main` and push the tag:
