@@ -4382,6 +4382,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
 ### Fixed
+- The watchlist smoke waits up to 5 seconds, after the page swaps back to `/`, for the newest feed
+  stream to be open and every earlier one closed, and prints the streams it saw, rather than
+  counting them once right after the swap, when the new page's stream may not be opened yet or the
+  left one not yet closed
+  ([#1134 The watchlist smoke reads its open feed streams once, right after a client navigation, so 'one feed stream while the component is on the page' fails about 1 run in 80](https://github.com/corten-run/corten/issues/1134)).
 - A `data-patch` submit that is abandoned, by a newer submit of the form (another button, other
   values) or by a navigation, drops its `aria-busy` marks at once, as the guide says, rather than
   when its own code next ran (after its fetch rejected, or once what it waited on to draw had loaded),
