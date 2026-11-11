@@ -556,6 +556,27 @@ try {
       await own?.close();
     }
   }
+  // Without JavaScript, in each engine (the `scripting` media feature is the engine's): the
+  // listings' sort button, which only the script makes work, is not drawn, and the listings are in
+  // the server's order, cheapest first.
+  for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
+    const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
+    const plainContext = await (own ?? browser).newContext({ javaScriptEnabled: false });
+    try {
+      const plain = await plainContext.newPage();
+      await plain.goto(`${base}/items/item_5`);
+      const sortShown = await plain.isVisible("[data-scope=listing-sort] > button");
+      const cents = await plain.$$eval("[data-scope=listing-sort] tbody tr", (rows) => rows.map((r) => Number(r.getAttribute("data-cents"))));
+      check(
+        `${name} without JavaScript: the listings' sort button is not drawn, and the listings are cheapest first`,
+        !sortShown && cents.length > 1 && cents.every((c, i) => i === 0 || cents[i - 1] <= c),
+        `sort shown: ${sortShown}; ${cents.slice(0, 5).join(" ")}`,
+      );
+    } finally {
+      await plainContext.close();
+      await own?.close();
+    }
+  }
   // A full document denies the powerful features no page uses: Chromium reads the header (no
   // console warning for a name it does not know, but `bluetooth` where the build has no Web
   // Bluetooth, as on Linux) and refuses them; a navigation is not sent it.

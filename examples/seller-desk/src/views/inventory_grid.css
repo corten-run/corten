@@ -1,6 +1,10 @@
 .grid { display: grid; gap: 12px; }
 .toolbar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; min-height: 36px; }
 .toolbar input[type="search"] { width: 17.5rem; max-width: 100%; }
+/* The filter is a GET form: its Filter button is for a page without scripts, where typing filters
+   nothing until it is sent; with them the rows filter as the seller types. */
+.filter { display: flex; gap: 8px; max-width: 100%; }
+@media (scripting: enabled) { .no-script { display: none; } }
 /* The bulk bar is a card, not the accent the kit's ghost and outline buttons turn on hover. */
 .toolbar [role="group"] { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
 .toolbar > output { color: var(--destructive); font-weight: 500; }
@@ -20,13 +24,14 @@
 .table tbody tr:hover { background: var(--muted); }
 .table th:first-child, .table td:first-child { width: 44px; }
 .table th:nth-child(5), .table td:nth-child(5), .table th:nth-child(6), .table td:nth-child(6) { text-align: end; font-variant-numeric: tabular-nums; }
-/* A sortable header is a button: it says so on hover and focus, and shows the sort it applies. */
-.table th button { white-space: nowrap; padding: 2px 4px; margin: -2px -4px; border: 0; border-radius: 4px; background: none; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
-.table th button:hover { background: var(--muted); }
+/* A sortable header is a link to the grid sorted by its column (its handler sorts in place): it
+   says so on hover and focus, and shows the sort it applies. */
+.table th a { display: inline-block; white-space: nowrap; padding: 2px 4px; margin: -2px -4px; border-radius: 4px; color: inherit; text-decoration: none; }
+.table th a:hover { background: var(--muted); }
 /* The arrows are drawn, not read: `aria-sort` says the order. */
-.table th button::after { content: " \2195" / ""; opacity: 0.45; }
-.table th[aria-sort="ascending"] button::after { content: " \2191" / ""; opacity: 1; }
-.table th[aria-sort="descending"] button::after { content: " \2193" / ""; opacity: 1; }
+.table th a::after { content: " \2195" / ""; opacity: 0.45; }
+.table th[aria-sort="ascending"] a::after { content: " \2191" / ""; opacity: 1; }
+.table th[aria-sort="descending"] a::after { content: " \2193" / ""; opacity: 1; }
 .table tr[data-selected] { background: var(--accent); }
 /* Sold out: the row fades, and its quantity is marked. */
 .table tr[data-sold-out] td:not(:first-child, :last-child) { color: var(--muted-foreground); }
@@ -42,5 +47,5 @@
   .table td small { display: block; color: var(--muted-foreground); font-size: .75rem; }
   .table :is(th, td) { padding: 8px 6px; }
   .table th:first-child, .table td:first-child { width: 32px; }
-  .toolbar input[type="search"] { width: 100%; }
+  .filter, .toolbar input[type="search"] { width: 100%; }
 }
