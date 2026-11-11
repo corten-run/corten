@@ -152,6 +152,8 @@ impl Partners {
 
 /// The bearer token the request sends (`Authorization: Bearer <token>`, RFC 6750), a partner's key
 /// or an agent's token, whose scheme is matched in any case (RFC 9110 11.1); an empty one is none.
+/// A value that is not ASCII is none here too, where the MCP endpoint, which reads bytes, counts it
+/// as a token sent: RFC 6750's token is ASCII, so either answer is a refusal.
 fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     let (scheme, token) = headers.get(header::AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
     let token = token.trim();
@@ -1176,8 +1178,8 @@ mod tests {
             res["result"]["structuredContent"]["message"],
             "Alert set: we will email a@b.c when Pika <Promo> & \"Friends\" drops below $1.00."
         );
-        // The scheme is matched in any case (RFC 9110 11.1), and an empty token is none: told
-        // where to get one, with no `invalid_token`.
+        // The scheme is matched in any case (RFC 9110 11.1). The endpoint answers an empty token
+        // as none: told where to get one, with no `invalid_token`.
         let lower = app.call(Method::POST, &mcp::Mcp).json(&alert).header(header::AUTHORIZATION, "bearer dev-token");
         let res: serde_json::Value = serde_json::from_str(&send(lower).await.2).unwrap();
         assert!(res["result"]["structuredContent"]["message"].is_string(), "{res}");

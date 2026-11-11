@@ -1174,9 +1174,10 @@ rules something out.
     realm, or `mcp` when its name, which is also its `serverInfo` and may be any text, is empty
     or not printable ASCII. It takes `Bearer` with no token after it as no token, so the client is
     told where to get one (RFC 6750 2.1 does not allow an empty token, and 3.1 would let it be
-    `invalid_request`; a check that wants that 400 returns `ToolError::Invalid`). A 401 sends one
-    challenge, with parameters and no token68 (`Negotiate <data>`); a client offered two schemes
-    at once (RFC 9110 11.6.1 allows a list) is not one an app has needed.
+    `invalid_request`; with an `Authorization`, a check that wants that 400 returns
+    `ToolError::Invalid`, and without one a check's `Invalid` is the tool call's result). A 401
+    sends one challenge, with parameters and no token68 (`Negotiate <data>`); a client offered two
+    schemes at once (RFC 9110 11.6.1 allows a list) is not one an app has needed.
     Of the 401s `Refused` makes, `sign_in`'s to a data client is the one that falls short of
     RFC 9110: it carries no challenge, since a session cookie has no HTTP authentication scheme
     to name ([Limit 11](#limit-caller-types); a 401 an app writes by hand, `Error::status`, is
@@ -1240,7 +1241,8 @@ rules something out.
     a mistake in the first test that refuses a request or when the app starts, and a value from a
     store or a request is the app's to clean); platform (RFC 9110 15.5.2: a 401 MUST send
     `WWW-Authenticate`; RFC 6750 (3) for Bearer's parameters; RFC 7617 (2) for Basic's realm;
-    IANA's HTTP Authentication Scheme Registry, which has no scheme for a session cookie); value (mistakes fail at compile time, Value 4: a
+    IANA's HTTP Authentication Scheme Registry, which has no scheme for a session cookie); value
+    (mistakes fail at compile time, Value 4: a
     route's caller, and a challenge's scheme in a `const`; a challenge's realm and parameters are
     the bet above).
 
@@ -1265,8 +1267,8 @@ rules something out.
     `compile_fail` doctest that holds `Challenge::new("bearer")` out, at `075bda73`; 2026-11-10,
     the tests of the MCP endpoint's `mcp` realm, of a scheme `Challenge::new` makes in a `const`,
     and of card-market's empty bearer token, at `7d743d7a`; 2026-11-10, the MCP endpoint's test
-    of `Bearer` with only whitespace after it, at `709deb66`, and card-market's agents with a
-    lowercase scheme and an empty token, in the commit after it.
+    of `Bearer` alone or with only whitespace after it, and card-market's agents with a lowercase
+    scheme and its partners' empty key, at `ea4aff53`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are

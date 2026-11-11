@@ -457,8 +457,8 @@ fn keyed(input: &Value) -> bool {
 impl<A: Send + 'static> Tools<A> {
     /// Where clients get a token for the endpoint ([`Authorization`]): Corten serves its
     /// protected-resource metadata next to the endpoint and names it in every 401. Without it a
-    /// 401 names only `Bearer` and a realm (the endpoint's name, or `mcp` when the name is empty or not
-    /// printable ASCII), for tokens handed out by hand.
+    /// 401 names only `Bearer` and a realm (the endpoint's name, or `mcp` when the name is empty or
+    /// not printable ASCII), for tokens handed out by hand.
     pub fn authorization(mut self, authorization: Authorization) -> Self {
         self.authorization = Some(Arc::new(authorization));
         self
