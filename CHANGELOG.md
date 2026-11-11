@@ -2586,7 +2586,7 @@ Corten is pre-1.0, so any minor version may change the API.
     pulses while the `<corten-live>` around it is live, so a glance tells a live view from a frozen
     one, and is still while it connects, reconnects or has closed or ended, before the runtime
     runs, without JavaScript and outside a `<corten-live>`. It is still under
-    `prefers-reduced-motion: reduce`, pulses in the system's text color under forced colors as
+    `prefers-reduced-motion: reduce`, and pulses in the system's text color under forced colors as
     `Progress`'s sweep moves. The guides give the rules that make the words beside it follow the
     stream too ("Live" only while it is live, "Not live" otherwise and without JavaScript).
     Not breaking: `StatusDot` is unchanged (its doc test no longer names a class a live form
@@ -2621,12 +2621,14 @@ Corten is pre-1.0, so any minor version may change the API.
     and the copies stay the kit's. Nothing changes for an app that keeps its copies. One set up by an
     older kit that takes the new copies adds the two tokens `corten ui add checkboxes --merge` (or
     `radio_group`, or `--force` for a copy without edits) names, as the kit's theme has them,
-    before it starts. The kit theme's two declarations and the two `var()`s in each stylesheet make
-    the ui-gallery's served `components.css` 60,608 bytes where it was 60,471 (gzip 10,039 against
-    10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier
-    size is the served file with the literals put back). The ui-gallery's smoke test checks both
-    groups at the kit's values and at a theme's. Asked for by the Chase Sets pilot, which edited
-    both copies to .5rem
+    before it starts; a copy edited to other values keeps them by taking the kit's `var()` lines
+    and declaring the two tokens at its own values. The kit theme's two declarations and the two
+    `var()`s in each stylesheet make the ui-gallery's served `components.css` 60,608 bytes where it
+    was 60,471 (on the branch at 99c09ad8 against main at c65c10ec, the stylesheets and theme as
+    merged; gzip 10,039 against 10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and
+    brotli's default; the earlier size is the served file with the literals put back). The
+    ui-gallery's smoke test checks both groups at the kit's values and at a theme's. Asked for by
+    the Chase Sets pilot, which edited both copies to .5rem
     ([#1082 Kit RadioGroup and Checkboxes print their fieldset's gap and legend margin as literals kept equal by hand, so a theme with tighter choice lists edits both copies](https://github.com/corten-run/corten/issues/1082)).
 278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
     after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
@@ -2689,9 +2691,12 @@ Corten is pre-1.0, so any minor version may change the API.
     shows on a `Solid` badge's fill too, where a dot in the badge's own tone was the fill's color
     and could not be seen; the kit doc and guide say a dot in a badge takes it. `LiveDot` takes it
     as well. Under forced colors it is `CanvasText`, as every tone is.
-    A dot in another tone in a badge still compiles: kit files are copied into an app one by one,
-    so the dot has no badge type to check against. Not
-    breaking: the other tones are unchanged, and `corten ui add status_dot --merge` takes `Text`.
+    A dot in another tone in a badge still compiles: `Badge` is a class on the app's element, and
+    `html!` has no type for the element around a component, so no change to the tones could catch
+    it. A dot the badge drew itself, with no tone, could not disagree with it, but it would be a
+    second way to draw a dot, so the kit has none. **Breaking:** an app's exhaustive `match` on
+    its copied `StatusTone` gains a `Text` arm once `corten ui add status_dot --merge` takes it;
+    markup is unchanged, as the other tones are.
     The kit's rule adds 42 bytes to the stylesheet (measured on the ui-gallery's served
     `components.css`: 60,920 bytes against 60,878, gzip 10,099 against 10,089, brotli 8,900
     against 8,884, with the rule taken out for the earlier size). The ui-gallery's badges use it,
@@ -6686,6 +6691,14 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+76. `bench/browser`'s README links the view app's code to `gen/src/bench.js`, where its handlers
+    are, not `apps/view/app.js`, which never existed; `npm run check` (`scripts/docs.mjs`, tested by
+    `docs.test.mjs`) now fails on a link in the repository's Markdown to a file or folder a commit
+    would not hold: an inline link, spaces around its target allowed, and an HTML tag's `src`,
+    `srcset` or `href` (the README's logo), outside code (a span that wraps onto the next line
+    too; a backtick with no partner in its paragraph is text), comments and escapes (reference
+    definitions are not read), and that link was the only one it found
+    ([#1083 bench/browser README links the view app's code to apps/view/app.js, which never existed; its handlers are gen/src/bench.js](https://github.com/corten-run/corten/issues/1083)).
 77. [Design Choice 33](docs/design.md#choice-state-derives) records why shared state keeps
     `#[derive(Clone, FromRef)]` rather than a `#[corten::state]` attribute that writes both: `Clone`
     is what routing and a handler taking the whole state need, `FromRef` what a handler taking one
