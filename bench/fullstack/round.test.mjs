@@ -198,9 +198,25 @@ test("count.mjs has perf watch the app's pinned cores on a bench host, and every
 
 test("an app that serves only the JSON is in the JSON phases, cold start and count, not the pages", () => {
   const all = calls("r13", "10", ["corten"], ["http://localhost:18410"], ["aspnet-aot"]);
-  const named = (/** @type {string} */ script, /** @type {string=} */ target) => all.filter(([, , s, ...rest]) => s === script && (!target || rest.at(-1) === target)).map((c) => c.join(" "));
+  const named = (/** @type {string} */ script, /** @type {string=} */ target) => all.filter(([, , s, ...rest]) => s === script && (!target || rest.at(-2) === target)).map((c) => c.join(" "));
+  assert.equal(named("run-ssr.mjs", "json").length, 2, "both JSON phases");
   for (const c of [...named("run-ssr.mjs", "json"), ...named("cold-start.mjs"), ...named("count.mjs")]) assert.match(c, /corten,aspnet-aot/);
+  assert.equal(named("run-ssr.mjs", "page").length, 2, "both page phases");
   for (const c of [...named("run-ssr.mjs", "page"), ...named("browser.mjs")]) assert.doesNotMatch(c, /aspnet-aot/);
+});
+
+test("a page app whose JSON is another app's is in the page phases, not the JSON ones", () => {
+  const all = calls("m1", "10", ["corten", "aspnet"], ["u1", "u2"], ["aspnet-aot"], 1, ["aspnet"]);
+  const json = all.filter(([, , s, ...rest]) => s === "run-ssr.mjs" && rest.at(-2) === "json").map((c) => c.join(" "));
+  const page = all.filter(([, , s, ...rest]) => s === "run-ssr.mjs" && rest.at(-2) === "page").map((c) => c.join(" "));
+  assert.equal(json.length, 2);
+  assert.equal(page.length, 2);
+  for (const c of json) assert.match(c, / corten,aspnet-aot json /);
+  for (const c of page) assert.match(c, / corten,aspnet page /);
+  for (const script of ["cold-start.mjs", "count.mjs", "conform.mjs"]) assert.match(all.find(([, , s]) => s === script)?.join(" ") ?? "", /corten,aspnet,aspnet-aot/, script);
+  const pageOnlyUnder = (/** @type {Record<string, string>} */ env) => spawnSync(process.execPath, ["--input-type=module", "-e", 'console.log(JSON.stringify((await import("./apps.mjs")).pageOnly))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "BENCH_TIER" && k !== "BENCH_APPS")), ...env } }).stdout.trim();
+  assert.equal(pageOnlyUnder({ BENCH_TIER: "matched" }), '["aspnet"]');
+  assert.equal(pageOnlyUnder({}), "[]", "the defaults tier runs every page app's JSON");
 });
 
 test("quote makes one shell word of any text", { skip: spawnSync("bash", ["-c", "true"]).status !== 0 && "no bash here" }, () => {

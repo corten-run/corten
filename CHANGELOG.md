@@ -2718,6 +2718,21 @@ Corten is pre-1.0, so any minor version may change the API.
     edge's host for server actions; the defaults tier's image is built from the same config as
     before. Its matched matrix meets 14 of 24 columns
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+290. ASP.NET Core joins `bench/fullstack`'s matched tier, as its Razor Pages app and aspnet-aot:
+    under `PROFILE=matched` the Razor Pages app adds the security headers by the middleware ASP.NET
+    Core's documentation gives for a header, ASP.NET Core's host filter, response compression,
+    problem details and an error page from its exception handler, health checks, `HEAD` on the JSON,
+    Kestrel's body limit and connection cap, and a 10 s timeout on the item API's client (a 500,
+    where Corten answers 503); aspnet-aot, which already had the rest, adds the cap, and its headers
+    move, in both tiers, to the same documented middleware, so its 500 and its deadline's 503 now go
+    without them, and its host list takes a `.example.com` in `HOSTS` as the domain too, as the
+    Razor Pages app's does. Without the profile every defaults-tier cell of both is as r16's; no
+    load run has measured the moved header middleware, so aspnet-aot's next defaults row may move. A
+    matched round runs the Razor Pages app in the page phases and aspnet-aot in the JSON ones
+    (`matchedJson: false` in `apps.mjs`). The Razor Pages app's matched matrix meets 22 of 24
+    columns, and aspnet-aot's all 14 that are not about pages, one of them (readiness) by a health
+    check of its own that the tier's rule would not add
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4374,6 +4389,11 @@ Corten is pre-1.0, so any minor version may change the API.
   in 30 runs on a branch that did not touch it. It waits on frames, not a timer, and a row still
   moving after 120 frames fails the check rather than being read as settled
   ([#1150 The ui-gallery smoke's WebKit 'focus never under it' check fails now and then on a change that does not touch the kit](https://github.com/corten-run/corten/issues/1150)).
+- A `data-patch` submit that is abandoned, by a newer submit of the form (another button, other
+  values) or by a navigation, drops its `aria-busy` marks at once, as the guide says, rather than
+  when its own code next ran (after its fetch rejected, or once what it waited on to draw had loaded),
+  so a replaced button is never shown working; the runtime grows 15 bytes gzip (14,872 to 14,887)
+  ([#1108 The smoke's busy-mark check failed once in WebKit: the replaced button A was still marked busy while B's submit was on its way](https://github.com/corten-run/corten/issues/1108)).
 - `corten::listeners` (and so `serve`) listens with a queue of 511 finished connections on Linux
   (Windows 11 held 200 in one run; macOS keeps its 128 unless raised), not mio's and the standard library's 128.
   With 1,024 clients connecting at once to a page on one CPU (Docker Desktop's Linux VM), the
@@ -6079,6 +6099,14 @@ Corten is pre-1.0, so any minor version may change the API.
     the gallery built from this change and from the commit it was merged onto, 71c0361a. Found by
     the Chase Sets pilot, which set `margin: auto` on its reviews page's dialog
     ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
+222. `bench/fullstack/builds.test.mjs`'s touch test runs every app's touch in one bash, each in a
+    subshell in the app's directory, where it started a bash per app: on Windows each is a WSL
+    start, and the test failed now and then under load with `1 !== 0` and nothing on stderr. A
+    bash that never ran the script is asked once more, and so is the probe that decides whether
+    bash is there; a quoting mistake that stops the script names the app it stopped at. The test
+    takes 0.89 s against 7.27 s (median of five alternating runs each, 0.81 to 1.35 against 6.03
+    to 10.22, on a loaded Windows workstation)
+    ([#1095 builds.test.mjs's touch test fails now and then on Windows under load: WSL's bash exits 1 with no stderr for one app](https://github.com/corten-run/corten/issues/1095)).
 
 ### Documentation
 
