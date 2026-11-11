@@ -274,6 +274,13 @@ impl Refused {
 /// ```compile_fail,E0080
 /// const NEGOTIATE: corten::Challenge = corten::Challenge::new("Negotiate realm");
 /// ```
+///
+/// `Bearer` and `Basic` need a parameter (RFC 6750 3, RFC 7617 2), so `new` does not make them
+/// either:
+///
+/// ```compile_fail,E0080
+/// const BEARER: corten::Challenge = corten::Challenge::new("bearer");
+/// ```
 #[derive(Clone, Debug)]
 pub struct Challenge(HeaderValue);
 
@@ -283,15 +290,26 @@ impl Challenge {
     /// [`Challenge::param`] does.
     #[track_caller]
     pub fn bearer(realm: &str) -> Self {
-        Challenge::new("Bearer").param("realm", realm)
+        Challenge::scheme("Bearer").param("realm", realm)
     }
 
     /// Another scheme the client knows, written as a `const` of the app's
     /// (`const NEGOTIATE: Challenge = Challenge::new("Negotiate");`), where one that is not a token
-    /// (RFC 9110 5.6.2) does not compile; called at run time it panics.
+    /// (RFC 9110 5.6.2) does not compile; called at run time it panics. `Bearer` and `Basic`, in any
+    /// case, are refused too, since each needs a parameter: they are [`Challenge::bearer`] and
+    /// [`Challenge::basic`].
     #[track_caller]
     pub const fn new(scheme: &'static str) -> Self {
         assert!(is_token(scheme.as_bytes()), "corten: an authentication scheme is a token (RFC 9110 5.6.2)");
+        assert!(
+            !eq_ignore_case(scheme.as_bytes(), b"bearer") && !eq_ignore_case(scheme.as_bytes(), b"basic"),
+            "corten: Bearer and Basic take a realm: Challenge::bearer(realm) or Challenge::basic(realm)"
+        );
+        Challenge::scheme(scheme)
+    }
+
+    /// A scheme Corten names itself, followed by the parameters its RFC asks for.
+    pub(crate) const fn scheme(scheme: &'static str) -> Self {
         Challenge(HeaderValue::from_static(scheme))
     }
 
@@ -349,13 +367,28 @@ impl Challenge {
     /// sign-in prompt, naming the realm. Panics as [`Challenge::param`] does.
     #[track_caller]
     pub fn basic(realm: &str) -> Self {
-        Challenge::new("Basic").param("realm", realm)
+        Challenge::scheme("Basic").param("realm", realm)
     }
 
     /// The header's value.
     pub(crate) fn value(&self) -> &HeaderValue {
         &self.0
     }
+}
+
+/// Whether `a` and `b` are the same ASCII text in any case, in a `const`.
+const fn eq_ignore_case(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut at = 0;
+    while at < a.len() {
+        if !a[at].eq_ignore_ascii_case(&b[at]) {
+            return false;
+        }
+        at += 1;
+    }
+    true
 }
 
 /// A token (RFC 9110 5.6.2): one or more of its characters.
@@ -607,13 +640,15 @@ mod tests {
         assert_eq!(Challenge::bearer("partners").0, r#"Bearer realm="partners""#);
         let challenge = Challenge::bearer("partners").param("error", "invalid_token");
         assert_eq!(challenge.0, r#"Bearer realm="partners", error="invalid_token""#);
-        assert_eq!(Challenge::new("Basic").param("realm", r#"say "hi" \ go"#).0, r#"Basic realm="say \"hi\" \\ go""#);
+        assert_eq!(Challenge::basic(r#"say "hi" \ go"#).0, r#"Basic realm="say \"hi\" \\ go""#);
     }
 
     #[test]
     fn a_name_inside_a_quoted_value_is_not_a_parameter() {
-        let challenge =
-            Challenge::new("Bearer").param("error_description", "scope=x, realm=\"y\"").param("scope", "y").param("realm", "z");
+        let challenge = Challenge::scheme("Bearer")
+            .param("error_description", "scope=x, realm=\"y\"")
+            .param("scope", "y")
+            .param("realm", "z");
         assert_eq!(challenge.0, r#"Bearer error_description="scope=x, realm=\"y\"", scope="y", realm="z""#);
         assert_eq!(Challenge::basic("shop").0, r#"Basic realm="shop""#);
     }
@@ -631,6 +666,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Bearer and Basic take a realm")]
+    fn a_basic_scheme_without_its_realm_panics() {
+        let _ = Challenge::new("BASIC");
+    }
+
+    #[test]
     #[should_panic(expected = "an authentication scheme is a token")]
     fn a_scheme_with_a_space_panics() {
         let _ = Challenge::new("Bearer realm");
@@ -639,7 +680,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "parameter name is a token")]
     fn a_parameter_name_with_a_quote_panics() {
-        let _ = Challenge::new("Bearer").param("re\"alm", "x");
+        let _ = Challenge::scheme("Bearer").param("re\"alm", "x");
     }
 
     #[test]

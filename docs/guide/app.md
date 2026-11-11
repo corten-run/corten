@@ -1437,8 +1437,8 @@ one clients reach (from the environment, since it differs in each deployment); t
 from the route type, and one with a parameter or a trailing slash does not compile; mounting the
 endpoint at another route panics at startup. The origin and each issuer must be `https` (or
 `http` on `localhost` or a loopback address), checked when given. Without `authorization`, a
-401 says only `Bearer`, for tokens handed out by hand, and tokens are checked per tool call as
-before. Either way a 401 for a request that sent a token adds `error="invalid_token"`.
+401 names `Bearer` and the endpoint's name as its realm (`mcp` when the name is not plain
+ASCII), for tokens handed out by hand, and tokens are checked per tool call as before. Either way a 401 for a request that sent a token adds `error="invalid_token"`.
 
 APIs nest as areas do, so each feature owns its JSON routes as it owns its pages. A feature's
 module has a prefix under the app's (`/api/forecast-calibration` in `/api`), and both are

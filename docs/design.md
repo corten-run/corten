@@ -1160,21 +1160,24 @@ rules something out.
     or middleware reads it, once per request, and reading it makes the answer private. A 401 from
     `Refused::unauthorized` carries the app's `Challenge` in `WWW-Authenticate`, which RFC 9110
     (15.5.2) requires on every 401, so its constructor takes one and no `unauthorized` leaves it
-    out: `Challenge::bearer(realm)` and `Challenge::basic(realm)`, with the realm RFC 6750 (3: a
-    parameter after the scheme) and RFC 7617 ask for, or a
-    scheme in a `const` of the app's, checked as a token when the program compiles (a
-    `Challenge::new` outside a `const` is checked as it runs), with parameters always sent as
-    quoted strings and checked when the refusal is made (a challenge is built where the request
-    is refused, so a mistake in a literal shows on the first refused request, which an app's
-    tests send). The MCP endpoint without an `Authorization` still answers a request with no
-    token with a bare `Bearer`, as it did, short of RFC 6750 (3). Of the 401s `Refused` makes, `sign_in`'s to a data client is the one that
+    out: `Challenge::bearer(realm)` (RFC 6750 (3) has a parameter follow the scheme, and a realm
+    is the one every Bearer API has) and `Challenge::basic(realm)` (RFC 7617 requires the realm),
+    or a scheme in a `const` of the app's, checked when the program compiles as a token that is
+    neither `Bearer` nor `Basic` (a `Challenge::new` outside a `const` is checked as it runs),
+    with parameters always sent as quoted strings and checked when the refusal is made (a
+    challenge is built where the request is refused, so a mistake in a literal shows on the first
+    refused request, which an app's tests send). The MCP endpoint without an `Authorization`
+    names itself as the realm. Of the 401s `Refused` makes, `sign_in`'s to a data client is the
+    one that
     falls short of it: it carries no challenge, since a session cookie has no HTTP authentication
     scheme to name (a 401 an app writes by hand, `Error::status`, is its own). A key sent in a
     header of the app's own (`X-Api-Key`) has no scheme either, so an API that keeps one for
     clients that already send it also takes the key as a bearer token and challenges `Bearer`.
     Not chosen for the type: `unauthorized()` sending `Bearer` by default, which would have
     kept every caller compiling but named a scheme for an app that takes another; a `BEARER`
-    constant with no parameter, which RFC 6750 (3) does not allow; a raw
+    constant with no parameter, which RFC 6750 (3) does not allow; a method per RFC 6750 error
+    code (`.invalid_token()`), which would tie a type every scheme uses to one scheme's three
+    codes, each a literal the app's tests send; a raw
     `HeaderValue`, which checks neither the scheme nor the quoting; and a `&'static str` scheme
     with no parameters, which cannot say `error="invalid_token"` (RFC 6750 3.1). Not chosen for
     `sign_in`: a scheme of Corten's own (`Cookie`), which no client reads and which
@@ -1222,8 +1225,11 @@ rules something out.
     take, so no route given to the `App` skips them, an unstaged route's arguments standing in for
     its answer's); bet (most of an app's access rules are
     about who is asking, which a type can name, and the rest depend on the record, which the
-    handler reads anyway); platform (RFC 9110 15.5.2: a 401 MUST send `WWW-Authenticate`; RFC
-    6750 for Bearer's parameters; IANA's HTTP Authentication Scheme Registry, which has no scheme
+    handler reads anyway); bet (a challenge's realm and error code are literals, so checking
+    them when a refusal is made finds a mistake in the first test that refuses a request, and a
+    value from a store or a request is the app's to clean); platform (RFC 9110 15.5.2: a 401
+    MUST send `WWW-Authenticate`; RFC 6750 (3) for Bearer's parameters; RFC 7617 (2) for Basic's
+    realm; IANA's HTTP Authentication Scheme Registry, which has no scheme
     for a session cookie); value (mistakes fail at compile time, Value 4).
 
     Revisit when: an app needs an access rule a type cannot name and a handler cannot check

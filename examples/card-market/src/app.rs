@@ -1183,7 +1183,7 @@ mod tests {
         let (status, headers, body) = send(call(Some("wrong"), alert)).await;
         assert_eq!(
             (status, &headers["www-authenticate"]),
-            (StatusCode::UNAUTHORIZED, &r#"Bearer error="invalid_token""#.parse().unwrap())
+            (StatusCode::UNAUTHORIZED, &r#"Bearer realm="card-market-item-page", error="invalid_token""#.parse().unwrap())
         );
         let res: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!((res["id"].clone(), res["error"]["code"].clone()), (json!(1), json!(-32001)), "{body}");

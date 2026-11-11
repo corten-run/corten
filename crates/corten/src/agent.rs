@@ -258,7 +258,7 @@ impl Authorization {
         // RFC 9728 3.1: the well-known path goes between the host and the resource's path.
         let well_known = format!("/.well-known/oauth-protected-resource{}", path.trim_end_matches('/'));
         let metadata = format!("{}{well_known}", self.origin);
-        let mut unauthorized = crate::Challenge::new("Bearer").param("resource_metadata", &metadata);
+        let mut unauthorized = crate::Challenge::scheme("Bearer").param("resource_metadata", &metadata);
         if !self.scopes.is_empty() {
             unauthorized = unauthorized.param("scope", &self.scopes.join(" "));
         }
@@ -451,7 +451,7 @@ fn keyed(input: &Value) -> bool {
 impl<A: Send + 'static> Tools<A> {
     /// Where clients get a token for the endpoint ([`Authorization`]): Corten serves its
     /// protected-resource metadata next to the endpoint and names it in every 401. Without it a
-    /// 401 says only `Bearer`, for tokens handed out by hand.
+    /// 401 names only `Bearer` and a realm (the endpoint's name), for tokens handed out by hand.
     pub fn authorization(mut self, authorization: Authorization) -> Self {
         self.authorization = Some(Arc::new(authorization));
         self
@@ -617,7 +617,7 @@ impl<A: Send + 'static> Tools<A> {
             ToolError::Invalid(message) => {
                 let mut res = reply(id, Err((-32600, format!("invalid request: {message}"))));
                 *res.status_mut() = StatusCode::BAD_REQUEST;
-                let challenge = crate::Challenge::new("Bearer").param("error", "invalid_request");
+                let challenge = crate::Challenge::scheme("Bearer").param("error", "invalid_request");
                 res.headers_mut().insert(header::WWW_AUTHENTICATE, challenge.value().clone());
                 return res;
             }
@@ -638,11 +638,18 @@ impl<A: Send + 'static> Tools<A> {
 
     /// The 401: the challenge, and `error="invalid_token"` when the request sent one (RFC 6750
     /// 3.1; a request with no bearer token, or another scheme's credentials, is told only where
-    /// to get one).
+    /// to get one). Without an [`Authorization`] its realm is the endpoint's name, or `mcp` when
+    /// the name is not printable ASCII, since RFC 6750 (3) has `Bearer` followed by a parameter.
     fn unauthorized(&self, id: Value, sent: bool) -> Response {
         let mut res = reply(id, Err((-32001, "unauthorized".into())));
         *res.status_mut() = StatusCode::UNAUTHORIZED;
-        let mut challenge = self.challenge.get().map_or(crate::Challenge::new("Bearer"), |c| c.unauthorized.clone());
+        let mut challenge = match self.challenge.get() {
+            Some(protected) => protected.unauthorized.clone(),
+            None if !self.name.is_empty() && self.name.bytes().all(|b| b == b' ' || b.is_ascii_graphic()) => {
+                crate::Challenge::bearer(&self.name)
+            }
+            None => crate::Challenge::bearer("mcp"),
+        };
         if sent {
             challenge = challenge.param("error", "invalid_token");
         }
@@ -660,7 +667,7 @@ impl<A: Send + 'static> Tools<A> {
 
     /// The 403's `WWW-Authenticate` for a call that needs `scope`.
     fn insufficient_scope(&self, scope: &str) -> HeaderValue {
-        let mut value = crate::Challenge::new("Bearer").param("error", "insufficient_scope");
+        let mut value = crate::Challenge::scheme("Bearer").param("error", "insufficient_scope");
         if scope.split(' ').all(scope_token) {
             value = value.param("scope", scope);
         } else {
@@ -1112,9 +1119,12 @@ mod tests {
     async fn without_an_authorization_a_refusal_names_no_metadata() {
         let app = protected(None);
         let (status, headers, _) = send(&app, adjust(None)).await;
-        assert_eq!((status, &headers["www-authenticate"]), (StatusCode::UNAUTHORIZED, &HeaderValue::from_static("Bearer")));
+        assert_eq!(
+            (status, &headers["www-authenticate"]),
+            (StatusCode::UNAUTHORIZED, &HeaderValue::from_static(r#"Bearer realm="test""#))
+        );
         let (_, headers, _) = send(&app, adjust(Some("expired"))).await;
-        assert_eq!(headers["www-authenticate"], r#"Bearer error="invalid_token""#);
+        assert_eq!(headers["www-authenticate"], r#"Bearer realm="test", error="invalid_token""#);
         let list = Request::post("/mcp").header("content-type", "application/json");
         let list = list.body(Body::from(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string()));
         assert_eq!(send(&app, list.unwrap()).await.0, StatusCode::OK, "tokens are checked per call, as before");
