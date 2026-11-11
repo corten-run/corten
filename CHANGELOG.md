@@ -4341,6 +4341,14 @@ Corten is pre-1.0, so any minor version may change the API.
     1,074), loaded only by a page that calls it. A pager step that writes is a form the app draws
     in place of the pager, which the guides now say
     ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
+176. The runtime and its modules are minified by terser after esbuild minifies them, so every page
+    ships fewer bytes: the runtime is 14,318 bytes with gzip (level 9), 533 fewer (3.6%), and 12,955
+    with brotli (level 11), 532 fewer (3.9%), and 105 fewer uncompressed (measured on `21f9fab3`);
+    `view.js` is 75 and 60 bytes smaller compressed, `format.js` 8 and 18, and `upload.js` and
+    `keys.js` within 11 bytes either way. terser (5.51.2) is a development dependency of the repository's tooling; apps
+    install nothing new
+    ([design Choice 35](docs/design.md#choice-runtime-terser),
+    [#1047 Benchmark round r16: item-page JavaScript grew 9.1% (13,187 to 14,392 gzip bytes)](https://github.com/corten-run/corten/issues/1047)).
 
 169. The image `corten new` writes (and card-market's) runs jemalloc with
     `MALLOC_CONF=background_thread:true,tcache_max:65536`, a third line beside the two that preload
