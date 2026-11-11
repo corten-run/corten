@@ -7840,7 +7840,8 @@ async fn a_route_that_says_no_store_keeps_its_answers_and_failures_out_of_caches
 /// plain text with no quoted value: otherwise a `no-store` goes out on one line (`no-store` alone
 /// beside a quoted value or a byte that is not text), so a cache that reads only one line, or a
 /// value another way, is told the same. `must-understand, no-store` on an answer nothing makes
-/// personal is left as written, and a `private` beside them is not trusted.
+/// personal is left as written, and a `private` beside them is not trusted. Every line is read
+/// for a `no-store`, not only the first.
 #[tokio::test]
 async fn a_cache_control_counts_only_for_what_it_plainly_says() {
     let router = Table::new()
@@ -7855,6 +7856,17 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
             "/second-line",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "public, max-age=600"), (header::CACHE_CONTROL, "no-store")];
+                (appended(lines), "second")
+            }),
+        )
+        .route(
+            "/second-line-valued",
+            get(|| async {
+                let lines = [
+                    (header::CACHE_CONTROL, "public, max-age=600"),
+                    (header::CACHE_CONTROL, "no-store=1"),
+                    (header::SET_COOKIE, "seen=1"),
+                ];
                 (appended(lines), "second")
             }),
         )
@@ -8032,6 +8044,7 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
         ("/quoted-failure", "no-store"),
         ("/valued", "no-store"),
         ("/second-line", "public, max-age=600, no-store"),
+        ("/second-line-valued", "no-store"),
         ("/escaped", "no-store"),
         ("/must-understand-shared", "max-age=60, must-understand, no-store"),
         ("/must-understand-valued", "no-store"),
