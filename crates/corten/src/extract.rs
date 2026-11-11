@@ -920,6 +920,8 @@ mod tests {
     /// The limit the stages put on a request is the readers', and they read past by it: of ten
     /// pieces of 1 MiB under a 3 MiB limit, the four that went over and three more are read;
     /// under 512 KiB the first refuses, reaching twice the limit, and the one that crosses it is read.
+    /// A body whose length says it is over twice a raised limit (4 MiB) is refused unread, and
+    /// one declared at exactly twice is read past.
     #[tokio::test]
     async fn a_whole_body_reader_takes_the_requests_limit() {
         let limited = |limit: usize, pieces: usize| {

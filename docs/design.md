@@ -715,8 +715,9 @@ rules something out.
     would be a second place a route's settings live beside its area or API; and a type parameter
     on the readers (`Json<T, LIMIT>`), which puts a server setting in every handler's signature.
     The request's `Signal`, which every staged request already allocates, carries the limit,
-    so setting one adds no allocation: each signal pays an XOR as it is made, and a reader the
-    lookup of the signal and another XOR.
+    so setting one adds no allocation: each request pays the limit's selection (a comparison, or a
+    prefix lookup in an area) and an XOR as its signal is made, and a reader the lookup of the
+    signal and another XOR.
     The readers wait for a slow client until the deadline, not an idle time as an `Upload` does,
     so a raised limit is held that long: a prefix that raises one keeps a deadline. A route that
     says `unstaged` reads no body; one that takes more than its prefix allows takes the whole
