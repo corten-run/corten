@@ -1126,32 +1126,60 @@ rules something out.
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
     the `laned` variant of `fa0b1525`.
 
-26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
-    `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
-    `#[serde(..)]` attributes to name a form's keys or a URL's words, so with serde's derive beside
-    it the attributes had two readers and a form type derived two things for one meaning. The impl
-    follows serde_derive's for the attributes these types use (names, aliases, defaults, `skip`,
-    `other`, `deny_unknown_fields`, `borrow`, `bound`, `expecting`, and the bounds serde infers)
-    and refuses at compile time one that reads the type another way (`flatten`, `with`, `from`,
-    `tag` and the like), whose field takes a type of its own. Not chosen: depending on serde_derive
-    from `corten-macros`, which builds on `proc_macro` alone, or keeping the second derive, which a
+26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
+    write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
+    type's `#[serde(..)]` attributes to name a form's keys, a URL's words or a JSON reply's fields,
+    so with serde's derive beside it the attributes had two readers and a type derived two things
+    for one meaning. The impl follows serde_derive's for the attributes these types use (names,
+    aliases, defaults, `skip`, `other`, `deny_unknown_fields`, `borrow`, `bound`, `expecting`,
+    `transparent`, and the bounds serde infers) and the shapes `FromJson` reads (named, tuple,
+    newtype and unit structs, enums of unit variants), and refuses at compile time one that reads
+    the type another way (`flatten`, `with`, `from`, `tag` and the like), whose field takes a type
+    of its own. For `FromJson` this also means its reader and the `Deserialize` it falls back to
+    come from one reading of the attributes. A type whose `Deserialize` is written by hand, or by
+    serde for an attribute `FromJson` refuses, is made a `FromJson` with an empty impl, which
+    serde_json reads through that `Deserialize`: the derive never guesses at another impl, and
+    serde's derive beside it is a second impl (E0119). Since `Fields` and `UrlValue` write the
+    `Deserialize` `FromJson` would, they write its `FromJson` and schema too (features `json` and
+    `types`), so a form's input is read from JSON and is an agent tool's input with no derive beside
+    theirs, and `FromJson` beside them is a second impl as well. A generic `Fields` or `UrlValue`
+    type's `FromJson` is the trait's own body, which hands the text to serde_json, under
+    `Self: DeserializeOwned` (a generic `#[derive(FromJson)]` keeps Corten's reader): the bounds
+    serde infers for its `Deserialize` (`T: Default` for a defaulted `T`, a bound on `T::Assoc`) are
+    not one per parameter, and a reader written against them would have to repeat each. So a generic
+    form or URL-value type is read by serde_json, a value nested in another twice (the reader finds
+    its text, serde_json reads it), with no way back to the reader: `FromJson` beside `Fields` and
+    an empty impl are both a second impl. An enum with `#[serde(other)]` is read by the reader up to
+    a word it does not know, where it gives up on the whole text and serde_json reads it again, and
+    is described as any string. One whose `Deserialize` borrows from its input cannot be a
+    `FromJson`, which reads owned values. Not chosen: depending on serde_derive from
+    `corten-macros`, which builds on `proc_macro` alone, or keeping the second derive, which a
     derive cannot add to the item it reads
-    ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
+    ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763),
+    [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
 
     Stands on: platform (serde_derive 1.0.229's impl and bound inference, which
     `crates/corten/tests/derived_deserialize.rs` holds this one to by reading each of its types
     twice, with this derive and with serde's, and comparing values, errors and the names passed to
     the deserializer); measured (reading a seven-field form costs 9,241 instructions before, on
-    `62eb57f7`, and after, on `8cd5934e`: callgrind, release build, 1,200 reads less 200 over
-    1,000, three runs each, `form::de::tests::what_reading_a_form_costs`); reasoned (`corten-macros` keeps no
+    `62eb57f7`, and after, on `8cd5934e`: callgrind, release build, 1,200 reads less 200 over 1,000,
+    three runs each, `form::de::tests::what_reading_a_form_costs`; reading the item benchmark's 500
+    API responses costs 265,550,044 instructions through `FromJson` and 438,766,522 through
+    serde_json alone, before, on `c65c10ec` with serde's derive, and after, on `a791d9ba` with this
+    one and again on `58b8c2f8`: callgrind, release build, `read_cost` in `examples/card-market`,
+    two runs each; a generic `Fields` or `UrlValue` type's read through serde_json, and an
+    `#[serde(other)]` enum's second read, are not measured); reasoned (`corten-macros` keeps no
     dependencies); value (one way to do each thing and a small surface, Values 5 and 6).
 
     Revisit when: a serde release changes what its derive writes for these attributes, which the
-    twin tests would show; or apps need an attribute this refuses often enough that a type of
-    their own is the second way.
+    twin tests would show; or apps need an attribute this refuses often enough that a type of their
+    own is the second way; or generic `Fields` or `UrlValue` types, or `#[serde(other)]` enums, are
+    common enough that their serde_json read shows in a measured page or API, which would ask for a
+    reader that repeats serde's inferred bounds or reads past a word it does not know.
 
-    Last checked: 2026-11-06, serde_derive 1.0.229 at `8cd5934e`; 2026-11-06, the form read at
-    `8cd5934e`.
+    Last checked: 2026-11-06, the form read at `8cd5934e`; 2026-11-08, the JSON read for `FromJson`
+    at `a791d9ba` and `58b8c2f8`; 2026-11-09, serde_derive 1.0.229 at `b44bd54b` (the twin tests, on
+    the branch merged onto the integration tip).
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or

@@ -707,7 +707,7 @@ fn enumeration(container: &Container, body: &Group) -> Result<(TokenStream, Vec<
         return err(body.span(), "ToJson: an enum is either untagged or tagged");
     }
     let mut arms = TokenStream::new();
-    for tokens in split(body.stream(), ',') {
+    for tokens in crate::component::variants(body.stream()) {
         let mut j = 0;
         let mut attrs = Vec::new();
         while is_punct(tokens.get(j), '#') {
