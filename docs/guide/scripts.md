@@ -181,8 +181,8 @@ Not `<noscript>`: it can only add markup when scripts are off, not leave out a c
 them, and the media query does both in the component's stylesheet. `examples/deck-builder`'s
 stylesheet has both rules. `examples/seller-desk`'s grid keeps both its controls without scripts:
 its filter is a `GET` form whose Filter button is not drawn with them, and its sort headers are
-links to the sorted page, which the handlers sort in place instead of following. The query follows whether scripts are on, not whether this one ran:
-with JavaScript off for the site it matches `none`, but a script an extension blocks or that
+links to the sorted page, which the handlers sort in place instead of following. The query
+follows whether scripts are on, not whether this one ran: with JavaScript off for the site it matches `none`, but a script an extension blocks or that
 fails to load still matches `enabled`, so its controls are drawn and do nothing. A browser
 without the `scripting` media feature (before Chromium 120, Firefox 113, Safari 17) draws both, as
 it did.
