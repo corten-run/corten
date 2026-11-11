@@ -1,0 +1,92 @@
+{
+ "requests": 3000,
+ "rounds": 3,
+ "idleSeconds": 60,
+ "images": {
+  "cm-p1011-je": {
+   "id": "sha256:8c7d22f00dd50bb6fefdd2b646e95edf87e7dd8a59b7dcb60c260389a9dbbd79",
+   "env": [
+    "LD_PRELOAD=libjemalloc.so.2"
+   ]
+  },
+  "corten-card-market-p1011b": {
+   "id": "sha256:038aeddfe6e5372e0822d2fd5afc9b4ac741a8701c4a2004d14195739f9f5507",
+   "env": [
+    "LD_PRELOAD=libjemalloc.so.2",
+    "MALLOC_CONF=background_thread:true,tcache_max:65536"
+   ]
+  },
+  "cm-p1011-jecap1": {
+   "id": "sha256:55d7b81830e656db1d32b146096c223f21cf36f2154bd083f1b6f66d57c09cee",
+   "env": [
+    "LD_PRELOAD=libjemalloc.so.2",
+    "MALLOC_CONF=background_thread:true,max_background_threads:1,tcache_max:65536"
+   ]
+  }
+ },
+ "rows": [
+  {
+   "round": 1,
+   "image": "cm-p1011-je",
+   "idleCpuMs": 91,
+   "seconds": 60,
+   "threads": 3
+  },
+  {
+   "round": 1,
+   "image": "corten-card-market-p1011b",
+   "idleCpuMs": 90,
+   "seconds": 60,
+   "threads": 6
+  },
+  {
+   "round": 1,
+   "image": "cm-p1011-jecap1",
+   "idleCpuMs": 99,
+   "seconds": 60,
+   "threads": 4
+  },
+  {
+   "round": 2,
+   "image": "cm-p1011-je",
+   "idleCpuMs": 83,
+   "seconds": 60,
+   "threads": 3
+  },
+  {
+   "round": 2,
+   "image": "corten-card-market-p1011b",
+   "idleCpuMs": 87,
+   "seconds": 60,
+   "threads": 6
+  },
+  {
+   "round": 2,
+   "image": "cm-p1011-jecap1",
+   "idleCpuMs": 113,
+   "seconds": 60,
+   "threads": 4
+  },
+  {
+   "round": 3,
+   "image": "cm-p1011-je",
+   "idleCpuMs": 90,
+   "seconds": 60,
+   "threads": 3
+  },
+  {
+   "round": 3,
+   "image": "corten-card-market-p1011b",
+   "idleCpuMs": 112,
+   "seconds": 60,
+   "threads": 6
+  },
+  {
+   "round": 3,
+   "image": "cm-p1011-jecap1",
+   "idleCpuMs": 79,
+   "seconds": 60,
+   "threads": 4
+  }
+ ]
+}

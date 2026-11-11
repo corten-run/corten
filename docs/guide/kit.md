@@ -56,8 +56,14 @@ guide](styles.md#design-tokens) writes colors (sRGB with its hex, or `oklch`); t
 fails, naming the file and property, if a component reads one the theme lacks. The kit's own
 look is warm grays with a weathering-steel orange as `--primary` and `--ring`. Its text meets
 WCAG AA contrast in both themes, which a test of `corten ui` checks: each `-foreground` on its
-color, each tone on a card (an alert's text) and the muted text on the page and on a card 4.5:1,
-and `--input` (a field's border) 3:1 on the page.
+color, each tone on a card (an alert's text), the muted text on the page and on a card and the
+chosen tab's text on the page 4.5:1, and `--input` (a field's border) 3:1 on the page.
+`--tab-selected-color`, the text of the chosen tab or segmented choice (a `TabGroup` tab, a
+`ChoiceGroup` option in a `Segmented`, a `SegmentedLinks` link, a `SegmentedRadio`), is a
+reference rather than a value, `"{foreground}"` in both themes, so it follows the theme's text. A
+design system whose chosen tab is in its brand color points it there, in each theme the app has
+(`"tab-selected-color": { "$type": "color", "$value": "{primary}" }`); the raised choice's
+surface stays `--background`, and under forced colors the chosen one is outlined as before.
 
 Sizes are tokens too, so a theme changes them in one place and the copied files stay the kit's:
 `--control-height` (a button, field, select, menu button or page link of the default size; 2.25rem),
@@ -68,6 +74,10 @@ button and a default or large button, not a small one's, which stays .8125rem; .
 `--control-width-sm`, `--control-width-md` and `--control-width-lg` (`ControlWidth`'s widths; 8, 16
 and 24rem), `--card-padding` (a card's
 padding and the gap between its parts; 1.5rem), `--card-heading-font-size` (a card's heading; 1rem),
+`--choice-list-gap` and `--choice-list-legend-gap` (the space between a `Checkboxes` or `RadioGroup`'s
+choices and under its legend, in both groups at once; .75rem each; not a `Segmented` control's
+choices or its `SegmentedRadios` legend, which keep their own), `--tab-font-weight` (the weight
+of every tab and segmented choice, chosen or not; 500),
 a `Stats` figure's type (below) and `--toasts-inset-bottom` (how far `Toasts` sits above the bottom of the window; 1rem, plus the
 home indicator's inset on a page whose viewport meta has `viewport-fit=cover`). A layout with a
 fixed bar along the bottom (a phone's tab bar) sets it on `body` where the bar shows, so a toast
