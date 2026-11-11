@@ -2764,6 +2764,19 @@ Corten is pre-1.0, so any minor version may change the API.
     columns, and aspnet-aot's all 14 that are not about pages, one of them (readiness) by a health
     check of its own that the tier's rule would not add
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+291. The kit's `StatusDot` and `LiveDot` draw their dot at the theme's `--status-dot-size`, where
+    `status_dot.css` had `.5rem` as a literal, so a design system whose status dots are smaller (a
+    .375rem dot) sets one token in its theme instead of editing the copied stylesheet. One token
+    sizes both, since they share the dot's rule. The kit's theme declares it as `.5rem`, so no
+    app's look changes; an app with a theme of its own that adds or merges `status_dot` is told the
+    token's line, as for the other sizes, and its startup check names `status_dot.css` until the
+    theme declares it. The ui-gallery's smoke test checks both dots are .5rem in the kit's theme
+    and .375rem with the token set so on the root. No request or render cost: the ui-gallery's
+    served `components.css` is 61,493 bytes where it was 61,434 (gzip 10,192 against 10,173, brotli
+    8,985 against 8,963, Node's zlib at gzip level 9 and brotli's default), served by the gallery
+    built from this change and from the commit it was made on, b38f7880. Found by the Chase Sets
+    pilot, whose design system draws its status dots at .375rem
+    ([#1199 Kit StatusDot draws its dot at a literal .5rem, so a design system with a smaller status dot edits the copy](https://github.com/corten-run/corten/issues/1199)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
