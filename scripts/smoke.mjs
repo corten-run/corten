@@ -212,8 +212,9 @@ function pending() {
 }
 
 /**
- * Sends each GET still loading (but streams) again from Node, with the browser's headers and a 10 s
- * bound, and says how long the server took: a fast answer here while the browser's waited says the
+ * Sends each GET still loading (but streams) again from Node, with the browser's headers but its
+ * cookies (`headers()` leaves them out, and `allHeaders()` would ask the browser, which may be what
+ * is stuck) and a 10 s bound, and says how long the server took: a fast answer here while the browser's waited says the
  * browser held the request, a slow one or none says the server or the machine did (#1149). A
  * request the smoke routed itself goes to the server here.
  */

@@ -4325,7 +4325,7 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Fixed
 - When a watchlist smoke run fails on a Playwright call (a page load past its 30 s timeout, say),
   the report numbers each request still loading by its context and page, sends the same GETs again
-  from Node with the browser's headers and how long the server took, and gives the run's peak of
+  from Node with the browser's headers (not its cookies) and how long the server took, and gives the run's peak of
   requests in flight in one context, so a stalled load says whether the browser or the server held it
   ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
 - `bench/fullstack`'s Phoenix app reads the item API through a Finch pool of 1,024 connections
