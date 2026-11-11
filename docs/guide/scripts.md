@@ -83,7 +83,7 @@ until it checks. An app cannot turn one of them off: `corten check` writes the c
 checks with each time, and `--no-script-types` leaves every script unchecked, not one option.
 `exactOptionalPropertyTypes` is not used: it refuses a property set to `undefined` where one is
 optional, and the DOM's option objects (`{ signal }` for `addEventListener`) take that as left out,
-as JSON does, so it rejects scripts that work ([design Choice 38](../design.md#choice-script-checks)).
+as JSON does, so it rejects scripts that work ([design Choice 39](../design.md#choice-script-checks)).
 A ref on several kinds of element is typed as one they all are: `ref={tab as HTMLElement}`.
 
 **JSDoc, not TypeScript.** The checker is TypeScript's either way: `corten check` runs `tsc` with

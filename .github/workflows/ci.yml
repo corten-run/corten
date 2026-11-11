@@ -32,6 +32,10 @@ jobs:
       - run: cargo clippy --workspace --all-features --all-targets -- -D warnings
       - run: cargo test --workspace --all-features
       - run: cargo test -p corten-run --no-default-features
+      # The JSON features alone, as an app takes them: the workspace turns on serde's `rc`, which an
+      # app need not, and `json` builds without `types` (the schemas and `RawValue`).
+      - run: cargo check -p corten-run --no-default-features --features json
+      - run: cargo check -p corten-run --no-default-features --features agent,feed
       # corten check type-checks the app's scripts and fails without tsc: the version package.json
       # pins, on the Node the browser job uses rather than whatever the runner image has.
       - uses: actions/setup-node@v7

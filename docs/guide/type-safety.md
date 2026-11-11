@@ -18,7 +18,7 @@ checked on the other side.
 | Text to catalogs | `messages!`: every locale has every key with the same arguments |
 | Form to handler | `#[derive(Fields)]` names are `FieldName`s, the only key `name=`, `Errors` and corten-ui's fields take, and the same derive reads the post by those names (it implements serde's `Deserialize`, so a form type derives nothing else) |
 | Handler to JSON client | `Json<T>` and `req.screen` take a `ToJson`; `#[derive(ToJson)]` reads `#[serde(...)]` and refuses one it cannot write as serde does (`flatten` of anything but a derived struct, `serialize_with`), so what it writes is what serde reads back |
-| Another service's JSON to a page | `corten::json::from_slice` takes a `FromJson`; `#[derive(FromJson)]` reads `#[serde(...)]` and refuses one it cannot read as serde does (`flatten`, `deserialize_with`), and needs `Deserialize` too, which reads whatever its reader gives up on |
+| Another service's JSON to a page | `corten::json::from_slice` takes a `FromJson`; `#[derive(FromJson)]` reads `#[serde(...)]` and refuses one it cannot read as serde does (`flatten`, `deserialize_with`), and writes the type's `Deserialize` from the same reading, which reads whatever its reader gives up on (serde's derive beside it does not compile) |
 | Server to script | `corten::types::Types::new().add::<Row>().components(COMPONENTS).sync(path)` in a test writes TypeScript declarations and fails while they are stale (line endings aside, so a Windows checkout with CRLF is not); `corten check` then fails in every script that reads an old name (it runs TypeScript's `tsc` over `src/` and `static/`, and fails when the app has scripts and `tsc` is not installed, unless told `--no-script-types`) |
 | Feed rows to their key | `#[derive(Row)]` (`corten::feed::Row`): a row's key is the field marked `#[row(id)]`, so renaming it moves the key with it; a row with none, two, an id that is not text, a serde attribute that makes the id's JSON differ from `id()` or puts another member under its key (a flattened field's members aside), a tuple struct, or a row that is not `Clone`, `Serialize`, `Send`, `Sync` and `'static` (a generic one, where a feed of it is built) does not compile |
 | Server to agent | tool input and output schemas generated from the structs by `#[derive(FromJson)]` and `#[derive(ToJson)]` (feature `agent`) |
@@ -73,16 +73,23 @@ JSON Schema (draft 2020-12): a doc comment is the `description` (and a first lin
 carries its `default`. The schemas are compiled only with feature `types` (which `agent` turns on).
 
 A derived type compiles with a field of any type serde writes or reads, since many are never
-described. Describing one whose field, at any depth, has a type with no schema panics naming
-that type: in the test that calls `Types::sync`, or at startup for a tool. Derive `ToJson` (or
-`FromJson`) on the type, or, for another crate's type, implement the trait for a
-`#[serde(transparent)]` newtype around it. In a generic type, a field type that has a schema
-only under a bound the type does not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same
-way: add the bound to the type's where clause. A type a root names directly (`Types::add`, a
-tool's input or output, an event's field) without a schema does not compile. Rust's own types
-that serde writes have one (strings, numbers, `NonZero*`, lists, sets, maps, tuples, `Option`,
-`Box`/`Rc`/`Arc`/`Cow`, `Duration`, `SystemTime`, paths and addresses, `serde_json`'s values and
-`RawValue`, Corten's `Raw` and `Day`). The read side describes what `FromJson` reads, so an enum
-with data in a tool's input, which `FromJson` does not take, has no read schema: implement
-`FromJsonSchema` for it by hand. A declaration is named after the Rust type; a
-`#[serde(rename)]` on the type does not change its JSON, and does not change the name.
+described. Describing one whose field, at any depth, has a type with no schema panics naming that
+type: in the test that calls `Types::sync`, or at startup for a tool. Derive `ToJson` (or
+`FromJson`) on the type (a `Fields` or `UrlValue` type has its read schema already), or, for another
+crate's type, implement the trait for a `#[serde(transparent)]` newtype around it (a newtype that is
+a tool's whole output implements `ToJson` by hand as well, `serde_json::to_writer(&mut *out,
+&self.0).expect(..)`, writing exactly one JSON object: an output that is or holds a `ToJson`
+written by hand is parsed before it is sent, so one that is not one object is the tool's internal
+error, logged with the tool's name, and a debug build answers it with a 500 naming the tool; a
+newtype that is a tool's whole input takes `impl corten::FromJson for T {}` beside its
+`Deserialize`). In a generic type, a field type that has a schema only under a bound the type does
+not declare (`Cow<'a, [T]>` needs `T: Clone`) is named the same way: add the bound to the type's where clause. A type a root names
+directly (`Types::add`, a tool's input or output, an event's field) without a schema does not
+compile. Rust's own types that serde writes have one (strings, numbers, `NonZero*`, lists, sets,
+maps, tuples, `Option`, `Box`/`Rc`/`Arc`/`Cow`, `Duration`, `SystemTime`, paths and addresses,
+`serde_json`'s values and `RawValue`, Corten's `Raw` and `Day`). The read side describes what
+`FromJson` reads, so an enum with data in a tool's input, which `FromJson` does not take, has no
+read schema: implement `FromJsonSchema` for it by hand (and, when it is the whole input, which a
+tool bounds on `FromJson`, add `impl corten::FromJson for T {}` beside its `Deserialize`). A
+declaration is named after the Rust type; a `#[serde(rename)]` on the type does not change its JSON,
+and does not change the name.

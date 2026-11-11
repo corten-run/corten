@@ -1576,25 +1576,42 @@ Under the prefix:
    that carries the user's cookies is refused, and no `Access-Control-Allow-Credentials` is sent.
 6. `Json` in the prelude is `corten::Json` (feature `json`). It reads a request body into a
    `FromJson` (item 8) with the value and the rejections axum's `Json` gives: Corten's reader takes
-   an `application/json` body, and axum (`serde_json`) any other JSON content type and any body
-   the reader gives up on. What it writes is a `ToJson`: derive it
-   (`#[derive(ToJson)]`, also in the prelude) on the response type, next to `Serialize` if other
-   surfaces read it too. The derive lays the JSON out when the crate compiles, so a response
-   copies one byte string between each pair of values instead of writing every key, quote and
-   comma, into a `Vec` sized from the type's last response that the body keeps. It reads
-   `#[serde(...)]` and writes the bytes `serde_json` would. A `#[serde(flatten)]` field whose type
-   is a struct that derives `ToJson` is written in place, its members laid out the same way; an
-   attribute it cannot follow (`flatten` of a map or an enum, `serialize_with`) does not compile. A field whose type has only `Serialize` (an id or a
-   date from another crate) is written by `serde_json`. `serde_json::Value` is a `ToJson`, as above.
-   axum's `Json` works too, and writes any `Serialize` through `serde_json` and a `BytesMut`.
+   an `application/json` body, and axum (`serde_json`) any other JSON content type and any body the
+   reader gives up on. What it writes is a `ToJson`: derive it (`#[derive(ToJson)]`, also in the
+   prelude) on the response type. It needs no `Serialize` unless the app's own code writes the type
+   with serde or it is a feed row; an agent tool's output is a `ToJson` too, and its input a
+   `FromJson`. The derive lays the JSON out when the crate compiles, so a response copies one byte
+   string between each pair of values instead of writing every key, quote and comma, into a `Vec`
+   sized from the type's last response that the body keeps. It reads `#[serde(...)]` and writes the
+   bytes `serde_json` would. A `#[serde(flatten)]` field whose type is a struct that derives
+   `ToJson` is written in place, its members laid out the same way; an attribute it cannot follow
+   (`flatten` of a map or an enum, `serialize_with`) does not compile. A field whose type has only
+   `Serialize` (an id or a date from another crate) is written by `serde_json`, and so is a whole
+   field around one (`Vec<theirs::Id>`, a map whose values are one) or a map whose key is not a
+   `JsonKey` (`BTreeMap<theirs::Key, u32>`). An app's own key type is a `JsonKey` when it is an
+   externally tagged enum of unit variants that derives `ToJson`, or by `impl
+   corten::json::JsonKey`, whose `write_key` writes the one JSON string serde writes for it, quotes
+   included (an agent tool's output that holds a hand-written `ToJson` or `JsonKey` is parsed
+   before it is sent). `serde_json::Value`
+   is a `ToJson`, as above. axum's `Json` works too, and writes any `Serialize` through `serde_json`
+   and a `BytesMut`.
 7. Numbers are written as serde_json writes them, a whole float as `2.0`
    ([Numbers in JSON](#numbers-in-json)).
-8. To read JSON another service answers, derive `FromJson` (in the prelude) next to `Deserialize`
-   and read it with `corten::json::from_slice` or `from_str`. Corten's reader takes the fields the
-   type declares and skips the rest; on anything it does not follow (an escaped key, a missing or
-   duplicate field) `serde_json` reads the text instead, so the value and every error are
-   `serde_json`'s. It reads `#[serde(...)]` as `Deserialize` does and refuses one it cannot follow
-   (`flatten`, `deserialize_with`); a field of a type with only `Deserialize` is read by `serde_json`.
+8. To read JSON another service answers, derive `FromJson` (in the prelude) and read it with
+   `corten::json::from_slice` or `from_str`. The derive writes the type's serde `Deserialize` too,
+   so it needs no second derive (one beside it does not compile). Corten's reader takes the fields
+   the type declares and skips the rest; on anything it does not follow (an escaped key, a missing
+   or duplicate field) `serde_json` reads the text instead, so the value and every error are
+   `serde_json`'s. It reads `#[serde(...)]` as serde's derive does and refuses one it cannot follow
+   (`flatten`, `deserialize_with`); a field of a type with only `Deserialize` is read by
+   `serde_json`, and an empty `impl corten::FromJson for T {}` lets such a type be read alone. A
+   `#[derive(Fields)]` form input or a `#[derive(UrlValue)]` enum is a `FromJson` already (with
+   feature `json`, and has its schema with `types`), so `FromJson` beside either does not compile
+   either. A generic one (`Offer<T>`) is a `FromJson` wherever its `Deserialize` applies, read by
+   serde_json rather than Corten's reader, and a `UrlValue` enum with a `#[serde(other)]` variant
+   reads any other word as that variant (its schema is any string). A form input whose fields borrow
+   from the input (`&'a str`, `#[serde(borrow)]`) cannot be a `FromJson`, which reads owned values;
+   give it owned fields (`String`) to read it from JSON.
 
 Each route is a `#[derive(Route)]` struct, and the API's prefix is one too (`ApiRoot` above), so
 the router and the links name the same URL, and a route outside the prefix (`/apis/items`
@@ -1617,7 +1634,7 @@ test reads the contract the handlers enforce, not a copy beside them:
 ```rust
 use corten::prelude::*;
 
-#[derive(serde::Serialize, ToJson)]
+#[derive(ToJson)]
 struct Price { lowest: String }
 
 #[corten::routes(api = ApiRoot, openapi = ApiDoc)]
@@ -1708,10 +1725,10 @@ value (with `JSON.stringify`'s form, `2` reads as an integer and `2.5` as a floa
    integers and `as_f64` on both otherwise, and flags a field the old service sent as an integer
    that now arrives as a float: that field should be an integer type.
 3. Text that must match another service's byte for byte is written by the app and sent as `Raw`,
-   which is a `ToJson` and so can be one field of a derived response. `Raw` has no `Serialize`, so
-   a type that feeds or agent output also write holds `Box<serde_json::value::RawValue>`
-   (serde_json's `raw_value` feature; for agent output or generated types its schema is any JSON
-   value). JavaScript's number form comes from
+   which is a `ToJson` and so can be one field of a derived response or of an agent tool's output
+   (its schema is any JSON value). `Raw` has no `Serialize`, so a feed row, which serde writes,
+   holds `Box<serde_json::value::RawValue>` instead (serde_json's `raw_value` feature; for
+   generated types its schema is any JSON value). JavaScript's number form comes from
    `serde_json::Serializer::with_formatter` over a type that derives `Serialize`, with a
    `Formatter` whose `write_f64` and `write_f32` write it (`-0.0` as `0`, digits below `1e21` and
    down to `1e-6`, an exponent outside that), sent with `Raw::new`.

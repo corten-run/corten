@@ -796,6 +796,41 @@ pub(crate) fn split(tokens: TokenStream, sep: char) -> Vec<Vec<TokenTree>> {
     parts
 }
 
+/// An enum body's variants, split at its top-level commas. Unlike [`split`], a `<` nests only
+/// where it opens generic arguments or a qualified path (`size_of::<Pair<u8, u16>>()`,
+/// `<HashMap<u8, u16> as Trait>::N`): one after a value is an operator (`B = 1 << 1`, both of
+/// its `<`), which would otherwise hide every comma after it. A `>` after `-` is an arrow's
+/// (`fn() -> u8`), not a close.
+pub(crate) fn variants(tokens: TokenStream) -> Vec<Vec<TokenTree>> {
+    let mut parts = vec![Vec::new()];
+    let mut depth = 0i32;
+    // The token before: a value (an operand), the `-` of an arrow, or the first `<` of a shift.
+    let (mut value, mut dash, mut shift) = (false, false, false);
+    for token in tokens {
+        if let TokenTree::Punct(p) = &token {
+            match p.as_char() {
+                '<' if shift => {}
+                '<' if depth > 0 || !value => depth += 1,
+                '>' if depth > 0 && !dash => depth -= 1,
+                ',' if depth == 0 => {
+                    parts.push(Vec::new());
+                    (value, dash, shift) = (false, false, false);
+                    continue;
+                }
+                _ => {}
+            }
+            shift = p.as_char() == '<' && !shift && depth == 0 && value && p.spacing() == Spacing::Joint;
+            dash = p.as_char() == '-' && p.spacing() == Spacing::Joint;
+            value = false;
+        } else {
+            (value, dash, shift) = (true, false, false);
+        }
+        parts.last_mut().expect("never empty").push(token);
+    }
+    parts.retain(|p| !p.is_empty());
+    parts
+}
+
 /// `<'a, T: Render = Foo, const N: usize>` gives the impl list without defaults
 /// (`<'a, T: Render, const N: usize>`) and the type's arguments (`<'a, T, N>`).
 pub(crate) fn split_generics(generics: &[TokenTree]) -> (TokenStream, TokenStream) {
