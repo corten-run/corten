@@ -6,7 +6,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 /// What [`crate::serve_on`] serves on besides the TCP sockets [`crate::listeners`] binds: a Unix
 /// socket, a socket a supervisor hands over, or a listener of the app's own. A connection's
-/// [`ClientIp`](crate::ClientIp) is its `Addr` when that is a `SocketAddr`.
+/// [`ClientIp`](crate::ClientIp) is its `Addr` when that is a `SocketAddr`. Tokio's
+/// `TcpListener`, as a `Listener`, accepts each connection with Nagle's algorithm off
+/// (`TCP_NODELAY`); a listener of the app's own sets what it chooses.
 pub trait Listener: Send + 'static {
     /// A connection.
     type Io: AsyncRead + AsyncWrite + Unpin + Send + 'static;
@@ -26,10 +28,19 @@ impl Listener for tokio::net::TcpListener {
     type Io = tokio::net::TcpStream;
     type Addr = std::net::SocketAddr;
 
+    /// The next connection, with `TCP_NODELAY` set, as Go's `net/http` and nginx set it: a
+    /// streamed answer's small writes (a feed's patches, a live element's fragments) then go out as
+    /// they are made, where with Nagle's algorithm one written while the last is unacknowledged
+    /// waited for the other end's delayed acknowledgement, about 40 ms behind nginx on Linux
+    /// (`docs/design.md#choice-tcp-nodelay`). A connection the option cannot be set on is served
+    /// as it is.
     async fn accept(&mut self) -> (Self::Io, Self::Addr) {
         loop {
             match tokio::net::TcpListener::accept(self).await {
-                Ok(accepted) => return accepted,
+                Ok((stream, addr)) => {
+                    let _ = stream.set_nodelay(true);
+                    return (stream, addr);
+                }
                 Err(error) => failed(error).await,
             }
         }

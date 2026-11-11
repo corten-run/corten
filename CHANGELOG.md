@@ -11,11 +11,29 @@ Corten is pre-1.0, so any minor version may change the API.
   (`Authorization: Bearer <token>`), the scheme `Challenge::bearer` asks an API's clients to use:
   the scheme in any case, one or more spaces, the token trimmed, and `None` for no
   `Authorization`, another scheme, `Bearer` with nothing after it or a value outside visible
-  ASCII. The MCP endpoint decides whether a refused request sent a token with it, so a value
-  outside ASCII is now told where to get a token rather than `error="invalid_token"`; the
-  `Challenge` and `Tools::auth` examples (now a compiled doctest, where it called an `auth::bearer`
+  ASCII. The `Challenge` and `Tools::auth` examples (now a compiled doctest, where it called an `auth::bearer`
   that does not exist) and card-market's partners and agents read with it in place of their own
   parsers ([#1225 Corten tells an API to take its key as a bearer token but gives it no reader, so each app parses Authorization by hand and the agent docs call an auth::bearer that does not exist](https://github.com/corten-run/corten/issues/1225)).
+
+### Fixed
+
+- A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no
+  longer closes a tunnel once the timeout has passed from when it opened, whether it is carrying
+  traffic or idle: as on a WebSocket, idle limits on the tunnel are the route's, and
+  `App::send_timeout` still ends a write that waits on it. A refused `CONNECT` is an answer like
+  any other, closed once idle past the timeout. Before, the tunnel's empty `200` marked the
+  connection idle at once, and a downstream proxy measured hundreds of streams cut at 29 to 31 s
+  under the default 30 s
+  ([#1218 A CONNECT answered 2xx goes idle like a plain answer, so the header timeout cuts the tunnel mid-stream (only a 101 stays busy)](https://github.com/corten-run/corten/issues/1218)).
+- Each TCP connection Corten accepts (`serve`, and `serve_on` or `serve_wrapped` with tokio's
+  `TcpListener`) has Nagle's algorithm off (`TCP_NODELAY`), as Go's `net/http` and nginx do, so
+  a feed's patches or a live element's fragments made one after another are no longer held for
+  the acknowledgement of the last one. Through nginx with the app in a container of its own, the
+  second of ten small events made back to back on a reused connection came 42.5 and 43.0 ms (the
+  medians of two runs) after the first, the other eight with it; with the option set, -0.1 ms,
+  and a request costs the same instructions; a listener of the app's own keeps its choice (design
+  Choice 41, `bench/nodelay`)
+  ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
 
 ## 0.2.0 (2026-11-11)
 
