@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { apps, locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
-import { aggregateCold, cpuSettings, loadPhases, phases, resultSchema, roundIdentity, sources, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { aggregateCold, cpuSettings, loadPhases, phases, readableSchemas, roundIdentity, sources, stageAggregate, timedProfiles, v3Schema } from "./run-contract.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "missing/invalid timestamp"); return n; };
 function loadEvidence(p) {
@@ -42,7 +42,10 @@ function statsEvidence(p) {
   assert.ok(Number.isSafeInteger(p.cpuUsec) && p.cpuUsec > 0);
 }
 export function validateSummary(s) {
-  assert.equal(s.schema, resultSchema); assert.equal(s.workload, workload); roundIdentity(s.round);
+  assert.ok(readableSchemas.includes(s.schema), `unreadable result schema ${s.schema}; this reader takes ${readableSchemas.join(" or ")}`);
+  // A v3 round is read as v4 with no stop records: under v3 an app that stopped failed the round.
+  const v3 = s.schema === v3Schema;
+  assert.equal(s.workload, workload); roundIdentity(s.round);
   assert.deepEqual(s.measurement.profiles, timedProfiles, "timed profile matrix must contain localized pages and locale-neutral JSON only");
   assert.match(s.commit, /^[a-f0-9]{40}$/); assert.equal(s.dirty, false);
   assert.equal(s.finishedCommit, s.commit); assert.equal(s.finishedDirty, false);
@@ -81,6 +84,7 @@ export function validateSummary(s) {
         assert.ok(runs.length === 3 || runs.at(-1).stopped, "a profile has fewer than three passes only when the app stopped");
         for (const run of runs) {
           assert.ok(!run.failed, "failed run contradicts complete status"); assert.equal(run.locale, locale);
+          assert.ok(!v3 || run.stopped === undefined, "a v3 round cannot record a stop: an app that stopped failed it");
           if (run.stopped !== undefined) { assert.equal(run, runs.at(-1), "no pass runs after the app stopped"); stopEvidence(run); }
           else assert.equal(run.complete, true);
           const runStart = time(run.startedAt), runEnd = time(run.finishedAt);
@@ -105,7 +109,12 @@ export function validateSummary(s) {
         }
         assert.deepEqual(Object.keys(a.phases[key]).sort(), [...phases].sort(), "unexpected/missing aggregate phases");
         // The aggregate's stop mark, like its outcome count, must match the saved passes.
-        for (const phase of phases) assert.deepEqual(a.phases[key][phase], stageAggregate(runs, phase, 3), "aggregate must match saved passes");
+        // A v3 aggregate has no stopped field at all.
+        for (const phase of phases) {
+          const expected = stageAggregate(runs, phase, 3);
+          if (v3) delete expected.stopped;
+          assert.deepEqual(a.phases[key][phase], expected, "aggregate must match saved passes");
+        }
       }
     }
   }
@@ -115,7 +124,7 @@ export function report(s) {
   validateSummary(s);
   const identity = roundIdentity(s.round);
   const lines = [`# Marketplace v2 ${s.round}${identity.kind === "development" ? " (development)" : ""}`, "",
-    `Commit: \`${s.commit}\`. Schema: \`${s.schema}\`. CPU: ${s.host.cpu} (online CPUs ${s.host.onlineCpus}).`,
+    `Commit: \`${s.commit}\`. Schema: \`${s.schema}\`${s.schema === v3Schema ? " (read as v4: a v3 round has no stop records, since an app that stopped failed it)" : ""}. CPU: ${s.host.cpu} (online CPUs ${s.host.onlineCpus}).`,
     "A new localized baseline, not a change from marketplace r16 or catalog c1.", "",
     "Every number is the median [min-max] of three measured passes, not a confidence interval. Overlapping ranges do not establish a speed difference.",
     "Pages cover all three locales; JSON is locale-neutral and timed once per source/pass. All twenty apps pass both sources and twelve browser profiles before any load.",

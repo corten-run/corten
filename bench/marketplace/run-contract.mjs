@@ -19,6 +19,11 @@ export { phases, sources, targets } from "../catalog/contract.mjs";
 // (run.stopped, appStop): the profile's later phases and passes do not run, so it can have fewer
 // than three passes, and each stage that lost a pass carries the stop (stageAggregate).
 export const resultSchema = "marketplace-results/v4";
+// The schemas report.mjs and compare.mjs read. A v3 summary is read as a v4 one with no stop
+// records: under v3 an app that stopped failed the round, so a valid v3 round has none, and its
+// aggregates lack only the stopped field. Rounds are written as v4 only.
+export const v3Schema = "marketplace-results/v3";
+export const readableSchemas = [v3Schema, resultSchema];
 export const timedProfiles = sources.flatMap((source) => [
   ...locales.map((locale) => ({ key: `${source}-${locale}-page`, source, locale, target: "page" })),
   { key: `${source}-neutral-json`, source, locale: null, target: "json" },

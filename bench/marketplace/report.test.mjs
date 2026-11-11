@@ -406,3 +406,49 @@ test("a stage the app stopped in is an outcome, not a comparable number, and new
   stopProfile(dies, "corten", "fixture-en-US-page", 1, "warmup", oom);
   assert.deepEqual(compare(dies, failing).newOutcomes.map((o) => o.phase), ["fixed", "sat64", "sat256"]);
 });
+
+// A summary as a v3 round (r19, at main 25acd6a7) writes it: no stop records, and aggregates
+// without the stopped field.
+function asV3(s, round) {
+  const v = structuredClone(s);
+  v.schema = "marketplace-results/v3"; v.round = v.options.round = round;
+  for (const a of Object.values(v.apps)) for (const stages of Object.values(a.phases)) for (const p of Object.values(stages)) delete p.stopped;
+  return v;
+}
+
+test("a v3 summary is read as v4 with no stop records: it validates and reports with no stop lines", () => {
+  const s = asV3(synthetic(), "r19");
+  validateSummary(s);
+  const text = report(s);
+  assert.ok(text.includes("Schema: `marketplace-results/v3` (read as v4"));
+  assert.doesNotMatch(text, /^App stopped:/m, "no stop line");
+  assert.doesNotMatch(text, /^\| [^|]+\(stopped:/m, "no stopped mark beside any numbers");
+  assert.equal(text.match(/^#### Fixed 150 req\/s$/gm).length, 8);
+  const stopped = synthetic(); stopProfile(stopped, "rails", "fixture-en-US-page", 2, "sat64", oom);
+  for (const bad of [
+    asV3(stopped, "r19"),
+    (() => { const v = structuredClone(s); v.apps.corten.phases["fixture-en-US-page"].fixed.stopped = null; return v; })(),
+    (() => { const v = structuredClone(s); v.apps.corten.runs["fixture-en-US-page"].pop(); return v; })(),
+    { ...s, schema: "marketplace-results/v2" },
+    { ...s, schema: "marketplace-results/v5" },
+    { ...synthetic(), schema: "marketplace-results/v3" },
+  ]) assert.throws(() => validateSummary(bad));
+});
+
+test("a v3 baseline compares with a v4 round, and a stop in the v4 round is a new outcome", () => {
+  const baseline = asV3(synthetic(), "r19");
+  const current = synthetic(); current.round = current.options.round = "r20";
+  stopProfile(current, "corten", "fixture-en-US-page", 3, "sat256", oom);
+  stopProfile(current, "rails", "api-de-DE-page", 1, "warmup", { Running: false, OOMKilled: false, ExitCode: 1 });
+  const result = compare(current, baseline, { unchangedApps: ["rails", "nextjs"] });
+  assert.equal(result.compatible, true, result.warnings.join("\n"));
+  assert.equal(result.comparisonKeys.current, result.comparisonKeys.baseline, "the same measurement read as v4 has one key");
+  assert.deepEqual(result.newOutcomes.map((o) => [o.app, o.profile, o.phase]), [
+    ["corten", "fixture-en-US-page", "sat256"], ["rails", "api-de-DE-page", "fixed"], ["rails", "api-de-DE-page", "sat64"], ["rails", "api-de-DE-page", "sat256"]]);
+  assert.deepEqual(result.newOutcomes[0].stopped, { baseline: null, current: { pass: 3, phase: "sat256", exitCode: 137, oomKilled: true } });
+  const row = (app, profile, phase) => result.rows.find((r) => r.app === app && r.profile === profile && r.phase === phase);
+  assert.equal(row("corten", "fixture-en-US-page", "sat256").metrics, null);
+  assert.deepEqual(row("corten", "fixture-en-US-page", "sat64").stopped, { baseline: null, current: null });
+  assert.equal(row("corten", "fixture-en-US-page", "sat64").metrics.rps.percentChange, 0);
+  assert.equal(compare(asV3(synthetic(), "r20"), baseline).compatible, true, "two v3 rounds still compare");
+});

@@ -118,7 +118,9 @@ app's and profile's results; the report marks each stage that lost a pass
 than three passes only there. Still failures: a phase with no k6 summary or in which no request
 succeeded, a 200 of the wrong content type, an app container that stopped during its cold start
 (before any load), and any error answer from the upstream to a record read. Results written
-this way are schema `marketplace-results/v4`; the reporter reads only that schema.
+this way are schema `marketplace-results/v4`. The reporter and `compare.mjs` also read a
+`marketplace-results/v3` summary, as v4 with no stop records (under v3 an app that stopped
+failed the round), so a v3 round compares with v4 rounds; any other schema is rejected.
 The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
 
 The deterministic fixture is 500 new rich trading-card records, not the old marketplace

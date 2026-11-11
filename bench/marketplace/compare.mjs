@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { pathToFileURL } from "node:url";
 import { apps } from "./contract.mjs";
-import { aggregateCold, phases, profileStop, roundIdentity, timedProfiles } from "./run-contract.mjs";
+import { aggregateCold, phases, profileStop, resultSchema, roundIdentity, timedProfiles } from "./run-contract.mjs";
 import { validateSummary } from "./report.mjs";
 
 const hostFields = ["cpu", "onlineCpus", "platform", "release", "node", "docker"];
@@ -15,13 +15,15 @@ const canonical = (v) => Array.isArray(v) ? v.map(canonical)
 /** SHA-256 regression key, independent of round/build/commit and JSON property order.
  * Includes all measurement options (including future keys), full measurement metadata,
  * schema/workload/fixture, CPU hardware/topology/pinning, host software and tool images.
+ * The schema in the key is the one a summary is read as: a v3 summary is read as v4 with no
+ * stop records, so a v3 round and a v4 round with the same measurement share a key.
  * An equal key is necessary, not sufficient: compare also requires earlier official
  * identity and full validated evidence. Reference adapters require caller attestation.
  */
 export function comparisonKey(s) {
   validateSummary(s);
   for (const key of hostFields) if (typeof s.host[key] !== "string" || !s.host[key]) throw new Error(`Missing host ${key}; no comparison key.`);
-  const input = { schema: s.schema, workload: s.workload, fixtureSha256: s.fixtureSha256,
+  const input = { schema: resultSchema, workload: s.workload, fixtureSha256: s.fixtureSha256,
     options: measurementOptions(s.options), measurement: s.measurement,
     host: Object.fromEntries(hostFields.map((k) => [k, s.host[k]])),
     tools: Object.fromEntries(["upstream", "k6"].map((tool) => [tool, s.tools[tool].imageId])) };
@@ -51,8 +53,10 @@ export function comparisonKey(s) {
  * passes to it, else null (#1128). A stopped stage is an outcome, not a number: its row has
  * metrics null, it is in newOutcomes when the baseline's stage had no stop, and a reference app's
  * stopped stage or cold row is left out of the cohort and named in outcomeApps.
- * Equal measurement options, fixture, result schema, CPU model/topology/placement,
- * host software and load/upstream images are required. Build flags are not measures.
+ * Equal measurement options, fixture, CPU model/topology/placement, host software and
+ * load/upstream images are required, and both summaries in a schema the reporter reads (v3 or
+ * v4: a v3 round, which failed on any stopped app, compares as a v4 round with no stop). Build
+ * flags are not measures.
  */
 export function compare(current, baseline, { unchangedApps = [] } = {}) {
   const result = { schema: "marketplace-comparison/v1", current: current?.round ?? null,
@@ -69,7 +73,8 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   const now = roundIdentity(current.round), old = roundIdentity(baseline.round);
   if (now.kind !== "official" || old.kind !== "official" || old.number >= now.number) warn("Comparison requires an earlier official marketplace-v2 r17+ baseline; development, legacy r16 and catalog rounds have no deltas.");
   const same = (label, a, b) => { if (!isDeepStrictEqual(a, b)) warn(`Incompatible ${label}; no deltas.`); };
-  for (const key of ["schema", "workload", "fixtureSha256", "measurement"]) same(key, current[key], baseline[key]);
+  // Both schemas passed validateSummary, so both are read as v4 (v3 with no stop records).
+  for (const key of ["workload", "fixtureSha256", "measurement"]) same(key, current[key], baseline[key]);
   same("measurement options", measurementOptions(current.options), measurementOptions(baseline.options));
   for (const key of hostFields) {
     if (typeof current.host[key] !== "string" || !current.host[key] || typeof baseline.host[key] !== "string" || !baseline.host[key]) warn(`Missing host ${key}; no deltas.`);
@@ -96,7 +101,7 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   for (const app of comparedApps) for (const { key } of timedProfiles) for (const phase of phases) {
     const was = baseline.apps[app].phases[key][phase], now = current.apps[app].phases[key][phase];
     const row = { app, profile: key, phase, metrics: {}, warnings: [] };
-    row.stopped = { baseline: was.stopped, current: now.stopped };
+    row.stopped = { baseline: was.stopped ?? null, current: now.stopped ?? null };
     row.appOutcomes = { baseline: was.appOutcomes, current: now.appOutcomes };
     const outcome = { app, profile: key, phase, appOutcomes: row.appOutcomes, failedRate: { baseline: was.failedRate, current: now.failedRate }, dropped: { baseline: was.dropped, current: now.dropped }, stopped: row.stopped };
     if (was.stopped || now.stopped) {

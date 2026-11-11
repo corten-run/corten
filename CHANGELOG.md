@@ -2894,7 +2894,9 @@ Corten is pre-1.0, so any minor version may change the API.
   that lost a pass `(stopped: n of 3 passes)` with a line naming the stop and refuses a summary
   whose marks and stop records disagree; `compare.mjs` gives such a stage no deltas and lists it
   in `newOutcomes` when the baseline's stage had no stop. A stop during cold start, before any
-  load, still fails the round. Results are schema `marketplace-results/v4`
+  load, still fails the round. Results are schema `marketplace-results/v4`; `report.mjs` and
+  `compare.mjs` still read a `marketplace-results/v3` summary as v4 with no stop records, so a v3
+  round validates and is a compatible baseline for v4 rounds
   ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128)).
 
 - A `Public` answer costs less to send: the last check of its `Cache-Control` copies the
