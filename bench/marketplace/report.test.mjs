@@ -346,9 +346,12 @@ test("an app whose container stops under load is that app's recorded outcome, an
   assert.deepEqual(p.sat64.stopped, { pass: 2, phase: "sat64", exitCode: 137, oomKilled: true });
   const text = report(s);
   const en = text.split("## en-US\n")[1].split("\n## ")[0];
-  // fewer than three passes say what the number is: of two the lower pass, of one that pass
-  assert.ok(en.includes("| rails (stopped: 2 of 3 passes; the lower pass, not a median) | 1000.00 [1000.00-1000.00] |"), "the cold starts keep the passes before the stop, marked");
-  assert.ok(en.includes("| rails (stopped: 2 of 3 passes; the lower pass, not a median) | 1001.00 [1001.00-1002.00] |"), "so does the fixed stage");
+  // fewer than three passes say what the number is: of two the lower value in each column on its
+  // own (spread), so not one pass's numbers; of one, that pass
+  assert.ok(en.includes("| rails (stopped: 2 of 3 passes; the lower of two values per column, not a median) | 1000.00 [1000.00-1000.00] |"), "the cold starts keep the passes before the stop, marked");
+  assert.ok(en.includes("| rails (stopped: 2 of 3 passes; the lower of two values per column, not a median) | 1001.00 [1001.00-1002.00] |"), "so does the fixed stage");
+  assert.doesNotMatch(text, /lower pass/, "the mark does not say the numbers come from one pass");
+  assert.ok(text.includes("of two passes each number is the lower of the two values in its column"));
   assert.ok(en.includes("| rails (stopped: 1 of 3 passes; one pass, no range) | 1001.00 [1001.00-1001.00] |"));
   assert.ok(text.includes("except in a row marked stopped, which has fewer"), "the header does not call every number a three-pass median");
   assert.ok(en.includes("App stopped: rails fixture-en-US-page sat64: its container was OOM-killed (exit code 137) during sat64 in pass 2."));

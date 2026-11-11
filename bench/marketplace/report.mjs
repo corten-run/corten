@@ -38,8 +38,9 @@ function stopEvidence(run) {
 // text does not either.
 const stopText = (s) => `its container ${s.oomKilled ? `was OOM-killed (${s.exitCode === null ? "a process in it; the container kept running" : `exit code ${s.exitCode}`})` : `exited with code ${s.exitCode}`} during ${s.phase} in pass ${s.pass}`;
 // A stage the app's stop left with fewer than three passes says what its number is: of two passes
-// the "median" is the lower one (spread), and one pass has no range.
-const stoppedMark = (n, asked) => n >= asked ? "" : ` (stopped: ${n} of ${asked} passes${n === 2 ? "; the lower pass, not a median" : n === 1 ? "; one pass, no range" : ""})`;
+// spread takes the lower value in each column on its own (req/s and p95 may come from different
+// passes), and one pass has no range.
+const stoppedMark = (n, asked) => n >= asked ? "" : ` (stopped: ${n} of ${asked} passes${n === 2 ? "; the lower of two values per column, not a median" : n === 1 ? "; one pass, no range" : ""})`;
 function statsEvidence(p) {
   finite(p.cpuAvgPct); finite(p.cpuMaxPct); assert.ok(p.cpuMaxPct >= p.cpuAvgPct);
   finite(p.memAvgMiB, Number.MIN_VALUE); finite(p.memMaxMiB, p.memAvgMiB);
@@ -131,13 +132,13 @@ export function report(s) {
   const lines = [`# Marketplace v2 ${s.round}${identity.kind === "development" ? " (development)" : ""}`, "",
     `Commit: \`${s.commit}\`. Schema: \`${s.schema}\`${s.schema === v3Schema ? " (read as v4: a v3 round has no stop records, since an app that stopped failed it)" : ""}. CPU: ${s.host.cpu} (online CPUs ${s.host.onlineCpus}).`,
     "A new localized baseline, not a change from marketplace r16 or catalog c1.", "",
-    "Every number is the median [min-max] of three measured passes, not a confidence interval, except in a row marked stopped, which has fewer: of two passes it is the lower one, of one pass that pass. Overlapping ranges do not establish a speed difference.",
+    "Every number is the median [min-max] of three measured passes, not a confidence interval, except in a row marked stopped, which has fewer: of two passes each number is the lower of the two values in its column, of one pass that pass. Overlapping ranges do not establish a speed difference.",
     "Pages cover all three locales; JSON is locale-neutral and timed once per source/pass. All twenty apps pass both sources and twelve browser profiles before any load.",
     `Fixed load asks for ${s.options.rate} requests/second. Closed-loop 64/256-user results are observed throughput and latency, not proven maximum capacity. Warmup ${s.options.warmup}s; each phase ${s.options.duration}s; identity encoding.`,
     "CPU % is sampled app-container usage (100% = one core). CPU us/request and requests/CPU-second use counted whole-container cgroup CPU, not instructions or handler-only time. CPU % and steady memory average the central 15%-95% of samples; peak memory is the sampled maximum, not an unsampled high-water mark.",
     "These load results do not measure browser interactivity, bytes, build cost or instructions.",
     "A stage marked * is the app's measured outcome under this profile: some requests got an answer other than 200 or timed out (10 s), or the fixed rate could not be started. It is recorded, not retried, and the later phases still ran. Its req/s, latency percentiles and requests/CPU-second count every request sent, failed ones included.",
-    "A stage marked (stopped: n of 3 passes) is also the app's outcome: its container exited or was OOM-killed during a load phase (warmup included), and the line below the table says when. That profile's later phases and passes were not run, so the stage's numbers come from the n passes before the stop, or none. A 200 of the wrong content type, an app that stopped during its cold start, or an upstream error fails the run instead."];
+    "A stage marked (stopped: n of 3 passes) is also the app's outcome: its container exited or was OOM-killed during a load phase (warmup included), and the line below the table says when. That profile's later phases and passes were not run, so the stage's numbers come from the n passes before the stop, or none. A 200 of the wrong content type, an app that stopped during its cold start or before a phase began, or an upstream error fails the run instead."];
   const cell = (r, digits = 2) => `${r.median.toFixed(digits)} [${r.min.toFixed(digits)}-${r.max.toFixed(digits)}]`;
   const label = (v) => v.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
   const warnings = [];
