@@ -4382,6 +4382,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
 ### Fixed
+- A `data-patch` submit that is abandoned, by a newer submit of the form (another button, other
+  values) or by a navigation, drops its `aria-busy` marks at once, as the guide says, rather than
+  when its own code next ran (after its fetch rejected, or once what it waited on to draw had loaded),
+  so a replaced button is never shown working; the runtime grows 15 bytes gzip (14,872 to 14,887)
+  ([#1108 The smoke's busy-mark check failed once in WebKit: the replaced button A was still marked busy while B's submit was on its way](https://github.com/corten-run/corten/issues/1108)).
 - `corten::listeners` (and so `serve`) listens with a queue of 511 finished connections on Linux
   (Windows 11 held 200 in one run; macOS keeps its 128 unless raised), not mio's and the standard library's 128.
   With 1,024 clients connecting at once to a page on one CPU (Docker Desktop's Linux VM), the
