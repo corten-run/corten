@@ -122,21 +122,29 @@ rules something out.
    Stands on: measured (the client-heavy table in performance.md, round browser-4, the median of 30
    loads: views take over 1,000 server-rendered rows in 10.2 ms, Solid, Svelte, Vue, React and
    Remix in 16.2 to 131 ms; Solid, the nearest, takes 1.6 times as long, against 3.3 times in
-   round browser-3, 19.6 ms against 6.0 on another CPU, Chromium and runtime); reasoned (nested
-   branches need the same typed-template check and CSP custom-property application as rows;
-   centralizing those does not require tracking application state); value (one way to give an
-   element behavior, Values 5).
+   round browser-3, 19.6 ms against 6.0 on another CPU, Chromium and runtime. Each is one round of
+   a number that has moved between runs: browser-2 measured 29.5 ms for views and three reruns of
+   that step 4.9, 20.7 and 6.3 ms. In browser-4 the browser painted a frame before views were
+   ready on at least half the loads, a median of 58 ms that takeover leaves out (none in
+   browser-3), and the page was ready after Svelte's and Vue's, where in browser-3 it was the first
+   framework ready; why takeover rose is open in
+   [#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222));
+   reasoned (nested branches need the same typed-template check and CSP custom-property
+   application as rows; centralizing those does not require tracking application state); value
+   (one way to give an element behavior, Values 5).
 
    Revisit when: a client framework takes over server-rendered rows as fast as views in the
-   client-heavy table, with no hydration (not met in browser-4: the nearest, Solid, hydrates and
-   takes 16.2 ms against 10.2, though it already creates rows faster); or apps' handlers keep
-   repeating state that crosses components, which a framework would hold once. The nested deck
-   preview exercises that boundary: draft data stays in its owner, while `view` owns only adoption
-   and cloning. Revisit that split if more screens need another state/lifecycle mechanism, or if
-   its root-id identity cannot express their branches.
+   client-heavy table, with no hydration (not met in browser-4, one round: the nearest, Solid,
+   hydrates and takes 16.2 ms against 10.2, though it already creates rows faster); or apps'
+   handlers keep repeating state that crosses components, which a framework would hold once. The
+   nested deck preview exercises that boundary: draft data stays in its owner, while `view` owns
+   only adoption and cloning. Revisit that split if more screens need another state/lifecycle
+   mechanism, or if its root-id identity cannot express their branches.
 
    Last checked: 2026-11-11, the client-heavy table, round browser-4 on a Xeon Platinum 8358, on
-   `3fb4b1ac`; 2026-11-06, nested deck preview and connected-tree measurements on `fc09b98d`.
+   `3fb4b1ac`; 2026-10-23, round browser-3 on a Xeon Platinum 8280, on `77002fe`; 2026-10-23,
+   browser-2 and its three reruns, recorded in the browser benchmark's README at `0cda9827`;
+   2026-11-06, nested deck preview and connected-tree measurements on `fc09b98d`.
 
 5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
@@ -318,15 +326,21 @@ rules something out.
    framework or WASM layer is faster than the platform's own DOM calls. The scripts guide has the
    table for choosing ([Server or browser](guide/scripts.md#server-or-browser)).
 
-   Stands on: measured (views take over 1,000 server-rendered rows in 10.2 ms, the fastest of the
-   client frameworks measured, Solid next at 16.2 ms; the client-heavy table in performance.md,
-   median of 30 loads, round browser-4); value (Values 1: the work goes where it is fastest for
-   the user).
+   Stands on: measured (views take over 1,000 server-rendered rows in 10.2 ms, ahead of the client
+   frameworks measured, Solid next at 16.2 ms; the client-heavy table in performance.md, median of
+   30 loads, round browser-4. That is one round of a number that has moved between runs (browser-2
+   measured 29.5 ms, three reruns of it 4.9, 20.7 and 6.3), and it rose from browser-3's 6.0 ms
+   on another CPU, Chromium and runtime while the browser now paints a frame before views are
+   ready on at least half the loads and the page is ready after Svelte's and Vue's; why is open in
+   [#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222));
+   value (Values 1: the work goes where it is fastest for the user).
 
    Revisit when: Values 1 changes. A case measured against the scripts guide's table (Server or
    browser) moves that case and the table, not this choice.
 
-   Last checked: 2026-11-11, round browser-4 on a Xeon Platinum 8358, on `3fb4b1ac`.
+   Last checked: 2026-11-11, round browser-4 on a Xeon Platinum 8358, on `3fb4b1ac`; 2026-10-23,
+   round browser-3 on a Xeon Platinum 8280, on `77002fe`; 2026-10-23, browser-2 and its three
+   reruns, recorded in the browser benchmark's README at `0cda9827`.
 
 10. <a id="choice-app-owns-document"></a>**The document is a component the app owns, not a shell Corten configures.** A page hands
    `req.page` its whole document, the app's layout with the page in it, and the head is markup

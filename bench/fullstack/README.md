@@ -460,17 +460,28 @@ twenty apps on a c-8 droplet (Xeon Platinum 8358, not the 8280 of browser-3), wi
 3fb4b1ac. Every browser run worked, and parity passed on 17 pages for every app. Corten's item page
 loads 15.0 KB of JavaScript (gzip, three files; browser-3 6.9 KB in four). All rows are in
 [results/browser-4](results/browser-4); the browser table in
-[docs/performance.md](../../docs/performance.md#in-the-browser) is still round r16's. An operator
-stepped in twice:
+[docs/performance.md](../../docs/performance.md#in-the-browser) is still round r16's. The round
+did not run as `droplet.mjs` intends; in order, from `run.log`:
 
 1. `fixtures/items.json` was missing on the droplet, so six apps did not answer on the first
-   start (13:41 UTC). The file was copied onto the droplet and the round restarted at 13:53 UTC.
-2. After the browser pass the suite went on into the build step, which it should not run, and it
-   was stopped after three apps (corten, leptos and topcoat; axum-maud's was cut off partway).
+   start (13:41 UTC). The operator copied the file onto the droplet and restarted the unit at
+   13:53 UTC
+   ([#1217 bench: refuse a round whose fixtures/items.json is missing or unusable, before creating a droplet](https://github.com/corten-run/corten/pull/1217)).
+2. After the browser pass the suite went on into the build step, which it should not run
+   ([#1221 bench: the browser suite runs the browser step alone, so the client-heavy pass fits its unit](https://github.com/corten-run/corten/pull/1221)).
+   At about 14:57 UTC the operator sent SIGTERM to `run-all.mjs` and `build.mjs`, after corten,
+   leptos and topcoat had built and partway through axum-maud; that let the unit's chained
+   `cd bench/browser && node run-all.mjs` start (14:57:57) before the operator stopped the unit.
    `build.json`, `rust-analyzer.json` and `docker-rebuild.json` are partial, and Corten's docker
-   rebuild failed (ENOENT for `examples/card-market/src/views/alert.rs` in the copy it builds), so
-   none of them is a result of this round. `bench/browser`'s pass was then run by hand
-   ([its README](../browser/README.md#on-linux-against-the-most-used-frameworks-round-browser-4)).
+   rebuild failed (ENOENT for `examples/card-market/src/views/alert.rs` in the copy it builds)
+   ([#1226 bench: docker-rebuild copies a context whose own directory is named bench, as a droplet's repository is](https://github.com/corten-run/corten/pull/1226)),
+   so none of them is a result of this round.
+3. A one-off script ran `summarize.mjs browser-4` by hand (the `summary exit 0` line), so
+   `summary.json` and `summary.txt` are made from those partial results; their browser rows come
+   from the complete `browser.json`. The same script started `bench/browser`'s pass, which failed
+   in its first three steps because `cargo` was not on `PATH`, and a second one-off unit ran that
+   pass to completion at 15:06:53 UTC
+   ([bench/browser's README](../browser/README.md#on-linux-against-the-most-used-frameworks-round-browser-4)).
 
 A selection, median (p90):
 
@@ -493,8 +504,9 @@ A selection, median (p90):
 | leptos | 2890 (2894) ms | 428 ms | 55 ms | 266 ms | 238 (239) ms | 2 MB |
 | tanstack-start | 2371 (2385) ms | 512 ms | 71 ms | 272 ms | 332 (338) ms | 2.9 MB |
 
-One run on another CPU model than browser-3's, so a difference between the two rounds is not
-Corten's own change.
+One run each. The CPU model (8358 against 8280), Chromium (156 against 148) and Corten (its item
+page's JavaScript 15.0 KB against 6.9 KB) all changed between browser-3 and this round, so a
+difference between the two cannot be put down to any one of them.
 
 ### Browser pass after the many-rows change (round browser-3, 2026-10-23)
 

@@ -215,11 +215,20 @@ Plain JavaScript is the floor: hand-written DOM code. Measured in round browser-
 Corten's rows are server-rendered `#[component(view)]` components, so taking them over is reading
 the page rather than rebuilding it, and a row costs 101 bytes of JavaScript memory against
 928-2,413 for the frameworks, which keep each row's data and bookkeeping in JavaScript. Its
-takeover is still the fastest of the frameworks, but slower than in round browser-3 (2026-10-23,
-at 77002fe): 10.2 ms against 6.0 then, while Solid, Svelte, Vue, React and plain JavaScript took
-over faster in this round than in that one (Solid 16.2 ms against 19.6) and Remix slower. The two
-rounds ran on different CPUs (a Xeon Platinum 8280 then), different Chromium versions (148 then)
-and different Corten runtimes, and they do not show which of those slowed Corten's takeover
+takeover is the fastest of the frameworks in this round, but that is one round of a number that
+has moved between runs before: round browser-2 measured 29.5 ms for Corten, and three reruns of
+that step on one CPU model gave 4.9, 20.7 and 6.3 ms
+([browser benchmark](../bench/browser/README.md#on-linux-against-the-most-used-frameworks-round-browser-3)).
+It is also slower than in round browser-3 (2026-10-23, at 77002fe): 10.2 ms against 6.0 then,
+while Solid, Svelte, Vue, React and plain JavaScript took over faster in this round than in that
+one (Solid 16.2 ms against 19.6) and Remix slower. Two things moved for Corten that did not for
+most apps: on at least half of its loads (and React's) the browser painted a frame between
+parsing and the app being ready, a median of 58 ms of rendering that takeover leaves out, where
+browser-3's median was none for every app; and its page was ready 89 ms after navigation began,
+after Svelte's (39.6 ms) and Vue's (42.2 ms), where in browser-3 it was ready before every other
+framework's. The two rounds ran on different CPUs (a Xeon Platinum 8280 then), different Chromium
+versions (148 then) and different Corten runtimes, and they do not show which of those slowed
+Corten's takeover
 ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)). Its
 JavaScript is the runtime, views and the page's handlers, 17.9 KB gzip, more than Solid's 6.8 KB
 and less than the other frameworks'. Creating thousands of rows in the browser is where it trails
