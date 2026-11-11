@@ -1349,6 +1349,30 @@ pub struct Field {
 /// # }
 /// ```
 ///
+/// A hole on a `<form>` is read and written through Element's own members, since a form's
+/// controls' names shadow its own (`<button name="remove">` is `form.remove`):
+///
+/// ```
+/// use corten::prelude::*;
+///
+/// #[component(view)]
+/// pub fn Line(id: u32, busy: bool) -> impl Render {
+///     html! {
+///         <form key={id} data-busy={busy}>
+///             <button name="remove">"Remove"</button>
+///         </form>
+///     }
+/// }
+///
+/// # fn main() {
+/// let js = Line.view.unwrap().js;
+/// assert!(js.contains(r#"Element.prototype.hasAttribute.call(this.el, "data-busy")"#), "{js}");
+/// assert!(js.contains(r#"set busy(v) { Element.prototype.toggleAttribute.call(this.el, "data-busy", v); }"#), "{js}");
+/// assert!(js.contains(r#"if (Element.prototype.hasAttribute.call(el, "data-busy") !== data.busy) Element.prototype.toggleAttribute.call(el, "data-busy", data.busy);"#), "{js}");
+/// assert!(js.contains(r#"static key(el) { return Element.prototype.getAttribute.call(el, "data-key") ?? ""; }"#), "{js}");
+/// # }
+/// ```
+///
 /// An `<input>`'s `value` and `checked` are what it shows now, which the user changes: the view
 /// reads and writes them as properties (and writes the default a form reset goes back to).
 ///
