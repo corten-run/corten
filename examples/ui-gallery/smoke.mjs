@@ -4509,6 +4509,27 @@ async function run(browser) {
       dotInBadge.own !== "rgba(0, 0, 0, 0)",
     JSON.stringify(dotInBadge),
   );
+  // --status-dot-size sizes StatusDot and LiveDot through the rule they share: the theme's .5rem,
+  // then a design system's .375rem set once on the root.
+  const dotSize = await orders.evaluate(() => {
+    const root = document.documentElement;
+    const rem = parseFloat(getComputedStyle(root).fontSize);
+    const dots = [...document.querySelectorAll("[class*='status-dot__dot']")];
+    const still = dots.find((d) => !d.className.includes("status-dot__live"));
+    const live = dots.find((d) => d.className.includes("status-dot__live"));
+    if (!still || !live) return { missing: dots.length };
+    const sized = () => [still, live].map((d) => { const r = d.getBoundingClientRect(); return [r.width / rem, r.height / rem]; });
+    const theme = sized();
+    root.style.setProperty("--status-dot-size", ".375rem");
+    const set = sized();
+    root.style.removeProperty("--status-dot-size");
+    return { theme, set };
+  });
+  check(
+    "StatusDot and LiveDot: --status-dot-size sizes both, .5rem in the kit's theme",
+    !("missing" in dotSize) && dotSize.theme.flat().every((s) => Math.abs(s - 0.5) < 0.01) && dotSize.set.flat().every((s) => Math.abs(s - 0.375) < 0.01),
+    JSON.stringify(dotSize),
+  );
   // LiveDot: inside a <corten-live> whose stream is live it pulses (an opacity animation that
   // runs), and is still while the stream is not live, outside one, for a user who asks for less
   // motion; under forced colors it pulses as Progress's sweep moves. The element is made, read and
