@@ -996,10 +996,13 @@ impl Error {
 
     /// The failure's answer, logged with its source and telling a client `detail`.
     fn answer_saying(self, detail: Arc<str>) -> Response {
+        // As an error, not its `Display`, so the log names each cause under it (a reset connection
+        // under "error sending request"), as `error.sources`.
+        let error: &(dyn std::error::Error + 'static) = &*self.source;
         if self.status.is_server_error() {
-            tracing::error!(status = self.status.as_u16(), error = %self.source, "corten: request failed");
+            tracing::error!(status = self.status.as_u16(), error, "corten: request failed");
         } else {
-            tracing::debug!(status = self.status.as_u16(), error = %self.source, "corten: request refused");
+            tracing::debug!(status = self.status.as_u16(), error, "corten: request refused");
         }
         let mut res = (self.status, self.status.canonical_reason().unwrap_or("Error")).into_response();
         res.extensions_mut().insert(Failed(detail));

@@ -45,7 +45,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { allApps } from "./apps.mjs";
+import { allApps, buildArgs } from "./apps.mjs";
 import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
@@ -301,7 +301,7 @@ const launch = async () => {
   remove(tarball);
 
   console.log("building the images");
-  const fullstackImages = (/** @type {string[]} */ names) => names.filter((app) => app !== "corten").map((app) => `docker build -q -t cb-${app} bench/fullstack/apps/${app}`);
+  const fullstackImages = (/** @type {string[]} */ names) => names.filter((app) => app !== "corten").map((app) => `docker ${buildArgs(app, tier).join(" ")}`);
   await retry(2, () => remote(suite === "live"
     ? [
       "cd /bench && tar -xzf src.tgz",

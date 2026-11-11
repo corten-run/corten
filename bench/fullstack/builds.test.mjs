@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { allApps } from "./apps.mjs";
-import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, readStep, recipes, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -17,6 +17,17 @@ const repo = fileURLToPath(new URL("../..", import.meta.url));
 test("every app with pages has a recipe, and every recipe an app", () => {
   const pageApps = Object.keys(allApps).filter((name) => allApps[/** @type {keyof typeof allApps} */ (name)].pages !== false);
   assert.deepEqual(Object.keys(recipes).sort(), pageApps.sort());
+});
+
+test("a matched round builds Next.js as the tier's image is built, with the Dockerfile's arguments", () => {
+  const nextjsEnv = (/** @type {Record<string, string>} */ env) => {
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", 'const b = await import("./builds.mjs"); console.log(JSON.stringify(b.recipes.nextjs.env))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "BENCH_TIER" && k !== "BENCH_APPS" && k !== "BENCH_EDGE")), ...env } });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  assert.deepEqual(nextjsEnv({}), { NEXT_TELEMETRY_DISABLED: "1" });
+  const dockerfile = readFileSync(join(repo, "bench/fullstack/apps/nextjs/Dockerfile"), "utf8");
+  assert.deepEqual(nextjsEnv({ BENCH_TIER: "matched" }), { NEXT_TELEMETRY_DISABLED: "1", PROFILE: "matched", EDGE_HOST: /^ARG EDGE_HOST=(\S+)$/m.exec(dockerfile)?.[1] });
 });
 
 test("the apps that build first are the ones with a development build", () => {
@@ -63,18 +74,36 @@ test("the source image starts from the toolchain and copies the context", () => 
   assert.match(sourceDockerfile("gin"), /^FROM bb-tools-gin\nRUN apk add [^\n]+\nWORKDIR \/src\nCOPY \. \.\n$/);
 });
 
-test("each app's edited file is touched by its own name, whatever the shell would read in it", { skip: spawnSync("bash", ["-c", "true"]).status !== 0 && "no bash here" }, () => {
+// Whether bash runs, asked twice: on Windows it is a WSL start, which can fail once under load.
+const hasBash = () => spawnSync("bash", ["-c", "true"]).status === 0 || spawnSync("bash", ["-c", "true"]).status === 0;
+
+test("each app's edited file is touched by its own name, whatever the shell would read in it", { skip: !hasBash() && "no bash here" }, () => {
   const dir = mkdtempSync(join(tmpdir(), "corten-touch-"));
-  for (const [name, r] of Object.entries(recipes)) {
+  const apps = Object.entries(recipes);
+  // One bash for every app, each in a subshell in its own directory, as a step runs, with a path
+  // relative to it: on Windows each bash is a WSL start, and one per app is the probable cause of
+  // the test failing now and then under load, exiting 1 with nothing on stderr. Each app's name is
+  // printed before its commands, so one whose quoting breaks the script's parse is the last named.
+  // The script is on stdin: Windows passes a command line on to WSL's bash changed.
+  let script = "echo started\n";
+  for (const [name, r] of apps) {
     const file = join(dir, name, r.edit);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, "x");
     utimesSync(file, 1, 1);
-    // bash in the app's directory, as a step runs, with a path relative to it.
-    // On stdin: Windows passes a command line on to bash (WSL's) changed.
     const where = join(dir, name).replace(/\\/g, "/");
-    const run = spawnSync("bash", ["-s"], { input: `cd '${where}' 2>/dev/null || cd "$(wslpath '${where}')" || exit 9\n${touchThen(r.edit, "true")}\n`, encoding: "utf8" });
-    assert.equal(run.status, 0, `${name}: ${run.stderr}`);
+    script += `echo "app ${name}"\n(cd '${where}' 2>/dev/null || cd "$(wslpath '${where}')" || exit 9\n${touchThen(r.edit, "true")}\n) || echo "failed ${name} $?"\n`;
+  }
+  let run = spawnSync("bash", ["-s"], { input: script, encoding: "utf8" });
+  // A bash that never ran the script (no "started") is asked once more, which only covers a
+  // failed start (the probable cause of the failures, not confirmed); a failed touch is not.
+  if (!/^started$/m.test(run.stdout)) run = spawnSync("bash", ["-s"], { input: script, encoding: "utf8" });
+  assert.match(run.stdout, /^started$/m, `bash did not start (status ${run.status}): ${run.stderr}`);
+  const last = [...run.stdout.matchAll(/^app (.+)$/gm)].at(-1)?.[1] ?? "its start, before any app";
+  assert.equal(run.status, 0, `the script stopped at ${last}: ${run.stdout}${run.stderr}`);
+  for (const [name, r] of apps) {
+    const file = join(dir, name, r.edit);
+    assert.doesNotMatch(run.stdout, new RegExp(`^failed ${name} `, "m"), `${name}: ${run.stdout}${run.stderr}`);
     assert.ok(statSync(file).mtimeMs > 1000, `${name}: ${r.edit} was not touched`);
     assert.deepEqual(readdirSync(dirname(file)), [r.edit.split("/").at(-1)], `${name}: the touch made another file`);
   }
@@ -227,6 +256,58 @@ test("rustc's passes and macro statistics are read from its output", () => {
   assert.deepEqual(macros.map((m) => m.macro), ["#[derive(Deserialize)]", "html!", "#[derive(Id)]", "::core::include_bytes!", "::schemars::_private::serde_json::json!"]);
   assert.deepEqual(macros[1], { macro: "html!", uses: 18, lines: 917, bytes: 44913 });
   assert.equal(macros[4].uses, 10);
+});
+
+test("each Rust app's completion point is in its file once, and every app that checks has one", () => {
+  for (const [name, r] of Object.entries(recipes)) {
+    assert.equal(!!r.ra, !!r.check, `${name}: an app the editor's loop checks has a completion point, and only one`);
+    if (!r.ra) continue;
+    assert.equal(r.ra.at.split("|").length, 2, `${name}: one | in ${r.ra.at}`);
+    // The probe types `nope_` at the point and looks for an error naming `nope_<expect>`.
+    assert.ok(r.ra.at.split("|")[1].startsWith(r.ra.expect), `${name}: ${r.ra.at} has ${r.ra.expect} right after the |`);
+    const text = readFileSync(join(repo, contextOf(name), r.edit), "utf8");
+    assert.equal(text.split(r.ra.at.replace("|", "")).length, 2, `${name}: ${r.edit} needs exactly one ${r.ra.at}`);
+  }
+});
+
+test("a Docker rebuild's edit numbers its run, so no two runs write the same file", () => {
+  for (const name of Object.keys(recipes)) {
+    const seen = new Set();
+    for (let run = 1; run <= 6; run += 1) {
+      const { from, to } = runChange(name, run);
+      assert.equal(from, changeOf(name).from);
+      assert.ok(to.includes(`Set the price alert (${run})`), `${name}: ${to}`);
+      seen.add(to);
+    }
+    assert.equal(seen.size, 6, name);
+  }
+});
+
+test("the steps a BuildKit build ran are the ones its plain output did not mark CACHED", () => {
+  const output = [
+    "#1 [internal] load build definition from Dockerfile",
+    "#1 DONE 0.0s",
+    "#5 [build 1/4] FROM docker.io/library/rust:1-bookworm@sha256:abc",
+    "#5 CACHED",
+    "#6 [build 2/4] COPY . .",
+    "#6 DONE 0.4s",
+    "#7 [build 4/4] RUN --mount=type=cache,target=/src/target cargo build --release",
+    "#7 12.1    Compiling card-market v0.1.0 (/src/examples/card-market)",
+    "#7 DONE 40.2s",
+    "#8 [stage-1 3/3] COPY --from=build /out/server /app/server",
+    "#8 CACHED",
+  ].join("\r\n");
+  assert.deepEqual(ranSteps(output), [
+    "[internal] load build definition from Dockerfile",
+    "[build 2/4] COPY . .",
+    "[build 4/4] RUN --mount=type=cache,target=/src/target cargo build --release",
+  ]);
+  assert.deepEqual(ranSteps("#5 [build 4/4] RUN make\n#5 CACHED\n"), []);
+  assert.equal(ranARun(ranSteps(output)), true);
+  // A build after the edit that only copied (the build step cached) did not build.
+  assert.equal(ranARun(["[internal] load build definition from Dockerfile", "[build 2/4] COPY . ."]), false);
+  assert.equal(ranARun(["[build 2/4] COPY ./RUN /src"]), false);
+  assert.deepEqual(compiledIn(output.replace("#7 DONE", "#7 30.5    Compiling card-market-two v0.2.0\r\n#7 DONE")), ["card-market", "card-market-two"]);
 });
 
 test("build.mjs's table has a row for an app with no build step, a built app and a failed one", () => {
