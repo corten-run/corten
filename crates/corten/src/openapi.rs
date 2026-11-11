@@ -1016,7 +1016,7 @@ mod tests {
 
     use crate::{http::StatusCode, App, Error, Json, JsonResult, Params, Routes};
 
-    #[derive(serde::Deserialize, crate::json::FromJson)]
+    #[derive(crate::json::FromJson)]
     struct NewAlert {
         below: u32,
         note: Option<String>,
@@ -1107,6 +1107,8 @@ mod tests {
         #[route("/api/quotes", get = quotes, post = quote)]
         pub struct Quotes {
             pub order: Option<super::Order>,
+            pub also: Vec<super::Order>,
+            pub by: super::Order,
         }
 
         #[route("/api/socket", get = socket)]
@@ -1226,7 +1228,16 @@ mod tests {
         assert_eq!(quotes["post"]["security"], json!([{ "x-api-key": [] }]));
         assert_eq!(
             quotes["get"]["parameters"],
-            json!([{ "name": "order", "in": "query", "schema": { "type": "string", "enum": ["lowest", "newest"] } }])
+            json!([
+                { "name": "order", "in": "query", "schema": { "type": "string", "enum": ["lowest", "newest"] } },
+                {
+                    "name": "also",
+                    "in": "query",
+                    "schema": { "type": "array", "items": { "type": "string", "enum": ["lowest", "newest"] } }
+                },
+                // One alone, required, is its words too, not the enum's JSON schema.
+                { "name": "by", "in": "query", "required": true, "schema": { "type": "string", "enum": ["lowest", "newest"] } }
+            ])
         );
         assert_eq!(quotes["get"]["responses"]["default"], json!({ "$ref": "#/components/responses/FailureOrJson" }));
         assert_eq!(quotes["post"]["responses"]["default"], json!({ "$ref": "#/components/responses/FailureOrJson" }));

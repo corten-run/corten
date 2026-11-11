@@ -1,6 +1,6 @@
 //! Corten's macros, re-exported by the `corten` crate: `html!` and `#[component]` (see
 //! `corten::view`), `#[derive(Fields)]` (see `corten::Fields`), `#[derive(ToJson)]` and `#[derive(FromJson)]` (see `corten::json`), `#[derive(Route)]` (see
-//! `corten::route`), `#[derive(Id)]` (see `corten::view::Id`), `#[derive(FromRef)]` (see `corten::FromRef`), `#[event]` and `script!` (see `corten::script`), `messages!` (see `corten::i18n`) and
+//! `corten::route`), `#[derive(Id)]` (see `corten::view::Id`), `#[derive(FromRef)]` (see `corten::FromRef`), `#[derive(Row)]` (see `corten::feed::Row`), `#[event]` and `script!` (see `corten::script`), `messages!` (see `corten::i18n`) and
 //! `tokens!` and component stylesheets (see `corten::style`), and `embed!` (see `corten::assets`).
 //!
 //! Written against `proc_macro` alone (no `syn` or `quote`), so the crate has no dependencies
@@ -27,6 +27,7 @@ mod messages;
 mod names;
 mod route;
 mod routes;
+mod row;
 mod schema;
 mod script;
 mod style;
@@ -78,6 +79,12 @@ pub fn derive_url_value(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(FromRef, attributes(from_ref))]
 pub fn derive_from_ref(input: TokenStream) -> TokenStream {
     from_ref::expand(input).unwrap_or_else(|(span, message)| tokens::compile_error(span, &message))
+}
+
+/// A feed row's `id`, the field marked `#[row(id)]`. Documented at `corten::feed::Row`.
+#[proc_macro_derive(Row, attributes(row))]
+pub fn derive_row(input: TokenStream) -> TokenStream {
+    row::expand(input).unwrap_or_else(|(span, message)| tokens::compile_error(span, &message))
 }
 
 /// An element id as a type. Documented at `corten::view::Id`.
@@ -149,10 +156,16 @@ pub fn derive_fields(input: TokenStream) -> TokenStream {
         Ok(code) => code.parse().expect("generated code parses"),
         Err(message) => return format!("::core::compile_error!({message:?});").parse().expect("compile_error parses"),
     };
-    // serde's `Deserialize`, so the struct needs no `#[derive(Deserialize)]` beside this one.
+    // serde's `Deserialize`, so the struct needs no `#[derive(Deserialize)]` beside this one,
+    // and the `FromJson` that reads it from JSON with corten's reader, so it needs no
+    // `#[derive(FromJson)]` either (a second `Deserialize`).
     out.extend(
         derive::parse(input, "Fields")
-            .and_then(|item| deserialize::for_struct(&item))
+            .and_then(|item| {
+                let mut code = deserialize::for_struct(&item)?;
+                code.extend(from_json::beside_deserialize(&item));
+                Ok(code)
+            })
             .unwrap_or_else(|(span, message)| tokens::compile_error(span, &message)),
     );
     out

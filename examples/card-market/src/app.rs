@@ -2,7 +2,8 @@
 //! policy (CSP nonce, cross-site write check), versioned assets, error pages, health, PWA with
 //! push, head tags, an i18n catalog, robots/sitemap, compression, the home and category pages
 //! cached by CDNs (`Public`), an item as JSON for other services and the price-alert
-//! action as an MCP tool for agents, both mounted as JSON-only routes (`App::api`). Partners'
+//! action as an MCP tool for agents, both mounted as JSON-only routes (`App::api`), and a
+//! grading page whose captioned clip the browser seeks by byte ranges (its own area, `/grading`). Partners'
 //! services set alerts with an API key sent as a bearer token (`Caller<Partner>`), and writes are limited per client
 //! address by a middleware on the routes that take them, the item pages' area and the partner
 //! API (`WriteLimit`, `ClientIp`; `PROXIES` behind a load balancer).
@@ -23,15 +24,17 @@ use corten::{
     security::{Policy, Violations},
     seo::{self, SitemapUrl},
 };
-use serde::{Deserialize, Serialize};
 
 use crate::{
-    api, embeds, items, mcp,
+    api, embeds, grading, items, mcp,
     model::{AlertInput, ItemView, set_alert},
     routes,
     source::Source,
     text::Msg,
-    views::{self, AlertForm, AlertFormView, AlertMessage, Framed, ItemCard, ItemList, ItemPage, Layout, MoreOffers, Shown},
+    views::{
+        self, AlertForm, AlertFormView, AlertMessage, ConditionGuide, Framed, ItemCard, ItemList, ItemPage, Layout, MoreOffers,
+        Shown,
+    },
 };
 
 /// The app, assembled: routes plus the error page, catalogs and PWA settings. Corten adds the rest.
@@ -102,6 +105,7 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
     let ready = source.clone();
     App::new(routes::router(source.clone()))
         .area(|area| items::area(area, source.clone()).middleware(limit.clone()))
+        .area(|area| grading::area(area).components(&[ConditionGuide]))
         .area(|area| {
             let embedders = embedders.split(',').map(str::trim).filter(|o| !o.is_empty());
             embeds::area(area, source.clone()).policy(|p| embedders.fold(p, |p, origin| p.frame_ancestors(origin)))
@@ -363,7 +367,7 @@ pub(crate) async fn home(req: Req, State(source): State<Source>) -> Public<HtmlR
 }
 
 /// The trail a search engine shows for a page (schema.org `BreadcrumbList`), as structured data.
-#[derive(Serialize, ToJson)]
+#[derive(ToJson)]
 struct Breadcrumbs {
     #[serde(rename = "@context")]
     context: &'static str,
@@ -373,7 +377,7 @@ struct Breadcrumbs {
     items: Vec<Crumb>,
 }
 
-#[derive(Serialize, ToJson)]
+#[derive(ToJson)]
 struct Crumb {
     #[serde(rename = "@type")]
     kind: &'static str,
@@ -417,6 +421,20 @@ pub(crate) async fn category(
     let page = req.page(html! { <Layout req={req} title={title} head={head}>{views::category(req, t, title, items)}</Layout> });
     let answer = shared(page).shared(Duration::from_secs(3600));
     if items.is_empty() { answer.header::<XRobotsTag>(HeaderValue::from_static("noindex")) } else { answer }
+}
+
+/// How the market grades a card's condition: a page of its own in an area of its own, so the pages
+/// and the components' stylesheet the bench apps copy stay as they were (#1133).
+pub(crate) async fn grading(req: Req) -> Public<HtmlResult> {
+    let t: Msg = req.t();
+    let req = &req;
+    shared(req.page(html! {
+        <Layout req={req} title={t.grading_title()} head="">
+            <h1>{t.grading_title()}</h1>
+            <ConditionGuide req={req} t={t} />
+            <p><a href={routes::Home}>{t.category_back()}</a></p>
+        </Layout>
+    }))
 }
 
 /// The item's old address, moved for good.
@@ -496,7 +514,7 @@ pub(crate) async fn create_alert(
 }
 
 /// Which item, for `items.get`.
-#[derive(Deserialize, FromJson)]
+#[derive(FromJson)]
 struct ItemId {
     /// Item id, like item_17.
     id: String,
@@ -504,7 +522,7 @@ struct ItemId {
 
 /// A price alert as an agent or a partner asks for it: the form's fields (same names, same
 /// rules) plus the item.
-#[derive(Deserialize, FromJson)]
+#[derive(FromJson)]
 pub(crate) struct CreateAlert {
     /// Item id, like item_17.
     id: String,
@@ -514,7 +532,7 @@ pub(crate) struct CreateAlert {
     target_price: String,
 }
 
-#[derive(Serialize, ToJson)]
+#[derive(ToJson)]
 pub(crate) struct AlertSet {
     message: String,
     /// The partner the alert was set for, when a partner set it; agents do not have one.
@@ -562,7 +580,7 @@ fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
                 let source = read_source.clone();
                 async move {
                     let item = source.item(&input.id).await.map_err(ToolError::internal)?;
-                    // The cached item, serialized where it is: no copy.
+                    // The cached item, written where it is: no copy.
                     item.ok_or_else(|| ToolError::Invalid(format!("no item {}", input.id)))
                 }
             },
@@ -593,7 +611,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{api, embeds, items, mcp, routes, views::ItemQuery};
+    use crate::{api, embeds, grading, items, mcp, routes, views::ItemQuery};
 
     /// Fetch metadata a browser sends with a form post: a post from another site is refused.
     const SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
@@ -608,6 +626,12 @@ mod tests {
     }
 
     fn app() -> App {
+        super::app_with(fixture(), Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" }, WRITES_PER_MINUTE)
+            .test()
+    }
+
+    /// The items `app` serves.
+    fn fixture() -> Source {
         let offers: Vec<_> = (1..=7)
             .map(|n| json!({ "offer_id": format!("o{n}"), "buyer_display_name": format!("Buyer {n}"), "product_summary": "NM", "quantity_requested": 1, "price_amount": "1.00", "price_currency_code": "USD" }))
             .collect();
@@ -623,8 +647,7 @@ mod tests {
             "offer_demand_matches": offers
         });
         let bare = json!({ "catalog_item_id": "item_10", "title": "Bare", "market_summary": null });
-        let source = Source::fixture(&json!({ "item_9": item, "item_10": bare }).to_string()).unwrap();
-        super::app_with(source, Keys { partners: Partners::parse("dev=dev-key"), agents: "dev-token" }, WRITES_PER_MINUTE).test()
+        Source::fixture(&json!({ "item_9": item, "item_10": bare }).to_string()).unwrap()
     }
 
     /// The alert form on `item`, posted from the page: the title, the address and the price.
@@ -749,6 +772,40 @@ mod tests {
             "only the document is shared"
         );
         assert_eq!(app.get(&ITEM).await.headers()["cache-control"], "private, no-cache");
+    }
+
+    /// The grading page's condition clip: the video in MP4, then WebM, and captions in each
+    /// language, the reader's the default, every file from `static/` (a versioned URL); a category
+    /// links to it, and the home page has no clip (#1133).
+    #[tokio::test]
+    async fn the_condition_clip_is_captioned_in_the_readers_language() {
+        let app = app();
+        for (language, on, off) in [("en", "en", "fr"), ("fr-CA", "fr", "en")] {
+            let page = app.get(&grading::Grading).header(header::ACCEPT_LANGUAGE, language).await;
+            let html = page.text();
+            let track = |lang: &str| {
+                let at = html.find(&format!(r#"srclang="{lang}""#)).unwrap_or_else(|| panic!("{lang} track: {html}"));
+                html[at..at + html[at..].find('>').unwrap()].to_string()
+            };
+            assert!(track(on).ends_with(" default") && !track(off).contains("default"), "{}, {}", track(on), track(off));
+            assert!(track(on).contains(r#"src="/assets/"#) && track(on).contains(&format!(r#"/grading/condition.{on}.vtt""#)));
+            let source = |file: &str, kind: &str| {
+                let at = html.find(&format!(r#"/grading/{file}" type="{kind}">"#));
+                at.unwrap_or_else(|| panic!("{file}: {html}"))
+            };
+            assert!(source("condition.mp4", "video/mp4") < source("condition.webm", "video/webm"));
+        }
+        assert!(!app.get(&routes::Home).await.text().contains("<video"), "the home page is the bench's, unchanged");
+        let category = app.get(&routes::Category { slug: "promo" }).await;
+        let category = category.text();
+        assert!(category.contains(&format!(r#"<a href="{}">"#, grading::Grading)), "{category}");
+        let sheet = |html: &str, name: &str| html.contains(&format!("/{name}\" data-corten-style>"));
+        let grading = app.get(&grading::Grading).await;
+        let grading = grading.text();
+        assert!(sheet(grading, "sections/grading.css"), "the clip's styles are its area's: {grading}");
+        let home = app.get(&routes::Home).await;
+        let home = home.text();
+        assert!(!sheet(home, "sections/grading.css"), "and no other page links them");
     }
 
     #[tokio::test]
@@ -970,6 +1027,47 @@ mod tests {
         let responses: Vec<&str> = (1..=500).map(|n| raw[&format!("item_{n}")].get()).collect();
         let serde = std::env::var("READ_WITH").is_ok_and(|w| w == "serde");
         assert_eq!(read_all(&responses, serde), responses.len());
+    }
+
+    /// What an agent's `items.get` call costs, for callgrind: `TOOL_CALLS` calls through `/mcp`,
+    /// one item after another from the fixture, each answered with the item as written by its
+    /// `ToJson`. Build with `cargo test --release -p card-market --no-run`, then run the binary
+    /// twice, `CORTEN_FIXTURE=/path/items.json TOOL_CALLS=200` and `=1200`, under
+    /// `valgrind --tool=callgrind <test binary> --ignored --exact app::tests::tool_cost`: the
+    /// difference over 1,000 is one call, without startup and setup.
+    #[tokio::test]
+    #[ignore]
+    async fn tool_cost() {
+        use corten::http::{Body, Request};
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+        let path = std::env::var("CORTEN_FIXTURE").expect("CORTEN_FIXTURE");
+        let source = Source::fixture(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let router = super::app_with(source, Keys { partners: Partners::parse(""), agents: "t" }, WRITES_PER_MINUTE).router();
+        let calls: usize = std::env::var("TOOL_CALLS").expect("TOOL_CALLS").parse().unwrap();
+        let bodies: Vec<String> = (1..=500)
+            .map(|n| {
+                json!({ "jsonrpc": "2.0", "id": n, "method": "tools/call", "params": { "name": "items.get", "arguments": { "id": format!("item_{n}") } } })
+                    .to_string()
+            })
+            .collect();
+        let mut bytes = 0;
+        for body in bodies.iter().cycle().take(calls) {
+            let req = Request::post(mcp::Mcp::PATH)
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .header("authorization", "Bearer t")
+                .body(Body::from(body.clone()))
+                .unwrap();
+            let res = router.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), StatusCode::OK);
+            let body = std::hint::black_box(res.into_body().collect().await.unwrap().to_bytes());
+            // A tool error is a 200 too: measure the output written, not the error path. The end
+            // says which, at the same cost whatever the output's size.
+            assert!(body.ends_with(br#","isError":false}}"#), "{}", String::from_utf8_lossy(&body));
+            bytes += body.len();
+        }
+        println!("{calls} calls, {} bytes avg", bytes / calls);
     }
 
     #[tokio::test]
@@ -1205,6 +1303,7 @@ mod tests {
             res["result"]["structuredContent"]["message"],
             "Alert set: we will email a@b.c when Pika <Promo> & \"Friends\" drops below $1.00."
         );
+        assert_eq!(res["result"]["structuredContent"].get("partner"), None, "an agent's alert has no partner: {body}");
         // The scheme is matched in any case (RFC 9110 11.1). The endpoint answers an empty token
         // as none: told where to get one, with no `invalid_token`.
         let lower = app.call(Method::POST, &mcp::Mcp).json(&alert).header(header::AUTHORIZATION, "bearer dev-token");
@@ -1378,6 +1477,12 @@ mod tests {
         let (_, _, body) = send(call(Some("dev-token"), read)).await;
         let res: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(res["result"]["structuredContent"]["listings"].as_array().unwrap().len(), 2);
+        // The output is written by its ToJson: serde's bytes for the item, in the text block and
+        // as is in structuredContent.
+        let text = res["result"]["content"][0]["text"].as_str().unwrap();
+        let item = fixture().item("item_9").await.unwrap().unwrap();
+        assert_eq!(text, serde_json::to_string(&*item).unwrap());
+        assert!(body.contains(&format!(r#""structuredContent":{text}"#)), "{body}");
     }
 
     #[tokio::test]

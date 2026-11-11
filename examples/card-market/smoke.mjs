@@ -12,6 +12,11 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "ok  " : "FAIL"} ${name}${detail ? ` (${detail})` : ""}`);
   if (!ok) failures.push(name);
 };
+/** A check this browser cannot make, and why. */
+const skip = (/** @type {string} */ name, /** @type {string} */ why) => {
+  seen(name);
+  console.log(`skip ${name} (${why})`);
+};
 
 const browser = steady(await chromium.launch({ headless: true }));
 try {
@@ -206,24 +211,49 @@ try {
   check("a shortcut opens a page of the app", shortcut.status === 200 && shortcut.type.startsWith("text/html") && /ember.reach/i.test(shortcut.title), JSON.stringify(shortcut));
   await manifestCdp.detach();
 
-  // Push: the app's worker script (Pwa::import_script) handles a push sent through DevTools.
-  await context.grantPermissions(["notifications"], { origin: base });
-  const cdp = await context.newCDPSession(page);
-  /** @type {string | null} */
-  let registrationId = null;
-  cdp.on("ServiceWorker.workerRegistrationUpdated", ({ registrations }) => {
-    for (const r of registrations) if (r.scopeURL === `${base}/` && !r.isDeleted) registrationId = r.registrationId;
-  });
-  await cdp.send("ServiceWorker.enable");
-  for (let i = 0; i < 50 && registrationId === null; i += 1) await page.waitForTimeout(100);
-  if (registrationId !== null) {
-    const data = JSON.stringify({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
-    await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data });
+  // Push: the app's worker script (Pwa::import_script) handles a push sent through DevTools, in
+  // full Chromium (channel "chromium"): the headless shell denies notifications however they are
+  // granted, so its worker's showNotification fails. The app's message, and one of another shape
+  // (no title, a url that is not text) shown untitled and opening / (#1039).
+  const full = await chromium.launch({ headless: true, channel: "chromium" });
+  try {
+    const pushContext = await full.newContext();
+    const pushPage = await pushContext.newPage();
+    await pushPage.goto(base + "/");
+    await pushPage.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 10000 }).catch(() => {});
+    await pushContext.grantPermissions(["notifications"], { origin: base });
+    const cdp = await pushContext.newCDPSession(pushPage);
+    /** @type {string | null} */
+    let registrationId = null;
+    cdp.on("ServiceWorker.workerRegistrationUpdated", ({ registrations }) => {
+      for (const r of registrations) if (r.scopeURL === `${base}/` && !r.isDeleted) registrationId = r.registrationId;
+    });
+    await cdp.send("ServiceWorker.enable");
+    for (let i = 0; i < 50 && registrationId === null; i += 1) await pushPage.waitForTimeout(100);
+    /** The notifications the worker shows, read until one has `body` or 5 s pass. @param {string} body */
+    const shownWith = async (body) => {
+      for (const until = Date.now() + 5000; Date.now() < until; await pushPage.waitForTimeout(100)) {
+        const found = await pushPage.evaluate(async (body) => {
+          const n = (await (await navigator.serviceWorker.ready).getNotifications()).find((n) => n.body === body);
+          return n ? { title: n.title, url: n.data?.url } : null;
+        }, body);
+        if (found) return found;
+      }
+      return null;
+    };
+    /** @param {object} message */
+    const push = async (message) => {
+      if (registrationId !== null) await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify(message) });
+    };
+    await push({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
+    const shown = await shownWith("Card Name 5 is below $4.50");
+    check("a push message shows a notification", shown?.title === "Price drop" && shown?.url === "/items/item_5", registrationId === null ? "no registration id" : JSON.stringify(shown));
+    await push({ body: "Card Name 7 is back", url: 5 });
+    const odd = await shownWith("Card Name 7 is back");
+    check("a push message with no title and a url that is not text shows untitled and opens /", odd?.title === "" && odd?.url === "/", JSON.stringify(odd));
+  } finally {
+    await full.close();
   }
-  const shown = await page
-    .waitForFunction(async () => (await (await navigator.serviceWorker.ready).getNotifications()).some((n) => n.title === "Price drop"), null, { timeout: 5000 })
-    .then(() => true, () => false);
-  check("a push message shows a notification", shown, registrationId === null ? "no registration id" : "");
 
   // Offline: a fresh navigation through the runtime falls back to the worker's offline page.
   await page.reload();
@@ -233,6 +263,35 @@ try {
   await page.waitForFunction(() => document.querySelector("h1")?.textContent === "Not available", null, { timeout: 10_000 }).catch(() => {});
   check("offline navigation shows the offline page", (await page.textContent("h1")) === "Not available");
   await context.setOffline(false);
+
+  // Under the worker, a range of a versioned file still goes to the network as a 206, after the
+  // worker has cached the whole file (the cache holds whole files and cannot hold a 206) (#1133).
+  await page.goto(`${base}/grading`);
+  await page.waitForFunction(() => !!navigator.serviceWorker.controller);
+  const underWorker = await page.evaluate(async () => {
+    const src = /** @type {HTMLSourceElement} */ (document.querySelector('video source[type="video/mp4"]')).src;
+    const length = (await (await fetch(src)).arrayBuffer()).byteLength;
+    let cached = false;
+    for (let i = 0; i < 50 && !cached; i += 1) {
+      cached = !!(await caches.match(src));
+      if (!cached) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const part = await fetch(src, { headers: { range: "bytes=100-199" } });
+    return {
+      cached,
+      length,
+      status: part.status,
+      range: part.headers.get("content-range"),
+      size: part.headers.get("content-length"),
+      bytes: (await part.arrayBuffer()).byteLength,
+    };
+  });
+  check(
+    "under the service worker, a range of the clip is a 206 of those bytes after the whole file is cached",
+    underWorker.cached && underWorker.status === 206 && underWorker.range === `bytes 100-199/${underWorker.length}` &&
+      underWorker.size === "100" && underWorker.bytes === 100,
+    JSON.stringify(underWorker),
+  );
 
   const csp = errors.filter((e) => /Content Security Policy|Refused to/.test(e));
   check("no CSP violations", csp.length === 0, csp.join(" | "));
@@ -409,6 +468,68 @@ try {
       );
     } finally {
       await other.close();
+    }
+  }
+  // The grading page's condition clip plays from the embedded files in every engine: each byte range
+  // the browser asks for is answered 206 (WebKit also reads the file once without one, a 200; a
+  // request the browser drops shows as status 0), it seeks to the clip's last part, and the
+  // reader's captions show there (#1133). The clip is 8 KB, so the first range may be the whole
+  // file; the Rust tests cover ranges inside a file. The reader's track is the `default`: Chromium
+  // and Firefox show it unasked, while WebKit leaves captions to its own caption setting, so there
+  // the smoke turns the track on and checks the same cue. Playwright's WebKit on Windows lands a
+  // seek on the clip's start whatever server sends it (a plain Node one too), so it is skipped
+  // there; on Linux, as in CI, it makes the whole check.
+  for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
+    const clipCheck = `${name}: the grading page's clip plays from its embedded file by byte ranges, seeks, and shows the reader's captions there`;
+    if (name === "WebKit" && process.platform === "win32") {
+      skip(clipCheck, "Playwright's WebKit on Windows lands a seek on a video's start");
+      continue;
+    }
+    const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
+    const clipContext = await (own ?? browser).newContext();
+    try {
+      const clipPage = await clipContext.newPage();
+      /** @type {string[]} */
+      const answers = [];
+      clipPage.on("response", (r) => {
+        if (/\/grading\/condition\.(webm|mp4)$/.test(new URL(r.url()).pathname)) answers.push(`${r.request().headers()["range"] ?? "whole"}: ${r.status()} ${r.headers()["content-range"] ?? "-"}`);
+      });
+      await clipPage.goto(`${base}/grading`);
+      const clip = await clipPage.evaluate(async (/** @type {boolean} */ askFirst) => {
+        const within = (/** @type {Promise<unknown>} */ p, /** @type {string} */ what) =>
+          Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error(`no ${what} in 10 s`)), 10000))]);
+        const video = /** @type {HTMLVideoElement} */ (document.querySelector("video"));
+        const track = /** @type {HTMLTrackElement} */ (video.querySelector("track[default]"));
+        try {
+          if (video.readyState < 1) {
+            await within(new Promise((resolve, reject) => {
+              video.addEventListener("loadedmetadata", resolve, { once: true });
+              video.addEventListener("error", () => reject(new Error(`video error ${video.error?.code}`)), { once: true });
+            }), "metadata");
+          }
+          const unasked = track.track.mode;
+          if (askFirst && unasked !== "showing") track.track.mode = "showing";
+          if (track.readyState !== 2) await within(new Promise((resolve) => track.addEventListener("load", resolve, { once: true })), "captions");
+          video.currentTime = 4.5;
+          await within(new Promise((resolve) => video.addEventListener("seeked", resolve, { once: true })), "seek");
+          const cue = [...(track.track.cues ?? [])].find((c) => c.startTime <= video.currentTime && video.currentTime < c.endTime);
+          return { at: video.currentTime, duration: video.duration, src: video.currentSrc.split("/").pop(), lang: track.srclang, unasked, mode: track.track.mode, cue: cue instanceof VTTCue ? cue.text : null };
+        } catch (e) {
+          return { error: String(e), src: video?.currentSrc, state: video?.readyState, track: track?.readyState };
+        }
+      }, name === "WebKit");
+      check(
+        clipCheck,
+        !("error" in clip) && Math.abs(clip.at - 4.5) < 0.6 && clip.mode === "showing" &&
+          (name === "WebKit" || clip.unasked === "showing") && clip.lang === "en" &&
+          clip.cue?.startsWith("Moderately Played") === true &&
+          answers.some((a) => /^bytes=\S+: 206 bytes /.test(a)) &&
+          answers.every((a) => /^whole: (200|0) /.test(a) || /^bytes=\S+: (206 bytes |0 )/.test(a)),
+        `${JSON.stringify(clip)}; ${answers.join(", ")}`,
+      );
+    } finally {
+      await clipContext.close();
+      await own?.close();
     }
   }
   // A full document denies the powerful features no page uses: Chromium reads the header (no

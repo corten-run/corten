@@ -75,7 +75,7 @@ default = ["log"]
 # App::serve prints logs (errors, startup, shutdown) to stdout unless the app set a subscriber:
 # a subscriber of Corten's own (src/log.rs), so the feature adds no dependency.
 log = []
-# Handler arguments of any Serialize type (JSON in the markup) and JSON screens for data clients.
+# Handler arguments of any ToJson type (JSON in the markup) and JSON screens for data clients.
 json = ["serde/derive", "dep:serde_json", "dep:serde_path_to_error"]
 # corten::types: TypeScript declarations for scripts and JSON Schema for agents, from the same
 # reading of the types that #[derive(ToJson)] and #[derive(FromJson)] write and read them by.
@@ -101,6 +101,7 @@ all-features = true
 tokio = { version = "1", features = ["io-util", "macros", "rt", "rt-multi-thread", "test-util", "time"] }
 http-body-util = "0.1"
 tower = { version = "0.5", features = ["util"] }
-serde = { version = "1", features = ["derive"] }
+# `rc` for the tests that read an `Arc` or `Rc` as an app with that feature does.
+serde = { version = "1", features = ["derive", "rc"] }
 # The tests compare src/log.rs's lines, colors included, with this crate's.
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi"] }

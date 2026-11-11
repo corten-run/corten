@@ -372,7 +372,8 @@ impl Challenge {
         Challenge::scheme("Basic").param("realm", realm)
     }
 
-    /// The header's value.
+    /// The header's value, for the agent endpoint, which writes its own refusal.
+    #[cfg(feature = "agent")]
     pub(crate) fn value(&self) -> &HeaderValue {
         &self.0
     }

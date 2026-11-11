@@ -193,6 +193,10 @@ list of names of several fields (`[f.email.untyped(), f.price.untyped()]`). Vali
 Any name works, including ones the DOM gives a form's own properties (`action`, `method`, `id`): the runtime
 posts a `data-patch` form to its own `action` and `method` whatever its controls are named. An app's own
 script that reads `form.action` gets the control instead, as in any page; read `getAttribute("action")`.
+The same struct reads JSON too (feature `json`): `Fields` makes it a `FromJson` with its schema,
+so a data client's `Json<Input>` body or an agent tool's input is the form's struct, with its
+rules (derive nothing beside it for that; a generic struct is one wherever its `Deserialize`
+applies, read by serde_json).
 `FieldName`, `Errors` and `Form` are all in the prelude, and so is `Result`, whose error type
 defaults to `corten::Error`: a handler returns `Result`, and a helper that checks one field
 returns `Result<u32, Errors>`, both under `use corten::prelude::*`.
@@ -1317,9 +1321,13 @@ so memory stays at a few chunks. When the client leaves, the stream is dropped, 
 makes it: a cursor closes, a channel's sender fails. Read what can fail before returning it (the
 first page of rows, the file being there), since that error is still an error page; once the
 stream starts, the status and headers are sent, and an `Err` chunk ends the connection without
-the body's end, so the browser reports the download failed, and the error is logged. It cannot
-become an error page or a redirect. `Media::stream_sized(type, length, chunks)` sends a
-`Content-Length` so the browser shows progress; the stream must make exactly that many bytes, or
+the body's end, so the browser reports the download failed, and the error is logged with each
+cause under its message, as a handler's error is. It cannot become an error page or a redirect.
+`E` is anything `Error::new` takes: an error type (`std::io::Error`, a client's or a store's), a
+`String` or `&str` message, which is logged alone, or a `corten::Error`, so a stream made with
+the app's own `?` (of `corten::Result<Bytes>`) logs the error it holds; a type of the app's that
+only implements `Display` implements `std::error::Error` to be one.
+`Media::stream_sized(type, length, chunks)` sends a `Content-Length` so the browser shows progress; the stream must make exactly that many bytes, or
 the connection ends there as for a failure. A text type is compressed a chunk at a time (zstd,
 else gzip, never brotli, ended when the stream ends; uncompressed for a client that takes neither
 zstd nor gzip), so make chunks of some kilobytes, a few hundred rows, not a row each. No `ETag`

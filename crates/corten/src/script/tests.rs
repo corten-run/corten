@@ -69,6 +69,97 @@ fn Named<'a>(list: &'a [&'a str]) -> impl Render {
     }
 }
 
+script::script!(mod instrument = "instrument.js");
+
+/// A call with more arguments than a tuple's impls would reach: refs, text and the signal, each
+/// still checked against its parameter.
+#[component]
+fn Instrument() -> impl Render {
+    let (spectrum, fallback, controls, play, tempo, pattern, status, pause) = refs();
+    html! {
+        <div
+            on:connect={instrument::instrument(
+                spectrum, fallback, controls, play, tempo, pattern, status, pause,
+                "Play", "Stop", "Off", "On", "Unavailable", "Pause", "Resume", signal
+            )}
+        >
+            <canvas ref={spectrum}></canvas>
+            <p ref={fallback}></p>
+            <div ref={controls}>
+                <button ref={play}>"Play"</button>
+                <input ref={tempo} type="range">
+                <select ref={pattern}></select>
+                <output ref={status}></output>
+                <button ref={pause}>"Pause"</button>
+            </div>
+        </div>
+    }
+}
+
+#[test]
+fn a_call_takes_any_number_of_arguments() {
+    let html = Instrument {}.to_html();
+    assert!(
+        html.starts_with(concat!(
+            r#"<div data-scope="instrument" data-on="connect:instrument.instrument("#,
+            r#"@spectrum,@fallback,@controls,@play,@tempo,@pattern,@status,@pause,"#,
+            r#"&quot;Play&quot;,&quot;Stop&quot;,&quot;Off&quot;,&quot;On&quot;,&quot;Unavailable&quot;,&quot;Pause&quot;,&quot;Resume&quot;,$s)">"#
+        )),
+        "{html}"
+    );
+}
+
+/// What drawing a component with two handler calls, of one and three arguments, costs: callgrind
+/// counts it at `CALL_RENDERS` renders, and two counts' difference is the cost of that many.
+/// Build the lib's test binary with `cargo test --release -p corten-run --all-features --lib
+/// --no-run`, then run `CALL_RENDERS=1200 valgrind --tool=callgrind <that binary> --ignored --exact
+/// script::tests::what_a_handler_call_costs --test-threads=1`, and again at 200.
+#[test]
+#[ignore]
+fn what_a_handler_call_costs() {
+    let renders: usize = std::env::var("CALL_RENDERS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let mut bytes = 0;
+    for _ in 0..renders {
+        bytes += std::hint::black_box(LineItem { name: std::hint::black_box("a\"b"), quantity: 2 }).to_html().len();
+    }
+    assert!(bytes > 0);
+}
+
+script::script!(mod wide = "wide.js");
+
+/// A twelve-argument call, the longest a tuple's impls reached, which both ways of holding the
+/// arguments compile.
+#[component]
+fn Wide(label: &'static str) -> impl Render {
+    let (a, b, c, d, e, f) = refs();
+    html! {
+        <div on:connect={wide::wide(a, b, c, d, e, f, label, "h", "i", "j", "k", signal)}>
+            <p ref={a}></p>
+            <p ref={b}></p>
+            <p ref={c}></p>
+            <button ref={d}>"Go"</button>
+            <input ref={e}>
+            <output ref={f}></output>
+        </div>
+    }
+}
+
+/// What drawing a component with one twelve-argument handler call costs, as
+/// what_a_handler_call_costs measures its component, with `WIDE_RENDERS` renders. With
+/// `Instrument` (the sixteen-argument call above) in this test binary, the same twelve-argument
+/// code measured 41 instructions a render more than without it; the cause was not isolated (the
+/// CHANGELOG entry for <https://github.com/corten-run/corten/issues/1100>).
+#[test]
+#[ignore]
+fn what_a_long_handler_call_costs() {
+    let renders: usize = std::env::var("WIDE_RENDERS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let mut bytes = 0;
+    for _ in 0..renders {
+        bytes += std::hint::black_box(Wide { label: std::hint::black_box("a\"b") }).to_html().len();
+    }
+    assert!(bytes > 0);
+}
+
 #[test]
 fn a_list_of_strings_is_a_json_array() {
     let html = Named { list: &["above", "below"] }.to_html();

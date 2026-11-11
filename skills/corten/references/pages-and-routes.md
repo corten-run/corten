@@ -173,11 +173,11 @@ script gets the same formats from `t.js()` (`references/scripts.md`).
 
 ## A data screen
 
-A screen that native clients or agents also read derives `Serialize`, and its fields are the
+A screen that native clients or agents also read derives `ToJson`, and its fields are the
 whole view model, formatted text included:
 
 ```rust
-#[derive(Serialize)]
+#[derive(ToJson)]
 pub struct Home { stocks: Vec<Stock>, message: String }
 
 async fn home(req: Req, State(m): State<Market>) -> HtmlResult {
@@ -231,7 +231,8 @@ audience with `authorization.resource()`; a token missing a scope is
 `Json` is the prelude's `corten::Json`: a reader that refuses as axum's did (415, 400, 422, 413
 over the body limit, 2 MiB unless `App`, `Area` or `Api::body_limit` sets one, each a
 `corten::extract::BodyRejection`), and a response written in one buffer. The response type
-derives `ToJson` next to `Serialize` (`#[derive(Serialize, ToJson)] struct Price ..`); it reads the
+derives `ToJson` (`#[derive(ToJson)] struct Price ..`; `Serialize` only if the app's own code also
+writes it with serde or it is a feed row, and an agent tool's output needs none); it reads the
 same `#[serde(...)]` attributes, and one it cannot write as serde does is a compile error.
 Every failure under the prefix is an RFC 9457 Problem Details document (`application/problem+json`,
 `{"title","status","detail"}`) whatever the client accepts;
@@ -375,16 +376,17 @@ by hand.
 
 ## Data from another service
 
-A page built from another service's JSON reads the response into structs holding only the
-fields the page reads, not a `serde_json::Value`, with `corten::json::from_slice` on a type that
-derives `FromJson` next to `Deserialize`. The other fields are skipped without building them;
-for the example item page's 55 KB response that is a quarter of the work of a `Value`, and a
-fifth less than serde_json into the same structs. `#[serde(default)]` keeps a missing field
-from failing the page; a field that may be null is an `Option`, and one the service sends as
+A page built from another service's JSON reads the response into structs holding only the fields the
+page reads, not a `serde_json::Value`, with `corten::json::from_slice` on a type that derives
+`FromJson`, which writes its serde `Deserialize` too (do not derive both; a `Fields` or `UrlValue`
+type is a `FromJson` already, so do not add it there either). The other fields are skipped without
+building them; for the example item page's 55 KB response that is a quarter of the work of a
+`Value`, and a fifth less than serde_json into the same structs. `#[serde(default)]` keeps a missing
+field from failing the page; a field that may be null is an `Option`, and one the service sends as
 either a string or a number can stay a `Value`:
 
 ```rust
-#[derive(Deserialize, FromJson, Default)]
+#[derive(FromJson, Default)]
 #[serde(default)]
 struct ApiListing { listing_id: String, price_amount: serde_json::Value }
 

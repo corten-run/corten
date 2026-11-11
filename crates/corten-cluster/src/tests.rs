@@ -12,16 +12,11 @@ use corten::feed::Change;
 
 use super::*;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Row)]
 struct Item {
+    #[row(id)]
     id: String,
     n: i64,
-}
-
-impl Row for Item {
-    fn id(&self) -> &str {
-        &self.id
-    }
 }
 
 /// Rows live in `test_items` (feed key, id, n).

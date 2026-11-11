@@ -178,8 +178,9 @@ impl Module {
         for h in &self.handlers {
             let mut generics = TokenStream::new();
             let mut params = TokenStream::new();
-            let mut args = TokenStream::new();
-            let mut outs = TokenStream::new();
+            // The arguments as a tuple, `(a, b, c)`, or for more than a tuple takes, `Both` of two
+            // halves, so a call takes any number, nested only as deep as the logarithm of the count.
+            let (mut each_arg, mut each_out) = (Vec::new(), Vec::new());
             for (i, (name, param)) in h.params.iter().enumerate() {
                 let ty: TokenStream = TokenTree::Ident(Ident::new(&format!("A{i}"), Span::call_site())).into();
                 let arg: TokenStream = TokenTree::Ident(rust_ident(name, i)).into();
@@ -190,13 +191,15 @@ impl Module {
                     generics.extend(q("+ ::corten::script::Refused", &[]));
                 }
                 generics.extend(q(",", &[]));
-                args.extend(q(
-                    "::corten::script::__private::Typed::<__A0, __A1>::new(__A2),",
+                each_arg.push(q(
+                    "::corten::script::__private::Typed::<__A0, __A1>::new(__A2)",
                     &[ty.clone(), path.clone(), arg.clone()],
                 ));
-                outs.extend(q("::corten::script::__private::Typed<__A0, __A1>,", &[ty.clone(), path]));
+                each_out.push(q("::corten::script::__private::Typed<__A0, __A1>", &[ty.clone(), path]));
                 params.extend(q("__A0: __A1,", &[arg, ty]));
             }
+            let args = tree(&each_arg, "::corten::script::__private::Both(__A0, __A1)");
+            let outs = tree(&each_out, "::corten::script::__private::Both<__A0, __A1>");
             let doc = if h.doc.is_empty() { format!(" `{}` in {}.", h.name, self.file) } else { format!(" {}", h.doc) };
             let why: Vec<&str> = h
                 .params
@@ -209,8 +212,8 @@ impl Module {
             }
             fns.extend(q(
                 "#[doc = __A0] #[allow(non_snake_case, clippy::too_many_arguments)] #[must_use]
-                pub fn __A1<__A2>(__A3) -> ::corten::script::__private::Call<(__A4)> {
-                    ::corten::script::__private::Call::new(__A5, __A6, __A9, __A10, __A7, (__A8))
+                pub fn __A1<__A2>(__A3) -> ::corten::script::__private::Call<__A4> {
+                    ::corten::script::__private::Call::new(__A5, __A6, __A9, __A10, __A7, __A8)
                 }",
                 &[
                     literal(&doc),
@@ -234,6 +237,25 @@ impl Module {
         out.extend([TokenTree::Group(Group::new(Delimiter::Brace, fns))]);
         out
     }
+}
+
+/// The most arguments `Args` takes as one tuple: the longest tuple corten's `script.rs` gives
+/// `Args` to (its `args!` list). The two change together.
+const TUPLE: usize = 12;
+
+/// `items` as one tuple when it takes them (`()` for none, `(a,)` for one), else `both` (`Both(..)`
+/// for a value, `Both<..>` for its type) of its two halves, each made the same way.
+fn tree(items: &[TokenStream], both: &str) -> TokenStream {
+    if items.len() > TUPLE {
+        let (left, right) = items.split_at(items.len() / 2);
+        return q(both, &[tree(left, both), tree(right, both)]);
+    }
+    let mut inner = TokenStream::new();
+    for item in items {
+        inner.extend(item.clone());
+        inner.extend(q(",", &[]));
+    }
+    TokenStream::from(TokenTree::Group(Group::new(Delimiter::Parenthesis, inner)))
 }
 
 /// The Rust type a parameter's argument is checked against.

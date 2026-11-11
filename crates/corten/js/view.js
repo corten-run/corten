@@ -11,6 +11,29 @@
 // data. Corten serves this file inside `corten/views` (scripts/build-js.mjs builds it).
 
 /**
+ * Element's own members, for a row, a root or a parent that may be a form: a form control's
+ * `name` shadows the form's member of that name (`<button name="remove">` makes `form.remove` the
+ * button, `<input name="id">` makes `form.id` the input). Held whole, as the runtime holds it,
+ * rather than each member taken off by name: the file ships smaller. Still read directly, names
+ * no form gives a field: `insertBefore` and `textContent` (on the rows' parent),
+ * `firstElementChild`, `cloneNode`, `tagName`, `ownerDocument`, and the text holes of a generated
+ * view class and the path to its holes. A generated class reads and writes an attribute hole on a
+ * `<form>` (and a form row's `key`) through Element's own. A form's `style` is read through
+ * HTMLElement's own, and a row's `parentNode` and `nextSibling` through Node's.
+ */
+const own = Element.prototype;
+/** `el.id`, for an element that may be a form. @param {Element} el @returns {string} */
+const idOf = (el) => Reflect.get(own, "id", el);
+/**
+ * `node.parentNode`, for a node that may be a form: a form's control named `parentNode` would
+ * make a walk up from a row's contents cycle inside the form.
+ * @param {Node} node @returns {Node | null}
+ */
+const parentOf = (node) => Reflect.get(Node.prototype, "parentNode", node);
+/** `el.children`, for an element that may be a form. @param {Element} el @returns {Element[]} */
+const childrenOf = (el) => Array.from(Reflect.get(own, "children", el));
+
+/**
  * Gives a row cloned from a `<template>` the custom properties the server wrote for the
  * template's row (`style={..}`, `data-vars`): set through the CSSOM, as the runtime sets a
  * patch's, since a clone is under the document's policy. A script that fills rows draws their own
@@ -18,12 +41,14 @@
  * @param {Element} root
  */
 function vars(root) {
-  for (const el of [root, ...Array.from(root.querySelectorAll("[data-vars]"))]) {
-    const list = el.getAttribute("data-vars");
+  for (const el of [root, ...own.querySelectorAll.call(root, "[data-vars]")]) {
+    const list = own.getAttribute.call(el, "data-vars");
     if (!list || !(el instanceof HTMLElement || el instanceof SVGElement)) continue;
     for (const one of list.split(";")) {
       const at = one.indexOf(":");
-      if (one.startsWith("--") && at > 2) el.style.setProperty(one.slice(0, at), one.slice(at + 1), "important");
+      // `style` through HTMLElement's own getter: a form's control may be named `style`.
+      const style = el instanceof HTMLElement ? Reflect.get(HTMLElement.prototype, "style", el) : el.style;
+      if (one.startsWith("--") && at > 2) style.setProperty(one.slice(0, at), one.slice(at + 1), "important");
     }
   }
 }
@@ -72,25 +97,26 @@ export function checked(el, on) {
  */
 export function view(host, View, template) {
   const proto = template.content.firstElementChild;
-  if (!proto?.id || template.content.children.length !== 1 || [...template.content.childNodes].some((n) => n.nodeType === 3 && n.textContent?.trim())) {
+  if (!proto || !idOf(proto) || template.content.children.length !== 1 || [...template.content.childNodes].some((n) => n.nodeType === 3 && n.textContent?.trim())) {
     throw new Error("corten: view() needs a template with one root with an id", { cause: template });
   }
-  if (proto.matches("script") || proto.querySelector("script")) throw new Error("corten: view() does not clone scripts", { cause: template });
+  if (own.matches.call(proto, "script") || own.querySelector.call(proto, "script")) throw new Error("corten: view() does not clone scripts", { cause: template });
   const current = host.firstElementChild;
-  if (host.children.length === 1 && current?.id === proto.id && current.tagName === proto.tagName) return new View(current);
+  if (childrenOf(host).length === 1 && current && idOf(current) === idOf(proto) && current.tagName === proto.tagName) return new View(current);
   const next = /** @type {Element} */ (proto.cloneNode(true));
   const ids = new Set();
-  for (const el of [next, ...next.querySelectorAll("[id]")]) {
-    if (!el.id) continue;
-    const outside = [...host.ownerDocument.querySelectorAll(`#${CSS.escape(el.id)}`)].some((old) => old === host || !host.contains(old));
-    if (ids.has(el.id) || outside) {
-      throw new Error(`corten: view() would duplicate id ${el.id}`, { cause: el });
+  for (const el of [next, ...own.querySelectorAll.call(next, "[id]")]) {
+    const id = idOf(el);
+    if (!id) continue;
+    const outside = [...host.ownerDocument.querySelectorAll(`#${CSS.escape(id)}`)].some((old) => old === host || !Node.prototype.contains.call(host, old));
+    if (ids.has(id) || outside) {
+      throw new Error(`corten: view() would duplicate id ${id}`, { cause: el });
     }
-    ids.add(el.id);
+    ids.add(id);
   }
   vars(next);
   const shown = new View(next);
-  host.replaceChildren(next);
+  own.replaceChildren.call(host, next);
   return shown;
 }
 
@@ -119,7 +145,7 @@ export function view(host, View, template) {
  * @template {{ el: Element }} V
  * @typedef {{
  *   readonly length: number,
- *   at(i: number): V,
+ *   at(i: number): V | undefined,
  *   get(key: string): V | undefined,
  *   of(target: EventTarget | null): V | undefined,
  *   indexOf(view: V): number,
@@ -156,7 +182,7 @@ export function rows(parent, View, template) {
     return /** @type {Rows<D, V>} */ (known.list);
   }
   /** @type {Element[]} */
-  let els = Array.from(parent.children);
+  let els = childrenOf(parent);
   /**
    * The rows by key, made on the first get() and kept through the list's own changes: get() after
    * a push or a remove does not read every row's key again. @type {Map<string, Element> | null}
@@ -176,7 +202,7 @@ export function rows(parent, View, template) {
   // nothing.
   let rekeyed = false;
   /** Whether a row's own key changed, not a `data-key` inside it (a keyed ref, a nested list). @param {MutationRecord[]} records */
-  const rowKeyed = (records) => records.some((r) => r.target.parentNode === parent);
+  const rowKeyed = (records) => records.some((r) => parentOf(r.target) === parent);
   const keys = new MutationObserver((records) => {
     rekeyed ||= rowKeyed(records);
   });
@@ -189,7 +215,7 @@ export function rows(parent, View, template) {
   const sync = () => {
     if (byKey && (rowKeyed(keys.takeRecords()) || rekeyed)) forget();
     if (watch.takeRecords().length || stale) {
-      els = Array.from(parent.children);
+      els = childrenOf(parent);
       forget();
       stale = false;
     }
@@ -209,7 +235,7 @@ export function rows(parent, View, template) {
   const use = (/** @type {HTMLTemplateElement | undefined} */ t) => {
     if (!t) return;
     proto = t.content.firstElementChild;
-    protoVars = !!proto && (proto.hasAttribute("data-vars") || !!proto.querySelector("[data-vars]"));
+    protoVars = !!proto && (own.hasAttribute.call(proto, "data-vars") || !!own.querySelector.call(proto, "[data-vars]"));
   };
   use(template);
   /** @param {D} data */
@@ -220,10 +246,13 @@ export function rows(parent, View, template) {
     View.fill(el, data);
     return el;
   };
+  // The loops over rows read only indexes their own bounds keep in range, and say so with a
+  // cast: rows are a client operation's hot path, and they stay the loops they were rather than
+  // take a check per pass the timing could not show to be free (docs/design.md#choice-script-checks).
   /** @param {readonly D[]} items @param {Element[]} out @param {number} from @param {Node | null} before */
   const add = (items, out, from, before) => {
     const frag = document.createDocumentFragment();
-    for (let i = 0; i < items.length; i += 1) frag.appendChild((out[from + i] = make(items[i])));
+    for (let i = 0; i < items.length; i += 1) frag.appendChild((out[from + i] = make(/** @type {D} */ (items[i]))));
     parent.insertBefore(frag, before);
   };
   /** @type {Rows<D, V>} */
@@ -234,7 +263,8 @@ export function rows(parent, View, template) {
     },
     at(i) {
       sync();
-      return new View(els[i]);
+      const el = els.at(i);
+      return el && new View(el);
     },
     get(key) {
       sync();
@@ -253,7 +283,13 @@ export function rows(parent, View, template) {
     },
     of(target) {
       let el = /** @type {Node | null} */ (target);
-      while (el && el.parentNode !== parent) el = el.parentNode;
+      // An event's target may be no node (`window`), which Node's getter refuses: no row, as
+      // `el.parentNode` gave. A node from another realm (an iframe's document) is read as any.
+      try {
+        while (el && parentOf(el) !== parent) el = parentOf(el);
+      } catch {
+        el = null;
+      }
       return el ? new View(/** @type {Element} */ (el)) : undefined;
     },
     indexOf(view) {
@@ -266,9 +302,9 @@ export function rows(parent, View, template) {
       const from = els.length;
       add(items, els, from, null);
       if (byKey) for (let i = from; i < els.length; i += 1) {
-        const k = View.key(els[i]);
+        const k = View.key(/** @type {Element} */ (els[i]));
         if (byKey.has(k)) twice = true;
-        byKey.set(k, els[i]);
+        byKey.set(k, /** @type {Element} */ (els[i]));
       }
       done();
     },
@@ -278,7 +314,7 @@ export function rows(parent, View, template) {
       const i = els.indexOf(el);
       if (i < 0) return;
       els.splice(i, 1);
-      el.remove();
+      own.remove.call(el);
       if (byKey) {
         const k = View.key(el);
         if (byKey.get(k) === el) byKey.delete(k);
@@ -292,7 +328,7 @@ export function rows(parent, View, template) {
       const b = els[j];
       if (!a || !b || a === b) return;
       // Either may come first, and they may be neighbors: a goes where b is, then b where a was.
-      const afterA = a.nextSibling;
+      const afterA = /** @type {ChildNode | null} */ (Reflect.get(Node.prototype, "nextSibling", a));
       if (afterA === b) parent.insertBefore(b, a);
       else {
         parent.insertBefore(a, b);
@@ -317,13 +353,13 @@ export function rows(parent, View, template) {
       const where = new Map();
       const keyOf = View.keyOf;
       if (!keyOf) throw new Error(SERVER_MADE, { cause: parent });
-      for (let j = 0; j < els.length; j += 1) where.set(View.key(els[j]), j);
+      for (let j = 0; j < els.length; j += 1) where.set(View.key(/** @type {Element} */ (els[j])), j);
       // Each new item's old element, or -1.
       const from = new Int32Array(n).fill(-1);
       let kept = 0;
       // With no rows to keep (a first fill, or after clear()), no key is looked up.
       if (where.size) for (let i = 0; i < n; i += 1) {
-        const k = keyOf(items[i]);
+        const k = keyOf(/** @type {D} */ (items[i]));
         const j = where.get(k);
         if (j !== undefined) {
           from[i] = j;
@@ -338,21 +374,21 @@ export function rows(parent, View, template) {
         parent.textContent = "";
         add(items, next, 0, null);
       } else {
-        for (const j of where.values()) els[j].remove();
+        for (const j of where.values()) own.remove.call(/** @type {Element} */ (els[j]));
         // Elements on the longest run already in order stay; the rest move or are made.
         const stay = lis(from);
         let s = stay.length - 1;
         /** @type {Node | null} */
         let before = null;
         for (let i = n - 1; i >= 0; i -= 1) {
-          const j = from[i];
+          const j = /** @type {number} */ (from[i]);
           let el;
           if (j < 0) {
-            el = make(items[i]);
+            el = make(/** @type {D} */ (items[i]));
             parent.insertBefore(el, before);
           } else {
-            el = els[j];
-            View.fill(el, items[i]);
+            el = /** @type {Element} */ (els[j]);
+            View.fill(el, /** @type {D} */ (items[i]));
             if (s >= 0 && stay[s] === i) s -= 1;
             else parent.insertBefore(el, before);
           }
@@ -378,19 +414,19 @@ function lis(a) {
   const tails = [];
   const prev = new Int32Array(a.length);
   for (let i = 0; i < a.length; i += 1) {
-    const v = a[i];
+    const v = /** @type {number} */ (a[i]);
     if (v < 0) continue;
     let lo = 0;
     let hi = tails.length;
     while (lo < hi) {
       const mid = (lo + hi) >> 1;
-      if (a[tails[mid]] < v) lo = mid + 1;
+      if (/** @type {number} */ (a[/** @type {number} */ (tails[mid])]) < v) lo = mid + 1;
       else hi = mid;
     }
-    prev[i] = lo > 0 ? tails[lo - 1] : -1;
+    prev[i] = lo > 0 ? /** @type {number} */ (tails[lo - 1]) : -1;
     tails[lo] = i;
   }
   const run = new Array(tails.length);
-  for (let i = tails.length - 1, k = tails[tails.length - 1]; i >= 0; i -= 1, k = prev[k]) run[i] = k;
+  for (let i = tails.length - 1, k = /** @type {number} */ (tails[tails.length - 1]); i >= 0; i -= 1, k = /** @type {number} */ (prev[k])) run[i] = k;
   return run;
 }

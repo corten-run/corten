@@ -65,8 +65,36 @@ the JSDoc. A ref's element type is inferred from the tag it is put on, `event`'s
 `abort`, `progress` and `resize` are `Event`s, as the element fires them) and `target`'s from
 the tag, so passing a `<tbody>` ref where the handler takes a `<button>`, a `MouseEvent` where
 it takes a `KeyboardEvent`, a number where it takes a `string`, or calling a handler the script
-does not export is a compile error that points at the call. Inside the script, `tsc --checkJs`
+does not export is a compile error that points at the call. A call takes as many arguments as
+the function has, each checked the same way; arguments that belong together (a widget's
+elements and its labels) read better as one `@typedef` group
+([Lists and larger components](#lists-and-larger-components)). Inside the script, `tsc --checkJs`
 checks the function bodies against the same JSDoc.
+It runs with `strict` and four checks `strict` leaves out, the same settings Corten checks its own
+runtime, kit and examples with (a test fails when they differ):
+`noUncheckedIndexedAccess`, under which an array's element or a record's value read by index is
+`T | undefined` until the script checks it (`for (const row of rows)`, `const [first] = rows`,
+`rows[i]?.focus()`, or `if (!row) return` after the read); `noFallthroughCasesInSwitch`,
+under which a `case` that runs into the next one is an error; `allowUnreachableCode: false`, under
+which code that can never run (after a `return`) is an error; and `noUncheckedSideEffectImports`,
+under which `import "./file.js"`, run only for its effects, must name a module that exists. A
+script that read by index without a check fails `corten check` after the upgrade that added them
+until it checks. An app cannot turn one of them off: `corten check` writes the configuration it
+checks with each time, and `--no-script-types` leaves every script unchecked, not one option.
+`exactOptionalPropertyTypes` is not used: it refuses a property set to `undefined` where one is
+optional, and the DOM's option objects (`{ signal }` for `addEventListener`) take that as left out,
+as JSON does, so it rejects scripts that work ([design Choice 39](../design.md#choice-script-checks)).
+Types are erased when the script runs, so they hold only for values the checker saw made. What
+comes from outside it (JSON a script fetches or parses, storage, a message from another window or
+a worker) is typed `any` by TypeScript's libraries (`JSON.parse`, `res.json()`, `event.data`),
+so `JSON.parse(text).x.y` passes the check: give it the type `unknown`
+(`/** @type {unknown} */`) and check it before use. Corten's runtime does that with what it
+reads: a feed's envelope is checked, while its rows are trusted as the server's own type
+([Live rows](#live-rows)). Corten's own scripts (the runtime, the kit, the template and these
+examples) have no explicit `any` and no `@ts-ignore`, which `npm run check` holds them to; where
+the DOM library lacks a type (the Navigation API, a service worker's global) they declare what
+they use and cast once, with a comment saying what vouches for the value
+([design Choice 40](../design.md#choice-script-boundaries)).
 A ref on several kinds of element is typed as one they all are: `ref={tab as HTMLElement}`.
 
 **JSDoc, not TypeScript.** The checker is TypeScript's either way: `corten check` runs `tsc` with
@@ -718,7 +746,8 @@ export function select(link, body) {
   const list = rows(body, Row); // body's rows, the same list every time
   const row = list.of(link); // the row that was clicked
   if (row) row.selected = true;
-  list.at(5).label += " !!!"; // writes that one text node
+  const sixth = list.at(5); // none when there are fewer rows
+  if (sixth) sixth.label += " !!!"; // writes that one text node
 }
 ```
 
@@ -728,7 +757,7 @@ else, and a handler that gets the list's parent (and the `<template>`, to make n
 
 | `rows()` | |
 |---|---|
-| `at(i)`, `get(key)`, `of(event.target)`, `indexOf(view)`, `length`, iteration | the views of the rows |
+| `at(i)`, `get(key)`, `of(event.target)`, `indexOf(view)`, `length`, iteration | the views of the rows; `at`, `get` and `of` give none for a row that is not there, and a negative `at` counts back from the last, as an array's (`at(-1)` is the last row, so the row before the first is `i > 0 ? list.at(i - 1) : undefined`) |
 | `push(items)`, `remove(view)`, `swap(i, j)`, `clear()` | change the rows; new ones are clones of the template's row, filled with their data |
 | `replace(items)` | shows exactly `items`: rows with a key it had keep their element and are filled again |
 

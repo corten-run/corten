@@ -30,6 +30,7 @@
 //    read whole).
 // Without JavaScript, links and forms still work as plain HTML.
 
+import { patchOf, snapshotOf } from "./feed.js";
 import { parseOn } from "./on.js";
 
 // Trusted Types (the CSP's `require-trusted-types-for 'script'`, `trusted-types corten`): markup and
@@ -161,17 +162,70 @@ function load(name) {
 }
 
 /**
- * Element's own `getAttribute` and `hasAttribute`, for an element that may be a form: a form
- * control's `name` shadows the form's member of that name (`<input name="hasAttribute">` makes
- * `form.hasAttribute` the input), so the runtime reads the attributes of an element it dispatches
- * to, binds, finds refs in, patches or draws again through these. They are formCall's rule for
- * the two members read on every event and every element a patch puts in, without its lookup.
+ * Element's own members (and Node's), for an element that may be a form: a form control's `name`
+ * shadows the form's member of that name (`<input name="hasAttribute">` makes
+ * `form.hasAttribute` the input, `<button name="remove">` makes `form.remove` the button). So on
+ * an element it did not make that may be a form (one it dispatches to, binds, finds refs in, scans
+ * as it joins the page, patches, draws again, focuses or keeps the scroll of) the runtime reads
+ * attributes, children, scroll and whether it is on the page, queries, finds what is around it and
+ * puts or takes elements through these, which are formCall's rule without its lookup; it
+ * focuses one through focusOn, sets the custom properties of one through styleOf, and dispatches
+ * to, listens on and marks one busy through formCall.
+ * A field it reads (an input, select or textarea) has no controls, so its members are read
+ * directly. Some members it still reads or calls directly on any element: `parentElement`,
+ * `localName`, `nodeName`, `childNodes`, `childElementCount`, `outerHTML`, `textContent`,
+ * `cloneNode`, `showPopover`, and the layout a nav link's ancestors are measured by
+ * (`getBoundingClientRect`, `getClientRects`, `scrollWidth`, `clientWidth`, `clientLeft`,
+ * `scrollBy`). These are names no form gives a field, and the first ones are read on every walk
+ * up the page; a control named one breaks that read or call (`childElementCount` only makes a
+ * patch fall back to a scan of the children). (It writes `tabIndex`, which sets the attribute
+ * whatever a control is named.) Being the prototype's own, these also skip a custom element's
+ * override of the member. Held as `elementOwn.closest` rather than taken off the prototype by
+ * name: the runtime ships smaller.
  */
-const { getAttribute, hasAttribute } = Element.prototype;
+const elementOwn = Element.prototype;
 /** @param {Element} el @param {string} name */
-const attrOf = (el, name) => getAttribute.call(el, name);
+const attrOf = (el, name) => elementOwn.getAttribute.call(el, name);
 /** @param {Element} el @param {string} name */
-const hasAttr = (el, name) => hasAttribute.call(el, name);
+const hasAttr = (el, name) => elementOwn.hasAttribute.call(el, name);
+/** @param {Element} el @param {string} selector */
+const closestOf = (el, selector) => elementOwn.closest.call(el, selector);
+/** @param {Element} el @param {string} selector */
+const matchesOf = (el, selector) => elementOwn.matches.call(el, selector);
+/** `root.querySelector(selector)`, for a root that may be a form or a fragment (see queryAll). @param {ParentNode} root @param {string} selector */
+const queryOne = (root, selector) => (root instanceof Element ? elementOwn.querySelector.call(root, selector) : root.querySelector(selector));
+/** @param {Element} el @param {string} tag */
+const tagsIn = (el, tag) => elementOwn.getElementsByTagName.call(el, tag);
+/** @param {Node} el @param {Node | null} other */
+const holds = (el, other) => Node.prototype.contains.call(el, other);
+/**
+ * Whether `el` is on the page. Read directly first, as reading it through Node's own is twice as
+ * slow and the end of a life reads it for every element with one: a control that shadows it is an
+ * element, never a boolean.
+ * @param {Node} el @returns {boolean}
+ */
+const inPage = (el) => {
+  const on = /** @type {unknown} */ (el.isConnected);
+  return typeof on === "boolean" ? on : Reflect.get(Node.prototype, "isConnected", el);
+};
+/** @param {ParentNode} el @returns {HTMLCollection} */
+const childrenOf = (el) => (el instanceof Element ? Reflect.get(elementOwn, "children", el) : el.children);
+/** @param {Element} el @returns {NamedNodeMap} */
+const attributesOf = (el) => Reflect.get(elementOwn, "attributes", el);
+/**
+ * `el.style`, for an element that may be a form (`<select name="style">`). The getter is
+ * HTMLElement's or SVGElement's; an SVG element is never a form.
+ * @param {HTMLElement | SVGElement} el @returns {CSSStyleDeclaration}
+ */
+const styleOf = (el) => (el instanceof HTMLElement ? Reflect.get(HTMLElement.prototype, "style", el) : el.style);
+/** `el.scrollTop` or `el.scrollLeft`. @param {Element} el @param {"scrollTop" | "scrollLeft"} side @returns {number} */
+const scrollOf = (el, side) => Reflect.get(elementOwn, side, el);
+/**
+ * `root.querySelectorAll(selector)`, for a root that may be a form or a fragment (whose
+ * querySelectorAll, like its querySelector and children, is not Element's).
+ * @param {ParentNode} root @param {string} selector @returns {NodeListOf<Element>}
+ */
+const queryAll = (root, selector) => (root instanceof Element ? elementOwn.querySelectorAll.call(root, selector) : root.querySelectorAll(selector));
 
 /** Each element's parsed `data-on`, until the attribute changes. @type {WeakMap<Element, { source: string, list: Binding[] }>} */
 const parsed = new WeakMap();
@@ -212,7 +266,7 @@ function loadFor(b) {
  * @param {string | null} owner
  */
 function scopeOf(from, owner) {
-  const scope = owner ? from.closest(`[data-scope="${owner}"]`) : from.closest("[data-scope]");
+  const scope = closestOf(from, owner ? `[data-scope="${owner}"]` : "[data-scope]");
   if (!scope) throw new Error(`corten: no component root ${owner ? `data-scope="${owner}"` : "[data-scope]"} around`, { cause: from });
   return scope;
 }
@@ -237,17 +291,17 @@ function findRefs(from, owner, name) {
   // Still right while no element with this ref name joined the page and none it found left.
   const changes = refChanges.get(name) ?? 0;
   const hit = cached.get(name);
-  if (hit && hit.changes === changes && hit.found.every((el) => el.isConnected)) return hit.found.slice();
+  if (hit && hit.changes === changes && hit.found.every(inPage)) return hit.found.slice();
   const own = attrOf(scope, "data-scope");
   const qualified = `${own}/${name}`;
   /** @type {Element[]} */
   const found = [];
   const check = (/** @type {Element} */ el) => {
     const ref = attrOf(el, "data-ref");
-    if (ref === name ? el.closest("[data-scope]") === scope : ref === qualified && el.closest(`[data-scope="${own}"]`) === scope) found.push(el);
+    if (ref === name ? closestOf(el, "[data-scope]") === scope : ref === qualified && closestOf(el, `[data-scope="${own}"]`) === scope) found.push(el);
   };
   check(scope);
-  for (const el of Array.from(scope.querySelectorAll(`[data-ref="${name}"],[data-ref="${qualified}"]`))) check(el);
+  for (const el of Array.from(queryAll(scope, `[data-ref="${name}"],[data-ref="${qualified}"]`))) check(el);
   cached.set(name, { changes, found });
   return found.slice();
 }
@@ -327,7 +381,7 @@ function closestRef(el, owner, name, event) {
   for (const node of event.composedPath()) {
     if (!(node instanceof Element)) continue;
     const ref = attrOf(node, "data-ref");
-    if (ref === name ? node.closest("[data-scope]") === scope : ref === qualified && node.closest(`[data-scope="${own}"]`) === scope) return node;
+    if (ref === name ? closestOf(node, "[data-scope]") === scope : ref === qualified && closestOf(node, `[data-scope="${own}"]`) === scope) return node;
     if (node === scope) break;
   }
   return null;
@@ -399,9 +453,10 @@ function closestRef(el, owner, name, event) {
  * @returns {(args: Record<string, string | number>) => string}
  */
 function message(parts) {
+  // `parts` alternates text and names and starts and ends with text, so each read is in range.
   return (args) => {
-    let text = parts[0];
-    for (let i = 1; i < parts.length; i += 2) text += String(args[parts[i]]) + parts[i + 1];
+    let text = /** @type {string} */ (parts[0]);
+    for (let i = 1; i < parts.length; i += 2) text += String(args[/** @type {string} */ (parts[i])]) + parts[i + 1];
     return text;
   };
 }
@@ -460,7 +515,7 @@ function resolve(arg, el, event, binding) {
  */
 function connectWhenLoaded(el, binding, event, ready, signal) {
   loadFor(binding).then(() => {
-    if (signal.aborted || !el.isConnected) return;
+    if (signal.aborted || !inPage(el)) return;
     if (ready()) return void run(el, binding, event);
     const wait = Math.max(untilRetry(binding.module), formats.has(binding) ? untilRetry(FORMAT) : 0);
     setTimeout(() => connectWhenLoaded(el, binding, event, ready, signal), wait);
@@ -543,7 +598,7 @@ function listen(type) {
     // for the next one. A submit one of them stopped is still sent as a patch.
     if (!onPage.size) return;
     for (const el of [...onPage]) {
-      if (!el.isConnected) continue;
+      if (!inPage(el)) continue;
       for (const b of bindings(el)) if (b.type === anywhere) run(el, b, event);
     }
     if (event.cancelBubble && type === "submit") patchSubmit(event);
@@ -570,18 +625,19 @@ const connected = new Set();
  * @param {boolean} [inside] only what is inside `root` joined the page
  */
 function scan(root, names, inside = false) {
-  for (const template of Array.from(root.getElementsByTagName("template"))) modulesOf(template.content);
-  const marked = Array.from(root.querySelectorAll("[data-on]"));
+  for (const template of /** @type {HTMLTemplateElement[]} */ (Array.from(tagsIn(root, "template")))) modulesOf(template.content);
+  const marked = Array.from(queryAll(root, "[data-on]"));
   if (!inside) {
     if (hasAttr(root, "data-on")) marked.unshift(root);
     refName(root, names);
   }
   // Rows cloned from one template carry the same refs, so a name is added once per run of them.
   if (!(inside && fewRefNames(root, names))) {
-    const refs = root.querySelectorAll("[data-ref]");
+    // Indexed, as it was: this runs for every element a change adds (rows a view makes too).
+    const refs = queryAll(root, "[data-ref]");
     let last = null;
     for (let i = 0; i < refs.length; i += 1) {
-      const ref = attrOf(refs[i], "data-ref");
+      const ref = attrOf(/** @type {Element} */ (refs[i]), "data-ref");
       if (ref !== last && ref !== null) names.add(ref.slice(ref.indexOf("/") + 1));
       last = ref;
     }
@@ -614,7 +670,7 @@ function scan(root, names, inside = false) {
 function fewRefNames(root, names) {
   let selector = "[data-ref]";
   for (let seen = 0; seen < FEW_NAMES; seen += 1) {
-    const el = root.querySelector(selector);
+    const el = queryOne(root, selector);
     if (!el) return true;
     const ref = /** @type {string} */ (attrOf(el, "data-ref"));
     names.add(ref.slice(ref.indexOf("/") + 1));
@@ -632,13 +688,22 @@ const FEW_NAMES = 8;
  * the page (removed and inserted in one task) keeps its life.
  */
 function sweep() {
+  // `isConnected` read here rather than through inPage: each loop's own read stays fast where
+  // one read shared with the dispatch, the scan and patches slowed this loop after them.
   for (const [el, life] of lives) {
-    if (el.isConnected) continue;
+    const on = /** @type {unknown} */ (el.isConnected);
+    if (on === true || (on !== false && inPage(el))) continue;
     lives.delete(el);
     life.abort();
   }
-  for (const el of connected) if (!el.isConnected) connected.delete(el);
-  for (const el of onPage) if (!el.isConnected) onPage.delete(el);
+  for (const el of connected) {
+    const on = /** @type {unknown} */ (el.isConnected);
+    if (on === false || (on !== true && !inPage(el))) connected.delete(el);
+  }
+  for (const el of onPage) {
+    const on = /** @type {unknown} */ (el.isConnected);
+    if (on === false || (on !== true && !inPage(el))) onPage.delete(el);
+  }
 }
 
 /**
@@ -663,10 +728,10 @@ function observed(records) {
     const added = record.addedNodes;
     const parent = record.target;
     if (added.length > MANY && parent instanceof Element && added.length * 2 >= parent.childElementCount) wide.add(parent);
-    else for (const node of Array.from(added)) if (node instanceof Element && node.isConnected) scan(node, names);
+    else for (const node of Array.from(added)) if (node instanceof Element && inPage(node)) scan(node, names);
   }
   // Wiring is the same however often it runs, so a parent scanned whole may hold rows wired before.
-  for (const parent of wide) if (parent.isConnected) scan(parent, names, true);
+  for (const parent of wide) if (inPage(parent)) scan(parent, names, true);
   for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
   if (removed && (lives.size || connected.size || onPage.size)) sweep();
 }
@@ -722,6 +787,8 @@ export function subscribe(url, handlers, { signal } = {}) {
   let failures = 0;
   // Snapshots in a row whose own cursor the stream refused as it opened.
   let refused = 0;
+  // Snapshots in a row whose stream then sent a patch that is not one.
+  let rejected = 0;
   const status = handlers.status ?? (() => {});
   signal?.addEventListener(
     "abort",
@@ -755,11 +822,12 @@ export function subscribe(url, handlers, { signal } = {}) {
     try {
       const res = await fetch(url, { headers: { accept: "application/json" }, signal: current.signal });
       if (!res.ok) throw new Error(`corten: feed ${url} answered ${res.status}`);
-      /** @type {{ epoch: string, seq: number, rows: Row[] }} */
-      const snap = await res.json();
+      const snap = snapshotOf(await res.json());
+      if (!snap) throw new Error(`corten: feed ${url} sent no snapshot`);
       failures = 0;
       seq = snap.seq;
-      handlers.snapshot(snap.rows, snap.seq, snap.epoch);
+      // The rows are the server's own type, which the runtime does not check (`Row` is erased).
+      handlers.snapshot(/** @type {Row[]} */ (snap.rows), snap.seq, snap.epoch);
       listen(`${url}/live?since=${encodeURIComponent(`${snap.epoch}-${snap.seq}`)}`, true);
     } catch (error) {
       if (current.signal.aborted) return;
@@ -804,15 +872,25 @@ export function subscribe(url, handlers, { signal } = {}) {
     });
     es.addEventListener("patch", (event) => {
       const receivedAt = performance.now();
-      /** @type {{ seq: number, changes: FeedChange<Row>[] }} */
-      const batch = JSON.parse(/** @type {MessageEvent} */ (event).data);
+      const batch = patchOf(/** @type {MessageEvent<string>} */ (event).data);
+      // Not a patch (a server of another version, a route that sends other events): the write it
+      // carried is lost, so load the snapshot, after a backoff that grows while the patches after it
+      // are not either.
+      if (!batch) {
+        console.error(new Error(`corten: feed ${url} sent a bad patch`));
+        es.close();
+        source = null;
+        status("syncing");
+        return void wait(() => sync(true), (rejected += 1));
+      }
       if (batch.seq <= seq) return;
       if (batch.seq !== seq + 1) return void sync();
       seq = batch.seq;
       fresh = false;
       refused = 0;
-      cursor = /** @type {MessageEvent} */ (event).lastEventId;
-      handlers.patch(batch.changes, batch.seq, receivedAt);
+      rejected = 0;
+      cursor = /** @type {MessageEvent<string>} */ (event).lastEventId;
+      handlers.patch(/** @type {FeedChange<Row>[]} */ (batch.changes), batch.seq, receivedAt);
     });
   }
 
@@ -845,7 +923,7 @@ function parse(text, own = true) {
  * @param {Element | DocumentFragment} root
  */
 function setVars(root) {
-  const found = Array.from(root.querySelectorAll("[data-vars], template"));
+  const found = Array.from(queryAll(root, "[data-vars], template"));
   for (const el of root instanceof Element ? [root, ...found] : found) {
     // A template's markup gets its values too, so they move with it when a script puts its content
     // in the page (`rows.append(rest.content)`).
@@ -855,7 +933,7 @@ function setVars(root) {
     for (const one of vars.split(";")) {
       const at = one.indexOf(":");
       // Custom properties only: the server writes nothing else here.
-      if (one.startsWith("--") && at > 2) el.style.setProperty(one.slice(0, at), one.slice(at + 1), "important");
+      if (one.startsWith("--") && at > 2) styleOf(el).setProperty(one.slice(0, at), one.slice(at + 1), "important");
     }
   }
 }
@@ -870,8 +948,8 @@ function modulesOf(node) {
   /** @type {Promise<unknown>[]} */
   const pending = [];
   if (node instanceof Element && hasAttr(node, "data-on")) for (const b of bindings(node)) pending.push(loadFor(b));
-  for (const el of Array.from(node.querySelectorAll("[data-on]"))) for (const b of bindings(el)) pending.push(loadFor(b));
-  for (const template of Array.from(node.querySelectorAll("template"))) pending.push(modulesOf(template.content));
+  for (const el of Array.from(queryAll(node, "[data-on]"))) for (const b of bindings(el)) pending.push(loadFor(b));
+  for (const template of /** @type {HTMLTemplateElement[]} */ (Array.from(queryAll(node, "template")))) pending.push(modulesOf(template.content));
   return Promise.all(pending);
 }
 
@@ -920,10 +998,10 @@ async function apply(html, signal, sent, took, own = true, asked) {
     if (hasAttr(el, "data-corten-read-again")) again = el;
     else if (el instanceof HTMLTemplateElement && hasAttr(el, "data-remove")) {
       // Focus in it goes to the nearest element around it that can take focus.
-      const up = target?.contains(document.activeElement) && target.parentElement;
+      const up = !!target && holds(target, document.activeElement) && target.parentElement;
       navs ||= !!target && holdsNav(target);
       if (target?.parentElement) changedIn(target.parentElement, ["x", id, []]);
-      target?.remove();
+      if (target) elementOwn.remove.call(target);
       if (up) focusNear(up);
     }
     else if (!target) console.error(`corten: patch element <${el.localName}> needs an id that exists on the page`, el);
@@ -931,7 +1009,7 @@ async function apply(html, signal, sent, took, own = true, asked) {
       put.push(...Array.from(el.content.children));
       serve(el.content);
       changedIn(target, ["a", id, Array.from(el.content.childNodes)]);
-      target.append(el.content);
+      elementOwn.append.call(target, el.content);
     } else {
       if (target.parentElement) changedIn(target.parentElement, ["r", id, [el]]);
       replaceKeeping(target, el, sent, took);
@@ -960,7 +1038,7 @@ async function apply(html, signal, sent, took, own = true, asked) {
 function partTagBeside(put) {
   for (const el of put) {
     if (!idOf(el) || !el.parentElement) continue;
-    const tag = Array.from(el.parentElement.children).find((sibling) => sibling.matches(PART_AGAIN));
+    const tag = Array.from(childrenOf(el.parentElement)).find((sibling) => matchesOf(sibling, PART_AGAIN));
     if (tag) return tag;
   }
 }
@@ -976,7 +1054,7 @@ function partTagBeside(put) {
  */
 function readPatchAgain(tag, put) {
   const page = swapped;
-  const here = () => page === swapped && put.every((el) => el.isConnected);
+  const here = () => page === swapped && put.every(inPage);
   readLater(Number(tag.getAttribute("data-corten-read-again")), here, async () => {
     for (;;) {
       // Read when it is sent: a script may have changed it since (corten-ui's rows::sort keeps a
@@ -1011,7 +1089,7 @@ const PART_AGAIN = "template[data-corten-read-again][data-from]";
  */
 function readPartsAgain(main) {
   for (const tag of Array.from(main.querySelectorAll(PART_AGAIN))) {
-    readPatchAgain(tag, [tag, ...Array.from(/** @type {Element} */ (tag.parentElement).children).filter((el) => idOf(el))]);
+    readPatchAgain(tag, [tag, ...Array.from(childrenOf(/** @type {Element} */ (tag.parentElement))).filter((el) => idOf(el))]);
   }
 }
 
@@ -1050,27 +1128,40 @@ const idOf = (el) => attrOf(el, "id");
  * The form's own property `name`, past a control named like it: in the DOM `<button name="action">`
  * makes `form.action` that button, and `<input name="id">` makes `form.id` the input, so the
  * runtime never reads a form's properties or calls its methods directly.
+ * @template {keyof HTMLFormElement} K
  * @param {Element} form
- * @param {string} name
- * @returns {any}
+ * @param {K} name
+ * @returns {HTMLFormElement[K]}
  */
 const formProperty = (form, name) => Reflect.get(HTMLFormElement.prototype, name, form);
 
 /**
  * Calls the form's own method `name` (see formProperty), or an element's: `setAttribute` on a
  * link or form is Element's, whatever the form's controls are named.
+ * @template {"setAttribute" | "removeAttribute" | "dispatchEvent" | "addEventListener" | "removeEventListener" | "focus"} K
  * @param {Element} form
- * @param {string} name
- * @param {...any} args
+ * @param {K} name
+ * @param {Parameters<HTMLFormElement[K]>} args
  */
-const formCall = (form, name, ...args) => formProperty(form, name).call(form, ...args);
+const formCall = (form, name, ...args) => /** @type {(...args: Parameters<HTMLFormElement[K]>) => unknown} */ (formProperty(form, name)).call(form, ...args);
+
+/**
+ * Focuses `el` without scrolling to it. A form's `focus` goes through formCall, as a control may
+ * shadow it; any other element's is its own, which for an SVG or MathML element is not
+ * HTMLElement's (the one formCall would call, and which throws on them).
+ * @param {Element} el
+ */
+const focusOn = (el) => {
+  const how = { preventScroll: true };
+  if (el instanceof HTMLFormElement) formCall(el, "focus", how);
+  else /** @type {HTMLElement} */ (el).focus(how);
+};
 
 /** A random UUID v4. `crypto.randomUUID` is only there in secure contexts. */
 function uuid() {
+  // The version (4) in byte 6 and the variant (10xx) in byte 8.
   const b = crypto.getRandomValues(new Uint8Array(16));
-  b[6] = (b[6] & 0x0f) | 0x40;
-  b[8] = (b[8] & 0x3f) | 0x80;
-  const hex = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  const hex = Array.from(b, (x, i) => (i === 6 ? (x & 0x0f) | 0x40 : i === 8 ? (x & 0x3f) | 0x80 : x).toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
@@ -1080,7 +1171,7 @@ function uuid() {
  * @param {HTMLFormElement} form
  */
 function renewSubmitKeys(form) {
-  for (const field of Array.from(/** @type {HTMLFormControlsCollection} */ (formProperty(form, "elements")))) {
+  for (const field of Array.from(formProperty(form, "elements"))) {
     if (field instanceof HTMLInputElement && field.hasAttribute("data-submit")) {
       field.value = uuid();
     }
@@ -1091,7 +1182,7 @@ function renewSubmitKeys(form) {
 function sentState(form) {
   /** @type {Map<Element, string | undefined>} */
   const sent = new Map();
-  for (const f of Array.from(/** @type {HTMLFormControlsCollection} */ (formProperty(form, "elements")))) sent.set(f, stateOf(f));
+  for (const f of Array.from(formProperty(form, "elements"))) sent.set(f, stateOf(f));
   return sent;
 }
 
@@ -1108,7 +1199,7 @@ function sentState(form) {
 function counterpart(root, fresh, el, exact, ids) {
   if (el === root) return fresh;
   const id = idOf(el);
-  if (id) return ids ? ids(id) : fresh.querySelector(`#${CSS.escape(id)}`);
+  if (id) return ids ? ids(id) : queryOne(fresh, `#${CSS.escape(id)}`);
   let anchor = /** @type {Element} */ (el.parentElement);
   while (anchor !== root && !idOf(anchor)) anchor = /** @type {Element} */ (anchor.parentElement);
   const home = anchor === root ? fresh : counterpart(root, fresh, anchor, false, ids);
@@ -1116,18 +1207,18 @@ function counterpart(root, fresh, el, exact, ids) {
   if (!home) return null;
   if (name) {
     const selector = named(el, name);
-    const theirs = home.querySelectorAll(selector);
-    if (theirs.length === 1 && anchor.querySelectorAll(selector).length === 1) return theirs[0];
+    const theirs = queryAll(home, selector);
+    if (theirs.length === 1 && queryAll(anchor, selector).length === 1) return theirs.item(0);
   }
   if (exact) return null;
   /** @type {Element | undefined} */
   let found = home;
   for (let at = el, path = []; ; at = /** @type {Element} */ (at.parentElement)) {
     if (at === anchor) {
-      for (const i of path) found = found?.children[i];
+      for (const i of path) found = found && childrenOf(found)[i];
       return found?.localName === el.localName ? found : null;
     }
-    path.unshift(Array.prototype.indexOf.call(/** @type {Element} */ (at.parentElement).children, at));
+    path.unshift(Array.prototype.indexOf.call(childrenOf(/** @type {Element} */ (at.parentElement)), at));
   }
 }
 
@@ -1144,7 +1235,7 @@ function idsIn(fresh) {
   return (id) => {
     if (!byId) {
       byId = new Map();
-      for (const el of Array.from(fresh.querySelectorAll("[id]"))) {
+      for (const el of Array.from(queryAll(fresh, "[id]"))) {
         const at = /** @type {string} */ (idOf(el));
         if (!byId.has(at)) byId.set(at, el);
       }
@@ -1159,7 +1250,7 @@ const served = new WeakMap();
 
 /** Records what `root` and the elements in it were sent as. @param {ParentNode} root */
 function serve(root) {
-  for (const el of [root, ...Array.from(root.querySelectorAll("details, dialog"))]) {
+  for (const el of [root, ...Array.from(queryAll(root, "details, dialog"))]) {
     if (el instanceof HTMLDetailsElement || el instanceof HTMLDialogElement) served.set(el, el.open);
   }
 }
@@ -1174,11 +1265,11 @@ function serve(root) {
 function opened(root, fresh, ids) {
   /** @type {(() => void)[]} */
   const later = [];
-  for (const el of [root, ...Array.from(root.querySelectorAll("details, dialog, [popover]"))]) {
+  for (const el of [root, ...Array.from(queryAll(root, "details, dialog, [popover]"))]) {
     const dialog = el instanceof HTMLDialogElement;
     const toggles = dialog || el instanceof HTMLDetailsElement;
     const popover = hasAttr(el, "popover");
-    const shown = popover && el.matches(":popover-open");
+    const shown = popover && matchesOf(el, ":popover-open");
     const now = toggles && /** @type {HTMLDialogElement} */ (el).open;
     // Left as the server sent it, and not a shown popover: the fresh markup says, so its
     // counterpart is not looked up (a lookup is a query of `fresh`; most patches open nothing).
@@ -1230,11 +1321,11 @@ function replaceKeeping(root, fresh, sent, took, focus = true) {
   const ids = idsIn(fresh);
   const reopen = opened(root, fresh, ids);
   const focused = document.activeElement;
-  const inside = focus && focused && focused !== document.body && root.contains(focused);
+  const inside = focus && focused && focused !== document.body && holds(root, focused);
   const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
-  /** File inputs of `fresh` and the files to give them once they are in the page. @type {[any, FileList | null][]} */
+  /** File inputs of `fresh` and the files to give them once they are in the page. @type {[HTMLInputElement, FileList | null][]} */
   const files = [];
-  for (const f of [root, ...Array.from(root.querySelectorAll("input, textarea, select"))]) {
+  for (const f of [root, ...Array.from(queryAll(root, "input, textarea, select"))]) {
     // A submit key stays the form's own: renewed in place once an answer took the write, and kept
     // as sent after a 5xx (which may hide a write that applied), whatever key the answer drew.
     if (f instanceof HTMLInputElement && hasAttr(f, "data-submit")) {
@@ -1250,7 +1341,8 @@ function replaceKeeping(root, fresh, sent, took, focus = true) {
     const to = now !== undefined && (now !== (sent?.has(f) ? sent.get(f) : stateOf(f, true)) || (file && !took)) && counterpart(root, fresh, f, true, ids);
     if (!to || to.localName !== f.localName) continue;
     typedFields.add(to);
-    if (file) files.push([to, field.files]);
+    // An input, as `f` is: the names are the same.
+    if (file) files.push([/** @type {HTMLInputElement} */ (to), field.files]);
     else if (f instanceof HTMLSelectElement) {
       // Every chosen option, by value, so a multiple select keeps them all.
       const chosen = new Set(Array.from(f.selectedOptions, (o) => o.value));
@@ -1258,11 +1350,11 @@ function replaceKeeping(root, fresh, sent, took, focus = true) {
     } else if (/^(checkbox|radio)$/.test(field.type)) /** @type {HTMLInputElement} */ (to).checked = field.checked;
     else /** @type {HTMLInputElement} */ (to).value = field.value;
   }
-  root.replaceWith(fresh);
+  elementOwn.replaceWith.call(root, fresh);
   for (const [to, chosen] of files) to.files = chosen;
   reopen();
   if (next instanceof HTMLElement) {
-    next.focus({ preventScroll: true });
+    focusOn(next);
     try {
       const { selectionStart, selectionEnd, selectionDirection } = /** @type {HTMLInputElement} */ (focused);
       if (selectionStart !== null) /** @type {HTMLInputElement} */ (next).setSelectionRange(selectionStart, selectionEnd, selectionDirection ?? undefined);
@@ -1287,15 +1379,16 @@ function focusNear(el, root, fresh) {
     if (to instanceof HTMLElement) {
       const made = !hasAttr(to, "tabindex");
       if (made) to.tabIndex = -1;
-      to.focus({ preventScroll: true });
+      // Through focusOn: `to` may be a form around the element that left.
+      focusOn(to);
       if (document.activeElement === to) {
         if (made) {
-          const off = () => document.activeElement !== to && (to.removeAttribute("tabindex"), to.removeEventListener("blur", off));
-          to.addEventListener("blur", off);
+          const off = () => document.activeElement !== to && (elementOwn.removeAttribute.call(to, "tabindex"), formCall(to, "removeEventListener", "blur", off));
+          formCall(to, "addEventListener", "blur", off);
         }
         return;
       }
-      if (made) to.removeAttribute("tabindex");
+      if (made) elementOwn.removeAttribute.call(to, "tabindex");
     }
     if (fresh && el === root) {
       el = fresh.parentElement;
@@ -1345,7 +1438,7 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
         reload(notice);
         return false;
       }
-      part.remove();
+      elementOwn.remove.call(part);
       // One the server drew as the one on screen is left as it is: its scroll, its scripts' state
       // and the focus in it, as a write's page leaves a layout element that did not change. Compared
       // as layout elements are, so a nav link's `aria-current` (`req.nav`), which `markCurrent`
@@ -1455,27 +1548,27 @@ const partSent = new WeakMap();
  * @param {Element} el @param {Put} put
  */
 function changedIn(el, [how, id, nodes]) {
-  partSent.delete(/** @type {Element} */ (el.closest("[data-corten-page]")));
+  partSent.delete(/** @type {Element} */ (closestOf(el, "[data-corten-page]")));
   for (let up = /** @type {Element | null} */ (el); up; up = up.parentElement) {
     const was = drawn.get(up);
     if (was === undefined) continue;
     // Parsed at the first patch into it, not at load.
     const copy = typeof was !== "string" ? was.copy : was.startsWith("\0") ? null : parse(was).firstElementChild;
-    const at = copy?.querySelector(`[id="${CSS.escape(id)}"]`);
+    const at = copy && queryOne(copy, `[id="${CSS.escape(id)}"]`);
     if (!copy || !at) {
       // No markup is the marker, and none is another's.
       drawn.set(up, `\0${(patched += 1)}`);
       return;
     }
     const fresh = nodes.map((n) => n.cloneNode(true));
-    if (how === "x") at.remove();
-    else if (how === "a") at.append(...fresh);
-    else at.replaceWith(...fresh);
+    if (how === "x") elementOwn.remove.call(at);
+    else if (how === "a") elementOwn.append.call(at, ...fresh);
+    else elementOwn.replaceWith.call(at, ...fresh);
     // Appends a script trims on the page (a feed in the header) would grow the copy without end:
     // once it holds well more than the element does, the marker takes its place, and the next
     // write's page draws the element again.
-    const held = copy.getElementsByTagName("*").length;
-    drawn.set(up, how === "a" && held > 2 * up.getElementsByTagName("*").length + 64 ? `\0${(patched += 1)}` : { copy });
+    const held = tagsIn(copy, "*").length;
+    drawn.set(up, how === "a" && held > 2 * tagsIn(up, "*").length + 64 ? `\0${(patched += 1)}` : { copy });
     return;
   }
 }
@@ -1493,7 +1586,7 @@ function drawnAs(was) {
 }
 for (let el = document.querySelector("main"); el && el !== document.body; el = el.parentElement) {
   // As sent, made comparable only if a write's page is compared with it, so a load pays for the copy alone.
-  for (const beside of Array.from(el.parentElement?.children ?? [])) if (beside !== el) drawn.set(beside, beside.outerHTML);
+  for (const beside of el.parentElement ? Array.from(childrenOf(el.parentElement)) : []) if (beside !== el) drawn.set(beside, beside.outerHTML);
 }
 for (const part of Array.from(document.querySelectorAll("[data-corten-page]"))) partSent.set(part, markupOf(part));
 
@@ -1509,7 +1602,7 @@ function frameOf(doc) {
   let depth = 0;
   for (let el = doc.querySelector("main"); el; el = el.parentElement, depth++) {
     parts.push(`${depth}<${el.localName}`);
-    for (const a of Array.from(el.attributes)) if (a.name !== "nonce" && a.name !== "aria-busy") parts.push(`${depth} ${a.name}="${a.value}"`);
+    for (const a of Array.from(attributesOf(el))) if (a.name !== "nonce" && a.name !== "aria-busy") parts.push(`${depth} ${a.name}="${a.value}"`);
   }
   for (const el of Array.from(doc.head.children)) {
     // The page's values (`style={..}`) are its own, set on what is swapped in (`setVars`).
@@ -1552,15 +1645,16 @@ function layoutChanges(doc, notice) {
     const up = here.parentElement;
     const upThere = there.parentElement;
     if (!up || !upThere || up.localName !== upThere.localName) return null;
-    const mine = Array.from(up.children).filter((el) => el === here || drawn.has(el));
-    const theirs = Array.from(upThere.children);
+    const mine = Array.from(childrenOf(up)).filter((el) => el === here || drawn.has(el));
+    const theirs = Array.from(childrenOf(upThere));
     if (mine.length !== theirs.length || mine.indexOf(here) !== theirs.indexOf(there)) return null;
-    for (let i = 0; i < mine.length; i++) {
-      if (mine[i] === here) continue;
-      if (mine[i].localName !== theirs[i].localName) return null;
-      const was = drawn.get(mine[i]);
+    for (const [i, el] of mine.entries()) {
+      const their = theirs[i];
+      if (el === here) continue;
+      if (!their || el.localName !== their.localName) return null;
+      const was = drawn.get(el);
       const as = was === undefined ? "" : drawnAs(was);
-      if (as === null || comparable(as) !== markupOf(theirs[i]) || shows(theirs[i], said)) changed.push([mine[i], theirs[i], was]);
+      if (as === null || comparable(as) !== markupOf(their) || shows(their, said)) changed.push([el, their, was]);
     }
     here = up;
     there = upThere;
@@ -1576,16 +1670,16 @@ function layoutChanges(doc, notice) {
       for (const [old, el, was] of changed) {
         // One a patch replaced, or changed inside, while the page was on its way is newer than the
         // page: it stays.
-        if (!old.isConnected || drawn.get(old) !== was) continue;
+        if (!inPage(old) || drawn.get(old) !== was) continue;
         const markup = markupOf(el);
         // The server's markup of each page's part in it, before drawing adds what the user had
         // (a <details> they opened) or a focus move's tabindex.
-        const parts = [el, ...Array.from(el.querySelectorAll("[data-corten-page]"))]
+        const parts = [el, ...Array.from(queryAll(el, "[data-corten-page]"))]
           .filter((part) => hasAttr(part, "data-corten-page"))
           .map((part) => /** @type {const} */ ([part, part === el ? markup : markupOf(part)]));
         const as = was === undefined ? null : drawnAs(was);
         drawLayout(old, el, as === null ? null : parse(as).firstElementChild, said);
-        const now = old.isConnected ? old : el;
+        const now = inPage(old) ? old : el;
         drawn.set(now, markup);
         // A page's part the write's page drew anew is what the next navigation compares with.
         if (now !== old) for (const [part, sent] of parts) partSent.set(part, sent);
@@ -1604,7 +1698,7 @@ const LIVE = '[role="status"], [role="alert"], [aria-live]';
  * @param {Element} el @param {string | null} said
  */
 const shows = (el, said) =>
-  said !== null && [...(el.matches(LIVE) ? [el] : []), ...Array.from(el.querySelectorAll(LIVE))].some((live) => live.textContent?.includes(said));
+  said !== null && [...(matchesOf(el, LIVE) ? [el] : []), ...Array.from(queryAll(el, LIVE))].some((live) => live.textContent?.includes(said));
 /**
  * Draws `fresh`, the server's markup for the layout element `old`, in its place, as a patch
  * replaces an element ({@link replaceKeeping}), except that a live region in it (a toaster's)
@@ -1616,9 +1710,9 @@ const shows = (el, said) =>
  * @param {Element} old @param {Element} fresh @param {Element | null} before @param {string | null} said @param {boolean} [inside]
  */
 function drawLayout(old, fresh, before, said, inside = false) {
-  if (old.localName !== fresh.localName || !(inside || old.matches(LIVE) || old.querySelector(LIVE))) return replaceKeeping(old, fresh, null);
+  if (old.localName !== fresh.localName || !(inside || matchesOf(old, LIVE) || queryOne(old, LIVE))) return replaceKeeping(old, fresh, null);
   // Changed in place: a page's part that is or holds it is drawn by the next navigation.
-  partSent.delete(/** @type {Element} */ (old.closest("[data-corten-page]")));
+  partSent.delete(/** @type {Element} */ (closestOf(old, "[data-corten-page]")));
   const wiring = () => ["data-on", "data-ref", "data-scope"].map((a) => attrOf(old, a)).join("\n");
   const was = wiring();
   // The ref it had too, whose holders look again.
@@ -1626,8 +1720,8 @@ function drawLayout(old, fresh, before, said, inside = false) {
   refName(old, names);
   // What the user opened or closed stays as they left it, as a patch keeps it ({@link opened}).
   const toggles = old instanceof HTMLDetailsElement || old instanceof HTMLDialogElement;
-  for (const a of Array.from(old.attributes)) if (!hasAttr(fresh, a.name) && !(toggles && a.name === "open")) old.removeAttribute(a.name);
-  for (const a of Array.from(fresh.attributes)) if (attrOf(old, a.name) !== a.value && !(toggles && a.name === "open")) old.setAttribute(a.name, a.value);
+  for (const a of Array.from(attributesOf(old))) if (!hasAttr(fresh, a.name) && !(toggles && a.name === "open")) elementOwn.removeAttribute.call(old, a.name);
+  for (const a of Array.from(attributesOf(fresh))) if (attrOf(old, a.name) !== a.value && !(toggles && a.name === "open")) elementOwn.setAttribute.call(old, a.name, a.value);
   if (toggles) {
     const [now, want] = [old.open, hasAttr(fresh, "open")];
     // Left as the server sent it: the server's state now. A modal one closes by `close()`, which
@@ -1645,18 +1739,20 @@ function drawLayout(old, fresh, before, said, inside = false) {
     scan(old, names);
     for (const name of names) refChanges.set(name, (refChanges.get(name) ?? 0) + 1);
   }
-  if (old.matches(LIVE)) {
+  if (matchesOf(old, LIVE)) {
     const content = document.createDocumentFragment();
     content.append(...Array.from(fresh.childNodes));
     serve(content);
-    old.replaceChildren(content);
+    elementOwn.replaceChildren.call(old, content);
     return;
   }
   const [mine, theirs] = [Array.from(old.childNodes), Array.from(fresh.childNodes)];
-  if (mine.length !== theirs.length || mine.some((n, i) => n.nodeName !== theirs[i].nodeName)) return replaceKeeping(old, fresh, null);
+  if (mine.length !== theirs.length || mine.some((n, i) => n.nodeName !== theirs[i]?.nodeName)) return replaceKeeping(old, fresh, null);
   const then = before && before.childNodes.length === theirs.length ? before.childNodes : null;
   mine.forEach((n, i) => {
     const [there, was] = [theirs[i], then?.[i]];
+    // The same length as `mine`, checked above.
+    if (!there) return;
     if (!(n instanceof Element)) {
       if (was?.nodeValue !== there.nodeValue && n.nodeValue !== there.nodeValue) n.nodeValue = there.nodeValue;
       return;
@@ -1753,7 +1849,7 @@ document.addEventListener(
     const el = event.target;
     if (!(el instanceof Element)) return;
     scrolledIn.add(el);
-    if (el.scrollLeft) sideways.add(el);
+    if (scrollOf(el, "scrollLeft")) sideways.add(el);
   },
   { capture: true, passive: true },
 );
@@ -1773,7 +1869,7 @@ function viewOf(root, fresh) {
   const to = /** @type {Element} */ (/** @type {unknown} */ (fresh));
   /** @type {[HTMLDetailsElement, boolean][]} */
   const open = [];
-  for (const el of Array.from(root.querySelectorAll("details"))) {
+  for (const el of /** @type {HTMLDetailsElement[]} */ (Array.from(queryAll(root, "details")))) {
     if (!(el.open || served.get(el))) continue;
     const there = counterpart(root, to, el);
     if (there instanceof HTMLDetailsElement) open.push([there, el.open]);
@@ -1785,19 +1881,20 @@ function viewOf(root, fresh) {
   const around = new Set(scrolledIn);
   for (let el = document.activeElement; el && el !== root; el = el.parentElement) around.add(el);
   for (const el of around) {
-    const moved = el.scrollTop || el.scrollLeft;
-    if (!root.contains(el) || !(moved || sideways.has(el))) continue;
+    const top = scrollOf(el, "scrollTop");
+    const left = scrollOf(el, "scrollLeft");
+    if (!holds(root, el) || !(top || left || sideways.has(el))) continue;
     const there = counterpart(root, to, el);
     if (there?.localName !== el.localName) continue;
-    if (moved) scrolled.push([/** @type {Element} */ (there), el.scrollTop, el.scrollLeft]);
+    if (top || left) scrolled.push([/** @type {Element} */ (there), top, left]);
     // Scrolled sideways now, or before (back to its start too): a scroll in the same frame as the
     // swap has not had its event yet.
-    if (el.scrollLeft || sideways.has(el)) rows.push(/** @type {Element} */ (there));
+    if (left || sideways.has(el)) rows.push(/** @type {Element} */ (there));
   }
   return () => {
     for (const [el, now] of open) el.open = now;
     // A restored scroll's event comes later too, and the next swap may come first.
-    for (const [el, top, left] of scrolled) el.scrollTo(left, top), scrolledIn.add(el);
+    for (const [el, top, left] of scrolled) elementOwn.scrollTo.call(el, left, top), scrolledIn.add(el);
     for (const el of rows) scrolledIn.add(el), sideways.add(el);
     // A nav row's current link stays where the user left it.
     return rows;
@@ -1849,7 +1946,7 @@ const NAV = "a[href][data-nav]";
  * `matches` would hide the form's own.
  * @param {Element} el
  */
-const holdsNav = (el) => Element.prototype.matches.call(el, NAV) || !!Element.prototype.querySelector.call(el, NAV);
+const holdsNav = (el) => matchesOf(el, NAV) || !!queryOne(el, NAV);
 
 /**
  * Sets `aria-current="page"` on `<a data-nav>` links to this page (`data-nav="section"`: to this
@@ -1950,10 +2047,10 @@ function shellChanged(res) {
  */
 function focusInvalid(form) {
   const id = formProperty(form, "id");
-  const home = (formProperty(form, "isConnected") ? form : id && document.getElementById(id)) || document.querySelector("main");
+  const home = (inPage(form) ? form : id && document.getElementById(id)) || document.querySelector("main");
   const active = document.activeElement;
-  if (active && active !== document.body && !home?.contains(active)) return;
-  const field = home?.querySelector('[aria-invalid="true"]') ?? document.querySelector('main [aria-invalid="true"]');
+  if (active && active !== document.body && (!home || !holds(home, active))) return;
+  const field = (home && queryOne(home, '[aria-invalid="true"]')) ?? document.querySelector('main [aria-invalid="true"]');
   if (field instanceof HTMLElement) field.focus();
 }
 
@@ -1987,7 +2084,7 @@ function pageKey(url) {
 function prefetch(target) {
   // Without the Navigation API a click is a full page load, which cannot use a prefetched swap.
   if (!("navigation" in window)) return;
-  const link = target instanceof Element ? target.closest("a[href]") : null;
+  const link = target instanceof Element ? closestOf(target, "a[href]") : null;
   if (!(link instanceof HTMLAnchorElement) || link.target || link.hasAttribute("download")) return;
   if (link.closest("[data-reload], [data-no-prefetch]")) return;
   const url = new URL(link.href, location.href);
@@ -1997,7 +2094,7 @@ function prefetch(target) {
   if (url.origin !== location.origin || pageKey(url) === pageKey(new URL(location.href)) || pageKey(url) === fetching?.key) return;
   const key = pageKey(url);
   // The user asked the browser to save data.
-  if (/** @type {any} */ (navigator).connection?.saveData) return;
+  if (/** @type {Navigator & { connection?: { saveData?: boolean } }} */ (navigator).connection?.saveData) return;
   const now = performance.now();
   const hit = prefetched.get(key);
   if (hit && now - hit.at < PREFETCH_FRESH_MS) return;
@@ -2244,8 +2341,13 @@ function readLater(seconds, wanted, read) {
   setTimeout(wait, seconds * 1000);
 }
 
-/** @type {any} */
-const navigation = /** @type {any} */ (window).navigation;
+/**
+ * What the runtime's own navigations carry in `info` ({@link go}), under keys only this module has.
+ * @typedef {{ [REDIRECTED]?: Response, [KEEP_PLACE]?: ReturnType<typeof placeOf>, [LOAD]?: boolean, [SOURCE]?: Element | null, [WRITTEN]?: boolean, [READ_AGAIN]?: boolean }} Info
+ * @typedef {import("./navigation").NavigateEvent<Info>} NavigateEvent
+ */
+// The Navigation API, where the browser has it; TypeScript's DOM library does not declare it yet.
+const navigation = /** @type {Window & { navigation?: import("./navigation").Navigation<Info> }} */ (window).navigation;
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -2298,7 +2400,7 @@ function sendsAs(form, submitter) {
 
 /**
  * What started a navigation, if anything: a link, a form, or the button that sent one.
- * @param {any} event
+ * @param {NavigateEvent} event
  */
 function startedBy(event) {
   const el = event.info?.[SOURCE] ?? event.sourceElement;
@@ -2310,16 +2412,22 @@ function startedBy(event) {
  * the submit button as the source but sets `formData` from the form's own method, so a POST
  * button in a GET form has none (#190); Firefox names the form there, and its `formData`
  * follows the button.
- * @param {any} event
+ * @param {NavigateEvent} event
  */
 function posts(event) {
   const button = event.sourceElement;
-  const form = button?.form;
-  if (!(form instanceof HTMLFormElement) || !(button instanceof HTMLButtonElement || button instanceof HTMLInputElement)) return !!event.formData;
-  return sendsAs(form, button).method === "post";
+  if (!(button instanceof HTMLButtonElement || button instanceof HTMLInputElement) || !(button.form instanceof HTMLFormElement)) return !!event.formData;
+  return sendsAs(button.form, button).method === "post";
 }
 
-navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
+/**
+ * Whether the element a navigation came from (a link, a button, or the form, when no button sent
+ * it) is in `selector`, read past a control named `closest`.
+ * @param {{ sourceElement: Element | null }} event @param {string} selector
+ */
+const sourceIn = (event, selector) => event.sourceElement instanceof Element && !!closestOf(event.sourceElement, selector);
+
+navigation?.addEventListener("navigate", (event) => {
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
   // page's own: nothing to fetch. Back and forward between pages this runtime swapped are
   // same-document traversals too, and do need the page.
@@ -2332,7 +2440,7 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
     event.downloadRequest !== null ||
     posts(event) ||
     event.navigationType === "reload" ||
-    event.sourceElement?.closest?.("[data-reload]");
+    sourceIn(event, "[data-reload]");
   if (skip) return;
   const url = new URL(event.destination.url);
   const again = event.info?.[READ_AGAIN];
@@ -2346,7 +2454,7 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
   // The same page read again, or a form or link marked `data-keep-place` (filters applied as they
   // change): the page changes under the user, who stays where they were reading, on the control
   // they used. Kept across a redirect the server answers with.
-  const place = again || event.sourceElement?.closest?.("[data-keep-place]") ? placeOf(document.activeElement) : event.info?.[KEEP_PLACE];
+  const place = again || sourceIn(event, "[data-keep-place]") ? placeOf(document.activeElement) : event.info?.[KEEP_PLACE];
   if (place === undefined) {
     // Back and forward: the browser puts the user back where they were on that entry.
     if (event.navigationType === "traverse") {
@@ -2373,8 +2481,8 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
     // Back to the control, unless the user has moved on meanwhile.
     const now = document.activeElement;
     const el = /** @type {HTMLInputElement | undefined} */ (place && (!now || now === document.body) ? document.querySelectorAll(place.at)[place.nth] : undefined);
-    if (!el) return;
-    el.focus({ preventScroll: true });
+    if (!el || !place) return;
+    focusOn(el);
     try {
       const [start, end, direction] = place.caret;
       if (start !== null) el.setSelectionRange(start, end, direction);
@@ -2391,11 +2499,12 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
  * replaces before its address changes (the user clicks on while the page is on its way) rejects
  * it, which the browser would log as uncaught. Returns `finished`, for the caller that wants to know how it ended.
  * @param {string} url
- * @param {object} options
+ * @param {{ history?: "push" | "replace", info?: Info }} options
  * @returns {Promise<unknown>}
  */
 function go(url, options) {
-  const { committed, finished } = navigation.navigate(url, options);
+  // Called only where the browser has the Navigation API.
+  const { committed, finished } = /** @type {NonNullable<typeof navigation>} */ (navigation).navigate(url, options);
   committed.catch(() => {});
   return finished;
 }
@@ -2420,10 +2529,10 @@ const PRECOMMIT = "NavigationPrecommitController" in window;
  * navigation that takes this one's place in history (`Precommit.history`), so the link's address
  * never shows. `main` is busy from the click either way. Elsewhere, and for back and forward, the
  * address changes at once, as before.
- * @param {any} event
+ * @param {NavigateEvent} event
  * @param {(precommit: Precommit | undefined) => Promise<void>} run
  * @param {() => void} after
- * @param {object} options
+ * @param {import("./navigation").NavigationInterceptOptions} options
  * @param {boolean} [early] whether the address may wait for the answer (not a page read again)
  */
 function interceptVisit(event, run, after, options, early = true) {
@@ -2443,7 +2552,7 @@ function interceptVisit(event, run, after, options, early = true) {
   let visiting = Promise.resolve();
   event.intercept({
     ...options,
-    precommitHandler: (/** @type {any} */ controller) =>
+    precommitHandler: (controller) =>
       new Promise((answered, failed) => {
         const commit = async (/** @type {Response | undefined} */ res) => {
           let took = false;
@@ -2499,7 +2608,7 @@ let drawnFor = navigation?.currentEntry?.key ?? "";
 // An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page
 // that was there.
 navigation?.addEventListener("currententrychange", () => {
-  if (!navigation.transition) drawnFor = navigation.currentEntry?.key ?? drawnFor;
+  if (!navigation?.transition) drawnFor = navigation?.currentEntry?.key ?? drawnFor;
 });
 
 /**
@@ -2545,7 +2654,8 @@ function remember(key, main) {
   /** @type {[Element, string, string, string][]} */
   const fields = [];
   for (const f of typedFields) {
-    if (!f.matches("input, textarea, select") || !main.contains(f) || unkept(f)) continue;
+    // Through matchesOf: `f` is any target of an input or change event, a form among them.
+    if (!matchesOf(f, "input, textarea, select") || !main.contains(f) || unkept(f)) continue;
     const now = stateOf(f);
     const name = f.getAttribute("name");
     const at = f.id ? `#${CSS.escape(f.id)}` : name ? named(f, name) : "";
@@ -2556,7 +2666,7 @@ function remember(key, main) {
   /** @type {Typed[]} */
   const typed = fields.map(([f, at, key, now]) => [at, key, /** @type {Element[]} */ (found.get(at)).indexOf(f), now, fieldDrawn(f)]);
   // The entry as it is now: a replace since the page was drawn made a new one with the same key.
-  const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
+  const entry = navigation?.entries().find((e) => e.key === key);
   if (!typed.length || !entry) return void typedIn.delete(key);
   typedIn.set(key, typed);
   entry.addEventListener("dispose", forget);
@@ -2564,9 +2674,9 @@ function remember(key, main) {
 
 /** @param {Event} event the dispose of an entry `typedIn` has */
 function forget(event) {
-  const key = /** @type {any} */ (event.target).key;
+  const key = /** @type {NavigationHistoryEntry} */ (event.target).key;
   // A replace disposes the entry it replaces and gives the new one its key.
-  const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
+  const entry = navigation?.entries().find((e) => e.key === key);
   if (entry) entry.addEventListener("dispose", forget);
   else typedIn.delete(key);
 }
@@ -2598,7 +2708,7 @@ function fieldsAt(root, wanted) {
   /** @type {Map<string, Element[]>} */
   const found = new Map();
   if (wanted.size <= 64) {
-    for (const at of wanted.keys()) found.set(at, Array.from(root.querySelectorAll(at)).filter((el) => el.matches("input, textarea, select")));
+    for (const at of wanted.keys()) found.set(at, Array.from(root.querySelectorAll(at)).filter((el) => matchesOf(el, "input, textarea, select")));
     return found;
   }
   const ids = new Set();
@@ -2620,17 +2730,18 @@ function fieldsAt(root, wanted) {
  * its name in <main>, and which of the controls with that name it is), and its caret. Null when
  * nothing is focused.
  * @param {Element | null} el
- * @returns {{ at: string, nth: number, caret: [number | null, number | null, any] } | null}
+ * @returns {{ at: string, nth: number, caret: [number | null, number | null, "forward" | "backward" | "none" | undefined] } | null}
  */
 function placeOf(el) {
-  const name = el?.getAttribute("name");
-  const at = el?.id ? `#${CSS.escape(el.id)}` : name && el ? `main ${named(el, name)}` : "";
+  const name = el && attrOf(el, "name");
+  const id = el && idOf(el);
+  const at = id ? `#${CSS.escape(id)}` : name && el ? `main ${named(el, name)}` : "";
   if (!at) return null;
   const f = /** @type {HTMLInputElement} */ (el);
-  /** @type {[number | null, number | null, any]} */
-  let caret = [null, null, null];
+  /** @type {[number | null, number | null, "forward" | "backward" | "none" | undefined]} */
+  let caret = [null, null, undefined];
   try {
-    caret = [f.selectionStart, f.selectionEnd, f.selectionDirection];
+    caret = [f.selectionStart, f.selectionEnd, f.selectionDirection ?? undefined];
   } catch {}
   return { at, nth: Array.prototype.indexOf.call(document.querySelectorAll(at), el), caret };
 }
@@ -2641,8 +2752,8 @@ function placeOf(el) {
  * @param {Element} el @param {string} name
  */
 function named(el, name) {
-  const value = el.getAttribute("value");
-  const choice = /^(checkbox|radio)$/.test(el.getAttribute("type") ?? "") ? (value === null ? ":not([value])" : `[value="${CSS.escape(value)}"]`) : "";
+  const value = attrOf(el, "value");
+  const choice = /^(checkbox|radio)$/.test(attrOf(el, "type") ?? "") ? (value === null ? ":not([value])" : `[value="${CSS.escape(value)}"]`) : "";
   return `${el.localName}[name="${CSS.escape(name)}"]${choice}`;
 }
 /**
@@ -2875,7 +2986,7 @@ function sendAgain(form, submitter) {
   const id = idOf(form);
   const now = formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
   if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
-  const all = /** @type {HTMLElement[]} */ (Array.from(/** @type {HTMLFormControlsCollection} */ (formProperty(now, "elements"))));
+  const all = /** @type {HTMLElement[]} */ (Array.from(formProperty(now, "elements")));
   const by =
     !submitter || all.includes(submitter)
       ? submitter
@@ -2929,7 +3040,7 @@ customElements.define(
         liveStatus(this, source.readyState === EventSource.CLOSED ? "closed" : "reconnecting");
       });
       source.addEventListener("patch", (event) => {
-        const { data, origin } = /** @type {MessageEvent} */ (event);
+        const { data, origin } = /** @type {MessageEvent<string>} */ (event);
         // The origin the stream came from, after any redirect: another's fragment is not drawn, nor
         // an event a script dispatched.
         if (!event.isTrusted || origin !== location.origin) return console.error("corten: <corten-live> draws only fragments its stream brought from this origin, not", event.isTrusted ? origin : "an event a script dispatched");
@@ -2965,8 +3076,9 @@ try {
   const kept = sessionStorage.getItem(NOTICE);
   if (kept !== null) {
     sessionStorage.removeItem(NOTICE);
-    const [path, text, until] = JSON.parse(kept);
-    if (path === location.pathname && Date.now() < until) ready.then(() => setTimeout(() => announce(new URLSearchParams({ m: text }))));
+    // What `reload` wrote, or not: storage is the browser's, and outlives a version of the runtime.
+    const [path, text, until] = /** @type {unknown[]} */ (JSON.parse(kept));
+    if (path === location.pathname && typeof text === "string" && typeof until === "number" && Date.now() < until) ready.then(() => setTimeout(() => announce(new URLSearchParams({ m: text }))));
   }
 } catch {
   // No session storage, or not what reload wrote: nothing to say.
@@ -2978,7 +3090,7 @@ try {
 const devStart = document.querySelector('meta[name="corten-dev"]')?.getAttribute("content");
 if (devStart) {
   new EventSource("/corten/dev").addEventListener("message", (event) => {
-    if (/** @type {MessageEvent} */ (event).data !== devStart) reload();
+    if (/** @type {MessageEvent<string>} */ (event).data !== devStart) reload();
   });
   // A failed load is the browser's own error, which names the URL: a message of the runtime's
   // would be bytes every production page carries.

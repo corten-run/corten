@@ -41,16 +41,11 @@ pub struct Item {
 }
 
 /// A stock level, what the live feed sends.
-#[derive(Clone, Serialize, ToJson)]
+#[derive(Clone, Serialize, ToJson, Row)]
 pub struct Level {
+    #[row(id)]
     pub id: String,
     pub qty: u32,
-}
-
-impl Row for Level {
-    fn id(&self) -> &str {
-        &self.id
-    }
 }
 
 #[derive(Clone)]

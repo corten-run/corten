@@ -2,7 +2,7 @@
 // edits: after every replace, push, remove, swap or clear, and after changes made to the
 // children without it (a server patch, a sort), the children must show exactly the items, in
 // order, keep their elements for kept keys, and at(i) / get(key) / of(target) / indexOf(view)
-// must give the view of the right row, also after a script sets a row's key through its view. Rows
+// must give the view of the right row (and at(i) none past either end), also after a script sets a row's key through its view. Rows
 // of a view without keyOf (the server makes them) refuse push and replace. node view-check.mjs
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
@@ -127,6 +127,8 @@ const result = await page.evaluate(async (src) => {
       if (l.at(i).el !== el || l.of(el.firstChild)?.el !== el) fail(step, "at/of at " + i);
       if (l.get(String(next[i].k))?.el !== el || l.indexOf(l.at(i)) !== i) fail(step, "get/indexOf at " + i);
     });
+    // Past either end there is no row; a negative index counts back from the last, as an array's.
+    if (l.at(kids.length) !== undefined || l.at(-kids.length - 1) !== undefined || l.at(-1)?.el !== kids.at(-1)) fail(step, "at past the ends");
     const seen = Array.from(l, (view) => view.el);
     if (seen.length !== kids.length || seen.some((el, i) => el !== kids[i])) fail(step, "iterator");
     items = next;

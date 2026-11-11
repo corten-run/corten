@@ -6,6 +6,15 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- Static files with `mp4`, `webm` and `vtt` names are sent as `video/mp4`, `video/webm` and
+  `text/vtt`, and a `GET` of a versioned URL, this version's or an old one's, for a file sent as it
+  is stored answers a single byte `Range` with a `206` (a bare `416` past its end, the whole file
+  for several ranges, a `HEAD` or the favicon), honoring `If-Range` for its strong ETag, so a
+  native `<video>` with captions plays and seeks from `embed!`; the PWA's service worker leaves a
+  range, and the video or audio a player loads, to the network. Card market's `/grading` page
+  shows a captioned clip, linked from each category; it is an area with its own stylesheet, so the
+  pages and the components' stylesheet the benchmark compares are unchanged
+  ([#1133 Serve embedded video and caption assets with standard MIME types and byte-range responses](https://github.com/corten-run/corten/issues/1133)).
 - `Policy::frame_ancestors` and `Sources::frame_ancestors` let the sites they name show the
   pages in a frame, the app's or an area's only, which no site may by default; such a page is sent
   no `X-Frame-Options`, or `SAMEORIGIN` for `'self'` alone, and keeps its `frame-ancestors`
@@ -281,20 +290,21 @@ Corten is pre-1.0, so any minor version may change the API.
     call; this checks its body. An app with scripts needs `tsc` (Changed 158). Asked for by the
     Chase Sets pilot
     ([#20 corten check does not type-check an app's scripts](https://github.com/todd-skelton/corten/issues/20)).
-34. `#[derive(FromJson)]`, `corten::json::from_slice` and `from_str` (feature `json`, the derive in the
-    prelude): JSON read by Corten's reader, which matches each key against the type's fields, makes
-    each value straight from the text and skips (validating) the rest. Where it meets anything it
-    does not follow (an escaped key, a missing or duplicate field, a number it does not parse
+34. `#[derive(FromJson)]`, `corten::json::from_slice` and `from_str` (feature `json`, the derive
+    in the prelude): JSON read by Corten's reader, which matches each key against the type's fields,
+    makes each value straight from the text and skips (validating) the rest. Where it meets anything
+    it does not follow (an escaped key, a missing or duplicate field, a number it does not parse
     itself) serde_json reads the text instead, so the value and every error are serde_json's; it
-    needs `Deserialize` next to it for that. It reads `rename`, `rename_all`, `alias`, `default`,
-    `skip`, `skip_deserializing`, `deny_unknown_fields` and `transparent`; one it cannot follow, or
-    an enum with data, does not compile, and a field of a type with only `Deserialize` is read by
-    serde_json from its own text. `examples/item-page` reads its item API's response with it:
-    measured in process (`perf_event`, user-mode instructions, release build, the 500 benchmark
-    responses of 55 KB), 878,078 instructions a response through serde_json and 698,733 through
-    `FromJson` (-20.4%), 913,151 and 733,130 with the conversion into the view model;
-    `render_cost` (median of 3) reads one in 304.8 µs through serde_json and 185.5 µs. Its
-    `render_cost` checks the 500 responses read the same both ways.
+    needs `Deserialize` next to it for that (it writes the `Deserialize` itself since Changed 170).
+    It reads `rename`, `rename_all`, `alias`, `default`, `skip`, `skip_deserializing`,
+    `deny_unknown_fields` and `transparent`; one it cannot follow, or an enum with data, does not
+    compile, and a field of a type with only `Deserialize` is read by serde_json from its own text.
+    `examples/item-page` reads its item API's response with it: measured in process (`perf_event`,
+    user-mode instructions, release build, the 500 benchmark responses of 55 KB), 878,078
+    instructions a response through serde_json and 698,733 through `FromJson` (-20.4%), 913,151 and
+    733,130 with the conversion into the view model; `render_cost` (median of 3) reads one in 304.8
+    µs through serde_json and 185.5 µs. Its `render_cost` checks the 500 responses read the same
+    both ways.
 35. Live streams are compressed (feature `compress`). A `corten::live` or feed response to a client
     that accepts zstd or gzip is one compressed stream per connection, flushed after every event,
     with the context kept between events; never brotli
@@ -2583,23 +2593,21 @@ Corten is pre-1.0, so any minor version may change the API.
     brotli 8,657 against 8,567), the theme's seven tokens (210 bytes, on every page of an app on
     the kit's theme) included; the earlier size is the served file with the old rules put back
     ([#1054 Kit Stats writes its label and figure type as literals, so a theme with a display face or uppercase labels (Chase Sets' design system) edits the copied stats.css](https://github.com/corten-run/corten/issues/1054)).
-276. The kit's `stack` has `StackStart`, a look written beside a `Stack`
-    (`class={(Stack { gap: Gap::Xs }, StackStart {})}`): the column's children keep their own
-    width at its start (its end on a right-to-left page), each at most the stack's, a word wider than
-    that breaking inside it and a picture narrowing in its shape, for a column of links as wide as
-    their words, badges, or a button under a line of text. Its rule names both classes, so it wins
-    over `.stack`'s wherever an app links its stylesheets and does nothing beside a `Cluster` or
-    alone; an app's own `align-items` on the stack tied with the kit's and won only by stylesheet
-    order. Not breaking: every `Stack { gap }` is as it was, and a copied `stack.rs` and
-    `stack.css` take it from `corten ui diff`. Measured as the Dialog's entry was: `stack.css` 237 to 395 bytes
-    (gzip 164 to 226, brotli 125 to 182). The ui-gallery's selling limit card has a column of a
-    link and a badge
+287. The kit's `stack` has `StackStart { gap }` (changed by Changed 174; it was first a class
+    written beside a `Stack`): a stack whose children keep their own width at its start (its end on
+    a right-to-left page), each at most the column's, a word wider than that breaking inside it and
+    a picture narrowing in its shape, for a column of links as wide as their words, badges, or a
+    button under a line of text. Its rule names both classes, so it wins over `.stack`'s wherever
+    an app links its stylesheets; an app's own `align-items` on the stack tied with the kit's and
+    won only by stylesheet order. Not breaking: every `Stack { gap }` is as it was. Measured as
+    the Dialog's entry was: `stack.css` 237 to 395 bytes (gzip 164 to 226, brotli 125 to 182). The
+    ui-gallery's selling limit card has a column of a link and a badge
     ([#1119 Kit Stack always stretches its children, so a column of links, badges or a button at their own width keeps a page rule that ties with .stack](https://github.com/corten-run/corten/issues/1119)).
 277. The kit's `status_dot` has `LiveDot { tone }`, the dot of a live view's badge: its opacity
     pulses while the `<corten-live>` around it is live, so a glance tells a live view from a frozen
     one, and is still while it connects, reconnects or has closed or ended, before the runtime
     runs, without JavaScript and outside a `<corten-live>`. It is still under
-    `prefers-reduced-motion: reduce`, pulses in the system's text color under forced colors as
+    `prefers-reduced-motion: reduce`, and pulses in the system's text color under forced colors as
     `Progress`'s sweep moves. The guides give the rules that make the words beside it follow the
     stream too ("Live" only while it is live, "Not live" otherwise and without JavaScript).
     Not breaking: `StatusDot` is unchanged (its doc test no longer names a class a live form
@@ -2634,12 +2642,14 @@ Corten is pre-1.0, so any minor version may change the API.
     and the copies stay the kit's. Nothing changes for an app that keeps its copies. One set up by an
     older kit that takes the new copies adds the two tokens `corten ui add checkboxes --merge` (or
     `radio_group`, or `--force` for a copy without edits) names, as the kit's theme has them,
-    before it starts. The kit theme's two declarations and the two `var()`s in each stylesheet make
-    the ui-gallery's served `components.css` 60,608 bytes where it was 60,471 (gzip 10,039 against
-    10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier
-    size is the served file with the literals put back). The ui-gallery's smoke test checks both
-    groups at the kit's values and at a theme's. Asked for by the Chase Sets pilot, which edited
-    both copies to .5rem
+    before it starts; a copy edited to other values keeps them by taking the kit's `var()` lines
+    and declaring the two tokens at its own values. The kit theme's two declarations and the two
+    `var()`s in each stylesheet make the ui-gallery's served `components.css` 60,608 bytes where it
+    was 60,471 (on the branch at 99c09ad8 against main at c65c10ec, the stylesheets and theme as
+    merged; gzip 10,039 against 10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and
+    brotli's default; the earlier size is the served file with the literals put back). The
+    ui-gallery's smoke test checks both groups at the kit's values and at a theme's. Asked for by
+    the Chase Sets pilot, which edited both copies to .5rem
     ([#1082 Kit RadioGroup and Checkboxes print their fieldset's gap and legend margin as literals kept equal by hand, so a theme with tighter choice lists edits both copies](https://github.com/corten-run/corten/issues/1082)).
 278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
     after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
@@ -2661,6 +2671,34 @@ Corten is pre-1.0, so any minor version may change the API.
     The time from a save to the page showing it under each stack's development server is not
     measured, and the bench README says why
     ([#1033 bench/fullstack does not measure save-to-reload under each stack's dev server, rust-analyzer's own latency, or a Docker build with BuildKit's cache warm](https://github.com/corten-run/corten/issues/1033)).
+282. `#[derive(Row)]` (`corten::feed::Row`, the derive and the trait at once): a feed row's key is
+    the field marked `#[row(id)]`, in place of the `impl Row` each row wrote by hand, so a renamed
+    key field moves the key with it. The row's `Clone` and `Serialize` stay in its derive list
+    ([design Choice 36](docs/design.md#choice-derived-row)). A row with no field marked or two, a
+    field marked twice, an id that is not text (a type that derefs to `str`: `String`, `Box<str>`,
+    `&'static str`, `Cow<'static, str>`, `Arc<str>` with serde's `rc` feature), an enum, a unit
+    struct, a `row` attribute on the struct, or one other than `#[row(id)]` on a field does not
+    compile, nor does an id serde leaves out of the JSON, where a script reads the key, or writes or
+    reads as other text than `id()` returns (`skip` and its variants, `with`, `serialize_with`,
+    `deserialize_with`, `flatten`), an id serde reads under another name than it writes it under or
+    under an `alias` too, another field serde writes or reads under the id's key (a `rename`, an `alias`, the row's
+    `rename_all` or `tag`; a flattened field's members are not checked), a row serde writes or reads as another value
+    (`into`, `transparent`, `from`, `try_from`), or a tuple struct, whose fields serde writes
+    without names (an id type's own `Serialize` and `Deserialize`, and a row's that are not serde's
+    derive, are not checked); the trait's bounds
+    (`Serialize`, `Clone`, `Send`, `Sync`, `'static`) still hold, each with a `compile_fail` example
+    on the derive. A row a `macro_rules!` declares with the id's visibility or attributes passed in
+    derives it too, and a generic row needs no bounds on its parameters: it is a row for each type
+    argument that makes it one, and a feed of one that is not does not compile. The listings-feed,
+    watchlist, seller-desk and deck-builder rows, the live benchmark's and `corten-cluster`'s take
+    it; an `impl Row` written by hand still works, for a row the derive cannot express (such as an
+    enum, a tuple struct, a key made of several fields, or an `id` that does more than return a
+    field). `corten::feed` is now a module that re-exports `corten-feed`
+    and the derive, so every `corten::feed::..` path still resolves. The feed sends the same rows and
+    patches (`tests/derived_row.rs` compares a derived row's snapshot, parsed without its epoch, and
+    its replayed patch, byte for byte, with a hand-written row's), so
+    nothing on the request path changed to measure
+    ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
 283. The benchmarks have FastAPI and Express apps (`bench/fullstack/apps/fastapi` and
     `apps/express`), each written its framework's usual way with htmx as the other server-rendered
     apps are: the item page, the catalog page, the localized marketplace page and the live price
@@ -2702,9 +2740,12 @@ Corten is pre-1.0, so any minor version may change the API.
     shows on a `Solid` badge's fill too, where a dot in the badge's own tone was the fill's color
     and could not be seen; the kit doc and guide say a dot in a badge takes it. `LiveDot` takes it
     as well. Under forced colors it is `CanvasText`, as every tone is.
-    A dot in another tone in a badge still compiles: kit files are copied into an app one by one,
-    so the dot has no badge type to check against. Not
-    breaking: the other tones are unchanged, and `corten ui add status_dot --merge` takes `Text`.
+    A dot in another tone in a badge still compiles: `Badge` is a class on the app's element, and
+    `html!` has no type for the element around a component, so no change to the tones could catch
+    it. A dot the badge drew itself, with no tone, could not disagree with it, but it would be a
+    second way to draw a dot, so the kit has none. **Breaking:** an app's exhaustive `match` on
+    its copied `StatusTone` gains a `Text` arm once `corten ui add status_dot --merge` takes it;
+    markup is unchanged, as the other tones are.
     The kit's rule adds 42 bytes to the stylesheet (measured on the ui-gallery's served
     `components.css`: 60,920 bytes against 60,878, gzip 10,099 against 10,089, brotli 8,900
     against 8,884, with the rule taken out for the earlier size). The ui-gallery's badges use it,
@@ -2744,6 +2785,21 @@ Corten is pre-1.0, so any minor version may change the API.
     columns, and aspnet-aot's all 14 that are not about pages, one of them (readiness) by a health
     check of its own that the tier's rule would not add
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+291. The kit's `StatusDot` and `LiveDot` draw their dot at the theme's `--status-dot-size`, where
+    `status_dot.css` had `.5rem` as a literal, so a design system whose status dots are smaller (a
+    .375rem dot) sets one token in its theme instead of editing the copied stylesheet. One token
+    sizes both, since they share the dot's rule. The kit's theme declares it as `.5rem`, so no
+    app's look changes; an app with a theme of its own that adds or merges `status_dot` is told the
+    token's line, as for the other sizes, and its startup check names `status_dot.css` until the
+    theme declares it. A copy edited to another size conflicts on `--merge` at the `.dot` line:
+    take the kit's line and declare the size as the token. The ui-gallery's smoke test checks both
+    dots are .5rem in the kit's theme and .375rem with the token set so on the root. No server
+    request or render cost; measured, the ui-gallery's served `components.css` is 61,493 bytes
+    where it was 61,434 (gzip 10,192 against 10,173, brotli 8,985 against 8,963, Node's zlib at
+    gzip level 9 and brotli's default, one fetch of each fixed file), served by the gallery built
+    from this change and from the commit it was made on, b38f7880. Found by the Chase Sets pilot,
+    whose design system draws its status dots at .375rem
+    ([#1199 Kit StatusDot draws its dot at a literal .5rem, so a design system with a smaller status dot edits the copy](https://github.com/corten-run/corten/issues/1199)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -3124,15 +3180,16 @@ Corten is pre-1.0, so any minor version may change the API.
     16.0 µs after).
 35. The JSON a request reads or answers with goes through Corten's own JSON code where it still
     went through `serde_json`: the `Json` extractor needs `T: FromJson` (derive it next to
-    `Deserialize`) and reads an `application/json` body with Corten's reader, leaving any other
-    JSON content type, and any body the reader gives up on, to axum, so the value and every
-    rejection are axum's; `req.screen`'s data, `Meta::json_ld` and a handler argument of a JSDoc
-    type Corten does not check need `ToJson` instead of `Serialize`, with the same bytes out.
-    Measured on the benchmark's 500 items (`perf_event`, user-mode instructions, release build,
-    lowest of each run's passes, three runs within 0.5%): reading an item API response (55 KB)
-    through the extractor 1,616,862 before and 725,531 after (-55%; axum's `Json` tracks the path
-    to an error as it reads), `json_ld` of the item's view model 106,164 and 50,265 (-53%), and a
-    whole `Accept: application/json` request for a `req.screen` of it 123,664 and 69,200 (-44%).
+    `Deserialize`; since Changed 170, `FromJson` alone) and reads an `application/json` body with
+    Corten's reader, leaving any other JSON content type, and any body the reader gives up on, to
+    axum, so the value and every rejection are axum's; `req.screen`'s data, `Meta::json_ld` and a
+    handler argument of a JSDoc type Corten does not check need `ToJson` instead of `Serialize`,
+    with the same bytes out. Measured on the benchmark's 500 items (`perf_event`, user-mode
+    instructions, release build, lowest of each run's passes, three runs within 0.5%): reading an
+    item API response (55 KB) through the extractor 1,616,862 before and 725,531 after (-55%; axum's
+    `Json` tracks the path to an error as it reads), `json_ld` of the item's view model 106,164 and
+    50,265 (-53%), and a whole `Accept: application/json` request for a `req.screen` of it 123,664
+    and 69,200 (-44%).
 36. `FromJson` reads with less work per value: skipping a value tests for whitespace with one
     compare where it tested four, a number no longer skips whitespace its caller already skipped,
     and a struct with a container `#[serde(default)]` is read over that default (each field written
@@ -4439,6 +4496,14 @@ Corten is pre-1.0, so any minor version may change the API.
     1,074), loaded only by a page that calls it. A pager step that writes is a form the app draws
     in place of the pager, which the guides now say
     ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
+176. The runtime and its modules are minified by terser after esbuild minifies them, so every page
+    ships fewer bytes: the runtime is 14,318 bytes with gzip (level 9), 533 fewer (3.6%), and 12,955
+    with brotli (level 11), 532 fewer (3.9%), and 105 fewer uncompressed (measured on `21f9fab3`);
+    `view.js` is 75 and 60 bytes smaller compressed, `format.js` 8 and 18, and `upload.js` and
+    `keys.js` within 11 bytes either way. terser (5.51.2) is a development dependency of the repository's tooling; apps
+    install nothing new
+    ([design Choice 35](docs/design.md#choice-runtime-terser),
+    [#1047 Benchmark round r16: item-page JavaScript grew 9.1% (13,187 to 14,392 gzip bytes)](https://github.com/corten-run/corten/issues/1047)).
 
 169. The image `corten new` writes (and card-market's) runs jemalloc with
     `MALLOC_CONF=background_thread:true,tcache_max:65536`, a third line beside the two that preload
@@ -4451,6 +4516,99 @@ Corten is pre-1.0, so any minor version may change the API.
     counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
     every row and removes its app however the run ends
     ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
+170. `#[derive(FromJson)]` writes the type's serde `Deserialize` too, from the same
+    `#[serde(..)]` its reader reads, so a type read from JSON derives one thing. The impl is
+    serde_derive's for the shapes and attributes `FromJson` reads (named, tuple, newtype and unit
+    structs, `transparent`, enums of unit variants; names, aliases, defaults, `skip`,
+    `deny_unknown_fields`, `expecting`, `bound`): `tests/derived_deserialize.rs` reads each shape
+    with it and with serde's derive and compares values, errors and the names passed to the
+    deserializer, and through Corten's reader too. A type whose `Deserialize` is written by hand, or
+    derived by serde for an attribute `FromJson` refuses (`flatten`), becomes a `FromJson` with an
+    empty `impl corten::FromJson for T {}`, read by serde_json: alone, in serde_json's one pass;
+    inside a derived type or a `Vec`, from its own text, which the reader finds first.
+    `#[derive(Fields)]` and `#[derive(UrlValue)]`, which write the type's `Deserialize` already, now
+    write its `FromJson` (feature `json`) and schema (`types`) too, so a form's input is read from
+    JSON, and is an agent tool's input, as it is, and a query's list of a `UrlValue` is described by
+    its words. A generic one is a `FromJson` wherever its `Deserialize` applies, read by serde_json
+    rather than Corten's reader (nested in another value, read twice: the reader finds its text and
+    serde_json reads it), so a generic form that derived `FromJson` beside `Fields` before, and was
+    read by the reader, is now read by serde_json; a `UrlValue` enum with `#[serde(other)]` reads
+    any other word as that variant (the reader gives up on the whole text there, and serde_json
+    reads it again) and is described as any string; a form input whose fields borrow from the input
+    cannot be a `FromJson`, which reads owned values. A generic `#[derive(FromJson)]` type is a
+    `FromJson` wherever its `Deserialize` applies, so one with a defaulted field holding its
+    parameter (`Vec<T>`), which failed to compile beside serde's derive, compiles and is read by
+    Corten's reader; a defaulted bare `T` is still refused. `#[serde(other)]` on
+    `#[derive(FromJson)]` names `UrlValue` as the derive that reads it. A type that needs `FromJson`
+    and lacks it is told the ways to get one in the compiler's note. An enum with a shift in a
+    discriminant (`B = 1 << 1`) is read whole by `UrlValue` and `FromJson` (and `ToJson` splits its
+    variants the same way): the shift hid the variants after it. **Migration:** take `Deserialize`
+    out of a derive list that has `FromJson`, and `FromJson` out of one that has `Fields` or
+    `UrlValue`, and remove a hand-written `impl FromJson` or `impl FromJsonSchema` for a `Fields` or
+    `UrlValue` type: each is now a second impl (E0119). Reading the benchmark's 500 item API
+    responses costs the same: 265,550,044 instructions through `FromJson` and 438,766,522 through
+    serde_json alone, before and after (callgrind, release build, `read_cost` in
+    `examples/card-market`, two runs each)
+    ([#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
+173. An agent tool's output (`Tools::tool`, `idempotent_tool`, `read_tool`) is a `ToJson` and is
+    written by it, so it derives `ToJson` alone, as every other JSON answer does, where it needed
+    serde's `Serialize` beside it, and a tool's input is a `FromJson`, as it was in every example.
+    The answer is the same JSON (card-market's agent test checks its bytes against serde's for the
+    item). An `items.get` call costs about 21% fewer instructions: 266,844 a call before (265,376 to
+    267,830) and 211,152 after (211,123 to 211,865), with the same answer, 14,464 bytes on average
+    over the calls counted (callgrind, release build, card-market's `tool_cost`, 1,200 calls less
+    200 over 1,000, medians and ranges of three alternating runs, on `217bce2c` and `6d04bbe6`). No
+    data-role attribute is added beside `ToJson` and `FromJson`, which already name each type's
+    direction ([design Choice 38](docs/design.md#choice-json-derives)). **Breaking:** the type a
+    tool returns must be a `ToJson` and the type it takes a `FromJson`, as must any container around
+    them (a derived struct's own fields still fall back to serde), so what was only `Serialize` or
+    `Deserialize` no longer compiles as one: an output whose `Serialize` is derived by serde or
+    written by hand, with a `ToJsonSchema` written by hand; an input that is a `Deserialize` with a
+    `FromJsonSchema` written by hand; a container (`Box`, a map, `Cow`, `Arc`) whose item or value
+    is one of those or another crate's type; a derived generic type, output or input, whose type
+    argument is not `ToJson` or `FromJson`; an output map whose key is not a `JsonKey` (an app's key
+    type implements `corten::json::JsonKey`, writing the text serde writes for it; an externally
+    tagged enum of unit variants that derives `ToJson` gets one from the derive, so an app's own
+    `impl JsonKey` for one is E0119 and is removed); and an input map whose key is not `String`
+    (`BTreeMap<u32, _>`, `BTreeMap<Box<str>, _>`). The std types Corten gives a schema for are
+    `ToJson`, and `FromJson` in their owned forms (`str`, `[T]`, `Path` and `RawValue` boxed or
+    shared), written and read as serde does (`Duration`, `SystemTime`, IP and socket addresses,
+    paths, the `NonZero` integers, `PhantomData`, `serde_json::Number` and, with the `types`
+    feature, `RawValue`), as are `Cow<T>`, `Box<str>`, `Box<Path>` and `Box<[T]>`, the 128-bit
+    integers, sets, `VecDeque`, arrays (read up to 32 items, as serde reads them) and tuples, and
+    `Arc` and `Rc` of a `FromJson`, of `str`, of `Path`, of `[T]` or (with `types`) of `RawValue`,
+    which are read with serde's `rc` feature. Derive `ToJson` or `FromJson`; a `Serialize` or
+    `Deserialize` type that has a schema but is not one (another crate's, or a map of one) goes in a
+    `#[serde(transparent)]` newtype that derives it; only a type whose output schema is written by
+    hand implements `ToJson` by hand beside it (`serde_json::to_writer(&mut *out,
+    &self.0).expect(..)` in a newtype, for another crate's type); an input whose `Deserialize` is
+    not `FromJson`'s takes `impl corten::FromJson for T {}`; an input type the orphan rule keeps an
+    app from implementing it for (a map with other keys) goes in a `#[serde(transparent)]` newtype
+    that derives `FromJson`. `serde_json::Map<String, Value>` is now a `FromJson`, so an input read
+    as any object compiles as before. CI and the Checks build `corten-run` with `json` alone and
+    with `agent` and `feed` alone, as an app takes them, since the workspace turns on serde's `rc`
+    and an app need not. A field whose own `Serialize` fails (a map with a key JSON cannot hold,
+    inside another crate's type, or a std type serde refuses: a path that is not UTF-8, a
+    `SystemTime` before the epoch) panics in its `ToJson`; for a tool's output the call catches it
+    and answers the tool's internal error with the call's `id`, as before, and logs the tool's name
+    with the panic's message (a test holds it; an app built with `panic = "abort"` ends instead). A
+    tool output derived over types whose `ToJson` Corten or serde writes goes out unparsed (a type
+    that holds itself, a tree, included); one that is or holds a `ToJson` or map key (`JsonKey`)
+    written by hand is parsed before it is sent, and
+    one that is not one JSON object is the tool's internal error, logged with the tool's name, the
+    output's size and the fault, not its data (a debug build, `corten dev` or tests without
+    `--release`, parses every output and answers a bad one with the app's 500 and a log line
+    naming the tool). Parsing every output in a release build measured about 92,700 more
+    instructions a call (medians 303,500 against 210,762 over three runs, 44% of `tool_cost`'s),
+    which a derived output does not pay; whether to parse is decided once, when the tool is added.
+    An enum whose `Serialize` is not serde's derive (written by hand, or `serde_repr`'s number) and
+    that derives `ToJson` writes what its `#[serde(..)]` attributes say, its variant's name for a
+    unit variant, as a value and as a map key, not what that `Serialize` writes. To keep what its
+    `Serialize` writes, do not derive `ToJson` on it: as a field it is then written by serde, and as
+    a map key it takes a hand-written `JsonKey` that writes the text serde writes. A tool's output
+    can hold `Raw`, a `ToJson` with any JSON value as its schema; the app guide said it needed
+    `Box<RawValue>`, which only a feed row still does
+    ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
 172. The kit's `Card` and `CardPanel` take a `size` (`CardSize::Md`, the theme's `--card-padding`,
     or `Sm`, denser), as `Button`, `Dialog` and `Progress` do, and `CardCompact` is gone: it was a
     class written beside a card (`(Card {}, CardCompact {})`) that compiled alone or beside any
@@ -4465,6 +4623,32 @@ Corten is pre-1.0, so any minor version may change the API.
     and `corten ui add card --force` (an unedited copy) or `--merge` (an edited one) takes
     `card.rs` and `card.css`
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
+174. The kit's `StackStart` is the stack itself, `StackStart { gap }` written in place of the
+    `Stack` (with `Gap::App`, the app's `gap` utility beside it, as for `Stack`), where it was a
+    class written beside one (`(Stack { gap }, StackStart {})`) that compiled alone, doing nothing.
+    It writes the same classes, so the page is the same, and `StackStart {}` alone no longer
+    compiles (E0063, the missing `gap`). A class list cannot refuse a second look, so two misuses
+    still compile and the docs name them: kept beside its `Stack` (the error's `gap` added there
+    too) it writes the stack's classes twice, and both gaps when they differ, the larger winning;
+    beside a `Cluster` it turns the row into a column. **Migration:** replace `(Stack { gap },
+    StackStart {})` with `StackStart { gap }` and remove the `Stack`. `corten ui diff stack` shows
+    the kit's change, and `corten ui add stack --force` (an unedited copy) or `--merge` (an edited
+    one) takes `stack.rs` and `stack.css` ([#1126 Kit StackStart compiles alone or beside a Cluster
+    and does nothing there, since it is a class beside Stack's rather than an option of the
+    look](https://github.com/corten-run/corten/issues/1126)).
+175. The watchlist smoke's seven submit-queue cases each wait for their own outcome (the
+    patch drawn, the form gone, the `corten:error`, the older read's late answer tried) and then
+    700 ms, in which a send the queue must not make would be seen, where each waited 2.5 seconds
+    for a `corten:error` that six of them never get. The fixture holds each case's first answer
+    until its second press is made, so the press meets the first submit still out however slow it
+    is, and the six cases with no error now check that none came. The queue's checks take 10 to 13
+    seconds per browser where they took 21.4 to 22 (the smoke's own times for the section: Firefox
+    11.3 to 12.7 against 21.9 to 22.0, four runs and three, alternated; Chromium 10.1 and 10.9
+    against 21.4 twice, WebKit 12.0 against 21.5 twice). A runtime that drew an aborted read, sent
+    after a 5xx, a 409 or a removed form, or kept the old submit key still fails the same checks
+    (c65c10ec's runtime with those rules taken out, in Chromium and Firefox), and the aborted read
+    is now checked to have been cancelled in the browser and not only to be undrawn
+    ([#1087 Watchlist queue smokes wait for a 2.5-second error timeout on six non-error outcomes](https://github.com/corten-run/corten/issues/1087)).
 177. An integer of 100 or more that markup or a message writes (`{count}`) goes into the page two
     digits at a time, one `push_str` of a pair from a table in place of one `push` a digit. The
     text is unchanged. Measured with callgrind (release build, three alternated runs each, 500
@@ -4479,7 +4663,52 @@ Corten is pre-1.0, so any minor version may change the API.
     digits in half
     ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
+179. Scripts are type-checked with `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`,
+    `allowUnreachableCode: false` and `noUncheckedSideEffectImports` as well as `strict`, by
+    `corten check` and by Corten's own `npm run check`, and a test fails when the settings differ:
+    an array's element or a record's value read by index is `T | undefined` until the script
+    checks it, a `switch` case that runs into the next one is an error, as are code after a
+    `return` and `import "./file.js"` naming a module that does not exist. An app cannot turn one
+    off (`--no-script-types` leaves every script unchecked). An app's script that reads by index
+    without a check fails `corten check` until it does (`for (const x of xs)`, `const [first] =
+    xs`, or a check of what it read). So do the kit's scripts an app copied before this with
+    `corten ui add` (`relative_time`, `choice`, `combo_box`, `tab_group` and `menu_button`):
+    take the new ones with `corten ui add <name> --merge`.
+    `rows(..).at(i)` is `V | undefined`: none past either end, and a negative `i` counts back
+    from the last, as an array's `at()`, where it gave a view of no row before. The kit's
+    `ComboBox` with no options threw on Enter after Arrow Down; it closes now.
+    `exactOptionalPropertyTypes` is not used ([design Choice 39](docs/design.md#choice-script-checks))
+    ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)).
+171. `subscribe()` checks the envelope of what a feed sends: a snapshot's `epoch`, `seq` and
+    `rows`, and a patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An
+    answer that is not a snapshot is a failed snapshot, logged and fetched again after a backoff,
+    where it reached `snapshot` with no rows; a patch that is not one (not JSON, say) closes the
+    stream and loads the snapshot again after a backoff that doubles from 1 s, where it threw in
+    the listener and its write was missed until the next patch. Rows are trusted as the server's
+    `Row`. The runtime, the kit, the template and the examples have no explicit `any` (the
+    Navigation API and a service worker's global are declared where they are used), and
+    `npm run check` fails on an explicit `any` or a `@ts-ignore` in them. card-market's push
+    worker shows a message with no title as an empty title, where it showed "undefined", and opens
+    `/` for a `url` that is not text. The runtime's gzip size grows by 202 bytes, 129 of them the
+    feed's checks ([design Choice 40](docs/design.md#choice-script-boundaries))
+    ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
+
 ### Fixed
+- When a watchlist smoke run fails on a Playwright call (a page load past its 30 s timeout, say),
+  the report numbers each request still loading by its context and page, sends the same GETs again
+  from Node with the browser's headers (not its cookies) and how long the server took, and gives the run's peak of
+  requests in flight in one context, so a stalled load says whether the browser or the server held it
+  ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
+- The watchlist smoke's check of the feed's backoff after a stream answered with an error failed
+  in Firefox under load: a 2 s wait measured 6.1 and 6.6 s against a 3.5 s bound. Timed in the
+  page, from the error that closed a source to the next `EventSource`, the first wait (the 1 s
+  the runtime's `wait` sets) took 5,892 ms (Playwright saw 5,897), so the page itself ran late,
+  not only Playwright's view of it. The check now reads the timers the runtime set as each source
+  closed, which must be 1 s, 2 s and 1 s, requires the next source to be opened by that timer
+  and no sooner, and has no upper bound on how late it ran; the sequence may take up to 60 s,
+  and ends once live. The failure detail gives the timers asked, the waits taken and the
+  requests as Playwright saw them
+  ([#1102 The watchlist smoke's Firefox feed backoff check fails under load: a 2 s wait measured over 6 s against a 3.5 s bound](https://github.com/corten-run/corten/issues/1102)).
 - The ui-gallery smoke's check that keyboard focus never lands under a dialog's or sheet's sticky
   header now reads a focused row only after it has held its place for two animation frames (at
   most 120). WebKit scrolls a focused row into view over a few frames, and a row read mid-scroll
@@ -4512,9 +4741,17 @@ Corten is pre-1.0, so any minor version may change the API.
 - A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
   feed load, relay or JetStream consumer, is logged as the error itself, so Corten's log line
   adds each source's message (`error.sources`): an HTTP client's "error sending request" now
-  names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
-  message
+  names the reset or timeout beneath it
   ([#1127 Benchmark r17: Corten returns two HTTP 500s fetching upstream during page load](https://github.com/corten-run/corten/issues/1127)).
+- A streamed download's failed chunk (`Media::stream`, `Media::stream_sized`) is logged as the
+  error itself too, each cause under its message, where it was logged by its message alone. A
+  chunk's error is now anything `Error::new` takes, `Into<Box<dyn std::error::Error + Send +
+  Sync>>`, where it was any `Display + Send`: an error type, a `String`, a `&str` or a
+  `corten::Error` compiles as before, the last now logged as the error it holds (`corten::Error`
+  converts into that box). Breaking: a chunk error of the app's that only implements `Display`, or
+  is not `Sync`, does not compile; implement `std::error::Error` for it, or map it with
+  `.map_err(|e| e.to_string())`, which logs the message alone
+  ([#1153 A streamed download's failure is logged by its message alone: Media::stream takes E: Display, not E: Error](https://github.com/corten-run/corten/issues/1153)).
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
   flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
@@ -4538,6 +4775,15 @@ Corten is pre-1.0, so any minor version may change the API.
   layer, is about 286,650 instructions against brotli's 213,720 (zstd's is unchanged at 100,470;
   callgrind, three runs each, within 20 instructions)
   ([#1131 Brotli-compressed SSE delays final events in WebKit](https://github.com/corten-run/corten/issues/1131)).
+- The kit's `CardSize::Sm` card's padding is two thirds of the theme's `--card-padding` and its
+  content's gap half of it, where both were fixed numbers (1rem and .75rem, what the kit's theme
+  still gives), so a theme whose `--card-padding` is 1rem or less no longer gets a small card as
+  large as its default one. A theme that sets its own `--card-padding` sees its small cards follow
+  it once the kit's `card.css` is merged: larger than before above 1.5rem (a 2rem theme's go from 1rem
+  to about 1.33rem). No token is added: a copied `card.css` takes it from
+  `corten ui add card --merge`. The ui-gallery smoke checks a small card under a theme with tight
+  cards
+  ([#1151 Kit CardSize::Sm is a fixed 1rem while the default card is the theme's --card-padding, so a theme at or below 1rem gets a small card no smaller than the default](https://github.com/corten-run/corten/issues/1151)).
 - The watchlist smoke's check that a submit button's formaction and formmethod are used waits up
   to 15 seconds for the post's answer and the message it draws, rather than 4 (most of the smoke's
   waits are 5 seconds): a loaded Firefox took longer than 4 and the check read status 0
@@ -6206,6 +6452,74 @@ Corten is pre-1.0, so any minor version may change the API.
     the gallery built from this change and from the commit it was merged onto, 71c0361a. Found by
     the Chase Sets pilot, which set `margin: auto` on its reviews page's dialog
     ([#1124 Kit Stack drops a child dialog's or popover's margin: auto, so a modal written in a Stack opens at the top of the screen instead of centered](https://github.com/corten-run/corten/issues/1124)).
+199. A handler call in the markup takes any number of arguments, where one with more than 12 did not
+    compile and named a private `Args` trait. A call of up to 12 is the tuple it was; past 12 the
+    generated call holds two halves, each a tuple or two halves again, so its nesting grows with the
+    logarithm of the count and stays far inside the compiler's recursion limit. Each argument is
+    checked against its parameter as before (a `compile_fail` doctest passes a number for the
+    fourteenth of sixteen, and a test builds that call and checks the error is Corten's, at the
+    argument, with no headline about `Args` or `Both`), the markup written is the same, and a
+    doctest checks every argument of a call of 25 (twelve, then halves of six and seven) in its
+    place. A call of 12 or fewer generates the same tokens as before, so an app with no longer call
+    compiles as it did. Measured with callgrind (release build, instructions per render as 1,200
+    renders less 200 over 1,000, three runs of each build, the before build's runs first, ranges
+    over the runs; before is c65c10ec with this change's two cost tests and `Wide` added, after is
+    the change built on it): a component with two handler calls, of one and three arguments
+    (`script::tests::what_a_handler_call_costs`), 2,696 (2,695.9 to 2,696.1) then 2,696 (2,695.9 to
+    2,697.3); one with a call of 12 (`what_a_long_handler_call_costs`), 4,569 (4,568.9 to 4,569.0)
+    then 4,610 (4,609.9 to 4,610.0) in a test binary that also builds the 16-argument component,
+    and 4,569 (4,569.0 to 4,569.1, two runs) with that component left out. So a call of 12 drew 41
+    instructions more (0.9%) in a binary that also has a longer call; what in that binary causes it
+    was not isolated
+    ([#1100 JavaScript handler bindings have an undocumented 12-argument ceiling and expose a private Args error](https://github.com/corten-run/corten/issues/1100)).
+220. A form with a control named after another member the runtime calls on an element still broke it
+    after Fixed 196, without an error that named the cause: `closest` kept a handler that takes an
+    `@ref` or `^ref` from running on the form, `querySelectorAll` or `getElementsByTagName` threw as
+    the form joined the page and left the other elements added with it unbound, `isConnected` kept a
+    removed form's `signal` from aborting and its `on:connect` from running when it came back, and
+    `remove`, `append`, `contains`, `replaceWith` or `matches` broke a patch of the form. Names like
+    `remove`, `append`, `contains`, `children` and `matches` are ordinary for a field, and so are
+    `focus`, which broke focus moved to the form after a patch, and `id`, which `corten/views` read
+    on a view's root. The runtime (`corten.js`) now reads and calls these through Element's and
+    Node's own members wherever the element may be a form (dispatch, refs, the scan of what joins
+    the page, the end of an element's life, patches, a layout drawn again, focus moved or kept after
+    a patch or a swap, the scroll a swap keeps, the fields a swap remembers, a hover's prefetch, and
+    the element a navigation came from, which browsers may give as the form), as it did for
+    `getAttribute` and `hasAttribute`; focus kept on an SVG or MathML element still goes through
+    that element's own `focus`. `corten/views` does the same for a row or a view's root that is a
+    form: `rows().remove` and `replace`, the children it lists, and `view()`'s checks of the root's
+    id and contents, the `parentNode` and `nextSibling` of a row, and the `key` and attribute holes
+    a generated view class reads and writes on a `<form>` (`<form key={id} data-busy={busy}>`). A
+    control named `style` no longer breaks a form's custom properties (`style={..}`) when a patch, a
+    swap or `corten/views` sets them. A few members are still read or called directly
+    (`parentElement`, `localName`, `nodeName`, `childNodes`, `childElementCount`, `outerHTML`,
+    `textContent`, `cloneNode`, `showPopover`, the layout a nav link's ancestors are measured by; in
+    `corten/views`, `insertBefore` and `textContent` on the rows' parent, `firstElementChild`,
+    `tagName`, `ownerDocument`, and a generated view class's text holes and the path to its holes):
+    no form names a field so, and the first ones are read on every walk up the page. Calling
+    Element's own members also skips a custom element's override of `remove`, `append`,
+    `replaceWith`, `replaceChildren` or `closest` when the runtime patches or walks it. Refusing
+    such names was not taken: the markup may come from anywhere, and `remove` is a field's name as
+    often as a method's. The runtime is 179 B larger, 271 B gzipped (40,988 to 41,167 B, 14,355
+    to 14,626 B gzip, 12,955 to 13,211 B brotli, against main a5ac0b2f, which minifies with terser,
+    Node's zlib at its default levels; 199 and 262 B against e8a5208f, before terser), and
+    `corten/views` 276 B larger, 111 B gzipped (4,477 to 4,753 B, 2,075 to 2,186 B gzip). In
+    Chromium only (headless Chromium 156.0.8078.4, a test page of one form served with each build,
+    20 rounds in rotating order, medians with ranges, before then after), dispatching 50,000 events
+    to a form's handler (221.6 ms, 193 to 328, then 214.2 ms, 190 to 343), a scan of 2,000 elements
+    joining (6.6 ms, 5 to 11, then 6.4 ms, 6 to 12), 300 patches of a form with controls named
+    `remove` and `isConnected` (31.8 ms, 28 to 47, then 31.9 ms, 27 to 56) and then the end of the
+    lives of 3,000 elements with a page-wide handler, checked 400 times (96.5 ms, 83 to 164, then
+    93.3 ms, 80 to 148; alone, 99.6 ms, 88 to 160, then 96.7 ms, 87 to 146) take the same time
+    within the spread. The sweep reads `isConnected` itself in each of its loops: through one shared
+    helper it was slower after the other three (140.6 ms, 117 to 200), likely as one read shared
+    with the dispatch, scan and patches sees every kind of element (not shown). A generated view
+    class's attribute hole on a form is no slower through Element's own: 2,000 `<form>` rows made
+    and 50,000 toggles of `data-selected`, 12 rounds each way alternating, each in a new page, the
+    first of each way dropped, medians 194.5 ms (160 to 244) and 28.9 ms (24 to 40) called directly
+    against 192.6 ms (160 to 219) and 9.7 ms (7 to 14), the toggles faster, likely as a form looks a
+    name up among its controls first; a hole on any other tag is called directly, as before
+    ([#1105 Form controls named after other Element members (closest, querySelectorAll, isConnected, remove, contains) still shadow what the runtime calls on a form](https://github.com/corten-run/corten/issues/1105)).
 222. `bench/fullstack/builds.test.mjs`'s touch test runs every app's touch in one bash, each in a
     subshell in the app's directory, where it started a bash per app: on Windows each is a WSL
     start, and the test failed now and then under load with `1 !== 0` and nothing on stderr. A
@@ -6715,6 +7029,14 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+76. `bench/browser`'s README links the view app's code to `gen/src/bench.js`, where its handlers
+    are, not `apps/view/app.js`, which never existed; `npm run check` (`scripts/docs.mjs`, tested by
+    `docs.test.mjs`) now fails on a link in the repository's Markdown to a file or folder a commit
+    would not hold: an inline link, spaces around its target allowed, and an HTML tag's `src`,
+    `srcset` or `href` (the README's logo), outside code (a span that wraps onto the next line
+    too; a backtick with no partner in its paragraph is text), comments and escapes (reference
+    definitions are not read), and that link was the only one it found
+    ([#1083 bench/browser README links the view app's code to apps/view/app.js, which never existed; its handlers are gen/src/bench.js](https://github.com/corten-run/corten/issues/1083)).
 77. [Design Choice 33](docs/design.md#choice-state-derives) records why shared state keeps
     `#[derive(Clone, FromRef)]` rather than a `#[corten::state]` attribute that writes both: `Clone`
     is what routing and a handler taking the whole state need, `FromRef` what a handler taking one

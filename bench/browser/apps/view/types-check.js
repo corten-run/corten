@@ -13,6 +13,9 @@ import { Card, Row, rows } from "corten/views";
 export function check(body, template, plain, cards, fixed) {
   const list = rows(body, Row, template);
   const row = list.at(0);
+  // @ts-expect-error: at() gives none past the end of the rows, so a row read by index is checked
+  row.label = "ok";
+  if (!row) return;
   row.label = "ok";
   row.id = 2;
   row.selected = true;

@@ -289,13 +289,15 @@ rules something out.
    building, so the crate compiles with every file. The PWA's icons, screenshots and worker
    script are named by their constants too; an image another site serves is a `Uri`.
 
-   Stands on: bet (an app's static files are small enough to compile into its binary); platform (a
+   Stands on: bet (an app's static files are small enough to compile into its binary, a video
+   included: a short clip is, and long or many videos belong in storage of their own); platform (a
    macro cannot ask cargo to watch a directory, so a new file waits for the next build that compiles
    the crate); reasoned (the binary is the whole deploy, and a constant per file makes a removed
    file a compile error).
 
    Revisit when: an app's static directory makes builds or images measurably slower than files
-   beside the binary would; or a macro on stable Rust can tell cargo to rebuild when a directory
+   beside the binary would, or startup measurably slower (every file is hashed when the app
+   starts, so a large video costs there too); or a macro on stable Rust can tell cargo to rebuild when a directory
    changes (`proc_macro`'s path tracking is unstable today), which would end the wait for the next
    build.
 
@@ -1260,32 +1262,60 @@ rules something out.
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
     the `laned` variant of `fa0b1525`.
 
-26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]` and `#[derive(UrlValue)]` write serde's
-    `Deserialize` themselves, as serde's derive writes it.** Each already reads a type's
-    `#[serde(..)]` attributes to name a form's keys or a URL's words, so with serde's derive beside
-    it the attributes had two readers and a form type derived two things for one meaning. The impl
-    follows serde_derive's for the attributes these types use (names, aliases, defaults, `skip`,
-    `other`, `deny_unknown_fields`, `borrow`, `bound`, `expecting`, and the bounds serde infers)
-    and refuses at compile time one that reads the type another way (`flatten`, `with`, `from`,
-    `tag` and the like), whose field takes a type of its own. Not chosen: depending on serde_derive
-    from `corten-macros`, which builds on `proc_macro` alone, or keeping the second derive, which a
+26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
+    write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
+    type's `#[serde(..)]` attributes to name a form's keys, a URL's words or a JSON reply's fields,
+    so with serde's derive beside it the attributes had two readers and a type derived two things
+    for one meaning. The impl follows serde_derive's for the attributes these types use (names,
+    aliases, defaults, `skip`, `other`, `deny_unknown_fields`, `borrow`, `bound`, `expecting`,
+    `transparent`, and the bounds serde infers) and the shapes `FromJson` reads (named, tuple,
+    newtype and unit structs, enums of unit variants), and refuses at compile time one that reads
+    the type another way (`flatten`, `with`, `from`, `tag` and the like), whose field takes a type
+    of its own. For `FromJson` this also means its reader and the `Deserialize` it falls back to
+    come from one reading of the attributes. A type whose `Deserialize` is written by hand, or by
+    serde for an attribute `FromJson` refuses, is made a `FromJson` with an empty impl, which
+    serde_json reads through that `Deserialize`: the derive never guesses at another impl, and
+    serde's derive beside it is a second impl (E0119). Since `Fields` and `UrlValue` write the
+    `Deserialize` `FromJson` would, they write its `FromJson` and schema too (features `json` and
+    `types`), so a form's input is read from JSON and is an agent tool's input with no derive beside
+    theirs, and `FromJson` beside them is a second impl as well. A generic `Fields` or `UrlValue`
+    type's `FromJson` is the trait's own body, which hands the text to serde_json, under
+    `Self: DeserializeOwned` (a generic `#[derive(FromJson)]` keeps Corten's reader): the bounds
+    serde infers for its `Deserialize` (`T: Default` for a defaulted `T`, a bound on `T::Assoc`) are
+    not one per parameter, and a reader written against them would have to repeat each. So a generic
+    form or URL-value type is read by serde_json, a value nested in another twice (the reader finds
+    its text, serde_json reads it), with no way back to the reader: `FromJson` beside `Fields` and
+    an empty impl are both a second impl. An enum with `#[serde(other)]` is read by the reader up to
+    a word it does not know, where it gives up on the whole text and serde_json reads it again, and
+    is described as any string. One whose `Deserialize` borrows from its input cannot be a
+    `FromJson`, which reads owned values. Not chosen: depending on serde_derive from
+    `corten-macros`, which builds on `proc_macro` alone, or keeping the second derive, which a
     derive cannot add to the item it reads
-    ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763)).
+    ([#763 Corten's form, route and JSON readers still require serde's Deserialize beside their own derives, and FromJson allocates every string it reads from an upstream body](https://github.com/corten-run/corten/issues/763),
+    [#1042 Let FromJson generate its required Deserialize implementation](https://github.com/corten-run/corten/issues/1042)).
 
     Stands on: platform (serde_derive 1.0.229's impl and bound inference, which
     `crates/corten/tests/derived_deserialize.rs` holds this one to by reading each of its types
     twice, with this derive and with serde's, and comparing values, errors and the names passed to
     the deserializer); measured (reading a seven-field form costs 9,241 instructions before, on
-    `62eb57f7`, and after, on `8cd5934e`: callgrind, release build, 1,200 reads less 200 over
-    1,000, three runs each, `form::de::tests::what_reading_a_form_costs`); reasoned (`corten-macros` keeps no
+    `62eb57f7`, and after, on `8cd5934e`: callgrind, release build, 1,200 reads less 200 over 1,000,
+    three runs each, `form::de::tests::what_reading_a_form_costs`; reading the item benchmark's 500
+    API responses costs 265,550,044 instructions through `FromJson` and 438,766,522 through
+    serde_json alone, before, on `c65c10ec` with serde's derive, and after, on `a791d9ba` with this
+    one and again on `58b8c2f8`: callgrind, release build, `read_cost` in `examples/card-market`,
+    two runs each; a generic `Fields` or `UrlValue` type's read through serde_json, and an
+    `#[serde(other)]` enum's second read, are not measured); reasoned (`corten-macros` keeps no
     dependencies); value (one way to do each thing and a small surface, Values 5 and 6).
 
     Revisit when: a serde release changes what its derive writes for these attributes, which the
-    twin tests would show; or apps need an attribute this refuses often enough that a type of
-    their own is the second way.
+    twin tests would show; or apps need an attribute this refuses often enough that a type of their
+    own is the second way; or generic `Fields` or `UrlValue` types, or `#[serde(other)]` enums, are
+    common enough that their serde_json read shows in a measured page or API, which would ask for a
+    reader that repeats serde's inferred bounds or reads past a word it does not know.
 
-    Last checked: 2026-11-06, serde_derive 1.0.229 at `8cd5934e`; 2026-11-06, the form read at
-    `8cd5934e`.
+    Last checked: 2026-11-06, the form read at `8cd5934e`; 2026-11-08, the JSON read for `FromJson`
+    at `a791d9ba` and `58b8c2f8`; 2026-11-09, serde_derive 1.0.229 at `b44bd54b` (the twin tests, on
+    the branch merged onto the integration tip).
 
 27. <a id="choice-caller-types"></a>**Who may use a route is in its handler's type, and every route reaches the app through
     the checks that read it.** A handler takes `Caller<T>`, whose `Identify` finds the caller or
@@ -1891,6 +1921,418 @@ rules something out.
     without skipping) and a socket probe on Linux in which a backlog of 128 timed out at the 130th
     connection and 511 admitted 200 on each loopback address.
 
+35. <a id="choice-runtime-terser"></a>**The runtime and its modules are minified by esbuild and then by
+    terser.** Every page of every app loads the runtime, so its bytes are paid on each first
+    visit. esbuild bundles each file (the runtime takes in `on.js`), lowers it to ES2022 and
+    minifies it, as before; terser, a development dependency of the repository's tooling that no
+    app installs, minifies that output again, compressing in two passes and renaming the module's
+    top-level names. The runtime on `21f9fab3`, as built (banner included), is 40,988 bytes
+    against 41,093, 14,318 with gzip (level 9) against 14,851, and 12,955 with brotli (level 11)
+    against 13,487: 3.6% less with gzip and 3.9% less with brotli, as Corten serves it, and 0.3%
+    less uncompressed. The saving is terser's renaming: on `c65c10ec`, without it, 495 of the 529
+    bytes it saved with gzip came back. Not chosen (measured on `c65c10ec`): esbuild's minifier
+    alone (above); terser on esbuild's unminified bundle instead (14,373 bytes with gzip and
+    13,015 with brotli, and 41,468 uncompressed, 477 more than before); terser renaming without
+    compressing (43 bytes more with gzip, 35 with brotli); one pass (12 and 6 bytes more); a third
+    pass (the same bytes as two).
+
+    Stands on: measured (each built file before and after on `21f9fab3`, one build each, the
+    build being deterministic: the runtime 105 bytes less uncompressed, 533 with gzip and 532
+    with brotli; `view.js` 20, 75 and 60 less; `format.js` 11, 8 and 18 less; `upload.js` and
+    `keys.js` within 11 bytes either way, `upload.js` 1 byte more uncompressed and `keys.js` 1
+    more with gzip; on `c65c10ec` the runtime was 107, 529 and 478 less); measured (the browser
+    smoke tests on the built files of `10cd394d`, one run each, in the engines each runs: the
+    watchlist, also under `corten dev`, card-market, ui-gallery, seller-desk, deck-builder and its
+    preview, auction-room and listings-feed all passed; an earlier build, terser over the
+    unminified bundle, failed one Firefox check that fails under load without it, the feed's
+    reconnect timing, [#1102 The watchlist smoke's Firefox feed backoff check fails under load: a 2 s wait measured over 6 s against a 3.5 s bound](https://github.com/corten-run/corten/issues/1102));
+    value (fewer bytes on every page, Values 1, for a dependency of the tooling only, Values 6).
+
+    Revisit when: esbuild's minifier comes within 1% of the two after compression, so one tool
+    does it and terser goes; or terser's output fails a smoke test in a supported engine that
+    esbuild's alone passes.
+
+    Last checked: 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2 and terser 5.51.2, and the
+    smoke tests on `10cd394d` (and CI's on this change).
+
+36. <a id="choice-derived-row"></a>**A feed row's key is the field marked `#[row(id)]`, which `#[derive(Row)]` reads; the
+    row's `Clone` and `Serialize` stay in its derive list.** The impl every row wrote by hand
+    (`fn id(&self) -> &str { &self.id }`) is one attribute on the field, so the key is named where
+    the field is and moves with it when it is renamed. The derive writes nothing else. A derive adds
+    impls, not other derives, and writing the row's `Serialize` itself would be a second
+    serializer beside serde's to keep in step, to save one word in a derive list; `Clone` is the
+    compiler's own derive. So a row still lists `Clone` and `Serialize` (and `ToJson` where a
+    script reads its type), and Rust checks each with the trait's `Send`, `Sync` and `'static`
+    bounds. Not chosen: an attribute macro (`#[corten::row(id = id)]`) that adds the derives to the
+    item, which hides standard derives behind a spelling of Corten's and names the field in an
+    argument rather than on it; taking a field named `id` without a mark, since a row's key is
+    better said (`sku`, `ticker`) than guessed. So a struct row with named fields, keyed by one of
+    them, derives `Row`, and only a row the derive cannot express (such as an enum, a tuple struct,
+    whose fields serde writes without names, a key made of several fields) implements the trait by
+    hand:
+    the hand-written impl is what is left for those, not a second way for the rest. Beyond the impl,
+    the derive refuses what makes a script or a replica read the key as something other than
+    `id()`, as far as the row's own serde attributes say: one that leaves the id out, writes or
+    reads it as other text or under two names, reads or writes the row as another value, or has
+    another member that serde writes or reads under the id's key. An id type's own `Serialize` and `Deserialize`, a row's
+    that are not serde's derive, and a flattened field's members are not known when the derive
+    runs, so they are not checked
+    ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
+
+    The derive is `corten::feed::Row`, beside the trait, and not in `corten-feed` itself: its impl
+    names `::corten::feed::Row`, so `corten-feed` and `corten-protocol`, which do not depend on
+    `corten`, keep writing their test rows by hand, as does a row whose `id` does more than
+    return a field (`corten-cluster`'s `Gated`). That is a cost: a native or agent client built on
+    `corten-protocol` alone, which a replica's read-side checks are for, writes its rows' `impl Row`
+    by hand too, since taking the derive there would bring in `corten` and its server
+    dependencies. No such client is in the repository or has been reported.
+
+    Stands on: reasoned (the generated impl is the one written by hand and the feed's path is
+    unchanged, which `crates/corten/tests/derived_row.rs` checks by comparing a derived row's
+    snapshot and replayed patch with a hand-written one's); value (one declaration for the key,
+    and no second way to derive `Clone` or `Serialize`, Values 5 and 6).
+
+    Revisit when: an example app, or an app that reports it, implements `Row` by hand for a key
+    made from more than one field, which a mark on one field cannot say; or a native or agent
+    client on `corten-protocol` alone keeps rows it would derive (the derive would then take a path
+    to the trait, such as `#[row(crate = corten_protocol)]`).
+
+    Last checked: 2026-11-10, the derive, its `compile_fail` examples, each compiled for its own
+    message, `tests/derived_row.rs`, and the rows of the four example apps and `corten-cluster` by
+    `cargo clippy --workspace --all-targets`, on `76247120`, the derive's last change; 2026-11-10,
+    the live benchmark's row, outside the workspace, by reading it on `76247120` (it has no serde
+    attribute).
+
+37. <a id="choice-asset-ranges"></a>**A static file answers one range of its bytes at any
+    version's URL, only as it is stored, and never sends `Accept-Ranges`.** A `<video>` asks for
+    ranges to seek, so a file sent only whole makes a player download what it skips, and Safari on
+    iOS plays media only from a server that answers ranges. A `GET` of a versioned URL, this
+    version's or an old one's, for a file sent unencoded answers one range as a `206` with its
+    `Content-Range`, a range the file cannot hold as a bare `416`, and `If-Range` keeps the range only for
+    the tag of the bytes sent, compared byte for byte (RFC 9110). An old version's URL is answered
+    from this version's file, `no-cache`, under that file's strong tag, so a page still holding an
+    old version's URLs after a deploy (a tab left open, a page a cache kept) still plays and seeks
+    its clip: every deploy renames every file, so refusing those ranges would stop the clip for
+    every Safari visitor until the page is reloaded, even when its bytes did not change. Sent whole
+    instead: several ranges or another unit (RFC 9110 lets a server ignore `Range`); a compressed
+    body, whose offsets are not the file's; and the favicon, whose URL outlives every deploy under
+    a weak tag. The cost, which this Choice brings: a server cannot tell an older version's URL
+    from a newer one's, so while a fleet runs two versions, or when a deploy lands between two
+    ranges of one playback, a file whose bytes changed can be answered from either version at
+    either URL. A client that sends `If-Range` then gets the whole file; one that does not may
+    join ranges of two versions and play neither. Sending other versions' URLs whole prevented
+    that, and was traded for Safari playing them; a file whose bytes did not change has the same
+    tag and bytes in both. No answer advertises ranges: the header is optional and browsers send
+    `Range` without it. The PWA's worker leaves a range to the network, since its cache holds whole
+    files and cannot hold a `206`, and the video or audio a player loads too (a request whose
+    destination is `video` or `audio`): one without a range (Playwright's Linux WebKit sends one
+    first) would otherwise be stored whole, downloading the whole video, which a player does not
+    read back from the cache; its captions and poster are cached like any versioned file. Not
+    chosen: `Accept-Ranges: bytes` on every file (optional, above); an old version's URL sent whole
+    (Safari on iOS would not play it, above); a URL named by each file's own hash rather than the
+    app's version (an unchanged clip would keep its URL across deploys and a server would know
+    which bytes a URL names, but it changes how every asset is named and cached, a change of its
+    own); multipart ranges (no browser player asks for them, and each would be a body Corten
+    writes); slicing an encoded body (the client's offsets name the file, not the encoding); the
+    worker cutting a range from a whole file it cached and answering the `206` itself (code in
+    every app's worker for offline video, which no app here needs;
+    [Limit 5](#limit-offline-fallback) stays).
+
+    Stands on: platform (Apple's Safari Web Content Guide, "Creating Video", says a server hosting
+    media for iOS must answer byte ranges, which iOS uses for random access; with no
+    `Accept-Ranges`, Chromium and Firefox ask for the clip by a `Range` and play it from the
+    `206`, and WebKit reads it whole once and then asks for a range from inside it, each seeking,
+    as card-market's smoke shows on Linux, below; the 8 KB clip comes whole in Chromium's and
+    Firefox's first range, so the smoke does not show them asking for a range from inside it);
+    measured (callgrind, `what_serving_a_file_costs`, which sends no `Range`, so its count is what
+    every file's answer pays, 1,200 requests less 200 over 1,000, five runs each taking turns:
+    11,826.69 (11,825.27 to 11,826.73) instructions a request on `97a63a92` with the test added
+    and 12,024.05 (12,024.05 to 12,025.49) on `92d38464`, with ranges at this version's URL only,
+    +197 (+1.7%); then 12,024.02 (12,023.98 to 12,024.06) on `84719c0f` and 12,026.06 (12,026.01
+    to 12,026.08) on a build whose request path is `a7b1c808`'s, with old URLs ranged too, +2);
+    reasoned (one range per answer and a tag naming the bytes sent keep a client that sends
+    `If-Range` from joining bytes of two files).
+
+    Revisit when: Safari or iOS on real hardware, not tested here, will not play or seek a clip
+    served this way, or a client that matters will not seek without `Accept-Ranges`; a clip is
+    reported playing garbled after a deploy (ranges of two versions joined); a player asks for
+    several ranges; or an app needs a `Media` answer, not a static file, to seek.
+
+    Last checked: 2026-11-10, Apple's guide read and the crate's asset tests on `112422cb`;
+    2026-11-10, card-market's smoke in Playwright 1.64.1 against a build of `4ec25ef4`, on Linux
+    with Chromium, Firefox and WebKit each playing and seeking the clip, and on Windows with
+    Chromium and Firefox; 2026-11-10, the count on `97a63a92` and `92d38464`; 2026-11-10, the
+    count on `84719c0f` and `a7b1c808`.
+
+38. <a id="choice-json-derives"></a>**A type's JSON role is the derive that names its direction,
+    `ToJson` to write and `FromJson` to read, not a data-role attribute.** Each derive is already
+    the one thing a type declares for its direction: `ToJson` lays out the JSON a response, a
+    screen's data, a typed script argument or an agent tool's output writes, and its schema (feature
+    `types`); `FromJson` reads it, with its `Deserialize`
+    ([Choice 26](#choice-derived-deserialize)). An attribute such as `#[corten::data(write)]` would
+    spell the same derive another way: it takes no line off a type and adds no check the derive does
+    not already make, and two spellings of one thing is what Values 5 and 6 rule out. The direction
+    stays in the type's own declaration, so nothing is written because it appears in a handler's
+    signature, and no type of another module or crate is exposed by it. An agent tool's output was
+    the one place a response type still needed serde's `Serialize` beside `ToJson`: its
+    `outputSchema` came from `ToJson`'s schema while its bytes came from `Serialize`, so a
+    hand-written `Serialize` could drift from the schema with nothing failing to compile (Value 4).
+    Tool outputs are now bounded on `ToJson`, so a derived `ToJson` writes both the schema and the
+    bytes (a field of another crate's type inside it is still written by serde under a schema
+    written for it, as in any `ToJson` answer), and a tool's output is written by the code every
+    other response is. The std types Corten gives a schema for are `ToJson` too, and `FromJson` in
+    their owned forms (`str`, `[T]`, `Path` and `RawValue` boxed or shared), written and read as
+    serde does (but for a map whose key is not a `JsonKey`, which is not written, or not `String`,
+    which is not read, an array of more than 32 items, which is not read, and an `Arc` or `Rc` read
+    without serde's `rc`), and another crate's type that has a schema goes in a
+    `#[serde(transparent)]` newtype that derives `ToJson`, one impl. A `ToJson` written by hand, for
+    a type whose schema is written by hand (one the derive refuses, or another crate's type with
+    none, in a newtype of the app's), comes with that `ToJsonSchema` beside it, two impls its author
+    keeps in step, as before. Tool inputs are bounded on `FromJson` the same way, so an input that
+    derives serde's `Deserialize` beside a schema written by hand does not compile, short of the
+    deliberate `impl FromJson for T {}` a type whose `Deserialize` `FromJson` cannot write takes
+    (written by hand, or serde's for an attribute it refuses), which again leaves two impls in its
+    author's hands. A hand-written `ToJson` can write what serde could not, broken JSON, which would
+    break the JSON-RPC answer around a tool's output, so whether an output is parsed before it is
+    sent follows from its type: `ToJson::__well_formed` (hidden) is true for Corten's own impls, for
+    `Raw` (parsed when it is made) and for what serde writes, the AND of its fields' for the derive
+    (each type expanded once in a question, so a tree, a cycle or a type many others hold answers at
+    once), and false for an impl written by hand (`JsonKey` likewise, for a map's keys). serde_json
+    writes well-formed JSON for a `Serialize` that follows serde's protocol, as every derived one
+    does; it does not check a hand-written one that calls a map's `serialize_key` twice, which a
+    debug build's parse catches and a release build sends as written, as before this Choice. An
+    output derived over well-formed types, the common case, goes out unparsed; one that is or holds
+    a hand-written `ToJson` is parsed in every build, and one that is not one JSON object is the
+    tool's internal error, logged with the tool's name, the output's size and the fault, not its
+    data. A debug build parses every output and answers a bad one with a 500, so a test stops at it.
+    Not chosen: parsing every output in a release build, about 92,700 more instructions a call
+    (303,500 against 210,762, 44% of `tool_cost`, and 14% over the serde path this replaced) for
+    outputs Corten's and the derives' impls cannot break; and checking only an output's ends, which
+    sent a broken object as written. `Json` answers are unchanged: they send a hand-written `ToJson`
+    as written. A tool output whose `ToJson` falls back to a field's own `Serialize` and fails
+    (another crate's map with a key JSON cannot hold, or a std type serde refuses: a path that is
+    not UTF-8, a `SystemTime` before the epoch) panics where it is written, as in every other
+    `ToJson` answer; the call catches that panic and answers the tool's internal error (`isError`,
+    "internal error"), as it did when serde wrote outputs, so `ToJson` stays the one writer (an app
+    built with `panic = "abort"` ends instead):
+
+    ```rust,ignore
+    // Before: the tool's output derived serde's Serialize as well, for the agent endpoint.
+    #[derive(serde::Serialize, corten::ToJson)]
+    struct Adjusted { id: String, quantity: i64 }
+
+    // After: ToJson alone.
+    #[derive(corten::ToJson)]
+    struct Adjusted { id: String, quantity: i64 }
+
+    // Not chosen: a data-role attribute spelling the same derive.
+    #[corten::data(write)]
+    struct Adjusted { id: String, quantity: i64 }
+    ```
+
+    Feed rows are the known exception: the feed sends a row with serde (`Row: Serialize`) and its
+    script type comes from `ToJson`, so a row still derives both; their declaration is
+    [#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044).
+
+    Not chosen: the attribute, a synonym; an attribute that derives both directions, which would
+    save a type that is read and written one name in its `#[derive(..)]` list
+    ([#1043 Evaluate whether a data-role attribute improves on the existing ToJson derive](https://github.com/corten-run/corten/issues/1043)).
+
+    Stands on: platform (the std types' `ToJson` and `FromJson` write and read what serde and
+    serde_json do for them, some by Corten's own code: serde 1.0.229 and serde_json 1.0.154);
+    measured (an agent's `items.get` call in card-market's `tool_cost` runs about 21% fewer
+    instructions, a median of 266,844 before (265,376 to 267,830) and 211,152 after (211,123 to
+    211,865): callgrind, release, 1,200 calls less 200 over 1,000, three alternating runs each,
+    14,464 bytes an answer on average over the calls counted; parsing each output in a release build
+    would add about 92,700 a call, a median of 303,500 (302,705 to 303,650) against 210,762 (210,433
+    to 211,420), three runs each, on `19fd761c` with its debug parse made unconditional
+    (`debug_assert!` to `assert!`); card-market's output is derived, so it is not parsed; tests
+    compare a tool answer's bytes with serde's for the item, and each std type's with serde's, and
+    check which outputs are parsed); reasoned (serde_json writes well-formed JSON for a `Serialize`
+    that follows serde's protocol, not checked for one that does not, where a debug build's parse is
+    the net; a type asked again in one question is known by its derive's static and its `type_name`,
+    which can coincide only for one generic type over two arguments of the same printed name, with
+    the same net; a derived `ToJson` writes a tool output's schema and its bytes, and a derived
+    `FromJson` a tool input's schema and what it reads); value (one declaration per direction,
+    Values 4, 5 and 6).
+
+    Revisit when: an example app needs, because the derives refuse its type, a hand-written `ToJson`
+    with a `ToJsonSchema` beside it or a `Deserialize` with the opt-in `impl FromJson for T {}`
+    (none in `examples/` at the last check), or a JSON seam other than the feed is bounded on
+    serde's `Serialize` or `Deserialize` again, or serde or serde_json changes how it writes or
+    reads one of the std types Corten writes or reads itself (the `json` tests that compare them
+    fail).
+
+    Last checked: 2026-11-09, the derives and the agent endpoint's bounds, inputs and outputs, at
+    `7965aeab`, the bounds' last change; 2026-11-10, no such impl in `examples/`, at `7197604f`;
+    2026-11-10, the std types' and pointers' `ToJson` and `FromJson` against serde's bytes and
+    values (`json` tests, and `corten-run` built with `json` alone and with `agent,feed`, serde
+    1.0.229 and serde_json 1.0.154), at `479f3f0e`; 2026-11-10, the `tool_cost` count, on `217bce2c`
+    with `tool_cost` added and on `6d04bbe6`, which parses only an output that is or holds a
+    hand-written `ToJson`, and the release parse's cost on `19fd761c`; 2026-11-10, which outputs are
+    parsed, trees, cycles and twelve types that all hold each other included (the agent test of that
+    name), at `d4aca597`.
+
+39. <a id="choice-script-checks"></a>**Scripts are type-checked with `strict`, `noUncheckedIndexedAccess`,
+    `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and
+    `noUncheckedSideEffectImports`, not `exactOptionalPropertyTypes`.** `strict` is not every
+    check `tsc` has. Each of the type-checking options it leaves out (below, chosen or not) was
+    tried alone on the runtime, the kit, the examples, the template and the typing fixture before
+    any was turned on.
+    `noUncheckedIndexedAccess` makes an element read from an array, or a value from a record, by
+    index `T | undefined` until the code checks it. It found 76 such reads, two of them bugs: the
+    kit's `ComboBox` with no options threw on Enter after Arrow Down, and `rows(..).at(i)` past
+    the end gave a view of no row (it is now `undefined` there, as an array's `at()` is,
+    negative indexes counting back from the last as they do there). The other 74 were reads a
+    loop's bound, a length check or the server's own data kept in range. Outside the runtime's
+    hot loops they were rewritten to need no index (`for .. of`, destructuring) or given a
+    check; inside them (`view.js`'s loops over rows, `scan`'s over the refs a change adds) they
+    keep the loop they had and cast what they read, with a comment saying what keeps it in range,
+    since `rows()` with those loops rewritten timed slower (below) and a cast costs nothing once
+    minified. A message's parts and the templates the server writes for a format are cast too,
+    for another reason: the server writes them in a shape it checks, so a read the cast covers
+    cannot miss (not timed). The
+    runtime's minified build (esbuild then terser, gzip level 9, against `39060950`): `corten.js`
+    14,594 to 14,592 bytes, `format.js` 1,486 to 1,499, and `view.js` 2,186 to 2,196, `at()`'s
+    check of the ends.
+    `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and
+    `noUncheckedSideEffectImports` each found nothing and cost nothing; a case that runs into the
+    next one, code after a `return` and a side-effect import of a module that is not there are
+    mistakes the compiler can see. An app, the repository and the browser benchmark's view apps
+    are checked the same way: `corten check` writes the app's config with a copy of the
+    repository's `jsconfig.json`'s options, and a test fails when any of the three differ.
+    Not chosen: `exactOptionalPropertyTypes`, which tells a property left out from one set to
+    `undefined` (5 errors, none a bug: two were `addEventListener`'s `{ signal }` with
+    `signal` possibly `undefined`, which Web IDL reads as left out, and three were Corten's own
+    option types, which would need `| undefined` written on each property; the difference it
+    checks is one neither a DOM option object nor JSON makes, so it costs annotations and
+    catches nothing here); `noPropertyAccessFromIndexSignature` (48 errors, reads such as
+    `el.dataset.value` to be written `el.dataset["value"]`, a style that catches nothing a
+    record's `T | undefined` does not); `noImplicitReturns` (3, all functions meant to give
+    `undefined` on one path, which `strict` already makes each caller handle);
+    `noImplicitOverride` (no class overrides anything); and `noUnusedLocals` (0),
+    `noUnusedParameters` (1, a handler's `event` named for the reader) and
+    `allowUnusedLabels: false` (0), which are lint, not safety: an unused name or label runs as
+    written.
+
+    Stands on: measured (`tsc` 5.9.3 with each option alone over `jsconfig.json`'s files on
+    `34138ae5`, the counts above, and the minified sizes before
+    and after on `39060950`, one build each, the build being deterministic); measured (Chromium through Playwright 1.64.1 on a busy Windows workstation, `bench/browser/rows-ab.mjs` (run
+    before it was committed), `rows()` with 1,000 rows, paired medians of 41 samples taking
+    turns with `c65c10ec`'s `view.js`: with its loops rewritten not to index
+    (`bench/browser/view-unindexed.js` in `f6885eca`, tag `evidence/script-checks-1038`), keeping some rows and making the rest
+    was 4.3% to 13.7% slower in seven of seven runs, where `c65c10ec` against itself was -3.0%
+    to 4.7%; the noise is too large to time the cast loops, which minify to the code they were,
+    `at()` aside); platform (Web IDL converts a dictionary member that is `undefined` as one
+    that is not present, and `JSON.stringify` leaves out a property whose value is
+    `undefined`); reasoned (a read past the end the checker cannot see is a `TypeError` far
+    from the read, as the `ComboBox`'s was); value (Mistakes fail at compile time, Values 4, after the user's speed,
+    Values 1, which is why the hot loops cast instead).
+
+    Revisit when: lib.dom's option dictionaries accept `undefined` under
+    `exactOptionalPropertyTypes` and a script of Corten's comes to tell a property left out from
+    one set to `undefined`, a TypeScript release adds a check that `strict` leaves out, or a
+    timing on a quiet host shows the hot loops rewritten not to index cost nothing (their casts
+    could then go).
+
+    Last checked: 2026-11-11, TypeScript 5.9.3 on `34138ae5` and the change, the
+    sizes against `39060950` (esbuild 0.28.2, terser 5.51.2), and the timings in Chromium
+    (Playwright 1.64.1) on 2026-11-08.
+
+40. <a id="choice-script-boundaries"></a>**What a script reads from outside the checker is `unknown` and checked where it
+    enters, as much as the reader needs; a feed's rows are trusted as the server's.** `tsc`
+    checks values whose making it saw, and JSDoc types are erased at run time, so a value parsed
+    or read from outside (`JSON.parse`, `res.json()`, storage, another window) is whatever it
+    is, whatever its annotation says. Each place the runtime reads one was sorted by who made the
+    value. A feed's snapshot and patches are the server's, written by `corten-protocol`, but the
+    runtime reading them may not be the one that server ships: a tab left open across a deploy
+    keeps the runtime it loaded (its URL is versioned), and a `FeedUrl` can name a route that
+    answers other JSON. Their envelope is checked (`crates/corten/js/feed.js`: a snapshot's
+    `epoch`, `seq` and `rows`; a patch's `seq` and each change's `op`, `id` and an
+    upsert's `value`). A bad snapshot is a failed one (logged, fetched again after the backoff a
+    failure gets); a bad patch, whose write is lost, closes the stream and loads the snapshot
+    again after a backoff that doubles while the next stream's patches are bad too, so a server
+    that only sends bad patches is asked again every 30 s once the backoff tops out. Before, a
+    snapshot of another shape reached the script's `snapshot` with no rows (and, unless that
+    threw, the stream was asked to resume from `undefined-undefined`); a patch whose changes were
+    of another shape moved `seq` on before the script's `patch` threw on them, so its write was
+    lost for good; and a patch that was not
+    JSON threw in the listener, its write missed until the next patch showed the gap. That is
+    correctness, first in the order, against 129 bytes every page pays (measured below). An HTTP error or a body that is not JSON was already a failed
+    snapshot, and `EventSource` closes a stream that is not `text/event-stream`, so a proxy's
+    error page never reaches either check. The rows are not checked: `Row` is the server's own
+    type, the checker holds the script to it, and checking it in the browser would need a
+    runtime schema the browser does not have (the Rust client, `corten_protocol::Replica`,
+    deserializes rows with the type, since there it has one). A notice the runtime kept in
+    `sessionStorage` for a full reload is checked field by field, since storage outlives a
+    version of the runtime. Trusted, as the server's or the runtime's own: `data-on` arguments
+    (the server writes them into the document the runtime runs in, in the format `wire.json`
+    tests both sides against, and markup that could write others could run its own script),
+    which `JSON.parse` gives as an unchecked `any` into the argument's type, and the
+    `corten:module` event each served module dispatches, which the runtime takes only from the
+    module its page's own script tag loaded. Explicit `any` was removed from the runtime, the
+    kit, the template and the examples (26 uses): where the DOM library has no type for an API
+    (the Navigation API, a service worker's global, `navigator.connection`) they declare the part
+    they use (`crates/corten/js/navigation.d.ts`) and cast once where the value enters; a form's
+    property read past a shadowing control is typed by its name (`HTMLFormElement[K]`); a
+    format's function is `(value: never) => string`, its branches typed. Typing the Navigation
+    API's `info` found a read the checker had not seen: the place a `data-keep-place`
+    navigation returns to was read when it could be `null`, kept safe only by the element
+    lookup before it, now checked. `scripts/escapes.mjs` (in `npm run check`) reads those
+    files with TypeScript's parser and fails on an `any` (or JSDoc's `*` or `?`) in a JSDoc type
+    or a declaration file, and on a `@ts-ignore`, `@ts-nocheck` or `@ts-expect-error` comment,
+    which belong to the typing fixtures. An implicit `any` (what `JSON.parse` returns, used as it is) is not found
+    by it, which is why each parse is listed here. Casts stay: the DOM gives an `Element` where
+    the markup guarantees an `HTMLInputElement`, and a cast says so in one place. An app's own
+    scripts are not held to this; `corten check` checks them with the same compiler options.
+    The runtime's minified build (gzip level 9, against the change before it, `27530e82`):
+    `corten.js` 14,592 to 14,794 bytes, of which the feed's checks are 129 (measured by building
+    with `snapshotOf` giving its input and `patchOf` the parsed JSON, unchecked) and the rest 73;
+    `format.js` 1,499 to 1,492.
+    One limit stays: a tab left open across a deploy that changes `Row` keeps the app's script
+    it loaded, and the new server's snapshot (a new generation, so the stream resyncs) gives that
+    script rows of the new shape. If its `patch` throws on one, that write is lost until the next
+    snapshot, since `seq` moved on before the script ran; if its `snapshot` throws, the snapshot
+    is fetched again after the backoff. The live-data guide says to keep a deploy's `Row`
+    readable by the script before it. Reloading open pages when a feed's generation changes
+    would close it, and is not done here.
+    Not chosen: validating rows from a schema the server derives (bytes for every app with a
+    feed; the rows match the server's `Row` except across a deploy, and there a check against
+    the old script's schema would refuse the new rows rather than let them throw in the script,
+    so the write would be lost all the same); a schema library (a dependency
+    for the few values that come from outside); checking only that a patch is JSON (a change
+    without an `id` would reach the script's `patch` and throw in the app's code, after `seq`
+    moved on).
+
+    Stands on: measured (each `JSON.parse` and `res.json()` in the runtime and each `any` in
+    the scripts, inventoried on `c65c10ec` and `648617e3` (tag `evidence/script-boundaries-1039`), 26 uses on each; the sizes above;
+    the check's time next to `JSON.parse` alone, patches of 1, 10 and 100 changes of a
+    nine-field row, medians of 15 alternating 100 ms rounds, three runs in Chromium 156 through
+    Playwright 1.64.1 on a busy workstation: the full check -1.6% to 8.0% over the parse, and
+    `JSON.parse` against itself -8.1% to 6.6%, so the check's cost is within what this timing
+    can resolve; the probe is `bench/browser/feed-check-cost.mjs`, committed after those runs, and
+    one run of it on 2026-11-09, in Chromium and in Node, gave the check -7.5% to 14.2% over the
+    parse and the parse against itself -9.6% to 6.8%); platform (JSDoc and TypeScript types are erased at run time, `JSON.parse`
+    returns `any`, `EventSource` fails a stream whose type is not `text/event-stream`, and
+    TypeScript 5.9's DOM library declares no `window.navigation`); reasoned (a value the checker
+    did not see made is only as typed as its producer: the server's rows are, an older runtime's
+    reading of a newer protocol and old storage are not); value (Correctness and reliability
+    first, a patch's write never lost without a snapshot; Mistakes fail at compile time, Values
+    4; Fast, and proven fast, Values 1, which is why the rows are not checked).
+
+    Revisit when: the repository's TypeScript (5.9.3, `package.json`) moves to one whose DOM
+    library declares the Navigation API (6.0's does, with `NavigateEvent.info` as `any`), when
+    `navigation.d.ts` goes and `info` alone is cast to the runtime's type; the browser gets a
+    way to check JSON against a schema without a library; or a feed carries rows the server did
+    not type (a feed relayed from another service); or open pages reload when a feed's generation
+    changes, which ends the limit above.
+
+    Last checked: 2026-11-11, the sizes against `27530e82` (esbuild 0.28.2 and terser 5.51.2) and
+    `scripts/escapes.mjs` on the change; 2026-11-10, TypeScript 5.9.3 on `560c4cf7` and the change
+    (the explicit-`any` count, 26 and 0); 2026-11-08, TypeScript
+    6.0.3 on the change, which checks clean, and the timings in Chromium 156 (Playwright 1.64.1),
+    again on 2026-11-09.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -1934,7 +2376,7 @@ rules something out.
 5. <a id="rule-works-without-js"></a>Pages and actions work without JavaScript: links are links and forms post. A feature only a
    browser can provide (drag and drop, a canvas) needs JavaScript; one that makes a server action
    instant (filtering the rows on the page as you type) keeps the form that does it without.
-6. <a id="rule-page-view-model"></a>A page another surface reads derives `Serialize`, and its fields are its whole view model
+6. <a id="rule-page-view-model"></a>A page another surface reads derives `ToJson`, and its fields are its whole view model
    (formatted text included). Then `req.screen` gives every surface the same data.
 7. <a id="rule-app-and-areas"></a>`App` configures the whole app; a part of it under a URL prefix is an `Area` (or an `Api`
    for routes that answer only JSON), which owns its routes. Its prefix and its routes are route
@@ -1998,6 +2440,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    modules as module scripts that hand their exports to the runtime as they run, so their handlers are
    in before `DOMContentLoaded`, and this needs a person faster than the network.
 5. <a id="limit-offline-fallback"></a>Offline is a fallback page plus cached versioned files, not offline data.
+   A video does not play offline: the worker leaves a range, and the video or audio a player
+   loads, to the network ([Choice 37](#choice-asset-ranges)).
 6. <a id="limit-prefetch-reuse"></a>Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
    post). It keeps the 8 newest and aborts the rest (the request, or the body once it answered),
    so hovering does not hold pages for the whole session; with the browser's data saver on it

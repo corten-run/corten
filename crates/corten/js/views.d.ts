@@ -32,8 +32,8 @@ declare module "corten/views" {
   /** The views of every child of a parent element, all made from one component without a key. */
   export interface RowList<V extends { el: Element }> {
     readonly length: number;
-    /** The view of the i-th row. */
-    at(i: number): V;
+    /** The view of the i-th row (a negative `i` counts back from the last), as `Array.prototype.at`; none past either end. */
+    at(i: number): V | undefined;
     /** The view of the row that holds `target` (an event's target), if any. */
     of(target: EventTarget | null): V | undefined;
     /** Where the view's row is, or -1. */

@@ -1145,6 +1145,30 @@ instead, whatever its methods: one written as that path, or one with a parameter
 The fixed icon uses a weak content tag that stays the same when its background-compressed
 forms become ready; versioned files retain their encoding-specific tags.
 
+A file is sent with the type its extension names: scripts, styles, HTML, JSON and source maps,
+web manifests, images, fonts, `wasm`, video (`mp4`, `webm`), captions (`vtt`), text
+and XML; any other is `application/octet-stream`. A `GET` of a versioned URL for a file sent as
+it is stored (a video, a font or a raster image, which are never compressed; a file too small to
+compress; or any file sent unencoded) answers a `Range`, so a `<video>` seeks without downloading
+what it skips: one range of bytes is a `206 Partial Content` with its `Content-Range`, a range
+the file cannot hold (one that starts past the end, or an empty suffix) is a bare `416` naming
+the file's length (never the app's error page), and several ranges or another unit get the whole
+file, as RFC 9110 allows. `If-Range` keeps the range only while it names the file's own strong
+ETag, and a `HEAD` is answered whole. An old version's URL is answered the same way from this
+version's file, so a page left open across a deploy still plays and seeks its clip (Safari on iOS
+plays media only from ranges); while a fleet runs two versions, or when a deploy lands between two
+ranges, a player that sends no `If-Range` may join ranges of a clip whose bytes changed. A file
+sent compressed is sent whole, since the
+compressed bytes' offsets are not the file's, and so is the favicon, whose URL outlives every
+deploy. No answer sends `Accept-Ranges`: browsers ask for a range without it
+([design Choice 37](../design.md#choice-asset-ranges)). The PWA's service worker leaves a range,
+and the video or audio a player loads, to the network (its captions and poster are cached like
+any versioned file), since its cache holds whole
+files and a player does not read a video back from it, so a video does not play offline. A video is
+compiled into the program like every static file
+([design Choice 8](../design.md#choice-compiled-static-files)), so a short clip fits; serve long
+or many videos from storage of their own.
+
 ## Caching
 
 Static files, component scripts, the components' stylesheet and the runtime have content-hashed
@@ -1564,23 +1588,39 @@ Under the prefix:
    0.8.9 and held by a test): a body with a JSON content type (`application/json`,
    `application/problem+json`, either with parameters such as a `charset`) is read by Corten's
    reader, and by `serde_json` only where that reader gives up, so the content type does not
-   choose the reader. What it writes is a `ToJson`: derive it
-   (`#[derive(ToJson)]`, also in the prelude) on the response type, next to `Serialize` if other
-   surfaces read it too. The derive lays the JSON out when the crate compiles, so a response
-   copies one byte string between each pair of values instead of writing every key, quote and
-   comma, into a `Vec` sized from the type's last response that the body keeps. It reads
-   `#[serde(...)]` and writes the bytes `serde_json` would. A `#[serde(flatten)]` field whose type
-   is a struct that derives `ToJson` is written in place, its members laid out the same way; an
-   attribute it cannot follow (`flatten` of a map or an enum, `serialize_with`) does not compile. A field whose type has only `Serialize` (an id or a
-   date from another crate) is written by `serde_json`. `serde_json::Value` is a `ToJson`, as above.
+   choose the reader. What it writes is a `ToJson`: derive it (`#[derive(ToJson)]`, also in the
+   prelude) on the response type. It needs no `Serialize` unless the app's own code writes the type
+   with serde or it is a feed row; an agent tool's output is a `ToJson` too, and its input a
+   `FromJson`. The derive lays the JSON out when the crate compiles, so a response copies one byte
+   string between each pair of values instead of writing every key, quote and comma, into a `Vec`
+   sized from the type's last response that the body keeps. It reads `#[serde(...)]` and writes the
+   bytes `serde_json` would. A `#[serde(flatten)]` field whose type is a struct that derives
+   `ToJson` is written in place, its members laid out the same way; an attribute it cannot follow
+   (`flatten` of a map or an enum, `serialize_with`) does not compile. A field whose type has only
+   `Serialize` (an id or a date from another crate) is written by `serde_json`, and so is a whole
+   field around one (`Vec<theirs::Id>`, a map whose values are one) or a map whose key is not a
+   `JsonKey` (`BTreeMap<theirs::Key, u32>`). An app's own key type is a `JsonKey` when it is an
+   externally tagged enum of unit variants that derives `ToJson`, or by `impl
+   corten::json::JsonKey`, whose `write_key` writes the one JSON string serde writes for it, quotes
+   included (an agent tool's output that holds a hand-written `ToJson` or `JsonKey` is parsed
+   before it is sent). `serde_json::Value` is a `ToJson`, as above.
 7. Numbers are written as serde_json writes them, a whole float as `2.0`
    ([Numbers in JSON](#numbers-in-json)).
-8. To read JSON another service answers, derive `FromJson` (in the prelude) next to `Deserialize`
-   and read it with `corten::json::from_slice` or `from_str`. Corten's reader takes the fields the
-   type declares and skips the rest; on anything it does not follow (an escaped key, a missing or
-   duplicate field) `serde_json` reads the text instead, so the value and every error are
-   `serde_json`'s. It reads `#[serde(...)]` as `Deserialize` does and refuses one it cannot follow
-   (`flatten`, `deserialize_with`); a field of a type with only `Deserialize` is read by `serde_json`.
+8. To read JSON another service answers, derive `FromJson` (in the prelude) and read it with
+   `corten::json::from_slice` or `from_str`. The derive writes the type's serde `Deserialize` too,
+   so it needs no second derive (one beside it does not compile). Corten's reader takes the fields
+   the type declares and skips the rest; on anything it does not follow (an escaped key, a missing
+   or duplicate field) `serde_json` reads the text instead, so the value and every error are
+   `serde_json`'s. It reads `#[serde(...)]` as serde's derive does and refuses one it cannot follow
+   (`flatten`, `deserialize_with`); a field of a type with only `Deserialize` is read by
+   `serde_json`, and an empty `impl corten::FromJson for T {}` lets such a type be read alone. A
+   `#[derive(Fields)]` form input or a `#[derive(UrlValue)]` enum is a `FromJson` already (with
+   feature `json`, and has its schema with `types`), so `FromJson` beside either does not compile
+   either. A generic one (`Offer<T>`) is a `FromJson` wherever its `Deserialize` applies, read by
+   serde_json rather than Corten's reader, and a `UrlValue` enum with a `#[serde(other)]` variant
+   reads any other word as that variant (its schema is any string). A form input whose fields borrow
+   from the input (`&'a str`, `#[serde(borrow)]`) cannot be a `FromJson`, which reads owned values;
+   give it owned fields (`String`) to read it from JSON.
 
 Each route is a `#[derive(Route)]` struct, and the API's prefix is one too (`ApiRoot` above), so
 the router and the links name the same URL, and a route outside the prefix (`/apis/items`
@@ -1603,7 +1643,7 @@ test reads the contract the handlers enforce, not a copy beside them:
 ```rust
 use corten::prelude::*;
 
-#[derive(serde::Serialize, ToJson)]
+#[derive(ToJson)]
 struct Price { lowest: String }
 
 #[corten::routes(api = ApiRoot, openapi = ApiDoc)]
@@ -1695,10 +1735,10 @@ value (with `JSON.stringify`'s form, `2` reads as an integer and `2.5` as a floa
    integers and `as_f64` on both otherwise, and flags a field the old service sent as an integer
    that now arrives as a float: that field should be an integer type.
 3. Text that must match another service's byte for byte is written by the app and sent as `Raw`,
-   which is a `ToJson` and so can be one field of a derived response. `Raw` has no `Serialize`, so
-   a type that feeds or agent output also write holds `Box<serde_json::value::RawValue>`
-   (serde_json's `raw_value` feature; for agent output or generated types its schema is any JSON
-   value). JavaScript's number form comes from
+   which is a `ToJson` and so can be one field of a derived response or of an agent tool's output
+   (its schema is any JSON value). `Raw` has no `Serialize`, so a feed row, which serde writes,
+   holds `Box<serde_json::value::RawValue>` instead (serde_json's `raw_value` feature; for
+   generated types its schema is any JSON value). JavaScript's number form comes from
    `serde_json::Serializer::with_formatter` over a type that derives `Serialize`, with a
    `Formatter` whose `write_f64` and `write_f32` write it (`-0.0` as `0`, digits below `1e21` and
    down to `1e-6`, an exponent outside that), sent with `Raw::new`.

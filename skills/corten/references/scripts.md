@@ -63,7 +63,10 @@ division: end statements with `;` and keep a division on the line it continues.
    handler's parameter as a string literal union: a call to it does not compile (an export only
    other scripts import may use one).
 3. A wrong ref type, wrong event type, wrong value type or a handler the script does not export
-   is a compile error at the call. `tsc --checkJs` checks the function bodies.
+   is a compile error at the call. `tsc --checkJs` checks the function bodies, with `strict`,
+   `noUncheckedIndexedAccess` (an element or record value read by index is `T | undefined`: read
+   with `for .. of`, destructuring, `?.`, or a check), `noFallthroughCasesInSwitch`,
+   `allowUnreachableCode: false` and `noUncheckedSideEffectImports`.
 4. `on:connect={..}` runs when the element joins the page: first load, navigation, a patch.
 5. A component with refs, whose handlers take `scope`, or whose script imports `keep`, has one
    root element; refs resolve inside it and outside nested components. Any element can be the root, a `<tr>` included.
@@ -209,7 +212,8 @@ element (a bubbling event on each change) and reads the attributes; never a `Mut
 ## Live rows (feature `feed`)
 
 ```rust
-// a Feed<Stock> where Stock: Row (has an id). In the routes module, each feed route names its rows:
+// a Feed<Stock>: #[derive(Clone, Serialize, ToJson, Row)] struct Stock { #[row(id)] ticker: String, .. }
+// (an enum row implements Row by hand). In the routes module, each feed route names its rows:
 //   #[route("/feed/stocks", get = stocks, rows = Stock)] pub struct Stocks;
 //   #[route("/feed/stocks/live", get = stocks_live, rows = Stock)] pub struct StocksLive;
 async fn stocks(State(m): State<Market>) -> FeedResponse<Stock> { m.stocks.snapshot() }
@@ -267,8 +271,9 @@ export function select(link, body) {
 }
 ```
 
-`rows()` has `at`, `get(key)`, `of`, `indexOf`, `push`, `remove`, `swap`, `clear` and keyed
-`replace` (pass the `<template>` holding one `<Row .. />` to make new rows). List the view in
+`rows()` has `at(i)` (none past either end; a negative `i` counts back from the last, as an
+array's `at()`, so check what it gives), `get(key)`, `of`, `indexOf`, `push`, `remove`, `swap`,
+`clear` and keyed `replace` (pass the `<template>` holding one `<Row .. />` to make new rows). List the view in
 `App::components`. Details: `docs/guide/scripts.md`, "Views".
 
 ## Widgets

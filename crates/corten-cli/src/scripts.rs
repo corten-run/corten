@@ -285,6 +285,10 @@ fn jsconfig(root: &Path, runtime: &Path) -> String {
     "allowJs": true,
     "noEmit": true,
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noFallthroughCasesInSwitch": true,
+    "allowUnreachableCode": false,
+    "noUncheckedSideEffectImports": true,
     "target": "es2022",
     "module": "esnext",
     "moduleResolution": "bundler",
@@ -520,5 +524,27 @@ mod tests {
         {
             assert!(config.contains(&format!("\"{part}\"")), "{part} in {config}");
         }
+    }
+
+    #[test]
+    fn an_app_s_scripts_are_checked_with_the_settings_corten_checks_its_own_with() {
+        // Every compiler option but the paths, which point at each side's own files.
+        let options = |text: &str| match json::parse(text).unwrap().get("compilerOptions") {
+            Some(Value::Object(fields)) => fields.iter().filter(|(name, _)| name != "paths").cloned().collect::<Vec<_>>(),
+            other => panic!("compilerOptions: {other:?}"),
+        };
+        let read = |path: &str| std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(path)).unwrap();
+        let repo = read("../../jsconfig.json");
+        let app = jsconfig(Path::new("/apps/shop"), Path::new("/reg/corten-0.1.0/js"));
+        assert_eq!(options(&app), options(&repo), "the generated config and jsconfig.json differ");
+        // The browser benchmark's view apps are scripts as an app writes them.
+        assert_eq!(options(&read("../../bench/browser/jsconfig.json")), options(&repo), "bench/browser/jsconfig.json differs");
+        assert!(options(&repo).iter().any(|(name, _)| name == "noUncheckedIndexedAccess"));
+        // The paths point at each side's own files, but name the same modules.
+        let aliases = |text: &str| match json::parse(text).unwrap().get("compilerOptions").and_then(|o| o.get("paths")) {
+            Some(Value::Object(paths)) => paths.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>(),
+            other => panic!("paths: {other:?}"),
+        };
+        assert_eq!(aliases(&app), aliases(&repo));
     }
 }

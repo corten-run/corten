@@ -88,7 +88,7 @@ export function toggle(event, box, sel) {
     const [from, to] = at < s.index ? [at, s.index] : [s.index, at];
     for (let i = from; i <= to; i += 1) {
       const other = list.at(i);
-      if (!other.el.hidden) other.selected = box.checked;
+      if (other && !other.el.hidden) other.selected = box.checked;
     }
   } else {
     row.selected = box.checked;

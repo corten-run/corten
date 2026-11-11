@@ -2530,7 +2530,7 @@ mod tests {
         {
             assert!(names.iter().any(|n| n == name), "{names:?}");
         }
-        assert_eq!(names.len(), 48, "{names:?}");
+        assert_eq!(names.len(), 49, "{names:?}");
         let module = list_in(&stamped(OWN_THEME_MODULE), piece("card")).unwrap();
         let module = list_in(&module, piece("alert")).unwrap();
         assert!(module.contains("use corten::Component;\n\npub mod alert;\npub mod card;\n\n/// Each component"), "{module}");
@@ -2752,6 +2752,7 @@ mod tests {
                     && !l.contains("\"stat-")
                     && !l.contains("\"choice-")
                     && !l.contains("\"tab-")
+                    && !l.contains("\"status-dot-")
             })
             .collect::<Vec<_>>()
             .join("\n");
@@ -2796,6 +2797,11 @@ mod tests {
         assert!(
             stats.contains(&r#""stat-value-font-weight": { "$type": "fontWeight", "$value": 600 }"#.to_string()),
             "{stats:?}"
+        );
+        // A status dot's size, read by StatusDot and LiveDot through the one rule they share.
+        assert_eq!(
+            undeclared(&dir, &app_now, &[piece("status_dot")]).sizes,
+            [r#""status-dot-size": { "$type": "dimension", "$value": { "value": 0.5, "unit": "rem" } }"#]
         );
         // A tab's and a segmented choice's weight and chosen color, read by both, named once: the
         // weight as the kit's theme has it, the color by name, as each theme gives it.
@@ -3588,9 +3594,9 @@ mod tests {
         // A dialog or popover child keeps the browser's margin: auto and width, which center it in
         // the top layer (#1124).
         assert!(stack.lines().any(|l| l == ":where(.stack, .cluster) > :where(:not(dialog, [popover])) { margin-block: 0; }"));
-        // StackStart keeps a stack's children their own width: two classes, so it beats .stack and does
-        // nothing beside a Cluster or alone; its cap on a child's width, the word break and a picture's
-        // shape have no specificity, so an app's rule on a child wins.
+        // StackStart keeps a stack's children their own width: it writes the stack's classes and its
+        // own, two classes, so it beats .stack; its cap on a child's width, the word break and a
+        // picture's shape have no specificity, so an app's rule on a child wins.
         assert!(stack.contains(".stack.start { align-items: flex-start; }"), "StackStart's rule");
         assert!(
             stack.contains(":where(.stack.start) > * { overflow-wrap: anywhere; }")

@@ -24,12 +24,12 @@ export function send(event, el, tables) {
   // The method and address the browser sends with, read through the prototypes' getters: a
   // control named `method` or `action` shadows a form's own.
   const own = submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement ? submitter : null;
-  const method = own?.hasAttribute("formmethod") ? own.formMethod : idl(HTMLFormElement.prototype, "method", el);
+  const method = own?.hasAttribute("formmethod") ? own.formMethod : idl("method", el);
   if (method === "post") {
     if (own?.hasAttribute("formaction")) taken(own, "formaction", links);
     else taken(el, "action", links);
   } else if (method === "get") {
-    const to = own?.hasAttribute("formaction") ? own.formAction : idl(HTMLFormElement.prototype, "action", el);
+    const to = own?.hasAttribute("formaction") ? own.formAction : idl("action", el);
     if (new URL(to, location.href).origin !== location.origin) return;
     // Set as the form is read, so nothing is added to the page: by the browser and by any handler
     // that reads it during this submit, which all happen in its task, so the listener ends with
@@ -62,8 +62,11 @@ export function link(a, tables, signal) {
   for (const type of ["pointerover", "focus", "click", "auxclick", "contextmenu"]) a.addEventListener(type, keep, { capture: true, signal });
 }
 
-/** A getter of `proto` read on `el`, past a control that shadows it. @param {object} proto @param {string} name @param {Element} el @returns {any} */
-const idl = (proto, name, el) => /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(proto, name)).get?.call(el);
+/**
+ * A form's own property, read on `el` through its getter, past a control that shadows it.
+ * @template {"method" | "action" | "elements"} K @param {K} name @param {Element} el @returns {HTMLFormElement[K]}
+ */
+const idl = (name, el) => /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(HTMLFormElement.prototype, name)).get?.call(el);
 
 /**
  * The header links' queries of each sorted table the ids name: the table, or every table inside
@@ -120,8 +123,7 @@ function taken(el, name, tables) {
  */
 function fields(form, data, tables) {
   const page = new URL(location.href).searchParams;
-  /** @type {Element[]} */
-  const controls = Array.from(idl(HTMLFormElement.prototype, "elements", form));
+  const controls = Array.from(idl("elements", form));
   for (const key of tables.flatMap(orderKeys)) {
     const seen = controls.some((c) => Element.prototype.getAttribute.call(c, "name") === key && !(c instanceof HTMLInputElement && c.type === "hidden"));
     if (seen) continue;

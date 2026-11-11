@@ -70,7 +70,8 @@ backend.
 2. Acting (built): `corten::agent::Tools` registers each tool with a name, a description and a
    handler `(caller, Input) -> Result<Output, ToolError>`. The `inputSchema` and `outputSchema`
    agents see are generated from `Input` and `Output` by the derives that read and write them
-   (`FromJson`, `ToJson`), so they cannot drift from the code, and bad arguments are refused
+   (`FromJson`, `ToJson`), so derived ones cannot drift from the code (a schema written by hand is
+   kept in step by its author), and bad arguments are refused
    before the handler runs. `Tools::auth` checks every call once and hands the proven caller to
    the tool; `ToolError::Unauthorized` is HTTP 401, `InsufficientScope` is HTTP 403 with
    `error="insufficient_scope"`, and `Forbidden` and `Invalid` are tool results with `isError`.
@@ -111,18 +112,19 @@ definition:
 | Seam | Source of truth | Checked by |
 |---|---|---|
 | Rust to markup | page struct and component props | `html!` and `#[component]` are Rust: a missing field or prop is a compile error |
-| Markup to handler | each handler's JSDoc, in the script next to the component | `#[component(js)]` reads the script when the crate compiles: `js::name(..)` exists only for an export, and each argument must match its `@param` type: a ref by the tag it is on, `event` by the `on:` name, `target` by the tag, values by their Rust type (a JSON value by a generated declaration's; a call to a handler whose parameter has no type to check the argument against does not compile, and only `unknown` takes any argument). `tsc --checkJs` (strict) checks the function bodies against the same JSDoc |
+| Markup to handler | each handler's JSDoc, in the script next to the component | `#[component(js)]` reads the script when the crate compiles: `js::name(..)` exists only for an export, and each argument must match its `@param` type: a ref by the tag it is on, `event` by the `on:` name, `target` by the tag, values by their Rust type (a JSON value by a generated declaration's; a call to a handler whose parameter has no type to check the argument against does not compile, and only `unknown` takes any argument). `tsc --checkJs` (`strict` and the checks of [Choice 39](design.md#choice-script-checks)) checks the function bodies against the same JSDoc |
 | Typed events | the `#[event]` struct | `corten::types` declares its class in `corten/events` with the fields' types; `on:Name` must name an `#[event]` type |
 | Feed rows to script | the row struct | `corten::types` writes `types/app.d.ts`; `subscribe<Row>` types the snapshot and every patch |
+| Feed rows to their key | the field marked `#[row(id)]` | `#[derive(Row)]` (`corten::feed::Row`) takes the row's id from that field, so a renamed key field moves the key every patch is matched by; a row with no field marked or two, an id that is not text, a serde attribute that makes the id's JSON differ from `id()` or puts another member under its key (a flattened field's members aside), a tuple struct, or a row that is not `Clone`, `Serialize`, `Send`, `Sync` and `'static` (a generic one, where a feed of it is built) does not compile |
 | Form fields to handler | the input struct | `#[derive(Fields)]`: views print `Input::FIELDS.email`, a `FieldName`, and `Errors` takes only that, so a renamed field is a compile error |
 | Links to routes | the route struct (`#[derive(Route)]`) | the router mounts `Route::PATH`; a path parameter without a field, a link missing a field, or a redirect or current-page check given a path as text does not compile |
 | Route parameters to handler | the route struct | the handler reads them back as `Params<Route>`, the struct's fields owned and read by the names the link writes; in a routes module a handler of a route with a path parameter that does not take its own `Params` does not compile |
 | Markup to stylesheet | the component's CSS file (`#[component(css)]`) | each class is a constant only that component (and helpers that name it, `css = Owner`) can use; a class the file lacks, or one written as text, does not compile; an unused class is a dead-code warning; a rule that does not start inside the component does not compile |
 | Views to tokens | the token files (`tokens!`) | scales are enums, utilities take them per breakpoint, and a theme context that defines a token the defaults lack does not compile |
 | Text to catalogs | the default locale's catalog (`messages!`) | every locale must have the same keys and arguments; a key is a method and an argument a parameter, so a misspelling does not compile |
-| Agent arguments and results | the tool's input and output structs | schemas generated from them; arguments are deserialized before the handler runs |
+| Agent arguments and results | the tool's input and output structs (`#[derive(FromJson)]`, `#[derive(ToJson)]`) | a tool's input must be a `FromJson` and its output a `ToJson`, so each derive gives the schema and what is read or written from one reading of the struct; arguments are read before the handler runs, and an output whose schema is written by hand needs its `ToJson` written by hand too, as an input whose `Deserialize` is not `FromJson`'s takes `impl FromJson for T {}` |
 | JSON from an API route | the response struct (`#[derive(ToJson)]`) | `Json<T>` needs `ToJson`; the derive reads `#[serde(...)]` and a rename rule or attribute it cannot write as serde does is a compile error, so the JSON is what the same struct's `Deserialize` reads |
-| JSON from another service | the response struct (`#[derive(FromJson)]` next to `Deserialize`) | `corten::json::from_slice` needs `FromJson`; the derive reads `#[serde(...)]` and an attribute it cannot read as serde does is a compile error, and where its reader gives up serde_json reads the text, so the value and errors are serde_json's |
+| JSON from another service | the response struct (`#[derive(FromJson)]`, which writes its `Deserialize` too) | `corten::json::from_slice` needs `FromJson`; the derive reads `#[serde(...)]` and an attribute it cannot read as serde does is a compile error, and where its reader gives up serde_json reads the text through that `Deserialize`, so the value and errors are serde_json's |
 | Screen JSON to native and agents | the page struct | `Types::json_schema` gives JSON Schema for code generators |
 | An API to its other services and client generators | the API's routes and its handlers' argument and answer types | `#[corten::routes(api = .., openapi = ApiDoc)]` serves an OpenAPI 3.1 document built from them (`corten::openapi`); a handler whose argument or answer cannot say how it appears does not compile, a parameter or body type with no JSON Schema fails the router build, and `openapi::sync` keeps a copy beside the code that `npm run check` validates |
 
@@ -130,7 +132,10 @@ The declarations file is generated by a test (`Types::sync`) that rewrites it an
 is stale, so a Rust change without the new file fails CI, and a script that no longer matches
 fails `npm run check`. A subscription that names no type gets `unknown`, never
 `any`, so nothing is read unchecked. `scripts/typecheck-fixture.js` proves each of these with
-`@ts-expect-error` lines that must stay errors.
+`@ts-expect-error` lines that must stay errors. Types are erased at run time: the runtime checks
+a feed's envelope (a snapshot's `epoch`, `seq` and `rows`; a patch's `seq` and each change's `op`
+and `id`) when it arrives and trusts its rows as the server's `Row`
+([design Choice 40](design.md#choice-script-boundaries)).
 
 Not checked: `data-*` attributes a script reads through `dataset` (strings on both sides; pass
 the value as a handler argument instead), that a ref inside an `if` is present when a handler
@@ -140,7 +145,9 @@ that), that a route marked `link` in a routes module (or a plain `#[derive(Route
 served by the API or area that should serve it (the app's tests cover that), that every component a page renders is listed in
 `App::components`, or in an area (`Area::components`) the page is under (checked at run time in debug builds,
 a router test or `cargo run` as well as `corten dev`: the page fails and names it), that a CSS custom property a stylesheet reads exists (a misspelled `var()` falls
-back silently), and logic a script repeats from Rust (the listing sort rule in the item page).
+back silently), a feed row's flattened field's members, its id type's own `Serialize` and `Deserialize`, or a row's that are not
+serde's derive (`#[derive(Row)]` reads the row's serde attributes, so any of them can put other text under the id's key), and logic a script repeats from Rust (the listing
+sort rule in the item page).
 
 ## Rules that keep surfaces from drifting
 

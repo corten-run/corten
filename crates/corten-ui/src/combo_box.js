@@ -82,11 +82,14 @@ export function key(event, root) {
       }
       break;
     }
-    case "Enter":
+    case "Enter": {
       if (!isOpen) return; // Enter in a closed field submits the form
-      if (b.active >= 0) choose(b, b.shown[b.active]);
+      // None highlighted, or none to highlight: a select with no options.
+      const el = b.shown[b.active];
+      if (el) choose(b, el);
       else close(b);
       break;
+    }
     case "Escape":
       if (!isOpen) return;
       b.input.value = label(b);
@@ -175,9 +178,9 @@ function open(parts, typed) {
   /** @type {HTMLElement[][]} */
   const ranked = [[], [], []];
   parts.all.forEach((el, i) => {
-    const r = query === "" ? 0 : rank(parts.words[i], query);
+    const r = query === "" ? 0 : rank(parts.words[i] ?? [], query);
     el.hidden = r < 0;
-    if (r >= 0) ranked[r].push(el);
+    ranked[r]?.push(el);
   });
   // The highlight belongs to the old list: clear it before the list it indexes is replaced.
   highlight(parts, -1);

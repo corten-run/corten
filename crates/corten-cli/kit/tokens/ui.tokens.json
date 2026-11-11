@@ -45,6 +45,7 @@
   "stat-value-font-size-narrow": { "$type": "dimension", "$value": { "value": 1.25, "unit": "rem" } },
   "stat-value-font-weight": { "$type": "fontWeight", "$value": 600 },
   "stat-value-tracking": { "$type": "number", "$value": -0.01 },
+  "status-dot-size": { "$type": "dimension", "$value": { "value": 0.5, "unit": "rem" } },
   "tab-font-weight": { "$type": "fontWeight", "$value": 500 },
   "toasts-inset-bottom": { "$type": "dimension", "$value": { "value": 1, "unit": "rem" } },
   "$extensions": { "run.corten": { "breakpoints": { "wide": { "value": 40, "unit": "rem" } } } }
