@@ -13613,7 +13613,8 @@ async fn a_failed_stream_is_logged_with_each_cause_under_it() {
         .route(
             "/message",
             get(|| async {
-                let chunks = futures_util::stream::iter([Ok(crate::http::Bytes::from_static(b"a,1\n")), Err("the store went away")]);
+                let chunks =
+                    futures_util::stream::iter([Ok(crate::http::Bytes::from_static(b"a,1\n")), Err("the store went away")]);
                 crate::Media::stream("application/octet-stream", chunks)
             }),
         )
