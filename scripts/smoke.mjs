@@ -133,25 +133,34 @@ const liveEvent = (accept) =>
  * @type {Map<import("@playwright/test").Request, { at: number, context: import("@playwright/test").BrowserContext }>}
  */
 const inflight = new Map();
+/** The most requests one context had in flight at once this run, how many were streams, and the one that made it most (#1149). */
+let busiest = { requests: 0, streams: 0, url: "" };
+/** The page a request is for, or null for a service worker's, which has no frame. @param {import("@playwright/test").Request} r */
+function pageOf(r) {
+  try {
+    return r.frame().page();
+  } catch {
+    return null;
+  }
+}
 /** @param {import("@playwright/test").Browser} browser */
 function track(browser) {
   /** @param {(r: import("@playwright/test").Request, at: { context: import("@playwright/test").BrowserContext }) => boolean} gone */
   const drop = (gone) => {
     for (const [r, at] of inflight) if (gone(r, at)) inflight.delete(r);
   };
-  /** @param {import("@playwright/test").Request} r */
-  const pageOf = (r) => {
-    try {
-      return r.frame().page();
-    } catch {
-      return null; // a service worker's request has no frame
-    }
-  };
   // `newPage` makes its context through `newContext`, so every context is watched here.
   const newContext = browser.newContext.bind(browser);
   browser.newContext = async (...args) => {
     const context = await newContext(...args);
-    context.on("request", (r) => inflight.set(r, { at: Date.now(), context }));
+    context.on("request", (r) => {
+      inflight.set(r, { at: Date.now(), context });
+      const mine = [...inflight].filter(([, at]) => at.context === context).map(([q]) => q);
+      const streams = mine.filter((q) => q.resourceType() === "eventsource").length;
+      if (mine.length > busiest.requests || (mine.length === busiest.requests && streams > busiest.streams)) {
+        busiest = { requests: mine.length, streams, url: r.url() };
+      }
+    });
     context.on("requestfinished", (r) => inflight.delete(r));
     context.on("requestfailed", (r) => inflight.delete(r));
     context.on("page", (page) => page.on("close", () => drop((r) => pageOf(r) === page)));
@@ -183,10 +192,42 @@ function trusting(browser) {
     return context;
   };
 }
-/** What is still loading, oldest first. */
+/**
+ * What is still loading, oldest first, each with its context's and page's number, so a stalled
+ * request can be told apart from the open streams that share its connections (#1149).
+ */
 function pending() {
   const now = Date.now();
-  return [...inflight].sort((a, b) => a[1].at - b[1].at).map(([r, { at }]) => `  ${now - at}ms ${r.method()} ${r.url()} (${r.resourceType()})`);
+  /** @type {Map<import("@playwright/test").BrowserContext, { n: number, pages: Map<import("@playwright/test").Page, number> }>} */
+  const contexts = new Map();
+  return [...inflight]
+    .sort((a, b) => a[1].at - b[1].at)
+    .map(([r, { at, context }]) => {
+      let c = contexts.get(context);
+      if (!c) contexts.set(context, (c = { n: contexts.size + 1, pages: new Map() }));
+      const page = pageOf(r);
+      if (page && !c.pages.has(page)) c.pages.set(page, c.pages.size + 1);
+      return `  ${now - at}ms page ${c.n}.${page ? c.pages.get(page) : "worker"} ${r.method()} ${r.url()} (${r.resourceType()})`;
+    });
+}
+
+/**
+ * Sends each GET still loading (but streams) again from Node, with a 10 s bound, and says how long
+ * the server took: a fast answer here while the browser's waited says the browser held the
+ * request, a slow one or none says the server or the machine did (#1149).
+ */
+async function again() {
+  const urls = [...new Set([...inflight.keys()].filter((r) => r.method() === "GET" && r.resourceType() !== "eventsource").map((r) => r.url()))];
+  return Promise.all(
+    urls.map(async (url) => {
+      const start = Date.now();
+      const outcome = await fetch(url, { signal: AbortSignal.timeout(10_000) }).then(
+        async (res) => (await res.arrayBuffer(), String(res.status)),
+        (e) => (e instanceof Error ? e.name : String(e)),
+      );
+      return `  ${Date.now() - start}ms ${outcome} ${url}`;
+    }),
+  );
 }
 
 for (engine of names) {
@@ -197,8 +238,11 @@ for (engine of names) {
     await run(browser);
   } catch (error) {
     console.log(`[${engine}] still loading when it failed:\n${pending().join("\n") || "  nothing"}`);
+    console.log(`[${engine}] the same requests sent now, outside the browser (#1149):\n${(await again()).join("\n") || "  nothing"}`);
+    console.log(`[${engine}] most requests in flight in one context: ${busiest.requests} (${busiest.streams} streams), at ${busiest.url}`);
     throw error;
   } finally {
+    busiest = { requests: 0, streams: 0, url: "" };
     inflight.clear();
     await browser.close();
   }
