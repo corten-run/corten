@@ -1,6 +1,7 @@
 # Publishes a release when a tag vX.Y.Z is pushed (CONTRIBUTING.md, Releasing): the checks, the
 # corten binary for each platform, every crate on crates.io, then a GitHub release with the
-# binaries and the CHANGELOG.md section for the version.
+# binaries and the CHANGELOG.md section for the version as its notes (attached as a file, and
+# linked from the notes, when it is longer than a GitHub release allows).
 name: Release
 
 on:
@@ -110,6 +111,8 @@ jobs:
       # CHANGELOG-<version>.md is there only when the notes were too long for the release itself.
       - run: |
           shopt -s nullglob
-          gh release create "$GITHUB_REF_NAME" corten-* CHANGELOG-*.md --repo "$GITHUB_REPOSITORY" --title "Corten ${{ needs.version.outputs.version }}" --notes-file notes.md
+          extra=(CHANGELOG-*.md)
+          shopt -u nullglob
+          gh release create "$GITHUB_REF_NAME" corten-* "${extra[@]}" --repo "$GITHUB_REPOSITORY" --title "Corten ${{ needs.version.outputs.version }}" --notes-file notes.md
         env:
           GH_TOKEN: ${{ github.token }}
