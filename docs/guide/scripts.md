@@ -65,7 +65,10 @@ the JSDoc. A ref's element type is inferred from the tag it is put on, `event`'s
 `abort`, `progress` and `resize` are `Event`s, as the element fires them) and `target`'s from
 the tag, so passing a `<tbody>` ref where the handler takes a `<button>`, a `MouseEvent` where
 it takes a `KeyboardEvent`, a number where it takes a `string`, or calling a handler the script
-does not export is a compile error that points at the call. Inside the script, `tsc --checkJs`
+does not export is a compile error that points at the call. A call takes as many arguments as
+the function has, each checked the same way; arguments that belong together (a widget's
+elements and its labels) read better as one `@typedef` group
+([Lists and larger components](#lists-and-larger-components)). Inside the script, `tsc --checkJs`
 checks the function bodies against the same JSDoc.
 It runs with `strict` and four checks `strict` leaves out, the same settings Corten checks its own
 runtime, kit and examples with (a test fails when they differ):
@@ -80,7 +83,7 @@ until it checks. An app cannot turn one of them off: `corten check` writes the c
 checks with each time, and `--no-script-types` leaves every script unchecked, not one option.
 `exactOptionalPropertyTypes` is not used: it refuses a property set to `undefined` where one is
 optional, and the DOM's option objects (`{ signal }` for `addEventListener`) take that as left out,
-as JSON does, so it rejects scripts that work ([design Choice 36](../design.md#choice-script-checks)).
+as JSON does, so it rejects scripts that work ([design Choice 38](../design.md#choice-script-checks)).
 A ref on several kinds of element is typed as one they all are: `ref={tab as HTMLElement}`.
 
 **JSDoc, not TypeScript.** The checker is TypeScript's either way: `corten check` runs `tsc` with
