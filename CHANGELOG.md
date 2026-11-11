@@ -4323,10 +4323,10 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
 ### Fixed
-- When a page load in the watchlist smoke times out, the report numbers each request still
-  loading by its context and page, sends the same GETs again from Node with how long the server
-  took, and gives the most requests one context had in flight, so a failure says whether the
-  browser or the server held them
+- When a watchlist smoke run fails on a Playwright call (a page load past its 30 s timeout, say),
+  the report numbers each request still loading by its context and page, sends the same GETs again
+  from Node with the browser's headers and how long the server took, and gives the run's peak of
+  requests in flight in one context, so a stalled load says whether the browser or the server held it
   ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
 - `bench/fullstack`'s Phoenix app reads the item API through a Finch pool of 1,024 connections
   (opened as needed) started in its supervision tree, where Req's own pool held Finch's 50 per host,

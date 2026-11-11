@@ -133,7 +133,7 @@ const liveEvent = (accept) =>
  * @type {Map<import("@playwright/test").Request, { at: number, context: import("@playwright/test").BrowserContext }>}
  */
 const inflight = new Map();
-/** The most requests one context had in flight at once this run, how many were streams, and the one that made it most (#1149). */
+/** This run's peak of requests in flight in one context (any origin, fulfilled ones too), how many were streams, and the one that made it (#1149). */
 let busiest = { requests: 0, streams: 0, url: "" };
 /** The page a request is for, or null for a service worker's, which has no frame. @param {import("@playwright/test").Request} r */
 function pageOf(r) {
@@ -212,16 +212,24 @@ function pending() {
 }
 
 /**
- * Sends each GET still loading (but streams) again from Node, with a 10 s bound, and says how long
- * the server took: a fast answer here while the browser's waited says the browser held the
- * request, a slow one or none says the server or the machine did (#1149).
+ * Sends each GET still loading (but streams) again from Node, with the browser's headers and a 10 s
+ * bound, and says how long the server took: a fast answer here while the browser's waited says the
+ * browser held the request, a slow one or none says the server or the machine did (#1149). A
+ * request the smoke routed itself goes to the server here.
  */
 async function again() {
-  const urls = [...new Set([...inflight.keys()].filter((r) => r.method() === "GET" && r.resourceType() !== "eventsource").map((r) => r.url()))];
+  /** @type {Map<string, Record<string, string>>} */
+  const gets = new Map();
+  for (const r of inflight.keys()) {
+    if (r.method() !== "GET" || r.resourceType() === "eventsource" || gets.has(r.url())) continue;
+    // Headers fetch refuses to send, and ones the connection sets for itself.
+    const headers = Object.fromEntries(Object.entries(r.headers()).filter(([name]) => !/^(host|connection|keep-alive|transfer-encoding|upgrade|expect|content-length)$/i.test(name)));
+    gets.set(r.url(), headers);
+  }
   return Promise.all(
-    urls.map(async (url) => {
+    [...gets].map(async ([url, headers]) => {
       const start = Date.now();
-      const outcome = await fetch(url, { signal: AbortSignal.timeout(10_000) }).then(
+      const outcome = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) }).then(
         async (res) => (await res.arrayBuffer(), String(res.status)),
         (e) => (e instanceof Error ? e.name : String(e)),
       );
@@ -239,7 +247,7 @@ for (engine of names) {
   } catch (error) {
     console.log(`[${engine}] still loading when it failed:\n${pending().join("\n") || "  nothing"}`);
     console.log(`[${engine}] the same requests sent now, outside the browser (#1149):\n${(await again()).join("\n") || "  nothing"}`);
-    console.log(`[${engine}] most requests in flight in one context: ${busiest.requests} (${busiest.streams} streams), at ${busiest.url}`);
+    console.log(`[${engine}] this run's peak of requests in flight in one context: ${busiest.requests} (${busiest.streams} streams), at ${busiest.url}`);
     throw error;
   } finally {
     busiest = { requests: 0, streams: 0, url: "" };
