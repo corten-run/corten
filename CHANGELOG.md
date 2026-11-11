@@ -4744,6 +4744,14 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
+- A write or a WebSocket handshake with no `Sec-Fetch-Site` (every handshake from Chromium and
+  Firefox) is checked against `Host` by its whole origin, where only what followed `://` was
+  compared: under `Policy::hsts` the `Origin` must be `https`, so a plain-http page on the app's
+  host can no longer open a socket to the HTTPS app (with the user's `Secure` cookies) or post to
+  it, and a default port is the same written or left out (`https://app.example` matches
+  `Host: app.example:443`). Without `hsts` the scheme is still not compared, since behind a proxy
+  that ends TLS the app cannot tell which it is served over
+  ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
 - Two examples drew controls that did nothing without JavaScript. card-market's item page no longer
   draws its listings' sort button when scripts are off (a `scripting: none` rule in
   `item_detail.css`; the page's markup is unchanged), so the listings show in the server's order,

@@ -849,9 +849,10 @@ pub(crate) struct Shared {
     /// [`crate::App::zoned_dates`]: dates are written in the visitor's zone while Corten renders.
     #[cfg(feature = "zones")]
     pub zoned_dates: bool,
-    /// A redirect's notice may ride in [`PLAIN_NOTICE_COOKIE`]: the app is not HTTPS only
-    /// ([`crate::security::Policy::hsts`]).
-    pub plain_notice: bool,
+    /// The app is HTTPS only ([`crate::security::Policy::hsts`]): a WebSocket handshake's
+    /// `Origin` must be `https` ([`crate::upgrade::Upgrade`]), and a redirect's notice never
+    /// rides in [`PLAIN_NOTICE_COOKIE`].
+    pub https_only: bool,
     /// Dev mode: error pages show the error.
     pub dev: bool,
     /// The names of the components the app lists (`App::components` and `Area::components`).
@@ -905,7 +906,7 @@ impl Shared {
             client_zone: false,
             #[cfg(feature = "zones")]
             zoned_dates: false,
-            plain_notice: true,
+            https_only: false,
             dev: false,
             components: Default::default(),
             sections: Vec::new(),
@@ -1165,11 +1166,11 @@ impl Req {
             uri: uri.clone(),
             accept_language: headers.get(header::ACCEPT_LANGUAGE).cloned(),
             notice: if notice {
-                Notice::of(headers, uri.path(), &signal, shared.plain_notice, *method == http::Method::GET)
+                Notice::of(headers, uri.path(), &signal, !shared.https_only, *method == http::Method::GET)
             } else {
                 None
             },
-            plain_write: write && shared.plain_notice && plain_origin(headers),
+            plain_write: write && !shared.https_only && plain_origin(headers),
             write,
             fetched,
             fills: !shared.layout_reads.is_empty() && extensions.get::<crate::layout::StartHere>().is_some(),

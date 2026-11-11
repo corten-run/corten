@@ -1516,13 +1516,15 @@ impl Policy {
     /// CSRF check for writes. Every current browser sends `Sec-Fetch-Site`, which page script
     /// cannot set: `same-origin` is accepted as is (so a proxy that rewrites `Host` cannot break
     /// writes) and anything cross-site is refused. Older browsers send only `Origin`, which must
-    /// then match `Host`. A request with neither header is not from a browser (a native app, an
-    /// agent, a webhook); those authenticate with tokens, not ambient cookies, so it passes.
+    /// then match `Host`: the same name and port (a missing one is the scheme's default), and
+    /// over `https` when the app is HTTPS only ([`Policy::hsts`]). A request with neither header
+    /// is not from a browser (a native app, an agent, a webhook); those authenticate with tokens,
+    /// not ambient cookies, so it passes.
     pub fn same_origin(&self, method: &Method, headers: &HeaderMap) -> bool {
         if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
             return true;
         }
-        write_allowed(&self.allowed_origins, headers)
+        write_allowed(&self.allowed_origins, self.hsts, headers)
     }
 
     /// The other origins [`Policy::allow_origin`] lets write.
@@ -1538,8 +1540,9 @@ impl Policy {
 
 /// Whether a write with `headers` comes from the app's own pages, one of `allowed` (lowercase
 /// origins), or a client that is not a browser: [`Policy::same_origin`] past its methods, and
-/// what a switch to a WebSocket is held to ([`crate::upgrade::Upgrade`]).
-pub(crate) fn write_allowed(allowed: &[String], headers: &HeaderMap) -> bool {
+/// what a switch to a WebSocket is held to ([`crate::upgrade::Upgrade`]). `https_only`: the app
+/// is served only over HTTPS ([`Policy::hsts`]).
+pub(crate) fn write_allowed(allowed: &[String], https_only: bool, headers: &HeaderMap) -> bool {
     let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()).map(|o| o.trim_end_matches('/').to_ascii_lowercase());
     if let Some(origin) = &origin {
         if allowed.iter().any(|allowed| allowed == origin) {
@@ -1555,10 +1558,49 @@ pub(crate) fn write_allowed(allowed: &[String], headers: &HeaderMap) -> bool {
     match origin {
         None => true,
         Some(origin) if origin == "null" => false,
-        Some(origin) => {
-            let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("").to_ascii_lowercase();
-            origin.split_once("://").is_some_and(|(_, rest)| rest == host)
+        Some(origin) => origin_of_host(origin, https_only, headers.get(header::HOST)),
+    }
+}
+
+/// Whether `origin` (an `Origin` header) is the origin the request was sent to, by its `Host`:
+/// the same name and port, a port left out being its scheme's default (`http` 80, `https` 443),
+/// and over `https` when the app is `https_only`. An origin is a scheme, a host and a port
+/// (RFC 6454), so one with a user, a path or a query is no page's. Without `https_only` the
+/// scheme is not compared: behind a proxy that ends TLS the app cannot tell which it is served
+/// over, so a plain-http page on its host passes.
+/// Out of line: only a request without `Sec-Fetch-Site` comes here.
+#[cold]
+#[inline(never)]
+fn origin_of_host(origin: String, https_only: bool, host: Option<&HeaderValue>) -> bool {
+    use http::uri::{Authority, Uri};
+    let Ok(origin) = Uri::try_from(origin) else { return false };
+    let (Some(scheme), Some(theirs)) = (origin.scheme_str(), origin.authority()) else { return false };
+    if (https_only && !scheme.eq_ignore_ascii_case("https")) || origin.path_and_query().is_some_and(|p| p.as_str() != "/") {
+        return false;
+    }
+    let Some(ours) = host.and_then(|host| Authority::try_from(host.as_bytes()).ok()) else { return false };
+    let default = if scheme.eq_ignore_ascii_case("https") {
+        Some(443)
+    } else if scheme.eq_ignore_ascii_case("http") {
+        Some(80)
+    } else {
+        None
+    };
+    // `None` for a user (`user@host`) or a port that is not one. With no user, what follows the
+    // host is nothing or `:` and the port.
+    let port = |authority: &Authority| {
+        let all = authority.as_str();
+        if all.contains('@') {
+            return None;
         }
+        match &all[authority.host().len()..] {
+            "" | ":" => Some(default),
+            port => port.strip_prefix(':').and_then(|port| port.parse::<u16>().ok()).map(Some),
+        }
+    };
+    match (port(theirs), port(&ours)) {
+        (Some(theirs_port), Some(ours_port)) => theirs_port == ours_port && theirs.host().eq_ignore_ascii_case(ours.host()),
+        _ => false,
     }
 }
 
@@ -2238,6 +2280,63 @@ mod tests {
             &headers(&[("sec-fetch-site", "same-site"), ("origin", "https://admin.example.com"), ("host", "a.com")])
         ));
         assert!(p.same_origin(&post, &headers(&[])), "native apps and agents send neither header");
+    }
+
+    /// A write with no `Sec-Fetch-Site` is held to its whole origin against `Host`: under hsts
+    /// a plain-http page on the app's host is another origin (#1212), and a default port is the
+    /// same whether it is written or not.
+    #[test]
+    fn a_write_without_sec_fetch_site_is_held_to_its_scheme_and_port() {
+        let post = Method::POST;
+        let write = |policy: &Policy, origin: &'static str, host: &'static str| {
+            policy.same_origin(&post, &headers(&[("origin", origin), ("host", host)]))
+        };
+        let https_only = Policy::new().hsts();
+        let either = Policy::new();
+        assert!(!write(&https_only, "http://app.example", "app.example"), "a plain-http page on the app's host");
+        assert!(write(&https_only, "https://app.example", "app.example"));
+        assert!(write(&either, "http://app.example", "app.example"), "without hsts the public scheme is unknown");
+        assert!(write(&either, "https://app.example", "app.example"));
+        assert!(
+            https_only.same_origin(&post, &headers(&[("sec-fetch-site", "same-origin"), ("origin", "http://app.example")])),
+            "Sec-Fetch-Site still decides when it is sent"
+        );
+        assert!(
+            Policy::new().hsts().allow_origin("http://legacy.example").same_origin(
+                &post,
+                &headers(&[("origin", "http://legacy.example"), ("host", "app.example")])
+            ),
+            "an origin the app allows is its own choice"
+        );
+
+        // Default ports: http 80, https 443.
+        for policy in [&https_only, &either] {
+            assert!(write(policy, "https://app.example", "app.example:443"));
+            assert!(write(policy, "https://app.example:443", "app.example"));
+            assert!(write(policy, "https://app.example:8443", "app.example:8443"));
+            assert!(write(policy, "HTTPS://App.Example", "APP.example"), "names and schemes are not case-sensitive");
+            assert!(write(policy, "https://app.example/", "app.example"));
+            assert!(write(policy, "https://[::1]:3000", "[::1]:3000"));
+            assert!(write(policy, "https://[::1]", "[::1]:443"));
+            assert!(!write(policy, "https://app.example", "app.example:8443"), "another port");
+            assert!(!write(policy, "https://app.example:8443", "app.example"));
+            assert!(!write(policy, "https://app.example", "app.example:80"), "http's port is not https's");
+            assert!(!write(policy, "https://other.example", "app.example"));
+            assert!(!write(policy, "https://app.example.evil", "app.example"));
+            assert!(!write(policy, "https://user@app.example", "app.example"), "an origin has no user");
+            assert!(!write(policy, "https://app.example", "user@app.example"));
+            assert!(!write(policy, "https://app.example/path", "app.example"), "an origin has no path");
+            assert!(!write(policy, "https://app.example?x", "app.example"));
+            assert!(!write(policy, "app.example", "app.example"), "an origin has a scheme");
+            assert!(!write(policy, "https://app.example", ""));
+            assert!(!write(policy, "https://", ""));
+        }
+        assert!(write(&either, "http://app.example", "app.example:80"));
+        assert!(write(&either, "http://app.example:80", "app.example"));
+        assert!(!write(&either, "http://app.example:443", "app.example"), "not http's default port");
+        assert!(!write(&either, "http://app.example", "app.example:443"));
+        assert!(!write(&https_only, "http://app.example:443", "app.example:443"), "the scheme, not only the port");
+        assert!(!https_only.same_origin(&post, &headers(&[("origin", "https://app.example")])), "no Host to match");
     }
 
     #[test]
