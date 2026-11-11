@@ -1028,7 +1028,7 @@ impl<M: Middleware> App<M> {
     /// rest. Bounds what many idle or slow clients can hold of the process's sockets and memory.
     /// A switched connection (a WebSocket after its `101`, a tunnel after a `2xx` to `CONNECT`)
     /// stops counting once it switches, so the cap does not bound those; a route that accepts
-    /// them limits them itself (`docs/design.md`, Limit 13).
+    /// them limits them itself (`docs/design.md#limit-protocol-switch`).
     pub fn max_connections(mut self, max: usize) -> Self {
         assert!(max > 0, "corten: max_connections is at least 1");
         self.connections.max = Some(max);

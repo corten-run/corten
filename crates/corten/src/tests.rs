@@ -9617,7 +9617,7 @@ async fn a_switched_connection_is_held_to_the_send_timeout() {
 /// twice the timeout, and so does one where neither side sends (its idle time is the route's), and
 /// `App::send_timeout` still ends a write its client makes no room for. A switched connection no
 /// longer counts against `App::max_connections`: the next connection is served while it is open.
-/// That is today's behavior, design Limit 13, not a promise: #1249 would count it, and this test
+/// That is today's behavior (docs/design.md#limit-protocol-switch), not a promise: #1249 would count it, and this test
 /// then expects the next connection to wait.
 /// A `CONNECT` refused (`403`) is an answer like any other, and its connection closes once idle
 /// past the timeout (#1218).
@@ -9708,7 +9708,7 @@ async fn a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does
 
     // The send timeout on a tunnel, which held before the fix too: a client that reads nothing
     // more has the route's write fail. Its connection is served while the first tunnel is still
-    // open, with one connection allowed (today's behavior, Limit 13; #1249 would make it wait).
+    // open, with one connection allowed (today's behavior, docs/design.md#limit-protocol-switch; #1249 would make it wait).
     let mut flood = tokio::net::TcpStream::connect(addr).await.unwrap();
     flood.write_all(b"CONNECT / HTTP/1.1\r\nhost: localhost\r\nx-flood: 1\r\n\r\n").await.unwrap();
     let answer = tokio::time::timeout(Duration::from_secs(3), head(&mut flood)).await.expect("served beside an open tunnel");
