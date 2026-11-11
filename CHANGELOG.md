@@ -2648,6 +2648,27 @@ Corten is pre-1.0, so any minor version may change the API.
     one of eighteen. Neither has a build step, so build-cost rows say so.
     They take Spring Boot's and Django's places among the matched tier's four most used frameworks
     ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
+281. The kit's `Tabs` and `Segmented` (with `SegmentedLinks` and `SegmentedRadios`) take every
+    choice's weight and the chosen one's text color from two theme tokens, `tab-font-weight` (500)
+    and `tab-selected-color` (a reference, `"{foreground}"`, in both theme files), so a design
+    system whose chosen tab is its brand color, or whose choices are semibold, sets them once and
+    the copies stay the kit's. Nothing changes for an app that keeps its copies, and the kit's look
+    is the same. One set up by an older kit that takes the new copies adds the two tokens
+    `corten ui add tabs --merge` (or `segmented`, or `--force` for a copy without edits) names, the
+    color in both theme files, before it starts. A checked `SegmentedRadio` under the pointer keeps the
+    chosen color: its hover rule weighed more than the checked one and drew it in `--foreground`,
+    which only showed once the two could differ. The kit's contrast test checks the chosen text on
+    `--background`, its raised surface, in both themes. The theme's declarations and the two
+    `var()`s in each stylesheet, with the hover rule's selector, make the ui-gallery's served
+    `components.css` 61,306 bytes where it was 61,057 (gzip 10,156 against 10,126, brotli 8,947
+    against 8,925, Node's zlib at gzip level 9 and brotli's default); the earlier size is the
+    served file just before this change, with the LiveDot and `StatusTone::Text` rules (277, 284).
+    The ui-gallery's smoke test checks a tab, a segmented choice, a `SegmentedLinks` link and a
+    `SegmentedRadio` at the kit's values and at a theme's, and each of the four chosen under the
+    pointer.
+    Asked for by the Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen
+    choice in `--primary` at 600
+    ([#1123 Kit Segmented and Tabs draw the chosen choice in --foreground at weight 500 as literals, so a theme whose chosen tab is its primary color edits both copies](https://github.com/corten-run/corten/issues/1123)).
 284. The kit's `StatusTone` has `Text`, the color of the text around the dot: in a badge, the
     badge's, so `<span class={Badge { tone, .. }}><StatusDot tone={StatusTone::Text} />"Open"</span>`
     writes a computed tone once, on the badge, and a dot that takes it cannot disagree with it. It

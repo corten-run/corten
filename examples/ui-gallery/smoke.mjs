@@ -109,6 +109,79 @@ const besideText = (el) => {
 };
 /** @param {{ gap: number, rem: number, off: number }} b */
 const spacedLikeButton = (b) => Math.abs(b.gap - b.rem) <= 0.5 && Math.abs(b.off) <= 1;
+// Kit Tabs and Segmented: each choice's weight and the chosen one's color are the theme's
+// tab-font-weight and tab-selected-color (500 and --foreground), so a theme whose chosen tab is its
+// primary color, or whose choices are semibold, sets two tokens (#1123). For each [chosen, other]
+// selector pair: "chosen's weight, other's weight, chosen's color", with the kit's theme and with one
+// that sets both, read with transitions off so the color is the end value, not a frame of its fade.
+const tabType = (/** @type {string[][]} */ pairs) => {
+  const probe = (/** @type {string} */ value) => {
+    const el = document.createElement("span");
+    el.style.color = value;
+    document.body.append(el);
+    const color = getComputedStyle(el).color;
+    el.remove();
+    return color;
+  };
+  const read = () =>
+    pairs.map(([chosen, other]) => {
+      const [c, o] = [document.querySelector(chosen), document.querySelector(other)];
+      return c && o ? `${getComputedStyle(c).fontWeight} ${getComputedStyle(o).fontWeight} ${getComputedStyle(c).color}` : `missing ${c ? other : chosen}`;
+    });
+  const still = new CSSStyleSheet();
+  still.replaceSync("* { transition: none !important; }");
+  const theme = new CSSStyleSheet();
+  theme.replaceSync(":root { --tab-font-weight: 600; --tab-selected-color: var(--primary); }");
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, still];
+  const kit = read();
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme];
+  const themed = read();
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
+  // Read once more so the kit's values are computed while transitions are still off, and removing
+  // that sheet starts no fade.
+  read();
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== still);
+  return { kit, themed, foreground: probe("var(--foreground)"), primary: probe("var(--primary)") };
+};
+// Hovers each chosen choice under a theme whose chosen color is its primary, with transitions off,
+// and reads whether it is hovered, its color and the primary's: a chosen choice under the pointer
+// keeps the theme's chosen color (#1123).
+const chosenUnderPointer = async (/** @type {import("@playwright/test").Page} */ pg, /** @type {string[]} */ selectors) => {
+  const hoverTheme = await pg.evaluateHandle(() => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(":root { --tab-selected-color: var(--primary); } * { transition: none !important; }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    return sheet;
+  });
+  /** @type {{ hovered: boolean, color: string, primary: string }[]} */
+  const hoveredChoices = [];
+  try {
+    for (const chosen of selectors) {
+      const choice = pg.locator(chosen);
+      await choice.hover();
+      hoveredChoices.push(
+        await choice.evaluate((el) => {
+          const probe = document.createElement("span");
+          probe.style.color = "var(--primary)";
+          document.body.append(probe);
+          const out = { hovered: el.matches(":hover"), color: getComputedStyle(el).color, primary: getComputedStyle(probe).color };
+          probe.remove();
+          return out;
+        }),
+      );
+    }
+  } finally {
+    await pg.evaluate((sheet) => {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+    }, hoverTheme);
+    await hoverTheme.dispose();
+    await pg.mouse.move(0, 0);
+  }
+  return hoveredChoices;
+};
+/** @param {{ kit: string[], themed: string[], foreground: string, primary: string }} t */
+const tabTypeIsTheThemes = (t) =>
+  t.primary !== t.foreground && t.kit.every((s) => s === `500 500 ${t.foreground}`) && t.themed.every((s) => s === `600 600 ${t.primary}`);
 
 for (engine of names) {
   const browser = steady(await engines[engine].launch({ headless: true }));
@@ -1224,6 +1297,22 @@ async function run(browser) {
     "Checkboxes and RadioGroup: the gap between choices and under the legend are the theme's choice-list-gap and choice-list-legend-gap",
     choiceSpacing.kit.every((s) => s === "0.75 0.75") && choiceSpacing.themed.every((s) => s === "0.5 0.25"),
     JSON.stringify(choiceSpacing),
+  );
+  const tabsType = await page.evaluate(tabType, [
+    ["[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"true\"]", "[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"false\"]"],
+    ["[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"true\"]", "[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"false\"]"],
+  ]);
+  check("Tabs and Segmented: each choice's weight and the chosen one's color are the theme's tab-font-weight and tab-selected-color", tabTypeIsTheThemes(tabsType), JSON.stringify(tabsType));
+  // The selected tab and the checked Segmented choice keep it under the pointer too: their chosen
+  // rules come after their hover rules at the same weight.
+  const hoveredTabs = await chosenUnderPointer(page, [
+    "[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"true\"]",
+    "[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"true\"]",
+  ]);
+  check(
+    "Tabs and Segmented: the chosen choice keeps the theme's chosen color under the pointer",
+    hoveredTabs.length === 2 && hoveredTabs.every((c) => c.hovered && c.color === c.primary),
+    JSON.stringify(hoveredTabs),
   );
   await period("Week").click();
   check("a click chooses in place, and every part of the group follows", (await period("Week").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $12.10 this week.|Sold 3 this week.", await showing());
@@ -2744,6 +2833,20 @@ async function run(browser) {
     "SegmentedLinks: the current link is raised on the track, the others are not",
     links.current === "Newest" && links.fits && links.fills[0] !== clear && links.fills[0] !== links.track && links.fills.slice(1).every((c) => c === clear),
     JSON.stringify(links),
+  );
+  const linksType = await orders.evaluate(tabType, [
+    ["nav[class*='segmented__links'] > a[aria-current='page']", "nav[class*='segmented__links'] > a:not([aria-current])"],
+    ["[class*='segmented__track'] > label:has(> input:checked)", "[class*='segmented__track'] > label:not(:has(> input:checked))"],
+  ]);
+  check("SegmentedLinks and SegmentedRadios: each choice's weight and the chosen one's color are the theme's", tabTypeIsTheThemes(linksType), JSON.stringify(linksType));
+  // Under the pointer the checked SegmentedRadio and the current SegmentedLinks link keep the
+  // theme's chosen color: the radio's hover rule, which weighs more than its checked one, leaves a
+  // checked choice alone, and the link's chosen rule comes after its hover rule.
+  const hoveredChoices = await chosenUnderPointer(orders, ["[class*='segmented__track'] > label:has(> input:checked)", "nav[class*='segmented__links'] > a[aria-current='page']"]);
+  check(
+    "SegmentedRadios and SegmentedLinks: the chosen choice keeps the theme's chosen color under the pointer",
+    hoveredChoices.length === 2 && hoveredChoices.every((c) => c.hovered && c.color === c.primary),
+    JSON.stringify(hoveredChoices),
   );
   // StackStart: a column whose children keep their own width, a link as wide as its words and a
   // badge, each at most the column's; at 320px a word wider than the column breaks inside its link,
