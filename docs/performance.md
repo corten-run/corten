@@ -219,7 +219,8 @@ takeover is still the fastest of the frameworks, but slower than in round browse
 at 77002fe): 10.2 ms against 6.0 then, while Solid, Svelte, Vue, React and plain JavaScript took
 over faster in this round than in that one (Solid 16.2 ms against 19.6) and Remix slower. The two
 rounds ran on different CPUs (a Xeon Platinum 8280 then), different Chromium versions (148 then)
-and different Corten runtimes, and they do not show which of those slowed Corten's takeover. Its
+and different Corten runtimes, and they do not show which of those slowed Corten's takeover
+([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)). Its
 JavaScript is the runtime, views and the page's handlers, 17.9 KB gzip, more than Solid's 6.8 KB
 and less than the other frameworks'. Creating thousands of rows in the browser is where it trails
 Solid and plain JavaScript (48.4 ms against 41.6 and 37.5 ms for 10,000). What is left is mostly
