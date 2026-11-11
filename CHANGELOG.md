@@ -5,6 +5,23 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+### Fixed
+
+- A write or a WebSocket handshake with no `Sec-Fetch-Site` (every handshake from Chromium and
+  Firefox) is checked against `Host` by its whole origin, where only what followed `://` was
+  compared: under `Policy::hsts` the `Origin` must be `https` or loopback, so a plain-http page
+  on the app's host can no longer open a socket to the HTTPS app (with the user's `Secure`
+  cookies) or post to it. Browsers send `Sec-Fetch-Site` only to secure origins, so an app with
+  `hsts` now refuses every write and handshake from a plain-http page other than loopback, in
+  every browser, the app itself reached as `http://192.168.1.5` included; one served that way
+  must not set `hsts`. A default port is the same written or left out (`https://app.example`
+  matches `Host: app.example:443`), also for the plain notice cookie, and an origin of another
+  scheme (`capacitor://localhost`) is refused. Without `hsts` the scheme is still not compared,
+  since behind a proxy that ends TLS the app cannot tell which it is served over (design Limit
+  26); the deploy guide's checklist says to set `hsts` for an app served only over HTTPS even when
+  the proxy sends the header
+  ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
+
 ## 0.2.0 (2026-11-11)
 
 The first release of all seven crates, published together by the Release workflow. The main crate's
@@ -4802,20 +4819,6 @@ their names, and has no tag or release.
   it in place as before. Both smokes check the page with scripts off in Chromium, Firefox and
   WebKit
   ([#1210 card-market's listing sort and seller-desk's sort headers and filter are drawn without JavaScript and do nothing](https://github.com/corten-run/corten/issues/1210)).
-- A write or a WebSocket handshake with no `Sec-Fetch-Site` (every handshake from Chromium and
-  Firefox) is checked against `Host` by its whole origin, where only what followed `://` was
-  compared: under `Policy::hsts` the `Origin` must be `https` or loopback, so a plain-http page
-  on the app's host can no longer open a socket to the HTTPS app (with the user's `Secure`
-  cookies) or post to it. Browsers send `Sec-Fetch-Site` only to secure origins, so an app with
-  `hsts` now refuses every write and handshake from a plain-http page other than loopback, in
-  every browser, the app itself reached as `http://192.168.1.5` included; one served that way
-  must not set `hsts`. A default port is the same written or left out (`https://app.example`
-  matches `Host: app.example:443`), also for the plain notice cookie, and an origin of another
-  scheme (`capacitor://localhost`) is refused. Without `hsts` the scheme is still not compared,
-  since behind a proxy that ends TLS the app cannot tell which it is served over (design Limit
-  26); the deploy guide's checklist says to set `hsts` for an app served only over HTTPS even when
-  the proxy sends the header
-  ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
 - `bench/fullstack/droplet.mjs` refuses to start a full-stack, browser or hardening round when
   `bench/fullstack/fixtures/items.json` is missing, empty, not JSON or without `item_1`, before it
   creates a droplet. Git does not keep the file, so a round started from a fresh checkout ran an
