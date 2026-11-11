@@ -2849,10 +2849,13 @@ Corten is pre-1.0, so any minor version may change the API.
     Which one). Design Limit 17, which recorded that they were untyped, is gone, so Limits 18 to 24
     are now 17 to 23, and the other entries here that cite them say the new numbers
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
-14. axum, from Corten's dependencies (design Choice 25, step 4), and with it what named axum:
+14. axum, from Corten's dependencies (design Choice 25, step 4), and with it what named axum. An
+    app that never named axum still breaks on the paths of Corten's own HTTP types, which moved to
+    `corten::http` (Changed, its first entry), so start there. And with it:
     `corten::axum` (a test's stand-in for another service depends on a server of its own: add
     `axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }` as a
-    dev-dependency, write `axum::` where it wrote `corten::axum::` (its `Router`, `State` and
+    dev-dependency, with `"json"` among the features when the stand-in reads or answers
+    `axum::Json`, write `axum::` where it wrote `corten::axum::` (its `Router`, `State` and
     `serve` on a `tokio::net::TcpListener`), as the app guide shows; the app under test stays a
     `corten::Router`); `compress::apply` and `Policy::apply`, which
     wrapped an axum router (`App` puts compression, feature `compress`, and its policy,
@@ -2881,7 +2884,10 @@ Corten is pre-1.0, so any minor version may change the API.
   `corten::middleware::{IntoResponse, Response, ..}` and `corten::Bytes`. Those paths are gone:
   change the `use` (`use corten::http::{Body, IntoResponse, Request, Response};`). The types are
   the same; `corten::http::Request` and `Response` with no type argument are over `Body`, as
-  the old paths were. `MatchedPath` stays in `corten::middleware`.
+  the old paths were. `MatchedPath` stays in `corten::middleware`. Fix the imports first: an
+  unresolved `corten::extract::Request` also shows up as many E0277 errors at the handlers' body
+  reads (the size of `[u8]` cannot be known), which go away with the import; an app's port saw 65
+  errors from three imports.
 
 - `Refused::unauthorized` takes the `Challenge` its 401 sends in `WWW-Authenticate`, which RFC
   9110 requires on a 401 and which it never sent: `Refused::unauthorized(Challenge::bearer(realm))`,
