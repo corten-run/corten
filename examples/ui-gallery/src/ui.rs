@@ -154,6 +154,22 @@ pub mod skeleton;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/slider.rs"]
 pub mod slider;
+/// The kit's stack. `StackStart` is a whole look, the stack with its gap: written without one, as
+/// the class it was beside a `Stack`, it does not compile.
+///
+/// ```compile_fail,E0063
+/// use corten::prelude::*;
+/// use ui_gallery::ui::stack::{Gap, Stack, StackStart};
+///
+/// let _ = html! { <div class={(Stack { gap: Gap::Xs }, StackStart {})}></div> };
+/// ```
+///
+/// ```
+/// use corten::prelude::*;
+/// use ui_gallery::ui::stack::{Gap, StackStart};
+///
+/// let _ = html! { <div class={StackStart { gap: Gap::Xs }}></div> };
+/// ```
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/stack.rs"]
 pub mod stack;
@@ -552,13 +568,16 @@ pub(crate) mod tests {
         assert_eq!(panel, r#"<section class="card__panel card__sm"></section>"#);
     }
 
-    /// `StackStart` is a class beside the stack's, so the column keeps its children their own width.
+    /// `StackStart` is the stack itself with the class that keeps its children their own width, so it
+    /// is written alone, with its gap, and writes what the stack and that class did together.
     #[test]
-    fn a_stack_start_is_a_class_beside_the_stack() {
-        use super::stack::{Gap, Stack, StackStart};
+    fn a_stack_start_is_the_stack_with_its_gap() {
+        use super::stack::{Gap, StackStart};
         use corten::view::Render;
-        let start = corten::html! { <div class={(Stack { gap: Gap::Xs }, StackStart {})}></div> }.to_html();
+        let start = corten::html! { <div class={StackStart { gap: Gap::Xs }}></div> }.to_html();
         assert_eq!(start, r#"<div class="stack__stack stack__xs stack__start"></div>"#);
+        let app = corten::html! { <div class={StackStart { gap: Gap::App }}></div> }.to_html();
+        assert_eq!(app, r#"<div class="stack__stack stack__start"></div>"#);
     }
 
     /// A look imported under another name, beside an app type that has its name, keeps the kit's
