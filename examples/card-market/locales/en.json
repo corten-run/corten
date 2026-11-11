@@ -61,6 +61,12 @@
     "title": "Popular items",
     "item": "Item {n}"
   },
+  "grading": {
+    "title": "How we grade a card's condition",
+    "caption": "From Near Mint to Moderately Played, in six seconds.",
+    "captions_en": "English",
+    "captions_fr": "Français"
+  },
   "card": {
     "from": "From {price}"
   },

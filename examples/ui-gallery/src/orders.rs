@@ -494,7 +494,7 @@ pub fn Orders<'a>(t: Msg, page: usize, sort: Option<OrderSort>, payout: usize, p
                                 </meter>
                             </Field>
                             // A column whose children keep their own width: a link as wide as its words, a badge.
-                            <div class={(Stack { gap: Gap::Xs }, StackStart {})}>
+                            <div class={StackStart { gap: Gap::Xs }}>
                                 <a href={url::Help}>"How selling limits work"</a>
                                 <span class={Badge { tone: BadgeTone::Neutral, emphasis: BadgeEmphasis::Outline }}>
                                     "Lifts at 50 sales"

@@ -58,7 +58,10 @@
 //! (`sections/search+categories.css`).
 //!
 //! During a rolling deploy a page from the old version can ask a new server for an old URL. It
-//! gets the current file with `Cache-Control: no-cache`, so nothing caches the mismatch.
+//! gets the current file with `Cache-Control: no-cache`, so nothing caches the mismatch, under
+//! the current file's strong tag, and a range of it is answered as this version's is. A server
+//! cannot tell an older version from a newer one, so an old server answers a new URL the same way
+//! (`docs/design.md#choice-asset-ranges` has what that costs a player).
 
 use std::{
     collections::HashMap,
@@ -69,7 +72,7 @@ use std::{
 
 use axum::body::Bytes;
 use axum::{
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
 };
 
@@ -219,11 +222,11 @@ pub(crate) fn favicon(assets: Option<&Arc<Assets>>) -> Table {
     });
     Table::new().route(
         FAVICON_PATH,
-        get(move |headers: HeaderMap| {
+        get(move |method: Method, headers: HeaderMap| {
             let icon = icon.clone();
             async move {
                 match icon {
-                    Some((assets, path)) => assets.serve(path, &headers, FAVICON_CACHE, true),
+                    Some((assets, path)) => assets.serve(path, &method, &headers, FAVICON_CACHE, Url::Fixed),
                     None => {
                         let mut res = (StatusCode::NOT_FOUND, [(header::CACHE_CONTROL, NO_FAVICON_CACHE)]).into_response();
                         res.extensions_mut().insert(crate::page::AsIs);
@@ -793,14 +796,19 @@ impl Assets {
                         Ok(read) => read,
                         Err(rejection) => return rejection.into_response(),
                     };
-                    let cache = if version == assets.version { IMMUTABLE } else { HeaderValue::from_static("no-cache") };
-                    assets.serve(&path, &parts.headers, cache, false)
+                    let (cache, url) = if version == assets.version {
+                        (IMMUTABLE, Url::Current)
+                    } else {
+                        (HeaderValue::from_static("no-cache"), Url::Old)
+                    };
+                    assets.serve(&path, &parts.method, &parts.headers, cache, url)
                 }
             }),
         )
     }
 
-    fn serve(&self, path: &str, headers: &HeaderMap, cache: HeaderValue, fixed: bool) -> Response {
+    /// The file at `path`, asked for at a URL of the kind `url`.
+    fn serve(&self, path: &str, method: &Method, headers: &HeaderMap, cache: HeaderValue, url: Url) -> Response {
         let Some(file) = self.files.get(path) else {
             return StatusCode::NOT_FOUND.into_response();
         };
@@ -808,7 +816,7 @@ impl Assets {
         let (body, coding) = file.body.pick(headers);
         #[cfg(not(feature = "compress"))]
         let body = file.body.clone();
-        let etag = if fixed {
+        let etag = if url == Url::Fixed {
             // Its URL is revalidated: keep the same weak content tag while background
             // compression changes the encoded bytes. Versioned files keep per-coding tags.
             HeaderValue::try_from(format!("W/\"{:016x}\"", file.hash)).expect("hex tag")
@@ -832,17 +840,110 @@ impl Assets {
             crate::compress::encoded_headers(res.headers_mut(), file.content_type, None);
             return res;
         }
+        // A range of the file as it is stored, to a GET sent it unencoded (a video seeking): an
+        // encoded body's offsets are not the file's, so it is sent whole, and RFC 9110 has every
+        // other method ignore `Range`. A versioned URL, this version's or an old one's, is
+        // answered in part under the strong tag of the bytes it sends: Safari plays a video only
+        // from ranges, and every deploy renames every file, so refusing an old URL would stop a
+        // cached page's clip for every Safari visitor until it reloads. The trade: while a fleet
+        // runs two versions, or across a deploy between two ranges, a file whose bytes changed can
+        // be answered from either version at either URL, so a client that sends `If-Range` gets
+        // the whole file and one that does not may join ranges of two versions (sending other
+        // versions' URLs whole prevented that, and Safari would not play them). A file whose bytes
+        // did not change has the same tag and bytes in both. The favicon's URL outlives every
+        // deploy under a weak tag, so it is sent whole. `If-Range` holds for the strong tag
+        // compared byte for byte, so a weak tag or a date never matches (RFC 9110's strong
+        // comparison; the files have no date). No `Accept-Ranges`: a browser asks for a range
+        // unprompted (#1133).
+        #[cfg(feature = "compress")]
+        let ranged = url != Url::Fixed && coding.is_none() && method == Method::GET;
+        #[cfg(not(feature = "compress"))]
+        let ranged = url != Url::Fixed && method == Method::GET;
+        let range = match ranged.then(|| headers.get(header::RANGE)).flatten() {
+            Some(value) => {
+                let holds = headers.get(header::IF_RANGE).is_none_or(|tag| *tag == etag);
+                holds.then(|| byte_range(value.as_bytes(), body.len())).flatten()
+            }
+            None => None,
+        };
         let head = [
             (header::CONTENT_TYPE, HeaderValue::from_static(file.content_type)),
             (header::CACHE_CONTROL, cache),
             (header::ETAG, etag),
         ];
         #[allow(unused_mut)]
-        let mut res = (head, body).into_response();
+        let mut res = match range {
+            None => (head, body).into_response(),
+            Some(Ok(range)) => {
+                let at = format!("bytes {}-{}/{}", range.start, range.end - 1, body.len());
+                let mut res = (StatusCode::PARTIAL_CONTENT, head, body.slice(range)).into_response();
+                res.headers_mut().insert(header::CONTENT_RANGE, HeaderValue::try_from(at).expect("digits"));
+                res
+            }
+            Some(Err(())) => return unsatisfiable(body.len()),
+        };
         #[cfg(feature = "compress")]
         crate::compress::encoded_headers(res.headers_mut(), file.content_type, coding);
         res
     }
+}
+
+/// What a URL a file is asked for at names, which decides its tag and whether it is sent in part.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Url {
+    /// This version's URL: these exact bytes, under a strong tag, sent in ranges.
+    Current,
+    /// An older version's URL: this version's bytes, never cached, under their strong tag, sent in
+    /// ranges.
+    Old,
+    /// A URL that outlives a deploy (the favicon's): revalidated under a weak tag, sent whole.
+    Fixed,
+}
+
+/// The one byte range a `Range` header asks of a body `len` bytes long (RFC 9110 14.1.2):
+/// `Some(Ok(range))` to send, `Some(Err(()))` when it starts past the end (a 416), and `None` to
+/// send the whole body, as a server may for a header it does not parse, another unit or several
+/// ranges.
+fn byte_range(value: &[u8], len: usize) -> Option<Result<std::ops::Range<usize>, ()>> {
+    let (unit, set) = std::str::from_utf8(value).ok()?.split_once('=')?;
+    if !unit.trim_ascii().eq_ignore_ascii_case("bytes") || set.contains(',') {
+        return None;
+    }
+    let (first, last) = set.trim_ascii().split_once('-')?;
+    let number = |digits: &str| digits.bytes().all(|b| b.is_ascii_digit()).then(|| digits.parse::<u64>().ok()).flatten();
+    let len64 = len as u64;
+    let (start, end) = if first.is_empty() {
+        // The last `n` bytes; none at all cannot be sent, and of an empty body they are the whole
+        // (empty) body (RFC 9110 14.1.1).
+        let n = number(last)?;
+        if n == 0 {
+            return Some(Err(()));
+        }
+        if len == 0 {
+            return None;
+        }
+        (len64.saturating_sub(n), len64)
+    } else {
+        let start = number(first)?;
+        let end = match last {
+            "" => len64,
+            last => number(last).filter(|&last| last >= start)?.saturating_add(1).min(len64),
+        };
+        if start >= len64 {
+            return Some(Err(()));
+        }
+        (start, end)
+    };
+    Some(Ok(start as usize..end as usize))
+}
+
+/// The 416 for a range past the end of a body `len` bytes long, naming its length: sent as it is,
+/// not as the app's error page, which would drop `Content-Range`.
+fn unsatisfiable(len: usize) -> Response {
+    let whole = HeaderValue::try_from(format!("bytes */{len}")).expect("digits");
+    let mut res = (StatusCode::RANGE_NOT_SATISFIABLE, [(header::CONTENT_RANGE, whole)]).into_response();
+    res.extensions_mut().insert(crate::page::AsIs);
+    res
 }
 
 /// A file's ETag: its hash in hex, quoted, and its coding's tag after a `-` (`"0123..ef-br"`).
@@ -1090,6 +1191,9 @@ pub(crate) fn content_type(path: &str) -> &'static str {
         Some("woff2") => "font/woff2",
         Some("woff") => "font/woff",
         Some("wasm") => "application/wasm",
+        Some("mp4") => "video/mp4",
+        Some("webm") => "video/webm",
+        Some("vtt") => "text/vtt; charset=utf-8",
         Some("txt") => "text/plain; charset=utf-8",
         Some("xml") => "application/xml",
         _ => "application/octet-stream",
@@ -1125,6 +1229,29 @@ mod tests {
         root
     }
 
+    /// What serving a file costs: `ASSET_REQUESTS` (200) requests of a 4 KiB stylesheet in process,
+    /// one at a time, unencoded (the answer a range is read for). Counted under callgrind at two
+    /// numbers of requests (200 and 1,200), the difference over the 1,000 requests between them is
+    /// the instructions a request:
+    /// `ASSET_REQUESTS=200 cargo test --release -p corten-run --all-features --lib -- --ignored what_serving_a_file_costs`,
+    /// then the same with `ASSET_REQUESTS=1200`.
+    #[test]
+    #[ignore]
+    fn what_serving_a_file_costs() {
+        let requests: usize = std::env::var("ASSET_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+        let root = dir("cost", &[("style.css", &"a{color:red}\n".repeat(320))]);
+        let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let app = crate::Router::from(assets.routes());
+        let url = assets.url("style.css");
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(async {
+            for _ in 0..requests {
+                let res = app.clone().oneshot(Request::get(&url).body(Body::empty()).unwrap()).await.unwrap();
+                assert_eq!(res.status(), StatusCode::OK);
+            }
+        });
+    }
+
     #[tokio::test]
     async fn versioned_urls_are_immutable_and_old_versions_are_not_cached() {
         let root = dir("serve", &[("style.css", "a{}"), ("scripts/x_y.js", "export function f() {}"), (".env", "SECRET=1")]);
@@ -1146,6 +1273,205 @@ mod tests {
         assert_eq!(get(traversal).await.unwrap().status(), StatusCode::NOT_FOUND, "only loaded files are served");
         let dotfile = format!("/assets/{}/.env", assets.version());
         assert_eq!(get(dotfile).await.unwrap().status(), StatusCode::NOT_FOUND, "dotfiles are skipped");
+    }
+
+    /// Video and captions are named by their standard types (#1133).
+    #[test]
+    fn video_and_captions_have_their_types() {
+        assert_eq!(content_type("intro.mp4"), "video/mp4");
+        assert_eq!(content_type("intro.WEBM"), "video/webm");
+        assert_eq!(content_type("captions/en.vtt"), "text/vtt; charset=utf-8");
+    }
+
+    /// One range of bytes, as RFC 9110 writes it; a range past the end is unsatisfiable, and what
+    /// is not one range of bytes is ignored, so the whole body is sent.
+    #[test]
+    fn a_range_is_one_span_of_bytes() {
+        let at = |value: &str| byte_range(value.as_bytes(), 100);
+        assert_eq!(at("bytes=0-9"), Some(Ok(0..10)));
+        assert_eq!(at("bytes=10-"), Some(Ok(10..100)));
+        assert_eq!(at("bytes=90-500"), Some(Ok(90..100)), "a last byte past the end is the end");
+        assert_eq!(at("bytes=-5"), Some(Ok(95..100)));
+        assert_eq!(at("bytes=-500"), Some(Ok(0..100)));
+        assert_eq!(at("Bytes = 0-0"), Some(Ok(0..1)), "the unit is compared without case");
+        assert_eq!(at("bytes=100-"), Some(Err(())));
+        assert_eq!(at("bytes=-0"), Some(Err(())));
+        assert_eq!(byte_range(b"bytes=-1", 0), None, "of an empty body, the last bytes are all of it");
+        for ignored in ["bytes=9-0", "bytes=0-1,5-6", "items=0-1", "bytes=+1-2", "bytes=a-", "bytes", "bytes=-"] {
+            assert_eq!(at(ignored), None, "{ignored}");
+        }
+    }
+
+    /// A video seeks: a range of a file is sent as a 206 of those bytes, named by `Content-Range`,
+    /// a range past its end as a 416 naming its length, a range under another version's tag
+    /// (`If-Range`) as the whole file, a file the client already has as a 304, and a `HEAD` whole
+    /// (#1133).
+    #[tokio::test]
+    async fn a_file_is_sent_in_the_ranges_asked_for() {
+        let video: String = (0..100u8).map(|i| char::from(b'a' + i % 26)).collect();
+        let root = dir("ranges", &[("intro.mp4", &video)]);
+        let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let app = crate::Router::from(assets.routes());
+        let url = assets.url("intro.mp4");
+        let get = |headers: &[(header::HeaderName, &str)]| {
+            let mut req = Request::get(&url);
+            for (name, value) in headers {
+                req = req.header(name, *value);
+            }
+            app.clone().oneshot(req.body(Body::empty()).unwrap())
+        };
+        let body = |res: Response| async move { http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes() };
+        let whole = get(&[]).await.unwrap();
+        assert_eq!(whole.status(), StatusCode::OK);
+        assert!(!whole.headers().contains_key(header::ACCEPT_RANGES), "a range is answered, not advertised");
+        assert_eq!(whole.headers()[header::CONTENT_TYPE], "video/mp4");
+        let tag = whole.headers()[header::ETAG].clone();
+        let part = get(&[(header::RANGE, "bytes=10-19")]).await.unwrap();
+        assert_eq!(part.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(part.headers()[header::CONTENT_RANGE], "bytes 10-19/100");
+        assert_eq!(
+            (&part.headers()[header::ETAG], &part.headers()[header::CONTENT_TYPE]),
+            (&tag, &HeaderValue::from_static("video/mp4"))
+        );
+        assert_eq!(body(part).await, video.as_bytes()[10..20]);
+        let tail = get(&[(header::RANGE, "bytes=-5"), (header::IF_RANGE, tag.to_str().unwrap())]).await.unwrap();
+        assert_eq!(
+            (tail.status(), &tail.headers()[header::CONTENT_RANGE]),
+            (StatusCode::PARTIAL_CONTENT, &HeaderValue::from_static("bytes 95-99/100"))
+        );
+        assert_eq!(body(tail).await, video.as_bytes()[95..]);
+        let past = get(&[(header::RANGE, "bytes=100-")]).await.unwrap();
+        assert_eq!(
+            (past.status(), &past.headers()[header::CONTENT_RANGE]),
+            (StatusCode::RANGE_NOT_SATISFIABLE, &HeaderValue::from_static("bytes */100"))
+        );
+        let stale = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, "\"0000000000000000\"")]).await.unwrap();
+        assert_eq!(stale.status(), StatusCode::OK, "another version's range is sent whole");
+        assert_eq!(body(stale).await.len(), 100);
+        let weak = format!("W/{}", tag.to_str().unwrap());
+        let weak = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, &weak)]).await.unwrap();
+        assert_eq!(weak.status(), StatusCode::OK, "If-Range compares strongly: a weak tag never names these exact bytes");
+        let dated = get(&[(header::RANGE, "bytes=10-19"), (header::IF_RANGE, "Sun, 08 Nov 2026 00:00:00 GMT")]).await.unwrap();
+        assert_eq!(dated.status(), StatusCode::OK, "the files have no date to compare");
+        let huge = get(&[(header::RANGE, "bytes=99999999999999999999-")]).await.unwrap();
+        assert_eq!(huge.status(), StatusCode::OK, "a number past u64 is not parsed, so the whole file is sent");
+        let old = url.replacen(assets.version(), "000000000000", 1);
+        let old = app
+            .clone()
+            .oneshot(Request::get(&old).header(header::RANGE, "bytes=10-19").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            (old.status(), &old.headers()[header::CONTENT_RANGE], &old.headers()[header::CACHE_CONTROL]),
+            (StatusCode::PARTIAL_CONTENT, &HeaderValue::from_static("bytes 10-19/100"), &HeaderValue::from_static("no-cache")),
+            "an old version's URL is answered in part from these bytes, never cached (Safari plays a video only from ranges)"
+        );
+        assert_eq!(body(old).await, video.as_bytes()[10..20]);
+        let moved = url.replacen(assets.version(), "000000000000", 1);
+        let moved = app
+            .clone()
+            .oneshot(
+                Request::get(&moved)
+                    .header(header::RANGE, "bytes=10-19")
+                    .header(header::IF_RANGE, "\"0000000000000000\"")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(moved.status(), StatusCode::OK, "bytes that changed under an old URL are sent whole to If-Range");
+        assert_eq!(body(moved).await.len(), 100);
+        let same = url.replacen(assets.version(), "000000000000", 1);
+        let same = app
+            .clone()
+            .oneshot(
+                Request::get(&same)
+                    .header(header::RANGE, "bytes=10-19")
+                    .header(header::IF_RANGE, tag.to_str().unwrap())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(same.status(), StatusCode::PARTIAL_CONTENT, "bytes unchanged under an old URL keep the range to If-Range");
+        let kept = get(&[(header::RANGE, "bytes=10-19"), (header::IF_NONE_MATCH, tag.to_str().unwrap())]).await.unwrap();
+        assert_eq!(kept.status(), StatusCode::NOT_MODIFIED);
+        let head = app
+            .clone()
+            .oneshot(Request::head(&url).header(header::RANGE, "bytes=0-9").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(head.status(), StatusCode::OK, "only a GET is answered in part (RFC 9110 14.2)");
+        assert!(!head.headers().contains_key(header::CONTENT_RANGE));
+        assert_eq!(head.headers()[header::CONTENT_TYPE], "video/mp4", "a HEAD names the file's type");
+        let root = dir("ranges-empty", &[("empty.vtt", "")]);
+        let empty = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let res = crate::Router::from(empty.routes())
+            .oneshot(Request::get(empty.url("empty.vtt")).header(header::RANGE, "bytes=0-").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            (res.status(), &res.headers()[header::CONTENT_RANGE]),
+            (StatusCode::RANGE_NOT_SATISFIABLE, &HeaderValue::from_static("bytes */0")),
+            "no byte of an empty file can be sent"
+        );
+    }
+
+    /// Captions compressed for the client are sent whole: an encoded body's offsets are not the
+    /// file's. A client that takes them unencoded gets its range.
+    #[cfg(feature = "compress")]
+    #[tokio::test]
+    async fn an_encoded_file_is_sent_whole() {
+        let captions = format!("WEBVTT\n\n{}", "00:00.000 --> 00:01.000\nA line of captions.\n\n".repeat(60));
+        let root = dir("ranges-encoded", &[("en.vtt", &captions)]);
+        let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let app = crate::Router::from(assets.routes());
+        let url = assets.url("en.vtt");
+        let get = |encodings: &str| {
+            let req = Request::get(&url).header(header::RANGE, "bytes=0-9").header(header::ACCEPT_ENCODING, encodings);
+            app.clone().oneshot(req.body(Body::empty()).unwrap())
+        };
+        let cold = get("br").await.unwrap();
+        assert_eq!(cold.status(), StatusCode::PARTIAL_CONTENT, "before its compressed forms exist, the file is sent as stored");
+        assert!(!cold.headers().contains_key(header::CONTENT_ENCODING));
+        assets.files["en.vtt"].body.wait();
+        let encoded = get("br").await.unwrap();
+        assert_eq!(
+            (encoded.status(), &encoded.headers()[header::CONTENT_ENCODING]),
+            (StatusCode::OK, &HeaderValue::from_static("br"))
+        );
+        assert!(!encoded.headers().contains_key(header::ACCEPT_RANGES) && !encoded.headers().contains_key(header::CONTENT_RANGE));
+        let plain = get("identity").await.unwrap();
+        assert_eq!(
+            (plain.status(), &plain.headers()[header::CONTENT_TYPE]),
+            (StatusCode::PARTIAL_CONTENT, &HeaderValue::from_static("text/vtt; charset=utf-8"))
+        );
+        assert_eq!(
+            plain.headers()[header::VARY],
+            "accept-encoding",
+            "a shared cache keeps the 206 from a client that takes brotli"
+        );
+    }
+
+    /// Through the compression middleware, a range of a compressible file sent as it is stored
+    /// (before its compressed forms exist, or to a client that takes only zstd) stays the exact
+    /// bytes asked for: the middleware never encodes an answer that has a `Content-Range`.
+    #[cfg(feature = "compress")]
+    #[tokio::test]
+    async fn the_middleware_leaves_a_range_as_it_is() {
+        let captions = format!("WEBVTT\n\n{}", "00:00.000 --> 00:01.000\nA line of captions.\n\n".repeat(60));
+        let root = dir("ranges-middleware", &[("en.vtt", &captions)]);
+        let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
+        let app = crate::compress::apply(axum::Router::new().fallback_service(crate::Router::from(assets.routes())));
+        let url = assets.url("en.vtt");
+        for encodings in ["gzip", "zstd"] {
+            let req = Request::get(&url).header(header::RANGE, "bytes=100-1299").header(header::ACCEPT_ENCODING, encodings);
+            let res = app.clone().oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
+            assert_eq!(res.status(), StatusCode::PARTIAL_CONTENT, "{encodings}");
+            assert!(!res.headers().contains_key(header::CONTENT_ENCODING), "{encodings}: a range is never encoded");
+            let body = http_body_util::BodyExt::collect(res.into_body()).await.unwrap().to_bytes();
+            assert_eq!(body, captions.as_bytes()[100..1300], "{encodings}: a slice large enough to compress");
+        }
     }
 
     /// The fixed icon's content is unchanged when its background-compressed form becomes ready.
