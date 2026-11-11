@@ -687,13 +687,11 @@ where
     fn call(&self, req: Request) -> Answering {
         let mut service = self.0.clone();
         Box::pin(async move {
-            if let Err(error) = std::future::poll_fn(|cx| service.poll_ready(cx)).await {
-                match Into::<Infallible>::into(error) {}
-            }
-            match service.call(req).await {
-                Ok(res) => res.into_response(),
-                Err(error) => match Into::<Infallible>::into(error) {},
-            }
+            let ready: Result<(), Infallible> = std::future::poll_fn(|cx| service.poll_ready(cx)).await.map_err(Into::into);
+            let Ok(()) = ready;
+            let answered: Result<T::Response, Infallible> = service.call(req).await.map_err(Into::into);
+            let Ok(res) = answered;
+            res.into_response()
         })
     }
 }
