@@ -697,6 +697,15 @@ setting. Windows 11 held 200 (one run, a Winsock listener on loopback asking for
 connection past them, the client seeing the error after about 2 s; Windows Server was not tried.
 A listener of the app's own sets its own.
 
+Each connection accepted from a tokio `TcpListener` (one of `listeners`', or one the app passes to
+`serve_on` or `serve_wrapped`) has Nagle's algorithm off (`TCP_NODELAY`), as Go's `net/http` and
+nginx do. A feed's patches or a live element's fragments made one after another then go out as
+they are made: with it on, one written while the last was not yet acknowledged waited for nginx's
+delayed acknowledgement, about 40 ms on Linux
+([design Choice 41](../design.md#choice-tcp-nodelay)). A whole answer is one write either way. A
+listener of the app's own sets what it chooses, and one that wants Nagle's algorithm calls
+`set_nodelay(false)` on what it accepts.
+
 HTTPS is a step on each connection before HTTP, which `corten::serve_wrapped` takes: the TLS
 handshake. TLS stays the app's choice of library, and so does its configuration. With
 `tokio-rustls`, around the same loopback pair:

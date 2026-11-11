@@ -1,0 +1,19 @@
+[package]
+name = "nodelay-corten"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "The TCP_NODELAY measurement's app: bursts of small live events, with Nagle's algorithm left on, turned off, or as Corten's listeners set it."
+
+# Not part of the Corten workspace.
+[workspace]
+
+[dependencies]
+corten = { package = "corten-run", path = "../../../crates/corten" }
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

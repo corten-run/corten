@@ -28,6 +28,7 @@ bench/fullstack/     Historical marketplace implementations and diagnostic scrip
 bench/marketplace/   Equivalent-localization marketplace v2, the nightly workload from official r17
 bench/catalog/       Optional locale-neutral record detail and JSON diagnostic, with a separate baseline
 bench/live/          One price feed pushed to many clients in the same frameworks
+bench/nodelay/       A burst of small live events through nginx, with and without TCP_NODELAY
 ```
 
 Dependencies of `corten`: `hyper` and `hyper-util` (connections, including ones that switch
