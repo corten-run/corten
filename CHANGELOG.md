@@ -4760,6 +4760,10 @@ Corten is pre-1.0, so any minor version may change the API.
   counting them once right after the swap, when the new page's stream may not be opened yet or the
   left one not yet closed
   ([#1134 The watchlist smoke reads its open feed streams once, right after a client navigation, so 'one feed stream while the component is on the page' fails about 1 run in 80](https://github.com/corten-run/corten/issues/1134)).
+- The test that a port taken on `::1` fails `bind` takes another port when the one it took is busy
+  on `127.0.0.1`, up to 8 times, rather than assume a number free on one address is free on the
+  other: a test running beside it held that number on `127.0.0.1` once in CI
+  ([#1203 a_taken_ipv6_loopback_port_is_an_error fails now and then: the [::1] port it takes may be in use on 127.0.0.1 by a parallel test](https://github.com/corten-run/corten/issues/1203)).
 - A `data-patch` submit that is abandoned, by a newer submit of the form (another button, other
   values) or by a navigation, drops its `aria-busy` marks at once, as the guide says, rather than
   when its own code next ran (after its fetch rejected, or once what it waited on to draw had loaded),
