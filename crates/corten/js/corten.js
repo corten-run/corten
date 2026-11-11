@@ -66,7 +66,14 @@ const fromHere = (url) => url !== "" && new URL(url).origin === location.origin;
 /** @param {string} text */
 const trustedHTML = (text) => /** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createHTML(text) : text));
 
-const scriptsDir = document.querySelector('meta[name="corten-scripts"]')?.getAttribute("content") ?? "/assets/scripts/";
+const scriptsMeta = document.querySelector('meta[name="corten-scripts"]');
+const scriptsDir = scriptsMeta?.getAttribute("content") ?? "/assets/scripts/";
+/**
+ * Where Corten's other meta tags are: `<Corten />` writes them all together, after this one. Looked
+ * for there alone, as one missing from a long page (most are optional) would be looked for through
+ * all of it.
+ */
+const metas = scriptsMeta?.parentElement ?? document;
 
 /** @typedef {import("./on.js").Binding} Binding */
 /** @typedef {import("./on.js").Arg} Arg */
@@ -619,9 +626,10 @@ const connected = new Set();
 
 /**
  * Wires the markup under `root`: imports the modules its handlers name, listens for their events
- * and runs `on:connect` handlers. The names of the refs in it go in `names`.
+ * and runs `on:connect` handlers. The names of the refs in it go in `names`, which the caller counts
+ * as changed; with none they are not read.
  * @param {Element} root
- * @param {Set<string>} names
+ * @param {Set<string> | null} names
  * @param {boolean} [inside] only what is inside `root` joined the page
  */
 function scan(root, names, inside = false) {
@@ -629,10 +637,10 @@ function scan(root, names, inside = false) {
   const marked = Array.from(queryAll(root, "[data-on]"));
   if (!inside) {
     if (hasAttr(root, "data-on")) marked.unshift(root);
-    refName(root, names);
+    if (names) refName(root, names);
   }
   // Rows cloned from one template carry the same refs, so a name is added once per run of them.
-  if (!(inside && fewRefNames(root, names))) {
+  if (names && !(inside && fewRefNames(root, names))) {
     // Indexed, as it was: this runs for every element a change adds (rows a view makes too).
     const refs = queryAll(root, "[data-ref]");
     let last = null;
@@ -1250,7 +1258,9 @@ const served = new WeakMap();
 
 /** Records what `root` and the elements in it were sent as. @param {ParentNode} root */
 function serve(root) {
-  for (const el of [root, ...Array.from(queryAll(root, "details, dialog"))]) {
+  // A query a tag each: the browser finds one tag faster than a list of them, and a load runs it
+  // over the whole page.
+  for (const el of [root, ...Array.from(queryAll(root, "details")), ...Array.from(queryAll(root, "dialog"))]) {
     if (el instanceof HTMLDetailsElement || el instanceof HTMLDialogElement) served.set(el, el.open);
   }
 }
@@ -1504,12 +1514,17 @@ async function swapPage(html, signal, stay, notice = null, layout = null, conten
  * @param {Element} el
  */
 const markupOf = (el) => comparable(el.outerHTML);
-/** @param {string} html */
-const comparable = (html) =>
-  html
-    .replace(/<noscript\b([^>]*)>[\s\S]*?<\/noscript>/gi, "<noscript$1></noscript>")
-    .replace(/ nonce="[^"]*"/g, "")
-    .replace(/<a\b[^>]*>/g, (tag) => (tag.includes(" data-nav") ? tag.replace(' aria-current="page"', "") : tag));
+/**
+ * Each pattern runs only on markup that holds its start: a load compares the head's tags, which
+ * hold none, and a pattern's first use costs more than the rest of the load's comparison.
+ * @param {string} html
+ */
+const comparable = (html) => {
+  if (/<noscript/i.test(html)) html = html.replace(/<noscript\b([^>]*)>[\s\S]*?<\/noscript>/gi, "<noscript$1></noscript>");
+  if (html.includes(' nonce="')) html = html.replace(/ nonce="[^"]*"/g, "");
+  if (html.includes("<a")) html = html.replace(/<a\b[^>]*>/g, (tag) => (tag.includes(" data-nav") ? tag.replace(' aria-current="page"', "") : tag));
+  return html;
+};
 
 /**
  * A patch into a layout element: what it replaced (`"r"`, by its id, with the new element), removed
@@ -2029,7 +2044,7 @@ function inView(el, leave) {
 }
 
 /** The shell key the server printed for this document. */
-const shellKey = document.querySelector('meta[name="corten-shell"]')?.getAttribute("content") ?? null;
+const shellKey = metas.querySelector('meta[name="corten-shell"]')?.getAttribute("content") ?? null;
 
 /**
  * True when a page response belongs to another shell: the document must be loaded in full.
@@ -3059,7 +3074,9 @@ customElements.define(
 );
 
 markCurrent();
-scan(document.documentElement, new Set());
+// No names: nothing counts the first page's as changed (they went into a set nothing read), and a
+// page of rows has thousands.
+scan(document.documentElement, null);
 serve(document);
 readAgainLater();
 {
@@ -3087,7 +3104,7 @@ try {
 // Under `corten dev` the server sends the time it started; after a restart (a rebuild) the stream
 // reconnects to a server that started later, and the page reloads. Its other checks are a module
 // only a dev server serves (js/dev.js).
-const devStart = document.querySelector('meta[name="corten-dev"]')?.getAttribute("content");
+const devStart = metas.querySelector('meta[name="corten-dev"]')?.getAttribute("content");
 if (devStart) {
   new EventSource("/corten/dev").addEventListener("message", (event) => {
     if (/** @type {MessageEvent<string>} */ (event).data !== devStart) reload();
@@ -3100,11 +3117,11 @@ if (devStart) {
 
 // App::client_zone: the browser's time zone, kept in a cookie for the server's ClientZone. Written
 // on each full load, so a visitor who travels is followed from their next page.
-if (document.querySelector('meta[name="corten-zone"]')) {
+if (metas.querySelector('meta[name="corten-zone"]')) {
   document.cookie = `corten-zone=${Intl.DateTimeFormat().resolvedOptions().timeZone};path=/;max-age=31536000;samesite=lax`;
 }
 
-const worker = document.querySelector('meta[name="corten-sw"]')?.getAttribute("content");
+const worker = metas.querySelector('meta[name="corten-sw"]')?.getAttribute("content");
 if (worker && "serviceWorker" in navigator) {
   addEventListener("load", () => {
     navigator.serviceWorker.register(/** @type {string} */ (/** @type {unknown} */ (trusted ? trusted.createScriptURL(worker) : worker))).catch((error) => console.error("corten: service worker registration failed", error));

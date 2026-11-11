@@ -146,7 +146,21 @@ What it shows:
    ms for Solid, Svelte and Vue and 55-131 ms for React and Remix. It is slower than browser-3's
    6.0 ms, while Solid, Svelte, Vue, React and plain JavaScript took over faster than in browser-3
    and Remix slower. The CPU, Chromium and Corten's runtime all changed between the rounds, and
-   this round does not show which slowed Corten's takeover
+   this round does not show which slowed Corten's takeover. An A/B on one Core i9-10885H laptop
+   with this round's Chromium (156.0.8078.4), `ssr.mjs` taking turns between this round's commit
+   and 77002fe, measured part of it: takeover +4.24 ± 1.03 ms over 8 pairs of 30 loads and
+   +2.96 ± 0.62 ms over 4 more (Solid -0.19 and -0.20 ms), and the runtime's own evaluation at
+   load, from performance marks in copies of the page over the loads with no long frame, 9.4 ms
+   against 5.9 (+3.5 ms, no spread recorded), spent in four startup steps. This round's median
+   load had a long frame, on which takeover reads about 9 ms higher, so part of 6.0 to 10.2 ms is
+   probably that.
+   [#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) cut that evaluation: in another session on the same laptop and Chromium, against a base
+   (8c2a1b71) with this round's runtime, evaluation -4.14 ± 0.16 ms (base 10.15 ms, 9.90 to 10.70,
+   against 6.00, 5.90 to 6.40, medians of 6 runs of 30 loads) and the takeover of the loads with
+   no long frame -3.91 ± 2.40 ms over 8 pairs of 30 loads, with Solid, the control, at
+   -0.31 ± 0.85 ms. The two sessions measured the same runtime at 9.4 and 10.15 ms, so their
+   differences compare (+3.5 ms, then -4.14), not their levels. The 10.2 ms above is this round's;
+   the next browser round measures takeover again
    ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)).
    It is also one round of a number that has moved between runs before (browser-2 and its
    reruns, below). On about half of Corten's and React's loads a long frame rendered
