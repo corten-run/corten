@@ -1030,8 +1030,9 @@ mod tests {
     }
 
     /// What an agent's `items.get` call costs, for callgrind: `TOOL_CALLS` calls through `/mcp`,
-    /// one item after another from the fixture, each answered with the item as written by its
-    /// `ToJson`. Build with `cargo test --release -p card-market --no-run`, then run the binary
+    /// one item after another from the fixture, each with the `MCP-Protocol-Version` a client sends
+    /// after `initialize`, and answered with the item as written by its `ToJson`. Build with
+    /// `cargo test --release -p card-market --no-run`, then run the binary
     /// twice, `CORTEN_FIXTURE=/path/items.json TOOL_CALLS=200` and `=1200`, under
     /// `valgrind --tool=callgrind <test binary> --ignored --exact app::tests::tool_cost`: the
     /// difference over 1,000 is one call, without startup and setup.
@@ -1057,6 +1058,7 @@ mod tests {
                 .header("content-type", "application/json")
                 .header("accept", "application/json, text/event-stream")
                 .header("authorization", "Bearer t")
+                .header("mcp-protocol-version", corten::agent::PROTOCOL_VERSIONS[0])
                 .body(Body::from(body.clone()))
                 .unwrap();
             let res = router.clone().oneshot(req).await.unwrap();
