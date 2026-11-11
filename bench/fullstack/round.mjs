@@ -58,7 +58,7 @@ export const roundNameError = (round, tier, { full = false } = {}) => {
 export const fixtureError = (suite, text) => {
   if (suite === "live") return null;
   const round = `a ${{ fullstack: "full-stack", harden: "hardening" }[suite] ?? suite} round`;
-  const how = "Write it with node bench/fullstack/fixtures/fetch.mjs, which needs the item API on :18400, or copy one from a checkout that has it (bench/fullstack/README.md, Running it)";
+  const how = "Copy one from a checkout that has it, or write it with node bench/fullstack/fixtures/fetch.mjs from a rust-item-detail API on :18400 (not in this repository; bench/fullstack/README.md, Running it, and REVIEW.md)";
   if (text === null) return `bench/fullstack/fixtures/items.json is missing: ${round} serves its items from it, and git does not keep it. ${how}`;
   let items;
   try { items = JSON.parse(text); } catch { items = null; }

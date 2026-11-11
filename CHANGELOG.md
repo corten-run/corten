@@ -4745,9 +4745,9 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Fixed
 - `bench/fullstack/droplet.mjs` refuses to start a full-stack, browser or hardening round when
   `bench/fullstack/fixtures/items.json` is missing, empty, not JSON or without `item_1`, before it
-  creates a droplet. Git does not keep
-  the file, so a round started from a fresh checkout ran an item API that exited at once, and every
-  app waited out its two-minute start with every page failing.
+  creates a droplet. Git does not keep the file, so a round started from a fresh checkout ran an
+  item API that exited at once, and every app waited out its two-minute start with every page
+  failing.
 - A build with the `json` feature and not `types` compiles its tests again (one checked a
   declaration only `types` makes), and CI now builds them; a build without the `log` feature no
   longer warns about an unused import; and the MSRV (1.88) build no longer warns that the code
