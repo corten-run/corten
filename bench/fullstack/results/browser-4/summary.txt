@@ -1,0 +1,101 @@
+
+Cost (requests per CPU-second at the fixed rate and at 64 users, CPU at the fixed rate, 64-user requests a second per MiB)
+
+SSR fixture
+| App | fixed rate: achieved rps, p50/p99 ms, CPU | 64 VUs: rps, p50/p99 | 256 VUs: rps, p99, failed | memory under load |
+
+SSR api
+| App | fixed rate: achieved rps, p50/p99 ms, CPU | 64 VUs: rps, p50/p99 | 256 VUs: rps, p99, failed | memory under load |
+
+SSR fixture-json
+| App | fixed rate: achieved rps, p50/p99 ms, CPU | 64 VUs: rps, p50/p99 | 256 VUs: rps, p99, failed | memory under load |
+
+SSR api-json
+| App | fixed rate: achieved rps, p50/p99 ms, CPU | 64 VUs: rps, p50/p99 | 256 VUs: rps, p99, failed | memory under load |
+
+Build (wall, CPU-seconds, peak memory; cores 1-4)
+| corten | clean (deps + build) 64.1 s, 129.5 CPU-s | deps 1.7 s (downloads) | build 62.4 s, 127.8 CPU-s, 596 MiB | after the edit 29.0 s, 54.1 CPU-s, 495 MiB | dev 27.0 s, after the edit 1.2 s (1.5 CPU-s) |
+| leptos | clean (deps + build) 260.0 s, 648.2 CPU-s | deps 1.7 s (downloads) | build 258.2 s, 646.4 CPU-s, 2329 MiB | after the edit 132.7 s, 205.6 CPU-s, 1163 MiB | dev 100.8 s, after the edit 6.9 s (16.7 CPU-s) |
+| topcoat | clean (deps + build) 79.2 s, 212.2 CPU-s | deps 1.5 s (downloads) | build 77.7 s, 210.7 CPU-s, 865 MiB | after the edit 33.8 s, 64.2 CPU-s, 550 MiB | dev 38.5 s, after the edit 3.8 s (5.9 CPU-s) |
+| axum-maud | clean (deps + build) 48.1 s, 128.4 CPU-s | deps 1.1 s (downloads) | build 47.1 s, 127.3 CPU-s, 795 MiB | after the edit 18.1 s, 38.2 CPU-s, 377 MiB | dev 23.8 s, after the edit 0.9 s (1.2 CPU-s) |
+
+Editor, tests, other edits and disk (wall time; after an edit, the median)
+| corten | check 18.1 s, after the edit 0.6 s [1 crates] | tests compiled 28.2 s, after the edit 1.4 s [1 crates] | dev after a handler edit 1.8 s (3 runs) [1 crates] | dev after a shared type edit 3.2 s (3 runs) [1 crates] | dev after a message edit 1.2 s (3 runs) [1 crates] | dev after a route edit 2.2 s (3 runs) [1 crates] | disk: deps 227 MB, build 258 MB, dev 878 MB |
+| leptos | check 36.0 s, after the edit 0.9 s [1 crates] | tests compiled 65.3 s, after the edit 10.1 s [1 crates] | disk: deps 239 MB, build 2147 MB, dev 4281 MB |
+| topcoat | check 27.8 s, after the edit 1.3 s [1 crates] | tests compiled 37.8 s, after the edit 3.6 s [1 crates] | disk: deps 200 MB, build 717 MB, dev 1348 MB |
+| axum-maud | disk: deps 161 MB, build 435 MB, dev 837 MB |
+
+The clean build on other cores, and the development build linked by mold
+| corten | cores 1-2: 81.3 s, 125.6 CPU-s | cores 0-7: 60.2 s, 159.2 CPU-s | mold: dev 27.6 s, after the edit 1.4 s (the default build's linker: lld) |
+
+The app's own docker build after the edit, BuildKit's cache warm (wall, CPU-seconds; each the median of its own runs)
+| corten | FAILED: ENOENT: no such file or directory, open '/tmp/corten-docker-rebuild-XlfIcd/corten/examples/card-market/src/views/alert.rs' |
+
+rust-analyzer (ready cold and warm; after the edit, the median of a completion and of the errors asked for)
+| corten | ready 22.7 s cold, 10.6 s warm | completion 68 ms (offered in 5 of 5) | errors 49 ms (shown in 5 of 5), cleared 45 ms | 2750 MiB peak |
+| leptos | ready 28.6 s cold, 16.8 s warm | completion 5432 ms (offered in 5 of 5) | errors 5567 ms (shown in 5 of 5), cleared 5425 ms | 4394 MiB peak |
+| topcoat | ready 16.4 s cold, 5.8 s warm | completion 2836 ms (offered in 5 of 5) | errors 2897 ms (shown in 5 of 5), cleared 2777 ms | 2388 MiB peak |
+
+Bytes (raw / gzip)
+| corten | html 9.1/2.1 | js 41.6/15.0 (3) | wasm 0.0/0.0 | css 9.0/2.7 |
+| nextjs | html 26.4/4.9 | js 456.5/136.2 (7) | wasm 0.0/0.0 | css 8.5/2.2 |
+| tanstack-start | html 18.2/4.4 | js 349.2/114.0 (6) | wasm 0.0/0.0 | css 8.5/2.4 |
+| sveltekit | html 17.0/3.7 | js 99.2/37.9 (10) | wasm 0.0/0.0 | css 8.5/2.2 |
+| react-router | html 20.2/5.0 | js 311.5/99.3 (4) | wasm 0.0/0.0 | css 8.5/2.4 |
+| leptos | html 18.7/3.7 | js 25.0/7.0 (1) | wasm 1280.2/518.2 | css 8.5/2.2 |
+| django | html 8.0/1.9 | js 51.8/17.0 (2) | wasm 0.0/0.0 | css 9.0/2.7 |
+| rails | html 9.2/2.3 | js 152.2/40.7 (7) | wasm 0.0/0.0 | css 9.0/2.7 |
+| laravel | html 11.4/2.9 | js 255.8/84.3 (1) | wasm 0.0/0.0 | css 9.0/2.7 |
+| aspnet | html 8.0/2.0 | js 51.8/17.0 (2) | wasm 0.0/0.0 | css 9.0/2.7 |
+| spring | html 7.9/1.9 | js 51.8/17.0 (2) | wasm 0.0/0.0 | css 9.0/2.7 |
+| phoenix | html 10.7/2.6 | js 149.2/46.2 (1) | wasm 0.0/0.0 | css 9.0/2.7 |
+| astro | html 7.9/1.9 | js 25.0/9.2 (3) | wasm 0.0/0.0 | css 8.3/2.2 |
+| nuxt | html 18.1/4.6 | js 201.2/75.4 (6) | wasm 0.0/0.0 | css 8.3/2.2 |
+| topcoat | html 10.5/2.3 | js 47.6/15.0 (2) | wasm 0.0/0.0 | css 9.0/2.7 |
+| axum-maud | html 7.7/1.8 | js 51.8/17.0 (2) | wasm 0.0/0.0 | css 9.0/2.7 |
+| gin | html 7.7/1.8 | js 51.8/17.0 (2) | wasm 0.0/0.0 | css 9.0/2.7 |
+| drogon | html 7.7/1.8 | js 51.8/17.0 (2) | wasm 0.0/0.0 | css 9.0/2.7 |
+| fastapi | html 7.8/1.8 | js 51.8/17.0 (2) | wasm 0.0/0.0 | css 9.0/2.7 |
+| express | html 7.8/1.8 | js 51.8/17.0 (2) | wasm 0.0/0.0 | css 9.0/2.7 |
+
+Browser (median / p90 ms)
+| desktop/corten | interactive 49/55 | LCP 56 | TBT 0 | action 74 | nav 12/13 | heap 1.6 MB | ok |
+| desktop/nextjs | interactive 131/135 | LCP 64 | TBT 0 | action 73 | nav 71/85 | heap 3.4 MB | ok |
+| desktop/tanstack-start | interactive 113/116 | LCP 68 | TBT 0 | action 71 | nav 22/24 | heap 2.9 MB | ok |
+| desktop/sveltekit | interactive 94/96 | LCP 64 | TBT 0 | action 75 | nav 25/26 | heap 2.4 MB | ok |
+| desktop/react-router | interactive 143/147 | LCP 84 | TBT 0 | action 71 | nav 32/34 | heap 2.7 MB | ok |
+| desktop/leptos | interactive 103/105 | LCP 60 | TBT 0 | action 74 | nav 20/20 | heap 2 MB | ok |
+| desktop/django | interactive 38/41 | LCP 60 | TBT 0 | action 75 | nav 17/18 | heap 1.7 MB | ok |
+| desktop/rails | interactive 52/55 | LCP 56 | TBT 0 | action 89 | nav 24/27 | heap 2.1 MB | ok |
+| desktop/laravel | interactive 59/67 | LCP 56 | TBT 0 | action 75 | nav 20/20 | heap 2.2 MB | ok |
+| desktop/aspnet | interactive 40/42 | LCP 60 | TBT 0 | action 75 | nav 13/14 | heap 1.7 MB | ok |
+| desktop/spring | interactive 51/57 | LCP 64 | TBT 0 | action 76 | nav 28/31 | heap 1.7 MB | ok |
+| desktop/phoenix | interactive 84/87 | LCP 72 | TBT 0 | action 80 | nav 14/15 | heap 2.3 MB | ok |
+| desktop/astro | interactive 48/52 | LCP 56 | TBT 0 | action 75 | nav 13/14 | heap 1.6 MB | ok |
+| desktop/nuxt | interactive 97/100 | LCP 64 | TBT 0 | action 73 | nav 19/20 | heap 2.9 MB | ok |
+| desktop/topcoat | interactive 47/47 | LCP 52 | TBT 0 | action 64 | nav 12/13 | heap 1.9 MB | ok |
+| desktop/axum-maud | interactive 65/68 | LCP 52 | TBT 0 | action 75 | nav 12/13 | heap 1.7 MB | ok |
+| desktop/gin | interactive 39/41 | LCP 56 | TBT 0 | action 75 | nav 12/13 | heap 1.7 MB | ok |
+| desktop/drogon | interactive 40/42 | LCP 60 | TBT 0 | action 75 | nav 13/13 | heap 1.7 MB | ok |
+| desktop/fastapi | interactive 40/43 | LCP 60 | TBT 0 | action 75 | nav 15/16 | heap 1.7 MB | ok |
+| desktop/express | interactive 37/40 | LCP 64 | TBT 0 | action 76 | nav 14/14 | heap 1.7 MB | ok |
+| mobile/corten | interactive 456/467 | LCP 444 | TBT 0 | action 264 | nav 193/194 | heap 1.6 MB | ok |
+| mobile/nextjs | interactive 1347/1356 | LCP 408 | TBT 99 | action 266 | nav 473/483 | heap 3.3 MB | ok |
+| mobile/tanstack-start | interactive 2371/2385 | LCP 512 | TBT 71 | action 272 | nav 332/338 | heap 2.9 MB | ok |
+| mobile/sveltekit | interactive 862/865 | LCP 484 | TBT 0 | action 264 | nav 271/274 | heap 2.4 MB | ok |
+| mobile/react-router | interactive 1034/1048 | LCP 460 | TBT 11 | action 306 | nav 272/276 | heap 2.8 MB | ok |
+| mobile/leptos | interactive 2890/2894 | LCP 428 | TBT 55 | action 266 | nav 238/239 | heap 2 MB | ok |
+| mobile/django | interactive 445/448 | LCP 408 | TBT 0 | action 271 | nav 232/241 | heap 1.7 MB | ok |
+| mobile/rails | interactive 1177/1179 | LCP 520 | TBT 0 | action 279 | nav 242/244 | heap 2.1 MB | ok |
+| mobile/laravel | interactive 878/881 | LCP 440 | TBT 1 | action 299 | nav 205/207 | heap 2.2 MB | ok |
+| mobile/aspnet | interactive 439/440 | LCP 408 | TBT 0 | action 264 | nav 232/237 | heap 1.7 MB | ok |
+| mobile/spring | interactive 640/642 | LCP 468 | TBT 1 | action 270 | nav 233/237 | heap 1.7 MB | ok |
+| mobile/phoenix | interactive 923/934 | LCP 424 | TBT 14 | action 118 | nav 125/127 | heap 2.3 MB | ok |
+| mobile/astro | interactive 653/662 | LCP 492 | TBT 1 | action 290 | nav 222/227 | heap 1.6 MB | ok |
+| mobile/nuxt | interactive 1565/1582 | LCP 576 | TBT 83 | action 262 | nav 248/251 | heap 3 MB | ok |
+| mobile/topcoat | interactive 450/459 | LCP 416 | TBT 0 | action 258 | nav 204/206 | heap 1.9 MB | ok |
+| mobile/axum-maud | interactive 640/642 | LCP 468 | TBT 0 | action 272 | nav 232/235 | heap 1.7 MB | ok |
+| mobile/gin | interactive 640/641 | LCP 464 | TBT 0 | action 270 | nav 232/234 | heap 1.7 MB | ok |
+| mobile/drogon | interactive 444/446 | LCP 412 | TBT 0 | action 269 | nav 203/206 | heap 1.7 MB | ok |
+| mobile/fastapi | interactive 640/641 | LCP 464 | TBT 0 | action 273 | nav 233/235 | heap 1.7 MB | ok |
+| mobile/express | interactive 642/643 | LCP 464 | TBT 1 | action 272 | nav 233/234 | heap 1.7 MB | ok |
