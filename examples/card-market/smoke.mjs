@@ -241,15 +241,26 @@ try {
       }
       return null;
     };
-    /** @param {object} message */
-    const push = async (message) => {
-      if (registrationId !== null) await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify(message) });
+    /**
+     * Sends `message` and reads the notifications until one has its body. Under load Chromium now
+     * and then drops a notification the worker showed: its trace has the push dispatched and the
+     * handler's `waitUntil` settled (`DidHandlePushEvent` COMPLETED), and `getNotifications()`
+     * never lists it, for either push (#1202: 14 of about 550 local runs, none shown late). A
+     * message not shown in 5 s is sent once more, and the detail says which send showed it.
+     * @param {{ title?: string, body: string, url: unknown }} message
+     */
+    const shown = async (message) => {
+      if (registrationId === null) return null;
+      for (let send = 1; send <= 2; send += 1) {
+        await cdp.send("ServiceWorker.deliverPushMessage", { origin: base, registrationId, data: JSON.stringify(message) });
+        const found = await shownWith(message.body);
+        if (found) return { ...found, send };
+      }
+      return null;
     };
-    await push({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
-    const shown = await shownWith("Card Name 5 is below $4.50");
-    check("a push message shows a notification", shown?.title === "Price drop" && shown?.url === "/items/item_5", registrationId === null ? "no registration id" : JSON.stringify(shown));
-    await push({ body: "Card Name 7 is back", url: 5 });
-    const odd = await shownWith("Card Name 7 is back");
+    const first = await shown({ title: "Price drop", body: "Card Name 5 is below $4.50", url: "/items/item_5" });
+    check("a push message shows a notification", first?.title === "Price drop" && first?.url === "/items/item_5", registrationId === null ? "no registration id" : JSON.stringify(first));
+    const odd = await shown({ body: "Card Name 7 is back", url: 5 });
     check("a push message with no title and a url that is not text shows untitled and opens /", odd?.title === "" && odd?.url === "/", JSON.stringify(odd));
   } finally {
     await full.close();

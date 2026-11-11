@@ -4753,6 +4753,13 @@ Corten is pre-1.0, so any minor version may change the API.
   counting them once right after the swap, when the new page's stream may not be opened yet or the
   left one not yet closed
   ([#1134 The watchlist smoke reads its open feed streams once, right after a client navigation, so 'one feed stream while the component is on the page' fails about 1 run in 80](https://github.com/corten-run/corten/issues/1134)).
+- card-market's push checks send a message once more when its notification is not listed within
+  5 seconds, and say which send showed it. Under load Chromium now and then loses a notification
+  the worker showed: the trace has the push dispatched and its handler settled, and
+  `getNotifications()` never lists it, even 30 seconds later (14 of about 550 local runs). A longer
+  wait would not help. With the second send, 120 runs under load passed, 6 of them on the second
+  send
+  ([#1202 card-market's smoke failed once in CI waiting 5 s for a second push notification (no title, url not text) that a rerun showed](https://github.com/corten-run/corten/issues/1202)).
 - A `data-patch` submit that is abandoned, by a newer submit of the form (another button, other
   values) or by a navigation, drops its `aria-busy` marks at once, as the guide says, rather than
   when its own code next ran (after its fetch rejected, or once what it waited on to draw had loaded),
