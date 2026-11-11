@@ -144,18 +144,18 @@ impl Partners {
         Partners(Arc::new(pairs.map(|(name, key)| (key.to_string(), Arc::from(name))).collect()))
     }
 
-    /// The key the request sends as a bearer token (`Authorization: Bearer <key>`, RFC 6750),
-    /// whose scheme is matched in any case; an empty one is no key.
-    fn sent(headers: &HeaderMap) -> Option<&str> {
-        let (scheme, key) = headers.get(header::AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
-        let key = key.trim();
-        (scheme.eq_ignore_ascii_case("bearer") && !key.is_empty()).then_some(key)
-    }
-
     /// The partner whose key the request sends.
     fn named(&self, headers: &HeaderMap) -> Option<&Arc<str>> {
-        self.0.get(Self::sent(headers)?)
+        self.0.get(bearer_token(headers)?)
     }
+}
+
+/// The bearer token the request sends (`Authorization: Bearer <token>`, RFC 6750), a partner's key
+/// or an agent's token, whose scheme is matched in any case (RFC 9110 11.1); an empty one is none.
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let (scheme, token) = headers.get(header::AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
 }
 
 /// A service that sets alerts for its users, known by the API key it sends as a bearer token. A
@@ -175,7 +175,7 @@ impl corten::openapi::Argument for Partner {
 
 impl Identify<ApiState> for Partner {
     async fn identify(parts: &Parts, state: &ApiState) -> Result<Self, Refused> {
-        let refused = match (state.partners.named(&parts.headers), Partners::sent(&parts.headers)) {
+        let refused = match (state.partners.named(&parts.headers), bearer_token(&parts.headers)) {
             (Some(name), _) => return Ok(Partner { name: name.clone() }),
             (None, None) => Refused::unauthorized(Challenge::bearer("partners")),
             (None, Some(_)) => Refused::unauthorized(Challenge::bearer("partners").param("error", "invalid_token")),
@@ -534,13 +534,9 @@ fn rpc_failure(status: StatusCode, message: &str) -> RpcFailure {
 fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
     let read_source = source.clone();
     Tools::new("card-market-item-page", env!("CARGO_PKG_VERSION"))
-        .auth(move |headers| {
-            // The scheme is matched in any case (RFC 9110 11.1).
-            let sent = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.split_once(' '));
-            match sent.filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, token)| token.trim()) {
-                Some(token) if tokens.iter().any(|known| known == token) => Ok(()),
-                _ => Err(ToolError::Unauthorized),
-            }
+        .auth(move |headers| match bearer_token(headers) {
+            Some(token) if tokens.iter().any(|known| known == token) => Ok(()),
+            _ => Err(ToolError::Unauthorized),
         })
         .read_tool(
             "items.get",
@@ -1180,6 +1176,20 @@ mod tests {
             res["result"]["structuredContent"]["message"],
             "Alert set: we will email a@b.c when Pika <Promo> & \"Friends\" drops below $1.00."
         );
+        // The scheme is matched in any case (RFC 9110 11.1), and an empty token is none: told
+        // where to get one, with no `invalid_token`.
+        let lower = app.call(Method::POST, &mcp::Mcp).json(&alert).header(header::AUTHORIZATION, "bearer dev-token");
+        let res: serde_json::Value = serde_json::from_str(&send(lower).await.2).unwrap();
+        assert!(res["result"]["structuredContent"]["message"].is_string(), "{res}");
+        for empty in ["Bearer", "Bearer  "] {
+            let (status, headers, _) =
+                send(app.call(Method::POST, &mcp::Mcp).json(&alert).header(header::AUTHORIZATION, empty)).await;
+            assert_eq!(
+                (status, &headers["www-authenticate"]),
+                (StatusCode::UNAUTHORIZED, &r#"Bearer realm="card-market-item-page""#.parse().unwrap()),
+                "{empty:?}"
+            );
+        }
         // The tools' own refusal keeps its request's id: `Api::errors` leaves a JSON body as it is.
         // A bearer token that was sent and refused is named invalid (RFC 6750).
         let (status, headers, body) = send(call(Some("wrong"), alert)).await;

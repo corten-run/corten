@@ -319,8 +319,9 @@ impl Challenge {
     /// 6750's `error`, `error_description` and `scope`, which must not hold them, is the app's.
     /// It runs when the challenge is made, so a challenge is best built from literals the app's
     /// tests send a request through, or, for a realm from configuration, once at startup, kept in
-    /// the app's state and cloned for each refusal, so a bad one stops the app from starting. Panics when `name` is not a token or the challenge has it already
-    /// (RFC 9110 11.2, in any case), or `value` has a control character or a byte outside ASCII,
+    /// the app's state and cloned for each refusal, so a bad one stops the app from starting.
+    /// Panics when `name` is not a token or the challenge has it already (RFC 9110 11.2, in any
+    /// case), or `value` has a control character or a byte outside ASCII,
     /// Corten's rule since the authentication framework has no reliable way to carry another
     /// character set (RFC 7617 3): a value from a request or a store is the app's to clean first.
     #[track_caller]

@@ -457,7 +457,8 @@ fn keyed(input: &Value) -> bool {
 impl<A: Send + 'static> Tools<A> {
     /// Where clients get a token for the endpoint ([`Authorization`]): Corten serves its
     /// protected-resource metadata next to the endpoint and names it in every 401. Without it a
-    /// 401 names only `Bearer` and a realm (the endpoint's name), for tokens handed out by hand.
+    /// 401 names only `Bearer` and a realm (the endpoint's name, or `mcp` when the name is empty or not
+    /// printable ASCII), for tokens handed out by hand.
     pub fn authorization(mut self, authorization: Authorization) -> Self {
         self.authorization = Some(Arc::new(authorization));
         self
@@ -1074,7 +1075,7 @@ mod tests {
         // Other credentials than a bearer token are no token, nor is `Bearer` with only
         // whitespace after it: told where to get one, nothing more.
         let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": {} } });
-        for sent in ["Basic YTpi", "Bearer   ", "Bearer \t"] {
+        for sent in ["Basic YTpi", "Bearer", "Bearer   ", "Bearer \t"] {
             let req = Request::post("/mcp").header("content-type", "application/json").header("authorization", sent);
             let (status, headers, _) = send(&app, req.body(Body::from(call.to_string())).unwrap()).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{sent:?}");
