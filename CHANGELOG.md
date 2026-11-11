@@ -4560,16 +4560,20 @@ Corten is pre-1.0, so any minor version may change the API.
     exactly the parts it names, and `browser` fails unless every part is in exactly one group, so a
     check cannot drop out by a renamed group or a mistyped condition. Over 40 passing pull request
     runs (39 first attempts) the browser job took a median 1,076 s and the Rust job 989 s, 589 s of
-    it the release tests. Measured on this change's first run (one run, f7396486, every cache
-    cold): the smoke groups took 6 min 57 s, 7 min 29 s and 7 min 49 s and `rust-checks` 7 min 51
-    s, so `browser` passed after about 11 minutes, and `rust-release` 17 min 6 s, so the run took
-    17 min 13 s; `rust-release` again on its warm cache took 12 min 20 s (one rerun). So the
-    release tests are now the long pole: on warm caches a change's checks should finish in about 12
-    and a half minutes (estimated from that rerun) rather than 18, with 8 jobs in a run, up to 6 at
-    once, rather than 3. The failure cases ran on Actions on a throwaway branch: with a part in no
-    group every smoke group passed and `browser` failed at its parts check, and with one smoke step
-    and the release tests made to fail, `browser` and `rust` each failed; a cancelled or skipped
-    job is refused by the same test of each result
+    it the release tests. Measured on this change's first run (one run, f7396486, both new Rust
+    caches cold): the smoke groups took 6 min 57 s, 7 min 29 s and 7 min 49 s and `rust-checks` 7
+    min 51 s; `browser` passed 11 min 20 s after the run started, having waited 3 min 23 s for a
+    runner after the last group ended; `rust-release` took 17 min 6 s and `rust` passed 17 min 12 s
+    in. Run alone on its warm cache, `rust-release` took 12 min 20 s, and `rust` then waited 4 min
+    19 s for a runner (one rerun). So the release tests are now the long pole, and each of the two
+    gate jobs adds the wait for a runner, 2 s to 4 min 19 s in these runs: on warm caches a
+    change's checks should finish in about 12.5 to 17 minutes (estimated from those runs) rather
+    than 17.5 to 22.5 (other pull requests' runs in the same hours, six runs), with 8 jobs in a
+    run, up to 6 at once, rather than 3. Two failure cases ran on Actions on a throwaway branch:
+    with a part in no group every smoke group passed and `browser` failed at its parts check, and
+    with one smoke step and a step added after the release tests made to fail, `browser` and `rust`
+    each failed. A cancelled or skipped job (not run) reaches the same test of each result, and a
+    group's name is only the job's display name, so renaming one changes no part
     ([#1085 CI runs every browser example in sequence, putting a 17-minute path on each change](https://github.com/corten-run/corten/issues/1085),
     [#1086 CI starts its 9.6-minute release test step only after the rest of the Rust checks](https://github.com/corten-run/corten/issues/1086)).
 
