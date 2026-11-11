@@ -755,7 +755,9 @@ impl StartHere {
         let page = match crate::body::to_bytes(body, usize::MAX).await {
             Ok(page) => page,
             Err(error) => {
-                tracing::error!("corten: a page with layout reads could not be read to fill it: {error}");
+                let error = body_error(error);
+                let error: &(dyn std::error::Error + 'static) = &*error;
+                tracing::error!(error, "corten: a page with layout reads could not be read to fill it");
                 return crate::Error::new("corten: the page could not be read").into_response();
             }
         };
@@ -978,6 +980,20 @@ fn draw(
     }
 }
 
+/// A body's own error, under however many of axum's wrappers it came in (`to_bytes` adds one,
+/// `Body::new` and `Body::from_stream` another): each repeats its source's message, so a log of the
+/// wrapper would say it twice.
+fn body_error(error: axum::Error) -> axum::BoxError {
+    let mut error = error.into_inner();
+    while error.is::<axum::Error>() {
+        match error.downcast::<axum::Error>() {
+            Ok(wrapper) => error = wrapper.into_inner(),
+            Err(other) => return other,
+        }
+    }
+    error
+}
+
 #[cfg(test)]
 mod tests {
     use super::{mark, mark_end, MARK};
@@ -1001,5 +1017,18 @@ mod tests {
             let page = format!("{MARK}{written}");
             assert_eq!(mark_end(&page, token, 0, 12), None, "{written}");
         }
+    }
+
+    /// A body read for layout that fails is logged as the stream's own error, not as axum's
+    /// wrappers around it, which repeat its message: one from `to_bytes`, one from `from_stream`.
+    #[tokio::test]
+    async fn a_failed_body_is_its_own_error_without_axums_wrappers() {
+        let broken = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "the upstream reset the connection");
+        let stream = futures_util::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"<p>")), Err(broken)]);
+        let error = axum::body::to_bytes(axum::body::Body::from_stream(stream), usize::MAX).await.unwrap_err();
+        let error = super::body_error(error);
+        assert!(error.is::<std::io::Error>(), "{error:?}");
+        assert_eq!(error.to_string(), "the upstream reset the connection");
+        assert!(std::error::Error::source(&*error).is_none());
     }
 }

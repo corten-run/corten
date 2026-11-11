@@ -8,7 +8,7 @@
 //! | `POST /archive`, `POST /watch` | the menu's form actions: archive the draft, watch the card |
 //! | `POST /save` | saving the draft, answered with a toast |
 //! | `POST /publish` | publishing the draft: refused (409, the card sold meanwhile), answered with a failed toast |
-//! | `POST /rename` | the rename dialog's form: refused, the dialog drawn open; else back to the draft, whose toaster says it was renamed (`req.redirect_with_notice`) |
+//! | `POST /rename` | the rename dialog's form: refused (no name, or the other draft's, which the form's own message says in `FormAlert`), the dialog drawn open; else back to the draft, whose toaster says it was renamed (`req.redirect_with_notice`) |
 //! | `GET /help` | the menu's link |
 //! | `GET /orders?page=2` | the seller's orders, a page of them: the kit's other components |
 //! | `POST /orders/settings` | the shipping settings: back to the orders, whose toaster says they were saved |
@@ -18,7 +18,7 @@ use std::time::{Duration, SystemTime};
 use corten_ui::{Toast, Toaster};
 
 use crate::gallery::{
-    CARD, Condition, Gallery, MarketTab, MenuResult, OrderResult, Period, Pricing, Region, RenameDialog, Sale, Times,
+    CARD, Condition, Gallery, MarketTab, MenuResult, OrderResult, Period, Pricing, Region, RenameDialog, Sale, SalesPage, Times,
 };
 use crate::orders::{Orders, PAGES, PAYOUTS, SettingsForm};
 use crate::ui::{
@@ -53,6 +53,7 @@ pub mod url {
         pub sale: Option<crate::gallery::Sale>,
         pub period: Option<crate::gallery::Period>,
         pub sold: Option<crate::gallery::SoldBy>,
+        pub sales: Option<crate::gallery::SalesPage>,
     }
 
     #[route("/sell", post = sell)]
@@ -188,7 +189,7 @@ fn gallery(req: &Req, gallery: Gallery<'_>) -> HtmlResult {
 const TITLE: &str = "Sell Ashen Drake | corten-ui";
 
 /// The draft, with no tab, period, order or sheet chosen: the bar's links and the steps' current one.
-pub const DRAFT: url::Home = url::Home { tab: None, sale: None, period: None, sold: None };
+pub const DRAFT: url::Home = url::Home { tab: None, sale: None, period: None, sold: None, sales: None };
 
 /// The listings tab with nothing to report: what each answer below changes one part of
 /// (`Gallery { result: &text, ..listings(&req, &none) }`), since every prop is written.
@@ -197,6 +198,7 @@ fn listings<'a>(req: &Req, none: &'a Errors) -> Gallery<'a> {
         tab: MarketTab::Listings,
         period: Period::Month,
         sold: None,
+        earlier: false,
         result: "",
         sale: false,
         times: times(req),
@@ -210,7 +212,17 @@ async fn home(req: Req, Params(q): Params<url::Home>) -> HtmlResult {
     let none = Errors::new();
     let tab = q.tab.unwrap_or(MarketTab::Listings);
     let period = q.period.unwrap_or(Period::Month);
-    gallery(&req, Gallery { tab, period, sold: q.sold, sale: q.sale == Some(Sale::Last), ..listings(&req, &none) })
+    gallery(
+        &req,
+        Gallery {
+            tab,
+            period,
+            sold: q.sold,
+            earlier: q.sales == Some(SalesPage::Earlier),
+            sale: q.sale == Some(Sale::Last),
+            ..listings(&req, &none)
+        },
+    )
 }
 
 #[derive(Fields)]
@@ -312,18 +324,27 @@ pub struct RenameForm {
     pub name: String,
 }
 
-/// A name is required: refused, the dialog comes back drawn open with the error, as a patch or in
-/// the whole page.
+/// The name of the seller's other draft, which this one cannot take.
+pub const TAKEN: &str = "Holiday lot";
+
+/// A name is required, and not the other draft's: refused, the dialog comes back drawn open with
+/// the error, as a patch or in the whole page. A taken name is said for the whole form too
+/// (`FormAlert`), as it is about the other draft, not about what was typed.
 async fn rename(req: Req, Form(form): Form<RenameForm>) -> HtmlResult {
     let name = form.name.trim();
-    if !name.is_empty() {
+    let f = RenameForm::FIELDS;
+    let mut errors = Errors::new();
+    if name.is_empty() {
+        errors.add(f.name, "Give the draft a name.");
+    } else if name.eq_ignore_ascii_case(TAKEN) {
+        errors.add_form(format!("Your other draft is named {TAKEN}. Rename that one first, or choose another name."));
+        errors.add(f.name, "Choose another name.");
+    } else {
         return req.redirect_with_notice(
-            &url::Home { tab: None, sale: None, period: None, sold: None },
+            &url::Home { tab: None, sale: None, period: None, sold: None, sales: None },
             format_args!("Renamed to {name}."),
         );
     }
-    let mut errors = Errors::new();
-    errors.add(RenameForm::FIELDS.name, "Give the draft a name.");
     let page = || async { gallery(&req, Gallery { rename: RenameDialog { name, errors: &errors }, ..listings(&req, &errors) }) };
     req.invalid(&errors, RenameDialog { name, errors: &errors }, page).await
 }
@@ -337,8 +358,10 @@ async fn watch(req: Req) -> HtmlResult {
 }
 
 async fn menu_action(req: Req, text: &'static str) -> HtmlResult {
-    req.patch_or(MenuResult { text }, || async { req.redirect(&url::Home { tab: None, sale: None, period: None, sold: None }) })
-        .await
+    req.patch_or(MenuResult { text }, || async {
+        req.redirect(&url::Home { tab: None, sale: None, period: None, sold: None, sales: None })
+    })
+    .await
 }
 
 /// A page of the orders: one past the last is the last.
@@ -382,7 +405,7 @@ async fn help(req: Req) -> HtmlResult {
                 <dt>"Archive and Watch"</dt>
                 <dd>"Archiving puts the draft away without listing it. Watching tells you when this card's market low moves."</dd>
             </dl>
-            <p><a href={url::Home { tab: None, sale: None, period: None, sold: None }}>"Back to the draft"</a></p>
+            <p><a href={url::Home { tab: None, sale: None, period: None, sold: None, sales: None }}>"Back to the draft"</a></p>
         </Layout>
     })
 }
@@ -402,7 +425,7 @@ mod tests {
     };
 
     /// The gallery, with nothing in its address.
-    const HOME: url::Home = url::Home { tab: None, sale: None, period: None, sold: None };
+    const HOME: url::Home = url::Home { tab: None, sale: None, period: None, sold: None, sales: None };
 
     fn client() -> Client {
         app().test()
@@ -622,6 +645,18 @@ mod tests {
         assert!(
             home.contains(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" aria-label"#),
             "drawn closed: {home}"
+        );
+        assert!(!patch.contains("alert__destructive alert__soft\" role="), "a field's error alone draws no form alert: {patch}");
+        // The other draft's name: the form says why, in the kit's destructive alert, and the field
+        // is marked.
+        let taken = rename(" holiday LOT ").mode(Mode::Action).await;
+        assert_eq!(taken.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let taken = taken.text();
+        assert!(
+            taken.contains(r#"<div class="alert__alert alert__destructive alert__soft" role="alert"><p>Your other draft is named Holiday lot. Rename that one first, or choose another name.</p></div>"#)
+                && taken.contains("Choose another name.")
+                && taken.contains("aria-invalid=\"true\""),
+            "{taken}"
         );
     }
 

@@ -81,7 +81,7 @@ docker run -d --name corten-watchlist-dev -p 18483:8080 -e CORTEN_DEV=1 corten-w
 node scripts/smoke-dev.mjs http://localhost:18483 corten-watchlist-dev
 docker rm -f corten-watchlist-dev
 docker build -f examples/card-market/Dockerfile -t corten-card-market .
-docker run -d --name corten-card-market -p 18481:8080 -e ITEM_SOURCE=fixture -e FIXTURE_PATH=/fixtures/smoke.json -e AGENT_ORIGINS=http://127.0.0.1:18481 -e PROXIES=172.16.0.0/12,192.168.0.0/16 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token -v "${PWD}/examples/card-market/fixtures:/fixtures:ro" corten-card-market
+docker run -d --name corten-card-market -p 18481:8080 -e ITEM_SOURCE=fixture -e FIXTURE_PATH=/fixtures/smoke.json -e AGENT_ORIGINS=http://127.0.0.1:18481 -e EMBED_ORIGINS=http://127.0.0.1:18481 -e PROXIES=172.16.0.0/12,192.168.0.0/16 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token -v "${PWD}/examples/card-market/fixtures:/fixtures:ro" corten-card-market
 node examples/card-market/smoke.mjs http://localhost:18481
 docker rm -f corten-card-market
 docker build -f examples/ui-gallery/Dockerfile -t corten-ui-gallery .
@@ -166,7 +166,7 @@ The failover benchmark is `node examples/listings-feed/bench/run.mjs`; see its h
 ## Pull requests
 
 For nightly performance evidence, use the [marketplace v2 procedure](bench/marketplace/nightly.md).
-Official `rN` rounds start at r17; `wN` stays for development. Require all eighteen apps, both
+Official `rN` rounds start at r17; `wN` stays for development. Require all twenty apps, both
 sources and every conformance profile before load. The nightly suite measures CPU, memory,
 load and cold start only, with three short-window passes (`--duration 15 --warmup 10 --rate 150`)
 on a dedicated c-8, app CPU 1, upstream CPUs 2-3 and load CPUs 4-7. Time pages in all three

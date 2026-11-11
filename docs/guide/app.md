@@ -11,7 +11,7 @@ your routes. Each default can be replaced in one line.
 | Names it answers to | `localhost`, IP addresses; any other `Host` gets `421` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
-| What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; `#[derive(Clone, FromRef)]` on `Shared` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out) |
+| What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; on `Shared`, `#[derive(Clone, FromRef)]`: `Clone` lets each route have a copy and a handler take the whole state, and `FromRef` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out; [design Choice 33](../design.md#choice-state-derives)) |
 | What a route answers | its handler's return type: `HtmlResult` (a page, a patch, a redirect; failures are the error page) or `JsonResult<T>` (failures are JSON too; `Result<JsonResponse, JsonError>` for a status or cookie of the handler's own, or another server's answer passed on) | `Public<..>` around either for an answer that is the same for everyone, `NoStore<..>` (or `no_store` on the route) for one nothing may keep ([below](#caching)) |
 | The client's address | the connection's peer; no `X-Forwarded-For` is read | a handler takes `ClientIp`; behind a proxy, `PROXIES=10.0.0.0/8` in the environment or `Policy::proxy("10.0.0.0/8")` ([below](#the-clients-address)) |
 | Who is asking | nothing: no lookup runs | a handler takes `Caller<Viewer>` (`Viewer: Identify`), looked up only then, once per request ([below](#who-is-asking)) |
@@ -19,16 +19,16 @@ your routes. Each default can be replaced in one line.
 | Error pages | every [`Failure`](#error-pages) in a plain document, in the request's mode (page, swap or JSON), sent with `X-Robots-Tag: noindex`; the error is logged, and shown only under `corten dev`; right for an API or a first sketch; an app with a layout sets one, and a debug build warns once at startup when an app with a stylesheet has none | `.error_page(page, state)`: `async fn(Failure, Req, ..extractors) -> HtmlResult`, in the app's layout and for who is asking; `corten new` writes one that names each case |
 | JSON-only routes | none | `.api(api::api)` for a `#[corten::routes(api = ApiRoot)]` module: every failure under the prefix is JSON, unknown URLs included, with no document ([below](#json-only-routes)) |
 | WebSockets and relays | none | a handler takes `Upgrade` and returns its `websocket(..)` or `switch(..)`; `Relay` passes another server's answer on as it came ([below](#websockets-and-relays)) |
-| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies 16 powerful features (camera, microphone, screen recording, location, motion sensors, installed fonts, idle detection, window placement, payment, and devices: USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
+| Security | a CSP that allows Corten's inline tag (the import map) by hash (a nonce only when the layout or a handler asks for one) and requires Trusted Types, with only the runtime's policy, so no script writes markup from a string, a `Permissions-Policy` on each full document that denies 16 powerful features (camera, microphone, screen recording, location, motion sensors, installed fonts, idle detection, window placement, payment, and devices: USB, serial, HID, Bluetooth, MIDI), nosniff, referrer, frame and opener headers, a same-origin check on unsafe methods; forms go to this origin only | `.policy(Policy::new()...)`: another origin for scripts, styles, images, `fetch`, frames, fonts, or `.form_action("https://pay.example")` for a form (or a form's redirect) that hands the user to another site, `.trusted_types_policy(name)` for a third-party script's own Trusted Types policy, `.allow_feature(Feature::Geolocation)` for a feature the app uses, `.frame_ancestors("https://partner.example")` for a site that may show the pages in a frame; one part of the app's pages only: `Area::policy` ([below](#a-policy-for-part-of-the-app)) |
 | Caching | static files and the runtime cached forever; everything rendered `private, no-cache` ([below](#caching)) | return `Public<HtmlResult>` (or `Public<JsonResult<T>>`) for an answer that is the same for everyone |
 | Static files | component scripts and the components' stylesheets (one file, plus one per area that lists components and one per set of areas that list the same components) at content-hashed, immutable URLs; each script loaded by the pages whose handlers use it | `.assets(Static)`: `static/`, compiled into the program by `corten::assets::embed!` (a constant per file, `req.asset(Static::STYLE_CSS)`) and served the same way ([below](#static-files)); `/favicon.ico` answers the directory's `favicon.ico`, else its `favicon.svg`, cached a day, unless a route of the app's matches the path; `.components(&[..])`, `Area::components(&[..])` ([styles](styles.md#areas)) |
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
-| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
+| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted, up to 511 in each listener's queue on Linux; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, warnings and other `tracing` events at `INFO` and above to stdout, one line each, as `tracing-subscriber`'s `fmt()` writes them without targets (`2026-11-06T21:20:29.018154Z  WARN corten: ...`), in its colors when stdout is a terminal and `NO_COLOR` is unset; control characters other than a tab are escaped in every field, so request text cannot start a line of its own or send the terminal a command; spans are not printed (feature `log`, a subscriber of Corten's own with no dependency) | set your own `tracing` subscriber first (`tracing_subscriber::fmt().init()` for spans, filters such as `RUST_LOG` or JSON lines); `serve` then leaves it alone |
-| Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd or brotli; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
+| Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
 | Installable app | off | `.pwa(Pwa::new(manifest))`: manifest, generated service worker, offline page |
 | A route outside all of the above | none: every route gets every default here | `unstaged` on one route's `#[route(..)]`: no same-origin check, middleware, security headers, cache rule, deadline or error page, for an answer the same for everyone who can reach it; the host check stays ([below](#a-route-outside-the-stages)) |
 | Languages | none | `.messages::<Msg>()`: `req.t()` and `req.lang()` follow `Accept-Language`, or the locale a page's URL names (a `Locale<Msg>` route field the handler gives `req.set_locale`, [Views](views.md#a-locale-in-the-url)); each page says its locale in `Content-Language` |
@@ -84,16 +84,32 @@ from flood to flood, which is how it was told from a leak (no allocation count w
 mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
 left 167 MiB, still rising about 18 MiB a flood
 ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+The same floods driven by `bench/fullstack/flood-memory.mjs` (three runs each, the cgroup's
+`memory.current` 35 seconds after the last flood) left 406 to 455 MiB on glibc's allocator, and its
+tunables did not stop it: two arenas or one left 382 to 452 MiB, and a 16 KiB mmap threshold 177 to
+184 MiB, still climbing 20 MiB a flood. jemalloc as it comes left 118 to 139 MiB, since it returns
+memory only while the app allocates (more than the earlier run's 45 MiB 35 seconds after the last
+flood, taken by `docker stats` on a build of `e751d127`, for a cause not found; the sizing below
+uses this run);
+with its background thread
+(`MALLOC_CONF=background_thread:true`) the same app idle went back to 7 to 11 MiB
+([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
-room to spare, sized from the peak repeated floods reach rather than the first. The Dockerfile
-`corten new` writes preloads jemalloc in the image's last stage, which gives the memory back
-between floods at no measured cost per request ([design Choice 23](../design.md#choice-jemalloc-image)).
-An image of the app's own adds the same two lines, before any `USER` line; removing them runs
-the app on glibc's allocator:
+room to spare, sized from the peak repeated floods reach rather than the first: 187 to 197 MiB for
+4,000 here with the background thread, about 48 KiB a connection (sampled a second before each
+flood's hold ended). Past the cap,
+connections wait in each listener's queue (up to 511 from `corten::listeners` on Linux). By how
+Linux queues them (reasoned, not measured), the kernel keeps what each has sent so far, up to its
+receive buffer, in the host's TCP memory, and charges it to the container when the app accepts
+the connection, so it lands as the cap frees room. The Dockerfile `corten new` writes preloads jemalloc in the image's last
+stage with that background thread and a 64 KiB thread cache, which keeps brotli's buffers between
+responses ([design Choice 23](../design.md#choice-jemalloc-image)). An image of the app's own adds
+the same three lines, before any `USER` line; removing them runs the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
+ENV MALLOC_CONF=background_thread:true,tcache_max:65536
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
@@ -670,6 +686,15 @@ binds `HOST`:`PORT` (both loopback addresses without `HOST`, port 3000 without `
 that implements `corten::Listener`, with `serve`'s shutdown across all of them
 (tasks told, live streams ended, every listener closed and drained, tasks waited for). A Unix
 socket, or a socket a supervisor hands over, is a listener of the app's own.
+Each of `listeners`' sockets asks the system to hold up to 511 connections that finished their
+handshake but are not yet accepted (Node's default, and nginx's on Linux), not the standard library's
+128 ([design Choice 34](../design.md#choice-listen-backlog)).
+On Linux, which caps it at `net.core.somaxconn` (4096 since 5.4), a burst of clients faster than
+the server accepts them then waits in that queue rather than a second or more for a resent SYN.
+macOS caps it at `kern.ipc.somaxconn`, 128 by default, so there the change takes a raised
+setting. Windows 11 held 200 (one run, a Winsock listener on loopback asking for 511) and refused a
+connection past them, the client seeing the error after about 2 s; Windows Server was not tried.
+A listener of the app's own sets its own.
 
 HTTPS is a step on each connection before HTTP, which `corten::serve_wrapped` takes: the TLS
 handshake. TLS stays the app's choice of library, and so does its configuration. With
@@ -1745,21 +1770,23 @@ async fn quotes(viewer: Caller<Viewer>, upgrade: Upgrade) -> corten::Result<Swit
 6. Only HTTP/1.1 connections served by `corten::serve` switch; an HTTP/2 request (no extended
    `CONNECT`) and a test's `app().test()` get a 426.
 
-`corten::Relay::new(status, headers, body)` is another server's answer passed on as it came,
-for a gateway or a backend for a frontend: its status, its headers less the hop-by-hop ones, and
-its body as it arrives (`Body::from_stream(res.bytes_stream())` from reqwest). A failure status
-keeps the upstream's body, never the error page or the JSON error. The app's security and cache
-rules still apply, except that a `Content-Security-Policy` the upstream sent replaces the app's:
-a relayed page's scripts were written for its own policy (their nonces and hosts), which the app's
-would block. Without one, the app's applies. A `Permissions-Policy` the upstream sent is kept the
-same way, and a relayed page without one gets the app's
-([below](#a-policy-for-part-of-the-app)). A streamed body is passed on as each piece arrives.
-Corten compresses no relayed body, buffered or streamed, an event stream included, so a long
-relayed stream holds no compression context: the encoding is the upstream's. A relay that should
-be compressed forwards the client's `Accept-Encoding`, and the upstream's encoded body goes on as
-it is, as long as the HTTP client does not decode it (for reqwest, leave its `gzip`, `brotli` and
-`zstd` features off). When the client leaves, the body is dropped, and
-the upstream request with it. What else to drop (`Set-Cookie`) is the route's to decide.
+`corten::Relay::new(status, headers, body)` is another server's answer passed on as it came, for a
+gateway or a backend for a frontend: its status, its headers less the hop-by-hop ones, and its body
+as it arrives (`Body::from_stream(res.bytes_stream())` from reqwest). A failure status keeps the
+upstream's body, never the error page or the JSON error. The app's security and cache rules still
+apply, except that a `Content-Security-Policy` the upstream sent replaces the app's: a relayed
+page's scripts were written for its own policy (their nonces and hosts), which the app's would
+block. Who may frame it stays the app's: its `frame-ancestors` is enforced beside the upstream's
+policy, and its `X-Frame-Options` (none, for a page another origin may frame) replaces the
+upstream's ([below](#a-policy-for-part-of-the-app)).
+Without an upstream policy, the app's applies. A `Permissions-Policy` the upstream sent is kept the
+same way, and a relayed page without one gets the app's. A streamed body is passed on as each piece
+arrives. Corten compresses no relayed body, buffered or streamed, an event stream included, so a
+long relayed stream holds no compression context: the encoding is the upstream's. A relay that
+should be compressed forwards the client's `Accept-Encoding`, and the upstream's encoded body goes
+on as it is, as long as the HTTP client does not decode it (for reqwest, leave its `gzip`, `brotli`
+and `zstd` features off). When the client leaves, the body is dropped, and the upstream request with
+it. What else to drop (`Set-Cookie`) is the route's to decide.
 
 A route that answers some requests itself and passes the rest on (by method, body or tenant,
 while it moves off another service; a cache in front of an upstream) names one answer for both.
@@ -2258,6 +2285,28 @@ loads the current page again rather than swap it in: answer such a form with a p
 An area that adds only sources the app already has keeps the app's policy and shell key. A policy for a single route is an area of one page. An `App::api` keeps its
 own `default-src 'none'`.
 
+No site may show a page in a frame (`frame-ancestors 'none'`, and `X-Frame-Options: DENY` for
+browsers that do not read it), so another site cannot lay its own page over one of the app's to
+steer a click. An unstaged route's answer is sent with neither unless its handler sets one: it
+is data, not a page, and runs no script ([A route outside the stages](#a-route-outside-the-stages)).
+A widget other sites embed (an item's card, a chart) is an area whose policy names them,
+`p.frame_ancestors("https://partner.example")`, and every other page keeps the denial; the card
+market's `/embed` area takes them from `EMBED_ORIGINS`. A source is a host or a scheme, or
+`'self'` for the app's own pages; `*` or a bare scheme (`https:`) lets any site frame them. On
+a staged route the policy decides `X-Frame-Options`, whatever a handler, middleware or relayed
+upstream sets: pages another origin may frame are sent none (it cannot name one) and pages only
+the app may frame `SAMEORIGIN`. Who may frame a page stays enforced where the app's CSP is not: a
+relayed answer that brings its own CSP, and under `Policy::report_only` a page another origin may
+frame, are also sent an enforced `Content-Security-Policy` of their `frame-ancestors` alone.
+Frame read-only pages: a
+parent on another site gets none of the app's `SameSite` cookies (Corten's cookie helper makes them
+`Lax`), so the page is drawn signed out there, but a parent on the same site (`blog.example.com`
+framing `app.example.com`) gets them, so the page is signed in and a write from it carries the
+session while the parent can lay its page over the button. A link meant to leave the frame (to a
+page that may not be framed) opens in the parent's tab: `<base target="_top">` in the framed page's
+head, with `data-no-prefetch` around its links, since a hover's prefetch would fetch a page the
+frame never shows.
+
 Every page requires [Trusted Types](https://developer.mozilla.org/en-US/docs/Web/API/Trusted_Types_API)
 (`require-trusted-types-for 'script'`), so the browser holds scripts to [Rule 1](../design.md#rule-html-macro):
 markup reaches the page from a string (`innerHTML`, `insertAdjacentHTML`, `DOMParser`, the
@@ -2542,10 +2591,16 @@ go on the answer as a header (which the error page keeps), but the page's body c
 When the lookup itself fails, an optional caller is `None` there, so the page is drawn signed
 out rather than not at all. Keeping the credentials for it is measured below.
 
-`failure.detail()` is what went wrong, under `corten dev` only; in production it is logged. A
-debug build's error about the app's own code (a component it does not serve, a `Refresh`
-header, a write redirected outside `form-action`) is the exception: it is set in every debug
-build, so a router test's error page names it.
+`failure.detail()` is what went wrong, under `corten dev` only; in production it is logged as
+the error itself, so Corten's log line names each error under the message as `error.sources`
+(the reset connection under an HTTP client's "error sending request"). A subscriber of the
+app's own decides how to show them: `tracing-subscriber`'s text format does the same, its JSON
+format writes the message alone. Each source's message is its library's own and can quote what it
+read (a JSON error names the value it could not parse, so part of an upstream answer), as the
+message above it could already (an HTTP client's names the URL); none of it reaches the client.
+A debug build's error about the app's own code (a component it
+does not serve, a `Refresh` header, a write redirected outside `form-action`) is the exception:
+it is set in every debug build, so a router test's error page names it.
 The error page `corten new` writes names every case without `_`, so when Corten adds one the
 app stops compiling instead of showing the wrong text. A JSON route's failures, a data
 client's and every failure under `App::api` are a JSON Problem Details document instead

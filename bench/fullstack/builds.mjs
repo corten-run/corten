@@ -1,6 +1,9 @@
 // How each app is built, for build.mjs: the image its toolchain is in, its build context, the
 // commands of its Dockerfile's dependency layer and build step, and one edit to its item page's
-// view. Kept apart from build.mjs so builds.test.mjs can check it without Docker. No side effects.
+// view. Kept apart from build.mjs so builds.test.mjs can check it without Docker. No side effects
+// beyond apps.mjs's, which refuses a BENCH_TIER, BENCH_EDGE or BENCH_APPS it cannot read.
+import { allApps, tier } from "./apps.mjs";
+import { edgeBase } from "./edge.mjs";
 import { quote } from "./round.mjs";
 
 /**
@@ -14,12 +17,13 @@ import { quote } from "./round.mjs";
  *   setup?: string,
  *   add?: string,
  *   deps: string,
- *   build: string,
+ *   build?: string,
  *   dev?: string,
  *   check?: string,
  *   test?: string,
  *   edits?: { kind: string, edit: string, from: string, to: string }[],
  *   timings?: { bin: string, own: string[], touch: string },
+ *   ra?: { at: string, expect: string, features?: string[] },
  *   edit: string,
  *   change?: { from: string, to: string },
  * }} Recipe
@@ -67,12 +71,19 @@ const node = (/** @type {string} */ file, /** @type {Record<string, string>=} */
  * timings and rustc's passes and macro expansion for one binary, whose own crates' names start
  * with one of `own`.
  *
+ * An app whose server runs its source as written has no `build`: FastAPI's Python and Express's
+ * EJS templates are compiled by the server as it first uses them, so its Dockerfile has nothing
+ * after the dependency step, and a round records its build and rebuild as none rather than a time.
+ *
  * For the Rust apps, the editor's and the tests' loops too: `check` is what an editor runs for its
  * diagnostics after a save (rust-analyzer's check on save is `cargo check --all-targets`, with the
  * features its documentation has an editor set; Corten's checks card-market alone, standing in for
  * an app of one crate), and `test` compiles the tests without running them. `edits`
  * are other kinds of change than the button's, each measured as a development rebuild: `kind`
  * names it, `edit` is its file (relative to the context) and `from` must appear in it once.
+ * `ra` is where rust-analyzer.mjs asks the language server for completions: in `edit`'s file,
+ * inside the item page's markup, at the `|` in `at` (which, without it, appears there once),
+ * where the list must offer `expect`; `features` are the cargo features an editor sets.
  * @type {Record<string, Recipe>}
  */
 export const recipes = {
@@ -108,6 +119,7 @@ export const recipes = {
       },
     ],
     timings: { bin: "card-market", own: ["corten", "card-market"], touch: "examples/card-market/src/main.rs" },
+    ra: { at: "{form.|errors.form_message()}", expect: "errors" },
   },
   leptos: {
     tools: "bb-tools-leptos",
@@ -121,6 +133,7 @@ export const recipes = {
     check: "cargo check --features ssr --all-targets",
     test: "cargo test --features ssr --no-run",
     edit: "src/app.rs",
+    ra: { at: "value=item.|title.clone()/>", expect: "title", features: ["ssr"] },
   },
   topcoat: {
     tools: "bb-tools-topcoat",
@@ -133,6 +146,7 @@ export const recipes = {
     check: "cargo check --locked --all-targets",
     test: "cargo test --locked --no-run",
     edit: "src/main.rs",
+    ra: { at: 'name="title" value=(&item.|title)>', expect: "title" },
   },
   "axum-maud": {
     tools: "rust:1-bookworm",
@@ -144,6 +158,7 @@ export const recipes = {
     check: "cargo check --locked --all-targets",
     test: "cargo test --locked --no-run",
     edit: "src/pages.rs",
+    ra: { at: 'value=(item.|title);', expect: "title" },
     change: { from: 'button type="submit" {', to: 'button type="submit" title="Set the price alert" {' },
   },
   gin: {
@@ -178,7 +193,9 @@ export const recipes = {
     dev: 'cmake -S . -B debug -DCMAKE_BUILD_TYPE=Debug && cmake --build debug -j"$(nproc)"',
     edit: "views/ItemPage.csp",
   },
-  nextjs: node("app/items/[id]/interactive.tsx", { NEXT_TELEMETRY_DISABLED: "1" }),
+  // A matched round (BENCH_TIER=matched) builds Next.js as the tier's image is built: with the
+  // profile (apps.mjs, buildArgs; the Dockerfile's PROFILE and EDGE_HOST arguments).
+  nextjs: node("app/items/[id]/interactive.tsx", { NEXT_TELEMETRY_DISABLED: "1", ...(tier === "matched" && { PROFILE: "matched", EDGE_HOST: new URL(edgeBase(allApps.nextjs, "outside")).host }) }),
   "tanstack-start": node("src/routes/items.$id.tsx"),
   sveltekit: node("src/routes/items/[id]/+page.svelte"),
   "react-router": node("app/routes/item.tsx"),
@@ -210,6 +227,24 @@ export const recipes = {
     add: htmx("static/htmx.min.js"),
     deps: "pip install --no-cache-dir -r requirements.txt",
     build: "python -m django collectstatic --noinput -v 0",
+    edit: "templates/item.html",
+  },
+  express: {
+    tools: "node:24-bookworm-slim",
+    context: "",
+    workdir: "/app",
+    env: { NODE_ENV: "production" },
+    add: htmx("static/htmx.min.js"),
+    deps: "npm install --no-audit --no-fund",
+    edit: "views/item.ejs",
+  },
+  fastapi: {
+    tools: "python:3.14-slim",
+    context: "",
+    workdir: "/app",
+    env: { PYTHONDONTWRITEBYTECODE: "1", PYTHONUNBUFFERED: "1" },
+    add: htmx("static/htmx.min.js"),
+    deps: "pip install --no-cache-dir -r requirements.txt",
     edit: "templates/item.html",
   },
   rails: {
@@ -254,7 +289,7 @@ export const recipes = {
 export const touchThen = (/** @type {string} */ path, /** @type {string} */ command) => `touch ${quote(path)} && ${command}`;
 
 /** Whether an app's builds are cargo's, whose output names each crate it compiles. */
-export const cargoBuilds = (/** @type {Recipe} */ r) => /\bcargo\b/.test(r.build);
+export const cargoBuilds = (/** @type {Recipe} */ r) => /\bcargo\b/.test(r.build ?? "");
 
 /** The edit an app's rebuilds make. */
 export const changeOf = (/** @type {string} */ name) => recipes[name].change ?? button;
@@ -400,5 +435,62 @@ export function rustcPasses(output) {
   return { total, passes, macros: macros.sort((a, b) => b.lines - a.lines).slice(0, 20) };
 }
 
+/**
+ * The edit a Docker rebuild makes on its `run`th run (from 1): the button's change, with the run's
+ * number in its title, so each run changes the file from what the run before it built, and no run
+ * finds its own result in the cache.
+ * @param {string} name
+ * @param {number} run
+ */
+export const runChange = (name, run) => {
+  const { from, to } = changeOf(name);
+  return { from, to: to.replace("Set the price alert", `Set the price alert (${run})`) };
+};
+
+/**
+ * The steps a BuildKit build ran rather than found in its cache, from its `--progress plain`
+ * output: each step's first line (`#7 [build 4/4] RUN cargo build ...`) names it, and a step the
+ * cache answered has a `#7 CACHED` line.
+ * @param {string} output
+ */
+export function ranSteps(output) {
+  /** @type {Map<string, string>} */
+  const named = new Map();
+  const cached = new Set();
+  for (const line of output.split(/\r?\n/)) {
+    const step = /^#(\d+) (\[[^\]]+\] .*)$/.exec(line);
+    if (step && !named.has(step[1])) named.set(step[1], step[2]);
+    const hit = /^#(\d+) CACHED$/.exec(line);
+    if (hit) cached.add(hit[1]);
+  }
+  return [...named].filter(([id]) => !cached.has(id)).map(([, what]) => what);
+}
+
+/** Whether a build ran a `RUN` step, given the steps it ran (`ranSteps`): one that ran only copies did not build. */
+export const ranARun = (/** @type {string[]} */ ran) => ran.some((step) => /^\[[^\]]+\] RUN /.test(step));
+
+/**
+ * The crates cargo compiled in a BuildKit build, from its `--progress plain` output
+ * (`#7 12.1    Compiling corten v0.1.0 (/src/crates/corten)`), by name.
+ * @param {string} output
+ */
+export const compiledIn = (output) => [...output.matchAll(/^#\d+ [\d.]+\s+Compiling (\S+) v/gm)].map((m) => m[1]);
+
 /** The median of some numbers. */
 export const median = (/** @type {number[]} */ xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+
+/**
+ * One app's row of the table `build.mjs` prints after a run, from its `build.json` entry. An app
+ * with no build step (no `build` in its recipe) has no build or rebuild to time.
+ * @param {string} name @param {any} e
+ */
+export function buildRow(name, e) {
+  const s = (/** @type {number} */ ms) => `${(ms / 1000).toFixed(1)} s`;
+  // Entries written before `complete` was recorded have none, and finished.
+  if (e.failed || e.complete === false) return `| ${name} | FAILED: ${(e.failed ?? "stopped before it finished").split("\n")[0]} |`;
+  const dev = e.dev ? `dev ${s(e.dev.clean.ms)}, after the edit ${s(e.dev.rebuild.ms)}` : "";
+  const built = e.build
+    ? [`build ${s(e.build.ms)}, ${e.build.cpuS} CPU-s, ${e.build.peakMiB} MiB`, `rebuild ${s(e.rebuild.ms)}, ${e.rebuild.cpuS} CPU-s`]
+    : ["no build step", "nothing to rebuild"];
+  return `| ${name} | deps ${s(e.deps.ms)} | ${built[0]} | clean ${s(e.clean.ms)}, ${e.clean.cpuS} CPU-s | ${built[1]} | ${dev} |`;
+}

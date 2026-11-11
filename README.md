@@ -219,7 +219,7 @@ runtime than today's).
 | Taking over 1,000 server-rendered rows | 6.0 ms, 101 bytes of memory per row |
 
 Nightly measurements move to [marketplace v2](bench/marketplace/README.md) starting with
-official round r17: equivalent request-time localization in all eighteen apps, with a new
+official round r17: equivalent request-time localization in all twenty apps (eighteen in r17), with a new
 baseline and no r16 or catalog c1 delta. No v2 performance numbers are published here yet.
 See the [nightly procedure](bench/marketplace/nightly.md) and
 [Performance](docs/performance.md) for scope, historical tables and measurement limits.

@@ -83,6 +83,9 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * about 2 minutes an app, so about 105 with eighteen (estimated). conform.mjs, new after r14, took about 2.8 minutes an app locally (two apps in
  * 340 s, Docker Desktop on a busy machine), so nineteen about 55 (estimated): it has 120. A build
  * call that is stopped skips only its app.
+ * With twenty apps (FastAPI and Express, added after r16), the same per-app estimates put the
+ * fixture page call at about 74 of its 140 minutes (1.9 times, not twice) and the others within
+ * their limits.
  * @param {string} round
  * @param {string} browserRuns
  * @param {string[]} names the apps that render the pages (they serve the JSON too)
@@ -90,14 +93,15 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * @param {string[]} [jsonOnly] the apps that serve only the JSON (`pages: false`)
  * @param {number} [passes] each load phase's passes (run-ssr.mjs): its calls' limits are that many
  *   times one pass's
+ * @param {string[]} [pageOnly] page apps left out of the JSON phases (another app serves their JSON)
  * @returns {[string, number, string, ...string[]][]}
  */
-export const calls = (round, browserRuns, names, urls, jsonOnly = [], passes = 1) => [
+export const calls = (round, browserRuns, names, urls, jsonOnly = [], passes = 1, pageOnly = []) => [
   ["cold-start", 30, "cold-start.mjs", round, "10", [...names, ...jsonOnly].join(",")],
   ["fixture", ssrLimits[0] * passes, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page", String(passes)],
-  ["fixture", ssrLimits[1] * passes, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json", String(passes)],
+  ["fixture", ssrLimits[1] * passes, "run-ssr.mjs", round, "fixture", "300", [...names.filter((n) => !pageOnly.includes(n)), ...jsonOnly].join(","), "json", String(passes)],
   ["api", ssrLimits[2] * passes, "run-ssr.mjs", round, "api", "150", names.join(","), "page", String(passes)],
-  ["api", ssrLimits[3] * passes, "run-ssr.mjs", round, "api", "150", [...names, ...jsonOnly].join(","), "json", String(passes)],
+  ["api", ssrLimits[3] * passes, "run-ssr.mjs", round, "api", "150", [...names.filter((n) => !pageOnly.includes(n)), ...jsonOnly].join(","), "json", String(passes)],
   ["count", 70, "count.mjs", round, "3", [...names, ...jsonOnly].join(",")],
   // The feature matrix from the round's own images, before the browser step starts every app.
   ["conform", 120, "conform.mjs", [...names, ...jsonOnly].join(","), round],

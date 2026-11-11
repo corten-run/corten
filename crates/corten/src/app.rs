@@ -1459,7 +1459,9 @@ pub async fn serve<M: Middleware>(app: App<M>) -> std::io::Result<()> {
 /// `port` when `PORT` is not set (`serve` passes 3000). For an app that serves HTTPS on them
 /// ([`serve_wrapped`]), or whose own default port is not 3000
 /// (`corten::serve_on(corten::listeners(8320).await?, app)`, with no `PORT` to set from the
-/// program).
+/// program). Each asks the system to hold 511 connections it has finished and the app not yet
+/// accepted, where `TcpListener::bind` asks for 128. The system may hold fewer: Linux caps it at
+/// `net.core.somaxconn`, macOS at `kern.ipc.somaxconn` (128 by default), and Windows 11 held 200.
 pub async fn listeners(port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
     let host = std::env::var("HOST").ok();
     let port: u16 = match std::env::var("PORT") {
@@ -1568,14 +1570,24 @@ where
 /// port another process holds is an error: `localhost` would reach that process instead (port 0,
 /// any free port, tries another pair).
 pub(crate) async fn bind(host: Option<&str>, port: u16) -> std::io::Result<Vec<tokio::net::TcpListener>> {
-    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
     if let Some(host) = host {
-        return Ok(vec![tokio::net::TcpListener::bind((host, port)).await?]);
+        // Each address the host resolves to in turn, as `TcpListener::bind` tries them.
+        let mut last = None;
+        for addr in tokio::net::lookup_host((host, port)).await? {
+            match listen(addr) {
+                Ok(listener) => return Ok(vec![listener]),
+                Err(error) => last = Some(error),
+            }
+        }
+        return Err(last.unwrap_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("HOST {host} resolves to no address"))
+        }));
     }
     let mut tries = 0;
     loop {
-        let v4 = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await?;
-        match tokio::net::TcpListener::bind((Ipv6Addr::LOCALHOST, v4.local_addr()?.port())).await {
+        let v4 = listen(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))?;
+        match listen(SocketAddr::from((Ipv6Addr::LOCALHOST, v4.local_addr()?.port()))) {
             Ok(v6) => return Ok(vec![v4, v6]),
             Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
                 tries += 1;
@@ -1586,6 +1598,32 @@ pub(crate) async fn bind(host: Option<&str>, port: u16) -> std::io::Result<Vec<t
             Err(_) => return Ok(vec![v4]),
         }
     }
+}
+
+/// How many connections the kernel holds finished (handshake done) for the server to accept.
+/// `TcpListener::bind` asks for 128 (mio's, the standard library's number), which overflows when
+/// clients connect faster than the server accepts them: with 1,024 k6 clients starting at once
+/// against a page on one CPU (Docker Desktop's Linux 6.18 VM, 2026-11-08), the kernel counted 142
+/// and 485 listen-queue overflows (two runs) and the slowest connect took 1.27 and 2.08 s (a SYN
+/// resent after about a second, and the load generator's own delay); with 511, none and 0.28 and
+/// 0.24 s (4096 overflowed none either). 511 is Node's default and nginx's on Linux
+/// (`docs/design.md#choice-listen-backlog`). The system caps it: Linux at
+/// `net.core.somaxconn` (4096 since 5.4, 128 before), macOS at `kern.ipc.somaxconn` (128 by
+/// default), Windows 11 at 200 (one run on loopback), where a connection past it is refused. Past
+/// [`App::max_connections`] connections wait in this queue for as long as the cap holds, each with
+/// what it has sent so far in kernel memory (reasoned, not measured), so the queue is kept no
+/// deeper than the burst needs.
+const BACKLOG: u32 = 511;
+
+/// A listener on `addr` with [`BACKLOG`], otherwise as `TcpListener::bind` makes it
+/// (`SO_REUSEADDR` on Unix, so a restarted server binds a port its last connections still hold
+/// in `TIME_WAIT`).
+fn listen(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+    let socket = if addr.is_ipv4() { tokio::net::TcpSocket::new_v4()? } else { tokio::net::TcpSocket::new_v6()? };
+    #[cfg(unix)]
+    socket.set_reuseaddr(true)?;
+    socket.bind(addr)?;
+    socket.listen(BACKLOG)
 }
 
 /// Serves `router` on every listener, each connection after its step `wrap`, until `stop`
