@@ -209,7 +209,8 @@ element (a bubbling event on each change) and reads the attributes; never a `Mut
 ## Live rows (feature `feed`)
 
 ```rust
-// a Feed<Stock> where Stock: Row (has an id). In the routes module, each feed route names its rows:
+// a Feed<Stock>: #[derive(Clone, Serialize, ToJson, Row)] struct Stock { #[row(id)] ticker: String, .. }
+// (an enum row implements Row by hand). In the routes module, each feed route names its rows:
 //   #[route("/feed/stocks", get = stocks, rows = Stock)] pub struct Stocks;
 //   #[route("/feed/stocks/live", get = stocks_live, rows = Stock)] pub struct StocksLive;
 async fn stocks(State(m): State<Market>) -> FeedResponse<Stock> { m.stocks.snapshot() }
@@ -281,7 +282,8 @@ anchor positioning. A `<dialog>` the server can draw `open` (a form it refuses) 
 `on:connect={corten_ui::dialog::modal(target)}`, so it is modal, not just open; one the address
 opens and a link closes (`?selected=..`) gets `dialog::modalClosedBy(target, close, signal)` with
 the link as the `close` ref, so a close request (Escape) goes to its address. A table whose page
-has all its rows sorts in place with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
+has all its rows sorts in place, also when other routes read its order (no round trip; the UI guide
+has the measurement), with `on:sort={corten_ui::rows::sort(event, target)}` on each kit
 `SortHeader` and `data-no-prefetch` on the `<thead>`, the server writing `data-sort` (a price in
 cents, a date) on a cell whose text is not its order (or a `<time datetime>` or `<data value>` in
 it), and the header's `ascending` and `descending` the pages the server sorts each way and `first`

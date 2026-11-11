@@ -556,6 +556,50 @@ try {
   check("any other origin is blocked by the browser", stranger === "blocked", stranger);
   await agents.close();
 
+  // A partner's page frames an item's card: the origin EMBED_ORIGINS names may (the other loopback
+  // name, as for agents), any other may not, and the item's own page may be framed by no one. Each
+  // parent page is made here, at its origin, with no policy of its own, so only the framed page's
+  // frame-ancestors decides. Chromium keeps a page it did not load from an address from framing a
+  // loopback server unless the page may reach the local network, so the parents are given that,
+  // and each is a loopback name; a frame counts as blocked only when its response blocked it.
+  const framing = await browser.newContext();
+  await framing.grantPermissions(["local-network-access"]);
+  /** The card's title as the frame at `parentOrigin` shows `path`, "blocked", or why it failed. */
+  const framedFrom = async (/** @type {string} */ parentOrigin, /** @type {string} */ path) => {
+    const parent = await framing.newPage();
+    /** @type {string | undefined} */
+    let failure;
+    parent.on("requestfailed", (request) => {
+      if (request.url() === `${base}${path}`) failure = request.failure()?.errorText;
+    });
+    await parent.route(`${parentOrigin}/partner`, (route) =>
+      route.fulfill({ contentType: "text/html", body: `<!DOCTYPE html><title>Partner</title><iframe src="${base}${path}"></iframe>` }),
+    );
+    await parent.goto(`${parentOrigin}/partner`);
+    const frame = await (await parent.waitForSelector("iframe")).contentFrame();
+    await frame?.waitForLoadState("load").catch(() => {});
+    const title = await frame?.locator("strong").first().textContent({ timeout: 3000 }).catch(() => null);
+    await parent.close();
+    return title ?? (failure === "net::ERR_BLOCKED_BY_RESPONSE" ? "blocked" : (failure ?? "nothing shown"));
+  };
+  const card = await fetch(`${base}/embed/items/item_5`);
+  const itemPage = await fetch(`${base}/items/item_5`);
+  check(
+    "an item's card names the partner that may frame it, and sends no X-Frame-Options; the item page denies every frame",
+    (card.headers.get("content-security-policy") ?? "").includes(`frame-ancestors ${otherOrigin};`) &&
+      card.headers.get("x-frame-options") === null &&
+      (itemPage.headers.get("content-security-policy") ?? "").includes("frame-ancestors 'none';") &&
+      itemPage.headers.get("x-frame-options") === "DENY",
+    `${card.headers.get("content-security-policy")} | ${card.headers.get("x-frame-options")} | ${itemPage.headers.get("x-frame-options")}`,
+  );
+  const partnerSees = await framedFrom(otherOrigin, "/embed/items/item_5");
+  check("the partner's page shows an item's card in a frame", partnerSees === "Card Name 5", partnerSees);
+  const strangerSees = await framedFrom(`http://[::1]:${baseUrl.port}`, "/embed/items/item_5");
+  check("another site's frame of the card is blocked by the browser", strangerSees === "blocked", strangerSees);
+  const itemFramed = await framedFrom(otherOrigin, "/items/item_5");
+  check("the partner's frame of the item page is blocked by the browser", itemFramed === "blocked", itemFramed);
+  await framing.close();
+
   // Cache headers: the home page is the same for every visitor, so a CDN may keep it; with the
   // visitor's cookie it is theirs alone, and other pages are private unless they say otherwise.
   const cacheOf = async (/** @type {string} */ path, /** @type {Record<string, string>} */ headers = {}) =>

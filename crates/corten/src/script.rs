@@ -317,9 +317,8 @@
 //! # mod app {
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String, qty: u32 }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String, qty: u32 }
 //!
 //! #[corten::routes(state = Feed<Level>)]
 //! pub mod url {
@@ -352,12 +351,10 @@
 //! ```compile_fail
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Stock { id: String }
-//! impl Row for Stock { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Stock { #[row(id)] id: String }
 //!
 //! #[corten::routes(state = Feed<Level>)]
 //! pub mod url {
@@ -375,12 +372,10 @@
 //! ```compile_fail
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Stock { id: String }
-//! impl Row for Stock { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Stock { #[row(id)] id: String }
 //!
 //! #[corten::routes(state = Feed<Level>)]
 //! pub mod url {
@@ -399,12 +394,10 @@
 //! ```compile_fail
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Stock { id: String }
-//! impl Row for Stock { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Stock { #[row(id)] id: String }
 //!
 //! #[corten::routes(state = Feed<Level>)]
 //! pub mod url {
@@ -431,13 +424,11 @@
 //! ```compile_fail
 //! use corten::{feed::{Feed, FeedResponse, Row}, prelude::*};
 //!
-//! #[derive(Clone, serde::Serialize)]
-//! pub struct Level { id: String, qty: u32 }
-//! impl Row for Level { fn id(&self) -> &str { &self.id } }
+//! #[derive(Clone, serde::Serialize, Row)]
+//! pub struct Level { #[row(id)] id: String, qty: u32 }
 //! mod stock {
-//!     #[derive(Clone, serde::Serialize)]
-//!     pub struct Level { pub id: String, pub name: String }
-//!     impl corten::feed::Row for Level { fn id(&self) -> &str { &self.id } }
+//!     #[derive(Clone, serde::Serialize, corten::feed::Row)]
+//!     pub struct Level { #[row(id)] pub id: String, pub name: String }
 //! }
 //!
 //! #[corten::routes(state = Feed<stock::Level>)]
@@ -988,6 +979,66 @@
 //! #[component(js)]
 //! fn TabBar() -> impl Render {
 //!     html! { <nav on:click={js::show(target, 42)}></nav> }
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! A call takes as many arguments as the function has, each checked against its parameter, the
+//! fourteenth as strictly as the first:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn Mixer() -> impl Render {
+//!     let (a, b, c, d, e, f, g, h) = refs();
+//!     html! {
+//!         <div on:connect={js::start(a, b, c, d, e, f, g, h, "i", "j", "k", "l", "m", "n", "o", signal)}>
+//!             <canvas ref={a}></canvas><p ref={b}></p><p ref={c}></p><button ref={d}></button>
+//!             <input ref={e}><select ref={f}></select><output ref={g}></output><button ref={h}></button>
+//!         </div>
+//!     }
+//! }
+//! # fn main() {
+//! assert!(Mixer {}.to_html().contains(r#"mixer.start(@a,@b,@c,@d,@e,@f,@g,@h,&quot;i&quot;,"#));
+//! # }
+//! ```
+//!
+//! Past twelve, the arguments are held in halves, each halved again past twelve, so a call of 25
+//! (twelve, then six and seven) writes every argument in its place:
+//!
+//! ```
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn Mixer() -> impl Render {
+//!     let (a, b, c, d, e, f, g, h) = refs();
+//!     html! {
+//!         <div on:connect={js::long(a, b, c, d, e, f, g, h, "1", "2", "3", "4", "5", "6", "7", "8",
+//!             "9", "10", "11", "12", "13", "14", "15", "16", signal)}>
+//!             <canvas ref={a}></canvas><p ref={b}></p><p ref={c}></p><button ref={d}></button>
+//!             <input ref={e}><select ref={f}></select><output ref={g}></output><button ref={h}></button>
+//!         </div>
+//!     }
+//! }
+//! # fn main() {
+//! let html = Mixer {}.to_html();
+//! assert!(html.contains(r#"mixer.long(@a,@b,@c,@d,@e,@f,@g,@h,&quot;1&quot;,&quot;2&quot;,&quot;3&quot;,&quot;4&quot;,&quot;5&quot;,&quot;6&quot;,&quot;7&quot;,&quot;8&quot;,&quot;9&quot;,&quot;10&quot;,&quot;11&quot;,&quot;12&quot;,&quot;13&quot;,&quot;14&quot;,&quot;15&quot;,&quot;16&quot;,$s)"#), "{html}");
+//! # }
+//! ```
+//!
+//! ```compile_fail,E0277
+//! use corten::prelude::*;
+//!
+//! #[component(js)]
+//! fn Mixer() -> impl Render {
+//!     let (a, b, c, d, e, f, g, h) = refs();
+//!     html! {
+//!         <div on:connect={js::start(a, b, c, d, e, f, g, h, "i", "j", "k", "l", "m", 42, "o", signal)}>
+//!             <canvas ref={a}></canvas><p ref={b}></p><p ref={c}></p><button ref={d}></button>
+//!             <input ref={e}><select ref={f}></select><output ref={g}></output><button ref={h}></button>
+//!         </div>
+//!     }
 //! }
 //! # fn main() {}
 //! ```
@@ -2164,9 +2215,31 @@ pub mod __private {
     )]
     pub trait Refs {}
 
-    /// The arguments of a call, a tuple.
+    /// The arguments of a call: a tuple of up to twelve, and for more, `Both` of two halves, each a
+    /// tuple or `Both` again. A tuple's impls stop at a fixed length, so a longer call nests; its
+    /// depth (which the compiler's recursion limit bounds) grows with the logarithm of the count,
+    /// and a call of twelve or fewer is the tuple it always was. A half is never empty.
     pub trait Args {
+        /// The arguments, comma-separated.
         fn write_args(&self, ctx: &Ctx, out: &mut String);
+
+        /// The arguments after others: a comma, then them.
+        #[inline]
+        fn write_rest(&self, ctx: &Ctx, out: &mut String) {
+            out.push(',');
+            self.write_args(ctx, out);
+        }
+    }
+
+    /// The two halves of a call's arguments past twelve.
+    pub struct Both<L, R>(pub L, pub R);
+
+    impl<L: Args, R: Args> Args for Both<L, R> {
+        #[inline]
+        fn write_args(&self, ctx: &Ctx, out: &mut String) {
+            self.0.write_args(ctx, out);
+            self.1.write_rest(ctx, out);
+        }
     }
 
     macro_rules! args {
@@ -2185,6 +2258,8 @@ pub mod __private {
             }
         )*};
     }
+    // The longest tuple here is corten-macros' `TUPLE` (in its `script.rs`): a call past it is
+    // held in `Both`. The two change together.
     args!(
         (),
         (A),

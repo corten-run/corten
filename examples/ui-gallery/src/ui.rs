@@ -23,6 +23,27 @@ pub mod breadcrumb;
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/button.rs"]
 pub mod button;
+/// The kit's card. Its density is the card's own `size`: the class it was written beside a card,
+/// which compiled alone or beside another look and did nothing there, is gone.
+///
+/// ```compile_fail,E0432
+/// use ui_gallery::ui::card::CardCompact;
+/// ```
+///
+/// ```compile_fail,E0063
+/// use corten::prelude::*;
+/// use ui_gallery::ui::card::Card;
+///
+/// let _ = html! { <section class={Card {}}></section> };
+/// ```
+///
+/// ```
+/// use corten::prelude::*;
+/// use ui_gallery::ui::card::{Card, CardPanel, CardSize};
+///
+/// let _ = html! { <section class={Card { size: CardSize::Sm }}></section> };
+/// let _ = html! { <section class={CardPanel { size: CardSize::Md }}></section> };
+/// ```
 #[rustfmt::skip]
 #[path = "../../../crates/corten-cli/kit/card.rs"]
 pub mod card;
@@ -518,6 +539,19 @@ pub(crate) mod tests {
         assert_eq!(literal, r#"<div class="stack__stack stack__md stack__cluster stack__sm"></div>"#);
     }
 
+    /// A card's and a panel's size is a class of their own, `Md` none, so a dense card is one look.
+    #[test]
+    fn a_card_and_a_panel_carry_their_size() {
+        use super::card::{Card, CardPanel, CardSize};
+        use corten::view::Render;
+        let md = corten::html! { <section class={Card { size: CardSize::Md }}></section> }.to_html();
+        assert_eq!(md, r#"<section class="card__card"></section>"#);
+        let sm = corten::html! { <section class={Card { size: CardSize::Sm }}></section> }.to_html();
+        assert_eq!(sm, r#"<section class="card__card card__sm"></section>"#);
+        let panel = corten::html! { <section class={CardPanel { size: CardSize::Sm }}></section> }.to_html();
+        assert_eq!(panel, r#"<section class="card__panel card__sm"></section>"#);
+    }
+
     /// `StackStart` is a class beside the stack's, so the column keeps its children their own width.
     #[test]
     fn a_stack_start_is_a_class_beside_the_stack() {
@@ -645,13 +679,20 @@ pub(crate) mod tests {
         );
     }
 
-    /// The dot is drawn, not read: the status is in the text beside it.
+    /// The dot is drawn, not read: the status is in the text beside it. A live one is the same dot
+    /// with the class that pulses it.
     #[test]
     fn a_status_dot_is_not_read() {
-        use super::status_dot::{StatusDot, StatusTone};
+        use super::status_dot::{LiveDot, StatusDot, StatusTone};
         use corten::view::Render;
         let html = StatusDot { tone: StatusTone::Success }.to_html();
         assert_eq!(html, r#"<span class="status-dot__dot status-dot__success" aria-hidden="true"></span>"#);
+        let live = LiveDot { tone: StatusTone::Info }.to_html();
+        assert_eq!(live, r#"<span class="status-dot__dot status-dot__live status-dot__info" aria-hidden="true"></span>"#);
+        let text = StatusDot { tone: StatusTone::Text }.to_html();
+        assert_eq!(text, r#"<span class="status-dot__dot status-dot__text" aria-hidden="true"></span>"#);
+        let live_text = LiveDot { tone: StatusTone::Text }.to_html();
+        assert_eq!(live_text, r#"<span class="status-dot__dot status-dot__live status-dot__text" aria-hidden="true"></span>"#);
     }
 
     /// A hidden legend is still the fieldset's legend, which names the group, with the class that

@@ -4,6 +4,10 @@
 //!    name in `#[route(..)]` and names the argument: before, the error was that axum's `Handler`
 //!    is not implemented, with a hint to use `#[axum::debug_handler]`, and named no argument (#761).
 //! 2. A value that is not a link where an `Href` is expected says what a link is (#974).
+//! 3. An `Option` of a type that is only `Display` in an attribute says what an `Option` takes
+//!    there (#1111).
+//! 4. A wrong argument deep in a long handler call is refused in Corten's words, at the argument,
+//!    and no error is about the private trait that holds the arguments (#1100).
 //!
 //! Each app is built with `cargo`, offline, from the workspace's lock, in the target directory
 //! `link_clash` builds in, so they share the dependencies' builds.
@@ -78,4 +82,50 @@ fn a_value_that_is_not_a_link_says_what_a_link_is() {
     assert!(stderr.contains("`Local::parse(text)`"), "the way from text to a link: {stderr}");
     let (ok, stderr) = build_main("href-message", &app("(Box::new(PullSheet) as Box<dyn Href>)"));
     assert!(ok, "the same link boxed as Box<dyn Href>: {stderr}");
+}
+
+/// An `Option` of a type that is only `Display` cannot be an attribute's value (`Option<T>` needs
+/// `T: AttrValue`), and the error says what it takes; an `Option` of a `UrlValue` enum compiles.
+#[test]
+fn an_option_in_an_attribute_says_what_it_takes() {
+    let app = |value: &str| {
+        format!("use corten::prelude::*;\n\nstruct Shown;\n\nimpl std::fmt::Display for Shown {{\n    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {{\n        f.write_str(\"shown\")\n    }}\n}}\n\n#[derive(Clone, Copy, UrlValue)]\nenum Finish {{\n    Weathered,\n}}\n\nfn main() {{\n    let _ = (Shown, Finish::Weathered);\n    let _ = html! {{ <div data-a={{{value}}}></div> }}.to_html();\n}}\n")
+    };
+    let (ok, stderr) = build_main("attr-message", &app("Some(Shown)"));
+    assert!(!ok, "an Option of a Display type compiled as an attribute");
+    assert!(stderr.contains("this value cannot be written in an attribute"), "Corten's message: {stderr}");
+    assert!(stderr.contains("if the value is an `Option`"), "the note on an Option: {stderr}");
+    let (ok, stderr) = build_main("attr-message", &app("Some(Finish::Weathered)"));
+    assert!(ok, "an Option of a UrlValue enum: {stderr}");
+}
+
+/// A number for the fourteenth of a handler's sixteen parameters is refused at the number, in
+/// Corten's words, as a wrong first argument is; no error's headline names the private `Args`
+/// that holds the arguments (nor `Both`, which holds them past twelve), as the twelve-argument
+/// ceiling's did (#1100).
+#[test]
+fn a_wrong_argument_in_a_long_call_is_refused_at_the_argument() {
+    let script = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mixer.js")).unwrap();
+    write(&Path::new(env!("CARGO_TARGET_TMPDIR")).join("args-message/src/mixer.js"), &script);
+    let app = |fourteenth: &str| {
+        format!(
+            "use corten::prelude::*;\n\n#[component(js)]\nfn Mixer() -> impl Render {{\n    let (a, b, c, d, e, f, g, h) = refs();\n    html! {{\n        <div on:connect={{js::start(a, b, c, d, e, f, g, h, \"i\", \"j\", \"k\", \"l\", \"m\", {fourteenth}, \"o\", signal)}}>\n            <canvas ref={{a}}></canvas><p ref={{b}}></p><p ref={{c}}></p><button ref={{d}}></button>\n            <input ref={{e}}><select ref={{f}}></select><output ref={{g}}></output><button ref={{h}}></button>\n        </div>\n    }}\n}}\n\nfn main() {{\n    let _ = Mixer {{}}.to_html();\n}}\n"
+        )
+    };
+    let (ok, stderr) = build_main("args-message", &app("42"));
+    assert!(!ok, "a number for a string parameter compiled");
+    assert!(stderr.contains("this argument does not match the handler's JSDoc type"), "Corten's message: {stderr}");
+    // The number's line and column: the call is on line 7, and `42` starts at column 85. rustc
+    // writes the path with the platform's separator.
+    assert!(
+        stderr.contains("src/main.rs:7:85") || stderr.contains("src\\main.rs:7:85"),
+        "the error points at the argument: {stderr}"
+    );
+    for line in stderr.lines().filter(|l| l.starts_with("error")) {
+        for private in ["Args", "Both", "Bind", "__private"] {
+            assert!(!line.contains(private), "an error's headline names {private}: {line}\n{stderr}");
+        }
+    }
+    let (ok, stderr) = build_main("args-message", &app("\"n\""));
+    assert!(ok, "the same call with a string there: {stderr}");
 }

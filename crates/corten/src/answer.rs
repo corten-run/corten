@@ -881,29 +881,33 @@ impl Media {
     /// ```
     ///
     /// Everything else is `Media`'s: its file name ([`Media::attachment`]), its headers, private
-    /// unless [`Public`]. A text type is compressed a chunk at a time as it comes (zstd or brotli,
-    /// as an event stream is, each ended when the stream ends), so a chunk of some kilobytes (a
-    /// few hundred rows) compresses far better than a row each. It goes out uncompressed in two
-    /// cases: to a client that takes only gzip (a script whose HTTP library has neither brotli
-    /// nor zstd), and while the server's compressed streams already hold their memory budget. No
-    /// `ETag` is made for it, since that would need the whole body.
+    /// unless [`Public`]. A text type is compressed a chunk at a time as it comes (zstd, else
+    /// gzip, as an event stream is, each ended when the stream ends; never brotli, which
+    /// Playwright's WebKit on Windows holds back), so a chunk of some kilobytes (a few hundred
+    /// rows) compresses far better than a row each. It goes out uncompressed in two cases: to a
+    /// client that takes neither zstd nor gzip, and while the server's compressed streams already
+    /// hold their memory budget. No `ETag` is made for it, since that would need the whole body.
     ///
     /// What can fail before anything is sent (a query that does not run, a file that is not
     /// there) is the handler's to try first, returning its error as any handler does: once the
     /// stream begins, the status and headers are sent. A chunk that is an `Err` after that ends
     /// the connection without the body's end, so the client knows the file is incomplete (a
-    /// browser reports the download failed), and the error is logged; it cannot become an error
-    /// page or a redirect. The request's deadline bounds the handler, not the stream, and
+    /// browser reports the download failed), and the error is logged as the error itself, each
+    /// cause under its message, as a handler's is; it cannot become an error page or a redirect.
+    /// The request's deadline bounds the handler, not the stream, and
     /// [`App::send_timeout`](crate::App::send_timeout) closes a connection whose client stops
     /// reading; nothing bounds a source that stops making chunks while the client waits, so give
     /// each chunk's read a time limit of its own (a query timeout). The error a failed chunk
     /// logs names the media type, so say which export it was in the error itself. Without a
     /// known length the body is chunked (HTTP/1.1) and the client shows no progress;
-    /// [`Media::stream_sized`] gives one.
+    /// [`Media::stream_sized`] gives one. A chunk's error is anything
+    /// [`Error::new`](crate::Error::new) takes: an error type (`std::io::Error`, a client's or a
+    /// store's), a `String` or `&str` message, or a [`corten::Error`](crate::Error), so a stream
+    /// made with the app's own `?` logs the error it holds.
     pub fn stream<S, E>(media_type: &'static str, chunks: S) -> Self
     where
         S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
-        E: std::fmt::Display + Send + 'static,
+        E: Into<Box<dyn std::error::Error + Send + Sync>> + Send + 'static,
     {
         Media::streamed(media_type, None, chunks)
     }
@@ -917,7 +921,7 @@ impl Media {
     pub fn stream_sized<S, E>(media_type: &'static str, length: u64, chunks: S) -> Self
     where
         S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
-        E: std::fmt::Display + Send + 'static,
+        E: Into<Box<dyn std::error::Error + Send + Sync>> + Send + 'static,
     {
         let mut media = Media::streamed(media_type, Some(length), chunks);
         media.0.headers_mut().insert(axum::http::header::CONTENT_LENGTH, axum::http::HeaderValue::from(length));
@@ -927,7 +931,7 @@ impl Media {
     fn streamed<S, E>(media_type: &'static str, length: Option<u64>, chunks: S) -> Self
     where
         S: futures_util::Stream<Item = Result<axum::body::Bytes, E>> + Send + 'static,
-        E: std::fmt::Display + Send + 'static,
+        E: Into<Box<dyn std::error::Error + Send + Sync>> + Send + 'static,
     {
         use axum::http::{header, HeaderValue};
         use futures_util::StreamExt;
@@ -935,19 +939,22 @@ impl Media {
         // logged and ended as an error, which ends the connection without the body's end.
         let checked = futures_util::stream::unfold(Some((Box::pin(chunks), length)), move |state| async move {
             let (mut chunks, left) = state?;
-            let failed = |why: String| {
-                tracing::error!("corten: a streamed {media_type} answer stopped after its headers were sent: {why}");
+            // As an error, not its `Display`, so the log names each cause under it (a reset
+            // connection under a store's "error reading rows"), as `error.sources`.
+            let failed = |why: Box<dyn std::error::Error + Send + Sync>| {
+                let error: &(dyn std::error::Error + 'static) = &*why;
+                tracing::error!(error, "corten: a streamed {media_type} answer stopped after its headers were sent");
                 Some((Err(StreamFailed), None))
             };
             match chunks.next().await {
                 Some(Ok(bytes)) => match left.map(|left| left.checked_sub(bytes.len() as u64)) {
-                    Some(None) => failed(format!("it made more than the {} bytes it said", length.unwrap_or(0))),
+                    Some(None) => failed(format!("it made more than the {} bytes it said", length.unwrap_or(0)).into()),
                     Some(Some(left)) => Some((Ok(bytes), Some((chunks, Some(left))))),
                     None => Some((Ok(bytes), Some((chunks, None)))),
                 },
-                Some(Err(error)) => failed(error.to_string()),
+                Some(Err(error)) => failed(error.into()),
                 None => match left {
-                    Some(left) if left > 0 => failed(format!("it ended {left} bytes short of the length it said")),
+                    Some(left) if left > 0 => failed(format!("it ended {left} bytes short of the length it said").into()),
                     _ => None,
                 },
             }

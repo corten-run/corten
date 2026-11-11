@@ -63,6 +63,20 @@ mod items {
     }
 }
 
+/// What partners' sites show of the market in a frame: an item's card. Only this area's pages
+/// may be framed, and only by the sites `EMBED_ORIGINS` names.
+#[corten::routes(area = Embeds, state = source::Source)]
+mod embeds {
+    #[route("/embed")]
+    pub struct Embeds;
+
+    /// An item's card, for a partner's page to frame.
+    #[route("/embed/items/{id}", get = app::embed_item)]
+    pub struct EmbedItem<'a> {
+        pub id: &'a str,
+    }
+}
+
 /// The JSON routes, for other services: every failure under `/api` is JSON, whatever the client
 /// accepts. `ApiRoot` is the prefix, so it needs no handler of its own.
 #[corten::routes(api = ApiRoot, state = app::ApiState, openapi = ApiDoc)]

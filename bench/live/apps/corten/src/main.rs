@@ -9,18 +9,13 @@ use corten::{
 use serde::{Deserialize, Serialize};
 
 /// A listing's price, with what the benchmark needs to time and order its delivery.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Row)]
 struct Tick {
+    #[row(id)]
     id: String,
     seq: u64,
     sent: f64,
     price: String,
-}
-
-impl Row for Tick {
-    fn id(&self) -> &str {
-        &self.id
-    }
 }
 
 #[derive(Deserialize)]

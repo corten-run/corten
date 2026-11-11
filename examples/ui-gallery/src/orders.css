@@ -7,6 +7,12 @@
 .share p { margin: 0 0 .25rem; font-size: .875rem; }
 .buyer { display: inline-flex; align-items: center; gap: .5rem; white-space: nowrap; }
 /* A panel's heading, the size a card's is. */
-.title { margin: 0; font-size: var(--card-heading-font-size); font-weight: 600; line-height: 1.25; }
+.title { font-size: var(--card-heading-font-size); font-weight: 600; line-height: 1.25; }
 .payout { gap: .75rem; }
+.schedule { font-size: .875rem; }
+/* The live badge's words follow the stream as its dot does: "Live" only inside a live
+   <corten-live>, and "Not live" otherwise, before the runtime runs and without JavaScript too. */
+.when-live { display: none; }
+:where(corten-live[status="live"]) .when-live { display: inline; }
+:where(corten-live[status="live"]) .when-not { display: none; }
 .lines { display: grid; flex: 1; gap: .5rem; }

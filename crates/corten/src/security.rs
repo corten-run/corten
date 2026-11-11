@@ -218,6 +218,16 @@ impl Policy {
         self
     }
 
+    /// An origin that may show these pages in an `<iframe>` (`frame-ancestors`), which no site may
+    /// by default. Allowed here, every page may be framed there; one part of the app's pages (a
+    /// widget partners embed) is its area's ([`Sources::frame_ancestors`]). A source is a host or
+    /// a scheme, or `'self'` for the app's own pages; a framed page is sent no `X-Frame-Options`,
+    /// or `SAMEORIGIN` when `'self'` is its only one.
+    pub fn frame_ancestors(mut self, source: &str) -> Self {
+        self.sources = self.sources.frame_ancestors(source);
+        self
+    }
+
     /// Another origin a form may send the user to (`form-action`): a hosted checkout, an identity
     /// provider's `form_post`, a sibling app. It also allows a form's handler to redirect there
     /// (`req.redirect(&uri)`), since Chromium and WebKit apply `form-action` to the redirects a
@@ -377,7 +387,10 @@ impl Policy {
     }
 
     /// Sends the CSP as `Content-Security-Policy-Report-Only`, to try a policy on a live site.
-    /// `Permissions-Policy` ([`Feature`]) is still enforced.
+    /// `Permissions-Policy` ([`Feature`]) is still enforced, and so is who may frame a page: by
+    /// `X-Frame-Options`, or by an enforced `Content-Security-Policy` of its `frame-ancestors`
+    /// alone for a page another origin may frame ([`Policy::frame_ancestors`]) and beside an
+    /// enforced policy a relayed upstream brought.
     pub fn report_only(mut self) -> Self {
         self.report_only = true;
         self
@@ -490,7 +503,7 @@ impl Policy {
         let mut csp = format!(
             "default-src 'self'; script-src 'self' {import_map}{}{nonce}{}; style-src 'self'{nonce}{}; img-src 'self'{}; \
              connect-src 'self'{}; font-src 'self'{}; frame-src {}; object-src 'none'; base-uri 'self'; form-action 'self'{}; \
-             frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; \
+             frame-ancestors {}; worker-src 'self'; manifest-src 'self'; require-trusted-types-for 'script'; \
              trusted-types corten{}{}",
             if s.script_loads() { format!(" {}", hash_source(SCRIPT_LOADS)) } else { String::new() },
             list(&s.script),
@@ -500,6 +513,7 @@ impl Policy {
             list(&s.font),
             if s.frame.is_empty() { "'none'".to_string() } else { list(&s.frame).trim_start().to_string() },
             list(&s.form_action),
+            if s.ancestors.is_empty() { "'none'".to_string() } else { list(&s.ancestors).trim_start().to_string() },
             list(&s.trusted_types),
             if s.script_loads() { " default" } else { "" },
         );
@@ -552,6 +566,8 @@ pub struct Sources {
     frame: Vec<String>,
     font: Vec<String>,
     form_action: Vec<String>,
+    /// The origins that may frame these pages (`frame-ancestors`); none: no one.
+    ancestors: Vec<String>,
     /// Trusted Types policies a script may create besides the runtime's.
     trusted_types: Vec<String>,
     /// The [`Feature`]s these pages may use, one bit each ([`Feature::bit`]).
@@ -819,6 +835,19 @@ impl Sources {
         self
     }
 
+    /// An origin that may show these pages in an `<iframe>` ([`Policy::frame_ancestors`]): a
+    /// host or a scheme, or `'self'`. No other keyword means anything there, and `'none'` is
+    /// what these pages have without one.
+    pub fn frame_ancestors(mut self, source: &str) -> Self {
+        let source = checked(source);
+        assert!(
+            !source.starts_with('\'') || source == "'self'",
+            "a frame-ancestors source is a host, a scheme or 'self': {source:?}"
+        );
+        self.ancestors.push(source);
+        self
+    }
+
     /// A Trusted Types policy a script may create ([`Policy::trusted_types_policy`]).
     pub fn trusted_types_policy(mut self, name: &str) -> Self {
         assert!(
@@ -875,13 +904,14 @@ impl Sources {
             frame,
             font,
             form_action,
+            ancestors,
             trusted_types,
             features,
             style_attributes,
             opener,
             referrer,
         } = self;
-        [script, style, img, connect, frame, font, form_action, trusted_types].iter().all(|list| list.is_empty())
+        [script, style, img, connect, frame, font, form_action, ancestors, trusted_types].iter().all(|list| list.is_empty())
             && *features == 0
             && !style_attributes
             && *opener == Opener::SameOrigin
@@ -909,6 +939,7 @@ impl Sources {
             (&mut self.frame, &more.frame),
             (&mut self.font, &more.font),
             (&mut self.form_action, &more.form_action),
+            (&mut self.ancestors, &more.ancestors),
             (&mut self.trusted_types, &more.trusted_types),
         ];
         for (list, more) in pairs {
@@ -1072,6 +1103,14 @@ pub(crate) struct Csp {
     style_at: (usize, usize, usize),
     opener: HeaderValue,
     referrer: Sent,
+    /// `X-Frame-Options` for browsers that do not read `frame-ancestors`: `DENY` when no one may
+    /// frame its pages, `SAMEORIGIN` when only the app may, none when another origin may (the
+    /// header cannot name one).
+    frame_options: Option<HeaderValue>,
+    /// Its `frame-ancestors` alone, as an enforced policy of its own: sent beside a relayed page's
+    /// own CSP, which may not widen who frames the app's pages, and under report-only on a page
+    /// another origin may frame, which has no `X-Frame-Options` to enforce it.
+    ancestors: HeaderValue,
     /// The `Permissions-Policy` of its full documents ([`Feature`]); none when every feature is
     /// allowed.
     permissions: Option<HeaderValue>,
@@ -1102,6 +1141,16 @@ impl Csp {
             style_at: (at, part, offset),
             opener: policy.sources.opener.header(),
             referrer: policy.sources.referrer,
+            frame_options: match policy.sources.ancestors.as_slice() {
+                [] => Some(HeaderValue::from_static("DENY")),
+                selfs if selfs.iter().all(|s| s == "'self'") => Some(HeaderValue::from_static("SAMEORIGIN")),
+                _ => None,
+            },
+            ancestors: match policy.sources.ancestors.as_slice() {
+                [] => HeaderValue::from_static("frame-ancestors 'none'"),
+                sources => HeaderValue::try_from(format!("frame-ancestors {}", sources.join(" ")))
+                    .expect("CSP sources are checked tokens"),
+            },
             permissions: Feature::denied(policy.sources.features),
             script_loads: policy.sources.script_loads(),
             #[cfg(debug_assertions)]
@@ -1354,6 +1403,16 @@ impl Applied {
             if self.report_only { header::CONTENT_SECURITY_POLICY_REPORT_ONLY } else { header::CONTENT_SECURITY_POLICY };
         let ours = csp.referrer;
         let opener = if page.is_some() { csp.opener.clone() } else { self.csp.opener.clone() };
+        // A response that is never a page is framed by no one, as its CSP says.
+        const NO_FRAMES: HeaderValue = HeaderValue::from_static("frame-ancestors 'none'");
+        let no_frames;
+        let (frame_options, ancestors) = match page {
+            Some(_) => (csp.frame_options.clone(), &csp.ancestors),
+            None => {
+                no_frames = NO_FRAMES;
+                (Some(HeaderValue::from_static("DENY")), &no_frames)
+            }
+        };
         let csp = match (page.map(|(slot, csp)| (slot.taken(), csp)), block) {
             (None, _) => Some(self.api_csp.clone()),
             (Some((None, csp)), None) => Some(csp.without_nonce.clone()),
@@ -1368,10 +1427,17 @@ impl Applied {
             }
         };
         // A response that brings a policy of its own is a relayed page (or a bug): it keeps it.
-        if let Some(brought) = csp.and_then(|csp| headers.insert(csp_header, csp)) {
-            self.keep_relayed(res, brought);
-        }
+        let kept = csp.and_then(|csp| headers.insert(csp_header, csp)).is_some_and(|brought| self.keep_relayed(res, brought));
         let headers = res.headers_mut();
+        // Who may frame a page is enforced even where the app's CSP is not: beside a relayed page's
+        // own, and under report-only on a page with no `X-Frame-Options` to fall back on or with an
+        // enforced policy an upstream brought, which could widen it.
+        let enforce = |headers: &HeaderMap| {
+            kept || (self.report_only && (frame_options.is_none() || headers.contains_key(header::CONTENT_SECURITY_POLICY)))
+        };
+        if enforce(headers) {
+            headers.append(header::CONTENT_SECURITY_POLICY, ancestors.clone());
+        }
         headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
         // An answer that brings a stricter policy (a relayed one, a handler's own) keeps it.
         match headers.entry(header::REFERRER_POLICY) {
@@ -1380,7 +1446,12 @@ impl Applied {
             }
             axum::http::header::Entry::Occupied(entry) => stricter_referrer(entry, ours),
         }
-        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+        // Who may frame a page is its policy's, whatever its handler, middleware or upstream set: one
+        // another origin may frame has none (the header cannot name one).
+        match frame_options {
+            Some(value) => headers.insert(header::X_FRAME_OPTIONS, value),
+            None => headers.remove(header::X_FRAME_OPTIONS),
+        };
         headers.insert(HeaderName::from_static("cross-origin-opener-policy"), opener);
         if self.hsts {
             headers.insert(header::STRICT_TRANSPORT_SECURITY, HeaderValue::from_static("max-age=31536000; includeSubDomains"));
@@ -1432,14 +1503,17 @@ impl Applied {
 
     /// A relayed page keeps the policy its own HTML was written for (its scripts' nonces and
     /// hosts), which the app's would block. Out of [`Applied::headers`], which every response runs.
+    /// Whether it kept it.
     #[cold]
     #[inline(never)]
-    fn keep_relayed(&self, res: &mut Response, brought: HeaderValue) {
+    fn keep_relayed(&self, res: &mut Response, brought: HeaderValue) -> bool {
         if res.extensions().get::<crate::answer::Relayed>().is_some() {
             let name =
                 if self.report_only { header::CONTENT_SECURITY_POLICY_REPORT_ONLY } else { header::CONTENT_SECURITY_POLICY };
             res.headers_mut().insert(name, brought);
+            return true;
         }
+        false
     }
 }
 
@@ -2191,6 +2265,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "a frame-ancestors source is a host, a scheme or 'self'")]
+    fn frame_ancestors_takes_no_other_keyword() {
+        let _ = Sources::default().frame_ancestors("'unsafe-inline'");
+    }
+
+    #[test]
     fn csp_carries_the_nonce_and_extra_sources() {
         let csp = Policy::new().script_src("https://js.stripe.com").frame_src("https://js.stripe.com").csp("abc");
         let import_map = hash_source(&crate::import_map(None, None, None));
@@ -2202,6 +2282,9 @@ mod tests {
         assert!(plain.contains(&format!("script-src 'self' {};", hash_source("{}"))) && !plain.contains("nonce"), "{plain}");
         assert!(csp.contains("frame-src https://js.stripe.com;"));
         assert!(Policy::new().csp("x").contains("frame-src 'none';"));
+        assert!(Policy::new().csp("x").contains("frame-ancestors 'none';"), "no one frames a page by default");
+        let framed = Policy::new().frame_ancestors("https://partner.example").frame_ancestors("'self'").csp("x");
+        assert!(framed.contains("frame-ancestors https://partner.example 'self';"), "{framed}");
         assert!(!csp.contains("unsafe-inline"));
         assert!(csp.contains("form-action 'self';"), "a form goes to this origin only: {csp}");
         let checkout = Policy::new().form_action("https://pay.example").form_action("https://id.example").csp("abc");

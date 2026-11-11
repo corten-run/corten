@@ -1254,7 +1254,7 @@ macro_rules! tuples {
 }
 tuples!((A, B), (A, B, C), (A, B, C, D));
 
-pub(crate) fn push_u64(n: u64, out: &mut String) {
+pub(crate) fn push_u64(mut n: u64, out: &mut String) {
     // One or two digits, most of a page's counts and quantities: pushed with no buffer.
     if n < 100 {
         if n >= 10 {
@@ -1263,12 +1263,25 @@ pub(crate) fn push_u64(n: u64, out: &mut String) {
         out.push(char::from(b'0' + (n % 10) as u8));
         return;
     }
-    let mut buf = [0u8; 20];
-    let digits = crate::ascii::digits(n, &mut buf);
-    out.reserve(digits.len());
-    // ASCII digits, each a push: no text to check, as `from_utf8` would.
-    for &d in digits {
-        out.push(char::from(d));
+    // Two digits per division, lowest first, then written highest first as two-digit text: one
+    // `push_str` a pair, whose text was checked once when the table was made, in place of a `push`
+    // a digit. Rust 1.98's `NumBuffer` is faster for long numbers but measured no faster on a page
+    // (#1089).
+    let mut pairs = [0u8; 10];
+    let mut len = 0;
+    while n >= 100 {
+        pairs[len] = (n % 100) as u8;
+        n /= 100;
+        len += 1;
+    }
+    out.reserve(2 * len + 2);
+    if n >= 10 {
+        out.push_str(crate::ascii::pair(n as u8));
+    } else {
+        out.push(char::from(b'0' + n as u8));
+    }
+    for &pair in pairs[..len].iter().rev() {
+        out.push_str(crate::ascii::pair(pair));
     }
 }
 
@@ -1393,8 +1406,9 @@ fn push_float(value: f64, out: &mut String) {
 }
 
 /// An attribute value. `true` prints the bare name and `false` nothing; `None` leaves the
-/// attribute out; text and numbers print ` name="value"`, escaped. Types that implement only
-/// `Display` work too.
+/// attribute out; text, numbers and `#[derive(UrlValue)]` enums print ` name="value"`, escaped.
+/// Types that implement only `Display` work in an `html!` attribute too, but not inside an
+/// `Option` (`Option<T>` needs `T: AttrValue`): write `.map(|v| v.to_string())` for one.
 pub trait AttrValue {
     /// Writes ` name="value"` (`name` already has its leading space), or nothing.
     fn write_attr(&self, name: &str, out: &mut String);
@@ -1966,7 +1980,8 @@ pub mod __private {
     #[diagnostic::on_unimplemented(
         message = "this value cannot be written in an attribute",
         label = "not text, a link, an id or an attribute value",
-        note = "an attribute takes text (a type that implements `Display`), a link (a typed route, `&dyn Href` or `Box<dyn Href>`), a `#[derive(Id)]` id, or a type that implements `AttrValue`"
+        note = "an attribute takes text (a type that implements `Display`), a link (a typed route, `&dyn Href` or `Box<dyn Href>`), a `#[derive(Id)]` id, or a type that implements `AttrValue`",
+        note = "if the value is an `Option`: it leaves the attribute out when `None`, and its `Some` takes text (`&str`, `String`, a number), a `#[derive(UrlValue)]` enum or another `AttrValue`, so an `Option` of other `Display` text is written `.map(|v| v.to_string())`"
     )]
     pub trait AttrText {
         fn __text(&self, name: &str, out: &mut String);

@@ -267,11 +267,12 @@ impl<S: Source> Hub<S> {
         let key = key.to_string();
         tokio::spawn(async move {
             if let Err(e) = hub.load(key.clone()).await {
+                let error: &(dyn std::error::Error + 'static) = &*e;
                 tracing::warn!(
                     target: "corten::feed",
                     instance = %hub.options.instance,
                     feed = %key,
-                    error = %e,
+                    error,
                     "reloading the feed failed"
                 );
             }
@@ -432,10 +433,11 @@ pub(crate) async fn start<S: Source>(hub: Arc<Hub<S>>, js: jetstream::Context) -
                         hub.on_message(key, Message { generation, json });
                     }
                     Err(e) => {
+                        let error: &(dyn std::error::Error + 'static) = &e;
                         tracing::warn!(
                             target: "corten::feed",
                             instance = %hub.options.instance,
-                            error = %e,
+                            error,
                             "JetStream consumer failed: every loaded feed reloads"
                         );
                         break;
@@ -452,7 +454,8 @@ pub(crate) async fn start<S: Source>(hub: Arc<Hub<S>>, js: jetstream::Context) -
                         break;
                     }
                     Err(e) => {
-                        tracing::warn!(target: "corten::feed", instance = %hub.options.instance, error = %e, "resubscribing to JetStream failed")
+                        let error: &(dyn std::error::Error + 'static) = &*e;
+                        tracing::warn!(target: "corten::feed", instance = %hub.options.instance, error, "resubscribing to JetStream failed")
                     }
                 }
             }
@@ -499,16 +502,11 @@ mod tests {
     use super::{Hub, Message};
     use crate::{Error, Options, Source};
 
-    #[derive(Clone, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Debug, Serialize, Deserialize, Row)]
     struct Item {
+        #[row(id)]
         id: String,
         n: i64,
-    }
-
-    impl Row for Item {
-        fn id(&self) -> &str {
-            &self.id
-        }
     }
 
     /// No rows are read: the test applies patches to a feed it built.
