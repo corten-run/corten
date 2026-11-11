@@ -61,16 +61,22 @@ median was 58 ms for Corten and React: about half their loads had the frame and 
 the median falls between the two, so it is not the frame's length. It was 0.1 ms for Remix and
 none for the rest, so how often the frame comes first is no longer alike for every framework.
 The rendering is any long frame (50 ms or more) between the parser finishing and ready, so it also
-counts frames an app causes while it starts, not only the server's rows painted first.
-`renderedLoads` is how many loads had some, `takeoverRenderedMs` and `takeoverNotRenderedMs` are
-the takeover medians of those loads and of the rest (null when there are none), and `each` keeps
-every load's takeover and rendering, so a round can be split again later. Corten's takeover is
-higher on the loads with that rendering even after it is left out, so its median over all loads
-moves with how many there are. In three runs of 15 loads on a desktop (Chromium 156), 8, 6 and 6
-of Corten's loads had the rendering, with takeover medians of 22.0, 22.7 and 20.4 ms against 12.3,
-12.6 and 11.6 ms for the rest, and 17.7, 16.1 and 12.0 ms over all loads. Why those loads are
-slower was not measured. Solid's loads had none, and React's and Remix's had it on 14 or 15. Rows the app removes or adds while starting are counted in a separate load, since a
-mutation observer slows every app that touches many nodes.
+counts frames an app causes while it starts, not only the server's rows painted first, and
+`paintedFirstMs` keeps the name it had in earlier rounds. A load can have a sliver of it (0.1 ms)
+and still count. `renderedLoads` is how many loads had some, `takeoverRenderedMs` and
+`takeoverNotRenderedMs` are the takeover medians of those loads and of the rest (null when there
+are none), and `each` keeps every load's takeover and rendering, so a round can be split again
+later. Corten's takeover is higher on the loads with that rendering even after it is left out, so
+with 6 to 8 such loads of 15 its median over all loads falls at the edge of the faster loads and
+moves with how many there are and how slow the slowest of the rest are. In three runs on a laptop
+(Core i9-10885H, Windows, Chromium 156; `node ssr.mjs --loads 15 --apps
+view-ssr,solid-ssr,react-ssr,remix-ssr` at the commit that added these fields;
+[results/ssr-rendered/](results/ssr-rendered/)), 8, 6 and 6 of Corten's loads had the rendering,
+with takeover medians of 22.0, 22.7 and 20.4 ms against 12.3, 12.6 and 11.6 ms for the rest, and
+17.7, 16.1 and 12.0 ms over all loads. Why those loads are slower was not measured. Solid's loads
+had none, and React's and Remix's had it on 14 or 15; Remix's median in browser-4 was 0.1 ms, so
+how many loads have it depends on the machine. Rows the app removes or adds while starting are
+counted in a separate load, since a mutation observer slows every app that touches many nodes.
 
 The browser's clock resolves to 0.1 ms here, so differences under a millisecond come from
 [ab.mjs](ab.mjs): the apps take turns in blocks of 25 clicks in one browser, and it reports each
@@ -143,7 +149,7 @@ What it shows:
    this round does not show which slowed Corten's takeover
    ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)).
    It is also one round of a number that has moved between runs before (browser-2 and its
-   reruns, below). On about half of Corten's and React's loads the browser painted a frame
+   reruns, below). On about half of Corten's and React's loads a long frame rendered
    between parsing and the app being ready, which takeover leaves out: their median
    `paintedFirstMs`, 58 ms, falls between the loads with the frame and those without, so it is
    not the frame's length (Remix 0.1 ms, the rest none); in browser-3 the median was none for

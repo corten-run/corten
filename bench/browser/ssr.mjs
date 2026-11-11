@@ -47,9 +47,10 @@ const watch = () => {
 
 // The browser may paint the server's rows before it runs the page's module scripts, or after, and
 // which one varies from load to load (round browser-3: about 100 ms on some loads of every app;
-// browser-4: a median of 58 ms for Corten and React, 0.1 ms for Remix and none for the rest). Long-animation-frame
-// entries (frames of 50 ms or more) say how long each long frame spent rendering, so takeover
-// leaves out the rendering of those frames between the parser finishing and the app being ready.
+// browser-4: a median of 58 ms for Corten and React, 0.1 ms for Remix and none for the rest).
+// Long-animation-frame entries (frames of 50 ms or more) say how long each long frame spent
+// rendering, so takeover leaves out the rendering of those frames between the parser finishing and
+// the app being ready.
 // That rendering also counts frames an app causes while it starts, so a load with some is not
 // known to have painted the server's rows first. The results give takeover over all loads, over
 // the loads with such rendering and over those without, and keep each load's values, so a round
@@ -130,8 +131,8 @@ for (const app of APPS) {
     htmlB: html.length,
     htmlGzipB: gzipSync(html, { level: 9 }).length,
     readyMs: round(median(runs.map((r) => r.ready))),
-    // From the parser finishing (domInteractive) to the app being ready, less the browser's
-    // rendering in between: the app's own start.
+    // From the parser finishing (domInteractive) to the app being ready, less the long frames'
+    // rendering in between.
     takeoverMs: round(median(runs.map((r) => r.takeover))),
     paintedFirstMs: round(median(runs.map((r) => r.painting))),
     // How many loads had long-frame rendering between the parser finishing and ready, and the

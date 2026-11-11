@@ -222,8 +222,8 @@ that step on one CPU model gave 4.9, 20.7 and 6.3 ms
 It is also slower than in round browser-3 (2026-10-23, at 77002fe): 10.2 ms against 6.0 then,
 while Solid, Svelte, Vue, React and plain JavaScript took over faster in this round than in that
 one (Solid 16.2 ms against 19.6) and Remix slower. Two things moved for Corten that did not for
-most apps. On about half of its loads (and React's) the browser painted a frame between parsing
-and the app being ready, which takeover leaves out; the median of that rendering, 58 ms, falls
+most apps. On about half of its loads (and React's) a long frame rendered between parsing and the
+app being ready (the server's rows painted first, or the app's own frames), which takeover leaves out; the median of that rendering, 58 ms, falls
 between the loads with the frame and those without and is not the frame's length, where
 browser-3's median was none for every app. And while every app was ready sooner after navigation
 began than in browser-3 (Corten 105.6 to 89.0 ms, Svelte 123.5 to 39.6, Vue 125.2 to 42.2, plain

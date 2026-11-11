@@ -2805,7 +2805,8 @@ Corten is pre-1.0, so any minor version may change the API.
     parser finishing and the app being ready (`renderedLoads`), the takeover median of those loads
     and of the rest (`takeoverRenderedMs`, `takeoverNotRenderedMs`), and each load's takeover and
     rendering (`each`), so a round's takeover can be read apart from how many of its loads had
-    that rendering. Measured on a desktop (three runs of 15 loads, Chromium 156): 8, 6 and 6 of
+    that rendering. Measured on a laptop (three runs of 15 loads, Core i9-10885H, Chromium 156,
+    in `bench/browser/results/ssr-rendered/`): 8, 6 and 6 of
     Corten's loads had it, with takeover medians of 22.0, 22.7 and 20.4 ms against 12.3, 12.6 and
     11.6 ms for the rest, and 17.7, 16.1 and 12.0 ms over all loads. How much of browser-4's rise
     this explains is not known, since that round kept only medians; an A/B on one machine,
