@@ -28,8 +28,9 @@ declare module "corten/views" {
     qty: number;
     sold_out: boolean;
     selected: boolean;
+    hidden: boolean;
     /** Writes every hole of `el` (a InventoryRow's root) from `data`. */
-    static fill(el: Element, data: { name: string; set: string; condition: string; qty: number; sold_out: boolean; selected: boolean }): void;
+    static fill(el: Element, data: { name: string; set: string; condition: string; qty: number; sold_out: boolean; selected: boolean; hidden: boolean }): void;
     /** The key of a InventoryRow's root (its key={id}). */
     static key(el: Element): string;
   }

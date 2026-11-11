@@ -1,7 +1,7 @@
 // Browser smoke test and timings for the seller desk.
 // Usage: node examples/seller-desk/smoke.mjs http://localhost:18484
 import { readFileSync } from "node:fs";
-import { chromium } from "@playwright/test";
+import { chromium, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
 
@@ -108,13 +108,26 @@ try {
   await page.click("[role=group] button:nth-of-type(2)");
   await page.fill("input[type=search]", "");
   check("with the filter cleared the item count is back", (await page.isVisible("#item-count")) && (await shownText()) === "");
+  // Whether the page's handler cancelled each filter submit and header click, read by a listener on
+  // the window, which runs after the runtime's on the document: a navigation would be too late to see.
+  await page.evaluate(() => {
+    const cancelled = /** @type {any} */ (window).__cancelled = /** @type {boolean[]} */ ([]);
+    addEventListener("submit", (e) => cancelled.push(e.defaultPrevented));
+    addEventListener("click", (e) => e.target instanceof Element && e.target.closest("thead a") && cancelled.push(e.defaultPrevented));
+  });
+  const cancelled = () => page.evaluate(() => /** @type {boolean[]} */ (/** @type {any} */ (window).__cancelled.splice(0)));
+  await page.press("input[type=search]", "Enter");
+  const submitKept = await cancelled();
+  check("with JavaScript the Filter button is not drawn, and Enter keeps the page", !(await page.isVisible("form[role=search] button")) && submitKept.join() === "true", submitKept.join());
   check("on a desktop the set and condition are their own columns, not repeated under the name", await page.isHidden("tbody tr td:nth-child(2) small"));
 
-  await time("sort by price (moves every row)", () => /** @type {HTMLButtonElement} */ (document.querySelectorAll("thead button")[3]).click());
+  await time("sort by price (moves every row)", () => /** @type {HTMLAnchorElement} */ (document.querySelectorAll("thead a")[3]).click());
   const prices = await page.$$eval("tbody tr", (rows) => rows.slice(0, 5).map((r) => Number(/** @type {HTMLInputElement} */ (r.cells[5].querySelector("input")).value)));
   check("sort orders rows by price", prices.every((p, i) => i === 0 || prices[i - 1] <= p), prices.join(" "));
-  await time("sort again (descending)", () => /** @type {HTMLButtonElement} */ (document.querySelectorAll("thead button")[3]).click());
-  await page.click("thead button >> nth=0");
+  await time("sort again (descending)", () => /** @type {HTMLAnchorElement} */ (document.querySelectorAll("thead a")[3]).click());
+  await page.click("thead a >> nth=0");
+  const clicksKept = await cancelled();
+  check("a header's click sorts in place, not by following its link", clicksKept.length === 3 && clicksKept.every(Boolean), clicksKept.join());
   const names = await page.$$eval("tbody tr", (rows) => rows.slice(0, 30).map((r) => r.cells[1].firstElementChild?.textContent ?? ""));
   check("sort orders rows by name, read from the row's field", names.every((n, i) => i === 0 || names[i - 1].localeCompare(n, "en") <= 0), names.slice(0, 5).join(", "));
   await page.click("tbody tr:first-child input[type=checkbox]");
@@ -164,8 +177,8 @@ try {
     }),
   );
   check("two refused rows: each field is described by its own message", described.length === 2 && described.every((d) => d.own && d.ids === 1), JSON.stringify(described));
-  await page.click("thead button >> nth=3");
-  if ((await page.getAttribute("thead th:nth-child(6)", "aria-sort")) !== "ascending") await page.click("thead button >> nth=3");
+  await page.click("thead a >> nth=3");
+  if ((await page.getAttribute("thead th:nth-child(6)", "aria-sort")) !== "ascending") await page.click("thead a >> nth=3");
   const last = await page.$$eval("tbody tr", (rows) => rows.slice(-2).map((r) => /** @type {HTMLInputElement} */ (r.cells[5].querySelector("input")).value).sort().join(" "));
   check("sorting by price puts the refused prices last", last === "abc xyz", last);
   await page.fill(`${second} input`, "3");
@@ -520,6 +533,43 @@ try {
       check("the statement's amounts are the kit table's numeric cells, aligned to the end", aligned.length > 0 && aligned.every((a) => a === "end"), aligned.join(" "));
     }
     await themed.context().close();
+  }
+
+  // Without JavaScript, in each engine (the `scripting` media feature is the engine's): the filter
+  // is a GET form the server answers, with its Filter button drawn, and a header is a link to the
+  // grid sorted by its column, the filter kept.
+  for (const [name, type] of /** @type {const} */ ([["Chromium", chromium], ["Firefox", firefox], ["WebKit", webkit]])) {
+    const own = name === "Chromium" ? null : steady(await type.launch({ headless: true }));
+    const plainContext = await (own ?? browser).newContext({ javaScriptEnabled: false });
+    try {
+      const plain = await plainContext.newPage();
+      await plain.goto(base);
+      const button = "form[role=search] button";
+      const drawn = await plain.isVisible(button);
+      await plain.fill("input[type=search]", "tidebreak");
+      // The URL the answer comes to: a load state can be read before the navigation starts.
+      await Promise.all([plain.waitForURL(/[?&]q=tidebreak/), plain.click(button)]);
+      const sets = await plain.$$eval("tbody tr:not([hidden])", (rows) => rows.map((r) => r.cells[2].textContent));
+      const says = await plain.$eval("#item-count", (p) => p.previousElementSibling?.textContent?.trim() ?? "");
+      check(
+        `${name} without JavaScript: the filter is a GET form the server answers, and says how many rows it shows`,
+        drawn && new URL(plain.url()).searchParams.get("q") === "tidebreak" && sets.length > 0 && sets.every((s) => s === "Tidebreak") &&
+          says.startsWith(`${sets.length.toLocaleString("en")} of `) && (await plain.isHidden("#item-count")),
+        `button drawn: ${drawn}; ${sets.length} rows; "${says}"; ${plain.url()}`,
+      );
+      await Promise.all([plain.waitForURL(/[?&]sort=name/), plain.click("thead a >> nth=0")]);
+      const names = await plain.$$eval("tbody tr:not([hidden])", (rows) => rows.map((r) => (r.cells[1].firstElementChild?.textContent ?? "").toLowerCase()));
+      const at = new URL(plain.url()).searchParams;
+      check(
+        `${name} without JavaScript: a header is a link to the grid sorted by its column, the filter kept`,
+        at.get("sort") === "name" && at.get("q") === "tidebreak" && names.length === sets.length &&
+          names.every((n, i) => i === 0 || (names[i - 1] ?? "") <= n) && (await plain.getAttribute("thead th:nth-child(2)", "aria-sort")) === "ascending",
+        `${plain.url()}; ${names.slice(0, 3).join(", ")}`,
+      );
+    } finally {
+      await plainContext.close();
+      await own?.close();
+    }
   }
 
   // Memory with the page settled.
