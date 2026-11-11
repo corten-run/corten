@@ -4447,6 +4447,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
 ### Fixed
+- When a watchlist smoke run fails on a Playwright call (a page load past its 30 s timeout, say),
+  the report numbers each request still loading by its context and page, sends the same GETs again
+  from Node with the browser's headers (not its cookies) and how long the server took, and gives the run's peak of
+  requests in flight in one context, so a stalled load says whether the browser or the server held it
+  ([#1149 Smoke and check failures under load remain after the #1053 and #1102 fixes: a fixed 4 s wait on the formaction post, page loads past their 30 s timeout, and builds.test's touch case](https://github.com/corten-run/corten/issues/1149)).
 - The watchlist smoke's check of the feed's backoff after a stream answered with an error failed
   in Firefox under load: a 2 s wait measured 6.1 and 6.6 s against a 3.5 s bound. Timed in the
   page, from the error that closed a source to the next `EventSource`, the first wait (the 1 s
