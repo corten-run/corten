@@ -1,7 +1,7 @@
 {
  "name": "before-a",
  "image": "corten-nodelay:before",
- "taken": "2026-11-11T22:15:13.184Z",
+ "taken": "2026-11-11T22:41:26.496Z",
  "nginx": "nginx version: nginx/1.29.8",
  "kernel": "6.18.58.1-microsoft-standard-WSL2",
  "rounds": 20,
@@ -13,99 +13,131 @@
    "idleMs": {
     "median": 0.2,
     "min": 0.1,
-    "max": 27.4
+    "max": 15.6
    },
    "firstAfterHeadMs": {
     "median": 0.09,
-    "min": 0.06,
-    "max": 5.51
+    "min": 0.05,
+    "max": 0.38
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": 44.3,
-    "min": -0.11,
-    "max": 89.01
+    "median": 42.47,
+    "min": -0.07,
+    "max": 62.12
    },
    "worstLateMs": {
-    "median": 44.3,
-    "min": -0.11,
-    "max": 89.01
+    "median": 42.47,
+    "min": -0.07,
+    "max": 62.12
    },
-   "over20ms": 79
+   "over20ms": 78,
+   "held": 78,
+   "heldEventsWithSecond": {
+    "9": 78
+   }
   },
   "default gap=0us after idle": {
    "runs": 20,
    "events": 10,
    "idleMs": {
-    "median": 1227.1,
+    "median": 1095.3,
     "min": 554,
-    "max": 1562.3
+    "max": 1701.8
    },
    "firstAfterHeadMs": {
-    "median": 0.14,
-    "min": 0.06,
-    "max": 8.53
+    "median": 0.13,
+    "min": 0.05,
+    "max": 8.12
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
     "median": -0.08,
-    "min": -0.63,
-    "max": -0.05
+    "min": -0.21,
+    "max": 0.76
    },
    "worstLateMs": {
     "median": -0.07,
-    "min": -0.63,
-    "max": 1.05
+    "min": -0.21,
+    "max": 4.04
    },
-   "over20ms": 0
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 1,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 19,
+    "over20ms": 0
+   },
+   "over20": []
   },
   "on gap=0us busy": {
    "runs": 80,
    "events": 10,
    "idleMs": {
-    "median": 0.2,
+    "median": 0.3,
     "min": 0.1,
-    "max": 5.3
+    "max": 6.3
    },
    "firstAfterHeadMs": {
-    "median": 0.12,
+    "median": 0.13,
     "min": 0.06,
-    "max": 2.46
+    "max": 3.14
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": -0.07,
-    "min": -1.52,
-    "max": 3.32
+    "median": -0.06,
+    "min": -1.36,
+    "max": 0.51
    },
    "worstLateMs": {
-    "median": -0.07,
-    "min": -1.52,
-    "max": 3.32
+    "median": -0.06,
+    "min": -1.36,
+    "max": 3.74
    },
-   "over20ms": 0
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {}
   },
   "on gap=0us after idle": {
    "runs": 20,
    "events": 10,
    "idleMs": {
-    "median": 805.5,
-    "min": 220.3,
-    "max": 1663.6
+    "median": 732.9,
+    "min": 209.9,
+    "max": 1566.3
    },
    "firstAfterHeadMs": {
-    "median": 0.13,
-    "min": 0.06,
-    "max": 0.29
+    "median": 0.12,
+    "min": 0.07,
+    "max": 0.33
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
     "median": -0.08,
-    "min": -0.36,
-    "max": 0.13
+    "min": -0.16,
+    "max": 0.18
    },
    "worstLateMs": {
-    "median": -0.08,
-    "min": -0.36,
-    "max": 0.13
+    "median": -0.07,
+    "min": -0.16,
+    "max": 13.83
    },
-   "over20ms": 0
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 1,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 19,
+    "over20ms": 0
+   },
+   "over20": []
   },
   "off gap=0us busy": {
    "runs": 80,
@@ -113,49 +145,73 @@
    "idleMs": {
     "median": 0.3,
     "min": 0.1,
-    "max": 3.6
+    "max": 4
    },
    "firstAfterHeadMs": {
-    "median": 0.09,
-    "min": 0.05,
-    "max": 0.29
+    "median": 0.1,
+    "min": 0.06,
+    "max": 2.14
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": 44.35,
-    "min": 8.87,
-    "max": 67.42
+    "median": 42.9,
+    "min": 32.74,
+    "max": 59.9
    },
    "worstLateMs": {
-    "median": 44.35,
-    "min": 8.87,
-    "max": 67.42
+    "median": 42.9,
+    "min": 32.74,
+    "max": 59.9
    },
-   "over20ms": 79
+   "over20ms": 80,
+   "held": 80,
+   "heldEventsWithSecond": {
+    "9": 80
+   }
   },
   "off gap=0us after idle": {
    "runs": 20,
    "events": 10,
    "idleMs": {
-    "median": 267.3,
-    "min": 31.3,
-    "max": 1488.9
+    "median": 218.2,
+    "min": 28.7,
+    "max": 1447.4
    },
    "firstAfterHeadMs": {
-    "median": 0.14,
+    "median": 0.1,
     "min": 0.06,
-    "max": 4.6
+    "max": 1.24
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": -0.07,
-    "min": -1.63,
-    "max": 43.6
+    "median": -0.08,
+    "min": -0.26,
+    "max": 41.55
    },
    "worstLateMs": {
-    "median": -0.07,
-    "min": -1.63,
-    "max": 43.6
+    "median": -0.06,
+    "min": -0.26,
+    "max": 41.55
    },
-   "over20ms": 1
+   "over20ms": 1,
+   "held": 1,
+   "heldEventsWithSecond": {
+    "9": 1
+   },
+   "idleUnder150ms": {
+    "runs": 4,
+    "over20ms": 1
+   },
+   "idle150msOrMore": {
+    "runs": 16,
+    "over20ms": 0
+   },
+   "over20": [
+    {
+     "idleMs": 28.7,
+     "lateMs": 41.5
+    }
+   ]
   },
   "default gap=1000us busy": {
    "runs": 80,
@@ -163,49 +219,80 @@
    "idleMs": {
     "median": 0.2,
     "min": 0.1,
-    "max": 12
+    "max": 4.4
    },
    "firstAfterHeadMs": {
-    "median": 0.1,
+    "median": 0.09,
     "min": 0.05,
-    "max": 2.13
+    "max": 0.43
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": 40.11,
-    "min": 18.59,
-    "max": 58.94
+    "median": 40.92,
+    "min": -1.19,
+    "max": 64.91
    },
    "worstLateMs": {
-    "median": 40.11,
-    "min": 18.59,
-    "max": 58.94
+    "median": 40.92,
+    "min": 2.07,
+    "max": 64.91
    },
-   "over20ms": 79
+   "over20ms": 79,
+   "held": 79,
+   "heldEventsWithSecond": {
+    "6": 2,
+    "7": 1,
+    "8": 1,
+    "9": 75
+   }
   },
   "default gap=1000us after idle": {
    "runs": 20,
    "events": 10,
    "idleMs": {
-    "median": 268.05,
-    "min": 45.5,
-    "max": 1565.3
+    "median": 244.45,
+    "min": 23.3,
+    "max": 1560.6
    },
    "firstAfterHeadMs": {
-    "median": 0.09,
-    "min": 0.05,
-    "max": 0.93
+    "median": 0.11,
+    "min": 0.07,
+    "max": 0.5
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": -0.14,
-    "min": -9.87,
-    "max": 10.71
+    "median": -0.09,
+    "min": -5.72,
+    "max": 38.63
    },
    "worstLateMs": {
-    "median": 1.52,
-    "min": -9.13,
-    "max": 10.71
+    "median": 0.47,
+    "min": -4.08,
+    "max": 38.63
    },
-   "over20ms": 0
+   "over20ms": 2,
+   "held": 2,
+   "heldEventsWithSecond": {
+    "9": 2
+   },
+   "idleUnder150ms": {
+    "runs": 2,
+    "over20ms": 2
+   },
+   "idle150msOrMore": {
+    "runs": 18,
+    "over20ms": 0
+   },
+   "over20": [
+    {
+     "idleMs": 23.3,
+     "lateMs": 38.6
+    },
+    {
+     "idleMs": 24.3,
+     "lateMs": 38.4
+    }
+   ]
   },
   "on gap=1000us busy": {
    "runs": 80,
@@ -213,49 +300,64 @@
    "idleMs": {
     "median": 0.2,
     "min": 0.1,
-    "max": 1.2
+    "max": 1
    },
    "firstAfterHeadMs": {
     "median": 0.1,
     "min": 0.05,
-    "max": 0.76
+    "max": 0.77
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": -0.07,
-    "min": -3.93,
-    "max": 5.35
+    "median": -0.06,
+    "min": -7,
+    "max": 3.45
    },
    "worstLateMs": {
-    "median": 0.4,
-    "min": -1.58,
-    "max": 6.14
+    "median": 0.26,
+    "min": -5.25,
+    "max": 11
    },
-   "over20ms": 0
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {}
   },
   "on gap=1000us after idle": {
    "runs": 20,
    "events": 10,
    "idleMs": {
-    "median": 461.25,
-    "min": 220.1,
-    "max": 1341.4
+    "median": 435.4,
+    "min": 192.7,
+    "max": 1385.4
    },
    "firstAfterHeadMs": {
-    "median": 0.1,
-    "min": 0.06,
-    "max": 0.55
+    "median": 0.08,
+    "min": 0.05,
+    "max": 0.16
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": -0.07,
-    "min": -1.22,
-    "max": 5.87
+    "median": 0.01,
+    "min": -0.32,
+    "max": 9.41
    },
    "worstLateMs": {
-    "median": 1.68,
-    "min": -1.22,
-    "max": 10.6
+    "median": 0.52,
+    "min": -0.11,
+    "max": 9.41
    },
-   "over20ms": 0
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 0,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 20,
+    "over20ms": 0
+   },
+   "over20": []
   },
   "off gap=1000us busy": {
    "runs": 80,
@@ -263,49 +365,66 @@
    "idleMs": {
     "median": 0.2,
     "min": 0.1,
-    "max": 15.9
+    "max": 2.4
    },
    "firstAfterHeadMs": {
-    "median": 0.1,
+    "median": 0.09,
     "min": 0.05,
-    "max": 3.67
+    "max": 0.39
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": 40.78,
-    "min": -0.08,
-    "max": 59.19
+    "median": 40.83,
+    "min": -1.22,
+    "max": 56.62
    },
    "worstLateMs": {
-    "median": 40.78,
-    "min": 3.93,
-    "max": 59.19
+    "median": 40.83,
+    "min": -1.22,
+    "max": 56.62
    },
-   "over20ms": 79
+   "over20ms": 79,
+   "held": 79,
+   "heldEventsWithSecond": {
+    "9": 79
+   }
   },
   "off gap=1000us after idle": {
    "runs": 20,
    "events": 10,
    "idleMs": {
-    "median": 428.55,
-    "min": 174.5,
-    "max": 657.8
+    "median": 367.05,
+    "min": 139.6,
+    "max": 613.2
    },
    "firstAfterHeadMs": {
-    "median": 0.09,
-    "min": 0.05,
-    "max": 0.5
+    "median": 0.1,
+    "min": 0.06,
+    "max": 0.58
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": -0.11,
-    "min": -2.94,
-    "max": 9.76
+    "median": -0.12,
+    "min": -2.26,
+    "max": 1.64
    },
    "worstLateMs": {
-    "median": 1.31,
-    "min": -2.07,
-    "max": 13.64
+    "median": 0.44,
+    "min": -2.22,
+    "max": 7.2
    },
-   "over20ms": 0
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 1,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 19,
+    "over20ms": 0
+   },
+   "over20": []
   },
   "default gap=10000us busy": {
    "runs": 80,
@@ -313,99 +432,133 @@
    "idleMs": {
     "median": 0.2,
     "min": 0.1,
-    "max": 1.9
+    "max": 6
    },
    "firstAfterHeadMs": {
     "median": 0.1,
     "min": 0.05,
-    "max": 21.93
+    "max": 1.12
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": 31.89,
-    "min": -0.93,
-    "max": 54.32
+    "median": 31.83,
+    "min": 12.67,
+    "max": 54.54
    },
    "worstLateMs": {
-    "median": 31.89,
-    "min": -0.93,
-    "max": 54.32
+    "median": 31.83,
+    "min": 12.67,
+    "max": 54.54
    },
-   "over20ms": 76
+   "over20ms": 79,
+   "held": 79,
+   "heldEventsWithSecond": {
+    "2": 2,
+    "3": 51,
+    "4": 26
+   }
   },
   "default gap=10000us after idle": {
    "runs": 20,
    "events": 10,
    "idleMs": {
-    "median": 400.2,
-    "min": 166.5,
-    "max": 846.8
+    "median": 366.35,
+    "min": 120.1,
+    "max": 628.5
    },
    "firstAfterHeadMs": {
-    "median": 0.09,
+    "median": 0.1,
     "min": 0.06,
-    "max": 0.52
+    "max": 0.18
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": 0.02,
-    "min": -12.8,
-    "max": 4.37
+    "median": -0.01,
+    "min": -1.13,
+    "max": 2.46
    },
    "worstLateMs": {
-    "median": 1.07,
-    "min": -7.29,
-    "max": 5.72
+    "median": 1.86,
+    "min": -0.44,
+    "max": 11.54
    },
-   "over20ms": 0
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 1,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 19,
+    "over20ms": 0
+   },
+   "over20": []
   },
   "on gap=10000us busy": {
    "runs": 80,
    "events": 10,
    "idleMs": {
-    "median": 0.2,
+    "median": 0.3,
     "min": 0.1,
-    "max": 2.3
+    "max": 8.2
    },
    "firstAfterHeadMs": {
     "median": 0.09,
     "min": 0.05,
-    "max": 0.93
+    "max": 17.67
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": 0,
-    "min": -5.72,
-    "max": 10.19
+    "median": -0.02,
+    "min": -14.16,
+    "max": 12.64
    },
    "worstLateMs": {
-    "median": 0.87,
-    "min": -2.17,
-    "max": 21.11
+    "median": 0.53,
+    "min": -14.16,
+    "max": 16.1
    },
-   "over20ms": 1
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {}
   },
   "on gap=10000us after idle": {
    "runs": 20,
    "events": 10,
    "idleMs": {
-    "median": 838.6,
-    "min": 224.6,
-    "max": 1506.8
+    "median": 804.6,
+    "min": 212.1,
+    "max": 1363.6
    },
    "firstAfterHeadMs": {
     "median": 0.1,
-    "min": 0.06,
-    "max": 0.17
+    "min": 0.05,
+    "max": 0.25
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": -0.02,
-    "min": -4.74,
-    "max": 7.08
+    "median": -0.04,
+    "min": -1.51,
+    "max": 8.89
    },
    "worstLateMs": {
-    "median": 0.35,
-    "min": -0.48,
-    "max": 11.95
+    "median": 1.65,
+    "min": -1.2,
+    "max": 15.83
    },
-   "over20ms": 0
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 0,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 20,
+    "over20ms": 0
+   },
+   "over20": []
   },
   "off gap=10000us busy": {
    "runs": 80,
@@ -413,49 +566,68 @@
    "idleMs": {
     "median": 0.2,
     "min": 0.1,
-    "max": 3.4
+    "max": 4.9
    },
    "firstAfterHeadMs": {
     "median": 0.09,
-    "min": 0.04,
-    "max": 0.78
+    "min": 0.05,
+    "max": 3.55
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": 31.23,
-    "min": 12.69,
-    "max": 44.98
+    "median": 31.42,
+    "min": -0.47,
+    "max": 55.2
    },
    "worstLateMs": {
-    "median": 31.23,
-    "min": 12.69,
-    "max": 44.98
+    "median": 31.42,
+    "min": -0.23,
+    "max": 55.2
    },
-   "over20ms": 75
+   "over20ms": 78,
+   "held": 78,
+   "heldEventsWithSecond": {
+    "2": 4,
+    "3": 58,
+    "4": 16
+   }
   },
   "off gap=10000us after idle": {
    "runs": 20,
    "events": 10,
    "idleMs": {
-    "median": 1204.6,
-    "min": 574.5,
-    "max": 1635.5
+    "median": 1120,
+    "min": 535.1,
+    "max": 1919.2
    },
    "firstAfterHeadMs": {
     "median": 0.1,
     "min": 0.06,
-    "max": 8.7
+    "max": 0.26
    },
+   "firstOver20ms": 0,
    "secondLateMs": {
-    "median": -0.08,
-    "min": -11.15,
-    "max": 3.43
+    "median": -0.02,
+    "min": -9.23,
+    "max": 10.42
    },
    "worstLateMs": {
-    "median": 2.23,
-    "min": -11.15,
-    "max": 16.12
+    "median": 0.67,
+    "min": -0.11,
+    "max": 10.42
    },
-   "over20ms": 0
+   "over20ms": 0,
+   "held": 0,
+   "heldEventsWithSecond": {},
+   "idleUnder150ms": {
+    "runs": 0,
+    "over20ms": 0
+   },
+   "idle150msOrMore": {
+    "runs": 20,
+    "over20ms": 0
+   },
+   "over20": []
   }
  }
 }

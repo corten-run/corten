@@ -83,15 +83,40 @@ try {
       const idleFor = mine.map((s) => s.idleMs).filter((ms) => ms !== null);
       const first = mine.map((s) => s.arrived[0]);
       const worst = mine.map((s) => Math.max(...s.arrived.slice(1).map((_, i) => late(s, i + 1))));
-      summary[`${app} gap=${gap}us ${regime}`] = {
+      // Over 20 ms: the first event more than 20 ms after the headers, or a later one more than 20
+      // ms late. Held: the second event more than 20 ms late. For a held stream, how many events
+      // came with the second (within 0.5 ms of it, the second included), counted by bursts.
+      const over = (i) => first[i] > 20 || worst[i] > 20;
+      const held = mine.filter((s) => late(s, 1) > 20);
+      const withSecond = {};
+      for (const s of held) {
+        const n = s.arrived.slice(1).filter((t) => Math.abs(t - s.arrived[1]) < 0.5).length;
+        withSecond[n] = (withSecond[n] ?? 0) + 1;
+      }
+      const cell = {
         runs: mine.length,
         events: mine[0].arrived.length,
         idleMs: idleFor.length ? stats(idleFor) : null,
         firstAfterHeadMs: stats(first),
+        firstOver20ms: first.filter((ms) => ms > 20).length,
         secondLateMs: stats(mine.map((s) => late(s, 1))),
         worstLateMs: stats(worst),
-        over20ms: mine.filter((_, i) => first[i] > 20 || worst[i] > 20).length,
+        over20ms: mine.filter((_, i) => over(i)).length,
+        held: held.length,
+        heldEventsWithSecond: withSecond,
       };
+      if (idle) {
+        // After idle, split at 150 ms unused, and each stream over 20 ms with how long its
+        // connection had been unused (null: the run's first stream on that app) and how late.
+        const split = (keep) => {
+          const is = mine.map((s, i) => i).filter((i) => keep(mine[i].idleMs));
+          return { runs: is.length, over20ms: is.filter(over).length };
+        };
+        cell.idleUnder150ms = split((ms) => ms === null || ms < 150);
+        cell.idle150msOrMore = split((ms) => ms !== null && ms >= 150);
+        cell.over20 = mine.flatMap((s, i) => (over(i) ? [{ idleMs: s.idleMs, lateMs: +Math.max(first[i], worst[i]).toFixed(1) }] : []));
+      }
+      summary[`${app} gap=${gap}us ${regime}`] = cell;
     }
   }
   const result = {

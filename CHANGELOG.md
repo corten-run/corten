@@ -10,8 +10,8 @@ Corten is pre-1.0, so any minor version may change the API.
   `TcpListener`) has Nagle's algorithm off (`TCP_NODELAY`), as Go's `net/http` and nginx do, so
   a feed's patches or a live element's fragments made one after another are no longer held for
   the acknowledgement of the last one. Through nginx with the app in a container of its own, the
-  second of ten small events made back to back on a reused connection came 44.3 and 43.3 ms (the
-  medians of two runs) after the first, the other eight with it; with the option set, -0.06 ms,
+  second of ten small events made back to back on a reused connection came 42.5 and 43.0 ms (the
+  medians of two runs) after the first, the other eight with it; with the option set, -0.1 ms,
   and a request costs the same instructions; a listener of the app's own keeps its choice (design
   Choice 41, `bench/nodelay`)
   ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
