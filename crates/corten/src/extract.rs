@@ -852,24 +852,6 @@ mod tests {
     /// over.
     #[tokio::test]
     async fn a_body_declared_over_the_limit_is_read_past() {
-        struct Declared(std::collections::VecDeque<Bytes>, std::sync::Arc<std::sync::atomic::AtomicUsize>);
-        impl http_body::Body for Declared {
-            type Data = Bytes;
-            type Error = std::convert::Infallible;
-            fn poll_frame(
-                mut self: std::pin::Pin<&mut Self>,
-                _: &mut std::task::Context<'_>,
-            ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, std::convert::Infallible>>> {
-                let piece = self.0.pop_front();
-                if piece.is_some() {
-                    self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                std::task::Poll::Ready(piece.map(|piece| Ok(http_body::Frame::data(piece))))
-            }
-            fn size_hint(&self) -> http_body::SizeHint {
-                http_body::SizeHint::with_exact(self.0.iter().map(|p| p.len() as u64).sum())
-            }
-        }
         let read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let pieces = [&b"123"[..], b"456", b"789"].into_iter().map(Bytes::from_static).collect();
         assert_eq!(bytes_up_to(Body::new(Declared(pieces, read.clone())), 5).await.unwrap(), None);
@@ -965,10 +947,25 @@ mod tests {
         let (req, read) = limited(65 << 20, 140);
         assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 130);
-        // A body whose length says it is over twice the limit is refused unread.
-        let mut req = super::Request::new(Body::new(Said((1 << 20) + 1)));
-        req.extensions_mut().insert(crate::Signal::with_body_limit(512 << 10));
+        // Under a raised limit, a body whose length says it is over twice the limit is refused
+        // unread, and one at twice the limit is read past.
+        let declared = |len: usize| {
+            let read = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let mib = Bytes::from(vec![0; 1 << 20]);
+            let mut pieces: std::collections::VecDeque<Bytes> = std::iter::repeat_n(mib, len >> 20).collect();
+            if len & ((1 << 20) - 1) != 0 {
+                pieces.push_back(Bytes::from(vec![0; len & ((1 << 20) - 1)]));
+            }
+            let mut req = super::Request::new(Body::new(Declared(pieces, read.clone())));
+            req.extensions_mut().insert(crate::Signal::with_body_limit(4 << 20));
+            (req, read)
+        };
+        let (req, read) = declared((8 << 20) + 1);
         assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 0, "over twice the limit: unread");
+        let (req, read) = declared(8 << 20);
+        assert_eq!(whole_of(req).await.unwrap_err().status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(read.load(std::sync::atomic::Ordering::Relaxed), 8, "at twice the limit: read past");
     }
 
     /// The whole body of `req`, at the limit the stages put on it, as a reader takes it.
@@ -979,6 +976,27 @@ mod tests {
 
     /// A body that says how long it is, and fails if it is read.
     struct Said(u64);
+
+    /// A body that says its length, its pieces' total, and counts the pieces read.
+    struct Declared(std::collections::VecDeque<Bytes>, std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl http_body::Body for Declared {
+        type Data = Bytes;
+        type Error = std::convert::Infallible;
+        fn poll_frame(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Result<http_body::Frame<Bytes>, std::convert::Infallible>>> {
+            let piece = self.0.pop_front();
+            if piece.is_some() {
+                self.1.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            std::task::Poll::Ready(piece.map(|piece| Ok(http_body::Frame::data(piece))))
+        }
+        fn size_hint(&self) -> http_body::SizeHint {
+            http_body::SizeHint::with_exact(self.0.iter().map(|p| p.len() as u64).sum())
+        }
+    }
 
     impl http_body::Body for Said {
         type Data = Bytes;

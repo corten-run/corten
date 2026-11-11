@@ -143,9 +143,9 @@ struct Inner {
     /// The app's, for a request it serves: carried here rather than as a request extension of
     /// its own, so the request's extensions stay within their first allocation.
     shared: Option<Arc<crate::page::Shared>>,
-    /// The body limit of the request's app, area or API where it is not the default
-    /// ([`crate::App::body_limit`]), here for the same reason: the limit XOR the default, so a
-    /// signal made without one (`Default`, 0) has the default and every limit, 0 too, is kept.
+    /// The body limit of the request's app, area or API ([`crate::App::body_limit`]), here for
+    /// the same reason: the limit XOR the default, so a signal made without one (`Default`, 0)
+    /// has the default and every limit, 0 too, is kept.
     body_limit: usize,
 }
 

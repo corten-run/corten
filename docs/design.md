@@ -715,8 +715,8 @@ rules something out.
     would be a second place a route's settings live beside its area or API; and a type parameter
     on the readers (`Json<T, LIMIT>`), which puts a server setting in every handler's signature.
     The request's `Signal`, which every staged request already allocates, carries the limit,
-    so setting one adds no allocation: each request pays a comparison and a reader the lookup of
-    the signal.
+    so setting one adds no allocation: each signal pays an XOR as it is made, and a reader the
+    lookup of the signal and another XOR.
     The readers wait for a slow client until the deadline, not an idle time as an `Upload` does,
     so a raised limit is held that long: a prefix that raises one keeps a deadline. A route that
     says `unstaged` reads no body; one that takes more than its prefix allows takes the whole
@@ -748,9 +748,9 @@ rules something out.
     measured (callgrind, release, jemalloc, 1,200 against 200 requests in process through the
     stages, one run each, the settable limit against `9653c20c`: a plain answer 13,234
     instructions a request before and 13,261 after, and a 1 KiB body `Bytes` reads 17,291 before
-    and 17,461 after, the same with `App::body_limit(4 << 20)` set (an area's limit adds the
-    prefix lookup the deadline already pays); a limit put on the request as an extension of its own
-    instead cost 17,969 with one set);
+    and 17,461 after, the same with `App::body_limit(4 << 20)` set (an area's limit adds a
+    prefix lookup like the deadline's, not measured); a limit put on the request as an extension
+    of its own instead cost 17,969 with one set);
     measured (axum 0.8.9's `Json` answers to twelve bodies under eight content types, recorded
     before it left and held by `json.rs`'s `AXUM_0_8_9` table);
     reasoned (the trait's shape is axum 0.8's, so an extractor's `impl` body compiles unchanged;
