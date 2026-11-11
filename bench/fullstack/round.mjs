@@ -93,14 +93,15 @@ const rank = (/** @type {string} */ name) => (compiledFirst.includes(name) ? com
  * @param {string[]} [jsonOnly] the apps that serve only the JSON (`pages: false`)
  * @param {number} [passes] each load phase's passes (run-ssr.mjs): its calls' limits are that many
  *   times one pass's
+ * @param {string[]} [pageOnly] page apps left out of the JSON phases (another app serves their JSON)
  * @returns {[string, number, string, ...string[]][]}
  */
-export const calls = (round, browserRuns, names, urls, jsonOnly = [], passes = 1) => [
+export const calls = (round, browserRuns, names, urls, jsonOnly = [], passes = 1, pageOnly = []) => [
   ["cold-start", 30, "cold-start.mjs", round, "10", [...names, ...jsonOnly].join(",")],
   ["fixture", ssrLimits[0] * passes, "run-ssr.mjs", round, "fixture", "300", names.join(","), "page", String(passes)],
-  ["fixture", ssrLimits[1] * passes, "run-ssr.mjs", round, "fixture", "300", [...names, ...jsonOnly].join(","), "json", String(passes)],
+  ["fixture", ssrLimits[1] * passes, "run-ssr.mjs", round, "fixture", "300", [...names.filter((n) => !pageOnly.includes(n)), ...jsonOnly].join(","), "json", String(passes)],
   ["api", ssrLimits[2] * passes, "run-ssr.mjs", round, "api", "150", names.join(","), "page", String(passes)],
-  ["api", ssrLimits[3] * passes, "run-ssr.mjs", round, "api", "150", [...names, ...jsonOnly].join(","), "json", String(passes)],
+  ["api", ssrLimits[3] * passes, "run-ssr.mjs", round, "api", "150", [...names.filter((n) => !pageOnly.includes(n)), ...jsonOnly].join(","), "json", String(passes)],
   ["count", 70, "count.mjs", round, "3", [...names, ...jsonOnly].join(",")],
   // The feature matrix from the round's own images, before the browser step starts every app.
   ["conform", 120, "conform.mjs", [...names, ...jsonOnly].join(","), round],
