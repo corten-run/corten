@@ -23,6 +23,8 @@ export const KEPT = new Set([
   "host.txt",
   "skipped.txt",
   "build.json",
+  "docker-rebuild.json",
+  "rust-analyzer.json",
   "bytes.json",
   "cold-start.json",
   "instructions.json",

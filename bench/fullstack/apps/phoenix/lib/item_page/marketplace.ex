@@ -34,7 +34,8 @@ defmodule ItemPage.Marketplace do
     case Req.get!(base <> "/marketplace/records/" <> URI.encode(id, &URI.char_unreserved?/1),
            retry: false,
            redirect: false,
-           decode_body: false
+           decode_body: false,
+           finch: [name: ItemPage.Finch]
          ) do
       %{status: 404} -> nil
       %{status: 200, body: body} -> body |> Jason.decode!() |> from_json()

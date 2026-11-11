@@ -133,25 +133,34 @@ const liveEvent = (accept) =>
  * @type {Map<import("@playwright/test").Request, { at: number, context: import("@playwright/test").BrowserContext }>}
  */
 const inflight = new Map();
+/** This run's peak of requests in flight in one context (any origin, fulfilled ones too), how many were streams, and the one that made it (#1149). */
+let busiest = { requests: 0, streams: 0, url: "" };
+/** The page a request is for, or null for a service worker's, which has no frame. @param {import("@playwright/test").Request} r */
+function pageOf(r) {
+  try {
+    return r.frame().page();
+  } catch {
+    return null;
+  }
+}
 /** @param {import("@playwright/test").Browser} browser */
 function track(browser) {
   /** @param {(r: import("@playwright/test").Request, at: { context: import("@playwright/test").BrowserContext }) => boolean} gone */
   const drop = (gone) => {
     for (const [r, at] of inflight) if (gone(r, at)) inflight.delete(r);
   };
-  /** @param {import("@playwright/test").Request} r */
-  const pageOf = (r) => {
-    try {
-      return r.frame().page();
-    } catch {
-      return null; // a service worker's request has no frame
-    }
-  };
   // `newPage` makes its context through `newContext`, so every context is watched here.
   const newContext = browser.newContext.bind(browser);
   browser.newContext = async (...args) => {
     const context = await newContext(...args);
-    context.on("request", (r) => inflight.set(r, { at: Date.now(), context }));
+    context.on("request", (r) => {
+      inflight.set(r, { at: Date.now(), context });
+      const mine = [...inflight].filter(([, at]) => at.context === context).map(([q]) => q);
+      const streams = mine.filter((q) => q.resourceType() === "eventsource").length;
+      if (mine.length > busiest.requests || (mine.length === busiest.requests && streams > busiest.streams)) {
+        busiest = { requests: mine.length, streams, url: r.url() };
+      }
+    });
     context.on("requestfinished", (r) => inflight.delete(r));
     context.on("requestfailed", (r) => inflight.delete(r));
     context.on("page", (page) => page.on("close", () => drop((r) => pageOf(r) === page)));
@@ -183,10 +192,51 @@ function trusting(browser) {
     return context;
   };
 }
-/** What is still loading, oldest first. */
+/**
+ * What is still loading, oldest first, each with its context's and page's number, so a stalled
+ * request can be told apart from the open streams that share its connections (#1149).
+ */
 function pending() {
   const now = Date.now();
-  return [...inflight].sort((a, b) => a[1].at - b[1].at).map(([r, { at }]) => `  ${now - at}ms ${r.method()} ${r.url()} (${r.resourceType()})`);
+  /** @type {Map<import("@playwright/test").BrowserContext, { n: number, pages: Map<import("@playwright/test").Page, number> }>} */
+  const contexts = new Map();
+  return [...inflight]
+    .sort((a, b) => a[1].at - b[1].at)
+    .map(([r, { at, context }]) => {
+      let c = contexts.get(context);
+      if (!c) contexts.set(context, (c = { n: contexts.size + 1, pages: new Map() }));
+      const page = pageOf(r);
+      if (page && !c.pages.has(page)) c.pages.set(page, c.pages.size + 1);
+      return `  ${now - at}ms page ${c.n}.${page ? c.pages.get(page) : "worker"} ${r.method()} ${r.url()} (${r.resourceType()})`;
+    });
+}
+
+/**
+ * Sends each GET still loading (but streams) again from Node, with the browser's headers but its
+ * cookies (`headers()` leaves them out, and `allHeaders()` would ask the browser, which may be what
+ * is stuck) and a 10 s bound, and says how long the server took: a fast answer here while the browser's waited says the
+ * browser held the request, a slow one or none says the server or the machine did (#1149). A
+ * request the smoke routed itself goes to the server here.
+ */
+async function again() {
+  /** @type {Map<string, Record<string, string>>} */
+  const gets = new Map();
+  for (const r of inflight.keys()) {
+    if (r.method() !== "GET" || r.resourceType() === "eventsource" || gets.has(r.url())) continue;
+    // Headers fetch refuses to send, and ones the connection sets for itself.
+    const headers = Object.fromEntries(Object.entries(r.headers()).filter(([name]) => !/^(host|connection|keep-alive|transfer-encoding|upgrade|expect|content-length)$/i.test(name)));
+    gets.set(r.url(), headers);
+  }
+  return Promise.all(
+    [...gets].map(async ([url, headers]) => {
+      const start = Date.now();
+      const outcome = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) }).then(
+        async (res) => (await res.arrayBuffer(), String(res.status)),
+        (e) => (e instanceof Error ? e.name : String(e)),
+      );
+      return `  ${Date.now() - start}ms ${outcome} ${url}`;
+    }),
+  );
 }
 
 for (engine of names) {
@@ -197,8 +247,11 @@ for (engine of names) {
     await run(browser);
   } catch (error) {
     console.log(`[${engine}] still loading when it failed:\n${pending().join("\n") || "  nothing"}`);
+    console.log(`[${engine}] the same requests sent now, outside the browser (#1149):\n${(await again()).join("\n") || "  nothing"}`);
+    console.log(`[${engine}] this run's peak of requests in flight in one context: ${busiest.requests} (${busiest.streams} streams), at ${busiest.url}`);
     throw error;
   } finally {
+    busiest = { requests: 0, streams: 0, url: "" };
     inflight.clear();
     await browser.close();
   }
@@ -282,14 +335,46 @@ async function run(browser) {
     errors.push(at ? `${text} at ${at}` : text);
   });
   page.on("pageerror", (e) => errors.push(e.message));
-  // Every EventSource the page opens, to see which are still open.
+  // Every EventSource the page opens, to see which are still open, with when it opened and when
+  // an error closed it for good, on the page's own clock (`openedAt`, `closedAt`), and each timer
+  // of half a second or more the page sets, so a wait the runtime asks for is read as asked, not
+  // only as a loaded browser ran it: `nextTimer` is the index of the first one set after the close.
   await page.addInitScript(() => {
-    const sources = ((/** @type {any} */ (window)).__sources = /** @type {EventSource[]} */ ([]));
+    const w = /** @type {any} */ (window);
+    const timers = (w.__timers = /** @type {number[]} */ ([]));
+    // The index of the recorded timer whose callback is running, so a source knows which opened it.
+    let running = -1;
+    const setTimer = window.setTimeout;
+    window.setTimeout = /** @type {typeof setTimeout} */ (
+      (/** @type {TimerHandler} */ handler, /** @type {number | undefined} */ delay, /** @type {unknown[]} */ ...rest) => {
+        if ((delay ?? 0) < 500 || typeof handler !== "function") return setTimer.call(window, handler, delay, ...rest);
+        const index = timers.push(delay ?? 0) - 1;
+        const fire = (/** @type {unknown[]} */ ...args) => {
+          const outer = running;
+          running = index;
+          try {
+            handler(...args);
+          } finally {
+            running = outer;
+          }
+        };
+        return setTimer.call(window, fire, delay, ...rest);
+      }
+    );
+    const sources = (w.__sources = /** @type {EventSource[]} */ ([]));
     window.EventSource = class extends EventSource {
       /** @param {ConstructorParameters<typeof EventSource>} args */
       constructor(...args) {
         super(...args);
         sources.push(this);
+        const self = /** @type {any} */ (this);
+        self.openedAt = performance.now();
+        self.openedBy = running;
+        this.addEventListener("error", () => {
+          if (this.readyState !== EventSource.CLOSED || self.closedAt !== undefined) return;
+          self.closedAt = performance.now();
+          self.nextTimer = timers.length;
+        });
       }
     };
   });
@@ -1239,14 +1324,15 @@ async function run(browser) {
   );
   // The message already says Acme from the keyed form, so the check waits for this post's own
   // answer: otherwise a slow post (Firefox) is still going out during the next check, which
-  // counts the posts it sees (#161).
+  // counts the posts it sees (#161). It waits 15 s, past the 5 s most of the smoke's waits take,
+  // because a loaded Firefox has taken over 4 s to answer this post (#1149).
   const viaButton = page
-    .waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 4000 })
+    .waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 15_000 })
     .then(async (r) => (await r.finished(), r.status()))
     .catch(() => 0);
   await page.click("#via-button button");
   const viaButtonStatus = await viaButton;
-  await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"), null, { timeout: 4000 }).catch(() => {});
+  await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"), null, { timeout: 15_000 }).catch(() => {});
   check(
     "a submit button's formaction and formmethod are used",
     viaButtonStatus === 200 && ((await page.textContent("#watch-message")) ?? "").startsWith("Watching Acme Corp"),
@@ -1359,6 +1445,24 @@ async function run(browser) {
   let queueAnswer = { status: 200, body: "" };
   /** @type {string[]} */
   let queueSent = [];
+  // Requests the route has answered or tried to (an aborted one's answer goes nowhere, and counts).
+  let queueAnswered = 0;
+  // The n of each request the page gave up on (an aborted read), which every engine reports as
+  // failed even while the route holds it (net::ERR_ABORTED, NS_BINDING_ABORTED, Load request
+  // cancelled); fulfilling it afterwards does not throw.
+  /** @type {string[]} */
+  let queueRefused = [];
+  const queueGaveUp = (/** @type {import("@playwright/test").Request} */ request) => {
+    if (new URL(request.url()).pathname !== "/queue") return;
+    const fields = request.method() === "GET" ? new URL(request.url()).searchParams : new URLSearchParams(request.postData() ?? "");
+    const n = fields.get("n") ?? "";
+    if (!queueRefused.includes(n)) queueRefused.push(n);
+  };
+  page.on("requestfailed", queueGaveUp);
+  // No answer goes before the case's second press is made, so that press meets the first submit
+  // still out: the check is of the queue and not of two sends, however slow the press.
+  /** @type {Promise<void>} */
+  let queuePressed = Promise.resolve();
   await page.route("**/queue*", async (route) => {
     const request = route.request();
     const fields = request.method() === "GET" ? new URL(request.url()).searchParams : new URLSearchParams(request.postData() ?? "");
@@ -1366,32 +1470,61 @@ async function run(browser) {
     const answer = queueAnswer;
     // The first of two reads answers last, so a read that was not aborted would draw over the newer.
     const late = request.method() === "GET" && fields.get("n") === "1";
+    await queuePressed;
     await new Promise((resolve) => setTimeout(resolve, late ? 1200 : 400));
     const body = answer.body.replace("{n}", fields.get("n") ?? "");
-    await route.fulfill({ status: answer.status, headers: { "content-type": "text/html; charset=utf-8", ...answer.headers }, body }).catch(() => {});
+    await route
+      .fulfill({ status: answer.status, headers: { "content-type": "text/html; charset=utf-8", ...answer.headers }, body })
+      .catch(() => {});
+    queueAnswered += 1;
   });
-  /** Puts the form (in a box a patch can redraw), presses, sets n to 2, presses, and waits. @param {string} form */
-  const queueCase = async (form) => {
+  /**
+   * Puts the form (in a box a patch can redraw), presses, sets n to 2 and presses again, then
+   * waits until `done` says the case's outcome is on the page (6 s at most, and `ended` is false)
+   * and 700 ms more, in which a send the queue must not make would be seen. `status`: the case's
+   * `corten:error`, or null, heard on the form too, so one sent to a form the answer took off the
+   * page is not missed. `refused`: the n of each request the page gave up on.
+   * @param {string} form @param {() => Promise<boolean>} done
+   */
+  const queueCase = async (form, done) => {
     queueSent = [];
+    queueAnswered = 0;
+    queueRefused = [];
+    /** @type {() => void} */
+    let pressed = () => {};
+    queuePressed = new Promise((resolve) => (pressed = resolve));
     await page.evaluate((form) => {
       document.getElementById("queue-box")?.remove();
       document.querySelector("main")?.insertAdjacentHTML("beforeend", __html(`<div id="queue-box">${form}<p id="queue-out"></p></div>`));
+      // The case's corten:error, if it gets one; the listener goes with the case.
+      const w = /** @type {any} */ (window);
+      w.__queueCase?.abort();
+      w.__queueCase = new AbortController();
+      w.__queueError = null;
+      const heard = (/** @type {Event} */ e) => (w.__queueError = /** @type {CustomEvent} */ (e).detail.status);
+      document.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
+      document.querySelector("#queue-box form")?.addEventListener("corten:error", heard, { signal: w.__queueCase.signal });
     }, form);
-    const error = page.evaluate(
-      () => new Promise((resolve) => {
-        document.addEventListener("corten:error", (e) => resolve(/** @type {CustomEvent} */ (e).detail.status), { once: true });
-        setTimeout(() => resolve(null), 2500);
-      }),
-    );
     await page.click("#queue-box button");
     await page.fill("#queue-box [name=n]", "2");
-    // Still out when the second press lands, so the check is of the queue and not of two sends.
     const busy = await page.getAttribute("#queue-box form", "aria-busy");
     await page.click("#queue-box button");
-    const status = await error;
+    pressed();
+    const until = Date.now() + 6000;
+    let ended = await done();
+    while (!ended && Date.now() < until) {
+      await page.waitForTimeout(50);
+      ended = await done();
+    }
     await page.waitForTimeout(700);
-    return { sent: queueSent.join(), status, busy };
+    const status = await page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__queueCase.abort();
+      return /** @type {number | null} */ (w.__queueError);
+    });
+    return { sent: queueSent.join(), status, busy, ended, refused: queueRefused.join() };
   };
+  const queueOut = () => page.evaluate(() => document.getElementById("queue-out")?.textContent ?? null);
   const queueLogged = errors.length;
   const patchHeaders = { "corten-patch": "1" };
   const queueForm = (/** @type {string} */ method, /** @type {string} */ extra = "") =>
@@ -1400,55 +1533,74 @@ async function run(browser) {
   // A newer GET aborts the older one, whose answer is worth nothing now: the first answers last,
   // and the page keeps the newer's.
   queueAnswer = { status: 200, headers: patchHeaders, body: '<p id="queue-out">read {n}</p>' };
-  const read = await queueCase(queueForm("get"));
-  await page.waitForTimeout(800);
-  check("a newer GET submit aborts the older one", read.sent === "GET 1,GET 2" && (await page.textContent("#queue-out")) === "read 2", `${read.sent}; ${await page.textContent("#queue-out")}`);
+  // Ended once the older's late answer was tried too, so it had its chance to draw.
+  const read = await queueCase(queueForm("get"), async () => queueAnswered === 2 && (await queueOut()) === "read 2");
+  check(
+    "a newer GET submit aborts the older one",
+    read.ended && read.status === null && read.sent === "GET 1,GET 2" && read.refused === "1" && (await queueOut()) === "read 2",
+    `${read.sent}; ${await queueOut()}; ended: ${read.ended}; error: ${read.status}; refused: ${read.refused}`,
+  );
 
   // An answer the runtime does not draw (a proxy's 503) drops the submit that waited.
   queueAnswer = { status: 503, body: "Service Unavailable" };
-  const undrawn = await queueCase(queueForm("post"));
-  check("a submit that waited for an answer the runtime does not draw is not sent", undrawn.sent === "POST 1" && undrawn.status === 503, `${undrawn.sent}; ${undrawn.status}`);
+  const undrawn = await queueCase(queueForm("post"), async () => (await page.evaluate(() => /** @type {any} */ (window).__queueError)) !== null);
+  check(
+    "a submit that waited for an answer the runtime does not draw is not sent",
+    undrawn.ended && undrawn.sent === "POST 1" && undrawn.status === 503,
+    `${undrawn.sent}; ${undrawn.status}; ended: ${undrawn.ended}`,
+  );
 
   // A 5xx patch is drawn, but the write may or may not have applied: the waiting submit drops.
   queueAnswer = { status: 500, headers: patchHeaders, body: '<p id="queue-out">failed</p>' };
-  const failedPatch = await queueCase(queueForm("post"));
+  const failedPatch = await queueCase(queueForm("post"), async () => (await queueOut()) === "failed");
   check(
     "a submit that waited for a 5xx is not sent, and the 5xx's patch is drawn",
-    failedPatch.sent === "POST 1" && (await page.textContent("#queue-out")) === "failed",
-    `${failedPatch.sent}; ${await page.textContent("#queue-out")}`,
+    failedPatch.ended && failedPatch.status === null && failedPatch.sent === "POST 1" && (await queueOut()) === "failed",
+    `${failedPatch.sent}; ${await queueOut()}; ended: ${failedPatch.ended}; error: ${failedPatch.status}`,
   );
 
   // A refusal of the state the write was made against (Errors::refuse, 409) is drawn and drops
   // the waiting submit: the user reads it before anything else goes.
   queueAnswer = { status: 409, headers: patchHeaders, body: '<p id="queue-out">stale</p>' };
-  const stale = await queueCase(queueForm("post"));
+  const stale = await queueCase(queueForm("post"), async () => (await queueOut()) === "stale");
   check(
     "a submit that waited is not sent after a 409 refusal, which is drawn",
-    stale.sent === "POST 1" && (await page.textContent("#queue-out")) === "stale",
-    `${stale.sent}; ${await page.textContent("#queue-out")}`,
+    stale.ended && stale.status === null && stale.sent === "POST 1" && (await queueOut()) === "stale",
+    `${stale.sent}; ${await queueOut()}; ended: ${stale.ended}; error: ${stale.status}`,
   );
 
   // An answer that removes the form drops it.
   queueAnswer = { status: 200, headers: patchHeaders, body: '<template id="queue" data-remove></template>' };
-  const removed = await queueCase(queueForm("post"));
-  check("a submit that waited is not sent when the answer removes its form", removed.sent === "POST 1" && (await page.$("#queue")) === null, removed.sent);
+  const removed = await queueCase(queueForm("post"), async () => (await page.$("#queue")) === null);
+  check(
+    "a submit that waited is not sent when the answer removes its form",
+    removed.ended && removed.status === null && removed.sent === "POST 1" && (await page.$("#queue")) === null,
+    `${removed.sent}; ended: ${removed.ended}; error: ${removed.status}`,
+  );
 
   // A form without an id that the answer took off the page is not found again: its values are
   // the ones from before the answer.
   queueAnswer = { status: 200, headers: patchHeaders, body: '<div id="queue-box"><form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form></div>' };
-  const noId = await queueCase('<form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form>');
-  check("a submit that waited is not sent when its form without an id left the page", noId.sent === "POST 1", noId.sent);
+  // The answer's box has no #queue-out: drawn once it is gone.
+  const noId = await queueCase('<form method="post" action="/queue" data-patch><input name="n" value="1"><button>Go</button></form>', async () => (await queueOut()) === null);
+  check(
+    "a submit that waited is not sent when its form without an id left the page",
+    noId.ended && noId.status === null && noId.sent === "POST 1",
+    `${noId.sent}; ended: ${noId.ended}; error: ${noId.status}`,
+  );
 
   // The submit that waited goes under the form's new key: the write's answer renewed it.
-  queueAnswer = { status: 200, headers: patchHeaders, body: '<p id="queue-out">saved</p>' };
-  const keyed = await queueCase(queueForm("post", `<input type="hidden" name="submit" data-submit value="${zero}">`));
+  queueAnswer = { status: 200, headers: patchHeaders, body: '<p id="queue-out">saved {n}</p>' };
+  // Ended once the waiting submit's own answer is drawn.
+  const keyed = await queueCase(queueForm("post", `<input type="hidden" name="submit" data-submit value="${zero}">`), async () => (await queueOut()) === "saved 2");
   const [firstKey, secondKey] = keyed.sent.split(",").map((s) => s.split(" ")[2]);
   check(
     "a submit that waited goes out after the write's answer, under the key the answer renewed",
-    keyed.busy === "true" && keyed.sent.startsWith("POST 1 ") && keyed.sent.includes(",POST 2 ") && firstKey === zero && /^[0-9a-f-]{36}$/.test(secondKey ?? "") && secondKey !== zero,
-    keyed.sent,
+    keyed.ended && keyed.status === null && keyed.busy === "true" && keyed.sent.split(",").length === 2 && keyed.sent.startsWith("POST 1 ") && keyed.sent.includes(",POST 2 ") && firstKey === zero && /^[0-9a-f-]{36}$/.test(secondKey ?? "") && secondKey !== zero,
+    `${keyed.sent}; ended: ${keyed.ended}; error: ${keyed.status}`,
   );
   await page.unroute("**/queue*");
+  page.off("requestfailed", queueGaveUp);
   await page.evaluate(() => document.getElementById("queue-box")?.remove());
   // The browser logs the 503, 500 and 409 the smoke answered; nothing else is expected.
   errors.splice(queueLogged, errors.length, ...errors.slice(queueLogged).filter((e) => !/Failed to load resource/.test(e)));
@@ -1456,9 +1608,16 @@ async function run(browser) {
   // A data-patch form's submit marks the button that sent it busy with the form, one outside the
   // form (`form=`) too, until the answer is drawn; a newer submit by another button takes the
   // marks, and the first button's goes (#1063).
+  // A's read is answered only once B's marks are read, so B replaces a read still on its way.
+  /** @type {() => void} */
+  let answerA = () => {};
+  /** @type {Promise<unknown>} */
+  let heldA = Promise.resolve();
+  const holdA = () => (heldA = new Promise((resolve) => (answerA = () => resolve(undefined))));
+  holdA();
   await page.route("**/busy-read*", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 600));
     const by = new URL(route.request().url()).searchParams.get("by");
+    if (by === "a") await heldA;
     await route.fulfill({ headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body: `<p id="busy-said">read ${by}</p>` }).catch(() => {});
   });
   await page.evaluate(() =>
@@ -1468,10 +1627,22 @@ async function run(browser) {
     ),
   );
   const busyMarks = () => page.evaluate(() => ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join());
-  await page.click("#busy-a");
-  const whileA = await busyMarks();
-  await page.click("#busy-b");
-  const whileB = await busyMarks();
+  // Each click and the read of the marks in one task: the marks are moved by the submit itself,
+  // not by A's read settling later (#1108).
+  /** @param {string} id */
+  const clickAndMarks = (id) =>
+    page.evaluate((id) => {
+      document.getElementById(id)?.click();
+      return ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
+    }, id);
+  let whileA = "";
+  let whileB = "";
+  try {
+    whileA = await clickAndMarks("busy-a");
+    whileB = await clickAndMarks("busy-b");
+  } finally {
+    answerA();
+  }
   await page.waitForFunction(() => document.querySelector("#busy-said")?.textContent === "read b", null, { timeout: 5000 }).catch(() => {});
   const busyAfter = await busyMarks();
   check(
@@ -1479,6 +1650,31 @@ async function run(browser) {
     whileA === "true,true,-" && whileB === "true,-,true" && busyAfter === "-,-,-",
     `${whileA} | ${whileB} | ${busyAfter}`,
   );
+  // A navigation abandons a read on its way, which drops its marks at once, not when its own code
+  // next runs (#1108). The page navigates to its own address, so the check stays on this page.
+  const abandonName = "a submit a navigation abandons drops its marks at once";
+  if (!(await page.evaluate(() => "navigation" in window))) skip(abandonName, "without the Navigation API a navigation is a full load");
+  else {
+    holdA();
+    /** @type {string[]} */
+    let abandoned = [];
+    try {
+      abandoned = await page.evaluate(() => {
+        const marks = () => ["busy-form", "busy-a", "busy-b"].map((id) => document.getElementById(id)?.getAttribute("aria-busy") ?? "-").join();
+        document.getElementById("busy-a")?.click();
+        const before = marks();
+        /** @type {any} */ (window).navigation.navigate(location.pathname + location.search);
+        return [before, marks()];
+      });
+    } finally {
+      answerA();
+    }
+    // The checks after this one draw into <main>, so this one fails if the page has not swapped.
+    const swapped = await page
+      .waitForFunction(() => !document.getElementById("busy-said") && !document.querySelector("main")?.hasAttribute("aria-busy"), null, { timeout: 10000 })
+      .then(() => true, () => false);
+    check(abandonName, swapped && abandoned[0] === "true,true,-" && abandoned[1] === "-,-,-", `${abandoned.join(" -> ")}${swapped ? "" : ", the page did not swap within 10 s"}`);
+  }
   await page.unroute("**/busy-read*");
   await page.evaluate(() => ["busy-form", "busy-said", "busy-a", "busy-b"].forEach((id) => document.getElementById(id)?.remove()));
 
@@ -1521,8 +1717,12 @@ async function run(browser) {
     `${whileWrite} | ${afterWrites}`,
   );
   const redirectName = "a write that sends the browser to another page keeps its button busy until that page is in";
+  // The feed sources before the write: a write that swaps the page in brings the component a new one.
+  const feedsBeforeGo = (await feedSources()).length;
+  let goSwapped = false;
   if (!(await page.evaluate(() => "navigation" in window))) skip(redirectName, "without the Navigation API the browser loads that page in full");
   else {
+    goSwapped = true;
     await page.click("#busy-wgo");
     const goBusy = await page.evaluate(() => /** @type {any} */ (window).__goHeld.getAttribute("aria-busy"));
     await page
@@ -1544,7 +1744,20 @@ async function run(browser) {
   // The sector links beside <main> are marked `page`: each navigation brings the page's.
   const sectors = () => page.$$eval("#sector-nav a", (links) => links.length);
   check("a layout element marked page is the page's: no sector links outside the news", (await sectors()) === 0);
-  check("one feed stream while the component is on the page", (await openFeeds()) === 1);
+  // When the page has just swapped back to /, its component may not have opened its feed yet and
+  // the one it left may not be closed, so the state is awaited rather than read once (#1134): the
+  // newest feed source open, every earlier one closed, and a new one if the page was swapped in.
+  const oneFeed = await page
+    .waitForFunction(
+      (/** @type {number} */ min) => {
+        const feeds = /** @type {EventSource[]} */ ((/** @type {any} */ (window)).__sources.filter((/** @type {EventSource} */ s) => s.url.includes("/feed/")));
+        return feeds.length >= min && feeds.at(-1)?.readyState !== EventSource.CLOSED && feeds.slice(0, -1).every((s) => s.readyState === EventSource.CLOSED);
+      },
+      Math.max(1, feedsBeforeGo + (goSwapped ? 1 : 0)),
+      { timeout: 5000 },
+    )
+    .then(() => true, () => false);
+  check("one feed stream while the component is on the page", oneFeed, `${await openFeeds()} open of ${JSON.stringify(await feedSources())}, ${feedsBeforeGo} before the write, ${goSwapped ? "swapped in" : "not swapped"}`);
   // The news page's disclaimer is in an area (Area::components): its stylesheet loads before the page is
   // swapped in, so the note is styled the moment it joins the page.
   await page.evaluate(() => {
@@ -2424,6 +2637,21 @@ async function run(browser) {
     const scripted = { id: await scriptPage.inputValue("#alert-form select"), above: await scriptPage.inputValue("#alert-form input[name=above]") };
     check("back to a page puts back what the user chose and not a value a script set", scripted.id === "SOLR" && scripted.above === "", JSON.stringify(scripted));
     await scriptPage.context().close();
+    // A value a script set and then dispatched input and change for, as a typed field sends, is.
+    const toldPage = await changed((body) => body);
+    await toldPage.evaluate(() => {
+      const above = /** @type {HTMLInputElement} */ (document.querySelector("#alert-form input[name=above]"));
+      above.value = "7";
+      above.dispatchEvent(new Event("input", { bubbles: true }));
+      above.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await toldPage.click('header nav a[href="/news"]');
+    await toldPage.waitForFunction(() => document.title === "News | Watchlist");
+    await toldPage.goBack();
+    await toldPage.waitForFunction(() => location.pathname === "/alerts" && !!document.querySelector("#alert-form") && !document.querySelector("main[aria-busy]"), null, { timeout: 5000 }).catch(() => {});
+    const told = await toldPage.inputValue("#alert-form input[name=above]");
+    check("back to a page puts back a value a script set and dispatched input and change for", told === "7", told);
+    await toldPage.context().close();
     // A form with a control named like one of a form's own methods is still read by the form's:
     // leaving it swaps the page in and Back puts back what was typed. (Playwright's own select
     // and checks call getAttribute on the form, so only the text field is typed in, by keys.)
@@ -2585,6 +2813,7 @@ async function run(browser) {
       "back to a page puts back a checkbox and a radio, and leaves a select whose options changed and a checkbox whose value changed as the server draws them",
       "back to a page puts back no file, the other fields before the page's elements connect",
       "back to a page puts back what the user chose and not a value a script set",
+      "back to a page puts back a value a script set and dispatched input and change for",
       "back to a page puts back what was typed in a form with a control named getAttribute",
       "back to a page puts back what was typed in more fields than are looked up one by one",
       "back to a page puts back what was typed there after a link the server sent elsewhere",
@@ -2929,7 +3158,10 @@ async function run(browser) {
         /** @type {[string, number]} */ ([name, times]),
         { timeout },
       )
-      .catch(() => {});
+      .then(
+        () => true,
+        () => false,
+      );
   /** @param {string} name */
   const unrouteFeed = async (name) => {
     await page.unroute(`**/feed/${name}`);
@@ -3021,23 +3253,44 @@ async function run(browser) {
   const failedFeed = await feedTimes("failed", (n) =>
     n === 1 ? `retry: 100\n\n${patchEvent(2)}` : n === 4 ? "retry: 100\n\n" : n <= 5 ? { status: 503 } : "retry: 60000\n\n",
   );
-  await feedLive("failed", 3, 10000);
+  // Long enough for a loaded browser that runs each timer seconds late; it ends once live.
+  const failedLive = await feedLive("failed", 3, 60_000);
   const failedStates = await stopFeed("failed");
   await unrouteFeed("failed");
-  const failedGaps = [2, 3, 5].map((i) => failedFeed.streamsAt[i] - failedFeed.streamsAt[i - 1]);
+  // The runtime's three waits: after the first source closed (the browser's reconnect to a 503),
+  // after its own first try (a 503), and after the source that opened and then closed. Each is the
+  // timer the runtime set as that source closed, which must be 1 s, 2 s and 1 s, and the time from
+  // the close to the next source, at least that long. A loaded Firefox ran a 1 s timer about 6 s
+  // late (#1102), which says nothing of the runtime, so the time taken has no upper bound.
+  const failedAt = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    const sources = w.__sources
+      .filter((/** @type {EventSource} */ s) => s.url.includes("/feed/failed/live"))
+      .map((/** @type {any} */ s) => ({ opened: /** @type {number} */ (s.openedAt), closed: /** @type {number | null} */ (s.closedAt ?? null), next: /** @type {number | undefined} */ (s.nextTimer), by: /** @type {number} */ (s.openedBy) }));
+    const timers = /** @type {number[]} */ (w.__timers);
+    // The first timer set after the close, which the runtime's error listener, run straight after
+    // the smoke's, sets in the same dispatch.
+    const asked = sources.map((s) => (s.next === undefined ? null : (timers[s.next] ?? null)));
+    return { sources, asked };
+  });
+  const failedAsked = failedAt.asked.slice(0, 3);
+  const failedGaps = [0, 1, 2].map((i) => Math.round((failedAt.sources[i + 1]?.opened ?? NaN) - (failedAt.sources[i]?.closed ?? NaN)));
+  const seenGaps = [2, 3, 5].map((i) => failedFeed.streamsAt[i] - failedFeed.streamsAt[i - 1]);
   check(
     "a stream answered with an error is listened to again from the last patch, after 1 s then 2 s, and 1 s again after a stream opened, with no snapshot",
     failedFeed.snapshots.length === 1 &&
       failedFeed.streams === 6 &&
       failedFeed.since.slice(2).every((since) => since === "a-2") &&
-      failedGaps[0] >= 900 &&
-      failedGaps[0] < 1900 &&
-      failedGaps[1] >= 1900 &&
-      failedGaps[1] < 3500 &&
-      failedGaps[2] >= 900 &&
-      failedGaps[2] < 1900 &&
+      failedAsked.join() === "1000,2000,1000" &&
+      // Each next source opened by the timer set as the one before it closed, and not sooner
+      // (5 ms for the clocks' granularity). The runtime opens it inside that timer's callback
+      // (`retry(() => listen(..))`); a wait added before it would fail this link, not the backoff.
+      failedAt.sources.length >= 4 &&
+      [0, 1, 2].every((i) => failedAt.sources[i + 1]?.by === failedAt.sources[i]?.next) &&
+      failedGaps.every((gap, i) => gap >= /** @type {number} */ (failedAsked[i]) - 5) &&
+      failedLive &&
       failedStates.includes("reconnecting live"),
-    `${failedFeed.snapshots.length} snapshots, ${failedFeed.streams} streams since ${failedFeed.since.join(" ")}, ${failedGaps.map((g) => `+${g} ms`).join(", ")}; ${failedStates}`,
+    `${failedLive ? "live 3 times" : "not live 3 times within 60 s"}, ${failedFeed.snapshots.length} snapshots, ${failedFeed.streams} streams since ${failedFeed.since.join(" ")}, ${failedAt.sources.length} sources, waits asked ${failedAsked.join(", ")} ms and taken ${failedGaps.map((g) => `${g} ms`).join(", ")} (as Playwright saw the requests: ${seenGaps.map((g) => `+${g} ms`).join(", ")}); ${failedStates}`,
   );
   // A snapshot that fails is fetched again after 1 s, and the feed goes live once one arrives.
   const retriedFeed = await feedTimes("retried", () => "retry: 60000\n\n", { snapshot: (n) => (n === 1 ? 500 : 200) });

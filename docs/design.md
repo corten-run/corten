@@ -138,7 +138,22 @@ rules something out.
 5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
    a handler the script does not export fails to compile at the call. No generated declarations
-   are needed between markup and script, and none can be stale.
+   are needed between markup and script, and none can be stale. Scripts are JavaScript with JSDoc,
+   not TypeScript source: `tsc` checks both, and the call check, the generated declarations and
+   data read at run time are the same either way. The macro already reads TypeScript's type syntax
+   inside JSDoc, so the call check would carry over; what TypeScript source adds is a step before
+   serving: full TypeScript needs code emitted for `enum`, namespaces and parameter properties, so
+   a build step; erasable-only TypeScript (TypeScript 5.8's `erasableSyntaxOnly`) needs a pass that
+   blanks its type syntax (annotations, `as`, `satisfies`, `!`, type parameters and arguments,
+   `interface`, `type`, modifiers, overloads, type-only imports and more) and keeps up with each
+   TypeScript release. Moving every script to TypeScript would still leave one format, so the
+   choice rests on that step, which JavaScript does not need, against the few checks below, each of
+   which JavaScript can be written to get too (a JSDoc type, a rest parameter; a class's only by
+   restating its fields). Stricter checks of a body are `tsc` options, which hold for JavaScript as
+   for TypeScript
+   ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)),
+   and data read at run time is unchecked in either
+   ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
    Stands on: bet (the JSDoc types the compiler reads cover what handlers take: elements and their
    lists, maps and views (`Holds`), events, `AbortSignal`, strings and lists of them, numbers,
@@ -147,13 +162,47 @@ rules something out.
    it cannot check a call against, a set of names written as string literals, any other JSON
    shape or an element or event in another shape, refuses the call rather than taking anything,
    and only `unknown` takes any argument, since it claims nothing the call does not check);
-   reasoned (with the check at the call, no declarations sit between markup and script to go stale);
-   value (a wrong call fails to compile, Values 4).
+   platform (TypeScript 5.9.3 and 7.0.2 check JSDoc types as they check annotations, except where
+   JavaScript infers a type, in the cases probed so far: a property first given after an empty
+   object literal, which a JSDoc type on the object catches; a value whose type nothing fixes (an
+   untyped `new Promise` or `new Set()`, a type parameter no argument decides), `any` in JavaScript
+   and `unknown` in TypeScript, which a JSDoc type fixes; a function called with `new` that sets
+   `this`'s properties, which 5.9.3 accepts in JavaScript and 7.0.2 refuses; a function that reads
+   `arguments`, which 5.9.3 lets take any number of arguments in JavaScript and 7.0.2 does not, and
+   a rest parameter fixes; and a property a class's constructor or method sets first, which
+   JavaScript takes as declared even when the class declares its fields, so a misspelled write is
+   flagged only when `this` is retyped to a typedef that repeats the fields (`@this` on a method, a
+   cast in the constructor), and a read of the misspelled name only when a method other than the
+   constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`);
+   reasoned (with the check at the call, no declarations sit between markup and script to go stale;
+   component behavior is exported functions, not classes; the runtime's one hand-written class,
+   `<corten-live>`, sets only the fields it declares, and the classes it generates, one per view
+   (the macro writes them) and one per typed event (`assets.rs` writes them), are typed by the
+   declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
+   was read, and none's value is used as a type it is not); measured (deck-builder's and
+   seller-desk's largest scripts and three small handlers, converted to TypeScript, surfaced no
+   bug; esbuild 0.28.2's output (`--format=esm`), which stands in for either language since Corten
+   serves esbuild's output for neither, with whitespace and comments removed was the same bytes,
+   17,424 and 4,358, and its plain output differed by comments and the parentheses a JSDoc cast
+   needs, 22,498 against 22,046 for deck-builder; `tsc` on the repository took, on TypeScript
+   5.9.3, 6.6 to 7.3 s with them as JavaScript and 7.6 to 8.7 s as TypeScript, three runs each, not
+   alternated, on a loaded machine, so no difference in time is claimed; no empty object literal
+   given properties later and no function called with `new` is in the repository's scripts, and
+   none reads `arguments`); value (a wrong call fails to compile, Values 4; one authoring format,
+   Values 5, which keeping JavaScript holds without a migration; no build step and no
+   syntax-removal pass in a macro that depends on nothing, Values 6).
 
    Revisit when: an example or a kit component has to take `unknown` where a precise type would
    serve it, because no checked type or generated declaration fits, so a wrong call compiles; or
    JavaScript gains type syntax of its own (TC39's type annotations proposal), which a script
-   could carry in place of JSDoc.
+   could carry in place of JSDoc; or a script needs a check `checkJs` cannot give with a JSDoc type
+   (an object built up a property at a time that cannot be written as a literal or a typed value);
+   or a component or the runtime has a hand-written class, or a function called with `new`, that
+   sets properties it does not declare, or a function that reads `arguments`; or TypeScript stops
+   reading a JSDoc form the scripts use (7.0 dropped several, among them `@enum`, `@class`, Closure
+   function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
+   which they use); or a TypeScript release changes what the probes behind the measured premise
+   show.
 
    Last checked: 2026-11-07, at `cdbe4392`: every parameter a handler in the repository took as
    any JSON value was listed (seven: six typed events imported in a JSDoc `@import`, now each its
@@ -165,7 +214,22 @@ rules something out.
    now take theirs, and an element's `error`, `abort` and `progress` were probed as plain `Event`s
    in Chromium 156, Firefox 157 and WebKit 27.2; a media element's `resize` is one in the HTML
    standard's event table, not probed), held by `scripts/events.mjs`
-   ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
+   ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072));
+   2026-11-10, JSDoc against TypeScript source at `c480d006` with TypeScript 5.9.3: deck-builder's
+   and seller-desk's largest scripts converted by TypeScript's own JSDoc-to-annotation fix (148
+   and 44 edits, two syntax fixes by hand, 0 errors), and the JSDoc in the 33 component, example
+   and template scripts listed (492 `@param`, 84 `@type`, 24 `@typedef`, about 40 casts, 16
+   `@import`), and all 62 scripts `jsconfig.json` checks besides its test fixture, the runtime's
+   included, compiled as TypeScript to find a property first given by assigning it (none: the three
+   such errors were types JSDoc gave that the copy lost), the template's and two kit handlers
+   converted by hand (0 errors), esbuild 0.28.2 run on the converted pair, `tsc` timed three times
+   on each, TypeScript 5.8's release notes read for `erasableSyntaxOnly` and 7.0's for JSDoc, and
+   TypeScript 7.0.2 run on the repository's `jsconfig.json` (0 errors) and on the same probes
+   (the same results as 5.9.3, but for a function called with `new` and a call with more arguments
+   than a function reading `arguments` declares, which 7.0.2 refuses), and the repository's scripts
+   searched for each, the first through the TypeScript copy (no TS2683 or TS7009), the second with
+   `rg` for `arguments` (only in comments)
+   ([#1040 Reassess JSDoc versus TypeScript for component scripts using measured safety and authoring tradeoffs](https://github.com/corten-run/corten/issues/1040)).
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in
@@ -225,13 +289,15 @@ rules something out.
    building, so the crate compiles with every file. The PWA's icons, screenshots and worker
    script are named by their constants too; an image another site serves is a `Uri`.
 
-   Stands on: bet (an app's static files are small enough to compile into its binary); platform (a
+   Stands on: bet (an app's static files are small enough to compile into its binary, a video
+   included: a short clip is, and long or many videos belong in storage of their own); platform (a
    macro cannot ask cargo to watch a directory, so a new file waits for the next build that compiles
    the crate); reasoned (the binary is the whole deploy, and a constant per file makes a removed
    file a compile error).
 
    Revisit when: an app's static directory makes builds or images measurably slower than files
-   beside the binary would; or a macro on stable Rust can tell cargo to rebuild when a directory
+   beside the binary would, or startup measurably slower (every file is hashed when the app
+   starts, so a large video costs there too); or a macro on stable Rust can tell cargo to rebuild when a directory
    changes (`proc_macro`'s path tracking is unstable today), which would end the wait for the next
    build.
 
@@ -757,44 +823,78 @@ rules something out.
    Last checked: 2026-11-06, CloudFront's guide to the cache key and Cloudflare's Cache Rules, whose
    Vary setting normalizes `Accept-Language` only when a rule turns it on, read at `62eb57f7`.
 
-23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image package, not a crate.** glibc's
-   allocator keeps memory a burst of connections freed, and each burst grows what it keeps: eight
-   floods of 4,000 unfinished request heads left card-market at 419 MiB with glibc and 45 MiB with
-   jemalloc preloaded 35 seconds after the last (31 to 81 MiB after each), one run each
+23. <a id="choice-jemalloc-image"></a>**The image `corten new` writes preloads jemalloc, an image
+   package, not a crate, with its background thread and a 64 KiB thread cache.** glibc's allocator
+   keeps memory a burst of connections freed, and each burst grows what it keeps. Eight floods of
+   4,000 unfinished 30 KiB request heads (`bench/fullstack/flood-memory.mjs`, card-market at
+   `81f1f8ef`, `--cpus 1 --memory 1g`, three runs each, the cgroup's `memory.current` 35 seconds
+   after the last flood, its anonymous memory in brackets) left 406 to 455 MiB (398 to 446) on
+   glibc's allocator, climbing 31 to 38 MiB a flood. Its own settings did not stop that: two arenas
+   or one left 382 to 452 MiB (376 to 439), and two with a 16 KiB mmap threshold 177 to 184 (172 to
+   177), still climbing 20 MiB a flood. jemalloc as Debian builds it left 118 to 139 MiB (114 to
+   128), since it returns memory only while the app allocates, and with `background_thread:true` 7
+   to 11 (4 to 8), and 13 to 16 (4 to 9) with the thread cache below too, with no climb. Sampled a
+   second before each hold ended, the highest was 187 to 197 MiB with the background thread, 217 to
+   227 without it and 418 to 466 on glibc. The thread costs nothing seen at rest: an app that had
+   served no request took 87 to 112 ms of CPU a minute with the tuned settings and 83 to 91 without
+   them (`alloc-faults.mjs` with `IDLE_SECONDS=60`, cgroup `usage_usec`, three rounds,
+   `results/alloc-idle`), with three more threads; capping them at one (`max_background_threads:1`)
+   left one more thread and 79 to 113 ms, so the image leaves jemalloc's default. A flooded app's
+   idle time, while the thread returns the flood's memory, was not measured
    ([the app guide](guide/app.md),
-   [#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886),
-   [#894 docs: a flood of unfinished heads leaves memory with glibc's allocator; size max_connections from repeated floods](https://github.com/corten-run/corten/pull/894),
-   [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
-   No cost to requests was measured: under callgrind the item page took about 83,000 instructions
-   per request with jemalloc and 87,000 with glibc (five runs each, at `547b54ae`), and on the
-   benchmark item page (three rounds each, 64 connections for 30 seconds, then 1,000 requests a
-   second for 30, a 1 GiB container on two cores of a desktop) CPU time per request was within the
-   rounds' spread (median 212 against 210 microseconds closed, 292 against 299 open), and memory at
-   rest after load was 16.4 to 18.2 MiB against 17.5 to 29.5 (cgroup `memory.current`). With
-   compression, as a browser asks for it (zstd 1, the coding current browsers get; images at
-   `b179987a`, three rounds each), CPU time per request was again within the spread (median 213
-   against 224 microseconds closed, 349 against 368 open) and memory at rest overlapped (17.9 to
-   24.7 MiB against 18.8 to 24.0). Brotli, for a client without zstd, was not measured. The rounds
-   ran on a shared desktop and varied more between rounds than between allocators, so they show no
-   cost large enough to see there, not a gain. The image grows by 1.8 MB (84.1 against 82.3). A
-   `#[global_allocator]` crate in the app would do the same in the program, but it compiles C into
-   every build and binds the app to it outside Docker too; the image's two lines are the app's,
-   which it removes to run on glibc's, and card-market's image has them too
+   [#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852),
+   [#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
+   jemalloc's thread cache stops at 32 KiB unless set, and a brotli response, which a client
+   without zstd gets, allocates buffers above that, so jemalloc maps them again for every one: the
+   item page sent with brotli took 19.3 to 19.4 minor page faults a request with jemalloc's
+   defaults, its background thread, no decay, `retain:false` or `thp:never`, and none with
+   `tcache_max` at 64 KiB or 8 MiB, as on glibc (`bench/fullstack/alloc-faults.mjs`, the server's
+   `minflt` over 2,000 requests, three rounds, `results/alloc-faults-br`); with `identity` or zstd
+   jemalloc's defaults, the tuned image and glibc took none (`results/alloc-faults`). That probe's
+   coarse CPU time put a brotli page at 355 to 595 microseconds with those faults and 285 to 350
+   without in one set, but 430 to 580 against 340 to 530 (tuned) and 345 to 465 (glibc) in the
+   other, so it agrees in direction only. On the benchmark item page (`bench/fullstack/ab.mjs`,
+   jemalloc as it comes, tuned, and glibc alternating, three rounds, 300 requests a second for 40
+   seconds, then 64 users, `results/ab-jemalloc-tuned`) the tuned image used 12.4% of its core at
+   300 brotli pages a second (12.0 to 14.4) against 16.8% (15.8 to 18.4) and 17.0% on glibc (16.3
+   to 17.5), and served 3,486 a second at 64 users (2,298 to 3,829) against 2,132 (1,303 to 2,210)
+   and 2,357 (1,908 to 2,470); with `identity` and with a browser's encodings (zstd) their ranges
+   overlapped, except a browser's at 64 users, where glibc's 2,139 to 3,392 sat below both (while in
+   `results/ab-jemalloc` glibc's median, 4,936, was above theirs, 3,607 and 3,454, the ranges
+   overlapping). No image with glibc's tunables went through `ab.mjs`, since none gave a flood's
+   memory back. An earlier set without the thread cache
+   (`results/ab-jemalloc`) had glibc at 3,554 brotli pages a second against 1,720 for jemalloc and
+   1,905 with its background thread. Those rounds ran on Docker Desktop with other work running,
+   where rounds of one image moved by up to 2.4 times at 64 users (glibc with `identity`, 3,490 to
+   8,467) and CPU time at 300 a second by up to 1.9 times (7.8 to 14.5% in `results/ab-jemalloc`),
+   so they show no cost they could see, and a brotli gain that the fault counts explain but whose
+   size they do not settle. Under callgrind the item page took about 83,000 instructions per
+   request with jemalloc and 87,000 with glibc (five runs each, at `547b54ae`). The image grows by
+   1.8 MB (84.1 against 82.3). A `#[global_allocator]` crate in the app would do the same in the
+   program, but it compiles C into every build and binds the app to it outside Docker too; the
+   image's three lines are the app's, which it removes to run on glibc's, and card-market's image
+   has them too
    ([#886 The template's image runs glibc's allocator, which keeps what a flood of unfinished heads freed; preloading jemalloc gives it back, unmeasured for throughput](https://github.com/corten-run/corten/issues/886)).
 
-   Stands on: measured, noisy and partly (memory after eight floods, one run each; CPU time per
-   request within the spread of three rounds on a shared desktop, which cannot show a small cost;
-   brotli not measured); bet (an app's image is Debian with the `libjemalloc2` package); reasoned
-   (an image package binds only the image, where a `#[global_allocator]` crate compiles C into every
-   build).
+   Stands on: measured (memory after eight floods, three runs each, seven allocator settings; page
+   faults a request, repeatable to 0.1 in every round; idle CPU, three rounds; instructions a
+   request under callgrind, five runs each); measured, noisy (CPU time and throughput in three
+   rounds on a shared desktop, whose rounds moved by up to 2.4 times); platform (Debian 12's
+   `libjemalloc2`, 5.3.0, has `background_thread` off and a 32 KiB `tcache_max` unless set, and
+   takes these option names); bet (an app's image is Debian with that package); reasoned (an image
+   package binds only the image, where a `#[global_allocator]` crate compiles C into every build).
 
-   Revisit when: a run on a quiet Linux host (`bench/fullstack/ab.mjs`) or with brotli shows a cost
-   per request; or glibc's own settings (`MALLOC_ARENA_MAX`, its trim threshold) give the memory
-   back with no package, which has not been tried.
+   Revisit when: a run on a quiet Linux host (`ab.mjs` or `alloc-faults.mjs` on a droplet) shows a
+   cost per request or no gain with brotli; the brotli encoder or its level changes what it
+   allocates (buffers above 64 KiB would fault again); Debian's jemalloc changes its thread cache's
+   default or drops `background_thread`; or an allocator Debian ships returns a flood's memory with
+   no settings.
 
-   Last checked: 2026-11-05, the eight floods, recorded at `83123350`; 2026-11-06, the callgrind
-   runs on `547b54ae`, recorded at `b179987a`; 2026-11-06, the rounds with zstd, images at
-   `b179987a`, recorded at `312b2c1c`.
+   Last checked: 2026-11-06, the callgrind runs on `547b54ae`, recorded at `b179987a`; 2026-11-08,
+   the floods, the page faults and the rounds, images of `81f1f8ef` (but for the tuned image in
+   `results/alloc-faults` and `alloc-idle`, a build whose commit was not recorded); 2026-11-09,
+   Debian's libjemalloc2 5.3.0 (package 5.3.0-1) in `debian:bookworm-slim`, its options printed by
+   `MALLOC_CONF=stats_print:true`.
 
 24. <a id="choice-openapi"></a>**An API's routes are described as an OpenAPI 3.1 document, with one extension for what it
    cannot say.** OpenAPI is the standard other services, gateways and client generators read, and
@@ -1504,6 +1604,243 @@ rules something out.
     17 ms); 2026-11-09, the memory again on `022c3282`, which counts only the
     test's thread (352,232 bytes, the same).
 
+33. <a id="choice-state-derives"></a>**An app's shared state derives `Clone` and `FromRef`, two
+    derives that each say one thing, not a state attribute that writes both.** `Clone` says the
+    state can be copied, which routing and a handler that takes the whole state both need:
+    `#[corten::routes(state = Shared)]` gives each route its own copy
+    (`Methods::with_state(.., state.clone())`, which takes an `S: Clone`, as axum's
+    `MethodRouter::with_state` it calls does), and a handler's `State<Shared>` goes through
+    axum-core's `impl<T: Clone> FromRef<T> for T`. `FromRef` says each field can be taken alone:
+    it gives each field its own extractor (`State<Market>`), which clones that field and needs no
+    `Clone` of the containing type. The six examples with shared state route seven state types:
+    three derive both (watchlist's `Shared`, card-market's `ApiState` and listings-feed's
+    `Shared`) and four derive `Clone` alone, their handlers taking the whole state (card-market's
+    `Source` (the state of its pages), auction-room's `Auction`, deck-builder's `Builder` and
+    seller-desk's `Desk`). A test's state in watchlist's `account.rs` derives both too, but no
+    route takes it, so it is not counted. A `#[corten::state]` attribute would take one word off
+    each of the three that derive both (the `Clone` in `#[derive(Clone, FromRef)]`) and give
+    three of the other four (`Auction`, `Builder`, `Desk`) a choice between it and the derive
+    they write now; `Source`, an enum, could not take it, since `FromRef` is derived only for a
+    struct with named fields. That is a third way to write state, and a concept to learn that one
+    word a type does not earn (Values 5 and 6). The generated code would be the same. `FromRef`
+    deriving `Clone` itself is not chosen either: a type that writes its own `impl Clone` and
+    derives `FromRef` would get a second, conflicting impl (no routed state does both today, but
+    the shape is real: `corten_cluster::Cluster<S>`, routed as a state by
+    `#[corten::routes(state = Cluster<Items>)]` in its tests, writes its own `Clone` because its
+    fields are behind an `Arc` and `#[derive(Clone)]` would bound it on its parameter), and the
+    derive list would no longer say that the type is `Clone`. Not chosen: the attribute; an option
+    on `FromRef` (`#[from_ref(clone)]`), the same second spelling in another place
+    ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
+
+    Stands on: reasoned (each route takes its own copy of the state, in `routes.rs`'s
+    `Methods::with_state(.., state.clone())`; an impl the derive wrote would conflict with a
+    hand-written `Clone`; and the attribute saves one word on three types while adding a way to
+    write six of the seven, counts that move with the examples); platform (axum 0.8.9's
+    `MethodRouter::with_state`, like its other `MethodRouter` methods, requires `S: Clone`, and
+    axum-core 0.5.6's `impl<T: Clone> FromRef<T> for T` is how a handler takes the whole state,
+    both from `Cargo.lock`; Corten routes on axum's router, [Choice 25](#choice-axum-router));
+    value (one way to do each thing and a small surface, Values 5 and 6).
+
+    Revisit when: a third mechanical impl is derived beside the pair on two or more of the
+    examples' routed state types, so an attribute would carry more than two derives' worth; or
+    Corten stops giving each route its own copy of the state, and neither axum's `MethodRouter`
+    nor axum-core's `impl<T: Clone> FromRef<T> for T`, through which a handler takes the whole
+    state, requires `S: Clone`, so state no longer needs `Clone`.
+
+    Last checked: 2026-11-10, the examples' state types, `from_ref.rs`, `routes.rs`,
+    `Methods::with_state`, `corten-cluster`'s tests, and axum 0.8.9 and axum-core 0.5.6 from
+    `Cargo.lock`, at `97a63a92`.
+
+34. <a id="choice-listen-backlog"></a>**A listener asks the system to hold 511 finished
+    connections, not 128.** `corten::listeners`, and so `serve`, binds each socket with a
+    backlog of 511, the connections whose handshake is done and that the server has not yet
+    accepted, where `TcpListener::bind` asks for 128 (mio's and the standard library's number).
+    Investigating round r17's page timeouts and dropped load iterations
+    ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128))
+    found a burst-connect delay that reproduces, though it is not shown to be what made r17's
+    failures: Linux takes one more than the backlog and drops the next SYN, so that client waits
+    for its resend, about a second. With 1,024 k6 clients
+    starting at once against a page on one CPU, the kernel counted 142 and 485 listen-queue
+    overflows (two runs) and the slowest connect took 1.27 and 2.08 s at 128; at 511 there were
+    none and it took 0.28 and 0.24 s, and 4096 overflowed none either. 511 is Node's default and
+    nginx's on Linux. A deeper queue is not free: past `App::max_connections` connections wait in it
+    for as long as the cap holds, each with what it has sent so far in kernel memory, so the queue
+    is kept no deeper than a burst needs, and 511 is the smallest of the sizes tried that held
+    this one, not a measured minimum. The system caps the number: Linux at `net.core.somaxconn`
+    (4096 since 5.4, 128 before), macOS at `kern.ipc.somaxconn` (128 by default, so there the change
+    takes a raised setting), and Windows 11 held 200 in one run and refused a connection past them.
+    A listener of the app's own (`serve_on`) sets its own backlog.
+    Not chosen: keeping 128 (the overflows and second-long connects above); the system's maximum,
+    `SOMAXCONN` or 4096 (as deep a queue behind `max_connections` as the system allows, for no
+    burst that 511 did not hold); a setting on `App` (a new concept for a number an app that needs
+    another can set on a listener of its own).
+
+    Stands on: measured (k6, 1,024 clients at once against a page on one CPU in Docker Desktop's
+    Linux 6.18 VM, two runs at 128 and at 511, one at 4096, the kernel's `ListenOverflows` and
+    k6's slowest connect; the crate's test
+    `a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit`, 200 connections on each
+    listener with none waiting 900 ms, which a backlog of 128 fails at the 130th); platform (Linux
+    admits backlog + 1 and drops the next SYN, retransmitted after about a second; the caps above;
+    Windows 11's 200 is one run on loopback, and Windows Server and macOS were not tried); reasoned
+    (connections held past `max_connections` cost kernel memory, not measured); value (a burst of
+    users connects at once rather than a second late, Values 1, as a default with no setting to
+    find, Values 7).
+
+    Revisit when: a round or an app sees listen-queue overflows at 511 under a burst a server
+    should take; a platform cap not listed above is found, a listed one changes (a macOS default
+    raised, a Windows that holds more or fewer than 200), or one of them is shown to need a
+    different default; or a measurement of the kernel memory held past `max_connections` shows
+    511 costs more than the bursts it absorbs.
+
+    Last checked: 2026-11-08, the k6 bursts and overflow counts on Docker Desktop's Linux 6.18 VM,
+    against `c65c10ec` (128), `3249bbed` (511) and `1a84048d` (4096); 2026-11-08, Windows 11's 200
+    on loopback, recorded in `c62a8706`; 2026-11-10, the crate's test on `70730b56` (Linux, passed
+    without skipping) and a socket probe on Linux in which a backlog of 128 timed out at the 130th
+    connection and 511 admitted 200 on each loopback address.
+
+35. <a id="choice-runtime-terser"></a>**The runtime and its modules are minified by esbuild and then by
+    terser.** Every page of every app loads the runtime, so its bytes are paid on each first
+    visit. esbuild bundles each file (the runtime takes in `on.js`), lowers it to ES2022 and
+    minifies it, as before; terser, a development dependency of the repository's tooling that no
+    app installs, minifies that output again, compressing in two passes and renaming the module's
+    top-level names. The runtime on `21f9fab3`, as built (banner included), is 40,988 bytes
+    against 41,093, 14,318 with gzip (level 9) against 14,851, and 12,955 with brotli (level 11)
+    against 13,487: 3.6% less with gzip and 3.9% less with brotli, as Corten serves it, and 0.3%
+    less uncompressed. The saving is terser's renaming: on `c65c10ec`, without it, 495 of the 529
+    bytes it saved with gzip came back. Not chosen (measured on `c65c10ec`): esbuild's minifier
+    alone (above); terser on esbuild's unminified bundle instead (14,373 bytes with gzip and
+    13,015 with brotli, and 41,468 uncompressed, 477 more than before); terser renaming without
+    compressing (43 bytes more with gzip, 35 with brotli); one pass (12 and 6 bytes more); a third
+    pass (the same bytes as two).
+
+    Stands on: measured (each built file before and after on `21f9fab3`, one build each, the
+    build being deterministic: the runtime 105 bytes less uncompressed, 533 with gzip and 532
+    with brotli; `view.js` 20, 75 and 60 less; `format.js` 11, 8 and 18 less; `upload.js` and
+    `keys.js` within 11 bytes either way, `upload.js` 1 byte more uncompressed and `keys.js` 1
+    more with gzip; on `c65c10ec` the runtime was 107, 529 and 478 less); measured (the browser
+    smoke tests on the built files of `10cd394d`, one run each, in the engines each runs: the
+    watchlist, also under `corten dev`, card-market, ui-gallery, seller-desk, deck-builder and its
+    preview, auction-room and listings-feed all passed; an earlier build, terser over the
+    unminified bundle, failed one Firefox check that fails under load without it, the feed's
+    reconnect timing, [#1102 The watchlist smoke's Firefox feed backoff check fails under load: a 2 s wait measured over 6 s against a 3.5 s bound](https://github.com/corten-run/corten/issues/1102));
+    value (fewer bytes on every page, Values 1, for a dependency of the tooling only, Values 6).
+
+    Revisit when: esbuild's minifier comes within 1% of the two after compression, so one tool
+    does it and terser goes; or terser's output fails a smoke test in a supported engine that
+    esbuild's alone passes.
+
+    Last checked: 2026-11-10, sizes on `21f9fab3` with esbuild 0.28.2 and terser 5.51.2, and the
+    smoke tests on `10cd394d` (and CI's on this change).
+
+36. <a id="choice-derived-row"></a>**A feed row's key is the field marked `#[row(id)]`, which `#[derive(Row)]` reads; the
+    row's `Clone` and `Serialize` stay in its derive list.** The impl every row wrote by hand
+    (`fn id(&self) -> &str { &self.id }`) is one attribute on the field, so the key is named where
+    the field is and moves with it when it is renamed. The derive writes nothing else. A derive adds
+    impls, not other derives, and writing the row's `Serialize` itself would be a second
+    serializer beside serde's to keep in step, to save one word in a derive list; `Clone` is the
+    compiler's own derive. So a row still lists `Clone` and `Serialize` (and `ToJson` where a
+    script reads its type), and Rust checks each with the trait's `Send`, `Sync` and `'static`
+    bounds. Not chosen: an attribute macro (`#[corten::row(id = id)]`) that adds the derives to the
+    item, which hides standard derives behind a spelling of Corten's and names the field in an
+    argument rather than on it; taking a field named `id` without a mark, since a row's key is
+    better said (`sku`, `ticker`) than guessed. So a struct row with named fields, keyed by one of
+    them, derives `Row`, and only a row the derive cannot express (such as an enum, a tuple struct,
+    whose fields serde writes without names, a key made of several fields) implements the trait by
+    hand:
+    the hand-written impl is what is left for those, not a second way for the rest. Beyond the impl,
+    the derive refuses what makes a script or a replica read the key as something other than
+    `id()`, as far as the row's own serde attributes say: one that leaves the id out, writes or
+    reads it as other text or under two names, reads or writes the row as another value, or has
+    another member that serde writes or reads under the id's key. An id type's own `Serialize` and `Deserialize`, a row's
+    that are not serde's derive, and a flattened field's members are not known when the derive
+    runs, so they are not checked
+    ([#1044 Generate feed-row requirements and the Row implementation from one declaration](https://github.com/corten-run/corten/issues/1044)).
+
+    The derive is `corten::feed::Row`, beside the trait, and not in `corten-feed` itself: its impl
+    names `::corten::feed::Row`, so `corten-feed` and `corten-protocol`, which do not depend on
+    `corten`, keep writing their test rows by hand, as does a row whose `id` does more than
+    return a field (`corten-cluster`'s `Gated`). That is a cost: a native or agent client built on
+    `corten-protocol` alone, which a replica's read-side checks are for, writes its rows' `impl Row`
+    by hand too, since taking the derive there would bring in `corten` and its server
+    dependencies. No such client is in the repository or has been reported.
+
+    Stands on: reasoned (the generated impl is the one written by hand and the feed's path is
+    unchanged, which `crates/corten/tests/derived_row.rs` checks by comparing a derived row's
+    snapshot and replayed patch with a hand-written one's); value (one declaration for the key,
+    and no second way to derive `Clone` or `Serialize`, Values 5 and 6).
+
+    Revisit when: an example app, or an app that reports it, implements `Row` by hand for a key
+    made from more than one field, which a mark on one field cannot say; or a native or agent
+    client on `corten-protocol` alone keeps rows it would derive (the derive would then take a path
+    to the trait, such as `#[row(crate = corten_protocol)]`).
+
+    Last checked: 2026-11-10, the derive, its `compile_fail` examples, each compiled for its own
+    message, `tests/derived_row.rs`, and the rows of the four example apps and `corten-cluster` by
+    `cargo clippy --workspace --all-targets`, on `76247120`, the derive's last change; 2026-11-10,
+    the live benchmark's row, outside the workspace, by reading it on `76247120` (it has no serde
+    attribute).
+
+37. <a id="choice-asset-ranges"></a>**A static file answers one range of its bytes at any
+    version's URL, only as it is stored, and never sends `Accept-Ranges`.** A `<video>` asks for
+    ranges to seek, so a file sent only whole makes a player download what it skips, and Safari on
+    iOS plays media only from a server that answers ranges. A `GET` of a versioned URL, this
+    version's or an old one's, for a file sent unencoded answers one range as a `206` with its
+    `Content-Range`, a range the file cannot hold as a bare `416`, and `If-Range` keeps the range only for
+    the tag of the bytes sent, compared byte for byte (RFC 9110). An old version's URL is answered
+    from this version's file, `no-cache`, under that file's strong tag, so a page still holding an
+    old version's URLs after a deploy (a tab left open, a page a cache kept) still plays and seeks
+    its clip: every deploy renames every file, so refusing those ranges would stop the clip for
+    every Safari visitor until the page is reloaded, even when its bytes did not change. Sent whole
+    instead: several ranges or another unit (RFC 9110 lets a server ignore `Range`); a compressed
+    body, whose offsets are not the file's; and the favicon, whose URL outlives every deploy under
+    a weak tag. The cost, which this Choice brings: a server cannot tell an older version's URL
+    from a newer one's, so while a fleet runs two versions, or when a deploy lands between two
+    ranges of one playback, a file whose bytes changed can be answered from either version at
+    either URL. A client that sends `If-Range` then gets the whole file; one that does not may
+    join ranges of two versions and play neither. Sending other versions' URLs whole prevented
+    that, and was traded for Safari playing them; a file whose bytes did not change has the same
+    tag and bytes in both. No answer advertises ranges: the header is optional and browsers send
+    `Range` without it. The PWA's worker leaves a range to the network, since its cache holds whole
+    files and cannot hold a `206`, and the video or audio a player loads too (a request whose
+    destination is `video` or `audio`): one without a range (Playwright's Linux WebKit sends one
+    first) would otherwise be stored whole, downloading the whole video, which a player does not
+    read back from the cache; its captions and poster are cached like any versioned file. Not
+    chosen: `Accept-Ranges: bytes` on every file (optional, above); an old version's URL sent whole
+    (Safari on iOS would not play it, above); a URL named by each file's own hash rather than the
+    app's version (an unchanged clip would keep its URL across deploys and a server would know
+    which bytes a URL names, but it changes how every asset is named and cached, a change of its
+    own); multipart ranges (no browser player asks for them, and each would be a body Corten
+    writes); slicing an encoded body (the client's offsets name the file, not the encoding); the
+    worker cutting a range from a whole file it cached and answering the `206` itself (code in
+    every app's worker for offline video, which no app here needs;
+    [Limit 5](#limit-offline-fallback) stays).
+
+    Stands on: platform (Apple's Safari Web Content Guide, "Creating Video", says a server hosting
+    media for iOS must answer byte ranges, which iOS uses for random access; with no
+    `Accept-Ranges`, Chromium and Firefox ask for the clip by a `Range` and play it from the
+    `206`, and WebKit reads it whole once and then asks for a range from inside it, each seeking,
+    as card-market's smoke shows on Linux, below; the 8 KB clip comes whole in Chromium's and
+    Firefox's first range, so the smoke does not show them asking for a range from inside it);
+    measured (callgrind, `what_serving_a_file_costs`, which sends no `Range`, so its count is what
+    every file's answer pays, 1,200 requests less 200 over 1,000, five runs each taking turns:
+    11,826.69 (11,825.27 to 11,826.73) instructions a request on `97a63a92` with the test added
+    and 12,024.05 (12,024.05 to 12,025.49) on `92d38464`, with ranges at this version's URL only,
+    +197 (+1.7%); then 12,024.02 (12,023.98 to 12,024.06) on `84719c0f` and 12,026.06 (12,026.01
+    to 12,026.08) on a build whose request path is `a7b1c808`'s, with old URLs ranged too, +2);
+    reasoned (one range per answer and a tag naming the bytes sent keep a client that sends
+    `If-Range` from joining bytes of two files).
+
+    Revisit when: Safari or iOS on real hardware, not tested here, will not play or seek a clip
+    served this way, or a client that matters will not seek without `Accept-Ranges`; a clip is
+    reported playing garbled after a deploy (ranges of two versions joined); a player asks for
+    several ranges; or an app needs a `Media` answer, not a static file, to seek.
+
+    Last checked: 2026-11-10, Apple's guide read and the crate's asset tests on `112422cb`;
+    2026-11-10, card-market's smoke in Playwright 1.64.1 against a build of `4ec25ef4`, on Linux
+    with Chromium, Firefox and WebKit each playing and seeking the clip, and on Windows with
+    Chromium and Firefox; 2026-11-10, the count on `97a63a92` and `92d38464`; 2026-11-10, the
+    count on `84719c0f` and `a7b1c808`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -1611,6 +1948,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    modules as module scripts that hand their exports to the runtime as they run, so their handlers are
    in before `DOMContentLoaded`, and this needs a person faster than the network.
 5. <a id="limit-offline-fallback"></a>Offline is a fallback page plus cached versioned files, not offline data.
+   A video does not play offline: the worker leaves a range, and the video or audio a player
+   loads, to the network ([Choice 37](#choice-asset-ranges)).
 6. <a id="limit-prefetch-reuse"></a>Hover and touch prefetch reuses a fetched page for up to 10 seconds (cleared after any form
    post). It keeps the 8 newest and aborts the rest (the request, or the body once it answered),
    so hovering does not hold pages for the whole session; with the browser's data saver on it
@@ -1837,3 +2176,19 @@ by design; where it is known, a limit says what would lift it or why it is so.
     header would close this at the cost of a round trip on every sort ([UI guide](guide/ui.md)). It
     lifts when a route's type says it reads a table's order, so markup that sends to it on a page
     that draws that table without the call does not build.
+
+25. <a id="limit-wire-diagnostics"></a>A page cannot see what the runtime sent or received: no
+    hook hands a script a submit's answer or a live stream's fragments as they came, so an in-page
+    inspector of the payload a page received has no supported way in (a script that wraps `fetch`
+    or `EventSource` before the runtime calls them is outside its contract). The browser's network panel shows
+    each navigation and submit and its answer, after content decoding and only while it is open,
+    and Chromium's shows an event stream's messages, the other engines' not checked
+    ([Requests and forms](guide/requests-and-forms.md#seeing-what-went-over-the-wire)). An app
+    learns its own outcomes from typed events its markup dispatches, from a submit's patch or a
+    live fragment. So by design: a hook would cost every page a check on each patch and runtime
+    bytes for an inspector few apps would show (Value 1), would have to define its own order,
+    cancellation and redaction of the private HTML and form data it carries, and would be a second
+    way to hear an outcome (Value 5), where the network panel already shows the wire (Value 2;
+    [#1130 Expose opt-in browser diagnostics for action responses and live HTML patches](https://github.com/corten-run/corten/issues/1130)).
+    It lifts when apps need the received payload in the page for their users, not their
+    developers, or when Chromium's panel stops showing an event stream's messages.
