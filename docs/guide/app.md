@@ -25,7 +25,7 @@ your routes. Each default can be replaced in one line.
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
-| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted, up to 511 in each listener's queue on Linux; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
+| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted, up to 511 in each listener's queue on Linux, and a WebSocket or tunnel stops counting once it switches; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, warnings and other `tracing` events at `INFO` and above to stdout, one line each, as `tracing-subscriber`'s `fmt()` writes them without targets (`2026-11-06T21:20:29.018154Z  WARN corten: ...`), in its colors when stdout is a terminal and `NO_COLOR` is unset; control characters other than a tab are escaped in every field, so request text cannot start a line of its own or send the terminal a command; spans are not printed (feature `log`, a subscriber of Corten's own with no dependency) | set your own `tracing` subscriber first (`tracing_subscriber::fmt().init()` for spans, filters such as `RUST_LOG` or JSON lines); `serve` then leaves it alone |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
@@ -37,7 +37,12 @@ your routes. Each default can be replaced in one line.
 
 `App::header_timeout` (30 seconds unless set) bounds what comes before a request: a client that
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle
-keep-alive connection closes after it too). A clock of the server's own checks it a few times a
+keep-alive connection closes after it too). A connection that switches, with a `101` (a
+WebSocket) or a `2xx` to `CONNECT` (a tunnel), is the route's from then on: the header timeout
+no longer applies and `App::send_timeout` bounds only its writes that wait, so one on which
+neither side sends stays open until the route ends it, and idle limits there are the route's
+([design Limit 13](../design.md#limit-protocol-switch)). A refused `CONNECT` is an answer like any
+other. A clock of the server's own checks the header timeout a few times a
 second, so a connection closes within a tenth of the timeout of it (at most a second either way). It applies to `serve`, `serve_on` and `serve_wrapped` alike (where a TLS handshake's time counts toward it), on
 every listener. `App::send_timeout` (60 seconds unless set, nginx's `send_timeout`) bounds what
 comes after: a write that finds the connection's send buffer full may wait that long for room,
@@ -64,14 +69,17 @@ can be run again (the import) may be left past it, to end with the process when 
 kills it. Only an app with an area or API whose deadline is not the app's keeps each request's,
 about 50 instructions a keep-alive request (callgrind); in an app without one, which pays
 nothing, every connection has the longer of the grace and the deadline. A switched connection
-(a WebSocket) is told and not waited for.
+(a WebSocket or a tunnel) is told and not waited for.
 `App::max_request_head(bytes)` (32 KiB unless set) bounds how large the head may be, a URL
 included: one past it is answered `431 Request Header Fields Too Large` as soon as it passes, by
 the HTTP server, with no body and none of the app's headers, and the connection closes (a client
 still sending the rest may see it reset instead). With the limit raised above 64 KiB, a URL over
 64 KiB gets 414. A request has at most 100 headers whatever the size.
 `App::max_connections(n)` caps how many connections are open across the listeners (none unless
-set, [design Choice 19](../design.md#choice-head-size)). Together they bound what clients that never
+set, [design Choice 19](../design.md#choice-head-size)). A switched connection, a WebSocket after
+its `101` or a tunnel after a `2xx` to `CONNECT`, stops counting once it switches
+([design Limit 13](../design.md#limit-protocol-switch)), so a route that accepts them bounds how
+many it holds itself. Together they bound what clients that never
 finish a request can hold: 4,000 connections each holding a head just under 32 KiB took
 card-market from 3.4 to 225 MiB (measured, about 57 KiB a connection), and it was still at
 211 MiB after they closed. That is glibc's allocator (Debian's, the Dockerfile's base) keeping
