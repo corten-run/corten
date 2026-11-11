@@ -535,8 +535,9 @@ fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
     let read_source = source.clone();
     Tools::new("card-market-item-page", env!("CARGO_PKG_VERSION"))
         .auth(move |headers| {
-            let token = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-            match token {
+            // The scheme is matched in any case (RFC 9110 11.1).
+            let sent = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.split_once(' '));
+            match sent.filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, token)| token.trim()) {
                 Some(token) if tokens.iter().any(|known| known == token) => Ok(()),
                 _ => Err(ToolError::Unauthorized),
             }

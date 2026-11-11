@@ -389,6 +389,8 @@ pub struct Tools<A = ()> {
     tools: Arc<BTreeMap<String, Tool<A>>>,
     authorization: Option<Arc<Authorization>>,
     challenge: Arc<OnceLock<Protected>>,
+    /// The 401's challenge without an [`Authorization`], built once from the name.
+    named: crate::Challenge,
 }
 
 impl<A> Clone for Tools<A> {
@@ -400,6 +402,7 @@ impl<A> Clone for Tools<A> {
             tools: self.tools.clone(),
             authorization: self.authorization.clone(),
             challenge: self.challenge.clone(),
+            named: self.named.clone(),
         }
     }
 }
@@ -407,7 +410,9 @@ impl<A> Clone for Tools<A> {
 impl Tools<()> {
     /// An endpoint whose tools anyone may call, until [`Tools::auth`] says otherwise.
     pub fn new(name: &str, version: &str) -> Self {
+        let printable = !name.is_empty() && name.bytes().all(|b| b == b' ' || b.is_ascii_graphic());
         Tools {
+            named: crate::Challenge::bearer(if printable { name } else { "mcp" }),
             name: name.into(),
             version: version.into(),
             auth: Arc::new(|_| Ok(())),
@@ -432,6 +437,7 @@ impl Tools<()> {
             tools: Arc::default(),
             authorization: self.authorization,
             challenge: self.challenge,
+            named: self.named,
         }
     }
 }
@@ -646,10 +652,7 @@ impl<A: Send + 'static> Tools<A> {
         *res.status_mut() = StatusCode::UNAUTHORIZED;
         let mut challenge = match self.challenge.get() {
             Some(protected) => protected.unauthorized.clone(),
-            None if !self.name.is_empty() && self.name.bytes().all(|b| b == b' ' || b.is_ascii_graphic()) => {
-                crate::Challenge::bearer(&self.name)
-            }
-            None => crate::Challenge::bearer("mcp"),
+            None => self.named.clone(),
         };
         if sent {
             challenge = challenge.param("error", "invalid_token");
@@ -753,8 +756,9 @@ impl<A: Send + 'static> Tools<A> {
     }
 }
 
-/// Whether the request sent a bearer token (RFC 6750: another scheme's credentials, or `Bearer`
-/// with nothing after it, are no token).
+/// Whether the request sent a bearer token (RFC 6750: another scheme's credentials are no token).
+/// `Bearer` with nothing after it, which RFC 6750 (2.1) does not allow, is taken as none too, so
+/// the client is told where to get one rather than that it sent a bad one (Corten's reading).
 fn bearer(headers: &HeaderMap) -> bool {
     headers.get(header::AUTHORIZATION).is_some_and(|value| {
         let value = value.as_bytes();
@@ -960,8 +964,9 @@ mod tests {
         };
         let tools = tools
             .auth(|headers| {
-                let token = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-                token.filter(|t| *t != "expired").map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
+                let sent = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.split_once(' '));
+                let token = sent.filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, token)| token.trim());
+                token.filter(|t| !t.is_empty() && *t != "expired").map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
             })
             .tool("inventory.adjust", "Adjust quantity", |agent: Agent, input: Adjust| async move {
                 if agent.0 != "writer" {
@@ -1066,12 +1071,15 @@ mod tests {
             Authorization::new::<Mcp>("https://Cards.example:443/", "https://auth.example").scopes(&["inventory:read"]);
         assert_eq!(authorization.resource(), "https://cards.example/mcp", "what the token check compares the audience with");
         let app = protected(Some(authorization));
-        // Other credentials than a bearer token are no token: told where to get one, nothing more.
-        let basic = Request::post("/mcp").header("content-type", "application/json").header("authorization", "Basic YTpi");
+        // Other credentials than a bearer token are no token, nor is `Bearer` with only
+        // whitespace after it: told where to get one, nothing more.
         let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": {} } });
-        let (status, headers, _) = send(&app, basic.body(Body::from(call.to_string())).unwrap()).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-        assert!(!headers["www-authenticate"].to_str().unwrap().contains("invalid_token"), "{headers:?}");
+        for sent in ["Basic YTpi", "Bearer   ", "Bearer \t"] {
+            let req = Request::post("/mcp").header("content-type", "application/json").header("authorization", sent);
+            let (status, headers, _) = send(&app, req.body(Body::from(call.to_string())).unwrap()).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED, "{sent:?}");
+            assert!(!headers["www-authenticate"].to_str().unwrap().contains("invalid_token"), "{sent:?}: {headers:?}");
+        }
         let (status, headers, body) = send(&app, adjust(None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         let metadata = "https://cards.example/.well-known/oauth-protected-resource/mcp";

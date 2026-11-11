@@ -1164,21 +1164,23 @@ rules something out.
     is the one every Bearer API has) and `Challenge::basic(realm)` (RFC 7617 requires the realm),
     or a scheme in a `const` of the app's, checked when the program compiles as a token that is
     neither `Bearer` nor `Basic` (a `Challenge::new` outside a `const` is checked as it runs),
-    with parameters always sent as quoted strings and checked when the refusal is made (a
+    with parameters always sent as quoted strings and checked when the challenge is made (a
     challenge is built where the request is refused, so a mistake in a literal shows on the first
     refused request, which an app's tests send; [Rule 8](#rule-compile-errors) gives way here
     because Corten has no startup point for an app's challenges, and a `const` form would be a
     second way to write one: an app whose realm comes from configuration builds its `Challenge`
     once at startup and clones it, which fails at startup). The MCP endpoint builds its own from
     its origin and scopes when it is mounted, and without an `Authorization` names itself as the
-    realm, or `mcp` when its name, which is also its `serverInfo` and may be any text, cannot be
-    one. A 401 sends one challenge, with parameters and no token68 (`Negotiate <data>`); a client
-    offered two schemes at once (RFC 9110 11.6.1 allows a list) is not one an app has needed.
+    realm, or `mcp` when its name, which is also its `serverInfo` and may be any text, is empty
+    or not printable ASCII. A 401 sends one challenge, with parameters and no token68
+    (`Negotiate <data>`); a client offered two schemes at once (RFC 9110 11.6.1 allows a list) is
+    not one an app has needed.
     Of the 401s `Refused` makes, `sign_in`'s to a data client is the one that falls short of
     RFC 9110: it carries no challenge, since a session cookie has no HTTP authentication scheme
     to name ([Limit 11](#limit-caller-types); a 401 an app writes by hand, `Error::status`, is
-    its own). A key sent in a header of the app's own (`X-Api-Key`) has no scheme either, so an API that keeps one for
-    clients that already send it also takes the key as a bearer token and challenges `Bearer`.
+    its own). A key sent in a header of the app's own (`X-Api-Key`) has no scheme either, so an
+    API that keeps one for clients that already send it also takes the key as a bearer token and
+    challenges `Bearer`.
     Not chosen for the type: `unauthorized()` sending `Bearer` by default, which would have
     kept every caller compiling but named a scheme for an app that takes another; a `BEARER`
     constant with no parameter, which RFC 6750 (3) does not allow; a method per RFC 6750 error
@@ -1192,8 +1194,8 @@ rules something out.
     Django REST framework answers a session API), which tells a client that its credentials were
     refused when it sent none, so a native app cannot tell "sign in" from "not allowed"; nor a
     challenge `sign_in` would carry, a second way to say what `unauthorized` says for a client
-    that sends a token, which a lookup that takes both refuses with `unauthorized` when the
-    request sent one. A route's
+    that sends a token, which a lookup that takes both should refuse with `unauthorized` when the
+    request sent a wrong one. A route's
     answer type says how it fails (`HtmlResult`: the error page; `JsonResult<T>`: JSON) and
     whether a shared cache may keep it (`Public<..>`, whose handler may only take `Anonymous`
     inputs and whose page cannot set a cookie). A route that says `no_store` is checked as
@@ -1231,11 +1233,10 @@ rules something out.
     take, so no route given to the `App` skips them, an unstaged route's arguments standing in for
     its answer's); bet (most of an app's access rules are
     about who is asking, which a type can name, and the rest depend on the record, which the
-    handler reads anyway); bet (a challenge's realm and error code are literals, or configuration an app builds one
-    `Challenge` from at startup, so checking them when a challenge is made finds a mistake in the
-    first test that refuses a request or when the app starts, and a value from a store or a
-    request is the app's to clean); platform (RFC 9110 15.5.2: a 401
-    MUST send `WWW-Authenticate`; RFC 6750 (3) for Bearer's parameters; RFC 7617 (2) for Basic's
+    handler reads anyway); bet (a challenge's realm and error code are literals, or configuration
+    an app builds one `Challenge` from at startup, so checking them when a challenge is made finds
+    a mistake in the first test that refuses a request or when the app starts, and a value from a
+    store or a request is the app's to clean); platform (RFC 9110 15.5.2: a 401 MUST send `WWW-Authenticate`; RFC 6750 (3) for Bearer's parameters; RFC 7617 (2) for Basic's
     realm; IANA's HTTP Authentication Scheme Registry, which has no scheme
     for a session cookie); value (mistakes fail at compile time, Value 4: a
     route's caller, and a challenge's scheme in a `const`; a challenge's realm and parameters are

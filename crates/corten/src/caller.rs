@@ -257,8 +257,8 @@ impl Refused {
 ///         let sent = parts.headers.get("authorization").and_then(|v| v.to_str().ok());
 ///         let key = sent.and_then(|v| v.split_once(' ')).filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"));
 ///         match key.map(|(_, key)| key.trim()).filter(|key| !key.is_empty()) {
-///             // No key (an empty one too), or another scheme's credentials: say how to send one,
-///             // and no error (RFC 6750 3.1).
+///             // No key, or another scheme's credentials: say how to send one, and no error (RFC
+///             // 6750 3.1). An empty key, which RFC 6750 does not allow, is taken as none.
 ///             None => Err(Refused::unauthorized(Challenge::bearer("partners"))),
 ///             // A real app looks the key up here.
 ///             Some("dev-key") => Ok(Partner { name: "dev".into() }),
@@ -317,8 +317,9 @@ impl Challenge {
     /// as a quoted string, with `"` and `\` escaped: a scheme with a parameter that must be a bare
     /// token (Digest's `algorithm`) is not written with it, and keeping `"` and `\` out of RFC
     /// 6750's `error`, `error_description` and `scope`, which must not hold them, is the app's.
-    /// It runs when the refusal is made, so a challenge is best built from literals the app's
-    /// tests send a request through. Panics when `name` is not a token or the challenge has it already
+    /// It runs when the challenge is made, so a challenge is best built from literals the app's
+    /// tests send a request through, or, for a realm from configuration, once at startup, kept in
+    /// the app's state and cloned for each refusal, so a bad one stops the app from starting. Panics when `name` is not a token or the challenge has it already
     /// (RFC 9110 11.2, in any case), or `value` has a control character or a byte outside ASCII,
     /// Corten's rule since the authentication framework has no reliable way to carry another
     /// character set (RFC 7617 3): a value from a request or a store is the app's to clean first.

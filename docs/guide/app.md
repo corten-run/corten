@@ -1439,7 +1439,8 @@ endpoint at another route panics at startup. The origin and each issuer must be 
 `http` on `localhost` or a loopback address), checked when given. Without `authorization`, a
 401 names `Bearer` and the endpoint's name as its realm (`mcp` when the name is empty or not
 printable ASCII), for tokens handed out by hand, and tokens are checked per tool call as
-before. Either way a 401 for a request that sent a token adds `error="invalid_token"`.
+before. Either way a 401 for a request that sent a token adds `error="invalid_token"`; `Bearer`
+with nothing after it counts as no token, so the client is told where to get one.
 
 APIs nest as areas do, so each feature owns its JSON routes as it owns its pages. A feature's
 module has a prefix under the app's (`/api/forecast-calibration` in `/api`), and both are
@@ -2110,8 +2111,10 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    already send that header takes the key as a bearer token too and challenges `Bearer`. Another
    scheme is a `const` of the app's (`const NEGOTIATE: Challenge = Challenge::new("Negotiate");`),
    so one that is not a token does not compile (called elsewhere, `new` checks it as it runs);
-   a parameter's value is always sent quoted and in ASCII, and is checked when the refusal is
-   made, so a test that sends a refused request finds a mistake in it. `Refused::sign_in`'s 401
+   a parameter's value is always sent quoted and in ASCII, and is checked when the challenge is
+   made, so a test that sends a refused request finds a mistake in it; a realm from configuration
+   goes into a `Challenge` the app builds once at startup, keeps in its state and clones for each
+   refusal, so a bad one stops the app from starting. `Refused::sign_in`'s 401
    to a data client has no challenge: a session cookie has no HTTP authentication scheme. A lookup
    that also takes a token should refuse a request that sent a wrong one with `unauthorized`.
 8. A check that depends on the record (only the author may edit a draft) stays in the handler,
