@@ -146,7 +146,14 @@ What it shows:
    ms for Solid, Svelte and Vue and 55-131 ms for React and Remix. It is slower than browser-3's
    6.0 ms, while Solid, Svelte, Vue, React and plain JavaScript took over faster than in browser-3
    and Remix slower. The CPU, Chromium and Corten's runtime all changed between the rounds, and
-   this round does not show which slowed Corten's takeover
+   this round does not show which slowed Corten's takeover. Paired runs on one desktop (an Intel
+   Core i9-10885H, `ssr.mjs` with performance marks in copies of the page, loads with no long
+   frame) found most of it in the runtime's own evaluation at load: 9.4 ms at this round's commit
+   against 5.9 at 77002fe (measured, 12 alternating pairs of 30 loads), spent in four startup
+   steps. [#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) took about 4 ms of it back: evaluation 10.15 ms (9.90 to 10.70) against 6.00
+   (5.90 to 6.40), medians of 6 runs of 30 loads, paired difference -4.14 ± 0.16 ms (measured),
+   and takeover -3.91 ± 2.40 ms over 8 pairs, Solid's -0.31 ± 0.85. The 10.2 ms above is this
+   round's; the next browser round measures takeover again
    ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)).
    It is also one round of a number that has moved between runs before (browser-2 and its
    reruns, below). On about half of Corten's and React's loads a long frame rendered

@@ -127,8 +127,18 @@ rules something out.
    that step 4.9, 20.7 and 6.3 ms. In browser-4 about half the loads had a long frame of
    rendering before views were ready, which takeover leaves out (a median of none in browser-3), and
    the page, though ready sooner than in browser-3 as every app's was, was ready after Svelte's and
-   Vue's, where in browser-3 it was the first framework ready; why takeover rose is open in
-   [#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222));
+   Vue's, where in browser-3 it was the first framework ready. Most of that rise was the runtime's
+   own evaluation at load, measured later in paired runs on one desktop (an Intel Core i9-10885H,
+   `bench/browser/ssr.mjs` with performance marks in copies of the page, medians of the loads with
+   no long frame): 9.4 ms at the round's commit against 5.9 at `77002fe`, 12 alternating pairs of
+   30 loads, spent in four startup steps that did work nothing used or did it the slow way (reading
+   every `data-ref`'s name, a `details, dialog` query over the whole page, the layout snapshot's
+   regular expressions, and looking for missing meta tags through the whole page).
+   [#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) took about 4 ms of it back: evaluation 10.15 ms (9.90 to 10.70) against 6.00 (5.90 to
+   6.40), medians of 6 runs of 30 loads each, a paired difference of -4.14 ms (standard deviation
+   0.16), and takeover 3.9 ms less (standard deviation 2.4) over 8 pairs, Solid's within 0.3 ms.
+   The round's 10.2 ms is the number until the next browser round measures takeover again
+   ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)));
    reasoned (nested branches need the same typed-template check and CSP custom-property
    application as rows; centralizing those does not require tracking application state); value
    (one way to give an element behavior, Values 5).
@@ -144,7 +154,8 @@ rules something out.
    Last checked: 2026-11-11, the client-heavy table, round browser-4 on a Xeon Platinum 8358, on
    `3fb4b1ac`; 2026-10-23, round browser-3 on a Xeon Platinum 8280, on `77002fe`; 2026-10-23,
    browser-2 and its three reruns, recorded in the browser benchmark's README at `0cda9827`;
-   2026-11-06, nested deck preview and connected-tree measurements on `fc09b98d`.
+   2026-11-11, paired runs of `bench/browser/ssr.mjs` on an Intel Core i9-10885H, `3fb4b1ac`
+   against `77002fe` and `8c2a1b71` against `8c9e84fd`; 2026-11-06, nested deck preview and connected-tree measurements on `fc09b98d`.
 
 5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
@@ -331,8 +342,13 @@ rules something out.
    30 loads, round browser-4. That is one round of a number that has moved between runs (browser-2
    measured 29.5 ms, three reruns of it 4.9, 20.7 and 6.3), and it rose from browser-3's 6.0 ms
    on another CPU, Chromium and runtime while about half the loads now have a long frame of
-   rendering before views are ready and the page is ready after Svelte's and Vue's; why is open in
-   [#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222));
+   rendering before views are ready and the page is ready after Svelte's and Vue's. Most of that
+   rise was the runtime's own evaluation at load, measured later in paired runs of
+   `bench/browser/ssr.mjs` on one desktop: 9.4 ms at the round's commit against 5.9 at `77002fe`
+   (12 pairs of 30 loads), and [#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) took about 4 ms of it back (evaluation medians of 10.15 and
+   6.00 ms over 6 runs of 30 loads, a paired difference of -4.14 ms, standard deviation 0.16). The
+   next browser round measures takeover again
+   ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)));
    value (Values 1: the work goes where it is fastest for the user).
 
    Revisit when: Values 1 changes. A case measured against the scripts guide's table (Server or
@@ -340,7 +356,9 @@ rules something out.
 
    Last checked: 2026-11-11, round browser-4 on a Xeon Platinum 8358, on `3fb4b1ac`; 2026-10-23,
    round browser-3 on a Xeon Platinum 8280, on `77002fe`; 2026-10-23, browser-2 and its three
-   reruns, recorded in the browser benchmark's README at `0cda9827`.
+   reruns, recorded in the browser benchmark's README at `0cda9827`; 2026-11-11, paired runs of
+   `bench/browser/ssr.mjs` on an Intel Core i9-10885H, `3fb4b1ac` against `77002fe` and
+   `8c2a1b71` against `8c9e84fd`.
 
 10. <a id="choice-app-owns-document"></a>**The document is a component the app owns, not a shell Corten configures.** A page hands
    `req.page` its whole document, the app's layout with the page in it, and the head is markup
