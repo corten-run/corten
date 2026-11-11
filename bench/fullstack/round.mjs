@@ -61,8 +61,9 @@ export const stepsUntil = (from, until) => {
 
 /**
  * The steps droplet.mjs's browser suite runs with run-all.mjs: the browser step alone (parity, look,
- * bytes, browser timing), then bench/browser's pass. Not the build step after it: the three apps
- * browser-4 built took 8 to 23 minutes each (topcoat, Corten, Leptos), and the builds' budget
+ * bytes, browser timing), then bench/browser's pass. Not the build step after it: in round browser-4
+ * (2026-11-11, a c-8; its log, not committed, as the round stopped there) build.mjs took 11, 22 and
+ * 8 minutes for Corten, Leptos and topcoat, the first three it builds, and the builds' budget
  * (buildBudgetMinutes) with the browser step does not fit the suite's three-hour unit.
  */
 export const browserSuite = { from: "browser", until: "browser" };
