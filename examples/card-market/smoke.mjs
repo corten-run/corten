@@ -267,8 +267,8 @@ try {
     check("a push message with no title and a url that is not text shows untitled and opens /", odd?.title === "" && odd?.url === "/", JSON.stringify(odd));
     // A second send is taken only from a loss as rare as Chromium's (about 1 push in 70 locally):
     // after one, a new message must show on its first send, so a worker that drops every other
-    // push still fails here. One that drops pushes at random passes more often than before (half
-    // of them: about 2 runs in 5, from 1 in 4), which the detail's `attempt` still shows. Chromium
+    // push still fails here. One that drops pushes at random passes more often than a single send
+    // did (half of them: about 2 runs in 5, from 1 in 4), which the detail's `attempt` still shows. Chromium
     // can lose this third push too (2 of 30 locally), so a run fails without cause about 1 time in
     // 500 (a resend in 1 run in 35, then this loss), where it failed about 1 time in 35.
     if (first?.attempt === 2 || odd?.attempt === 2) {
