@@ -75,16 +75,39 @@
 //! as is, so the browser and the agent share one definition and one set of rules.
 //!
 //! Agents authenticate the way any other client does: a bearer token, never ambient cookies.
-//! [`Tools::auth`] runs once per call, and its result is handed to the tool:
+//! [`Tools::auth`] runs once per call, reads the token with [`crate::caller::bearer`], and its
+//! result is handed to the tool:
 //!
-//! ```ignore
-//! let tools = Tools::new("card-market", env!("CARGO_PKG_VERSION"))
-//!     .auth(|headers| auth::bearer(headers).ok_or(ToolError::Unauthorized))
+//! ```
+//! use corten::{agent::{ToolError, Tools}, caller, prelude::*};
+//!
+//! /// Who the token says is calling.
+//! #[derive(Clone)]
+//! struct User { name: String }
+//!
+//! #[derive(corten::FromJson)]
+//! struct Adjust { id: String, delta: i64 }
+//!
+//! #[derive(corten::ToJson)]
+//! struct Adjusted { id: String, quantity: i64, by: String }
+//!
+//! #[corten::routes(api = Mcp)]
+//! mod mcp {
+//!     #[route("/mcp")]
+//!     pub struct Mcp;
+//! }
+//!
+//! let tools = Tools::new("card-market", "1.0")
+//!     // A real app looks the token up in its store here.
+//!     .auth(|headers| match caller::bearer(headers) {
+//!         Some("dev-token") => Ok(User { name: "dev".into() }),
+//!         _ => Err(ToolError::Unauthorized),
+//!     })
 //!     .tool("inventory.adjust", "Change the quantity of an inventory item", |user: User, input: Adjust| async move {
-//!         Ok(Adjusted { quantity: inventory::adjust(&user, input).await? })
+//!         Ok(Adjusted { id: input.id, quantity: input.delta, by: user.name })
 //!     });
-//! // #[corten::routes(api = Mcp)] mod mcp { #[route("/mcp")] pub struct Mcp; }
-//! let app = App::new(url::router()).api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()));
+//! let app = App::new(Routes::new()).api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()));
+//! # let _ = app.router();
 //! ```
 //!
 //! An endpoint whose tokens come from an OAuth authorization server says which one with
@@ -255,19 +278,19 @@ type Auth<A> = Arc<dyn Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync>;
 /// [`Authorization::resource`] to refuse a token issued for another server, as the spec requires:
 ///
 /// ```
-/// use corten::{agent::{Authorization, ToolError, Tools}, prelude::*};
+/// use corten::{agent::{Authorization, ToolError, Tools}, caller, prelude::*};
 ///
 /// #[derive(Route)]
 /// #[route("/mcp")]
 /// struct Mcp;
 ///
-/// # fn token_for(_: &corten::http::HeaderMap, _: &str) -> Option<()> { Some(()) }
+/// # fn token_for(_: &str, _: &str) -> Option<()> { Some(()) }
 /// let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example").scopes(&["inventory:read"]);
 /// let audience = authorization.resource().to_string();
 /// assert_eq!(audience, "https://cards.example/mcp");
 /// let tools = Tools::new("card-market", "1.0")
 ///     .authorization(authorization)
-///     .auth(move |headers| token_for(headers, &audience).ok_or(ToolError::Unauthorized));
+///     .auth(move |headers| caller::bearer(headers).and_then(|token| token_for(token, &audience)).ok_or(ToolError::Unauthorized));
 /// # let _ = tools;
 /// ```
 ///
@@ -733,7 +756,7 @@ impl<A: Send + 'static> Tools<A> {
     /// could not check (its provider is down), 500 (logged) for anything else. Never the answer.
     fn refused(&self, id: Value, error: ToolError, headers: &HeaderMap) -> Response {
         let (status, message) = match error {
-            ToolError::Unauthorized => return self.unauthorized(id, bearer(headers)),
+            ToolError::Unauthorized => return self.unauthorized(id, crate::caller::bearer(headers).is_some()),
             ToolError::InsufficientScope(scope) => return self.forbidden(id, &scope),
             // A malformed request (RFC 6750 3.1), told so in the challenge.
             ToolError::Invalid(message) => {
@@ -906,16 +929,6 @@ fn not_one_object(output: &str, parse: bool) -> Option<String> {
     None
 }
 
-/// Whether the request sent a bearer token (RFC 6750: another scheme's credentials are no token).
-/// `Bearer` with nothing after it, which RFC 6750 (2.1) does not allow, is taken as none too, so
-/// the client is told where to get one rather than that it sent a bad one (Corten's reading).
-fn bearer(headers: &HeaderMap) -> bool {
-    headers.get(header::AUTHORIZATION).is_some_and(|value| {
-        let value = value.as_bytes();
-        value.len() > 7 && value[..7].eq_ignore_ascii_case(b"bearer ") && !value[7..].trim_ascii().is_empty()
-    })
-}
-
 enum CallError {
     /// The check turned the call away (`Unauthorized`, `InsufficientScope`): a 401 or 403.
     Refused(ToolError),
@@ -990,10 +1003,7 @@ mod tests {
 
     fn app() -> Router {
         let tools = Tools::new("test", "1.0")
-            .auth(|headers| {
-                let token = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-                token.map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
-            })
+            .auth(|headers| crate::caller::bearer(headers).map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized))
             .tool("inventory.adjust", "Adjust quantity", |agent: Agent, input: Adjust| async move {
                 if input.id == "locked" {
                     return Err(ToolError::Forbidden(format!("{} may not change a locked item", agent.0)));
@@ -1459,9 +1469,8 @@ mod tests {
         };
         let tools = tools
             .auth(|headers| {
-                let sent = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.split_once(' '));
-                let token = sent.filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, token)| token.trim());
-                token.filter(|t| !t.is_empty() && *t != "expired").map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
+                let token = crate::caller::bearer(headers).filter(|t| *t != "expired");
+                token.map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
             })
             .tool("inventory.adjust", "Adjust quantity", |agent: Agent, input: Adjust| async move {
                 if agent.0 != "writer" {
@@ -1567,10 +1576,12 @@ mod tests {
         assert_eq!(authorization.resource(), "https://cards.example/mcp", "what the token check compares the audience with");
         let app = protected(Some(authorization));
         // Other credentials than a bearer token are no token, nor is `Bearer` with only
-        // whitespace after it: told where to get one, nothing more.
+        // whitespace after it, nor a value outside visible ASCII (`corten::caller::bearer`):
+        // told where to get one, nothing more.
         let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": {} } });
-        for sent in ["Basic YTpi", "Bearer", "Bearer   ", "Bearer \t"] {
-            let req = Request::post("/mcp").header("content-type", "application/json").header("authorization", sent);
+        for sent in [&b"Basic YTpi"[..], b"Bearer", b"Bearer   ", b"Bearer \t", "Bearer caf\u{e9}".as_bytes()] {
+            let sent = HeaderValue::from_bytes(sent).unwrap();
+            let req = Request::post("/mcp").header("content-type", "application/json").header("authorization", &sent);
             let (status, headers, _) = send(&app, req.body(Body::from(call.to_string())).unwrap()).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{sent:?}");
             assert!(!headers["www-authenticate"].to_str().unwrap().contains("invalid_token"), "{sent:?}: {headers:?}");

@@ -1399,7 +1399,11 @@ rules something out.
     to name ([Limit 11](#limit-caller-types); a 401 an app writes by hand, `Error::status`, is
     its own). A key sent in a header of the app's own (`X-Api-Key`) has no scheme either, so an
     API that keeps one for clients that already send it also takes the key as a bearer token and
-    challenges `Bearer`.
+    challenges `Bearer`. Corten reads the credentials it tells every API to take, with
+    `caller::bearer` (the scheme in any case, RFC 9110 11.1; an empty token, or a value outside
+    visible ASCII, none), and the MCP endpoint reads them with it too, so an app's lookup and the
+    endpoint's 401 agree on whether a token was sent, where parsers written by hand had disagreed
+    on the scheme's case and on a value outside ASCII.
     Not chosen for the type: `unauthorized()` sending `Bearer` by default, which would have
     kept every caller compiling but named a scheme for an app that takes another; a `BEARER`
     constant with no parameter, which RFC 6750 (3) does not allow; a method per RFC 6750 error
@@ -1456,7 +1460,8 @@ rules something out.
     an app builds one `Challenge` from at startup, so checking them when a challenge is made finds
     a mistake in the first test that refuses a request or when the app starts, and a value from a
     store or a request is the app's to clean); platform (RFC 9110 15.5.2: a 401 MUST send
-    `WWW-Authenticate`; RFC 6750 (3) for Bearer's parameters; RFC 7617 (2) for Basic's realm;
+    `WWW-Authenticate`; RFC 6750 (3) for Bearer's parameters and (2.1) for the credentials
+    `caller::bearer` reads, with the scheme in any case (RFC 9110 11.1); RFC 7617 (2) for Basic's realm;
     IANA's HTTP Authentication Scheme Registry, which has no scheme for a session cookie); value
     (mistakes fail at compile time, Value 4: a
     route's caller, and a challenge's scheme in a `const`; a challenge's realm and parameters are

@@ -6,6 +6,15 @@ Corten is pre-1.0, so any minor version may change the API.
 ## Unreleased
 ### Added
 
+- `corten::caller::bearer(&headers)` reads the token of RFC 6750's bearer credentials
+  (`Authorization: Bearer <token>`), the scheme `Challenge::bearer` asks an API's clients to use:
+  the scheme in any case, one or more spaces, the token trimmed, and `None` for no
+  `Authorization`, another scheme, `Bearer` with nothing after it or a value outside visible
+  ASCII. The MCP endpoint decides whether a refused request sent a token with it, so a value
+  outside ASCII is now told where to get a token rather than `error="invalid_token"`; the
+  `Challenge` and `Tools::auth` examples (now a compiled doctest, where it called an `auth::bearer`
+  that does not exist) and card-market's partners and agents read with it in place of their own
+  parsers ([#1225 Corten tells an API to take its key as a bearer token but gives it no reader, so each app parses Authorization by hand and the agent docs call an auth::bearer that does not exist](https://github.com/corten-run/corten/issues/1225)).
 - Static files with `mp4`, `webm` and `vtt` names are sent as `video/mp4`, `video/webm` and
   `text/vtt`, and a `GET` of a versioned URL, this version's or an old one's, for a file sent as it
   is stored answers a single byte `Range` with a `206` (a bare `416` past its end, the whole file
