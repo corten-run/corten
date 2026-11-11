@@ -739,7 +739,8 @@ impl<A: Send + 'static> Tools<A> {
             }
             ToolError::Upstream(message) => (StatusCode::SERVICE_UNAVAILABLE, format!("cannot check the token now: {message}")),
             ToolError::Internal(error) => {
-                tracing::error!(%error, "corten: the MCP endpoint's auth check failed");
+                let error: &(dyn std::error::Error + 'static) = &*error;
+                tracing::error!(error, "corten: the MCP endpoint's auth check failed");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
             }
         };
@@ -864,7 +865,8 @@ impl<A: Send + 'static> Tools<A> {
             ToolError::Forbidden(message) => format!("not allowed: {message}"),
             ToolError::Unauthorized | ToolError::InsufficientScope(_) => unreachable!("answered with a 401 or 403"),
             ToolError::Internal(error) => {
-                tracing::error!(tool = name, %error, "corten: agent tool failed");
+                let error: &(dyn std::error::Error + 'static) = &*error;
+                tracing::error!(tool = name, error, "corten: agent tool failed");
                 "internal error".into()
             }
         };
@@ -1845,5 +1847,61 @@ mod tests {
             words.filter(|word| !word.is_empty()).all(|word| serde_json::from_value::<crate::SubmitKey>(json!(word)).is_err()),
             "{refusal}"
         );
+    }
+
+    /// A tool's failure and the auth check's are logged as the error itself, so the log line
+    /// names each error under the message (a reset connection under "error sending request"),
+    /// while the agent is told "internal error" alone.
+    #[tokio::test]
+    async fn a_tool_or_auth_failure_is_logged_with_each_cause_under_it() {
+        #[derive(Debug)]
+        struct Failed(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
+        impl std::fmt::Display for Failed {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+        impl std::error::Error for Failed {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1.as_deref().map(|source| source as _)
+            }
+        }
+        #[derive(Clone)]
+        struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Lines {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let failure = || {
+            let reset = Failed("client error (SendRequest)", Some(Box::new(Failed("connection reset", None))));
+            ToolError::internal(Failed("error sending request", Some(Box::new(reset))))
+        };
+        let tools = Tools::new("test", "1.0");
+        let lines = Lines(std::sync::Arc::default());
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        let (result, refused) = tracing::subscriber::with_default(subscriber, || {
+            (tools.failed("stock.set", failure()), tools.refused(json!(1), failure(), &HeaderMap::new()))
+        });
+        assert!(result.contains(r#""text":"internal error""#), "{result}");
+        assert!(!result.contains("connection reset"), "the agent is not told the cause: {result}");
+        assert_eq!(refused.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(refused.into_body(), usize::MAX).await.unwrap();
+        let body = String::from_utf8_lossy(&body);
+        assert!(!body.contains("connection reset") && !body.contains("error sending request"), "nor is the client: {body}");
+        assert!(body.contains("internal error"), "{body}");
+        let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        let logged: Vec<&str> = text.lines().collect();
+        assert_eq!(logged.len(), 2, "{text}");
+        for (line, says) in logged.iter().zip(["agent tool failed", "auth check failed"]) {
+            assert!(line.contains(says), "{line}");
+            assert!(line.contains("error=error sending request"), "{line}");
+            assert!(line.contains("error.sources=[client error (SendRequest), connection reset]"), "{line}");
+        }
     }
 }

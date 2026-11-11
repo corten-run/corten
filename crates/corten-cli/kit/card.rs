@@ -22,7 +22,8 @@
 //! panel is the surface and its padding only, so the element's own class lays it out (a row of
 //! filters, `class={(CardPanel { size: CardSize::Md }, Filters)}`), or a `Stack` does.
 //! `CardSize::Sm` makes either denser, for a page with dense and roomy cards:
-//! `class={Card { size: CardSize::Sm }}`; a theme sets every card's padding with `--card-padding`.
+//! `class={Card { size: CardSize::Sm }}`; a theme sets every card's padding with `--card-padding`,
+//! a dense one's following it.
 use corten::prelude::*;
 
 /// A card's or a panel's padding and the gap between its parts. `Md` writes no class; `Sm` is a class
@@ -31,7 +32,8 @@ use corten::prelude::*;
 pub enum CardSize {
     /// The theme's `--card-padding`.
     Md,
-    /// Less padding and a smaller gap, for a dense card on a page with roomy ones.
+    /// Padding and a gap between its parts two thirds of the theme's `--card-padding`, and a gap in
+    /// its content half of it, for a dense card on a page with roomy ones.
     Sm,
 }
 

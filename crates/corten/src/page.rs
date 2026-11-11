@@ -2557,7 +2557,7 @@ fn unserved_module(name: &str) -> String {
 
 /// A failure a route of Corten's own answers as it is, not as the error page or JSON:
 /// `/favicon.ico`'s 404 when the app has no icon, which no person reads and which must start no
-/// layout read (#1056).
+/// layout read (#1056), and a static file's 416, whose `Content-Range` the page would drop (#1133).
 #[derive(Clone, Copy)]
 pub(crate) struct AsIs;
 

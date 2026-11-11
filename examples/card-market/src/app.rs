@@ -2,7 +2,8 @@
 //! policy (CSP nonce, cross-site write check), versioned assets, error pages, health, PWA with
 //! push, head tags, an i18n catalog, robots/sitemap, compression, the home and category pages
 //! cached by CDNs (`Public`), an item as JSON for other services and the price-alert
-//! action as an MCP tool for agents, both mounted as JSON-only routes (`App::api`). Partners'
+//! action as an MCP tool for agents, both mounted as JSON-only routes (`App::api`), and a
+//! grading page whose captioned clip the browser seeks by byte ranges (its own area, `/grading`). Partners'
 //! services set alerts with an API key (`Caller<Partner>`), and writes are limited per client
 //! address by a middleware on the routes that take them, the item pages' area and the partner
 //! API (`WriteLimit`, `ClientIp`; `PROXIES` behind a load balancer).
@@ -27,12 +28,15 @@ use corten::{
 };
 
 use crate::{
-    api, embeds, items, mcp,
+    api, embeds, grading, items, mcp,
     model::{AlertInput, ItemView, set_alert},
     routes,
     source::Source,
     text::Msg,
-    views::{self, AlertForm, AlertFormView, AlertMessage, Framed, ItemCard, ItemList, ItemPage, Layout, MoreOffers, Shown},
+    views::{
+        self, AlertForm, AlertFormView, AlertMessage, ConditionGuide, Framed, ItemCard, ItemList, ItemPage, Layout, MoreOffers,
+        Shown,
+    },
 };
 
 /// The app, assembled: routes plus the error page, catalogs and PWA settings. Corten adds the rest.
@@ -103,6 +107,7 @@ fn app_with(source: Source, keys: Keys, writes: u32) -> App {
     let ready = source.clone();
     App::new(routes::router(source.clone()))
         .area(|area| items::area(area, source.clone()).middleware(limit.clone()))
+        .area(|area| grading::area(area).components(&[ConditionGuide]))
         .area(|area| {
             let embedders = embedders.split(',').map(str::trim).filter(|o| !o.is_empty());
             embeds::area(area, source.clone()).policy(|p| embedders.fold(p, |p, origin| p.frame_ancestors(origin)))
@@ -410,6 +415,20 @@ pub(crate) async fn category(
     if items.is_empty() { answer.header::<XRobotsTag>(HeaderValue::from_static("noindex")) } else { answer }
 }
 
+/// How the market grades a card's condition: a page of its own in an area of its own, so the pages
+/// and the components' stylesheet the bench apps copy stay as they were (#1133).
+pub(crate) async fn grading(req: Req) -> Public<HtmlResult> {
+    let t: Msg = req.t();
+    let req = &req;
+    shared(req.page(html! {
+        <Layout req={req} title={t.grading_title()} head="">
+            <h1>{t.grading_title()}</h1>
+            <ConditionGuide req={req} t={t} />
+            <p><a href={routes::Home}>{t.category_back()}</a></p>
+        </Layout>
+    }))
+}
+
 /// The item's old address, moved for good.
 pub(crate) async fn old_item(req: Req, Params(old): Params<routes::OldItem<'_>>) -> HtmlResult {
     req.moved(&items::Item { id: &old.id, ..Default::default() })
@@ -587,7 +606,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{api, embeds, items, mcp, routes, views::ItemQuery};
+    use crate::{api, embeds, grading, items, mcp, routes, views::ItemQuery};
 
     /// Fetch metadata a browser sends with a form post: a post from another site is refused.
     const SEC_FETCH_SITE: HeaderName = HeaderName::from_static("sec-fetch-site");
@@ -748,6 +767,40 @@ mod tests {
             "only the document is shared"
         );
         assert_eq!(app.get(&ITEM).await.headers()["cache-control"], "private, no-cache");
+    }
+
+    /// The grading page's condition clip: the video in MP4, then WebM, and captions in each
+    /// language, the reader's the default, every file from `static/` (a versioned URL); a category
+    /// links to it, and the home page has no clip (#1133).
+    #[tokio::test]
+    async fn the_condition_clip_is_captioned_in_the_readers_language() {
+        let app = app();
+        for (language, on, off) in [("en", "en", "fr"), ("fr-CA", "fr", "en")] {
+            let page = app.get(&grading::Grading).header(header::ACCEPT_LANGUAGE, language).await;
+            let html = page.text();
+            let track = |lang: &str| {
+                let at = html.find(&format!(r#"srclang="{lang}""#)).unwrap_or_else(|| panic!("{lang} track: {html}"));
+                html[at..at + html[at..].find('>').unwrap()].to_string()
+            };
+            assert!(track(on).ends_with(" default") && !track(off).contains("default"), "{}, {}", track(on), track(off));
+            assert!(track(on).contains(r#"src="/assets/"#) && track(on).contains(&format!(r#"/grading/condition.{on}.vtt""#)));
+            let source = |file: &str, kind: &str| {
+                let at = html.find(&format!(r#"/grading/{file}" type="{kind}">"#));
+                at.unwrap_or_else(|| panic!("{file}: {html}"))
+            };
+            assert!(source("condition.mp4", "video/mp4") < source("condition.webm", "video/webm"));
+        }
+        assert!(!app.get(&routes::Home).await.text().contains("<video"), "the home page is the bench's, unchanged");
+        let category = app.get(&routes::Category { slug: "promo" }).await;
+        let category = category.text();
+        assert!(category.contains(&format!(r#"<a href="{}">"#, grading::Grading)), "{category}");
+        let sheet = |html: &str, name: &str| html.contains(&format!("/{name}\" data-corten-style>"));
+        let grading = app.get(&grading::Grading).await;
+        let grading = grading.text();
+        assert!(sheet(grading, "sections/grading.css"), "the clip's styles are its area's: {grading}");
+        let home = app.get(&routes::Home).await;
+        let home = home.text();
+        assert!(!sheet(home, "sections/grading.css"), "and no other page links them");
     }
 
     #[tokio::test]
