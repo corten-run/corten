@@ -2560,13 +2560,16 @@ by design; where it is known, a limit says what would lift it or why it is so.
     API's prefix), a failure elsewhere is sent as its handler made it (plain text, not Problem
     Details), and a panic is logged and answered 500 (plain, or the API's JSON under its prefix).
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel, a tunnel a `2xx` to `CONNECT` opens) only over HTTP/1.1 served by
-    `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten reads the handshake
-    and hands over the bytes: frames, message limits, buffering, per-message checks and how long
+    `corten::serve`; HTTP/2's extended `CONNECT` is not supported. Corten answers as the route
+    says (its `101` to a WebSocket handshake, its `2xx` to `CONNECT`) and hands over the bytes: frames, message limits, buffering, per-message checks and how long
     the connection may sit idle are the WebSocket library's and the route's, though
     `App::send_timeout` still ends a write the client makes no room for. `App::header_timeout`
     no longer applies and the deadline covered only the handler, so a switched connection on which
     neither side sends stays open until the route ends it; it no longer counts against
-    `App::max_connections`. The work on a switched connection is told when shutdown begins and is
+    `App::max_connections`, since hyper's connection ends when it hands over the socket and
+    the cap's permit goes with it, so a route that accepts them bounds how many it holds.
+    Moving the permit into the socket that is handed over would lift this
+    ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)). The work on a switched connection is told when shutdown begins and is
     not waited for.
 14. <a id="limit-http1"></a>Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
     seconds), which also closes an idle keep-alive connection, and be at most
