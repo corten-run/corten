@@ -23,7 +23,8 @@
 // BENCH_PASSES (1 unless set, droplet.mjs --passes) runs each load phase that many times, the apps
 // taking turns, and summarize.mjs reports their median and range (passes.mjs).
 import { spawn, spawnSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
@@ -92,14 +93,28 @@ const call = (/** @type {number} */ limit, /** @type {string[]} */ args) => /** 
 // Unattended only: a clean slate after a stopped call, a build that exited with an error, or a
 // restart. The benchmark's containers go
 // (a stopped k6 client leaves its container running; a restart leaves them all stopped): the apps,
-// build.mjs's steps (and the images they commit, several GB for a Rust app), cold start's, the item API, and k6's and cpu-time.mjs's by image. Then the item API starts again
+// build.mjs's steps (and the images they commit, several GB for a Rust app), docker-rebuild.mjs's
+// builders, cold start's, the item API, and k6's and cpu-time.mjs's by image, and the build scripts' scratch
+// directories. Then the item API starts again
 // on its cores.
 const reset = () => {
+  // docker-rebuild.mjs's builders first, with their state volumes: their containers match bb- too,
+  // and buildx rm on a builder whose container is gone leaves its volume.
+  for (const builder of docker("buildx", "ls", "--format", "{{.Name}}").stdout?.split("\n").filter((n) => n.startsWith("bb-dr-")) ?? []) docker("buildx", "rm", "-f", builder);
   const ids = [["name=fsw-", "name=bb-", "name=cs-", "name=item-api"], ["ancestor=grafana/k6:latest", "ancestor=alpine"]]
     .flatMap((filters) => docker("ps", "-aq", ...filters.flatMap((f) => ["--filter", f])).stdout?.split("\n").filter(Boolean) ?? []);
   if (ids.length) docker("rm", "-f", ...new Set(ids));
+  // A state volume buildx rm left (its builder's container already gone), now no container uses
+  // it.
+  const states = docker("volume", "ls", "-q", "--filter", "name=buildx_buildkit_bb-dr-").stdout?.split("\n").filter(Boolean) ?? [];
+  if (states.length) docker("volume", "rm", "-f", ...states);
   const images = docker("images", "-q", "--filter", "reference=bb-*").stdout?.split("\n").filter(Boolean) ?? [];
   if (images.length) docker("rmi", "-f", ...new Set(images));
+  // The scratch directories a stopped build.mjs or docker-rebuild.mjs left (a copy of the
+  // repository and an exported layer cache, for Corten); each removes its own when it ends.
+  for (const dir of readdirSync(tmpdir()).filter((d) => d.startsWith("corten-build-") || d.startsWith("corten-docker-rebuild-"))) {
+    rmSync(join(tmpdir(), dir), { recursive: true, force: true });
+  }
   if (apiContainer !== "item-api") return;
   const r = docker("run", "-d", "--name", "item-api", "--network", network, "--cpuset-cpus", "2-3", "-v", `${here}:/b:ro`,
     "node:24-bookworm-slim", "node", "/b/item-api/server.mjs", "/b/fixtures/items.json");

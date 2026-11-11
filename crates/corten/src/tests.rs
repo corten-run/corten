@@ -13338,6 +13338,36 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
     assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
 }
 
+/// A failure is logged with each cause under its message (a reset connection under a client's
+/// "error sending request"), not its message alone.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[test]
+fn a_failure_is_logged_with_each_cause_under_it() {
+    #[derive(Debug)]
+    struct Failed(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
+    impl std::fmt::Display for Failed {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Failed {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|source| source as _)
+        }
+    }
+    let lines = Lines(std::sync::Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let status = tracing::subscriber::with_default(subscriber, || {
+        let reset = Failed("client error (SendRequest)", Some(Box::new(Failed("connection reset", None))));
+        Error::new(Failed("error sending request", Some(Box::new(reset)))).into_response().status()
+    });
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("error=error sending request"), "{text}");
+    assert!(text.contains("error.sources=[client error (SendRequest), connection reset]"), "{text}");
+}
+
 /// An error's message (`Display`) is its source's, what the log says, and `status_code` the
 /// status of the answer it makes, for each way an error is made: checked against the answer, so
 /// the two cannot drift apart.
