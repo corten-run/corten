@@ -2567,8 +2567,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     no longer applies and the deadline covered only the handler, so a switched connection on which
     neither side sends stays open until the route ends it; it no longer counts against
     `App::max_connections`, since hyper's connection ends when it hands over the socket and
-    the cap's permit goes with it, so a route that accepts them bounds how many it holds.
-    Moving the permit into the socket that is handed over would lift this
+    the cap's permit goes with it, so a route that accepts switched connections bounds how many
+    it holds. Moving the permit into the socket that is handed over would lift this
     ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)). The work on a switched connection is told when shutdown begins and is
     not waited for.
 14. <a id="limit-http1"></a>Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
