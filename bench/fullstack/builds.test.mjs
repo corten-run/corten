@@ -19,6 +19,17 @@ test("every app with pages has a recipe, and every recipe an app", () => {
   assert.deepEqual(Object.keys(recipes).sort(), pageApps.sort());
 });
 
+test("a matched round builds Next.js as the tier's image is built, with the Dockerfile's arguments", () => {
+  const nextjsEnv = (/** @type {Record<string, string>} */ env) => {
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", 'const b = await import("./builds.mjs"); console.log(JSON.stringify(b.recipes.nextjs.env))'], { cwd: import.meta.dirname, encoding: "utf8", env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => k !== "BENCH_TIER" && k !== "BENCH_APPS" && k !== "BENCH_EDGE")), ...env } });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  assert.deepEqual(nextjsEnv({}), { NEXT_TELEMETRY_DISABLED: "1" });
+  const dockerfile = readFileSync(join(repo, "bench/fullstack/apps/nextjs/Dockerfile"), "utf8");
+  assert.deepEqual(nextjsEnv({ BENCH_TIER: "matched" }), { NEXT_TELEMETRY_DISABLED: "1", PROFILE: "matched", EDGE_HOST: /^ARG EDGE_HOST=(\S+)$/m.exec(dockerfile)?.[1] });
+});
+
 test("the apps that build first are the ones with a development build", () => {
   assert.deepEqual([...compiledFirst].sort(), Object.keys(recipes).filter((n) => recipes[n].dev).sort());
 });
