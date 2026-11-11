@@ -154,22 +154,25 @@ impl<S: Send + Sync> FromRequest<S> for Request {
     }
 }
 
-/// The whole body as [`crate::Bytes`], refused with a `413` over 2 MiB ([`BodyRejection`]).
+/// The whole body as [`crate::Bytes`], refused with a `413` over the route's limit
+/// ([`crate::App::body_limit`], 2 MiB unless set; [`BodyRejection`]).
 impl<S: Send + Sync> FromRequest<S> for bytes::Bytes {
     type Rejection = BodyRejection;
 
     async fn from_request(req: Request, _: &S) -> Result<Self, BodyRejection> {
-        crate::extract::whole(req.into_body()).await
+        let limit = crate::extract::body_limit(req.extensions());
+        crate::extract::whole(req.into_body(), limit).await
     }
 }
 
-/// The whole body as text, refused with a `400` when it is not UTF-8 and a `413` over 2 MiB
-/// ([`BodyRejection`]).
+/// The whole body as text, refused with a `400` when it is not UTF-8 and a `413` over the
+/// route's limit ([`crate::App::body_limit`], 2 MiB unless set; [`BodyRejection`]).
 impl<S: Send + Sync> FromRequest<S> for String {
     type Rejection = BodyRejection;
 
     async fn from_request(req: Request, _: &S) -> Result<Self, BodyRejection> {
-        let bytes = crate::extract::whole(req.into_body()).await?;
+        let limit = crate::extract::body_limit(req.extensions());
+        let bytes = crate::extract::whole(req.into_body(), limit).await?;
         String::from_utf8(bytes.into()).map_err(|error| {
             BodyRejection::new(
                 StatusCode::BAD_REQUEST,

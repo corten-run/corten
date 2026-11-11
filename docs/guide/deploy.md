@@ -66,7 +66,7 @@ server {
     ssl_certificate_key /etc/nginx/certs/key.pem;
 
     location / {
-        client_max_body_size 8m;   # the app's largest upload, plus its form
+        client_max_body_size 8m;   # more than twice the app's body limit (2 MiB); see below
         proxy_pass http://app;
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
@@ -77,6 +77,16 @@ server {
     }
 }
 ```
+
+nginx's limit decides who answers a body that is too large. The app reads a body past its limit
+by as much again (at most 64 MiB more; an `Upload` reads 64 MiB past its own limit) and answers
+it with its own 413 or the form redrawn; a body over `client_max_body_size` gets nginx's page
+instead. One rule sizes every `location`: the larger of twice its whole-body limit and its
+largest `Upload` limit plus 64 MiB. The `8m` above covers the default 2 MiB body limit and forms
+whose uploads stay under 8 MiB; a larger upload there gets nginx's page, not the form redrawn. A
+prefix with a large `Upload::limit` or a raised body limit (`Api::body_limit(16 << 20)` for a
+document API) gets a `location` of its own sized by the rule. This sizing is reasoned from what
+the app reads past a limit; the nginx check above did not send bodies over it.
 
 A route that reads a large body as it arrives (a file `PUT` read with
 `corten::extract::pieces_up_to`) gets a `location` of its own in the same `server`, so nginx
