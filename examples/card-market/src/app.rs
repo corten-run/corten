@@ -3,7 +3,7 @@
 //! push, head tags, an i18n catalog, robots/sitemap, compression, the home and category pages
 //! cached by CDNs (`Public`), an item as JSON for other services and the price-alert
 //! action as an MCP tool for agents, both mounted as JSON-only routes (`App::api`). Partners'
-//! services set alerts with an API key (`Caller<Partner>`), and writes are limited per client
+//! services set alerts with an API key sent as a bearer token (`Caller<Partner>`), and writes are limited per client
 //! address by a middleware on the routes that take them, the item pages' area and the partner
 //! API (`WriteLimit`, `ClientIp`; `PROXIES` behind a load balancer).
 use std::{
@@ -18,7 +18,7 @@ use corten::{
     agent::{ToolError, Tools},
     answer::XRobotsTag,
     extract::Request,
-    http::{HeaderMap, HeaderValue, Method, StatusCode, request::Parts},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header, request::Parts},
     middleware::{IntoResponse, Response},
     prelude::*,
     pwa::{FormFactor, Manifest, Pwa, Screenshot, Shortcut},
@@ -144,17 +144,25 @@ impl Partners {
         Partners(Arc::new(pairs.map(|(name, key)| (key.to_string(), Arc::from(name))).collect()))
     }
 
-    /// The header a partner sends its key in, read here and named in the API's document.
-    const HEADER: &'static str = "x-api-key";
-
-    /// The partner whose key the request sends (`X-Api-Key`).
+    /// The partner whose key the request sends.
     fn named(&self, headers: &HeaderMap) -> Option<&Arc<str>> {
-        self.0.get(headers.get(Self::HEADER)?.to_str().ok()?)
+        self.0.get(bearer_token(headers)?)
     }
 }
 
-/// A service that sets alerts for its users, known by the API key it sends (`X-Api-Key`). A
-/// handler that takes `Caller<Partner>` never runs without one: the request is a JSON 401.
+/// The bearer token the request sends (`Authorization: Bearer <token>`, RFC 6750), a partner's key
+/// or an agent's token, whose scheme is matched in any case (RFC 9110 11.1); an empty one is none.
+/// A value that is not ASCII is none here too, where the MCP endpoint, which reads bytes, counts it
+/// as a token sent: RFC 6750's token is ASCII, so either answer is a refusal.
+fn bearer_token(headers: &HeaderMap) -> Option<&str> {
+    let (scheme, token) = headers.get(header::AUTHORIZATION)?.to_str().ok()?.split_once(' ')?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
+}
+
+/// A service that sets alerts for its users, known by the API key it sends as a bearer token. A
+/// handler that takes `Caller<Partner>` never runs without one: the request is a JSON 401 whose
+/// `WWW-Authenticate` says to send one, and that the one sent is wrong (RFC 6750 3.1).
 #[derive(Clone, Hash)]
 pub(crate) struct Partner {
     pub name: Arc<str>,
@@ -163,16 +171,18 @@ pub(crate) struct Partner {
 /// In the API's OpenAPI document, the key it is known by and the header it is read from.
 impl corten::openapi::Argument for Partner {
     fn describe(operation: &mut corten::openapi::Operation<'_>) {
-        operation.api_key(Partners::HEADER, "The partner's API key.");
+        operation.bearer("The partner's API key.");
     }
 }
 
 impl Identify<ApiState> for Partner {
     async fn identify(parts: &Parts, state: &ApiState) -> Result<Self, Refused> {
-        match state.partners.named(&parts.headers) {
-            Some(name) => Ok(Partner { name: name.clone() }),
-            None => Err(Refused::unauthorized().message("Send a valid partner API key in X-Api-Key.")),
-        }
+        let refused = match (state.partners.named(&parts.headers), bearer_token(&parts.headers)) {
+            (Some(name), _) => return Ok(Partner { name: name.clone() }),
+            (None, None) => Refused::unauthorized(Challenge::bearer("partners")),
+            (None, Some(_)) => Refused::unauthorized(Challenge::bearer("partners").param("error", "invalid_token")),
+        };
+        Err(refused.message("Send a valid partner API key as a bearer token."))
     }
 }
 
@@ -526,12 +536,9 @@ fn rpc_failure(status: StatusCode, message: &str) -> RpcFailure {
 fn tools(source: Source, tokens: Arc<[String]>) -> Tools {
     let read_source = source.clone();
     Tools::new("card-market-item-page", env!("CARGO_PKG_VERSION"))
-        .auth(move |headers| {
-            let token = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-            match token {
-                Some(token) if tokens.iter().any(|known| known == token) => Ok(()),
-                _ => Err(ToolError::Unauthorized),
-            }
+        .auth(move |headers| match bearer_token(headers) {
+            Some(token) if tokens.iter().any(|known| known == token) => Ok(()),
+            _ => Err(ToolError::Unauthorized),
         })
         .read_tool(
             "items.get",
@@ -1171,12 +1178,26 @@ mod tests {
             res["result"]["structuredContent"]["message"],
             "Alert set: we will email a@b.c when Pika <Promo> & \"Friends\" drops below $1.00."
         );
+        // The scheme is matched in any case (RFC 9110 11.1). The endpoint answers an empty token
+        // as none: told where to get one, with no `invalid_token`.
+        let lower = app.call(Method::POST, &mcp::Mcp).json(&alert).header(header::AUTHORIZATION, "bearer dev-token");
+        let res: serde_json::Value = serde_json::from_str(&send(lower).await.2).unwrap();
+        assert!(res["result"]["structuredContent"]["message"].is_string(), "{res}");
+        for empty in ["Bearer", "Bearer  "] {
+            let (status, headers, _) =
+                send(app.call(Method::POST, &mcp::Mcp).json(&alert).header(header::AUTHORIZATION, empty)).await;
+            assert_eq!(
+                (status, &headers["www-authenticate"]),
+                (StatusCode::UNAUTHORIZED, &r#"Bearer realm="card-market-item-page""#.parse().unwrap()),
+                "{empty:?}"
+            );
+        }
         // The tools' own refusal keeps its request's id: `Api::errors` leaves a JSON body as it is.
         // A bearer token that was sent and refused is named invalid (RFC 6750).
         let (status, headers, body) = send(call(Some("wrong"), alert)).await;
         assert_eq!(
             (status, &headers["www-authenticate"]),
-            (StatusCode::UNAUTHORIZED, &r#"Bearer error="invalid_token""#.parse().unwrap())
+            (StatusCode::UNAUTHORIZED, &r#"Bearer realm="card-market-item-page", error="invalid_token""#.parse().unwrap())
         );
         let res: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!((res["id"].clone(), res["error"]["code"].clone()), (json!(1), json!(-32001)), "{body}");
@@ -1376,11 +1397,11 @@ mod tests {
         assert_eq!(deadline.error.code, -32603, "the deadline's 503 is the server's failure");
     }
 
-    /// A partner's JSON write, with the key `key`.
+    /// A partner's JSON write, with the key `key` as a bearer token.
     fn partner<'c>(app: &'c App, key: Option<&str>, body: &'static str) -> Call<'c, NoForm> {
         let call = app.call(Method::POST, &api::AlertsJson).body("application/json", body);
         match key {
-            Some(key) => call.header(HeaderName::from_static("x-api-key"), key),
+            Some(key) => call.header(header::AUTHORIZATION, &format!("Bearer {key}")),
             None => call,
         }
     }
@@ -1389,15 +1410,21 @@ mod tests {
     async fn a_partner_sets_an_alert_with_its_api_key() {
         let app = app();
         let alert = r#"{"id":"item_9","email":"ada@example.com","target_price":"0.40"}"#;
-        for key in [None, Some("wrong")] {
+        // No key, or an empty one: send one; a wrong one: it is not valid (RFC 6750 3.1).
+        for (key, challenge) in [
+            (None, r#"Bearer realm="partners""#),
+            (Some(""), r#"Bearer realm="partners""#),
+            (Some("wrong"), r#"Bearer realm="partners", error="invalid_token""#),
+        ] {
             let res = partner(&app, key, alert).await;
             assert_eq!(
                 (res.status(), res.text()),
                 (
                     StatusCode::UNAUTHORIZED,
-                    r#"{"title":"Unauthorized","status":401,"detail":"Send a valid partner API key in X-Api-Key."}"#
+                    r#"{"title":"Unauthorized","status":401,"detail":"Send a valid partner API key as a bearer token."}"#
                 )
             );
+            assert_eq!(res.headers()[header::WWW_AUTHENTICATE], challenge, "{key:?}");
         }
         let res = partner(&app, Some("dev-key"), alert).await;
         let (status, headers, body) = read(&res);

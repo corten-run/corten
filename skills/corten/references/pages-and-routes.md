@@ -247,8 +247,9 @@ An API that partners or a client generator read gets an OpenAPI 3.1 document of 
 handler, `#[route("/api/openapi.json")] pub struct ApiDoc;`. It is generated from the routes, the
 handlers' argument and answer types and each route's doc comment (its first paragraph is the
 summary), so never write or edit an OpenAPI file by hand. An extractor of the app's own (a `Caller`'s
-type) implements `corten::openapi::Argument` (`operation.api_key("x-api-key", "..")` or
-`operation.bearer("..")` for its credential, `operation.header(..)` for another header it reads,
+type) implements `corten::openapi::Argument` (`operation.bearer("..")` for a key or token, as the
+401's `Challenge::bearer(realm)` names it; `operation.api_key("x-api-key", "..")` only for an
+existing API's own header, `operation.header(..)` for another header it reads,
 empty otherwise), and an answer type of the app's own implements
 `corten::openapi::Answers`; without it the handler does not compile. A test keeps a copy beside the
 code with `corten::openapi::sync(path, doc.text())`.
@@ -311,8 +312,9 @@ impl Identify<Db> for Staff {
             Ok(Some(staff)) => Ok(staff),
             Ok(None) => Err(Refused::forbidden()),
             Err(error) => Err(Refused::unavailable(error)),   // the store is down: a 503, not sign-in
-            // An API key: Err(Refused::unauthorized().message("Invalid API key")), and after too many
-            // failures (the app counts them) Err(Refused::too_many(wait)): a 429 with Retry-After.
+            // An API key: Err(Refused::unauthorized(Challenge::bearer("partners"))), a 401 whose
+            // WWW-Authenticate names how to send one, and after too many failures (the app
+            // counts them) Err(Refused::too_many(wait)): a 429 with Retry-After.
         }
     }
 }

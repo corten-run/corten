@@ -4463,11 +4463,11 @@ struct Keyed;
 
 impl<S: Sync> crate::Identify<S> for Keyed {
     async fn identify(parts: &http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
-        match parts.headers.get("x-api-key").map(|v| v.as_bytes()) {
-            Some(b"k1") => Ok(Keyed),
-            Some(b"locked") => Err(crate::Refused::too_many(std::time::Duration::from_millis(1500))
+        match parts.headers.get("authorization").map(|v| v.as_bytes()) {
+            Some(b"Bearer k1") => Ok(Keyed),
+            Some(b"Bearer locked") => Err(crate::Refused::too_many(std::time::Duration::from_millis(1500))
                 .message("Too many failed attempts; try again later")),
-            _ => Err(crate::Refused::unauthorized().message("Invalid API key")),
+            _ => Err(crate::Refused::unauthorized(crate::Challenge::bearer("keys")).message("Invalid API key")),
         }
     }
 }
@@ -4476,7 +4476,8 @@ impl<S: Sync> crate::Identify<S> for Keyed {
 #[route("/api/keyed")]
 struct ApiKeyed;
 
-/// A refusal says why, in the API's own shape, and a lockout is a 429 that says when to try again.
+/// A refusal says why, in the API's own shape, a 401 says how to send credentials
+/// (`WWW-Authenticate`, RFC 9110 15.5.2), and a lockout is a 429 that says when to try again.
 #[cfg(feature = "json")]
 #[tokio::test]
 async fn a_refusal_tells_the_client_why_and_when_to_try_again() {
@@ -4488,22 +4489,28 @@ async fn a_refusal_tells_the_client_why_and_when_to_try_again() {
     let keyed = |key: Option<&'static str>| {
         let mut req = Request::get("/api/keyed");
         if let Some(key) = key {
-            req = req.header("x-api-key", key);
+            req = req.header("authorization", format!("Bearer {key}"));
         }
         let router = router.clone();
         async move {
             let res = router.oneshot(req.body(Body::empty()).unwrap()).await.unwrap();
-            let (status, retry) = (res.status().as_u16(), res.headers().get("retry-after").cloned());
-            (status, retry, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
+            let header = |name| res.headers().get(name).map(|v: &http::HeaderValue| v.to_str().unwrap().to_string());
+            let (status, retry, challenge) = (res.status().as_u16(), header("retry-after"), header("www-authenticate"));
+            (status, retry, challenge, String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap())
         }
     };
-    assert_eq!(keyed(Some("k1")).await, (200, None, "ok".to_string()));
+    assert_eq!(keyed(Some("k1")).await, (200, None, None, "ok".to_string()));
     assert_eq!(
         keyed(None).await,
-        (401, None, r#"{"type":"error","error":{"code":401,"message":"Invalid API key"}}"#.to_string())
+        (
+            401,
+            None,
+            Some(r#"Bearer realm="keys""#.to_string()),
+            r#"{"type":"error","error":{"code":401,"message":"Invalid API key"}}"#.to_string()
+        )
     );
-    let (status, retry, body) = keyed(Some("locked")).await;
-    assert_eq!((status, retry.as_ref().map(|v| v.to_str().unwrap())), (429, Some("2")), "whole seconds, rounded up");
+    let (status, retry, challenge, body) = keyed(Some("locked")).await;
+    assert_eq!((status, retry.as_deref(), challenge), (429, Some("2"), None), "whole seconds, rounded up");
     assert_eq!(body, r#"{"type":"error","error":{"code":429,"message":"Too many failed attempts; try again later"}}"#);
 }
 
@@ -4521,6 +4528,7 @@ async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
             Some(b"forbid") => crate::Refused::forbidden().message("Not your item"),
             Some(b"lock") => crate::Refused::too_many(std::time::Duration::from_millis(1500)).message("Slow down"),
             Some(b"down") => crate::Refused::unavailable("the session store is down"),
+            Some(b"key") => crate::Refused::unauthorized(crate::Challenge::basic("shop")).message("Bad key"),
             _ => return Ok("ok"),
         };
         Err(refused.into())
@@ -4535,11 +4543,15 @@ async fn a_handlers_refusal_tells_an_api_client_why_as_an_extractors_does() {
         ("forbid", 403, None, "Not your item"),
         ("lock", 429, Some("2"), "Slow down"),
         ("down", 503, None, "Service Unavailable"),
+        ("key", 401, None, "Bad key"),
     ] {
         let req = Request::get("/api/refuses").header("x-case", case).body(Body::empty()).unwrap();
         let res = router.clone().oneshot(req).await.unwrap();
         let got = (res.status().as_u16(), res.headers().get("retry-after").map(|v| v.to_str().unwrap().to_owned()));
         assert_eq!(got, (status, retry.map(str::to_owned)), "{case}");
+        let challenge = res.headers().get("www-authenticate").map(|v| v.to_str().unwrap().to_owned());
+        let want = (status == 401).then(|| r#"Basic realm="shop""#.to_owned());
+        assert_eq!(challenge, want, "a handler's own 401 keeps its challenge: {case}");
         let body = res.into_body().collect().await.unwrap().to_bytes();
         let want = format!(r#"{{"type":"error","error":{{"code":{status},"message":{message:?}}}}}"#);
         assert_eq!(String::from_utf8(body.to_vec()).unwrap(), want, "{case}");
@@ -8379,9 +8391,9 @@ struct Partner(&'static str);
 
 impl<S: Sync> crate::Identify<S> for Partner {
     async fn identify(parts: &http::request::Parts, _: &S) -> std::result::Result<Self, crate::Refused> {
-        match parts.headers.get("x-api-key").map(|v| v.as_bytes()) {
-            Some(b"k1") => Ok(Partner("acme")),
-            _ => Err(crate::Refused::unauthorized()),
+        match parts.headers.get("authorization").map(|v| v.as_bytes()) {
+            Some(b"Bearer k1") => Ok(Partner("acme")),
+            _ => Err(crate::Refused::unauthorized(crate::Challenge::bearer("partners"))),
         }
     }
 }
@@ -8847,7 +8859,8 @@ async fn a_found_caller_reaches_the_handler() {
 async fn reading_a_caller_makes_the_answer_private_and_a_public_one_is_shared() {
     let router = caller_app();
     assert_eq!(cache_control(&router, "/catalog/1", &[]).await, "public, max-age=60");
-    assert_eq!(cache_control(&router, "/catalog/1", &[("x-api-key", "k1")]).await, "public, max-age=60");
+    assert_eq!(cache_control(&router, "/catalog/1", &[("x-request-id", "k1")]).await, "public, max-age=60");
+    assert_eq!(cache_control(&router, "/catalog/1", &[("authorization", "Bearer k1")]).await, "private, no-cache");
     assert_eq!(cache_control(&router, "/catalog/1", &[("cookie", "session=abc")]).await, "private, no-cache");
     assert_eq!(cache_control(&router, "/catalog/nope", &[]).await, "private, no-cache", "a failure is never shared");
     // A handler that reads a caller cannot return `Public` (that does not compile). A response that
@@ -8861,8 +8874,8 @@ async fn reading_a_caller_makes_the_answer_private_and_a_public_one_is_shared() 
         ),
     ))
     .router();
-    assert_eq!(cache_control(&leaky, "/rates", &[("x-api-key", "k1")]).await, "private, no-cache");
-    assert_eq!(cache_control(&leaky, "/by-hand", &[("x-api-key", "k1")]).await, "private, no-cache");
+    assert_eq!(cache_control(&leaky, "/rates", &[("authorization", "Bearer k1")]).await, "private, no-cache");
+    assert_eq!(cache_control(&leaky, "/by-hand", &[("authorization", "Bearer k1")]).await, "private, no-cache");
 }
 
 #[tokio::test]
@@ -8873,7 +8886,12 @@ async fn a_caller_with_nowhere_to_sign_in_is_a_401_page() {
     let (status, res, body) = guarded(&router, "GET", "/partner", None, &[("accept", "text/html")]).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!res.contains_key("location") && body.contains("Something went wrong"), "{body}");
-    let (status, _, body) = guarded(&router, "GET", "/partner", None, &[("x-api-key", "k1")]).await;
+    assert_eq!(res["www-authenticate"], r#"Bearer realm="partners""#, "the error page keeps the challenge every 401 sends");
+    let (status, res, _) = guarded(&router, "GET", "/partner", None, &[("corten", "action")]).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(res.contains_key("corten-page"), "a form patch gets the error page to swap in");
+    assert_eq!(res["www-authenticate"], r#"Bearer realm="partners""#, "and so does the page swapped in");
+    let (status, _, body) = guarded(&router, "GET", "/partner", None, &[("authorization", "Bearer k1")]).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, "acme"));
 }
 
@@ -8919,6 +8937,7 @@ async fn a_handlers_refusal_signs_in_and_answers_a_data_client_as_an_extractors(
     let (status, res, body) = guarded(&router, "GET", "/mine", None, &[("accept", "application/json")]).await;
     assert_eq!((status, &body[..]), (StatusCode::UNAUTHORIZED, r#"{"title":"Unauthorized","status":401}"#), "a data client");
     assert_eq!(res["content-type"], "application/problem+json");
+    assert!(!res.contains_key("www-authenticate"), "a session cookie has no scheme to name");
 
     let (status, res, _) = guarded(&router, "GET", "/moved", None, &[("accept", "text/html")]).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "the status with_status gave");
@@ -8965,11 +8984,12 @@ async fn a_json_route_answers_every_failure_as_json_whatever_the_client_accepts(
         let (status, res, body) = guarded(&router, "GET", "/api/price/7", None, headers).await;
         assert_eq!((status, &body[..]), (StatusCode::UNAUTHORIZED, r#"{"title":"Unauthorized","status":401}"#), "{accept:?}");
         assert_eq!(res["content-type"], "application/problem+json");
+        assert_eq!(res["www-authenticate"], r#"Bearer realm="partners""#, "{accept:?}");
         let (status, _, body) = guarded(&router, "GET", "/api/price/abc", None, headers).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{accept:?}");
         assert!(body.starts_with(r#"{"title":"Bad Request","status":400,"#), "a path that does not parse: {body}");
     }
-    let (status, res, body) = guarded(&router, "GET", "/api/price/7", None, &[("x-api-key", "k1")]).await;
+    let (status, res, body) = guarded(&router, "GET", "/api/price/7", None, &[("authorization", "Bearer k1")]).await;
     assert_eq!((status, &body[..]), (StatusCode::OK, r#"{"id":7,"partner":"acme"}"#));
     assert_eq!(res["cache-control"], "private, no-cache");
 }
