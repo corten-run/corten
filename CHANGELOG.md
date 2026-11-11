@@ -4408,6 +4408,16 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
 ### Fixed
+- The watchlist smoke's check of the feed's backoff after a stream answered with an error failed
+  in Firefox under load: a 2 s wait measured 6.1 and 6.6 s against a 3.5 s bound. Timed in the
+  page, from the error that closed a source to the next `EventSource`, the first wait (the 1 s
+  the runtime's `wait` sets) took 5,892 ms (Playwright saw 5,897), so the page itself ran late,
+  not only Playwright's view of it. The check now reads the timers the runtime set as each source
+  closed, which must be 1 s, 2 s and 1 s, requires the next source to be opened by that timer
+  and no sooner, and has no upper bound on how late it ran; the sequence may take up to 60 s,
+  and ends once live. The failure detail gives the timers asked, the waits taken and the
+  requests as Playwright saw them
+  ([#1102 The watchlist smoke's Firefox feed backoff check fails under load: a 2 s wait measured over 6 s against a 3.5 s bound](https://github.com/corten-run/corten/issues/1102)).
 - The ui-gallery smoke's check that keyboard focus never lands under a dialog's or sheet's sticky
   header now reads a focused row only after it has held its place for two animation frames (at
   most 120). WebKit scrolls a focused row into view over a few frames, and a row read mid-scroll
