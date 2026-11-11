@@ -1461,9 +1461,9 @@ mod tests {
     /// bytes asked for: compression never encodes an answer that has a `Content-Range`.
     #[cfg(feature = "compress")]
     #[tokio::test]
-    async fn the_middleware_leaves_a_range_as_it_is() {
+    async fn compression_leaves_a_range_as_it_is() {
         let captions = format!("WEBVTT\n\n{}", "00:00.000 --> 00:01.000\nA line of captions.\n\n".repeat(60));
-        let root = dir("ranges-middleware", &[("en.vtt", &captions)]);
+        let root = dir("ranges-compressed", &[("en.vtt", &captions)]);
         let assets = Arc::new(Assets::load(&root, "/assets").unwrap());
         let app = crate::Router::from(assets.routes());
         let url = assets.url("en.vtt");
