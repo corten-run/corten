@@ -55,13 +55,28 @@ runs the twenty-app browser pass of `bench/fullstack` and then `run-all.mjs`.
 Takeover on the server-rendered pages is the time from the parser finishing to the app being
 ready, less the rendering of any frame the browser paints in between: Chromium paints the
 server's rows before the module scripts run on some loads and after them on others.
-`paintedFirstMs` in the results is that rendering, the median of the loads (the results keep
-only medians). In browser-3 the frame took about 100 ms when it came and the median was none for
-every app. In browser-4 the median was 58 ms for Corten and React: about half their loads had the
-frame and half did not, and the median falls between the two, so it is not the frame's length.
-It was 0.1 ms for Remix and none for the rest, so how often the frame comes first is no longer
-alike for every framework. Rows the app removes or adds while starting are counted in a separate
-load, since a mutation observer slows every app that touches many nodes.
+`paintedFirstMs` in the results is that rendering, the median of the loads. In browser-3 the
+frame took about 100 ms when it came and the median was none for every app. In browser-4 the
+median was 58 ms for Corten and React: about half their loads had the frame and half did not, and
+the median falls between the two, so it is not the frame's length. It was 0.1 ms for Remix and
+none for the rest, so how often the frame comes first is no longer alike for every framework.
+The rendering is any long frame (50 ms or more) between the parser finishing and ready, so it also
+counts frames an app causes while it starts, not only the server's rows painted first, and
+`paintedFirstMs` keeps the name it had in earlier rounds. A load can have a sliver of it (0.1 ms)
+and still count. `renderedLoads` is how many loads had some, `takeoverRenderedMs` and
+`takeoverNotRenderedMs` are the takeover medians of those loads and of the rest (null when there
+are none), and `each` keeps every load's takeover and rendering, so a round can be split again
+later. Corten's takeover is higher on the loads with that rendering even after it is left out, so
+with 6 to 8 such loads of 15 its median over all loads falls at the edge of the faster loads and
+moves with how many there are and how slow the slowest of the rest are. In three runs on a laptop
+(Core i9-10885H, Windows, Chromium 156; `node ssr.mjs --loads 15 --apps
+view-ssr,solid-ssr,react-ssr,remix-ssr` at the commit that added these fields;
+[results/ssr-rendered/](results/ssr-rendered/)), 8, 6 and 6 of Corten's loads had the rendering,
+with takeover medians of 22.0, 22.7 and 20.4 ms against 12.3, 12.6 and 11.6 ms for the rest, and
+17.7, 16.1 and 12.0 ms over all loads. Why those loads are slower was not measured. Solid's loads
+had none, and React's and Remix's had it on 14 or 15; Remix's median in browser-4 was 0.1 ms, so
+how many loads have it depends on the machine. Rows the app removes or adds while starting are
+counted in a separate load, since a mutation observer slows every app that touches many nodes.
 
 The browser's clock resolves to 0.1 ms here, so differences under a millisecond come from
 [ab.mjs](ab.mjs): the apps take turns in blocks of 25 clicks in one browser, and it reports each
@@ -131,10 +146,24 @@ What it shows:
    ms for Solid, Svelte and Vue and 55-131 ms for React and Remix. It is slower than browser-3's
    6.0 ms, while Solid, Svelte, Vue, React and plain JavaScript took over faster than in browser-3
    and Remix slower. The CPU, Chromium and Corten's runtime all changed between the rounds, and
-   this round does not show which slowed Corten's takeover
+   this round does not show which slowed Corten's takeover. An A/B on one Core i9-10885H laptop
+   with this round's Chromium (156.0.8078.4), `ssr.mjs` taking turns between this round's commit
+   and 77002fe, measured part of it: takeover +4.24 ± 1.03 ms over 8 pairs of 30 loads and
+   +2.96 ± 0.62 ms over 4 more (Solid -0.19 and -0.20 ms), and the runtime's own evaluation at
+   load, from performance marks in copies of the page over the loads with no long frame, 9.4 ms
+   against 5.9 (+3.5 ms, no spread recorded), spent in four startup steps. This round's median
+   load had a long frame, on which takeover reads about 9 ms higher, so part of 6.0 to 10.2 ms is
+   probably that.
+   [#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) cut that evaluation: in another session on the same laptop and Chromium, against a base
+   (8c2a1b71) with this round's runtime, evaluation -4.14 ± 0.16 ms (base 10.15 ms, 9.90 to 10.70,
+   against 6.00, 5.90 to 6.40, medians of 6 runs of 30 loads) and the takeover of the loads with
+   no long frame -3.91 ± 2.40 ms over 8 pairs of 30 loads, with Solid, the control, at
+   -0.31 ± 0.85 ms. The two sessions measured the same runtime at 9.4 and 10.15 ms, so their
+   differences compare (+3.5 ms, then -4.14), not their levels. The 10.2 ms above is this round's;
+   the next browser round measures takeover again
    ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)).
    It is also one round of a number that has moved between runs before (browser-2 and its
-   reruns, below). On about half of Corten's and React's loads the browser painted a frame
+   reruns, below). On about half of Corten's and React's loads a long frame rendered
    between parsing and the app being ready, which takeover leaves out: their median
    `paintedFirstMs`, 58 ms, falls between the loads with the frame and those without, so it is
    not the frame's length (Remix 0.1 ms, the rest none); in browser-3 the median was none for
