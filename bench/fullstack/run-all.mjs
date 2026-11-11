@@ -2,8 +2,9 @@
 // JSON without a database and against the item API, instructions per request, the feature matrix
 // (conform.mjs, each app on its own against a probe), then all apps up
 // together for parity, byte counts and browser timing, and last each app's build (build.mjs).
-// Usage: node run-all.mjs <round> [browserRuns=10] [from=cold-start|fixture|api|count|conform|browser|build] [--unattended]
+// Usage: node run-all.mjs <round> [browserRuns=10] [from=cold-start|fixture|api|count|conform|browser|build] [until=build] [--unattended]
 //   from: start at that step and keep the results already in results/<round> from earlier ones.
+//   until: the last step to run (droplet.mjs's browser suite stops after the browser step).
 //   --unattended: how droplet.mjs runs a round on a droplet, under a systemd unit that starts it
 //     again when the droplet restarts. Each call has a time limit (round.mjs) and may not go an
 //     hour without printing anything; one that does is stopped and the rest of its step skipped
@@ -30,12 +31,14 @@ import { fileURLToPath } from "node:url";
 import { apiContainer, apps, network, pageApps, pageOnly, runArgs, tier, viaEdge } from "./apps.mjs";
 import { edgeBase, reachApp, startEdge, stopEdge } from "./edge.mjs";
 import { passesOf } from "./passes.mjs";
-import { buildStep, calls, idleMinutes, mayStart, resumeAt, roundNameError, startMinutes, steps } from "./round.mjs";
+import { buildStep, calls, idleMinutes, mayStart, resumeAt, roundNameError, startMinutes, steps, stepsUntil } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const unattended = process.argv.includes("--unattended");
-const [round = "r1", browserRuns = "10", from = steps[0]] = process.argv.slice(2).filter((a) => a !== "--unattended");
+const [round = "r1", browserRuns = "10", from = steps[0], until = steps.at(-1)] = process.argv.slice(2).filter((a) => a !== "--unattended");
 if (!steps.includes(from)) throw new Error(`from must be one of ${steps.join(", ")}`);
+const untilError = stepsUntil(from, until).error;
+if (untilError) throw new Error(untilError);
 // A matched-tier round (BENCH_TIER=matched) is m<n>, and only it: the trend reads r<n> alone.
 if (roundNameError(round, tier, { full: true })) throw new Error(/** @type {string} */ (roundNameError(round, tier, { full: true })));
 // It removes every container on the host, so only where droplet.mjs runs it.
@@ -213,7 +216,7 @@ try {
   // The browser step reaches each app as the round's load phases do: the matched tier's through the edge.
   const urls = Object.values(pageApps).map((a) => (viaEdge ? edgeBase(a, "outside") : `http://localhost:${a.port}`));
   const all = calls(round, browserRuns, Object.keys(pageApps), urls, jsonOnly, passesOf(process.env.BENCH_PASSES), pageOnly);
-  for (const step of first ? steps.slice(steps.indexOf(first)) : []) {
+  for (const step of first ? stepsUntil(first, until).steps : []) {
     if (step === "count" && process.platform !== "linux") continue;
     progress(`start ${step}`);
     // The matched tier's browser timing reaches the apps through the edge: without it, only

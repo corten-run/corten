@@ -4754,6 +4754,11 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
+- `bench/fullstack/droplet.mjs --suite browser` runs the browser step alone again, then
+  bench/browser's client-heavy pass. Since every app's build became the step after it, the suite
+  ran the builds too (8 to 22 minutes each for the first three apps on a c-8, under a 240-minute
+  budget), so it could not reach the client-heavy pass within its three-hour unit. `run-all.mjs`
+  takes the last step to run (`until`) after `from`.
 - Two examples drew controls that did nothing without JavaScript. card-market's item page no longer
   draws its listings' sort button when scripts are off (a `scripting: none` rule in
   `item_detail.css`; the page's markup is unchanged), so the listings show in the server's order,

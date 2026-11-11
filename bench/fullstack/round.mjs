@@ -46,6 +46,29 @@ export const roundNameError = (round, tier, { full = false } = {}) => {
 };
 
 /**
+ * The steps run-all.mjs runs from `from` through `until`, or why that range has none.
+ * @param {string} from
+ * @param {string} until
+ * @returns {{ steps: string[], error: string | null }}
+ */
+export const stepsUntil = (from, until) => {
+  const start = steps.indexOf(from);
+  const end = steps.indexOf(until);
+  if (start < 0 || end < 0) return { steps: [], error: `from and until must each be one of ${steps.join(", ")}` };
+  if (end < start) return { steps: [], error: `until (${until}) comes before from (${from})` };
+  return { steps: steps.slice(start, end + 1), error: null };
+};
+
+/**
+ * The steps droplet.mjs's browser suite runs with run-all.mjs: the browser step alone (parity, look,
+ * bytes, browser timing), then bench/browser's pass. Not the build step after it: in round browser-4
+ * (2026-11-11, a c-8; its log, not committed, as the round stopped there) build.mjs took 11, 22 and
+ * 8 minutes for Corten, Leptos and topcoat, the first three it builds, and the builds' budget
+ * (buildBudgetMinutes) with the browser step does not fit the suite's three-hour unit.
+ */
+export const browserSuite = { from: "browser", until: "browser" };
+
+/**
  * Why a droplet.mjs suite cannot start with this fixtures/items.json, or null. The full-stack,
  * browser and hardening rounds serve their items from it (the item API, harden's item server) and
  * git does not keep it, so a fresh checkout has none; the live suite has no items. A file that is
