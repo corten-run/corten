@@ -2896,15 +2896,40 @@ their names, and has no tag or release.
     entry): fix those imports first.
 
 ### Changed
+- The runtime starts in less time on a long page: its first scan no longer reads the name of
+  every `data-ref` into a set it then dropped (nothing counted those names), it finds `<details>`
+  and `<dialog>` with a query of each tag, it looks for its other `<meta>` tags in the element
+  that holds its `corten-scripts` meta (found in the whole document), where `<Corten />` writes
+  them all, instead of through the whole document, and the comparison of the layout a write's page
+  is drawn against runs each of its patterns only on markup that holds what the pattern looks for.
+  Taking over 1,000 server-rendered rows in `bench/browser` spent about 4 ms less evaluating the
+  runtime (measured on one machine, paired runs); what it does is unchanged
+  ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)).
+
 - A marketplace v2 benchmark round records what an app fails to serve as that app's result:
   a phase in which it answered with anything but a 200 or timed out, or could not keep the fixed
   rate, is saved with its failure rate and dropped iterations, the later phases still run, and
   the report marks the stage, where any failed request used to fail the whole round and skip the
   app's saturation phases. A round is complete when no harness, parity or cleanup step failed; a
-  200 of the wrong content type, an app container that stopped, or an upstream error answer still
-  fails it. `compare.mjs` lists each stage that fails more than in the baseline
-  (`newOutcomes`), and the nightly counts a Corten one as a regression. Results are schema
-  `marketplace-results/v3`
+  200 of the wrong content type or an upstream error answer still fails it. `compare.mjs` lists
+  each stage that fails more than in the baseline (`newOutcomes`), and the nightly counts a
+  Corten one as a regression
+  ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128)).
+
+- In a marketplace v2 benchmark round, an app container that exits or is OOM-killed during a
+  load phase (warmup included) is that app's recorded outcome, where it used to fail the whole
+  round: the stop's pass, phase, exit code and OOM kill are saved, that profile's later phases
+  and passes are skipped, and every other app keeps its results. It is the app's only when the
+  container stopped after the phase began, the CPU counter sidecar and the upstream are the same
+  running containers, Docker recorded no kill, stop or restart of the app, and nothing failed
+  that the stop does not explain; otherwise, and for a stop during cold start or before the
+  phase began, the round still fails. The report marks each
+  stage that lost a pass `(stopped: n of 3 passes)` with a line naming the stop and refuses a
+  summary whose marks and stop records disagree; `compare.mjs` gives such a stage, and the cold
+  starts of a profile that lost a pass, no deltas, and lists the stage in `newOutcomes` when the
+  baseline's stage had no stop or a later one. Results are schema `marketplace-results/v4`;
+  `report.mjs` and `compare.mjs` still read a `marketplace-results/v3` summary as v4 with no stop
+  records, so a v3 round validates and is a compatible baseline for v4 rounds
   ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128)).
 
 - A `Public` answer costs less to send: the last check of its `Cache-Control` copies the

@@ -7,14 +7,13 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { aggregate, cpuSettings, imageProvenance, inventory, parseArgs, phases, readOutcome, resultSchema, sources, timedProfiles, upstreamErrors } from "./run-contract.mjs";
+import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { workload } from "./contract.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
-const rotate = (xs, offset) => xs.slice(offset % xs.length).concat(xs.slice(0, offset % xs.length));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const options = parseArgs(process.argv.slice(2), inventory);
 const cpus = cpuSettings(process.env);
@@ -76,6 +75,13 @@ async function command(binary, args, { timeout = 30000, file, cleanup = false } 
 }
 const docker = (args, opts) => command("docker", args, opts);
 const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
+// The app's container stopped during a load phase: its outcome under the profile, not a failure.
+class AppStopped extends Error {
+  constructor(stop) {
+    super(`app container ${stop.oomKilled ? "OOM-killed" : "exited"} during ${stop.phase} (exit ${stop.exitCode}, OOMKilled ${stop.oomKilled})`);
+    this.stop = stop;
+  }
+}
 const fail = (app, source, stage, error) => {
   const failure = { app, source, stage, error: error.stack ?? String(error) };
   summary.failures.push(failure);
@@ -111,6 +117,9 @@ const mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
 const upstreamName = `${runId}-upstream`;
 const cpuName = `${runId}-cpu`;
 const apiBase = `http://${upstreamName}:8080`;
+// StartedAt of the containers a load phase depends on, from when each was created: a stop of the
+// app is its outcome only while they are still the same running containers (phaseEnd).
+const startedAt = {};
 let upstreamUrl = null;
 async function upstreamCounters() {
   const response = await fetch(`${upstreamUrl}/__marketplace/control`, { signal: AbortSignal.timeout(5000) });
@@ -167,41 +176,66 @@ async function cpu(containers) {
   const usage = JSON.parse(await docker(["exec", cpuName, "node", "/bench/catalog/cgroup.mjs", ...ids.map(([, id]) => id)], { timeout: 15000 }));
   return Object.fromEntries(ids.map(([name, id]) => { assert.ok(Number.isSafeInteger(usage[id]), "missing CPU counter"); return [name, usage[id]]; }));
 }
-async function load(name, target, phase, seconds, raw) {
+async function load(name, target, phase, seconds, raw, pass) {
   const container = `${runId}-k6`;
   const output = join(raw, `${phase}.json`);
   const env = [...(target === "page" ? ["-e", `LOCALE=${summary.currentLocale}`] : []), "-e", `BASE=http://${name}:8080`, "-e", `TARGET=${target}`, "-e", `DURATION=${seconds}s`, "-e", `MODE=${phase === "fixed" ? "fixed" : "closed"}`,
     "-e", `RATE=${options.rate}`, "-e", `VUS=${phase === "sat256" ? 256 : phase === "warmup" ? 32 : 64}`];
   const samples = phase === "warmup" ? [] : [name, ...(summary.currentSource === "api" ? [upstreamName] : [])];
   const reads = summary.currentSource === "api" ? await upstreamCounters() : null;
+  // Before the k6 container exists: an app that stopped earlier stopped outside this phase (phaseEnd).
+  const phaseStartMs = Date.now();
   let before = {};
-  let after = {};
   let sampler;
-  let runError;
   let stats;
+  // What failed during the phase, at which step and when: phaseEnd decides what the app's stop explains.
+  const errors = [];
+  const failed = (step, error) => errors.push({ step, error, at: new Date().toISOString() });
+  let step = "k6";
   try {
     await owned(["create", "--network", network, ...cpus.load.args, "--memory", "2g", "--sysctl", "net.ipv4.ip_local_port_range=1024 65535", "--sysctl", "net.ipv4.tcp_tw_reuse=1", ...mount, ...env,
       k6Image, "run", "--quiet", "--summary-export", "/tmp/marketplace-summary.json", "/bench/marketplace/load.js"], container);
+    step = "cpu";
     before = samples.length ? await cpu(samples) : {};
+    // Starting the sampler is not a stats read: a failure here is never explained by a stop.
+    step = "sampler";
     sampler = samples.length ? sampleStats(samples, join(raw, `${phase}-stats.log`), seconds + 35) : null;
+    step = "k6";
     await docker(["start", "-a", container], { timeout: (seconds + 25) * 1000, file: join(raw, `${phase}.log`) });
-  } catch (e) { runError = e; }
+  } catch (e) { failed(step, e); }
   finally {
-    try { if (sampler) stats = await sampler.stop(); } catch (e) { runError ??= e; }
+    // Each stats error keeps the time it happened, so phaseEnd can tell one the app's stop caused.
+    try { if (sampler) stats = await sampler.stop(); }
+    catch (e) {
+      if (Array.isArray(e.errors)) for (const s of e.errors) errors.push({ step: "stats", error: new Error(s.message), at: s.at });
+      else failed("sampler", e);
+    }
   }
-  try { if (samples.length && Object.keys(before).length) after = await cpu(samples); }
-  catch (e) { runError ??= e; }
   try {
-    // Preserve failed k6 summaries as well as stderr. An absent summary never passes.
-    try { await docker(["cp", `${container}:/tmp/marketplace-summary.json`, output]); }
-    catch (e) { runError ??= e; }
+    const { after, seen } = await afterPhase({ pass, phase, phaseStart: new Date(phaseStartMs).toISOString() }, errors, {
+      app: async () => (await inspect(name)).State,
+      counters: async () => (samples.length && Object.keys(before).length ? cpu(samples) : {}),
+      // Preserve failed k6 summaries as well as stderr. An absent summary never passes.
+      summary: async () => { await docker(["cp", `${container}:/tmp/marketplace-summary.json`, output]); return JSON.parse(readFileSync(output, "utf8")); },
+      sidecars: () => Promise.all([cpuName, ...(reads ? [upstreamName] : [])].map(async (n) => ({ name: n, startedAt: startedAt[n], state: await inspect(n).then((i) => i.State, () => null) }))),
+      events: async () => {
+        const lines = await docker(["events", "--since", String(phaseStartMs / 1000), "--until", String(Date.now() / 1000), "--filter", "type=container", "--filter", `container=${name}`, "--format", "{{.Action}}|{{.TimeNano}}"]);
+        return lines.split("\n").filter(Boolean).map((line) => ({ action: line.slice(0, line.lastIndexOf("|")), ms: Number(line.slice(line.lastIndexOf("|") + 1)) / 1e6 })).filter((e) => e.ms >= phaseStartMs);
+      },
+    }, (e) => log(`${name} ${phase}: ${e.step} failed as the app stopped: ${String(e.error?.message ?? e.error).split("\n")[0]}`));
     const counters = Object.fromEntries(samples.filter((n) => before[n] !== undefined && after[n] !== undefined).map((n) => { assert.ok(after[n] >= before[n], "CPU counter moved backwards"); return [n, { usec: after[n] - before[n] }]; }));
     writeFileSync(join(raw, `${phase}-cpu.json`), JSON.stringify(counters, null, 2));
-    if (runError) throw runError;
-    // An app that exited or was killed (its 1 GiB) has no outcome to record: the run fails.
-    const state = (await inspect(name)).State;
-    assert.ok(state.Running && !state.OOMKilled, `app container stopped during ${phase} (exit ${state.ExitCode}, OOMKilled ${state.OOMKilled})`);
-    const metrics = readOutcome(JSON.parse(readFileSync(output, "utf8")));
+    // Throws for a harness or parity failure, including one the app's stop does not explain (#1128).
+    const stop = phaseEnd(seen);
+    if (stop) {
+      // An upstream error answer may be what stopped the app: that stays the harness's failure.
+      if (reads) {
+        const upstream = upstreamErrors(reads, await upstreamCounters());
+        assert.equal(upstream, 0, `the upstream answered ${upstream} record reads with an error during ${phase}, and the app stopped: a harness failure, not the app's outcome`);
+      }
+      throw new AppStopped(stop);
+    }
+    const metrics = readOutcome(seen.summary);
     if (reads) {
       const errors = upstreamErrors(reads, await upstreamCounters());
       assert.equal(errors, 0, `the upstream answered ${errors} record reads with an error during ${phase}: a harness failure, not the app's outcome`);
@@ -261,7 +295,9 @@ try {
   summary.networkCreated = true;
   await owned(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
     "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, "node", "/bench/marketplace/upstream.mjs"], upstreamName);
-  summary.tools = { upstream: { image: nodeImage, imageId: (await inspect(upstreamName)).Image } };
+  const upstreamInfo = await inspect(upstreamName);
+  startedAt[upstreamName] = upstreamInfo.State.StartedAt;
+  summary.tools = { upstream: { image: nodeImage, imageId: upstreamInfo.Image } };
   const upstream = upstreamUrl = await portOf(upstreamName);
   const upstreamDeadline = Date.now() + 20000;
   while (true) {
@@ -326,8 +362,11 @@ try {
     summary.tools.k6 = { image: k6Image, imageId: k6.Id, repoDigests: k6.RepoDigests };
     await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
-    for (let pass = 1; pass <= options.passes; pass++) for (const { key, source, locale, target } of timedProfiles) for (const app of rotate(options.apps, Math.floor((pass - 1) * options.apps.length / options.passes))) {
+    startedAt[cpuName] = (await inspect(cpuName)).State.StartedAt;
+    // A profile in which the app's container stopped runs no later pass (#1128).
+    for (const { pass, profile: { key, source, locale, target }, app, skip } of passPlan(options.passes, options.apps, timedProfiles, (a, k) => summary.apps[a].runs[k] ?? [])) {
       const entry = summary.apps[app];
+      if (skip) { log(`skipping ${app} ${source} ${target} pass ${pass}: its container stopped in pass ${skip.pass} during ${skip.phase}`); continue; }
       const name = `${runId}-${app}`;
       const raw = join(folder, source, app, `p${pass}-${locale ?? "neutral"}-${target}`);
       mkdirSync(raw);
@@ -339,23 +378,24 @@ try {
         log(`cold ${app} ${source} ${target} pass ${pass}`);
         run.cold = await coldStart(name, source, target, entry.imageId, raw);
         log(`warmup ${app} ${source} ${target} pass ${pass}`);
-        run.warmup = await load(name, target, "warmup", options.warmup, raw);
+        run.warmup = await load(name, target, "warmup", options.warmup, raw, pass);
         for (const phase of phases) {
           log(`${app} ${source} ${target} ${phase} pass ${pass}`);
-          run.phases[phase] = await load(name, target, phase, options.duration, raw);
+          run.phases[phase] = await load(name, target, phase, options.duration, raw, pass);
           save();
         }
         run.complete = true;
-      } catch (e) { run.failed = e.message; fail(app, source, `load ${target} pass ${pass}`, e); }
+      } catch (e) {
+        // The app's outcome, recorded with why; its later phases and passes of this profile do not run.
+        if (e instanceof AppStopped) { run.stopped = e.stop; log(`${app} ${source} ${target} pass ${pass}: app outcome, ${e.message}; later phases and passes of this profile skipped`); }
+        else { run.failed = e.message; fail(app, source, `load ${target} pass ${pass}`, e); }
+      }
       finally {
         try { writeFileSync(join(raw, "app.log"), await docker(["logs", name])); } catch (e) { fail(app, source, "app logs", e); }
         await remove(name);
       }
       run.finishedAt = new Date().toISOString();
-      for (const phase of phases) {
-        const runs = entry.runs[key].filter((r) => r.phases[phase]).map((r) => r.phases[phase]);
-        (entry.phases[key] ??= {})[phase] = { ...aggregate(runs), asked: options.passes };
-      }
+      for (const phase of phases) (entry.phases[key] ??= {})[phase] = stageAggregate(entry.runs[key], phase, options.passes);
       save();
     }
   }
