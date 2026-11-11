@@ -2794,8 +2794,11 @@ Corten is pre-1.0, so any minor version may change the API.
     are now 17 to 23, and the other entries here that cite them say the new numbers
     ([#964 corten::event_stream is public, untyped at the seam and unused outside Corten's own tests: remove it before 1.0 or record what only it serves](https://github.com/corten-run/corten/issues/964)).
 14. axum, from Corten's dependencies (design Choice 25, step 4), and with it what named axum:
-    `corten::axum` (a test's stand-in for another service depends on a server of its own, axum
-    as a dev-dependency say, as the app guide shows); `compress::apply` and `Policy::apply`, which
+    `corten::axum` (a test's stand-in for another service depends on a server of its own: add
+    `axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }` as a
+    dev-dependency, write `axum::` where it wrote `corten::axum::` (its `Router`, `State` and
+    `serve` on a `tokio::net::TcpListener`), as the app guide shows; the app under test stays a
+    `corten::Router`); `compress::apply` and `Policy::apply`, which
     wrapped an axum router (`App` puts compression, feature `compress`, and its policy,
     `App::policy`, around every route, and a route that wants neither is `unstaged`); and the
     answers only axum wrote: `Html` is `([(CONTENT_TYPE, "text/html; charset=utf-8")], body)` or
@@ -2804,7 +2807,8 @@ Corten is pre-1.0, so any minor version may change the API.
     `res.headers_mut().append(..)` on that answer's response (a `HeaderMap` part, as in axum,
     sends its own repeated lines but replaces a header of the same name the answer set). axum's
     `DefaultBodyLimit` layer no longer changes the 2 MiB `Bytes`, `String`, `Json` and `Form`
-    read: a route that takes a larger body takes the whole `Request` and reads it with
+    read: `App::body_limit`, `Area::body_limit` or `Api::body_limit` does (Added), and one
+    handler that takes the whole `Request` reads it with
     `corten::extract::bytes_up_to(request.into_body(), max)`. Corten's `IntoResponse` has no
     impl for `()` as a part, for a one-element tuple, for a tuple of parts as one part, or for a
     tuple that starts with `response::Parts` or `Response<()>`, takes up to 8 parts where axum
