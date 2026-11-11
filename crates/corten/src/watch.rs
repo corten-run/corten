@@ -287,11 +287,14 @@ impl<I: AsyncWrite + Unpin> AsyncWrite for Watched<I> {
 }
 
 /// A request's answer, whose body marks its connection idle when hyper has done with it. A
-/// switched connection (101) stays busy: it is the route's from then on.
+/// switched connection (a 101, or a 2xx to `CONNECT`: a tunnel) stays busy: it is the route's
+/// from then on.
 pub(crate) struct Answer<F> {
     pub inner: F,
     /// The connection's watch and the head's number.
     pub watch: Option<(Arc<Watch>, u64)>,
+    /// The request is a `CONNECT`, which a 2xx switches (RFC 9110 9.3.6).
+    pub connect: bool,
 }
 
 impl<F: Future<Output = Result<crate::response::Response, std::convert::Infallible>> + Unpin> Future for Answer<F> {
@@ -303,7 +306,9 @@ impl<F: Future<Output = Result<crate::response::Response, std::convert::Infallib
             Ok(res) => res,
             Err(never) => match never {},
         };
-        let watch = this.watch.take().filter(|_| res.status() != http::StatusCode::SWITCHING_PROTOCOLS);
+        let status = res.status();
+        let switched = status == http::StatusCode::SWITCHING_PROTOCOLS || (this.connect && status.is_success());
+        let watch = this.watch.take().filter(|_| !switched);
         Poll::Ready(Ok(res.map(|body| Answered { body, watch })))
     }
 }
