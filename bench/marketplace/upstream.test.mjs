@@ -20,7 +20,11 @@ test("private upstream serves canonical records and exposes uncached-read/error 
     assert.equal(redirected.status, 302);
     assert.equal(redirected.headers.get("location"), "/marketplace/records/item_2");
     assert.deepEqual((await (await fetch(`${base}/__marketplace/control`)).json()).requests, { item_1: 1 });
+    assert.deepEqual((await (await fetch(`${base}/__marketplace/control`)).json()).answers, { 302: 1 });
     await control({});
     assert.equal((await fetch(`${base}/marketplace/records/item_501`)).status, 404);
+    assert.equal((await fetch(`${base}/marketplace/records/item_2`)).status, 200);
+    // what a run reads around each phase: answers to record reads by status
+    assert.deepEqual((await (await fetch(`${base}/__marketplace/control`)).json()).answers, { 200: 1, 404: 1 });
   } finally { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); }
 });

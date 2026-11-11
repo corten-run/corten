@@ -106,7 +106,14 @@ node bench/marketplace/report.mjs bench/marketplace/results/w2/summary.json
 Use a fresh `wN` each time: an existing result directory is never overwritten. `--apps` may
 select individual apps for development checks. A full publishable baseline needs all twenty
 apps and three passes; the read-only reporter rejects subsets, check-only runs, dirty commits,
-missing profiles or passes, failed cleanup and aggregates that disagree with saved passes.
+missing profiles or passes, failed cleanup and aggregates that disagree with saved passes. A
+phase in which an app answered requests with anything but a 200 or timed out on them, or could
+not keep the fixed rate, is the app's result, not a failed run: it is saved with its failure
+rate and dropped iterations, the later phases still run, and the report marks the stage with
+`*` and lists each one. Still failures: a phase with no k6 summary or in which no request
+succeeded, a 200 of the wrong content type, an app container that stopped or ran out of memory,
+and any error answer from the upstream to a record read. Results written this way
+are schema `marketplace-results/v3`.
 The local `wN` commands do not create a droplet, collect c1, update nightly state or publish anything.
 
 The deterministic fixture is 500 new rich trading-card records, not the old marketplace

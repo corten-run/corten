@@ -7,7 +7,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { aggregate, cpuSettings, imageProvenance, inventory, parseArgs, phases, readLoad, resultSchema, sources, timedProfiles } from "./run-contract.mjs";
+import { aggregate, cpuSettings, imageProvenance, inventory, parseArgs, phases, readOutcome, resultSchema, sources, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { workload } from "./contract.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
@@ -111,6 +111,12 @@ const mount = ["-v", `${join(repo, "bench")}:/bench:ro`];
 const upstreamName = `${runId}-upstream`;
 const cpuName = `${runId}-cpu`;
 const apiBase = `http://${upstreamName}:8080`;
+let upstreamUrl = null;
+async function upstreamCounters() {
+  const response = await fetch(`${upstreamUrl}/__marketplace/control`, { signal: AbortSignal.timeout(5000) });
+  assert.equal(response.status, 200, "upstream counters unavailable");
+  return response.json();
+}
 function appArgs(name, source, image) {
   return ["--network", network, ...cpus.app.args, "--memory", "1g", "-p", "127.0.0.1::8080",
     "-v", `${fixtureDir}:/fixtures:ro`, "-e", `MARKETPLACE_SOURCE=${source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json",
@@ -167,6 +173,7 @@ async function load(name, target, phase, seconds, raw) {
   const env = [...(target === "page" ? ["-e", `LOCALE=${summary.currentLocale}`] : []), "-e", `BASE=http://${name}:8080`, "-e", `TARGET=${target}`, "-e", `DURATION=${seconds}s`, "-e", `MODE=${phase === "fixed" ? "fixed" : "closed"}`,
     "-e", `RATE=${options.rate}`, "-e", `VUS=${phase === "sat256" ? 256 : phase === "warmup" ? 32 : 64}`];
   const samples = phase === "warmup" ? [] : [name, ...(summary.currentSource === "api" ? [upstreamName] : [])];
+  const reads = summary.currentSource === "api" ? await upstreamCounters() : null;
   let before = {};
   let after = {};
   let sampler;
@@ -191,7 +198,15 @@ async function load(name, target, phase, seconds, raw) {
     const counters = Object.fromEntries(samples.filter((n) => before[n] !== undefined && after[n] !== undefined).map((n) => { assert.ok(after[n] >= before[n], "CPU counter moved backwards"); return [n, { usec: after[n] - before[n] }]; }));
     writeFileSync(join(raw, `${phase}-cpu.json`), JSON.stringify(counters, null, 2));
     if (runError) throw runError;
-    const metrics = readLoad(JSON.parse(readFileSync(output, "utf8")));
+    // An app that exited or was killed (its 1 GiB) has no outcome to record: the run fails.
+    const state = (await inspect(name)).State;
+    assert.ok(state.Running && !state.OOMKilled, `app container stopped during ${phase} (exit ${state.ExitCode}, OOMKilled ${state.OOMKilled})`);
+    const metrics = readOutcome(JSON.parse(readFileSync(output, "utf8")));
+    if (reads) {
+      const errors = upstreamErrors(reads, await upstreamCounters());
+      assert.equal(errors, 0, `the upstream answered ${errors} record reads with an error during ${phase}: a harness failure, not the app's outcome`);
+    }
+    if (metrics.appOutcome) log(`${name} ${phase}: app outcome, ${metrics.failed} of ${metrics.requests} requests failed, ${metrics.dropped} iterations dropped, ${metrics.checksFailed} checks failed`);
     if (samples.length) {
       assert.ok(counters[name].usec > 0, "phase used no CPU");
       Object.assign(metrics, stats[name], { cpuUsec: counters[name].usec, perCpuSecond: metrics.requests / (counters[name].usec / 1e6), upstream: counters[upstreamName] ? { ...stats[upstreamName], cpuUsec: counters[upstreamName].usec,
@@ -247,7 +262,7 @@ try {
   await owned(["run", "-d", "--network", network, ...cpus.api.args, "--memory", "512m", "-p", "127.0.0.1::8080", ...mount,
     "-v", `${fixtureDir}:/fixtures:ro`, nodeImage, "node", "/bench/marketplace/upstream.mjs"], upstreamName);
   summary.tools = { upstream: { image: nodeImage, imageId: (await inspect(upstreamName)).Image } };
-  const upstream = await portOf(upstreamName);
+  const upstream = upstreamUrl = await portOf(upstreamName);
   const upstreamDeadline = Date.now() + 20000;
   while (true) {
     try { const response = await fetch(`${upstream}/health`, { signal: AbortSignal.timeout(1000) }); await response.text(); if (response.ok) break; } catch {}

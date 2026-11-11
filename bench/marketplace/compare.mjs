@@ -40,13 +40,19 @@ export function comparisonKey(s) {
  * individual median percentage changes: conventional median plus min/max across apps,
  * not a ratio of cohort medians or a correction applied to Corten. Zero baselines are
  * excluded with names/counts; an empty cohort has no summaries, not invented zeroes.
+ * Each row also has appOutcomes {baseline, current}: passes in which the app did not serve the
+ * whole stage (#1128). newOutcomes lists the stages, Corten's and the references', that fail more
+ * than in the baseline: more such passes, any failed request or dropped iteration where the
+ * baseline had none in any pass, or a failure or drop range wholly above the baseline's. A
+ * reference stage with an outcome in either round is left out of the cohort and named in that
+ * cohort group's outcomeApps. Incompatible evidence has an empty newOutcomes.
  * Equal measurement options, fixture, result schema, CPU model/topology/placement,
  * host software and load/upstream images are required. Build flags are not measures.
  */
 export function compare(current, baseline, { unchangedApps = [] } = {}) {
   const result = { schema: "marketplace-comparison/v1", current: current?.round ?? null,
     baseline: baseline?.round ?? null, compatible: false, comparisonKeys: null, subject: "corten",
-    unchangedApps: [], rows: [], cold: [], cohort: { apps: [], rows: [], cold: [] }, warnings: [] };
+    unchangedApps: [], rows: [], cold: [], cohort: { apps: [], rows: [], cold: [] }, newOutcomes: [], warnings: [] };
   const warn = (message) => result.warnings.push(message);
   for (const [name, summary] of [["current", current], ["baseline", baseline]]) {
     try { validateSummary(summary); }
@@ -79,14 +85,22 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   if (Object.values(current.measurement.cpus).some((c) => !c.cpuset)) warn("CPU quota-only placement does not prove isolation in either round.");
   const delta = (a, b) => ({ baseline: { ...a }, current: { ...b }, percentChange: a.median === 0 ? null : (b.median / a.median - 1) * 100,
     rangesOverlap: a.min <= b.max && b.min <= a.max });
+  // A stage that fails more than in the baseline is reported whatever the percentages say (a 0%
+  // baseline has no percent change). Above a nonzero baseline, only a range wholly above it counts.
+  const worse = (was, now) => (was.max === 0 && now.max > 0) || now.min > was.max;
   for (const app of comparedApps) for (const { key } of timedProfiles) for (const phase of phases) {
     const row = { app, profile: key, phase, metrics: {}, warnings: [] };
-    for (const metric of ["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond"]) {
+    for (const metric of ["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond", "failedRate"]) {
       const a = baseline.apps[app].phases[key][phase][metric], b = current.apps[app].phases[key][phase][metric];
       row.metrics[metric] = delta(a, b);
     }
+    const was = baseline.apps[app].phases[key][phase], now = current.apps[app].phases[key][phase];
+    row.appOutcomes = { baseline: was.appOutcomes, current: now.appOutcomes };
+    if (now.appOutcomes > was.appOutcomes || worse(was.failedRate, now.failedRate) || worse(was.dropped, now.dropped))
+      result.newOutcomes.push({ app, profile: key, phase, appOutcomes: row.appOutcomes, failedRate: { baseline: was.failedRate, current: now.failedRate }, dropped: { baseline: was.dropped, current: now.dropped } });
     for (const [name, summary] of [["baseline", baseline], ["current", current]]) for (const run of summary.apps[app].runs[key]) {
       const p = run.phases[phase];
+      if (p.appOutcome) row.warnings.push(`${name} pass ${run.pass}: app outcome, ${p.failed} of ${p.requests} requests failed and ${p.dropped} iterations dropped; its numbers include them.`);
       if (p.upstream?.highCpu) row.warnings.push(`${name} pass ${run.pass}: busy upstream may limit throughput.`);
       if (phase !== "fixed" && p.cpuAvgPct < 95) row.warnings.push(`${name} pass ${run.pass}: app saturation not demonstrated.`);
     }
@@ -98,7 +112,9 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   }
   const summarizeCohort = (rows) => {
     const groups = new Map();
-    for (const row of rows.filter((r) => r.app !== "corten")) {
+    // A reference app's stage with an app outcome in either round is left out of the cohort and named.
+    const outcomeRows = rows.filter((r) => r.app !== "corten" && (r.appOutcomes?.baseline || r.appOutcomes?.current));
+    for (const row of rows.filter((r) => r.app !== "corten" && !outcomeRows.includes(r))) {
       const groupKey = `${row.profile}/${row.phase ?? "cold"}`;
       if (!groups.has(groupKey)) groups.set(groupKey, { profile: row.profile, ...(row.phase ? { phase: row.phase } : {}), metrics: {} });
       const group = groups.get(groupKey);
@@ -106,6 +122,11 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
         const entries = group.metrics[metric] ??= [];
         entries.push({ app: row.app, percentChange: value.percentChange });
       }
+    }
+    for (const row of outcomeRows) {
+      const groupKey = `${row.profile}/${row.phase}`;
+      if (!groups.has(groupKey)) groups.set(groupKey, { profile: row.profile, phase: row.phase, metrics: {} });
+      (groups.get(groupKey).outcomeApps ??= []).push(row.app);
     }
     return [...groups.values()].map((group) => ({ ...group, metrics: Object.fromEntries(Object.entries(group.metrics).map(([metric, entries]) => {
       const values = entries.filter((e) => e.percentChange !== null).map((e) => e.percentChange).sort((a, b) => a - b);
