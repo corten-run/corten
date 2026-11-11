@@ -1239,14 +1239,15 @@ async function run(browser) {
   );
   // The message already says Acme from the keyed form, so the check waits for this post's own
   // answer: otherwise a slow post (Firefox) is still going out during the next check, which
-  // counts the posts it sees (#161).
+  // counts the posts it sees (#161). It waits 15 s, past the 5 s most of the smoke's waits take,
+  // because a loaded Firefox has taken over 4 s to answer this post (#1149).
   const viaButton = page
-    .waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 4000 })
+    .waitForResponse((r) => r.request().method() === "POST" && new URL(r.url()).pathname === "/watch", { timeout: 15_000 })
     .then(async (r) => (await r.finished(), r.status()))
     .catch(() => 0);
   await page.click("#via-button button");
   const viaButtonStatus = await viaButton;
-  await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"), null, { timeout: 4000 }).catch(() => {});
+  await page.waitForFunction(() => document.getElementById("watch-message")?.textContent?.startsWith("Watching Acme Corp"), null, { timeout: 15_000 }).catch(() => {});
   check(
     "a submit button's formaction and formmethod are used",
     viaButtonStatus === 200 && ((await page.textContent("#watch-message")) ?? "").startsWith("Watching Acme Corp"),
