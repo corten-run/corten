@@ -65,6 +65,69 @@ app's mean with its standard error.
 
 The harness uses the repository's Playwright and its Chromium.
 
+## On Linux, against the most used frameworks (round browser-4)
+
+`droplet.mjs browser-4 --suite browser` on a DigitalOcean c-8 droplet (Xeon Platinum 8358, not
+the 8280 of browser-3), Linux 6.8, headless Chromium 156.0.8078.4, 2026-11-11, at commit 3fb4b1ac.
+Corten's runtime, `views.js` and the handler module are the ones the framework serves. Every app
+passed the DOM checks after every operation (no page errors), and every server-rendered app kept
+the server's 1,000 rows (none removed or added while starting).
+[results/browser-4](results/browser-4) has every number, including frame times; the client-heavy
+table in [docs/performance.md](../../docs/performance.md#client-heavy-screens) now comes from this
+round ([summarize.mjs](summarize.mjs)).
+
+The round did not run as `droplet.mjs` intends, and an operator stepped in twice:
+
+1. `fixtures/items.json` was missing on the droplet, so on the first start (13:41 UTC) six apps
+   of `bench/fullstack`'s browser pass did not answer. The file was copied onto the droplet and
+   the round restarted at 13:53 UTC.
+2. After that pass the suite went on into `bench/fullstack`'s build step, which the browser suite
+   should not run. It was stopped after three apps (corten, leptos and topcoat; axum-maud's was cut
+   off partway), so `build.json`, `rust-analyzer.json` and `docker-rebuild.json` in
+   [../fullstack/results/browser-4](../fullstack/results/browser-4) are partial, and Corten's docker
+   rebuild there failed (a file missing from the copy it builds) and measured nothing. This
+   benchmark's pass was then run by hand: `run-all.mjs`'s steps with its arguments, in its order.
+   A first attempt stopped at once because `cargo` was not on the shell's path; the second built
+   every app and ran every step. Both are in `run.log`.
+
+| | **Corten (views)** | Solid 1.9 | Svelte 5 | Vue 3.5 | React 19 | Remix 3 | Plain JS (floor) |
+|---|---|---|---|---|---|---|---|
+| Take over 1,000 server-rendered rows | **10.2 ms** | 16.2 ms | 19.3 ms | 21.6 ms | 54.8 ms | 131 ms | 1.1 ms |
+| First click on a taken-over row | **1.4 ms** | 1.0 ms | 2.4 ms | 2.2 ms | 4.4 ms | 11.7 ms | 0.3 ms |
+| Change 1 row of 10,000 | **0.2 ms** | 0.2 ms | 1.0 ms | 2.4 ms | 8.4 ms | 77.8 ms | 0.2 ms |
+| Change 100 rows of 10,000 | **0.5 ms** | 0.7 ms | 1.4 ms | 3.2 ms | 7.4 ms | 78.6 ms | 0.4 ms |
+| Update every 10th of 1,000 | **0.6 ms** | 0.5 ms | 0.5 ms | 0.8 ms | 1.6 ms | 7.1 ms | 0.3 ms |
+| Select a row | **0.2 ms** | 0.2 ms | 0.6 ms | 0.4 ms | 0.7 ms | 6.8 ms | 0.1 ms |
+| Swap two rows | **0.3 ms** | 0.5 ms | 0.5 ms | 0.5 ms | 7.5 ms | 5.9 ms | 0.2 ms |
+| Create 1,000 rows | **5.0 ms** | 4.4 ms | 5.8 ms | 8.3 ms | 10.5 ms | 11.6 ms | 3.8 ms |
+| Create 10,000 rows | **48.4 ms** | 41.6 ms | 57.7 ms | 85.4 ms | 284 ms | 123 ms | 37.5 ms |
+| Dashboard: 200 prices tick | **0.4 ms** | 0.7 ms | 0.8 ms | 1.0 ms | 0.6 ms | 12.6 ms | 0.3 ms |
+| Memory per row | **101 B** | 928 B | 1,229 B | 1,876 B | 2,031 B | 2,413 B | 166 B |
+| JavaScript, gzip | **17.9 KB** | 6.8 KB | 20.6 KB | 26.2 KB | 68.4 KB | 28.4 KB | 1.1 KB |
+
+Measured as browser-3's table below: commit times are the median of 15 (5 for the 10,000-row
+operations), the slower of the two rounds; no pair of rounds differed enough to show a range.
+Takeover is the median of 30 loads that take turns between the apps.
+
+What it shows:
+
+1. **Taking over server-rendered rows** is still where views differ most: 10.2 ms, against 16-22
+   ms for Solid, Svelte and Vue and 55-131 ms for React and Remix. It is slower than browser-3's
+   6.0 ms, while Solid, Svelte, Vue, React and plain JavaScript took over faster than in browser-3
+   and Remix slower. The CPU, Chromium and Corten's runtime all changed between the rounds, and
+   this round does not show which slowed Corten's takeover. On more than half of Corten's and
+   React's loads the browser painted a frame between parsing and the app being ready (a median
+   of 58 ms of rendering, which takeover leaves out); in browser-3 the median was none for every
+   app.
+2. **Changing rows that exist** costs views a few tenths of a millisecond, as it costs plain
+   JavaScript and Solid, and less than Vue, React and Remix on 10,000 rows.
+3. **Memory**: 101 bytes a row, below this plain JavaScript app (166), which keeps a copy of
+   each label.
+4. **Creating rows in the browser** is where views trail: 48.4 ms for 10,000 against 41.6 for
+   Solid and 37.5 for plain JavaScript (Svelte 57.7, Vue 85.4).
+5. **Size**: 17.9 KB gzip (runtime, views and the handlers), up from 8.6 KB in browser-3 as the
+   runtime grew; above Solid (6.8 KB) and below the others.
+
 ## On Linux, against the most used frameworks (round browser-3)
 
 `droplet.mjs browser-3 --suite browser` on a DigitalOcean c-8 droplet (Xeon Platinum 8280),
@@ -73,8 +136,8 @@ apps of `bench/fullstack`'s browser pass were stopped. Corten's runtime, `views.
 handler module are the ones the framework serves. Every app passed the DOM checks after every
 operation, and every server-rendered app kept the server's 1,000 rows (none removed or added
 while starting). [results/browser-3](results/browser-3) has every number, including frame times;
-the client-heavy table in [docs/performance.md](../../docs/performance.md#client-heavy-screens) is
-this one ([summarize.mjs](summarize.mjs)).
+the client-heavy table in [docs/performance.md](../../docs/performance.md#client-heavy-screens) was
+this one until browser-4 ([summarize.mjs](summarize.mjs)).
 
 | | **Corten (views)** | Solid 1.9 | Svelte 5 | Vue 3.5 | React 19 | Remix 3 | Plain JS (floor) |
 |---|---|---|---|---|---|---|---|

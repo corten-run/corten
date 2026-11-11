@@ -185,7 +185,7 @@ On a phone, Corten is interactive in 468 ms and on desktop in 59 ms. Its item pa
 
 ## Client-heavy screens
 
-A table of rows a script changes, in Chromium 148 on Linux. Each framework's app is written the
+A table of rows a script changes, in Chromium 156 on Linux. Each framework's app is written the
 way its keyed [js-framework-benchmark](https://github.com/krausest/js-framework-benchmark) entry
 is, built for production, and checked after every operation, so an app that skips work fails
 instead of looking fast. Times run from the click to the DOM being updated (the frames that lay
@@ -193,29 +193,35 @@ it out and paint it are in the results): the median of 15, the slower of two rou
 range when they disagree. Takeover runs from the HTML being parsed to the app marking itself
 ready, for 1,000 rows the server rendered, less any frame the browser paints in between (the
 median of 30 loads that take turns between the apps); every framework kept the server's rows.
-Plain JavaScript is the floor: hand-written DOM code. Measured in round browser-3 (2026-10-23, at
-77002fe); Corten's runtime has grown since, so its JavaScript row is less than a page sends today
-until the next round ([#833 The README's client-heavy table is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/corten-run/corten/issues/833)).
+Plain JavaScript is the floor: hand-written DOM code. Measured in round browser-4 (2026-11-11, at
+3fb4b1ac, on a DigitalOcean c-8 droplet with a Xeon Platinum 8358;
+[how the round ran](../bench/browser/README.md#on-linux-against-the-most-used-frameworks-round-browser-4)).
 
 | | **Corten (views)** | Solid 1.9 | Svelte 5 | Vue 3.5 | React 19 | Remix 3 | Plain JS (floor) |
 |---|---|---|---|---|---|---|---|
-| Take over 1,000 server-rendered rows | **6.0 ms** | 19.6 ms | 25.6 ms | 28.3 ms | 60.1 ms | 83.5 ms | 1.4 ms |
-| First click on a taken-over row | **1.8 ms** | 1.1 ms | 2.9 ms | 2.5 ms | 5.3 ms | 16.3 ms | 0.4 ms |
-| Change 1 row of 10,000 | **0.2 ms** | 0.2 ms | 1.2 ms | 5.9 ms | 11.7 ms | 120 ms | 0.1 ms |
-| Change 100 rows of 10,000 | **0.9 ms** | 1.0 ms | 1.8 ms | 6.8 ms | 26.4 ms | 112 ms | 0.6 ms |
-| Update every 10th of 1,000 | **0.6 ms** | 0.9 ms | 1.0 ms | 1.6 ms | 2.0 ms | 10.0 ms | 0.4 ms |
-| Select a row | **0.2 ms** | 0.3 ms | 1.2 ms | 0.7 ms | 1.1 ms | 8.5 ms | 0.1 ms |
-| Swap two rows | **0.3 ms** | 1.0 ms | 1.0 ms | 1.0 ms | 10.1 ms | 8.6 ms | 0.2 ms |
-| Create 1,000 rows | **6.4 ms** | 5.6 ms | 6.9 ms | 12.2 ms | 14.9 ms | 15.5 ms | 5.2 ms |
-| Create 10,000 rows | **68.9 ms** | 59.2 ms | 81.9 ms | 127 ms | 351 ms | 172 ms | 48.9 ms |
-| Dashboard: 200 prices tick | **0.6 ms** | 1.0 ms | 1.6 ms | 1.3 ms | 0.9 ms | 17.2 ms | 0.4 ms |
-| Memory per row | **101 B** | 927 B | 1,229 B | 1,876 B | 2,036 B | 2,416 B | 165 B |
-| JavaScript, gzip | **8.6 KB** | 6.8 KB | 20.6 KB | 26.2 KB | 68.4 KB | 28.4 KB | 1.1 KB |
+| Take over 1,000 server-rendered rows | **10.2 ms** | 16.2 ms | 19.3 ms | 21.6 ms | 54.8 ms | 131 ms | 1.1 ms |
+| First click on a taken-over row | **1.4 ms** | 1.0 ms | 2.4 ms | 2.2 ms | 4.4 ms | 11.7 ms | 0.3 ms |
+| Change 1 row of 10,000 | **0.2 ms** | 0.2 ms | 1.0 ms | 2.4 ms | 8.4 ms | 77.8 ms | 0.2 ms |
+| Change 100 rows of 10,000 | **0.5 ms** | 0.7 ms | 1.4 ms | 3.2 ms | 7.4 ms | 78.6 ms | 0.4 ms |
+| Update every 10th of 1,000 | **0.6 ms** | 0.5 ms | 0.5 ms | 0.8 ms | 1.6 ms | 7.1 ms | 0.3 ms |
+| Select a row | **0.2 ms** | 0.2 ms | 0.6 ms | 0.4 ms | 0.7 ms | 6.8 ms | 0.1 ms |
+| Swap two rows | **0.3 ms** | 0.5 ms | 0.5 ms | 0.5 ms | 7.5 ms | 5.9 ms | 0.2 ms |
+| Create 1,000 rows | **5.0 ms** | 4.4 ms | 5.8 ms | 8.3 ms | 10.5 ms | 11.6 ms | 3.8 ms |
+| Create 10,000 rows | **48.4 ms** | 41.6 ms | 57.7 ms | 85.4 ms | 284 ms | 123 ms | 37.5 ms |
+| Dashboard: 200 prices tick | **0.4 ms** | 0.7 ms | 0.8 ms | 1.0 ms | 0.6 ms | 12.6 ms | 0.3 ms |
+| Memory per row | **101 B** | 928 B | 1,229 B | 1,876 B | 2,031 B | 2,413 B | 166 B |
+| JavaScript, gzip | **17.9 KB** | 6.8 KB | 20.6 KB | 26.2 KB | 68.4 KB | 28.4 KB | 1.1 KB |
 
 Corten's rows are server-rendered `#[component(view)]` components, so taking them over is reading
 the page rather than rebuilding it, and a row costs 101 bytes of JavaScript memory against
-927-2,416 for the frameworks, which keep each row's data and bookkeeping in JavaScript. Creating
-thousands of rows in the browser is where it trails Solid and plain JavaScript (68.9 ms against
-59.2 and 48.9 ms for 10,000, down from 87.5 ms in the round before). What is left is mostly the
-cost of keeping each row's key and refs in the page, which is what makes takeover and memory
+928-2,413 for the frameworks, which keep each row's data and bookkeeping in JavaScript. Its
+takeover is still the fastest of the frameworks, but slower than in round browser-3 (2026-10-23,
+at 77002fe): 10.2 ms against 6.0 then, while Solid, Svelte, Vue, React and plain JavaScript took
+over faster in this round than in that one (Solid 16.2 ms against 19.6) and Remix slower. The two
+rounds ran on different CPUs (a Xeon Platinum 8280 then), different Chromium versions (148 then)
+and different Corten runtimes, and they do not show which of those slowed Corten's takeover. Its
+JavaScript is the runtime, views and the page's handlers, 17.9 KB gzip, more than Solid's 6.8 KB
+and less than the other frameworks'. Creating thousands of rows in the browser is where it trails
+Solid and plain JavaScript (48.4 ms against 41.6 and 37.5 ms for 10,000). What is left is mostly
+the cost of keeping each row's key and refs in the page, which is what makes takeover and memory
 small ([profile](../bench/browser/README.md#creating-many-rows)).

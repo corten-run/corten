@@ -206,8 +206,8 @@ The table preserves historical measurements, not a current framework ranking. Th
 rows are Corten's old marketplace implementation (round r16), with requests sent uncompressed
 and untagged, as `curl` sends them; a browser's request costs Corten more. Localization work
 was not equivalent across the eighteen apps, so r16 cannot establish general speed rankings.
-The last row is a client-heavy table in the browser (round browser-3, on an older, smaller
-runtime than today's).
+The last row is from the client-heavy table in the browser (round browser-4, 2026-11-11, at
+`3fb4b1ac`, on a Xeon Platinum 8358; [client-heavy screens](docs/performance.md#client-heavy-screens)).
 
 | What | Corten, measured |
 |---|---|
@@ -216,7 +216,7 @@ runtime than today's).
 | Memory after the first request | 1.3 MiB |
 | JavaScript the item page loaded | 14.1 KB (gzip) |
 | Interactive on a throttled phone, on desktop | 468 ms, 59 ms |
-| Taking over 1,000 server-rendered rows | 6.0 ms, 101 bytes of memory per row |
+| Taking over 1,000 server-rendered rows | 10.2 ms, 101 bytes of memory per row |
 
 Nightly measurements move to [marketplace v2](bench/marketplace/README.md) starting with
 official round r17: equivalent request-time localization in all twenty apps (eighteen in r17), with a new

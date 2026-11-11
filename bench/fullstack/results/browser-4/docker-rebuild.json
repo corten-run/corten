@@ -1,0 +1,13 @@
+{
+ "corten": {
+  "cores": "1-4",
+  "memoryCap": 12884901888,
+  "hostCores": 8,
+  "buildx": "github.com/docker/buildx v0.38.1 0dbe87f36ed472fe36b6796c3f70b4210a731fc5",
+  "commit": "",
+  "dirty": false,
+  "measuredAt": "2026-11-11T14:22:53.652Z",
+  "complete": false,
+  "error": "ENOENT: no such file or directory, open '/tmp/corten-docker-rebuild-XlfIcd/corten/examples/card-market/src/views/alert.rs'"
+ }
+}

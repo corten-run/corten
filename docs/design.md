@@ -119,21 +119,24 @@ rules something out.
    not another component model. Its server-rendered root id identifies the branch; existing
    `keep`, typed events and `signal` still own state, communication and cleanup.
 
-   Stands on: measured (the client-heavy table in performance.md, round browser-3, older than today's
-   runtime: views take over 1,000 server-rendered rows in 6.0 ms, Solid, Svelte, Vue, React and
-   Remix in 19.6 to 83.5 ms, the median of 30 loads); reasoned (nested branches need the same
-   typed-template check and CSP custom-property application as rows; centralizing those does not
-   require tracking application state); value (one way to give an element behavior, Values 5).
+   Stands on: measured (the client-heavy table in performance.md, round browser-4, the median of 30
+   loads: views take over 1,000 server-rendered rows in 10.2 ms, Solid, Svelte, Vue, React and
+   Remix in 16.2 to 131 ms; Solid, the nearest, takes 1.6 times as long, against 3.3 times in
+   round browser-3, 19.6 ms against 6.0 on another CPU, Chromium and runtime); reasoned (nested
+   branches need the same typed-template check and CSP custom-property application as rows;
+   centralizing those does not require tracking application state); value (one way to give an
+   element behavior, Values 5).
 
    Revisit when: a client framework takes over server-rendered rows as fast as views in the
-   client-heavy table, with no hydration (Solid already changes rows faster on some operations
-   there); or apps' handlers keep repeating state that crosses components, which a framework would
-   hold once. The nested deck preview exercises that boundary: draft data stays in its owner,
-   while `view` owns only adoption and cloning. Revisit that split if more screens need another
-   state/lifecycle mechanism, or if its root-id identity cannot express their branches.
+   client-heavy table, with no hydration (not met in browser-4: the nearest, Solid, hydrates and
+   takes 16.2 ms against 10.2, though it already creates rows faster); or apps' handlers keep
+   repeating state that crosses components, which a framework would hold once. The nested deck
+   preview exercises that boundary: draft data stays in its owner, while `view` owns only adoption
+   and cloning. Revisit that split if more screens need another state/lifecycle mechanism, or if
+   its root-id identity cannot express their branches.
 
-   Last checked: 2026-11-06, nested deck preview and connected-tree measurements on `fc09b98d`.
-   The older browser-3 measurement above remains from 2026-10-23 on `77002fe`, not rerun here.
+   Last checked: 2026-11-11, the client-heavy table, round browser-4 on a Xeon Platinum 8358, on
+   `3fb4b1ac`; 2026-11-06, nested deck preview and connected-tree measurements on `fc09b98d`.
 
 5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
@@ -315,14 +318,15 @@ rules something out.
    framework or WASM layer is faster than the platform's own DOM calls. The scripts guide has the
    table for choosing ([Server or browser](guide/scripts.md#server-or-browser)).
 
-   Stands on: measured (views take over 1,000 server-rendered rows in 6.0 ms, the client-heavy
-   table in performance.md, median of 30 loads, round browser-3, older than today's runtime); value
-   (Values 1: the work goes where it is fastest for the user).
+   Stands on: measured (views take over 1,000 server-rendered rows in 10.2 ms, the fastest of the
+   client frameworks measured, Solid next at 16.2 ms; the client-heavy table in performance.md,
+   median of 30 loads, round browser-4); value (Values 1: the work goes where it is fastest for
+   the user).
 
    Revisit when: Values 1 changes. A case measured against the scripts guide's table (Server or
    browser) moves that case and the table, not this choice.
 
-   Last checked: 2026-10-23, round browser-3, on `77002fe`.
+   Last checked: 2026-11-11, round browser-4 on a Xeon Platinum 8358, on `3fb4b1ac`.
 
 10. <a id="choice-app-owns-document"></a>**The document is a component the app owns, not a shell Corten configures.** A page hands
    `req.page` its whole document, the app's layout with the page in it, and the head is markup

@@ -7164,6 +7164,11 @@ Corten is pre-1.0, so any minor version may change the API.
     with `render-github.mjs`, which draws both from the brand pack's SVGs, and
     `corten-weathering-pack.md` gives their sizes, colors and font
     ([#1084 The GitHub avatar and social preview made from the brand pack are not in docs/brand, so they cannot be redone from the repository](https://github.com/corten-run/corten/issues/1084)).
+84. The client-heavy table in `docs/performance.md`, the README's takeover row and design Choices
+    4 and 9 are from round browser-4 (2026-11-11, `3fb4b1ac`, Xeon Platinum 8358): views take over
+    1,000 server-rendered rows in 10.2 ms (6.0 in browser-3, on another CPU), still ahead of
+    Solid's 16.2, and the page sends 17.9 KB of JavaScript (gzip), not 8.6
+    ([#833 The client-heavy table in docs/performance.md is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/corten-run/corten/issues/833)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
