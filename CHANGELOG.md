@@ -7202,6 +7202,12 @@ Corten is pre-1.0, so any minor version may change the API.
     ahead of Solid's 16.2 in this one round, and the page sends 17.9 KB of JavaScript (gzip), not 8.6
     ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222);
     [#833 The client-heavy table in docs/performance.md is from round browser-3 (2026-10-23): its 8.6 KB of Corten JavaScript is less than the runtime alone is now (12.1 KB gzip)](https://github.com/corten-run/corten/issues/833)).
+85. Design Choice 33 (an app's shared state derives `Clone` and `FromRef`) stands on Corten's
+    own router and `FromRef`, not on axum's `MethodRouter` and axum-core's blanket impl, which it
+    named until now though axum left in Choice 25's step 4: `Clone` is Corten's decision, since
+    Corten copies the state into each route, method slot and request and a handler takes the whole
+    state through a `Clone`-bounded `FromRef`; the Choice is revisited when neither needs `Clone`
+    ([#1227 Design Choice 33 still stands on axum's MethodRouter and axum-core's FromRef impl, which Corten stopped calling when axum left, so its premise and Revisit-when name code Corten does not run](https://github.com/corten-run/corten/issues/1227)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
