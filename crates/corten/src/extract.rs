@@ -935,7 +935,7 @@ mod tests {
                 counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 Ok::<_, std::io::Error>(p)
             }));
-            let mut req = super::Request::new(body);
+            let mut req = crate::http::Request::new(body);
             req.extensions_mut().insert(crate::Signal::with_body_limit(limit));
             (req, read)
         };
@@ -961,7 +961,7 @@ mod tests {
             if len & ((1 << 20) - 1) != 0 {
                 pieces.push_back(Bytes::from(vec![0; len & ((1 << 20) - 1)]));
             }
-            let mut req = super::Request::new(Body::new(Declared(pieces, read.clone())));
+            let mut req = crate::http::Request::new(Body::new(Declared(pieces, read.clone())));
             req.extensions_mut().insert(crate::Signal::with_body_limit(4 << 20));
             (req, read)
         };
@@ -974,7 +974,7 @@ mod tests {
     }
 
     /// The whole body of `req`, at the limit the stages put on it, as a reader takes it.
-    async fn whole_of(req: super::Request) -> Result<Bytes, super::BodyRejection> {
+    async fn whole_of(req: crate::http::Request) -> Result<Bytes, super::BodyRejection> {
         let limit = super::body_limit(req.extensions());
         super::whole(req.into_body(), limit).await
     }
