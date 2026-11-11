@@ -1875,8 +1875,10 @@ rules something out.
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 
     Stands on: reasoned (each route takes its own copy of the state, in `routes.rs`'s
-    `Methods::with_state(.., state.clone())`, and Corten's router clones it again into each
-    method slot, `router.rs`'s `MethodSet::with_state`, both bounded `S: Clone`; a handler takes
+    `Methods::with_state(.., state.clone())`, Corten's router clones it again into each method
+    slot, `router.rs`'s `MethodSet::with_state`, and once more for each request, `router.rs`'s
+    `Handled::call`, since `handler.rs`'s `Handler::call` takes the state by value, all bounded
+    `S: Clone`; a handler takes
     the whole state through `handler.rs`'s `impl<T: Clone> FromRef<T> for T`; both are Corten's
     own since axum left, [Choice 25](#choice-axum-router), step 4, so `Clone` is Corten's
     decision, not a platform's; an impl the derive wrote would conflict with a hand-written
@@ -1886,16 +1888,18 @@ rules something out.
 
     Revisit when: a third mechanical impl is derived beside the pair on two or more of the
     examples' routed state types, so an attribute would carry more than two derives' worth; or
-    Corten's router stops copying the state into each route and method slot (one shared `Arc`,
-    say), and `handler.rs`'s `impl<T: Clone> FromRef<T> for T`, through which a handler takes the
+    Corten stops copying the state into each route (the routes macro) and into each method slot
+    and request (the router), a handler given `&S` or one shared `Arc`, say, and `handler.rs`'s `impl<T: Clone> FromRef<T> for T`, through which a handler takes the
     whole state, stops requiring `Clone`, so state no longer needs `Clone`.
 
     Last checked: 2026-11-10, the examples' state types, `from_ref.rs`, `routes.rs`,
-    `Methods::with_state`, `corten-cluster`'s tests, and axum 0.8.9 and axum-core 0.5.6 from
-    `Cargo.lock`, at `97a63a92`; 2026-11-11, with axum gone, `router.rs`'s
-    `MethodSet::with_state` and `Slot::bind` (one clone per method slot), `route.rs`'s
-    `Methods::with_state` and `handler.rs`'s `FromRef` blanket impl, each bounded `Clone`, and
-    no crate under `crates/` depending on axum, at `25acd6a7`.
+    `Methods::with_state` and `corten-cluster`'s tests, at `97a63a92` (then also axum 0.8.9 and
+    axum-core 0.5.6 from `Cargo.lock`, the platform premise this Choice no longer has);
+    2026-11-11, with axum gone, `router.rs`'s `MethodSet::with_state` and `Slot::bind` (one
+    clone per method slot) and `Handled::call` (one per request), `corten`'s `route.rs`
+    `Methods::with_state`, `handler.rs`'s `Handler::call` and `FromRef` blanket impl, each
+    bounded `Clone` or taking the state by value, and no crate under `crates/` depending on axum,
+    at `25acd6a7`.
 
 34. <a id="choice-listen-backlog"></a>**A listener asks the system to hold 511 finished
     connections, not 128.** `corten::listeners`, and so `serve`, binds each socket with a
