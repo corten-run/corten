@@ -9977,11 +9977,15 @@ async fn a_taken_ipv6_loopback_port_is_an_error() {
         return;
     }
     // The test needs the number it takes on `::1` free on `127.0.0.1`, which nothing reserves: a
-    // test running beside it may hold it there (#1203), so a number busy there is tried again.
+    // test running beside it may hold it there (#1203), so a number busy there is tried again. The
+    // probe cannot be held through the test: `bind(None, ..)` would then fail on `127.0.0.1`, not on
+    // the `::1` port this is about, so a number taken in between is caught by the retry instead.
+    let mut busy = "";
     for _ in 0..8 {
         let taken = std::net::TcpListener::bind("[::1]:0").unwrap();
         let port = taken.local_addr().unwrap().port();
         if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+            busy = "before the test";
             continue;
         }
         let error = crate::app::bind(None, port).await.expect_err("the port is taken on ::1");
@@ -9991,11 +9995,11 @@ async fn a_taken_ipv6_loopback_port_is_an_error() {
                 assert_eq!(listeners.len(), 1, "HOST names one address");
                 return;
             }
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => busy = "by the time HOST bound it",
             Err(error) => panic!("{error}"),
         }
     }
-    panic!("each of 8 ports taken on ::1 was busy on 127.0.0.1 too");
+    panic!("each of 8 ports taken on ::1 was busy on 127.0.0.1 too, the last {busy}");
 }
 
 #[crate::routes]
