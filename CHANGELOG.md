@@ -5,6 +5,17 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+### Fixed
+- Each TCP connection Corten accepts (`serve`, and `serve_on` or `serve_wrapped` with tokio's
+  `TcpListener`) has Nagle's algorithm off (`TCP_NODELAY`), as Go's `net/http` and nginx do, so
+  a feed's patches or a live element's fragments made one after another are no longer held for
+  the acknowledgement of the last one. Through nginx with the app in a container of its own, the
+  second of ten small events made back to back on a reused connection came 44.3 and 43.3 ms (the
+  medians of two runs) after the first, the other eight with it; with the option set, -0.06 ms,
+  and a request costs the same instructions; a listener of the app's own keeps its choice (design
+  Choice 41, `bench/nodelay`)
+  ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
+
 ## 0.2.0 (2026-11-11)
 
 The first release of all seven crates, published together by the Release workflow. The main crate's
@@ -4788,15 +4799,6 @@ their names, and has no tag or release.
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
-- Each TCP connection Corten accepts (`serve`, and `serve_on` or `serve_wrapped` with tokio's
-  `TcpListener`) has Nagle's algorithm off (`TCP_NODELAY`), as Go's `net/http` and nginx do, so
-  a feed's patches or a live element's fragments made one after another are no longer held for
-  the proxy's delayed acknowledgement. Through nginx with the app in a container of its own, the
-  second of ten small events made back to back came 41.6 ms (median of 160 bursts; 39.2 to 53.7)
-  after the first, the other eight with it; with the option set, -0.1 ms, and a request costs the
-  same instructions; a listener of the app's own keeps its choice (design Choice 41,
-  `bench/nodelay`)
-  ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
 - `bench/fullstack/droplet.mjs --suite browser` runs the browser step alone again, then
   bench/browser's client-heavy pass. Since every app's build became the step after it, the suite
   ran the builds too (8 to 22 minutes each for the first three apps on a c-8, under a 240-minute

@@ -3,13 +3,14 @@
 // are), on and off. nginx in front of them in a fourth, and the client in a fifth, all on one
 // Docker network, so every hop is a real TCP connection between network namespaces (loopback
 // acknowledges differently). The client (client.mjs) opens each (app, gap) stream REPEAT times in
-// a row, ROUNDS rounds after one it discards. A stream that follows another on the same app reuses
-// nginx's connection to it soon after its last use, as on a proxy with steady traffic ("busy"); the
-// first of a block follows a pause of a few hundred milliseconds on that connection ("after
-// idle"), after which nginx's side acknowledged at once in trial runs. They are reported apart. This writes
-// results/<name>.json and prints, for each, the median and range of: how long after the headers
-// the first event came (the app makes it at once), and how late the second event and the latest
-// one came (arrival after the first, less when the app made it after the first).
+// a row, ROUNDS rounds after one it discards. A stream whose stream before went to the same app
+// reuses nginx's connection to it soon after its last use, as on a proxy with steady traffic
+// ("busy"); one whose stream before went to another app follows a pause on that connection while
+// the other apps ran ("after idle", how long is reported as idleMs). The order comes from the
+// streams as they ran, not from their place in a block. This writes results/<name>.json and
+// prints, for each, the median and range of: how long after the headers the first event came (the
+// app makes it at once), and how late the second event and the latest one came (arrival after the
+// first, less when the app made it after the first).
 // Usage: node run.mjs <name> [rounds=20] [repeat=5] [gaps=0,1000,10000] [--image corten-nodelay]
 // [--label key=value]... (a label goes on every container and the network it creates).
 import { spawnSync } from "node:child_process";
@@ -64,16 +65,28 @@ try {
   };
   // How late each event came after the first, against when the app made it after the first.
   const late = (s, i) => s.arrived[i] - s.arrived[0] - s.made[i];
+  const appOf = (url) => new URL(url).pathname.split("/")[1];
+  // Busy or after idle from the stream that ran just before; idleMs, how long the app's connection
+  // from nginx had been unused (null for the run's first stream on each app).
+  const lastEnded = {};
+  streams.forEach((s, i) => {
+    const app = appOf(s.url);
+    s.idle = i === 0 || appOf(streams[i - 1].url) !== app;
+    s.idleMs = app in lastEnded ? +(s.sent - lastEnded[app]).toFixed(1) : null;
+    lastEnded[app] = s.ended;
+  });
   for (const url of urls) {
     const [, app, , gap] = new URL(url).pathname.split("/");
     for (const [regime, idle] of [["busy", false], ["after idle", true]]) {
-      const mine = streams.filter((s) => s.url === url && (s.k === 0) === idle);
+      const mine = streams.filter((s) => s.url === url && s.idle === idle);
       if (!mine.length) continue;
+      const idleFor = mine.map((s) => s.idleMs).filter((ms) => ms !== null);
       const first = mine.map((s) => s.arrived[0]);
       const worst = mine.map((s) => Math.max(...s.arrived.slice(1).map((_, i) => late(s, i + 1))));
       summary[`${app} gap=${gap}us ${regime}`] = {
         runs: mine.length,
         events: mine[0].arrived.length,
+        idleMs: idleFor.length ? stats(idleFor) : null,
         firstAfterHeadMs: stats(first),
         secondLateMs: stats(mine.map((s) => late(s, 1))),
         worstLateMs: stats(worst),

@@ -704,7 +704,8 @@ they are made: with it on, one written while the last was not yet acknowledged w
 delayed acknowledgement, about 40 ms on Linux
 ([design Choice 41](../design.md#choice-tcp-nodelay)). A whole answer is one write either way. A
 listener of the app's own sets what it chooses, and one that wants Nagle's algorithm calls
-`set_nodelay(false)` on what it accepts.
+`set_nodelay(false)` on what it accepts. A `Router` served as a tower `Service` by another library's
+server never passes through Corten's accept, so `TCP_NODELAY` is that server's to set.
 
 HTTPS is a step on each connection before HTTP, which `corten::serve_wrapped` takes: the TLS
 handshake. TLS stays the app's choice of library, and so does its configuration. With

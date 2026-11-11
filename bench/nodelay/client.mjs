@@ -1,9 +1,10 @@
 // Opens each URL (a live stream of ten small events) REPEAT times in a row, URL after URL, ROUNDS
-// rounds, the URLs' order reversed every other round; each stream on a new connection to the proxy,
-// which reuses one connection to the app. Prints a JSON line per stream: its URL, its place in its
-// block (`k`: 0 is the first after the app's connection sat idle while the other URLs ran), when
-// its headers arrived after the request was sent (`head`), when each event arrived after the
-// headers (`arrived`), and when the app made each after the first (`made`), in milliseconds.
+// rounds, each round starting one URL further on than the last, so a round's first block is not
+// the one the round before ended with; each stream on a new connection to the proxy, which reuses
+// one connection to the app. Prints a JSON line per stream: its URL, its place in its block (`k`),
+// when it was sent and when it ended after the client started (`sent`, `ended`), when its headers
+// arrived after the request was sent (`head`), when each event arrived after the headers
+// (`arrived`), and when the app made each after the first (`made`), in milliseconds.
 // The client only reads, so its own TCP_NODELAY does not matter.
 // Usage: node client.mjs <rounds> <repeat> <url>...
 import http from "node:http";
@@ -36,7 +37,7 @@ function once(url, k) {
           }
         }
       });
-      res.on("end", () => resolve({ url, k, head: +(head - sent).toFixed(3), arrived: arrived.map((t) => +(t - head).toFixed(3)), made }));
+      res.on("end", () => resolve({ url, k, sent: +sent.toFixed(3), ended: +performance.now().toFixed(3), head: +(head - sent).toFixed(3), arrived: arrived.map((t) => +(t - head).toFixed(3)), made }));
       res.on("error", reject);
     });
     req.on("error", reject);
@@ -44,7 +45,7 @@ function once(url, k) {
 }
 
 for (let round = 0; round < Number(rounds); round += 1) {
-  for (const url of round % 2 ? [...urls].reverse() : urls) {
+  for (const url of urls.map((_, i) => urls[(i + round) % urls.length])) {
     for (let k = 0; k < Number(repeat); k += 1) console.log(JSON.stringify(await once(url, k)));
   }
 }
