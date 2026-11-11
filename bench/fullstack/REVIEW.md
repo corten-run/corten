@@ -62,7 +62,8 @@ There are two tiers:
 4. Tuning beyond what the framework's documentation recommends for one CPU, such as more
    processes than its guidance, or a setting chosen only to pass a test (caveat 5).
 5. In the matched tier, tuning beyond the profile, or writing a handler, error mapper or server
-   loop by hand for a part the framework does not provide.
+   loop by hand for a part the framework does not provide. Code the framework's own documentation
+   gives for a part, written as it gives it, counts as provided (the README, "The matched tier").
 
 ## How to propose a change
 
