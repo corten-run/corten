@@ -5449,7 +5449,20 @@ async function run(browser) {
             return { error: w.__uploadError, busy: document.querySelector("main form[enctype]")?.getAttribute("aria-busy") ?? null, loaded: w.__xhrStatus.join() };
           }),
       );
+  /** Why the last answer could not be given, when the engine refused it (empty when it was given). */
+  let unfulfilled = "";
+  /**
+   * Answers the upload with `status`; an engine that refuses the status has the request failed at
+   * once, rather than left waiting, and the reason is kept for the skip.
+   * @param {import("@playwright/test").Route} route @param {number} status
+   */
+  const answerUpload = (route, status) =>
+    route.fulfill({ status }).catch((/** @type {Error} */ e) => {
+      unfulfilled = e.message.split("\n")[0];
+      return route.abort().catch(() => {});
+    });
   const pressUpload = async () => {
+    unfulfilled = "";
     await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
     await page.click("main form[enctype] button");
   };
@@ -5480,30 +5493,28 @@ async function run(browser) {
   // A bare 204 or 205, with none of Corten's headers, is an answer the runtime does not draw:
   // corten:error with that status, not the 0 of a Response that could not be made. That is the
   // runtime's behavior today; #1258 (a data-patch write answered 204 fires corten:error) will
-  // change what a 204 should do, and this check with it. A 304 is checked where the engine's
-  // XMLHttpRequest loads one.
+  // change what a 204 should do, and this check with it. A 304 is skipped where it cannot be
+  // given or XMLHttpRequest does not load it.
   for (const status of [204, 205, 304]) {
+    const bareName = `an upload answered with a bare ${status} dispatches corten:error with status ${status}, and the form is not busy`;
+    // Playwright refuses a 304 there as a redirect, and the upload after the one it refused went
+    // unanswered for 8 s in a run that tried it.
+    if (status === 304 && engine === "webkit") {
+      skip(bareName, "Playwright cannot fulfill a 304 in WebKit (Cannot fulfill with redirect status: 304)");
+      continue;
+    }
     await watchUpload();
-    await page.route("**/avatar", (route) => route.fulfill({ status }));
+    await page.route("**/avatar", (route) => answerUpload(route, status));
     await pressUpload();
     const bare = await uploadEnded();
     await page.unroute("**/avatar");
-    const bareName = `an upload answered with a bare ${status} dispatches corten:error with status ${status}, and the form is not busy`;
-    if (status === 304 && bare.loaded !== "304") skip(bareName, `the engine's XMLHttpRequest did not load a 304: loaded ${bare.loaded || "nothing"}, corten:error ${bare.error}`);
+    if (status === 304 && bare.loaded !== "304") skip(bareName, `the engine's XMLHttpRequest did not load a 304: ${unfulfilled || `loaded ${bare.loaded || "nothing"}, corten:error ${bare.error}`}`);
     else check(bareName, bare.error === status && bare.busy === null && bare.loaded === String(status), JSON.stringify(bare));
   }
   // A status of 600 or more, which a browser may log as a failed resource.
   const beyondLogged = errors.length;
   await watchUpload();
-  /** @type {string} */
-  let unfulfilled = "";
-  // An engine that refuses the status has the request failed at once, rather than left waiting.
-  await page.route("**/avatar", (route) =>
-    route.fulfill({ status: 600 }).catch((/** @type {Error} */ e) => {
-      unfulfilled = e.message.split("\n")[0];
-      return route.abort().catch(() => {});
-    }),
-  );
+  await page.route("**/avatar", (route) => answerUpload(route, 600));
   await pressUpload();
   const beyond = await uploadEnded();
   await page.unroute("**/avatar");
