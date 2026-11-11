@@ -2,6 +2,7 @@
 // commands of its Dockerfile's dependency layer and build step, and one edit to its item page's
 // view. Kept apart from build.mjs so builds.test.mjs can check it without Docker. No side effects
 // beyond apps.mjs's, which refuses a BENCH_TIER, BENCH_EDGE or BENCH_APPS it cannot read.
+import { basename, resolve } from "node:path";
 import { allApps, tier } from "./apps.mjs";
 import { edgeBase } from "./edge.mjs";
 import { quote } from "./round.mjs";
@@ -299,6 +300,15 @@ export const dockerfileOf = (/** @type {string} */ name) => recipes[name].docker
 
 /** The app's build context, relative to the repository root. */
 export const contextOf = (/** @type {string} */ name) => recipes[name].context || `bench/fullstack/apps/${name}`;
+
+/**
+ * The cpSync filter that copies the directory `from` without the entries named in `skip`. The
+ * directory itself is always copied, whatever its name: on a droplet the repository is /bench, and
+ * the repository root's context leaves out "bench", which once skipped the whole copy (browser-4).
+ * @param {string} from
+ * @param {Set<string>} skip
+ */
+export const copyFilter = (from, skip) => (/** @type {string} */ src) => resolve(src) === resolve(from) || !skip.has(basename(src));
 
 /** The Dockerfile build.mjs builds an app's source image from: its toolchain and its context. */
 export const sourceDockerfile = (/** @type {string} */ name) => {

@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { allApps } from "./apps.mjs";
-import { buildRow, cargoBuilds, changeOf, contextOf, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
+import { buildRow, cargoBuilds, changeOf, contextOf, copyFilter, crateCost, dockerfileOf, oomKills, compiledIn, ranARun, ranSteps, readStep, recipes, runChange, rustcPasses, sourceDockerfile, stepScript, timingUnits, touchThen } from "./builds.mjs";
 import { compiledFirst } from "./round.mjs";
 
 const repo = fileURLToPath(new URL("../..", import.meta.url));
@@ -318,4 +318,15 @@ test("build.mjs's table has a row for an app with no build step, a built app and
     "| gin | deps 2.5 s | build 2.5 s, 3.1 CPU-s, 120 MiB | clean 5.0 s, 6.2 CPU-s | rebuild 2.5 s, 3.1 CPU-s |  |");
   assert.equal(buildRow("leptos", { failed: "exit 1\nmore", deps: step }), "| leptos | FAILED: exit 1 |");
   assert.equal(buildRow("nuxt", { deps: step, complete: false }), "| nuxt | FAILED: stopped before it finished |");
+});
+
+test("a context is copied whatever its own directory is named, without the entries it skips", () => {
+  const skip = new Set(["bench", "target"]);
+  for (const repo of ["/bench", "/src/corten"]) {
+    const keep = copyFilter(repo, skip);
+    assert.equal(keep(repo), true, repo);
+    assert.equal(keep(join(repo, "examples", "card-market", "src", "views", "alert.rs")), true, repo);
+    assert.equal(keep(join(repo, "bench")), false, repo);
+    assert.equal(keep(join(repo, "target")), false, repo);
+  }
 });
