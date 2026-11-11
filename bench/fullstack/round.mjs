@@ -46,10 +46,7 @@ export const roundNameError = (round, tier, { full = false } = {}) => {
 };
 
 /**
- * The steps run-all.mjs runs from `from` through `until`, or why that range has none. The browser
- * suite stops after the browser step: the build step after it times every app's build (8 to 23
- * minutes an app on a c-8 in browser-4: topcoat, Corten, Leptos), which does not fit the suite's
- * three-hour unit.
+ * The steps run-all.mjs runs from `from` through `until`, or why that range has none.
  * @param {string} from
  * @param {string} until
  * @returns {{ steps: string[], error: string | null }}
@@ -61,6 +58,14 @@ export const stepsUntil = (from, until) => {
   if (end < start) return { steps: [], error: `until (${until}) comes before from (${from})` };
   return { steps: steps.slice(start, end + 1), error: null };
 };
+
+/**
+ * The steps droplet.mjs's browser suite runs with run-all.mjs: the browser step alone (parity, look,
+ * bytes, browser timing), then bench/browser's pass. Not the build step after it: the three apps
+ * browser-4 built took 8 to 23 minutes each (topcoat, Corten, Leptos), and the builds' budget
+ * (buildBudgetMinutes) with the browser step does not fit the suite's three-hour unit.
+ */
+export const browserSuite = { from: "browser", until: "browser" };
 
 /** The minutes run-all.mjs may wait for each app to start before the browser step. */
 export const startMinutes = 2;

@@ -28,8 +28,9 @@
 //     connection floods) for every app of the tier, or those --apps names; results in
 //     bench/fullstack/results/<round>/hardening.json. It runs on its own cadence, not every round,
 //     and needs no edge, so a matched one runs on the defaults tier's droplet size.
-//   --suite browser: only the browser pass of this comparison (run-all.mjs from "browser": parity,
-//     bytes, browser timing), then bench/browser's run-all.mjs; results in both results folders.
+//   --suite browser: only the browser step of this comparison (run-all.mjs browser through browser:
+//     parity, look, bytes, browser timing), then bench/browser's run-all.mjs; results in both
+//     results folders.
 // Results land in bench/fullstack/results/<round>/; a finished full-stack round's raw output is
 // then packed into raw.tar.xz there (pack.mjs). A droplet this creates is destroyed once its
 // round has ended (finished or stopped short, after the download) or when it fails before the round
@@ -49,7 +50,7 @@ import { allApps, buildArgs } from "./apps.mjs";
 import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
-import { hoursFor, quote, roundNameError, steps, unit } from "./round.mjs";
+import { browserSuite, hoursFor, quote, roundNameError, steps, unit } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -323,7 +324,8 @@ const launch = async () => {
   // The round, as a script its unit runs. Only a full-stack round starts again at boot.
   const command = {
     live: `node run.mjs ${round}; node summarize.mjs ${round}; echo all done`,
-    browser: `. "$HOME/.cargo/env"; node run-all.mjs ${round} 10 browser browser; cd /bench/bench/browser && node run-all.mjs ${round}`,
+    // The browser step alone, not the builds after it (browserSuite in round.mjs says why).
+    browser: `. "$HOME/.cargo/env"; node run-all.mjs ${round} 10 ${browserSuite.from} ${browserSuite.until}; cd /bench/bench/browser && node run-all.mjs ${round}`,
     fullstack: `exec node run-all.mjs ${round} 10 ${from ?? steps[0]} --unattended`,
     // Each app's phases run against a freshly started app; the step needs no load generator.
     harden: `node harden.mjs ${only ? only.join(",") : "all"} ${round} && echo all done`,

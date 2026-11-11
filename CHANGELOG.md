@@ -4745,8 +4745,8 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Fixed
 - `bench/fullstack/droplet.mjs --suite browser` runs the browser step alone again, then bench/browser's
   client-heavy pass. Since every app's build became the step after it, the suite ran the builds
-  too, 8 to 23 minutes an app for twenty apps, so it ran out of its three-hour unit before the
-  client-heavy pass started. `run-all.mjs` takes the last step to run (`until`) after `from`.
+  too (8 to 23 minutes each for the first three apps on a c-8, under a 240-minute budget), so it
+  could not reach the client-heavy pass within its three-hour unit. `run-all.mjs` takes the last step to run (`until`) after `from`.
 - A build with the `json` feature and not `types` compiles its tests again (one checked a
   declaration only `types` makes), and CI now builds them; a build without the `log` feature no
   longer warns about an unused import; and the MSRV (1.88) build no longer warns that the code
