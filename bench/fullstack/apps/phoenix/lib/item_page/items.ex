@@ -39,7 +39,10 @@ defmodule ItemPage.Items do
   defp fetch(id) do
     base = System.get_env("API_BASE", "http://localhost:8080")
 
-    case Req.get!(base <> "/api/discovery/items/" <> URI.encode_www_form(id), retry: false) do
+    case Req.get!(base <> "/api/discovery/items/" <> URI.encode_www_form(id),
+           retry: false,
+           finch: [name: ItemPage.Finch]
+         ) do
       %{status: 404} -> nil
       %{status: 200, body: body} -> from_api(body)
       %{status: status} -> raise "item API returned #{status}"
