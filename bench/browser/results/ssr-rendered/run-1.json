@@ -1,0 +1,329 @@
+{
+  "date": "2026-11-11T16:31:53.942Z",
+  "chromium": "156.0.8078.4",
+  "loads": 15,
+  "apps": {
+    "view-ssr": {
+      "htmlB": 278359,
+      "htmlGzipB": 12175,
+      "readyMs": 206.9,
+      "takeoverMs": 17.7,
+      "paintedFirstMs": 139.1,
+      "renderedLoads": 8,
+      "takeoverRenderedMs": 21.95,
+      "takeoverNotRenderedMs": 12.3,
+      "rowsAtReady": 1000,
+      "rowsRemoved": 0,
+      "rowsAdded": 0,
+      "heapKB": 1338,
+      "firstSelectMs": 3.5,
+      "firstUpdateMs": 1.5,
+      "firstRemoveMs": 1,
+      "errors": 0
+    },
+    "solid-ssr": {
+      "htmlB": 292628,
+      "htmlGzipB": 18805,
+      "readyMs": 257.3,
+      "takeoverMs": 25.1,
+      "paintedFirstMs": 0,
+      "renderedLoads": 0,
+      "takeoverRenderedMs": null,
+      "takeoverNotRenderedMs": 25.1,
+      "rowsAtReady": 1000,
+      "rowsRemoved": 0,
+      "rowsAdded": 0,
+      "heapKB": 2293,
+      "firstSelectMs": 1.9,
+      "firstUpdateMs": 1.6,
+      "firstRemoveMs": 1.4,
+      "errors": 0
+    },
+    "react-ssr": {
+      "htmlB": 275332,
+      "htmlGzipB": 14763,
+      "readyMs": 329.9,
+      "takeoverMs": 115.4,
+      "paintedFirstMs": 171.3,
+      "renderedLoads": 14,
+      "takeoverRenderedMs": 113.8,
+      "takeoverNotRenderedMs": 135.9,
+      "rowsAtReady": 1000,
+      "rowsRemoved": 0,
+      "rowsAdded": 0,
+      "heapKB": 3718,
+      "firstSelectMs": 9.6,
+      "firstUpdateMs": 7.7,
+      "firstRemoveMs": 4.3,
+      "errors": 0
+    },
+    "remix-ssr": {
+      "htmlB": 275485,
+      "htmlGzipB": 14965,
+      "readyMs": 387.2,
+      "takeoverMs": 163.8,
+      "paintedFirstMs": 176.5,
+      "renderedLoads": 14,
+      "takeoverRenderedMs": 165.05,
+      "takeoverNotRenderedMs": 153.1,
+      "rowsAtReady": 1000,
+      "rowsRemoved": 0,
+      "rowsAdded": 0,
+      "heapKB": 4020,
+      "firstSelectMs": 29.3,
+      "firstUpdateMs": 23.3,
+      "firstRemoveMs": 24.3,
+      "errors": 0
+    }
+  },
+  "each": {
+    "view-ssr": [
+      {
+        "takeoverMs": 12.3,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 12.3,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 21.8,
+        "renderingMs": 176.2
+      },
+      {
+        "takeoverMs": 21.8,
+        "renderingMs": 178
+      },
+      {
+        "takeoverMs": 22.5,
+        "renderingMs": 172.7
+      },
+      {
+        "takeoverMs": 22.3,
+        "renderingMs": 159.3
+      },
+      {
+        "takeoverMs": 12,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 10.2,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 20.9,
+        "renderingMs": 174.5
+      },
+      {
+        "takeoverMs": 22.5,
+        "renderingMs": 173.4
+      },
+      {
+        "takeoverMs": 13.6,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 22.1,
+        "renderingMs": 139.1
+      },
+      {
+        "takeoverMs": 17.7,
+        "renderingMs": 163.7
+      },
+      {
+        "takeoverMs": 12.7,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 16.4,
+        "renderingMs": 0
+      }
+    ],
+    "solid-ssr": [
+      {
+        "takeoverMs": 24.7,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 27.1,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 26,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 26.9,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 24.4,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 26.6,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 24.4,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 27.5,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 25.1,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 25.1,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 25.2,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 23.6,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 26.6,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 24.4,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 23.4,
+        "renderingMs": 0
+      }
+    ],
+    "react-ssr": [
+      {
+        "takeoverMs": 103.2,
+        "renderingMs": 171.6
+      },
+      {
+        "takeoverMs": 106.8,
+        "renderingMs": 178.5
+      },
+      {
+        "takeoverMs": 112.2,
+        "renderingMs": 182.8
+      },
+      {
+        "takeoverMs": 107.2,
+        "renderingMs": 176.9
+      },
+      {
+        "takeoverMs": 122.3,
+        "renderingMs": 2.6
+      },
+      {
+        "takeoverMs": 144,
+        "renderingMs": 0.1
+      },
+      {
+        "takeoverMs": 111.9,
+        "renderingMs": 180.9
+      },
+      {
+        "takeoverMs": 110.5,
+        "renderingMs": 164.9
+      },
+      {
+        "takeoverMs": 287.2,
+        "renderingMs": 17.3
+      },
+      {
+        "takeoverMs": 115.4,
+        "renderingMs": 171.9
+      },
+      {
+        "takeoverMs": 117.2,
+        "renderingMs": 173.9
+      },
+      {
+        "takeoverMs": 117.5,
+        "renderingMs": 0.1
+      },
+      {
+        "takeoverMs": 117.3,
+        "renderingMs": 171.3
+      },
+      {
+        "takeoverMs": 109.5,
+        "renderingMs": 166.9
+      },
+      {
+        "takeoverMs": 135.9,
+        "renderingMs": 0
+      }
+    ],
+    "remix-ssr": [
+      {
+        "takeoverMs": 167.1,
+        "renderingMs": 165.9
+      },
+      {
+        "takeoverMs": 161.3,
+        "renderingMs": 176.5
+      },
+      {
+        "takeoverMs": 163.8,
+        "renderingMs": 184
+      },
+      {
+        "takeoverMs": 146.4,
+        "renderingMs": 132.4
+      },
+      {
+        "takeoverMs": 184.4,
+        "renderingMs": 3
+      },
+      {
+        "takeoverMs": 162.9,
+        "renderingMs": 177.9
+      },
+      {
+        "takeoverMs": 175.8,
+        "renderingMs": 181.6
+      },
+      {
+        "takeoverMs": 173.2,
+        "renderingMs": 173.1
+      },
+      {
+        "takeoverMs": 157.2,
+        "renderingMs": 176.5
+      },
+      {
+        "takeoverMs": 157.3,
+        "renderingMs": 188.7
+      },
+      {
+        "takeoverMs": 169.6,
+        "renderingMs": 184.5
+      },
+      {
+        "takeoverMs": 153.1,
+        "renderingMs": 0
+      },
+      {
+        "takeoverMs": 160.7,
+        "renderingMs": 181
+      },
+      {
+        "takeoverMs": 173.7,
+        "renderingMs": 192.4
+      },
+      {
+        "takeoverMs": 166.3,
+        "renderingMs": 175.1
+      }
+    ]
+  }
+}

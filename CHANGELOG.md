@@ -2801,6 +2801,17 @@ Corten is pre-1.0, so any minor version may change the API.
     from this change and from the commit it was made on, b38f7880. Found by the Chase Sets pilot,
     whose design system draws its status dots at .375rem
     ([#1199 Kit StatusDot draws its dot at a literal .5rem, so a design system with a smaller status dot edits the copy](https://github.com/corten-run/corten/issues/1199)).
+292. `bench/browser/ssr.mjs` also records how many loads had long-frame rendering between the
+    parser finishing and the app being ready (`renderedLoads`), the takeover median of those loads
+    and of the rest (`takeoverRenderedMs`, `takeoverNotRenderedMs`), and each load's takeover and
+    rendering (`each`), so a round's takeover can be read apart from how many of its loads had
+    that rendering. Measured on a laptop (three runs of 15 loads, Core i9-10885H, Chromium 156,
+    in `bench/browser/results/ssr-rendered/`): 8, 6 and 6 of
+    Corten's loads had it, with takeover medians of 22.0, 22.7 and 20.4 ms against 12.3, 12.6 and
+    11.6 ms for the rest, and 17.7, 16.1 and 12.0 ms over all loads. How much of browser-4's rise
+    this explains is not known, since that round kept only medians; an A/B on one machine,
+    posted on the issue, found the runtime's own start slower too, which this does not change
+    ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
