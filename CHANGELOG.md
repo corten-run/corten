@@ -2877,6 +2877,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- A `Public` answer costs less to send: the last check of its `Cache-Control` copies the
+  header's text, and looks for `no-store` in it again, only when it replaces the header, and the mark
+  that the header is Corten's is one response extension where it was two. Measured with callgrind
+  (release, jemalloc, instructions a request, three runs each, every run the same): a `Public`
+  JSON answer 20,157 where it cost 20,443, `Public::immutable` 18,573 where 19,202, a `Public`
+  page 27,452 where 27,737; a private answer the same within 4. The headers sent are the same.
+
 - The HTTP types an app names are in one module, `corten::http` (design Choice 25, part 3): the
   `http` crate's types as before (`corten::http::StatusCode`, `request::Parts`), and Corten's
   `Body`, `BodyDataStream`, `Request`, `Response`, `IntoResponse`, `IntoResponseParts`,
@@ -4753,6 +4760,10 @@ Corten is pre-1.0, so any minor version may change the API.
   counting them once right after the swap, when the new page's stream may not be opened yet or the
   left one not yet closed
   ([#1134 The watchlist smoke reads its open feed streams once, right after a client navigation, so 'one feed stream while the component is on the page' fails about 1 run in 80](https://github.com/corten-run/corten/issues/1134)).
+- The test that a port taken on `::1` fails `bind` takes another port when the one it took is busy
+  on `127.0.0.1`, up to 8 times, rather than assume a number free on one address is free on the
+  other: a test running beside it held that number on `127.0.0.1` once in CI
+  ([#1203 a_taken_ipv6_loopback_port_is_an_error fails now and then: the [::1] port it takes may be in use on 127.0.0.1 by a parallel test](https://github.com/corten-run/corten/issues/1203)).
 - card-market's push checks send a message once more when its notification is not listed within
   5 seconds, and say which send showed it or how many showed nothing. Under load Chromium now and
   then loses a notification the worker showed: the trace has the push dispatched and its handler

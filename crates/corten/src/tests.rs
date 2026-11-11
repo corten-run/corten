@@ -7840,7 +7840,8 @@ async fn a_route_that_says_no_store_keeps_its_answers_and_failures_out_of_caches
 /// plain text with no quoted value: otherwise a `no-store` goes out on one line (`no-store` alone
 /// beside a quoted value or a byte that is not text), so a cache that reads only one line, or a
 /// value another way, is told the same. `must-understand, no-store` on an answer nothing makes
-/// personal is left as written, and a `private` beside them is not trusted.
+/// personal is left as written, and a `private` beside them is not trusted. Every line is read
+/// for a `no-store`, not only the first.
 #[tokio::test]
 async fn a_cache_control_counts_only_for_what_it_plainly_says() {
     let router = Table::new()
@@ -7855,6 +7856,17 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
             "/second-line",
             get(|| async {
                 let lines = [(header::CACHE_CONTROL, "public, max-age=600"), (header::CACHE_CONTROL, "no-store")];
+                (appended(lines), "second")
+            }),
+        )
+        .route(
+            "/second-line-valued",
+            get(|| async {
+                let lines = [
+                    (header::CACHE_CONTROL, "public, max-age=600"),
+                    (header::CACHE_CONTROL, "no-store=1"),
+                    (header::SET_COOKIE, "seen=1"),
+                ];
                 (appended(lines), "second")
             }),
         )
@@ -8032,6 +8044,7 @@ async fn a_cache_control_counts_only_for_what_it_plainly_says() {
         ("/quoted-failure", "no-store"),
         ("/valued", "no-store"),
         ("/second-line", "public, max-age=600, no-store"),
+        ("/second-line-valued", "no-store"),
         ("/escaped", "no-store"),
         ("/must-understand-shared", "max-age=60, must-understand, no-store"),
         ("/must-understand-valued", "no-store"),
@@ -10131,11 +10144,30 @@ async fn a_taken_ipv6_loopback_port_is_an_error() {
     if !has_ipv6_loopback() {
         return;
     }
-    let taken = std::net::TcpListener::bind("[::1]:0").unwrap();
-    let port = taken.local_addr().unwrap().port();
-    let error = crate::app::bind(None, port).await.expect_err("the port is taken on ::1");
-    assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
-    assert_eq!(crate::app::bind(Some("127.0.0.1"), port).await.unwrap().len(), 1, "HOST names one address");
+    // The test needs the number it takes on `::1` free on `127.0.0.1`, which nothing reserves: a
+    // test running beside it may hold it there (#1203), so a number busy there is tried again. The
+    // probe cannot be held through the test: `bind(None, ..)` would then fail on `127.0.0.1`, not on
+    // the `::1` port this is about, so a number taken in between is caught by the retry instead.
+    let mut busy = "";
+    for _ in 0..8 {
+        let taken = std::net::TcpListener::bind("[::1]:0").unwrap();
+        let port = taken.local_addr().unwrap().port();
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+            busy = "before the test";
+            continue;
+        }
+        let error = crate::app::bind(None, port).await.expect_err("the port is taken on ::1");
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        match crate::app::bind(Some("127.0.0.1"), port).await {
+            Ok(listeners) => {
+                assert_eq!(listeners.len(), 1, "HOST names one address");
+                return;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => busy = "by the time HOST bound it",
+            Err(error) => panic!("{error}"),
+        }
+    }
+    panic!("each of 8 ports taken on ::1 was busy on 127.0.0.1 too, the last {busy}");
 }
 
 #[crate::routes]
