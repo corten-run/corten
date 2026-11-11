@@ -108,8 +108,17 @@ try {
   await page.click("[role=group] button:nth-of-type(2)");
   await page.fill("input[type=search]", "");
   check("with the filter cleared the item count is back", (await page.isVisible("#item-count")) && (await shownText()) === "");
+  // Whether the page's handler cancelled each filter submit and header click, read by a listener on
+  // the window, which runs after the runtime's on the document: a navigation would be too late to see.
+  await page.evaluate(() => {
+    const cancelled = /** @type {any} */ (window).__cancelled = /** @type {boolean[]} */ ([]);
+    addEventListener("submit", (e) => cancelled.push(e.defaultPrevented));
+    addEventListener("click", (e) => e.target instanceof Element && e.target.closest("thead a") && cancelled.push(e.defaultPrevented));
+  });
+  const cancelled = () => page.evaluate(() => /** @type {boolean[]} */ (/** @type {any} */ (window).__cancelled.splice(0)));
   await page.press("input[type=search]", "Enter");
-  check("with JavaScript the Filter button is not drawn, and Enter keeps the page", !(await page.isVisible("form[role=search] button")) && new URL(page.url()).search === "", page.url());
+  const submitKept = await cancelled();
+  check("with JavaScript the Filter button is not drawn, and Enter keeps the page", !(await page.isVisible("form[role=search] button")) && submitKept.join() === "true", submitKept.join());
   check("on a desktop the set and condition are their own columns, not repeated under the name", await page.isHidden("tbody tr td:nth-child(2) small"));
 
   await time("sort by price (moves every row)", () => /** @type {HTMLAnchorElement} */ (document.querySelectorAll("thead a")[3]).click());
@@ -117,7 +126,8 @@ try {
   check("sort orders rows by price", prices.every((p, i) => i === 0 || prices[i - 1] <= p), prices.join(" "));
   await time("sort again (descending)", () => /** @type {HTMLAnchorElement} */ (document.querySelectorAll("thead a")[3]).click());
   await page.click("thead a >> nth=0");
-  check("a header's click sorts in place, not by following its link", new URL(page.url()).search === "", page.url());
+  const clicksKept = await cancelled();
+  check("a header's click sorts in place, not by following its link", clicksKept.length === 3 && clicksKept.every(Boolean), clicksKept.join());
   const names = await page.$$eval("tbody tr", (rows) => rows.slice(0, 30).map((r) => r.cells[1].firstElementChild?.textContent ?? ""));
   check("sort orders rows by name, read from the row's field", names.every((n, i) => i === 0 || names[i - 1].localeCompare(n, "en") <= 0), names.slice(0, 5).join(", "));
   await page.click("tbody tr:first-child input[type=checkbox]");
