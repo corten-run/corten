@@ -839,7 +839,7 @@ run in order:
 
 ```rust
 use std::time::Duration;
-use corten::{extract::Request, http::HeaderValue, middleware::{IntoResponse, Response}, prelude::*};
+use corten::{http::{HeaderValue, IntoResponse, Request, Response}, prelude::*};
 
 struct RequestId;
 
@@ -884,7 +884,7 @@ every request at its prefix, never by a path the middleware compares. A request 
 never meets it:
 
 ```rust
-# use corten::{extract::Request, middleware::Response, prelude::*};
+# use corten::{http::{Request, Response}, prelude::*};
 # struct WriteLimit;
 # impl Middleware for WriteLimit {
 #     async fn call(&self, req: Request, next: impl Next) -> Response { next.run(req).await }
@@ -937,7 +937,7 @@ answer is otherwise sent as it made it, a raw `Response` too, and every other ro
 stage, so the fast route and a page that needs all of them sit side by side:
 
 ```rust
-use corten::{middleware::Response, prelude::*};
+use corten::{http::Response, prelude::*};
 
 #[corten::routes]
 mod url {
@@ -1359,7 +1359,7 @@ A refusal in the app's own shape (a document that does not exist yet,
 `Result<_, JsonError>` stays small), so a helper refuses with `?`, and it is answered as written,
 status, body and cookies. `Ok` is for the route's answers. Its status is a 4xx or 5xx: another
 panics in a debug build, and in release is logged and answered as a 500. A route that keeps
-another server's shape for a body it refuses too takes the whole `corten::extract::Request` and
+another server's shape for a body it refuses too takes the whole `corten::http::Request` and
 reads the body with `corten::extract::bytes_up_to(request.into_body(), max)` (`None` when over
 `max`), since `Json<T>` refuses before the handler in Corten's shape. Its `Err`, a body that could
 not be read, says why (`error.to_string()`, the log's message) and with what status
@@ -1814,7 +1814,7 @@ would skip the host check, the app's middleware, `Caller<T>` and the grace that 
 requests and tasks.
 
 1. A binary or XML body (Protobuf, CBOR, MessagePack, XML): a route under `App::api` whose
-   handler takes the whole `corten::extract::Request`, reads the body with
+   handler takes the whole `corten::http::Request`, reads the body with
    `bytes_up_to(request.into_body(), max)` up to the route's own limit, decodes it with the
    format's crate (`prost`, `ciborium`, `rmp-serde`, `quick-xml`), and answers
    `Media::new(content_type, bytes)`, or JSON. Its failures are the API's JSON (`Api::errors`
@@ -1862,7 +1862,8 @@ requests and tasks.
 use std::time::Duration;
 
 use corten::{
-    extract::{bytes_up_to, Request},
+    extract::bytes_up_to,
+    http::Request,
     http::StatusCode,
     json::Raw,
     prelude::*,

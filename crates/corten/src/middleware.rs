@@ -44,7 +44,7 @@
 //!
 //! ```
 //! use std::time::Duration;
-//! use corten::{extract::Request, http::HeaderValue, middleware::{IntoResponse, Response}, prelude::*};
+//! use corten::{http::{HeaderValue, IntoResponse, Request, Response}, prelude::*};
 //!
 //! struct RequestId;
 //!
@@ -76,7 +76,7 @@
 //! a route that says `unstaged`, which meets none), never by a path compared in the middleware:
 //!
 //! ```
-//! # use corten::{extract::Request, middleware::{IntoResponse, Response}, prelude::*};
+//! # use corten::{http::{IntoResponse, Request, Response}, prelude::*};
 //! # struct RateLimit;
 //! # impl Middleware for RateLimit {
 //! #     async fn call(&self, req: Request, next: impl Next) -> Response { next.run(req).await }
@@ -104,12 +104,8 @@
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use crate::extract::Request;
-/// What a middleware answers, and how it makes one of anything else
-/// (`Refused::too_many(wait).into_response()`, `StatusCode::FORBIDDEN.into_response()`). It takes
-/// the whole request, [`crate::extract::Request`]. A part set on another answer in a tuple before
-/// it, `([(header::LOCATION, url)], "moved")`, is an [`IntoResponseParts`].
-pub use crate::response::{IntoResponse, IntoResponseParts, Response, ResponseParts};
+use crate::http::Request;
+use crate::response::{IntoResponse, Response};
 pub use crate::router::MatchedPath;
 use futures_util::future::Either;
 

@@ -6,7 +6,7 @@
 //! implements [`OptionalFromRequestParts`] too, so it can take `Option<T>`. An extractor that
 //! reads the body ([`crate::Form`], [`crate::Upload`]) implements [`FromRequest`]. A refusal
 //! (`type Rejection`) is anything that makes a response
-//! ([`crate::middleware::IntoResponse`]). Who is asking is a [`crate::Caller`], found by the caller
+//! ([`crate::http::IntoResponse`]). Who is asking is a [`crate::Caller`], found by the caller
 //! type's [`crate::Identify`], never an extractor written for it. A part of the routes' state is a
 //! [`crate::FromRef`] bound:
 //!
@@ -142,7 +142,7 @@
 //!     pub struct Notes;
 //! }
 //!
-//! async fn notes(_: corten::Bytes, text: String) -> String {
+//! async fn notes(_: corten::http::Bytes, text: String) -> String {
 //!     text
 //! }
 //! # fn main() {}
@@ -173,15 +173,14 @@
 
 use std::{future::Future, pin::Pin, task::Poll, time::Duration};
 
-pub use crate::handler::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request, State};
+pub use crate::handler::{FromRequest, FromRequestParts, OptionalFromRequestParts, State};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use http_body::Body as HttpBody;
 use tokio::time::Sleep;
 
 use crate::{
-    answer::Body,
-    body::{BodyDataStream, BoxError},
+    body::{Body, BodyDataStream, BoxError},
     form::upload::{join, KEPT_AS_IT_CAME, READ_PAST, SMALL_PIECE},
     http::StatusCode,
     Error,
@@ -190,7 +189,7 @@ use crate::{
 /// The whole body, or `None` when it is larger than `max` bytes: for a handler that takes the
 /// [`Request`] and reads its body up to a limit of the route's own, answering a body over it (and
 /// one that does not parse) itself, as a route that keeps another server's error shape must.
-/// `Json`, [`crate::Form`] and [`crate::Bytes`] refuse a body before the handler runs,
+/// `Json`, [`crate::Form`] and [`crate::http::Bytes`] refuse a body before the handler runs,
 /// with the app's limit and Corten's answer. A body over `max` is read past, not kept, up to
 /// 64 MiB past it, so a client still sending reads the handler's answer rather than a closed
 /// connection, as an upload's is ([`crate::form::File::bytes_up_to`]); past that, or when its
@@ -204,7 +203,7 @@ use crate::{
 ///
 #[cfg_attr(feature = "json", doc = "```")]
 #[cfg_attr(not(feature = "json"), doc = "```ignore")]
-/// use corten::{extract::{bytes_up_to, Request}, http::StatusCode, prelude::*, JsonError, JsonResponse};
+/// use corten::{extract::bytes_up_to, http::{Request, StatusCode}, prelude::*, JsonError, JsonResponse};
 ///
 /// /// The largest configuration this route takes.
 /// const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -287,7 +286,7 @@ async fn up_to(body: Body, max: usize, past: usize, over: Option<Over>) -> Resul
     }))
 }
 
-/// The most of a body [`crate::Bytes`], `String`, [`crate::Json`] and [`crate::Form`] read: 2 MiB.
+/// The most of a body [`crate::http::Bytes`], `String`, [`crate::Json`] and [`crate::Form`] read: 2 MiB.
 pub(crate) const BODY_LIMIT: usize = 2 << 20;
 
 /// The whole body, for a reader that refuses the request before the handler runs: over
@@ -309,7 +308,7 @@ pub(crate) async fn whole(body: Body) -> Result<Bytes, BodyRejection> {
 }
 
 /// Why a reader of the whole body refused a request, before its handler ran: plain text at its
-/// status. [`crate::Bytes`], `String`, [`crate::Json`] and [`crate::Form`] refuse a body over
+/// status. [`crate::http::Bytes`], `String`, [`crate::Json`] and [`crate::Form`] refuse a body over
 /// 2 MiB (413) or one that could not be read (400); `String` one that is not UTF-8 (400); `Json`
 /// and `Form` one without their content type (415), and `Json` one that does not parse (400) or
 /// whose value does not fit the type (422). A handler that answers it itself takes
@@ -344,9 +343,9 @@ impl std::fmt::Display for BodyRejection {
 
 impl std::error::Error for BodyRejection {}
 
-impl crate::middleware::IntoResponse for BodyRejection {
-    fn into_response(self) -> crate::middleware::Response {
-        crate::middleware::IntoResponse::into_response((self.status, self.text))
+impl crate::http::IntoResponse for BodyRejection {
+    fn into_response(self) -> crate::http::Response {
+        crate::http::IntoResponse::into_response((self.status, self.text))
     }
 }
 
@@ -380,7 +379,7 @@ impl crate::middleware::IntoResponse for BodyRejection {
 /// ```
 /// use std::time::Duration;
 ///
-/// use corten::{extract::{pieces_up_to, BodyError, Request}, http::StatusCode, prelude::*, Error};
+/// use corten::{extract::{pieces_up_to, BodyError}, http::{Request, StatusCode}, prelude::*, Error};
 ///
 /// /// The largest file this route takes.
 /// const MAX_BYTES: usize = 1 << 30;
@@ -801,7 +800,10 @@ mod tests {
     use futures_util::{stream, StreamExt};
 
     use super::{bytes_up_to, pieces_up_to, BodyError, Pieces};
-    use crate::{answer::Body, http::StatusCode, middleware::IntoResponse, Error};
+    use crate::{
+        http::{Body, IntoResponse, StatusCode},
+        Error,
+    };
 
     /// A body in pieces, with no length up front, as a chunked request sends it.
     fn streamed(pieces: &[&'static str]) -> Body {

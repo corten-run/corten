@@ -24,9 +24,9 @@ use std::{
 };
 
 use crate::body::Body;
+use crate::handler::{Handler, Request};
 use crate::response::IntoResponse;
 use crate::response::Response;
-use crate::{extract::Request, handler::Handler};
 use http::header;
 use http::uri::PathAndQuery;
 use http::HeaderValue;

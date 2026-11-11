@@ -2643,6 +2643,14 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- Every HTTP type an app names is in one module, `corten::http` (design Choice 25, part 3): the
+  `http` crate's types as before (`corten::http::StatusCode`, `request::Parts`), and Corten's
+  `Body`, `BodyDataStream`, `Request`, `Response`, `IntoResponse`, `IntoResponseParts`,
+  `ResponseParts` and `Bytes`, which were `corten::answer::Body`, `corten::extract::Request`,
+  `corten::middleware::{IntoResponse, Response, ..}` and `corten::Bytes`. Those paths are gone:
+  change the `use` (`use corten::http::{Body, IntoResponse, Request, Response};`). Nothing else
+  changed; the types are the same.
+
 - axum is no longer one of Corten's dependencies (design Choice 25, step 4, and Choice 21). The
   body (`corten::answer::Body`), `IntoResponse`, `IntoResponseParts`, the readers of a whole
   body, the server-sent events writer and `Listener` are Corten's own, with axum's names and

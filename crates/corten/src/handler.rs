@@ -6,7 +6,7 @@
 //!
 //! A handler is an async function whose arguments implement [`FromRequestParts`], the last one
 //! [`FromRequest`] (it may take the body), and whose result is any
-//! [`IntoResponse`](crate::middleware::IntoResponse). The router boxes its future once.
+//! [`IntoResponse`](crate::http::IntoResponse). The router boxes its future once.
 
 use std::{convert::Infallible, future::Future};
 
@@ -18,7 +18,7 @@ use crate::{
 };
 
 /// A request as a handler or a middleware takes it whole.
-pub type Request<T = crate::answer::Body> = http::Request<T>;
+pub type Request<T = crate::body::Body> = http::Request<T>;
 
 /// A value read from a request's head (its method, URL and headers, and what the stages put in
 /// its extensions), which a handler takes as an argument. A refusal is `Rejection`, answered as
@@ -154,7 +154,7 @@ impl<S: Send + Sync> FromRequest<S> for Request {
     }
 }
 
-/// The whole body as [`crate::Bytes`], refused with a `413` over 2 MiB ([`BodyRejection`]).
+/// The whole body as [`crate::http::Bytes`], refused with a `413` over 2 MiB ([`BodyRejection`]).
 impl<S: Send + Sync> FromRequest<S> for bytes::Bytes {
     type Rejection = BodyRejection;
 
@@ -181,7 +181,7 @@ impl<S: Send + Sync> FromRequest<S> for String {
 
 /// The body as it comes, unread, for a handler that reads it itself
 /// ([`crate::extract::pieces_up_to`]).
-impl<S: Send + Sync> FromRequest<S> for crate::answer::Body {
+impl<S: Send + Sync> FromRequest<S> for crate::http::Body {
     type Rejection = Infallible;
 
     async fn from_request(req: Request, _: &S) -> Result<Self, Infallible> {

@@ -13,7 +13,8 @@ use std::{
 };
 
 use crate::body::Body;
-use crate::extract::{FromRequestParts, Request};
+use crate::extract::FromRequestParts;
+use crate::handler::Request;
 use crate::response::IntoResponse;
 use crate::response::Response;
 use http::header;

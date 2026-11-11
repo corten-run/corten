@@ -1,7 +1,8 @@
 //! What browsers report a page's CSP blocked ([`super::Policy::report_to`]), read the same
 //! whichever browser sent it.
 
-use crate::extract::{FromRequest, Request};
+use crate::extract::FromRequest;
+use crate::handler::Request;
 use crate::response::IntoResponse;
 use crate::response::Response;
 use http::header;

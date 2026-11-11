@@ -22,7 +22,8 @@ use std::{
 };
 
 use crate::{
-    extract::{FromRequestParts, Request},
+    extract::FromRequestParts,
+    handler::Request,
     response::{IntoResponse, Response},
 };
 use http::{header, request::Parts, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
@@ -1957,7 +1958,7 @@ pub mod cookie {
         ///         InvalidCookie::Name => Error::new(e),
         ///     })
         /// }
-        /// # use corten::middleware::IntoResponse;
+        /// # use corten::http::IntoResponse;
         /// assert!(session("c2Vzc2lvbg").is_ok());
         /// assert_eq!(session("a; b").unwrap_err().into_response().status(), StatusCode::BAD_GATEWAY);
         /// ```

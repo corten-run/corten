@@ -1,9 +1,7 @@
 //! A relay behind catch-all routes: `any = ..` serves every method, and one generic handler
 //! serves several routes while each still takes its own `Params`.
 use corten::{
-    answer::Body,
-    extract::Request,
-    http::StatusCode,
+    http::{Body, Request, StatusCode},
     prelude::*,
     route::{FromUrl, Local},
     App, Relay,

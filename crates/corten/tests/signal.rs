@@ -2,7 +2,11 @@
 //! and a request that is answered.
 use std::{io::Write, time::Duration};
 
-use corten::{answer::Body, extract::State, http::Request, Abort, App, Router, Signal};
+use corten::{
+    extract::State,
+    http::{Body, Request},
+    Abort, App, Router, Signal,
+};
 use http_body_util::BodyExt;
 use tokio::sync::mpsc;
 use tower::ServiceExt;

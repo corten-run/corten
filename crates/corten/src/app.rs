@@ -10,7 +10,7 @@ use crate::{
     assets::Assets,
     cache::{self, Seen},
     client::Peer,
-    extract::Request,
+    handler::Request,
     listener::Listener,
     middleware::Middleware,
     page::{self, default_error_page, error_page_fn, Asked, Credentials, ErrorPageFn, Failure, Shared},

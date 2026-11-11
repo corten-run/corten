@@ -2,10 +2,10 @@ use super::*;
 use crate::answer::ForOne;
 use crate::body::Body;
 use crate::cache::Cache;
+use crate::http::{self, Request};
 use crate::router::{get, Table};
 use crate::security::cookie::SetCookie;
 use crate::view::{html, Render};
-use http::Request;
 use http_body_util::BodyExt;
 use std::time::Duration;
 use tower::ServiceExt;
@@ -70,9 +70,9 @@ impl<F: Clone> tower::Layer<crate::Router> for OuterFn<F> {
     }
 }
 
-impl<F, Fut> tower::Service<crate::extract::Request> for OuterFnService<F>
+impl<F, Fut> tower::Service<crate::http::Request> for OuterFnService<F>
 where
-    F: Fn(crate::extract::Request, crate::Router) -> Fut,
+    F: Fn(crate::http::Request, crate::Router) -> Fut,
     Fut: std::future::Future<Output = crate::response::Response> + Send + 'static,
 {
     type Response = crate::response::Response;
@@ -83,7 +83,7 @@ where
         std::task::Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: crate::extract::Request) -> Self::Future {
+    fn call(&mut self, req: crate::http::Request) -> Self::Future {
         let answer = (self.f)(req, self.inner.clone());
         Box::pin(async move { Ok(answer.await) })
     }
@@ -92,8 +92,8 @@ where
 /// A layer that gives each request the peer address a server would ([`crate::testing::Call::peer`]).
 fn peer(
     at: std::net::SocketAddr,
-) -> tower::util::MapRequestLayer<impl Fn(crate::extract::Request) -> crate::extract::Request + Clone + Send + Sync> {
-    tower::util::MapRequestLayer::new(move |mut req: crate::extract::Request| {
+) -> tower::util::MapRequestLayer<impl Fn(crate::http::Request) -> crate::http::Request + Clone + Send + Sync> {
+    tower::util::MapRequestLayer::new(move |mut req: crate::http::Request| {
         req.extensions_mut().insert(crate::PeerAddr(at));
         req
     })
@@ -183,7 +183,7 @@ impl<S: Sync> crate::Identify<S> for Viewer {
 struct AsViewer(Option<&'static str>);
 
 impl crate::Middleware for AsViewer {
-    async fn call(&self, mut req: crate::extract::Request, next: impl crate::Next) -> Response {
+    async fn call(&self, mut req: crate::http::Request, next: impl crate::Next) -> Response {
         if let Some(name) = self.0 {
             req.headers_mut().insert("viewer", http::HeaderValue::from_static(name));
         }
@@ -196,7 +196,7 @@ impl crate::Middleware for AsViewer {
 struct Stamp;
 
 impl crate::Middleware for Stamp {
-    async fn call(&self, req: crate::extract::Request, next: impl crate::Next) -> Response {
+    async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> Response {
         use http::header;
         use http::HeaderValue;
         let mut res = if req.headers().contains_key("x-flood") {
@@ -1962,11 +1962,11 @@ async fn a_rule_read_by_an_outer_layer_keys_the_page_as_its_base() {
     let outer = App::new(Routes::from(routes()))
         .error_page(test_error_page, ())
         .middleware(AsViewer(Some("ada")))
-        .layer(OuterFn(|req: crate::extract::Request, next: crate::Router| async move {
+        .layer(OuterFn(|req: crate::http::Request, next: crate::Router| async move {
             let (mut parts, body) = req.into_parts();
             parts.headers.insert("viewer", http::HeaderValue::from_static("ada"));
             let _ = <Caller<Seller> as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
-            next.oneshot(crate::extract::Request::from_parts(parts, body)).await.unwrap()
+            next.oneshot(crate::http::Request::from_parts(parts, body)).await.unwrap()
         }))
         .router();
     let (_, viewer, _) = call_with(app(routes(), Some("ada")), "GET", "/", Some("nav"), None).await;
@@ -3983,7 +3983,7 @@ async fn a_page_catch_all_does_not_answer_under_an_api() {
 #[tokio::test]
 async fn an_api_answers_under_router_nest() {
     let nest = |prefix: &'static str, app: crate::Router| {
-        app.layer(tower::util::MapRequestLayer::new(move |mut req: crate::extract::Request| {
+        app.layer(tower::util::MapRequestLayer::new(move |mut req: crate::http::Request| {
             let inner = req.uri().path().strip_prefix(prefix).expect("under the prefix").to_string();
             *req.uri_mut() = inner.parse().unwrap();
             req
@@ -4281,11 +4281,11 @@ async fn a_layer_outside_the_app_shares_the_lookup_with_the_handler() {
     let routes = Table::new().route("/", get(|Caller(v): Caller<Viewer>| async move { v.0 }));
     let router = App::new(Routes::from(routes))
         .middleware(AsViewer(Some("ada")))
-        .layer(OuterFn(|req: crate::extract::Request, next: crate::Router| async move {
+        .layer(OuterFn(|req: crate::http::Request, next: crate::Router| async move {
             let (mut parts, body) = req.into_parts();
             parts.headers.insert("viewer", http::HeaderValue::from_static("ada"));
             let _ = <Caller<Viewer> as crate::extract::FromRequestParts<()>>::from_request_parts(&mut parts, &()).await;
-            next.oneshot(crate::extract::Request::from_parts(parts, body)).await.unwrap()
+            next.oneshot(crate::http::Request::from_parts(parts, body)).await.unwrap()
         }))
         .router();
     LOOKUPS.with(|n| n.set(0));
@@ -4299,11 +4299,11 @@ async fn a_layer_outside_the_app_shares_the_lookup_with_the_handler() {
 async fn a_middleware_that_reads_the_caller_shares_the_lookup() {
     struct Logs;
     impl crate::Middleware for Logs {
-        async fn call(&self, req: crate::extract::Request, next: impl crate::Next) -> Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> Response {
             let (mut parts, body) = req.into_parts();
             parts.headers.insert("viewer", http::HeaderValue::from_static("ada"));
             let who = Caller::<Viewer>::find(&parts, &()).await.map(|Caller(v)| v.0).unwrap_or("no one");
-            let mut res = next.run(crate::extract::Request::from_parts(parts, body)).await;
+            let mut res = next.run(crate::http::Request::from_parts(parts, body)).await;
             res.headers_mut().insert("x-who", http::HeaderValue::from_static(who));
             res
         }
@@ -5371,7 +5371,7 @@ fn a_route_matches_a_path_segment_by_segment() {
 #[tokio::test]
 async fn a_layer_around_the_app_goes_around_an_unstaged_route() {
     let router = App::new(unstaged_url::router())
-        .layer(OuterFn(|req: crate::extract::Request, next: crate::Router| async move {
+        .layer(OuterFn(|req: crate::http::Request, next: crate::Router| async move {
             let mut res = next.oneshot(req).await.unwrap();
             res.headers_mut().insert("x-outer", http::HeaderValue::from_static("1"));
             res
@@ -6929,7 +6929,7 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
     let rows = move |pulled: Arc<AtomicUsize>| {
         futures_util::stream::iter(0..4).map(move |i| {
             pulled.fetch_add(1, Ordering::SeqCst);
-            Ok::<_, std::io::Error>(crate::Bytes::from(row(i)))
+            Ok::<_, std::io::Error>(crate::http::Bytes::from(row(i)))
         })
     };
     let (export, sized) = (pulled.clone(), pulled.clone());
@@ -6951,27 +6951,33 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
         .route(
             "/empty",
             get(|| async {
-                crate::Media::stream("text/csv", futures_util::stream::empty::<Result<crate::Bytes, std::io::Error>>())
+                crate::Media::stream("text/csv", futures_util::stream::empty::<Result<crate::http::Bytes, std::io::Error>>())
             }),
         )
         .route(
             "/empty-sized",
             get(|| async {
-                crate::Media::stream_sized("text/csv", 0, futures_util::stream::empty::<Result<crate::Bytes, std::io::Error>>())
+                crate::Media::stream_sized(
+                    "text/csv",
+                    0,
+                    futures_util::stream::empty::<Result<crate::http::Bytes, std::io::Error>>(),
+                )
             }),
         )
         .route(
             "/small",
             get(|| async {
-                let rows =
-                    futures_util::stream::iter(["a,1\n", "b,2\n"].map(|row| Ok::<_, std::io::Error>(crate::Bytes::from(row))));
+                let rows = futures_util::stream::iter(
+                    ["a,1\n", "b,2\n"].map(|row| Ok::<_, std::io::Error>(crate::http::Bytes::from(row))),
+                );
                 crate::Media::stream_sized("text/csv", 8, rows)
             }),
         )
         .route(
             "/picture",
             get(|| async {
-                let png = futures_util::stream::once(async { Ok::<_, std::io::Error>(crate::Bytes::from(vec![7u8; 4096])) });
+                let png =
+                    futures_util::stream::once(async { Ok::<_, std::io::Error>(crate::http::Bytes::from(vec![7u8; 4096])) });
                 Public::new(Duration::from_secs(60), crate::Media::stream("image/png", png))
             }),
         );
@@ -7072,7 +7078,7 @@ async fn a_body_read_as_it_arrives_is_read_before_it_ends_and_refused_where_a_br
     let (first, mut got_first) = tokio::sync::mpsc::unbounded_channel::<usize>();
     let routes = Table::new().route(
         "/up",
-        crate::router::put(move |request: crate::extract::Request| {
+        crate::router::put(move |request: crate::http::Request| {
             let first = first.clone();
             async move {
                 let mut pieces = crate::extract::pieces_up_to(request.into_body(), MAX);
@@ -7163,7 +7169,7 @@ async fn what_a_large_upload_costs() {
     };
     let routes = Table::new().route(
         "/up",
-        crate::router::put(|request: crate::extract::Request| async move {
+        crate::router::put(|request: crate::http::Request| async move {
             let mut pieces = crate::extract::pieces_up_to(request.into_body(), usize::MAX);
             let (mut stored, mut largest) = (0usize, 0usize);
             while let Some(piece) = pieces.chunk().await? {
@@ -7212,7 +7218,7 @@ async fn a_body_trickled_in_on_a_route_with_no_deadline_is_a_408() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let routes = Table::new().route(
         "/up",
-        crate::router::put(|request: crate::extract::Request| async move {
+        crate::router::put(|request: crate::http::Request| async move {
             let mut pieces = crate::extract::pieces_up_to(request.into_body(), usize::MAX).idle(Duration::from_millis(500));
             let mut stored = 0;
             while let Some(piece) = pieces.chunk().await? {
@@ -7276,7 +7282,7 @@ async fn what_a_large_download_costs() {
             .unwrap_or(0)
     };
     // 64 KiB chunks of CSV-like text, made as they are asked for.
-    let chunk = |i: usize| crate::Bytes::from(format!("{i:>10},Pikachu,Base Set,Near Mint,1999\n").repeat(64 * 1024 / 46));
+    let chunk = |i: usize| crate::http::Bytes::from(format!("{i:>10},Pikachu,Base Set,Near Mint,1999\n").repeat(64 * 1024 / 46));
     let chunks = mib * 1024 * 1024 / chunk(0).len();
     let routes = Table::new().route(
         "/export",
@@ -7346,10 +7352,10 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
             self.0.store(true, Ordering::SeqCst);
         }
     }
-    fn then(error: Option<&'static str>) -> impl futures_util::Stream<Item = Result<crate::Bytes, &'static str>> + Send {
+    fn then(error: Option<&'static str>) -> impl futures_util::Stream<Item = Result<crate::http::Bytes, &'static str>> + Send {
         futures_util::stream::unfold(0, move |step| async move {
             match step {
-                0 => Some((Ok(crate::Bytes::from_static(b"abc")), 1)),
+                0 => Some((Ok(crate::http::Bytes::from_static(b"abc")), 1)),
                 1 => {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     error.map(|error| (Err(error), 2))
@@ -7374,10 +7380,10 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
                             let go = go.clone();
                             async move {
                                 match step {
-                                    0 => Some((Ok::<_, std::io::Error>(crate::Bytes::from_static(b"first")), 1)),
+                                    0 => Some((Ok::<_, std::io::Error>(crate::http::Bytes::from_static(b"first")), 1)),
                                     1 => {
                                         go.notified().await;
-                                        Some((Ok(crate::Bytes::from_static(b"rest")), 2))
+                                        Some((Ok(crate::http::Bytes::from_static(b"rest")), 2))
                                     }
                                     _ => None,
                                 }
@@ -7393,7 +7399,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
                 get(move || {
                     let (made, guard) = (made.clone(), Dropped(dropped.clone()));
                     async move {
-                        let chunk = crate::Bytes::from(vec![b'x'; 64 * 1024]);
+                        let chunk = crate::http::Bytes::from(vec![b'x'; 64 * 1024]);
                         crate::Media::stream(
                             "application/octet-stream",
                             futures_util::stream::repeat_with(move || {
@@ -7419,7 +7425,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
                         if part == "def" {
                             tokio::time::sleep(Duration::from_millis(100)).await;
                         }
-                        Ok::<_, &str>(crate::Bytes::from(part))
+                        Ok::<_, &str>(crate::http::Bytes::from(part))
                     });
                     crate::Media::stream_sized("application/octet-stream", 5, chunks)
                 }),
@@ -8222,7 +8228,7 @@ async fn dates_are_written_in_the_visitors_zone_while_corten_renders_the_answer(
     // cannot lose that it is `Public`: the request's signal holds it.
     struct Rebuild;
     impl crate::Middleware for Rebuild {
-        async fn call(&self, req: crate::extract::Request, next: impl crate::Next) -> Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> Response {
             let (parts, body) = next.run(req).await.into_parts();
             let mut res = Response::new(body);
             *res.status_mut() = parts.status;
@@ -8598,7 +8604,7 @@ async fn a_handlers_arguments_are_read_in_order_and_the_first_refusal_answers() 
         });
         Request::new(Body::from_stream(body))
     };
-    let answer = |response: crate::middleware::Response| async move {
+    let answer = |response: crate::http::Response| async move {
         let (parts, body) = response.into_parts();
         (parts.status, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
     };
@@ -10663,7 +10669,7 @@ async fn a_full_document_denies_powerful_features_and_an_area_allows_one() {
 struct DenyMore;
 
 impl crate::Middleware for DenyMore {
-    async fn call(&self, req: crate::extract::Request, next: impl crate::Next) -> crate::response::Response {
+    async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
         let mut res = next.run(req).await;
         res.headers_mut().append("permissions-policy", http::HeaderValue::from_static("fullscreen=()"));
         res.headers_mut().append("permissions-policy", http::HeaderValue::from_static("camera=()"));
@@ -11186,7 +11192,7 @@ async fn big_policy_page(req: Req) -> HtmlResult {
 struct AddRequestId;
 
 impl crate::Middleware for AddRequestId {
-    async fn call(&self, req: crate::extract::Request, next: impl crate::Next) -> crate::response::Response {
+    async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> crate::response::Response {
         let mut res = next.run(req).await;
         res.headers_mut().insert("x-request-id", http::HeaderValue::from_static("0123456789abcdef"));
         res
@@ -12348,7 +12354,7 @@ mod layout_reads {
     struct Holds(Arc<()>);
 
     impl crate::Middleware for Holds {
-        async fn call(&self, mut req: crate::extract::Request, next: impl crate::Next) -> Response {
+        async fn call(&self, mut req: crate::http::Request, next: impl crate::Next) -> Response {
             req.extensions_mut().insert(self.0.clone());
             next.run(req).await
         }
@@ -12647,7 +12653,7 @@ mod layout_reads {
     struct Rebuild;
 
     impl crate::Middleware for Rebuild {
-        async fn call(&self, req: crate::extract::Request, next: impl crate::Next) -> Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::Next) -> Response {
             let (head, body) = next.run(req).await.into_parts();
             let bytes = body.collect().await.unwrap().to_bytes();
             let mut res = Response::new(Body::from(bytes));
@@ -12949,7 +12955,7 @@ mod layout_reads {
     struct SlowAfter;
 
     impl crate::Middleware for SlowAfter {
-        async fn call(&self, req: crate::extract::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
             let res = next.run(req).await;
             tokio::time::sleep(Duration::from_millis(300)).await;
             res
@@ -12960,7 +12966,7 @@ mod layout_reads {
     struct RefuseAfter;
 
     impl crate::Middleware for RefuseAfter {
-        async fn call(&self, req: crate::extract::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
             let _ = next.run(req).await;
             crate::response::IntoResponse::into_response(StatusCode::FORBIDDEN)
         }
@@ -12971,7 +12977,7 @@ mod layout_reads {
     struct ForbidAfter;
 
     impl crate::Middleware for ForbidAfter {
-        async fn call(&self, req: crate::extract::Request, next: impl crate::middleware::Next) -> crate::response::Response {
+        async fn call(&self, req: crate::http::Request, next: impl crate::middleware::Next) -> crate::response::Response {
             let _ = next.run(req).await;
             crate::response::IntoResponse::into_response(crate::Refused::forbidden())
         }
@@ -13379,7 +13385,7 @@ async fn path_parameters_are_read_from_the_path_matched() {
             .route("/s/{s}", get(|Num(s): Num<String>| async move { s }))
             .route(
                 "/two/{a}",
-                get(|req: crate::extract::Request| async move {
+                get(|req: crate::http::Request| async move {
                     match crate::route::read_path::<(u32, u32)>(&req.into_parts().0) {
                         Ok(_) => StatusCode::OK.into_response(),
                         Err(rejection) => rejection.into_response(),

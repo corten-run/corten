@@ -59,14 +59,14 @@
 //! compile as one, and neither does a map whose keys JSON cannot hold:
 //!
 //! ```compile_fail
-//! use corten::{middleware::IntoResponse, Json};
+//! use corten::{http::IntoResponse, Json};
 //! #[derive(serde::Serialize)]
 //! struct Price { lowest: String }
 //! let _ = Json(Price { lowest: "$1".into() }).into_response();
 //! ```
 //!
 //! ```compile_fail
-//! use corten::{middleware::IntoResponse, Json};
+//! use corten::{http::IntoResponse, Json};
 //! let mut grid = std::collections::BTreeMap::new();
 //! grid.insert((1, 2), "a tuple is not a JSON key");
 //! let _ = Json(grid).into_response();
@@ -134,12 +134,13 @@ use std::{
     },
 };
 
-use crate::extract::{BodyRejection, FromRequest, Request};
+use crate::extract::{BodyRejection, FromRequest};
+use crate::handler::Request;
 use bytes::Bytes;
 use http::{header, HeaderValue, StatusCode};
 
 use crate::{
-    answer::Body,
+    body::Body,
     response::{IntoResponse, Response},
 };
 
