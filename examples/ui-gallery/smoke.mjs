@@ -109,6 +109,79 @@ const besideText = (el) => {
 };
 /** @param {{ gap: number, rem: number, off: number }} b */
 const spacedLikeButton = (b) => Math.abs(b.gap - b.rem) <= 0.5 && Math.abs(b.off) <= 1;
+// Kit Tabs and Segmented: each choice's weight and the chosen one's color are the theme's
+// tab-font-weight and tab-selected-color (500 and --foreground), so a theme whose chosen tab is its
+// primary color, or whose choices are semibold, sets two tokens (#1123). For each [chosen, other]
+// selector pair: "chosen's weight, other's weight, chosen's color", with the kit's theme and with one
+// that sets both, read with transitions off so the color is the end value, not a frame of its fade.
+const tabType = (/** @type {string[][]} */ pairs) => {
+  const probe = (/** @type {string} */ value) => {
+    const el = document.createElement("span");
+    el.style.color = value;
+    document.body.append(el);
+    const color = getComputedStyle(el).color;
+    el.remove();
+    return color;
+  };
+  const read = () =>
+    pairs.map(([chosen, other]) => {
+      const [c, o] = [document.querySelector(chosen), document.querySelector(other)];
+      return c && o ? `${getComputedStyle(c).fontWeight} ${getComputedStyle(o).fontWeight} ${getComputedStyle(c).color}` : `missing ${c ? other : chosen}`;
+    });
+  const still = new CSSStyleSheet();
+  still.replaceSync("* { transition: none !important; }");
+  const theme = new CSSStyleSheet();
+  theme.replaceSync(":root { --tab-font-weight: 600; --tab-selected-color: var(--primary); }");
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, still];
+  const kit = read();
+  document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme];
+  const themed = read();
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
+  // Read once more so the kit's values are computed while transitions are still off, and removing
+  // that sheet starts no fade.
+  read();
+  document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== still);
+  return { kit, themed, foreground: probe("var(--foreground)"), primary: probe("var(--primary)") };
+};
+// Hovers each chosen choice under a theme whose chosen color is its primary, with transitions off,
+// and reads whether it is hovered, its color and the primary's: a chosen choice under the pointer
+// keeps the theme's chosen color (#1123).
+const chosenUnderPointer = async (/** @type {import("@playwright/test").Page} */ pg, /** @type {string[]} */ selectors) => {
+  const hoverTheme = await pg.evaluateHandle(() => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(":root { --tab-selected-color: var(--primary); } * { transition: none !important; }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    return sheet;
+  });
+  /** @type {{ hovered: boolean, color: string, primary: string }[]} */
+  const hoveredChoices = [];
+  try {
+    for (const chosen of selectors) {
+      const choice = pg.locator(chosen);
+      await choice.hover();
+      hoveredChoices.push(
+        await choice.evaluate((el) => {
+          const probe = document.createElement("span");
+          probe.style.color = "var(--primary)";
+          document.body.append(probe);
+          const out = { hovered: el.matches(":hover"), color: getComputedStyle(el).color, primary: getComputedStyle(probe).color };
+          probe.remove();
+          return out;
+        }),
+      );
+    }
+  } finally {
+    await pg.evaluate((sheet) => {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== sheet);
+    }, hoverTheme);
+    await hoverTheme.dispose();
+    await pg.mouse.move(0, 0);
+  }
+  return hoveredChoices;
+};
+/** @param {{ kit: string[], themed: string[], foreground: string, primary: string }} t */
+const tabTypeIsTheThemes = (t) =>
+  t.primary !== t.foreground && t.kit.every((s) => s === `500 500 ${t.foreground}`) && t.themed.every((s) => s === `600 600 ${t.primary}`);
 
 for (engine of names) {
   const browser = steady(await engines[engine].launch({ headless: true }));
@@ -401,6 +474,78 @@ async function run(browser) {
     return result;
   });
   check("Checkbox: drawn as a checkbox, but not an input whose role is switch", drawnBox.box === "none" && drawnBox.asSwitch === "auto", JSON.stringify(drawnBox));
+  // A script that sets checked sends no change, so the group keeps its answer until the script
+  // dispatches input and change on each box it set, as the CheckboxGroup doc says. The filled step
+  // sets only the last box, so the group answers a change from a box other than its first.
+  const scripted = await page.evaluate(() => {
+    const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
+    const was = boxes.map((b) => b.checked);
+    const valid = () => boxes.every((b) => b.checkValidity());
+    /** @param {HTMLInputElement[]} set */
+    const tell = (set) => {
+      for (const b of set) {
+        b.dispatchEvent(new Event("input", { bubbles: true }));
+        b.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    };
+    for (const b of boxes) b.checked = false;
+    const cleared = valid();
+    tell(boxes);
+    const clearedTold = valid();
+    const last = /** @type {HTMLInputElement} */ (boxes.at(-1));
+    last.checked = true;
+    const filled = valid();
+    const message = boxes[0].validationMessage;
+    tell([last]);
+    const filledTold = valid();
+    for (const [i, b] of boxes.entries()) b.checked = was[i];
+    tell(boxes);
+    return { count: boxes.length, cleared, clearedTold, filled, message, filledTold, back: valid() };
+  });
+  check(
+    "CheckboxGroup: boxes a script sets keep the group's old answer until it dispatches input and change on them (cleared: valid, then refused; last box filled: refused with the app's message, then valid)",
+    scripted.count > 1 && scripted.cleared && !scripted.clearedTold && !scripted.filled && scripted.message === "Choose where you ship." && scripted.filledTold && scripted.back,
+    JSON.stringify(scripted),
+  );
+  // Back to a page the runtime swapped in brings back a box a script set with input and change,
+  // and one it set without them as drawn (the runtime keeps only fields it saw an event on). On a
+  // page of its own, so the form above keeps its state; only where the Navigation API is, which
+  // the runtime's back/forward needs.
+  const navContext = await browser.newContext();
+  const nav = await navContext.newPage();
+  nav.on("console", (m) => m.type() === "error" && !bug(m.text()) && errors.push(m.text()));
+  nav.on("pageerror", (e) => errors.push(e.message));
+  await nav.goto(`${base}/`);
+  const galleryTitle = await nav.title();
+  const backCheck = "CheckboxGroup: back to a swapped page keeps a box a script set with input and change, and brings one set without them back as drawn";
+  if (await nav.evaluate(() => "navigation" in window)) {
+    const set = await nav.evaluate(() => {
+      const boxes = /** @type {HTMLInputElement[]} */ (Array.from(document.querySelectorAll('form[action$="/sell"] fieldset input[type="checkbox"]')));
+      const [told, untold] = boxes.filter((b) => !b.defaultChecked);
+      told.checked = true;
+      told.dispatchEvent(new Event("input", { bubbles: true }));
+      told.dispatchEvent(new Event("change", { bubbles: true }));
+      untold.checked = true;
+      (/** @type {any} */ (window)).__sameDocument = 1;
+      return { told: told.value, untold: untold.value };
+    });
+    // Wait for each page's title, not its address: without NavigationPrecommitController the
+    // runtime moves the address at the click, before the page is drawn, and a Back taken then, or
+    // read before the page it brings back is in, reads the old <main>.
+    const drawn = (/** @type {string} */ title) => !!document.querySelector("main") && document.title === title && !document.querySelector("main[aria-busy]");
+    await nav.getByRole("link", { name: "Orders", exact: true }).first().click();
+    const left = await nav.waitForFunction(drawn, "Orders | corten-ui", { timeout: 10000 }).then(() => true, () => false);
+    // Back from the page, as the runtime's smoke takes it: Playwright's Linux WebKit loses the page
+    // when it drives a traverse the runtime intercepts.
+    await nav.evaluate(() => history.back());
+    const back = left && (await nav.waitForFunction(drawn, galleryTitle, { timeout: 10000 }).then(() => true, () => false));
+    const after = await nav.evaluate(({ told, untold }) => {
+      const box = (/** @type {string} */ value) => /** @type {HTMLInputElement | null} */ (document.querySelector(`form[action$="/sell"] fieldset input[type="checkbox"][value="${value}"]`));
+      return { swapped: (/** @type {any} */ (window)).__sameDocument === 1, told: box(told)?.checked, untold: box(untold)?.checked };
+    }, set);
+    check(backCheck, left && back && after.swapped && after.told === true && after.untold === false, JSON.stringify({ left, back, set, after }));
+  } else skip(backCheck, "no Navigation API: a navigation is a full page load");
+  await navContext.close();
   await us.uncheck();
   const shipMessage = await us.evaluate((i) => /** @type {HTMLInputElement} */ (i).validationMessage);
   await page.getByRole("button", { name: "List for sale" }).click();
@@ -1201,6 +1346,45 @@ async function run(browser) {
     "Segmented, Stepper and Checkboxes: corten-ui's ChoiceGroup, NumberField and CheckboxGroup drawn by the kit",
     kitLooks.group === "true true" && kitLooks.chosen !== kitLooks.other && kitLooks.other === "rgba(0, 0, 0, 0)" && kitLooks.stepper === "2.25 2.25 2.25" && kitLooks.fieldset === "grid none",
     JSON.stringify(kitLooks),
+  );
+  // Checkboxes and RadioGroup space their choices and their legend from two theme tokens
+  // (choice-list-gap, choice-list-legend-gap; .75rem each), so a theme that sets them moves both groups.
+  const choiceSpacing = await page.evaluate(() => {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const measure = () =>
+      ["[class*='checkboxes__checkboxes'] > fieldset", "fieldset[class*='radio-group__group']"].map((sel) => {
+        const set = /** @type {HTMLElement} */ (document.querySelector(sel));
+        const legend = /** @type {HTMLElement} */ (set.querySelector(":scope > legend"));
+        return [getComputedStyle(set).rowGap, getComputedStyle(legend).marginBottom].map((v) => parseFloat(v) / rem).join(" ");
+      });
+    const kit = measure();
+    const theme = new CSSStyleSheet();
+    theme.replaceSync(":root { --choice-list-gap: .5rem; --choice-list-legend-gap: .25rem; }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme];
+    const themed = measure();
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
+    return { kit, themed };
+  });
+  check(
+    "Checkboxes and RadioGroup: the gap between choices and under the legend are the theme's choice-list-gap and choice-list-legend-gap",
+    choiceSpacing.kit.every((s) => s === "0.75 0.75") && choiceSpacing.themed.every((s) => s === "0.5 0.25"),
+    JSON.stringify(choiceSpacing),
+  );
+  const tabsType = await page.evaluate(tabType, [
+    ["[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"true\"]", "[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"false\"]"],
+    ["[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"true\"]", "[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"false\"]"],
+  ]);
+  check("Tabs and Segmented: each choice's weight and the chosen one's color are the theme's tab-font-weight and tab-selected-color", tabTypeIsTheThemes(tabsType), JSON.stringify(tabsType));
+  // The selected tab and the checked Segmented choice keep it under the pointer too: their chosen
+  // rules come after their hover rules at the same weight.
+  const hoveredTabs = await chosenUnderPointer(page, [
+    "[class*='tabs__tabs'] [role=\"tab\"][aria-selected=\"true\"]",
+    "[class*='segmented__segmented'] [role=\"radio\"][aria-checked=\"true\"]",
+  ]);
+  check(
+    "Tabs and Segmented: the chosen choice keeps the theme's chosen color under the pointer",
+    hoveredTabs.length === 2 && hoveredTabs.every((c) => c.hovered && c.color === c.primary),
+    JSON.stringify(hoveredTabs),
   );
   await period("Week").click();
   check("a click chooses in place, and every part of the group follows", (await period("Week").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $12.10 this week.|Sold 3 this week.", await showing());
@@ -2722,6 +2906,20 @@ async function run(browser) {
     links.current === "Newest" && links.fits && links.fills[0] !== clear && links.fills[0] !== links.track && links.fills.slice(1).every((c) => c === clear),
     JSON.stringify(links),
   );
+  const linksType = await orders.evaluate(tabType, [
+    ["nav[class*='segmented__links'] > a[aria-current='page']", "nav[class*='segmented__links'] > a:not([aria-current])"],
+    ["[class*='segmented__track'] > label:has(> input:checked)", "[class*='segmented__track'] > label:not(:has(> input:checked))"],
+  ]);
+  check("SegmentedLinks and SegmentedRadios: each choice's weight and the chosen one's color are the theme's", tabTypeIsTheThemes(linksType), JSON.stringify(linksType));
+  // Under the pointer the checked SegmentedRadio and the current SegmentedLinks link keep the
+  // theme's chosen color: the radio's hover rule, which weighs more than its checked one, leaves a
+  // checked choice alone, and the link's chosen rule comes after its hover rule.
+  const hoveredChoices = await chosenUnderPointer(orders, ["[class*='segmented__track'] > label:has(> input:checked)", "nav[class*='segmented__links'] > a[aria-current='page']"]);
+  check(
+    "SegmentedRadios and SegmentedLinks: the chosen choice keeps the theme's chosen color under the pointer",
+    hoveredChoices.length === 2 && hoveredChoices.every((c) => c.hovered && c.color === c.primary),
+    JSON.stringify(hoveredChoices),
+  );
   // StackStart: a column whose children keep their own width, a link as wide as its words and a
   // badge, each at most the column's; at 320px a word wider than the column breaks inside its link,
   // and a picture wider than the column narrows in its shape (#1119).
@@ -2803,7 +3001,7 @@ async function run(browser) {
     JSON.stringify({ startWide, startLong }),
   );
   // Card: an action on the heading's row at its end, the description under them; a panel is one
-  // element with the card's padding on every side; a compact card is denser (#573, #605).
+  // element with the card's padding on every side; a CardSize::Sm card is denser (#573, #605, #1132).
   const cards = await orders.evaluate(() => {
     const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
     const box = (/** @type {Element | null | undefined} */ e) => e?.getBoundingClientRect();
@@ -2812,7 +3010,7 @@ async function run(browser) {
     const [heading, note] = [header?.querySelector("h2"), header?.querySelector(":scope > p")];
     const mid = (/** @type {DOMRect | undefined} */ r) => (r ? r.top + r.height / 2 : NaN);
     const panel = document.querySelector("[class*='card__panel']");
-    const compact = document.querySelector("[class*='card__compact']");
+    const compact = document.querySelector("[class~='card__card'][class~='card__sm']");
     const pad = (/** @type {Element | null} */ e) => (e ? [getComputedStyle(e).paddingTop, getComputedStyle(e).paddingLeft].map((p) => parseFloat(p) / rem) : []);
     return {
       row: Math.abs(mid(box(heading)) - mid(box(action))) <= 2,
@@ -3727,30 +3925,47 @@ async function run(browser) {
     /**
      * Moves focus up the long box from its last row with Shift+Tab, as a user does (WebKit does
      * not scroll a dialog for a script's focus()), counting the rows that land under the held
-     * header and those it reached; then removes the rows.
+     * header and those it reached; then removes the rows. Returns the covered count, or -1 when a
+     * Shift+Tab did not land on a row and -2 when a row never held its place, so neither passes.
      * @param {import("@playwright/test").Page} page
      * @param {string} selector The dialog or sheet.
      */
     const focusUp = async (page, selector) => {
       let covered = 0;
       let reached = 0;
+      let unsettled = 0;
       for (let i = 0; i < 39; i++) {
         await page.keyboard.press("Shift+Tab");
-        const [row, under] = await page.locator(selector).evaluate((box) => {
+        // Read once the row has stopped moving: WebKit scrolls a focused row into view over a few
+        // frames, and a row read mid-scroll can sit under the header it ends well below (one read at
+        // 28 px under it settled 248 px below it). Read once it has kept its place for two frames; one
+        // still moving after 120 frames is not read as settled.
+        const [row, under, settled] = await page.locator(selector).evaluate(async (box) => {
           const header = /** @type {HTMLElement} */ (box.querySelector(":scope > [class*='__header']"));
           const now = document.activeElement;
-          const row = !!now?.hasAttribute("data-smoke-row");
-          return [row, row && /** @type {Element} */ (now).getBoundingClientRect().top < header.getBoundingClientRect().bottom - 1];
+          if (!now?.hasAttribute("data-smoke-row")) return [false, false, true];
+          const gap = () => now.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
+          let last = gap();
+          let same = 0;
+          for (let frames = 0; same < 2 && frames < 120; frames++) {
+            await new Promise((done) => requestAnimationFrame(() => done(undefined)));
+            const next = gap();
+            same = next === last ? same + 1 : 0;
+            last = next;
+          }
+          return [true, last < -1, same >= 2];
         });
         if (row) reached += 1;
         if (under) covered += 1;
+        if (!settled) unsettled += 1;
       }
       await page.locator(selector).evaluate((box) => {
         box.querySelectorAll("[data-smoke-row]").forEach((row) => row.remove());
         box.scrollTop = 0;
       });
-      // Every Shift+Tab lands on a row, so a covered count of 0 is a measurement.
-      return reached === 39 ? covered : -1;
+      // Every Shift+Tab lands on a row and every row settles, so a covered count of 0 is a measurement.
+      if (reached !== 39) return -1;
+      return unsettled === 0 ? covered : -2;
     };
     for (const width of [1280, 390]) {
       const at = await (await browser.newContext({ viewport: { width, height: 600 } })).newPage();

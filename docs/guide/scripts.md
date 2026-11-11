@@ -72,6 +72,38 @@ elements and its labels) read better as one `@typedef` group
 checks the function bodies against the same JSDoc.
 A ref on several kinds of element is typed as one they all are: `ref={tab as HTMLElement}`.
 
+**JSDoc, not TypeScript.** The checker is TypeScript's either way: `corten check` runs `tsc` with
+`strict` and `checkJs`, and the editor reads JSDoc as it reads annotations. What each check
+covers:
+
+| What | Checked by | TypeScript source instead |
+|---|---|---|
+| a call in the markup, `js::showAll(..)` | the Rust compiler, against the JSDoc | the same, read from annotations |
+| a function's body | `tsc`, in `corten check` and the editor | refuses a few things JavaScript infers, below, each of which JavaScript can be written to check |
+| a value of a Rust type | the declarations `corten::types` writes, which the script imports | the same |
+| data that arrives at run time (`fetch`, `JSON.parse`, `dataset`, a feed's rows) | nothing when it arrives: it is trusted as declared | the same |
+
+TypeScript source refuses a few things checked JavaScript infers; these are the ones found so far.
+An empty object literal given a property after it is made (`const box = {}; if (x) box.count = 1;`)
+is typed as always having it: write the object whole or give it a type
+(`/** @type {{ count?: number }} */ const box = {};`). A property a class's constructor or method
+sets first is taken as declared, even when the class declares its fields, so a misspelled
+`this.naem = ..` is not flagged unless `this` is retyped to `Fields`, a typedef that repeats the
+class's fields (`/** @this {Fields} */` on a method, `/** @type {Fields} */ (this).name = ..` in
+the constructor), and a read of `naem` only when a method other than the constructor set it and
+`undefined` is not accepted. Keep behavior in exported functions, as components do, and have a
+class set only the fields it declares; write a class rather than a function called with `new`,
+which TypeScript 5.9.3 accepts in JavaScript and 7.0.2 refuses, and a rest parameter (`...rest`)
+rather than reading `arguments`, which lets 5.9.3 take any number of arguments. A value whose type
+nothing fixes (`new Promise((resolve) => ..)`, a type parameter no argument decides) is `any` in
+JavaScript and `unknown` in TypeScript: give it one (`/** @type {Promise<boolean>} */`). TypeScript
+source would also need a pass that removes TypeScript's syntax before a browser could run the
+script, or a build step; JavaScript needs neither. A cast is `/** @type {T} */ (value)` where
+TypeScript writes `value as T`, and a type argument goes on the declaration
+(`/** @type {Map<string, number>} */ const prices = new Map();`).
+[Design Choice 5](../design.md#choice-handlers-checked-where-called) has the measurements and when
+this is revisited.
+
 **What the browser gets.** Plain HTML: `data-ref="rows"` and
 `data-on="click:offer_list.showAll(@rows,@rest,$t)"`. One listener per event type on the
 document runs the handlers, innermost element first, and `event.stopPropagation()` stops the
@@ -712,15 +744,16 @@ wrong one and `tsc` checks the field's name and type: read each row's key once (
 ({ el: row.el, key: row.label }))`), sort those (text with an `Intl.Collator` for the page's
 `lang`), then `body.append(...)` the elements. Give each column its own handler (`sortByName`,
 `sortByPrice`) over a shared function rather than one handler taking the field's name as text: the
-markup's call is checked against the handler's name, while a JSDoc union of strings is any JSON
-value to the Rust compiler. `examples/seller-desk` sorts and filters its grid this way, and
-`examples/deck-builder` makes its deck's lines with `replace(items)` after each change, each filled
-from the collection row of the same card. Rows a script only puts in another order, and never
-writes or makes, need no view: the server writes the value each sorts by as a `data-` attribute
-(the number its own sort uses, such as a price in cents, never a cell's text), and the script
-compares those. `examples/card-market`'s listings sort this way, which keeps the views module off a
-page that needs nothing else from it. A table that only sorts by the header clicked needs no
-script of its own: corten-ui's `rows::sort` is that handler ([UI](ui.md)).
+markup's call is checked against the handler's name, while no call to a handler whose parameter is
+a JSDoc union of strings compiles (a Rust enum the server declares, such as `SortBy`, is the other
+checked way, in the table at the top of this page). `examples/seller-desk` sorts and filters its
+grid this way, and `examples/deck-builder` makes its deck's lines with `replace(items)` after each
+change, each filled from the collection row of the same card. Rows a script only puts in another
+order, and never writes or makes, need no view: the server writes the value each sorts by as a
+`data-` attribute (the number its own sort uses, such as a price in cents, never a cell's text),
+and the script compares those. `examples/card-market`'s listings sort this way, which keeps the
+views module off a page that needs nothing else from it. A table that only sorts by the header
+clicked needs no script of its own: corten-ui's `rows::sort` is that handler ([UI](ui.md)).
 
 The parameter's type says whose rows it holds: `Holds<Row, HTMLTableSectionElement>` (or
 `Holds<Row, HTMLTemplateElement>` for the template). `tsc` then rejects `rows(body, Card)` and

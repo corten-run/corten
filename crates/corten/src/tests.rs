@@ -6957,18 +6957,19 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
     {
         use std::io::Read;
         // Decoded by readers that check for the coding's end: a body without zstd's frame end or
-        // brotli's last block is an error, not a short file.
+        // gzip's trailer is an error, not a short file.
         let decoded = |coding: &str, body: &[u8]| -> std::io::Result<Vec<u8>> {
             let mut out = Vec::new();
             match coding {
                 "zstd" => zstd::stream::read::Decoder::new(body)?.read_to_end(&mut out)?,
-                _ => brotli::Decompressor::new(body, 4096).read_to_end(&mut out)?,
+                _ => flate2::read::GzDecoder::new(body).read_to_end(&mut out)?,
             };
             Ok(out)
         };
-        for coding in ["zstd", "br"] {
+        for coding in ["zstd", "gzip"] {
+            let accept = if coding == "gzip" { "gzip".to_owned() } else { format!("gzip, {coding}") };
             for path in ["/export", "/sized"] {
-                let (_, headers, body) = get_with(path, Some(&format!("gzip, {coding}"))).await;
+                let (_, headers, body) = get_with(path, Some(&accept)).await;
                 assert_eq!(headers[header::CONTENT_ENCODING], coding, "{path}");
                 assert_eq!(headers[header::VARY], "accept-encoding");
                 assert!(!headers.contains_key(header::CONTENT_LENGTH), "the length is the uncompressed one: {path}");
@@ -6988,8 +6989,16 @@ async fn a_streamed_download_is_media_sent_as_it_is_made() {
             assert_eq!((headers[header::CONTENT_LENGTH].to_str().unwrap(), &body[..]), ("8", &b"a,1\nb,2\n"[..]));
             assert_eq!(headers[header::VARY], "accept-encoding");
         }
-        // A client that takes only gzip gets it as it is, with its length.
-        let (_, headers, body) = get_with("/sized", Some("gzip")).await;
+        // A client that takes brotli and gzip, as WebKit asks, gets gzip, where a buffered body
+        // would be brotli: the stream's own coding, not the page's.
+        for path in ["/export", "/sized"] {
+            let (_, headers, body) = get_with(path, Some("gzip, deflate, br")).await;
+            assert_eq!(headers[header::CONTENT_ENCODING], "gzip", "{path}");
+            assert_eq!(decoded("gzip", &body).unwrap(), csv.as_bytes(), "{path}");
+        }
+        // A client that takes only brotli gets it as it is, with its length: a stream is never
+        // brotli (`compress::StreamCoder`).
+        let (_, headers, body) = get_with("/sized", Some("br")).await;
         assert!(!headers.contains_key(header::CONTENT_ENCODING));
         assert_eq!(headers[header::CONTENT_LENGTH], length.to_string());
         assert_eq!(body, csv.as_bytes());
@@ -7429,7 +7438,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
     let long = read_all(request("/long").await).await;
     assert!(long.contains("content-length: 5") && long.ends_with("\r\n\r\nabc"), "{long}");
     #[cfg(feature = "compress")]
-    for (coding, accept) in [("zstd", "accept-encoding: zstd\r\n"), ("br", "accept-encoding: br\r\n")] {
+    for (coding, accept) in [("zstd", "accept-encoding: zstd\r\n"), ("gzip", "accept-encoding: gzip\r\n")] {
         use std::io::Read;
         let mut stream = request_with("/broken-text", accept).await;
         let mut raw = Vec::new();
@@ -7454,7 +7463,7 @@ async fn a_streamed_download_is_pulled_as_the_client_reads_and_dropped_when_it_l
         let mut out = Vec::new();
         let decoded = match coding {
             "zstd" => zstd::stream::read::Decoder::new(&body[..]).unwrap().read_to_end(&mut out),
-            _ => brotli::Decompressor::new(&body[..], 4096).read_to_end(&mut out),
+            _ => flate2::read::GzDecoder::new(&body[..]).read_to_end(&mut out),
         };
         assert!(decoded.is_err(), "{coding}: a failed stream does not end its coding: {out:?}");
     }
@@ -8855,6 +8864,31 @@ fn an_area_under_an_api_prefix_fails_at_startup() {
 /// Whether this system has an IPv6 loopback address to listen on.
 fn has_ipv6_loopback() -> bool {
     std::net::TcpListener::bind("[::1]:0").is_ok()
+}
+
+/// A burst of clients larger than the standard library's backlog of 128 all finish connecting
+/// before the server accepts one, on each listener `HOST` gives and on the loopback pair: none
+/// waits for its SYN to be sent again. Linux admits one more than the backlog and drops the next
+/// SYN, so with 128 the 130th connection would wait a second.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit() {
+    const BURST: usize = 200;
+    let somaxconn: usize = std::fs::read_to_string("/proc/sys/net/core/somaxconn").unwrap().trim().parse().unwrap();
+    if somaxconn <= BURST {
+        eprintln!("skipped: net.core.somaxconn is {somaxconn}, which caps the backlog below the burst");
+        return;
+    }
+    for listeners in [crate::app::bind(Some("127.0.0.1"), 0).await.unwrap(), crate::app::bind(None, 0).await.unwrap()] {
+        for listener in &listeners {
+            let addr = listener.local_addr().unwrap();
+            let mut held = Vec::new();
+            for n in 1..=BURST {
+                let connected = tokio::time::timeout(Duration::from_millis(900), tokio::net::TcpStream::connect(addr)).await;
+                held.push(connected.unwrap_or_else(|_| panic!("{addr}: connection {n} waited for a resent SYN")).unwrap());
+            }
+        }
+    }
 }
 
 /// Without `HOST`, `localhost` is both loopback addresses on one port, so a browser that tries
@@ -10297,6 +10331,113 @@ async fn csp_and_shell(router: &Router, path: &str) -> (StatusCode, String, Stri
     let body = String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
     let shell = body.split(r#"name="corten-shell" content=""#).nth(1).map_or("", |rest| &rest[..16]).to_string();
     (status, csp, shell)
+}
+
+/// No one may frame a page by default, which it says twice (`frame-ancestors 'none'`,
+/// `X-Frame-Options: DENY`). An area that lets another origin frame its pages lists it and sends
+/// no `X-Frame-Options`, which cannot name one, while the app's other pages keep the denial; an
+/// area inside it adds its own; `'self'` alone is `SAMEORIGIN` (#1129).
+#[tokio::test]
+async fn an_area_lets_the_origins_it_names_frame_its_pages() {
+    let framing = |router: &Router, path: &'static str| {
+        let router = router.clone();
+        async move {
+            let res = router.oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+            let csp = res.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+            let ancestors = csp.split("; ").find_map(|d| d.strip_prefix("frame-ancestors ")).unwrap().to_string();
+            (ancestors, res.headers().get(header::X_FRAME_OPTIONS).map(|v| v.to_str().unwrap().to_string()))
+        }
+    };
+    let router = App::new(policy_url::router())
+        .area(|area| pay_url::area(area).policy(|p| p.frame_ancestors("https://partner.example")))
+        .area(|area| charts_url::area(area).policy(|p| p.frame_ancestors("'self'")))
+        .router();
+    assert_eq!(framing(&router, "/").await, ("'none'".into(), Some("DENY".into())));
+    assert_eq!(framing(&router, "/pay/card").await, ("https://partner.example".into(), None));
+    assert_eq!(framing(&router, "/pay/charts/week").await, ("https://partner.example 'self'".into(), None));
+    // An unknown URL in the area is answered under its policy, as its pages are.
+    assert_eq!(framing(&router, "/pay/nothing").await, ("https://partner.example".into(), None));
+    let own = App::new(policy_url::router()).policy(crate::security::Policy::new().frame_ancestors("'self'")).router();
+    assert_eq!(framing(&own, "/").await, ("'self'".into(), Some("SAMEORIGIN".into())));
+}
+
+/// Who may frame a page another origin may frame stays enforced where its CSP is not: a relayed
+/// page that brings its own CSP, or a report-only policy, gets the origins as an enforced
+/// `frame-ancestors` of its own. The policy decides `X-Frame-Options` whatever a handler set, and
+/// a response that is never a page is framed by no one (#1129).
+#[tokio::test]
+async fn who_may_frame_a_page_is_enforced_whatever_else_its_answer_or_policy_does() {
+    let relayed = || {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("content-type", "text/html".parse().unwrap());
+        headers.insert("content-security-policy", "frame-ancestors *".parse().unwrap());
+        headers.insert("x-frame-options", "SAMEORIGIN".parse().unwrap());
+        crate::Relay::new(StatusCode::OK, headers, Body::from("<p>upstream</p>"))
+    };
+    let app = |policy: crate::security::Policy| {
+        App::new(Routes::from(
+            Table::new()
+                .route("/", get(|| async { axum::response::Html("<p>home</p>") }))
+                .route("/own", get(|| async { ([(header::X_FRAME_OPTIONS, "DENY")], axum::response::Html("<p>own</p>")) }))
+                .route("/relayed", get(move || async move { relayed() })),
+        ))
+        .policy(policy)
+        .api::<ApiRoot>(|api| {
+            api.route::<ApiRates>(crate::Methods::reads(get(|| async { "rates" })))
+                .route::<ApiDown>(crate::Methods::reads(get(move || async move { relayed() })))
+        })
+        .router()
+    };
+    let all = |headers: &axum::http::HeaderMap, name: axum::http::HeaderName| -> Vec<String> {
+        headers.get_all(name).iter().map(|v| v.to_str().unwrap().to_string()).collect()
+    };
+    let partner = || crate::security::Policy::new().frame_ancestors("https://partner.example");
+
+    let router = app(partner());
+    let (_, headers, _) = call_with(router.clone(), "GET", "/relayed", None, Some("text/html")).await;
+    assert_eq!(
+        all(&headers, header::CONTENT_SECURITY_POLICY),
+        ["frame-ancestors *", "frame-ancestors https://partner.example"],
+        "the upstream's policy, and the app's origins enforced beside it"
+    );
+    assert!(!headers.contains_key(header::X_FRAME_OPTIONS), "nor does the upstream's");
+    let (_, headers, _) = call_with(router.clone(), "GET", "/own", None, None).await;
+    assert!(!headers.contains_key(header::X_FRAME_OPTIONS), "a handler's DENY would block the partner");
+    assert_eq!(all(&headers, header::CONTENT_SECURITY_POLICY).len(), 1, "an enforced policy needs no second line");
+    let (_, headers, _) = call_with(router.clone(), "GET", "/api/rates", None, None).await;
+    assert_eq!(headers["content-security-policy"], "default-src 'none'; frame-ancestors 'none'");
+    assert_eq!(headers["x-frame-options"], "DENY", "an API's answer is framed by no one");
+    let (_, headers, _) = call_with(router, "GET", "/api/down", None, None).await;
+    assert_eq!(
+        all(&headers, header::CONTENT_SECURITY_POLICY),
+        ["frame-ancestors *", "frame-ancestors 'none'"],
+        "nor by the sites a relayed one names"
+    );
+
+    // An upstream's policy cannot widen who frames a page no one may.
+    let (_, headers, _) = call_with(app(crate::security::Policy::new()), "GET", "/relayed", None, Some("text/html")).await;
+    assert_eq!(all(&headers, header::CONTENT_SECURITY_POLICY), ["frame-ancestors *", "frame-ancestors 'none'"]);
+    assert_eq!(headers["x-frame-options"], "DENY");
+
+    let router = app(partner().report_only());
+    let (_, headers, _) = call_with(router.clone(), "GET", "/relayed", None, Some("text/html")).await;
+    assert_eq!(all(&headers, header::CONTENT_SECURITY_POLICY), ["frame-ancestors *", "frame-ancestors https://partner.example"]);
+    assert!(headers["content-security-policy-report-only"].to_str().unwrap().starts_with("default-src 'self'"));
+    let (_, headers, _) = call_with(router, "GET", "/", None, None).await;
+    assert!(headers["content-security-policy-report-only"]
+        .to_str()
+        .unwrap()
+        .contains("frame-ancestors https://partner.example;"));
+    assert_eq!(all(&headers, header::CONTENT_SECURITY_POLICY), ["frame-ancestors https://partner.example"]);
+    assert!(!headers.contains_key(header::X_FRAME_OPTIONS));
+
+    // Without another origin, X-Frame-Options enforces it, and the policy's value replaces a handler's.
+    let (_, headers, _) = call_with(app(crate::security::Policy::new().report_only()), "GET", "/", None, None).await;
+    assert!(!headers.contains_key(header::CONTENT_SECURITY_POLICY));
+    assert_eq!(headers["x-frame-options"], "DENY");
+    let router = app(crate::security::Policy::new().frame_ancestors("'self'"));
+    let (_, headers, _) = call_with(router, "GET", "/own", None, None).await;
+    assert_eq!(headers["x-frame-options"], "SAMEORIGIN");
 }
 
 /// An area's policy adds to the app's on its pages only, nested areas add up, and a page whose
@@ -13220,6 +13361,36 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
             .collect()
     ));
     assert!(!crate::page::is_prefetch(&axum::http::HeaderMap::new()));
+}
+
+/// A failure is logged with each cause under its message (a reset connection under a client's
+/// "error sending request"), not its message alone.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[test]
+fn a_failure_is_logged_with_each_cause_under_it() {
+    #[derive(Debug)]
+    struct Failed(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
+    impl std::fmt::Display for Failed {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+    impl std::error::Error for Failed {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1.as_deref().map(|source| source as _)
+        }
+    }
+    let lines = Lines(std::sync::Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    let status = tracing::subscriber::with_default(subscriber, || {
+        let reset = Failed("client error (SendRequest)", Some(Box::new(Failed("connection reset", None))));
+        Error::new(Failed("error sending request", Some(Box::new(reset)))).into_response().status()
+    });
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    assert!(text.contains("error=error sending request"), "{text}");
+    assert!(text.contains("error.sources=[client error (SendRequest), connection reset]"), "{text}");
 }
 
 /// An error's message (`Display`) is its source's, what the log says, and `status_code` the

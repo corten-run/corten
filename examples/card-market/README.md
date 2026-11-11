@@ -30,6 +30,7 @@ docker run --rm -p 3000:8080 -e API_KEYS=dev=dev-key -e AGENT_TOKENS=dev-token c
 | `API_KEYS` | partners that may set alerts through `/api/alerts`, sending the key in `X-Api-Key`: `name=key,name=key` | no partner may |
 | `AGENT_TOKENS` | tokens for the MCP endpoint `/mcp`, sent as `Authorization: Bearer <token>`, comma separated | no agent may |
 | `AGENT_ORIGINS` | origins whose pages may call `/mcp` from the browser (CORS), comma separated | none |
+| `EMBED_ORIGINS` | origins whose pages may frame an item's card (`/embed/items/{id}`), comma separated; no other page may be framed | none |
 | `WRITES_PER_MINUTE` | writes one client address may make a minute | 20 |
 | `MAX_CONNECTIONS` | the most connections held open at once; past it, new ones wait until one closes | no limit |
 | `PROXIES` | the load balancers whose `X-Forwarded-For` is trusted: addresses or CIDRs, comma separated | the connection's address |
