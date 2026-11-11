@@ -10,7 +10,7 @@ its tests pass; the [review](#review) decides whether it should land.
 
 ```text
 crates/
-  corten/            The framework on axum: App, Req, html!, components, the runtime (js/corten.js)
+  corten/            The framework on hyper: App, Req, html!, components, the runtime (js/corten.js)
   corten-macros/     html!, #[component], #[event], script!, messages!, tokens!, derives (Fields, Route), on proc_macro alone (no syn)
   corten-cli/        The corten command, standard library only
   corten-feed/       Live feeds: rows, numbered patches, replay, resume
@@ -30,16 +30,17 @@ bench/catalog/       Optional locale-neutral record detail and JSON diagnostic, 
 bench/live/          One price feed pushed to many clients in the same frameworks
 ```
 
-Dependencies of `corten`: `axum`, `futures-util`, `getrandom` (CSP nonces), and from axum's
-tree `http` (the HTTP types apps name as `corten::http`), `http-body` (axum's body
-trait), `hyper` and `hyper-util` (connections, including ones that switch protocols),
-`tower-layer` and `tower-service` (middleware traits), `zmij` (float digits), `bytes`
-(multipart pieces), `memchr` (searching a multipart body for its boundary) and `serde`; `tokio`
-(sockets, signals, timers), `tracing`, `form_urlencoded` (forms and query strings),
-`corten-macros` (no dependencies). axum's features are only `http1`, `tokio` and `matched-path`
-(and `json` with Corten's `json`): [design Choice 25](docs/design.md#choice-axum-router). Optional:
-`serde`'s derive and `serde_json` (`json`), `zstd`, `brotli`, `flate2` (`compress`),
-`corten-feed` (`feed`). Apps need no JavaScript dependencies; `package.json` here is tooling for
+Dependencies of `corten`: `hyper` and `hyper-util` (connections, including ones that switch
+protocols, HTTP/1.1 only), `http` (the HTTP types apps name as `corten::http`), `http-body`
+(the body trait hyper and its clients share), `bytes` (bodies and multipart pieces),
+`matchit` (the router's path matching) and `percent-encoding` (its parameters), `tokio`
+(sockets, signals, timers), `futures-util`, `pin-project-lite` (bodies and streams without
+`unsafe`), `tower-layer` and `tower-service` (at the edges: `App::layer`, and `corten::Router` as a `Service`), `getrandom`
+(CSP nonces), `zmij` (float digits), `memchr` (searching a multipart body for its boundary),
+`form_urlencoded` (forms and query strings), `serde`, `tracing` and `corten-macros` (no
+dependencies). No web framework: [design Choice 25](docs/design.md#choice-axum-router).
+Optional: `serde`'s derive, `serde_json` and `serde_path_to_error` (`json`), `zstd`,
+`brotli`, `flate2` (`compress`), `jiff` (`zones`), `corten-feed` (`feed`). Apps need no JavaScript dependencies; `package.json` here is tooling for
 the framework itself.
 
 ## Tooling

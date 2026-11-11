@@ -39,19 +39,18 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet, VecDeque},
     convert::Infallible,
     marker::PhantomData,
+    pin::Pin,
     sync::{Arc, LazyLock, Mutex, MutexGuard},
+    task::{Context, Poll},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use axum::{
-    body::{Body, Bytes},
-    extract::FromRequestParts,
-    http::{header, request::Parts, HeaderName, HeaderValue},
-    response::{IntoResponse, Response},
-};
+use bytes::Bytes;
 use corten_protocol::{apply_ops, check_seq, Patch, SnapshotRef};
 pub use corten_protocol::{patch_json, Applied, ApplyError, Change, Cursor, Row, SyncReason};
-use futures_util::{stream, StreamExt};
+use futures_util::{stream, Stream, StreamExt};
+use http::{header, request::Parts, HeaderName, HeaderValue, Response};
+use http_body::{Frame, SizeHint};
 use serde::de::DeserializeOwned;
 use tokio::sync::{
     broadcast::{
@@ -384,43 +383,69 @@ impl<T: Row> Feed<T> {
         let rest = stream::unfold(StreamState { rx, last, done, drain: DRAINING.subscribe() }, next_chunk);
         let chunks = stream::iter([first]).chain(rest).map(move |chunk| {
             let _held = &guard;
-            Ok::<Bytes, Infallible>(chunk)
+            chunk
         });
-        FeedResponse::new(
-            (
-                [
-                    (header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream")),
-                    (header::CACHE_CONTROL, HeaderValue::from_static("no-cache")),
-                    // A proxy in front (nginx) passes each frame on as it is written, not when
-                    // its buffer fills: see `corten`'s live streams.
-                    (HeaderName::from_static("x-accel-buffering"), HeaderValue::from_static("no")),
-                ],
-                Body::from_stream(chunks),
-            )
-                .into_response(),
-        )
+        let mut res = Response::new(FeedBody(Kind::Live(Box::pin(chunks))));
+        let headers = res.headers_mut();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        // A proxy in front (nginx) passes each frame on as it is written, not when its buffer
+        // fills: see `corten`'s live streams.
+        headers.insert(HeaderName::from_static("x-accel-buffering"), HeaderValue::from_static("no"));
+        FeedResponse::new(res)
     }
 }
 
 /// A feed's snapshot ([`Feed::snapshot`]) or live stream ([`Feed::live`]) of `T` rows: a
 /// response a route names by its type, so a handler that returns one says it serves a feed and
-/// which rows (`-> FeedResponse<Level>`).
-pub struct FeedResponse<T>(Response, PhantomData<fn() -> T>);
+/// which rows (`-> FeedResponse<Level>`). `corten` sends it as it sends any answer.
+pub struct FeedResponse<T>(Response<FeedBody>, PhantomData<fn() -> T>);
 
 impl<T> FeedResponse<T> {
-    fn new(response: Response) -> Self {
+    fn new(response: Response<FeedBody>) -> Self {
         FeedResponse(response, PhantomData)
     }
 
     /// The response's body.
-    pub fn into_body(self) -> Body {
+    pub fn into_body(self) -> FeedBody {
         self.0.into_body()
+    }
+
+    /// The response, for a server to send.
+    pub fn into_http(self) -> Response<FeedBody> {
+        self.0
     }
 }
 
-impl<T> IntoResponse for FeedResponse<T> {
-    fn into_response(self) -> Response {
-        self.0
+/// A feed response's body ([`FeedResponse`]): a snapshot's JSON, whole, or a live stream's events
+/// as they are written. An HTTP body (`http_body::Body`) that never fails.
+pub struct FeedBody(Kind);
+
+enum Kind {
+    Whole(Option<Bytes>),
+    Live(Pin<Box<dyn Stream<Item = Bytes> + Send>>),
+}
+
+impl http_body::Body for FeedBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+        match &mut self.0 {
+            Kind::Whole(bytes) => Poll::Ready(bytes.take().map(|bytes| Ok(Frame::data(bytes)))),
+            Kind::Live(events) => events.as_mut().poll_next(cx).map(|chunk| chunk.map(|chunk| Ok(Frame::data(chunk)))),
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        matches!(self.0, Kind::Whole(None))
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        match &self.0 {
+            Kind::Whole(bytes) => SizeHint::with_exact(bytes.as_ref().map_or(0, |bytes| bytes.len() as u64)),
+            Kind::Live(_) => SizeHint::default(),
+        }
     }
 }
 
@@ -555,15 +580,11 @@ fn sync_frame(reason: SyncReason) -> Bytes {
     Bytes::from(format!("event: sync\ndata: {{\"reason\":\"{}\"}}\n\n", reason.as_str()))
 }
 
-fn snapshot_response(body: Bytes) -> Response {
-    (
-        [
-            (header::CONTENT_TYPE, HeaderValue::from_static("application/json")),
-            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
-        ],
-        body,
-    )
-        .into_response()
+fn snapshot_response(body: Bytes) -> Response<FeedBody> {
+    let mut res = Response::new(FeedBody(Kind::Whole(Some(body))));
+    res.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res
 }
 
 /// Rows inside [`Feed::write`]. Reads are free; anything that may change a row marks it.
@@ -634,20 +655,10 @@ impl Since {
     }
 }
 
-/// For an app on axum alone; a Corten app's handler takes it through `corten`.
-impl<S: Send + Sync> FromRequestParts<S> for Since {
-    type Rejection = Infallible;
-
-    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
-        Ok(Since::read(parts))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use axum::body::Body;
     use http_body_util::BodyExt;
     use serde::{Deserialize, Serialize};
 
@@ -669,13 +680,12 @@ mod tests {
         Feed::new((1..=3).map(|n| Item { id: format!("i{n}"), n }))
     }
 
-    async fn body_text(res: impl IntoResponse) -> String {
-        let res = res.into_response();
+    async fn body_text<T>(res: FeedResponse<T>) -> String {
         String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
     }
 
     /// Reads SSE text until `events` events arrived or the stream went quiet.
-    async fn read_events(body: &mut Body, events: usize) -> String {
+    async fn read_events(body: &mut FeedBody, events: usize) -> String {
         let mut text = String::new();
         while text.matches("\n\n").count() < events {
             match tokio::time::timeout(Duration::from_millis(500), body.frame()).await {
@@ -805,7 +815,7 @@ mod tests {
         for n in 1..=3 {
             feed.write(|tx| tx.get_mut("i1").unwrap().n = n * 100);
         }
-        let res = feed.live(cursor(&feed, 1)).into_response();
+        let res = feed.live(cursor(&feed, 1)).into_http();
         assert_eq!(res.headers()["x-accel-buffering"], "no", "a proxy passes each frame on");
         let mut body = res.into_body();
         feed.write(|tx| tx.get_mut("i2").unwrap().n = 7);
@@ -874,11 +884,11 @@ mod tests {
 
     #[tokio::test]
     async fn since_prefers_last_event_id() {
-        let req = axum::http::Request::builder().uri("/feed/live?since=aa-3").header("last-event-id", "bb-7").body(()).unwrap();
+        let req = http::Request::builder().uri("/feed/live?since=aa-3").header("last-event-id", "bb-7").body(()).unwrap();
         let (parts, _) = req.into_parts();
         let since = Since::read(&parts);
         assert_eq!(since.0, Some(Cursor::new("bb", 7)));
-        let (parts, _) = axum::http::Request::builder().uri("/x?a=1&since=aa-3").body(()).unwrap().into_parts();
+        let (parts, _) = http::Request::builder().uri("/x?a=1&since=aa-3").body(()).unwrap().into_parts();
         assert_eq!(Since::read(&parts).0, Some(Cursor::new("aa", 3)));
     }
 
@@ -891,9 +901,9 @@ mod tests {
         for generation in ["g7", "deploy.3", "v1_2", "A.b_9", "0"] {
             let feed = Feed::follow(generation, 4, std::iter::empty::<Item>());
             let uri = format!("/feed/live?since={generation}-4");
-            let (parts, _) = axum::http::Request::builder().uri(uri).body(()).unwrap().into_parts();
+            let (parts, _) = http::Request::builder().uri(uri).body(()).unwrap().into_parts();
             let since = Since::read(&parts);
-            let text = read_events(&mut feed.live(since).into_response().into_body(), 1).await;
+            let text = read_events(&mut feed.live(since).into_body(), 1).await;
             assert_eq!(text, "retry: 1000\n\n", "{generation}");
         }
     }

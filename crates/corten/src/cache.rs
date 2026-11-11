@@ -47,11 +47,14 @@
 
 use std::time::Duration;
 
-use axum::{
-    body::Body,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
-    response::{IntoResponseParts, Response, ResponseParts},
-};
+use crate::body::Body;
+use crate::response::IntoResponseParts;
+use crate::response::Response;
+use crate::response::ResponseParts;
+use http::header;
+use http::HeaderMap;
+use http::HeaderValue;
+use http::StatusCode;
 
 /// What caches may do with a response, as [`crate::Public`] and [`crate::NoStore`] set it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -147,7 +150,7 @@ impl Cache {
         if if_error > 0 {
             push(", stale-if-error=", if_error);
         }
-        HeaderValue::from_maybe_shared(axum::body::Bytes::from(text)).expect("digits are a valid header")
+        HeaderValue::from_maybe_shared(bytes::Bytes::from(text)).expect("digits are a valid header")
     }
 }
 
@@ -358,7 +361,7 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     let (mut parts, body) = res.into_parts();
     // Exact size: one held `Bytes`, which comes back as it is (compression then sends a held
     // value's stored form, which it finds by this pointer).
-    let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
+    let Ok(bytes) = crate::body::to_bytes(body, usize::MAX).await else {
         return Response::from_parts(parts, Body::empty());
     };
     let tag = weak_tag(&bytes, &parts.headers);
@@ -382,12 +385,12 @@ pub(crate) async fn tag(res: Response, has: &[HeaderValue]) -> Response {
     Response::from_parts(parts, Body::from(bytes))
 }
 
-/// A `304`'s empty body, of no stated size: axum writes `Content-Length` for a body that states one,
+/// A `304`'s empty body, of no stated size: the router writes `Content-Length` for a body that states one,
 /// and a `304`'s may only be the `200`'s (RFC 9110 8.6), which compression has not decided.
 struct Unsized;
 
 impl http_body::Body for Unsized {
-    type Data = axum::body::Bytes;
+    type Data = bytes::Bytes;
     type Error = std::convert::Infallible;
 
     fn poll_frame(
@@ -522,7 +525,7 @@ fn private(text: &str) -> HeaderValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::response::IntoResponse;
+    use crate::response::IntoResponse;
 
     fn seen() -> Seen {
         Seen { credentials: false, caller: false, partial: false, nonce: false, dev: false }

@@ -1,8 +1,8 @@
 use futures_util::StreamExt;
 
 use super::*;
+use crate::body::Body;
 use crate::form::Errors;
-use axum::body::Body;
 
 #[derive(corten_macros::Fields, Debug, PartialEq)]
 struct Listing {
@@ -277,8 +277,19 @@ async fn the_body_limit_is_a_413_and_the_default_is_2_mib() {
     let bytes = body(&[("photos", Some("big.png"), None, &[0u8; 3000]), ("title", None, None, b"Mew")]);
     assert_eq!(status(read(request(&bytes, 1000), Some(2048)).await.unwrap_err()), StatusCode::PAYLOAD_TOO_LARGE);
     assert!(read(request(&bytes, 1000), Some(4096)).await.is_ok());
-    let big = body(&[("photos", Some("big.png"), None, &vec![0u8; DEFAULT_LIMIT]), ("title", None, None, b"Mew")]);
+    let big = body(&[("photos", Some("big.png"), None, &vec![0u8; crate::extract::BODY_LIMIT]), ("title", None, None, b"Mew")]);
     assert_eq!(status(read(request(&big, 64 << 10), None).await.unwrap_err()), StatusCode::PAYLOAD_TOO_LARGE);
+    // The route's limit, where its app, area or API sets one, is the default in its place.
+    let limited = |limit: usize| {
+        let mut req = request(&bytes, 1000);
+        req.extensions_mut().insert(crate::Signal::with_body_limit(limit));
+        req
+    };
+    assert_eq!(status(read(limited(2048), None).await.unwrap_err()), StatusCode::PAYLOAD_TOO_LARGE);
+    assert!(read(limited(4096), None).await.is_ok());
+    let mut raised = request(&big, 64 << 10);
+    raised.extensions_mut().insert(crate::Signal::with_body_limit(4 << 20));
+    assert!(read(raised, None).await.is_ok(), "a raised limit takes what 2 MiB refused");
 }
 
 #[tokio::test]
@@ -714,6 +725,28 @@ async fn api_call(errors: bool, req: Request) -> (StatusCode, String, String) {
     (parts.status, content_type, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
 }
 
+/// An `Upload` under an API that sets a body limit keeps it, through the stages: a 3 MiB title
+/// the 2 MiB default refuses is read under 4 MiB, and a 2 KiB one is the API's 413 under 1 KiB.
+#[tokio::test]
+async fn an_upload_keeps_its_apis_body_limit() {
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let multipart = format!("multipart/form-data; boundary={BOUNDARY}");
+    for (limit, title, status) in [(4 << 20, 3 << 20, StatusCode::OK), (1 << 10, 2 << 10, StatusCode::PAYLOAD_TOO_LARGE)] {
+        let router = crate::App::new(crate::Routes::from(crate::router::Table::new()))
+            .api::<ImportRoot>(|api| api.route::<Listings>(crate::Methods::writes(crate::router::post(list))).body_limit(limit))
+            .router();
+        let title = vec![b'x'; title];
+        let res = router.oneshot(to("/api/listings", &multipart, self::body(&[("title", None, None, &title)]))).await.unwrap();
+        let (parts, body) = res.into_parts();
+        let body = String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        assert_eq!(parts.status, status, "{limit}: {}", &body[..body.len().min(200)]);
+        if status == StatusCode::PAYLOAD_TOO_LARGE {
+            assert_eq!(parts.headers[header::CONTENT_TYPE], "application/problem+json", "the API's 413");
+        }
+    }
+}
+
 fn to_import(content_type: &str, bytes: Vec<u8>) -> Request {
     to("/api/import", content_type, bytes)
 }
@@ -1142,7 +1175,7 @@ async fn the_deadline_is_the_servers_503_when_the_handler_is_not_waiting_for_the
 /// the deadline is the 413 its read gives too (#1061).
 #[tokio::test(start_paused = true)]
 async fn a_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413() {
-    async fn store(request: crate::extract::Request) -> crate::Result<String> {
+    async fn store(request: crate::http::Request) -> crate::Result<String> {
         let mut pieces = crate::extract::pieces_up_to(request.into_body(), 1024);
         while pieces.chunk().await?.is_some() {}
         Ok("stored".into())
@@ -1165,7 +1198,7 @@ async fn a_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413() {
 /// read past from there, and the deadline during that read is the 413 too (#1061).
 #[tokio::test(start_paused = true)]
 async fn a_chunked_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413() {
-    async fn store(request: crate::extract::Request) -> crate::Result<String> {
+    async fn store(request: crate::http::Request) -> crate::Result<String> {
         let mut pieces = crate::extract::pieces_up_to(request.into_body(), 1024);
         while pieces.chunk().await?.is_some() {}
         Ok("stored".into())
@@ -1185,7 +1218,7 @@ async fn a_chunked_body_read_in_pieces_past_its_limit_at_the_deadline_is_the_413
 /// for the body (#1061).
 #[tokio::test(start_paused = true)]
 async fn a_body_bytes_up_to_reads_past_at_the_deadline_is_the_clients_408() {
-    async fn own(request: crate::extract::Request) -> crate::Result<(crate::http::StatusCode, &'static str)> {
+    async fn own(request: crate::http::Request) -> crate::Result<(crate::http::StatusCode, &'static str)> {
         Ok(match crate::extract::bytes_up_to(request.into_body(), 1024).await? {
             Some(_) => (crate::http::StatusCode::OK, "kept"),
             None => (crate::http::StatusCode::UNPROCESSABLE_ENTITY, "too long"),
@@ -1221,6 +1254,49 @@ async fn a_body_read_past_its_limit_at_the_deadline_is_the_413() {
         "accept: text/html\r\n",
         Some(bytes.len()),
         (std::time::Duration::ZERO, &bytes[..3000]),
+    )
+    .await;
+    assert!(page.starts_with("HTTP/1.1 413"), "{page}");
+    assert_eq!(took, std::time::Duration::from_secs(30), "at the default deadline");
+}
+
+/// So is a body `String` (or `Bytes`, `Json`, `Form`) reads whole, over its 2 MiB: still being
+/// read past at the deadline, it is the 413, not a 408 that would have the client send it again.
+#[tokio::test(start_paused = true)]
+async fn a_whole_body_read_past_its_limit_at_the_deadline_is_the_413() {
+    async fn whole(text: String) -> String {
+        text
+    }
+    let app = crate::App::new(crate::Routes::from(crate::router::Table::new().route("/up", crate::router::post(whole))));
+    let bytes = vec![b'a'; 3 << 20];
+    let (page, took) = stalled_over_a_socket(
+        app,
+        "/up",
+        "accept: text/html\r\n",
+        Some(bytes.len()),
+        (std::time::Duration::ZERO, &bytes[..(5 << 19)]),
+    )
+    .await;
+    assert!(page.starts_with("HTTP/1.1 413"), "{page}");
+    assert_eq!(took, std::time::Duration::from_secs(30), "at the default deadline");
+}
+
+/// A whole body whose length says it is over the limit is read past from its first piece, none
+/// of it kept, so a client that stalls before sending the limit's worth still gets the 413 at the
+/// deadline: kept, its wait would have been a read of the body, answered 408.
+#[tokio::test(start_paused = true)]
+async fn a_whole_body_declared_over_its_limit_that_stalls_early_is_the_413() {
+    async fn whole(text: String) -> String {
+        text
+    }
+    let app = crate::App::new(crate::Routes::from(crate::router::Table::new().route("/up", crate::router::post(whole))));
+    let bytes = vec![b'a'; 3 << 20];
+    let (page, took) = stalled_over_a_socket(
+        app,
+        "/up",
+        "accept: text/html\r\n",
+        Some(bytes.len()),
+        (std::time::Duration::ZERO, &bytes[..(1 << 20)]),
     )
     .await;
     assert!(page.starts_with("HTTP/1.1 413"), "{page}");

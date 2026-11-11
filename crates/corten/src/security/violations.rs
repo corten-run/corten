@@ -1,11 +1,12 @@
 //! What browsers report a page's CSP blocked ([`super::Policy::report_to`]), read the same
 //! whichever browser sent it.
 
-use crate::extract::{FromRequest, Request};
-use axum::{
-    http::{header, StatusCode},
-    response::{IntoResponse, Response},
-};
+use crate::extract::FromRequest;
+use crate::handler::Request;
+use crate::response::IntoResponse;
+use crate::response::Response;
+use http::header;
+use http::StatusCode;
 use serde::{
     de::{IgnoredAny, MapAccess, SeqAccess, Visitor},
     Deserialize, Deserializer,
@@ -243,7 +244,7 @@ impl<S: Send + Sync> FromRequest<S> for Violations {
         if length.is_some_and(|length| length > LIMIT as u64) {
             return Err((StatusCode::PAYLOAD_TOO_LARGE, "The reports are over 256 KiB.").into_response());
         }
-        let body = axum::body::to_bytes(req.into_body(), LIMIT)
+        let body = crate::body::to_bytes(req.into_body(), LIMIT)
             .await
             .map_err(|_| (StatusCode::BAD_REQUEST, "The reports did not arrive whole, or are over 256 KiB.").into_response())?;
         Violations::read(content_type.as_deref(), &body).map_err(IntoResponse::into_response)
@@ -353,11 +354,11 @@ mod tests {
     #[tokio::test]
     async fn the_extractor_refuses_a_body_over_the_limit_or_of_another_type() {
         let post = |kind: &'static str, length: Option<usize>, body: Vec<u8>| {
-            let mut req = axum::http::Request::post("/csp-reports").header(header::CONTENT_TYPE, kind);
+            let mut req = http::Request::post("/csp-reports").header(header::CONTENT_TYPE, kind);
             if let Some(length) = length {
                 req = req.header(header::CONTENT_LENGTH, length);
             }
-            req.body(axum::body::Body::from(body)).unwrap()
+            req.body(crate::body::Body::from(body)).unwrap()
         };
         let status = |res: Result<Violations, Response>| res.map(|_| StatusCode::OK).unwrap_or_else(|res| res.status());
         let ok = post("application/csp-report", None, WEBKIT.as_bytes().to_vec());

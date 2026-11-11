@@ -13,11 +13,10 @@ use std::{
     task::{Context, Poll},
 };
 
-use axum::{
-    body::Body,
-    http::request::Parts,
-    response::{IntoResponse, Response},
-};
+use crate::body::Body;
+use crate::response::IntoResponse;
+use crate::response::Response;
+use http::request::Parts;
 
 use crate::view::Render;
 
@@ -32,9 +31,7 @@ use crate::view::Render;
 /// [`later`] once the handler has answered, before the app's middleware sees the page. A client
 /// navigation or a form the runtime submits keeps the layout the page has, so the read is not
 /// started for it; neither is it for a `HEAD`, an API, a data client, a route that answers
-/// something other than a page (a file, text, JSON) or Corten's own paths. (A plain axum handler
-/// that takes [`crate::Req`] starts it whatever it answers, since its answer type is not known
-/// there; the read is dropped unused.) A [`crate::Public`]
+/// something other than a page (a file, text, JSON) or Corten's own paths. A [`crate::Public`]
 /// page is the same for everyone, so it draws no one's value. A write that draws a page rather
 /// than redirect (a refused form without JavaScript) starts the reads its page draws once it has
 /// answered. The error page for a failure Corten finds the request at fault for (an unknown
@@ -495,7 +492,8 @@ enum State {
 /// area's middleware, so a read sees what middleware added (as an extractor does) and runs beside
 /// the handler's own reads; a `Public` or JSON route, or a `HEAD`, refuses them. They are polled
 /// with the handler on the request's task and drawn by [`StartHere::fill`] into whichever page
-/// answers. A plain axum handler starts them as it takes [`crate::Req`]. A write that draws a page
+/// answers. A route of Corten's own, whose answer type is not known there, starts them as it takes
+/// [`crate::Req`]. A write that draws a page
 /// rather than redirect starts the ones it draws as it is filled, from the request's head kept for
 /// it. The error page for a failure the request is at fault for starts those not started yet and waits for them
 /// (`StartHere::at_error_page`); for any other failure it starts none and draws those in already.
@@ -548,7 +546,7 @@ impl StartHere {
     /// As a route is called: a page's `GET` starts each of the app's reads, a write keeps the
     /// request's head for a page it may draw, and a `HEAD`, a JSON answer or a `Public` one (the
     /// same for everyone, so never one visitor's count) starts none.
-    pub(crate) fn arrive(&self, req: &mut axum::extract::Request, page: bool, public: bool) {
+    pub(crate) fn arrive(&self, req: &mut crate::http::Request, page: bool, public: bool) {
         let mut here = self.lock();
         if here.state != State::Waiting {
             return;
@@ -559,11 +557,11 @@ impl StartHere {
         }
         let (mut parts, body) = std::mem::take(req).into_parts();
         here.at_route(&mut parts);
-        *req = axum::extract::Request::from_parts(parts, body);
+        *req = crate::http::Request::from_parts(parts, body);
     }
 
-    /// As a handler takes [`crate::Req`]: for a route `#[corten::routes]` did not make (a plain
-    /// axum handler), what [`StartHere::arrive`] does for a page route.
+    /// As a handler takes [`crate::Req`]: for a route of Corten's own, which is not an app's
+    /// [`crate::Answer`], what [`StartHere::arrive`] does for a page route.
     pub(crate) fn extracted(&self, parts: &mut Parts) {
         // The error page starts its reads as it is called (`at_error_page`), not as it takes `Req`.
         if parts.extensions.get::<crate::Signal>().is_some_and(crate::Signal::is_error_page) {
@@ -581,7 +579,7 @@ impl StartHere {
     /// A `HEAD` starts none, and a request whose answer was `Public` stays refused.
     pub(crate) fn at_error_page(&self, parts: &mut Parts, waits: bool) {
         let mut here = self.lock();
-        if !waits || parts.method == axum::http::Method::HEAD {
+        if !waits || parts.method == http::Method::HEAD {
             return;
         }
         here.error_waits = true;
@@ -696,7 +694,7 @@ impl StartHere {
             pending.places.slots.iter().any(|slot| slot.id == id && slot.placed && !slot.head) && !gifts.contains(&id)
         };
         // An answer for everyone (`Public`) draws no one's value, whatever started the reads (a
-        // plain axum handler that took `Req`).
+        // route of Corten's own that took `Req`).
         let for_all = res.extensions().get::<SameForAll>().is_some();
         let (shared, refused, error_waits) = {
             let mut here = self.lock();
@@ -754,10 +752,9 @@ impl StartHere {
         };
         self.finish(pending.signal.is_error_page() && !error_waits).await;
         let (head, body) = res.into_parts();
-        let page = match axum::body::to_bytes(body, usize::MAX).await {
+        let page = match crate::body::to_bytes(body, usize::MAX).await {
             Ok(page) => page,
             Err(error) => {
-                let error = body_error(error);
                 let error: &(dyn std::error::Error + 'static) = &*error;
                 tracing::error!(error, "corten: a page with layout reads could not be read to fill it");
                 return crate::Error::new("corten: the page could not be read").into_response();
@@ -860,7 +857,7 @@ impl Here {
     /// A `GET` starts every read now; a write keeps its head, for a page it may draw rather than
     /// redirect; a `HEAD` (no body) starts none.
     fn at_route(&mut self, parts: &mut Parts) {
-        use axum::http::Method;
+        use http::Method;
         match parts.method {
             Method::GET => {
                 if let Some(Gives(gives)) = parts.extensions.get::<Gives>().copied() {
@@ -982,20 +979,6 @@ fn draw(
     }
 }
 
-/// A body's own error, under however many of axum's wrappers it came in (`to_bytes` adds one,
-/// `Body::new` and `Body::from_stream` another): each repeats its source's message, so a log of the
-/// wrapper would say it twice.
-fn body_error(error: axum::Error) -> axum::BoxError {
-    let mut error = error.into_inner();
-    while error.is::<axum::Error>() {
-        match error.downcast::<axum::Error>() {
-            Ok(wrapper) => error = wrapper.into_inner(),
-            Err(other) => return other,
-        }
-    }
-    error
-}
-
 #[cfg(test)]
 mod tests {
     use super::{mark, mark_end, MARK};
@@ -1021,16 +1004,23 @@ mod tests {
         }
     }
 
-    /// A body read for layout that fails is logged as the stream's own error, not as axum's
-    /// wrappers around it, which repeat its message: one from `to_bytes`, one from `from_stream`.
+    /// A body read for layout that fails is logged as the stream's own error, with no wrapper
+    /// around it to repeat its message: neither `to_bytes` nor `from_stream` adds one, nor
+    /// `Body::new`, which a layer that rebuilds the page's body goes through.
     #[tokio::test]
-    async fn a_failed_body_is_its_own_error_without_axums_wrappers() {
-        let broken = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "the upstream reset the connection");
-        let stream = futures_util::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"<p>")), Err(broken)]);
-        let error = axum::body::to_bytes(axum::body::Body::from_stream(stream), usize::MAX).await.unwrap_err();
-        let error = super::body_error(error);
-        assert!(error.is::<std::io::Error>(), "{error:?}");
-        assert_eq!(error.to_string(), "the upstream reset the connection");
-        assert!(std::error::Error::source(&*error).is_none());
+    async fn a_failed_body_is_its_own_error_without_wrappers() {
+        use crate::body::Body;
+        use futures_util::StreamExt;
+        let stream = || {
+            let broken = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "the upstream reset the connection");
+            futures_util::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"<p>")), Err(broken)])
+        };
+        let rebuilt = http_body_util::StreamBody::new(stream().map(|piece| piece.map(http_body::Frame::data)));
+        for (made, body) in [("from_stream", Body::from_stream(stream())), ("new", Body::new(rebuilt))] {
+            let error = crate::body::to_bytes(body, usize::MAX).await.unwrap_err();
+            assert!(error.is::<std::io::Error>(), "{made}: {error:?}");
+            assert_eq!(error.to_string(), "the upstream reset the connection", "{made}");
+            assert!(std::error::Error::source(&*error).is_none(), "{made}");
+        }
     }
 }

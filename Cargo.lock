@@ -118,8 +118,6 @@ dependencies = [
  "http",
  "http-body",
  "http-body-util",
- "hyper",
- "hyper-util",
  "itoa",
  "matchit",
  "memchr",
@@ -127,10 +125,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
- "serde_json",
- "serde_path_to_error",
  "sync_wrapper",
- "tokio",
  "tower",
  "tower-layer",
  "tower-service",
@@ -242,7 +237,9 @@ dependencies = [
 name = "card-market"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "corten-run",
+ "http-body",
  "http-body-util",
  "reqwest",
  "serde",
@@ -325,9 +322,11 @@ dependencies = [
 name = "corten-feed"
 version = "0.1.0"
 dependencies = [
- "axum",
+ "bytes",
  "corten-protocol",
  "futures-util",
+ "http",
+ "http-body",
  "http-body-util",
  "serde",
  "serde_json",
@@ -351,8 +350,6 @@ dependencies = [
 name = "corten-run"
 version = "0.1.0"
 dependencies = [
- "axum",
- "axum-core",
  "brotli",
  "bytes",
  "corten-feed",
@@ -370,8 +367,10 @@ dependencies = [
  "matchit",
  "memchr",
  "percent-encoding",
+ "pin-project-lite",
  "serde",
  "serde_json",
+ "serde_path_to_error",
  "tokio",
  "tower",
  "tower-layer",
@@ -1258,9 +1257,9 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "mime"
-version = "0.3.17"
+version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+checksum = "d5848f5a9e8117cf94f2f90faac24a87ff81600ff8628c1e3deaab572e76bfa1"
 
 [[package]]
 name = "miniz_oxide"

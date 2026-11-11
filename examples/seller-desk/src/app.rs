@@ -17,10 +17,8 @@ use std::{
 
 use corten::{
     Signal,
-    extract::Request,
     feed::{Feed, FeedResponse, Row, Since},
-    http::HeaderValue,
-    middleware::Response,
+    http::{HeaderValue, Request, Response},
     prelude::*,
     view::Remove,
 };

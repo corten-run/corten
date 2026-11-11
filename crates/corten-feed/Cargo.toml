@@ -2,19 +2,20 @@
 name = "corten-feed"
 version.workspace = true
 edition = "2021"
-description = "The server side of a Corten live feed: keyed rows, numbered patches, replay and resume, served as JSON snapshots and server-sent events on axum."
+description = "The server side of a Corten live feed: keyed rows, numbered patches, replay and resume, served as JSON snapshots and server-sent events as plain HTTP responses."
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-keywords = ["corten", "sse", "live", "feed", "axum"]
+keywords = ["corten", "sse", "live", "feed", "http"]
 categories = ["web-programming::http-server", "asynchronous"]
 
 [dependencies]
 corten-protocol.workspace = true
-# None of axum's features: the feed uses only its body, extractor and response types. Its
-# defaults here would turn `original-uri`, `form` and `query` back on for every app with a feed
-# (Cargo joins a crate's features across the build).
-axum = { version = "0.8", default-features = false }
+# A feed's answer is an `http` response with a body of its own (`FeedBody`), which `corten` sends
+# as it sends any answer: the vocabulary hyper and HTTP clients share, and no framework.
+bytes = "1"
+http = "1"
+http-body = "1"
 futures-util = { version = "0.3", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

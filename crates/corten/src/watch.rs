@@ -7,10 +7,11 @@
 //! read or write then fails and hyper closes it. hyper's own header timer was measured
 //! first: about 900 instructions a keep-alive request with a coarse timer of Corten's (1,400 with
 //! tokio's), since it sets up a sleep for every head and reads once more to start it. This costs
-//! about 300 (callgrind, keep-alive requests over TCP), which Corten's accept loop saves against
-//! `axum::serve`.
+//! about 300 (callgrind, keep-alive requests over TCP), which Corten's accept loop saved against
+//! `axum::serve` when it was measured.
 
-use axum::body::{Body, Bytes};
+use crate::body::Body;
+use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use std::{
     future::Future,
@@ -293,8 +294,8 @@ pub(crate) struct Answer<F> {
     pub watch: Option<(Arc<Watch>, u64)>,
 }
 
-impl<F: Future<Output = Result<axum::response::Response, std::convert::Infallible>> + Unpin> Future for Answer<F> {
-    type Output = Result<axum::http::Response<Answered>, std::convert::Infallible>;
+impl<F: Future<Output = Result<crate::response::Response, std::convert::Infallible>> + Unpin> Future for Answer<F> {
+    type Output = Result<http::Response<Answered>, std::convert::Infallible>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
@@ -302,7 +303,7 @@ impl<F: Future<Output = Result<axum::response::Response, std::convert::Infallibl
             Ok(res) => res,
             Err(never) => match never {},
         };
-        let watch = this.watch.take().filter(|_| res.status() != axum::http::StatusCode::SWITCHING_PROTOCOLS);
+        let watch = this.watch.take().filter(|_| res.status() != http::StatusCode::SWITCHING_PROTOCOLS);
         Poll::Ready(Ok(res.map(|body| Answered { body, watch })))
     }
 }
@@ -315,9 +316,12 @@ pub(crate) struct Answered {
 
 impl http_body::Body for Answered {
     type Data = Bytes;
-    type Error = axum::Error;
+    type Error = crate::body::BoxError;
 
-    fn poll_frame(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Result<http_body::Frame<Bytes>, axum::Error>>> {
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<http_body::Frame<Bytes>, crate::body::BoxError>>> {
         Pin::new(&mut self.get_mut().body).poll_frame(cx)
     }
 
