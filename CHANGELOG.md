@@ -5,6 +5,18 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+### Changed
+
+- The watchlist smoke checks three runtime behaviors it did not. A tapped link nothing hovered is
+  prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
+  has no Navigation API, so nothing is prefetched). An upload answered with a `204` is read with no
+  body: Corten's `corten-location` redirect is followed with no `corten:error`, and a bare `204`
+  is `corten:error` with status 204; one answered with a status of 600 is `corten:error` with
+  status 0; the form is left not busy each time. Another file of the same name, chosen while a
+  write sending the first is out, is sent after it, where the same file pressed again is not. Each
+  check failed against a runtime with the line it covers taken out
+  ([#1229 Three runtime behaviors have no browser check: touch prefetch, an upload answered with a status a Response cannot have, and a same-name file sent as a new submit](https://github.com/corten-run/corten/issues/1229)).
+
 ## 0.2.0 (2026-11-11)
 
 The first release of all seven crates, published together by the Release workflow. The main crate's

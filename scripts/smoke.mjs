@@ -1888,6 +1888,60 @@ async function run(browser) {
   // The browser logs the 503, 500 and 409 the smoke answered; nothing else is expected.
   errors.splice(queueLogged, errors.length, ...errors.slice(queueLogged).filter((e) => !/Failed to load resource/.test(e)));
 
+  // A file is in a pending submit's key by its size and time as well as its name, so another file
+  // of the same name, chosen while a write sending the first is out, is a new submit: it goes once
+  // the write's answer is drawn. The same press again with the same file sends nothing (#1229).
+  // Each write's answer is held until the second press is made, so that press meets it still out.
+  let fileSends = 0;
+  /** @type {Promise<void>} */
+  let filePressed = Promise.resolve();
+  await page.route("**/queue-file", async (route) => {
+    const n = (fileSends += 1);
+    await filePressed;
+    await route
+      .fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body: `<p id="queue-file-out">saved ${n}</p>` })
+      .catch(() => {});
+  });
+  /** Presses with a file, then again with `second` chosen (or the same file), and counts the sends. @param {Buffer | null} second */
+  const fileCase = async (second) => {
+    fileSends = 0;
+    /** @type {() => void} */
+    let pressed = () => {};
+    filePressed = new Promise((resolve) => (pressed = resolve));
+    await page.evaluate(() => {
+      document.getElementById("queue-file-box")?.remove();
+      document
+        .querySelector("main")
+        ?.insertAdjacentHTML(
+          "beforeend",
+          __html('<div id="queue-file-box"><form id="queue-file" method="post" action="/queue-file" enctype="multipart/form-data" data-patch><input type="file" name="f"><button>Send</button></form><p id="queue-file-out"></p></div>'),
+        );
+    });
+    await page.setInputFiles("#queue-file [name=f]", { name: "card.png", mimeType: "image/png", buffer: Buffer.from("first") });
+    await page.click("#queue-file button");
+    if (second) await page.setInputFiles("#queue-file [name=f]", { name: "card.png", mimeType: "image/png", buffer: second });
+    const busy = await page.getAttribute("#queue-file", "aria-busy");
+    await page.click("#queue-file button");
+    pressed();
+    const want = second ? "saved 2" : "saved 1";
+    const ended = await page
+      .waitForFunction((want) => document.getElementById("queue-file-out")?.textContent === want, want, { timeout: 6000 })
+      .then(() => true, () => false);
+    // Time in which a send the queue must not make would be seen.
+    await page.waitForTimeout(700);
+    const out = await page.evaluate(() => document.getElementById("queue-file-out")?.textContent ?? null);
+    return { sends: fileSends, busy, ended, out };
+  };
+  const sameFile = await fileCase(null);
+  const otherFile = await fileCase(Buffer.from("another picture"));
+  await page.unroute("**/queue-file");
+  await page.evaluate(() => document.getElementById("queue-file-box")?.remove());
+  check(
+    "another file of the same name pressed while a write sending one is out is sent after it; the same file pressed again is not",
+    sameFile.busy === "true" && sameFile.ended && sameFile.sends === 1 && otherFile.busy === "true" && otherFile.ended && otherFile.sends === 2,
+    `same file: ${JSON.stringify(sameFile)}; another: ${JSON.stringify(otherFile)}`,
+  );
+
   // A data-patch form's submit marks the button that sent it busy with the form, one outside the
   // form (`form=`) too, until the answer is drawn; a newer submit by another button takes the
   // marks, and the first button's goes (#1063).
@@ -4723,6 +4777,31 @@ async function run(browser) {
     check("a prefetch answered with Corten's redirect is followed on the click with no further request", sent.join() === "prefetch", sent.join());
     await page.unroute("**/news?r=3");
 
+    // A tap prefetches its link at touchstart, with no dwell: a link nothing hovered is asked for
+    // before the tap's click, and the visit uses that answer, so the page sends one request, the
+    // prefetch, and is swapped in (#1229). In a context with a touch screen, on a fresh page.
+    const touch = await browser.newContext({ hasTouch: true });
+    const tapPage = await touch.newPage();
+    await tapPage.goto(base);
+    await tapPage.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a id="tapped" href="/news?t=1">t</a>')));
+    /** @type {string[]} */
+    const tapRequests = [];
+    tapPage.on("request", (r) => {
+      if (r.headers()["corten"] === "nav" && new URL(r.url()).search === "?t=1") tapRequests.push(r.headers()["purpose"] === "prefetch" ? "prefetch" : "visit");
+    });
+    await tapPage.evaluate(() => ((/** @type {any} */ (window)).__marker = 8));
+    await tapPage.tap("#tapped");
+    const tappedIn = await tapPage
+      .waitForFunction(() => document.title === "News | Watchlist" && location.search === "?t=1", null, { timeout: 10_000 })
+      .then(() => true, () => false);
+    const swappedAfterTap = tappedIn && (await tapPage.evaluate(() => (/** @type {any} */ (window)).__marker === 8));
+    await touch.close();
+    check(
+      "a tapped link is prefetched at touchstart, before its click, and the visit uses it",
+      tapRequests.join() === "prefetch" && swappedAfterTap,
+      `${tapRequests.join() || "no request"}; ${tappedIn ? (swappedAfterTap ? "swapped in" : "loaded in full") : "the page did not arrive in 10 s"}`,
+    );
+
     // A section stylesheet that fails to load: the runtime loads the page in full instead of
     // showing it unstyled. A fresh document, so the stylesheet is not already in it.
     await page.goto(base);
@@ -4754,6 +4833,7 @@ async function run(browser) {
       "a hover's prefetch says so (purpose: prefetch), and the click uses it",
       "a prefetch answered with no page is not asked for again on a hover, is fetched again on the click, and swapped in",
       "a prefetch answered with Corten's redirect is followed on the click with no further request",
+      "a tapped link is prefetched at touchstart, before its click, and the visit uses it",
       "a section stylesheet that fails to load makes the page load in full",
     ])
       skip(name, noSwaps);
@@ -5303,6 +5383,104 @@ async function run(browser) {
   await page.click("main form[enctype] button");
   check("an upload the network fails dispatches corten:error with status 0", (await uploadFailed) === 0, String(await uploadFailed));
   await page.unroute("**/avatar");
+  // An upload answered with a status that takes no body (204, 205, 304) is made a Response with
+  // none, as fetch's is: one made with the answer's empty body would throw. A status a Response
+  // cannot have (600 or more) is the failure a network error is, corten:error with status 0, and
+  // the form is not left busy (#1229). Each case records the status the page's XMLHttpRequest
+  // loaded with, so an engine that turns such an answer into a network error is told apart.
+  const watchUpload = () =>
+    page.evaluate(() => {
+      const w = /** @type {any} */ (window);
+      w.__uploadWatch?.abort();
+      w.__uploadWatch = new AbortController();
+      w.__uploadError = null;
+      w.__xhrStatus = [];
+      // Kept for the tab too, since a redirect may load the page in full.
+      sessionStorage.removeItem("smoke-upload-error");
+      document.addEventListener(
+        "corten:error",
+        (e) => {
+          w.__uploadError = /** @type {CustomEvent} */ (e).detail.status;
+          sessionStorage.setItem("smoke-upload-error", String(w.__uploadError));
+        },
+        { signal: w.__uploadWatch.signal },
+      );
+      if (w.__xhrWatched) return;
+      w.__xhrWatched = true;
+      const send = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function (/** @type {any} */ body) {
+        this.addEventListener("load", () => w.__xhrStatus.push(this.status));
+        return send.call(this, body);
+      };
+    });
+  /** The form's corten:error once it is not busy, or after 8 s whatever it is, with the statuses loaded. */
+  const uploadEnded = () =>
+    page
+      .waitForFunction(
+        () => {
+          const w = /** @type {any} */ (window);
+          const busy = document.querySelector("main form[enctype]")?.getAttribute("aria-busy") ?? null;
+          return w.__uploadError !== null && busy === null && { error: w.__uploadError, busy, loaded: w.__xhrStatus.join() };
+        },
+        null,
+        { timeout: 8000 },
+      )
+      .then(
+        (handle) => handle.jsonValue(),
+        () =>
+          page.evaluate(() => {
+            const w = /** @type {any} */ (window);
+            return { error: w.__uploadError, busy: document.querySelector("main form[enctype]")?.getAttribute("aria-busy") ?? null, loaded: w.__xhrStatus.join() };
+          }),
+      );
+  const pressUpload = async () => {
+    await page.setInputFiles("main input[type=file]", [{ name: "card.png", mimeType: "image/png", buffer: png }]);
+    await page.click("main form[enctype] button");
+  };
+  // Corten's own 204, the redirect a write's handler answers with (`corten-location`), back to
+  // this page: the page the form is on is drawn again, and nothing failed.
+  await watchUpload();
+  await page.route("**/avatar", (route) => route.fulfill({ status: 204, headers: { "corten-location": "/account" } }));
+  await page.evaluate(() => document.querySelector("main form[enctype]")?.setAttribute("data-smoke-old", ""));
+  await pressUpload();
+  const redirectedIn = await page
+    .waitForFunction(() => {
+      const form = document.querySelector("main form[enctype]");
+      return !!form && !form.hasAttribute("data-smoke-old") && document.readyState === "complete";
+    }, null, { timeout: 8000 })
+    .then(() => true, () => false);
+  // The redirect may load the page in full, which starts the page's records again but not the
+  // tab's: the error is read from the tab's session storage.
+  const afterRedirect = await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    return { error: sessionStorage.getItem("smoke-upload-error"), loaded: w.__xhrStatus?.join() ?? "a full load", busy: document.querySelector("main form[enctype]")?.getAttribute("aria-busy") ?? null, path: location.pathname };
+  });
+  await page.unroute("**/avatar");
+  check(
+    "an upload answered with Corten's 204 redirect goes there, with no corten:error and the form not busy",
+    redirectedIn && afterRedirect.error === null && afterRedirect.busy === null && afterRedirect.path === "/account",
+    `${redirectedIn ? "" : "the page was not drawn again in 8 s; "}${JSON.stringify(afterRedirect)}`,
+  );
+  // A bare 204 is an answer the runtime does not draw: corten:error with that status, not 0.
+  await watchUpload();
+  await page.route("**/avatar", (route) => route.fulfill({ status: 204 }));
+  await pressUpload();
+  const bare = await uploadEnded();
+  await page.unroute("**/avatar");
+  check("an upload answered with a bare 204 dispatches corten:error with status 204, and the form is not busy", bare.error === 204 && bare.busy === null && bare.loaded === "204", JSON.stringify(bare));
+  // A status of 600 or more, which a browser may log as a failed resource.
+  const beyondLogged = errors.length;
+  await watchUpload();
+  /** @type {string} */
+  let unfulfilled = "";
+  await page.route("**/avatar", (route) => route.fulfill({ status: 600 }).catch((/** @type {Error} */ e) => (unfulfilled = e.message.split("\n")[0])));
+  await pressUpload();
+  const beyond = await uploadEnded();
+  await page.unroute("**/avatar");
+  errors.splice(beyondLogged, errors.length, ...errors.slice(beyondLogged).filter((e) => !/status of 600\b/.test(e)));
+  const beyondName = "an upload answered with a status of 600 dispatches corten:error with status 0, and the form is not busy";
+  if (beyond.loaded !== "600") skip(beyondName, `the engine did not hand XMLHttpRequest a status of 600: ${unfulfilled || `loaded ${beyond.loaded || "nothing"}, corten:error ${beyond.error}`}`);
+  else check(beyondName, beyond.error === 0 && beyond.busy === null, JSON.stringify(beyond));
   // A followed redirect on the progress path: the answer the upload module hands the runtime has
   // the redirect's URL (`responseURL`), as fetch's has, which the runtime reads to know the answer
   // is this origin's before it draws it. The module is called as the runtime calls it, and its
