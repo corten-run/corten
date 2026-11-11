@@ -4764,6 +4764,15 @@ Corten is pre-1.0, so any minor version may change the API.
   on `127.0.0.1`, up to 8 times, rather than assume a number free on one address is free on the
   other: a test running beside it held that number on `127.0.0.1` once in CI
   ([#1203 a_taken_ipv6_loopback_port_is_an_error fails now and then: the [::1] port it takes may be in use on 127.0.0.1 by a parallel test](https://github.com/corten-run/corten/issues/1203)).
+- card-market's push checks send a message once more when its notification is not listed within
+  5 seconds, and say which send showed it or how many showed nothing. Under load Chromium now and
+  then loses a notification the worker showed: the trace has the push dispatched and its handler
+  settled, and `getNotifications()` never lists it, even 30 seconds later (20 of about 670 local
+  runs, 15 of them the run's second push), so a longer wait would not help. After a second send, a
+  new message must show on its first, so a worker that drops every other push still fails. With
+  the second send, 120 runs under load passed, 6 of them on it; a run now fails without cause
+  about 1 time in 500 rather than 1 in 35
+  ([#1202 card-market's smoke failed once in CI waiting 5 s for a second push notification (no title, url not text) that a rerun showed](https://github.com/corten-run/corten/issues/1202)).
 - A `data-patch` submit that is abandoned, by a newer submit of the form (another button, other
   values) or by a navigation, drops its `aria-busy` marks at once, as the guide says, rather than
   when its own code next ran (after its fetch rejected, or once what it waited on to draw had loaded),
