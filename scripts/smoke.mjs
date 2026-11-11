@@ -1892,6 +1892,8 @@ async function run(browser) {
   // of the same name, chosen while a write sending the first is out, is a new submit: it goes once
   // the write's answer is drawn. The same press again with the same file sends nothing (#1229).
   // Each write's answer is held until the second press is made, so that press meets it still out.
+  // The files are made in the page, so each part of the key is told apart: another size at the
+  // same time, and the same size at another time.
   let fileSends = 0;
   /** @type {Promise<void>} */
   let filePressed = Promise.resolve();
@@ -1902,7 +1904,14 @@ async function run(browser) {
       .fulfill({ status: 200, headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" }, body: `<p id="queue-file-out">saved ${n}</p>` })
       .catch(() => {});
   });
-  /** Presses with a file, then again with `second` chosen (or the same file), and counts the sends. @param {Buffer | null} second */
+  /** Sets the form's file to one named card.png, of `text`, last modified at `time`. @param {[string, number]} file */
+  const pickFile = (file) =>
+    page.evaluate(([text, time]) => {
+      const files = new DataTransfer();
+      files.items.add(new File([text], "card.png", { type: "image/png", lastModified: time }));
+      /** @type {HTMLInputElement} */ (document.querySelector("#queue-file [name=f]")).files = files.files;
+    }, file);
+  /** Presses with a file, then again with `second` chosen (or the same file), and counts the sends. @param {[string, number] | null} second */
   const fileCase = async (second) => {
     fileSends = 0;
     /** @type {() => void} */
@@ -1917,9 +1926,9 @@ async function run(browser) {
           __html('<div id="queue-file-box"><form id="queue-file" method="post" action="/queue-file" enctype="multipart/form-data" data-patch><input type="file" name="f"><button>Send</button></form><p id="queue-file-out"></p></div>'),
         );
     });
-    await page.setInputFiles("#queue-file [name=f]", { name: "card.png", mimeType: "image/png", buffer: Buffer.from("first") });
+    await pickFile(["first", 1]);
     await page.click("#queue-file button");
-    if (second) await page.setInputFiles("#queue-file [name=f]", { name: "card.png", mimeType: "image/png", buffer: second });
+    if (second) await pickFile(second);
     const busy = await page.getAttribute("#queue-file", "aria-busy");
     await page.click("#queue-file button");
     pressed();
@@ -1933,13 +1942,14 @@ async function run(browser) {
     return { sends: fileSends, busy, ended, out };
   };
   const sameFile = await fileCase(null);
-  const otherFile = await fileCase(Buffer.from("another picture"));
+  const otherSize = await fileCase(["another picture", 1]);
+  const otherTime = await fileCase(["secnd", 2]);
   await page.unroute("**/queue-file");
   await page.evaluate(() => document.getElementById("queue-file-box")?.remove());
   check(
-    "another file of the same name pressed while a write sending one is out is sent after it; the same file pressed again is not",
-    sameFile.busy === "true" && sameFile.ended && sameFile.sends === 1 && otherFile.busy === "true" && otherFile.ended && otherFile.sends === 2,
-    `same file: ${JSON.stringify(sameFile)}; another: ${JSON.stringify(otherFile)}`,
+    "another file of the same name pressed while a write sending one is out is sent after it, whether its size or its time differs; the same file pressed again is not",
+    [sameFile, otherSize, otherTime].every((c) => c.busy === "true" && c.ended) && sameFile.sends === 1 && otherSize.sends === 2 && otherTime.sends === 2,
+    `same file: ${JSON.stringify(sameFile)}; another size: ${JSON.stringify(otherSize)}; another time: ${JSON.stringify(otherTime)}`,
   );
 
   // A data-patch form's submit marks the button that sent it busy with the form, one outside the
@@ -4779,11 +4789,17 @@ async function run(browser) {
 
     // A tap prefetches its link at touchstart, with no dwell: a link nothing hovered is asked for
     // before the tap's click, and the visit uses that answer, so the page sends one request, the
-    // prefetch, and is swapped in (#1229). In a context with a touch screen, on a fresh page.
+    // prefetch, and is swapped in (#1229). In a context with a touch screen, on a fresh page. A tap
+    // also sends pointerover, whose dwell prefetches too: it is stopped before the runtime hears it,
+    // so touchstart is the only way the prefetch can come.
     const touch = await browser.newContext({ hasTouch: true });
     const tapPage = await touch.newPage();
+    tapPage.on("pageerror", (e) => errors.push(e.message));
     await tapPage.goto(base);
-    await tapPage.evaluate(() => document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a id="tapped" href="/news?t=1">t</a>')));
+    await tapPage.evaluate(() => {
+      addEventListener("pointerover", (e) => e.stopImmediatePropagation(), { capture: true });
+      document.querySelector("header nav")?.insertAdjacentHTML("beforeend", __html('<a id="tapped" href="/news?t=1">t</a>'));
+    });
     /** @type {string[]} */
     const tapRequests = [];
     tapPage.on("request", (r) => {
@@ -5407,7 +5423,7 @@ async function run(browser) {
       );
       if (w.__xhrWatched) return;
       w.__xhrWatched = true;
-      const send = XMLHttpRequest.prototype.send;
+      const send = (w.__xhrSend = XMLHttpRequest.prototype.send);
       XMLHttpRequest.prototype.send = function (/** @type {any} */ body) {
         this.addEventListener("load", () => w.__xhrStatus.push(this.status));
         return send.call(this, body);
@@ -5461,19 +5477,33 @@ async function run(browser) {
     redirectedIn && afterRedirect.error === null && afterRedirect.busy === null && afterRedirect.path === "/account",
     `${redirectedIn ? "" : "the page was not drawn again in 8 s; "}${JSON.stringify(afterRedirect)}`,
   );
-  // A bare 204 is an answer the runtime does not draw: corten:error with that status, not 0.
-  await watchUpload();
-  await page.route("**/avatar", (route) => route.fulfill({ status: 204 }));
-  await pressUpload();
-  const bare = await uploadEnded();
-  await page.unroute("**/avatar");
-  check("an upload answered with a bare 204 dispatches corten:error with status 204, and the form is not busy", bare.error === 204 && bare.busy === null && bare.loaded === "204", JSON.stringify(bare));
+  // A bare 204 or 205, with none of Corten's headers, is an answer the runtime does not draw:
+  // corten:error with that status, not the 0 of a Response that could not be made. That is the
+  // runtime's behavior today; #1258 (a data-patch write answered 204 fires corten:error) will
+  // change what a 204 should do, and this check with it. A 304 is checked where the engine's
+  // XMLHttpRequest loads one.
+  for (const status of [204, 205, 304]) {
+    await watchUpload();
+    await page.route("**/avatar", (route) => route.fulfill({ status }));
+    await pressUpload();
+    const bare = await uploadEnded();
+    await page.unroute("**/avatar");
+    const bareName = `an upload answered with a bare ${status} dispatches corten:error with status ${status}, and the form is not busy`;
+    if (status === 304 && bare.loaded !== "304") skip(bareName, `the engine's XMLHttpRequest did not load a 304: loaded ${bare.loaded || "nothing"}, corten:error ${bare.error}`);
+    else check(bareName, bare.error === status && bare.busy === null && bare.loaded === String(status), JSON.stringify(bare));
+  }
   // A status of 600 or more, which a browser may log as a failed resource.
   const beyondLogged = errors.length;
   await watchUpload();
   /** @type {string} */
   let unfulfilled = "";
-  await page.route("**/avatar", (route) => route.fulfill({ status: 600 }).catch((/** @type {Error} */ e) => (unfulfilled = e.message.split("\n")[0])));
+  // An engine that refuses the status has the request failed at once, rather than left waiting.
+  await page.route("**/avatar", (route) =>
+    route.fulfill({ status: 600 }).catch((/** @type {Error} */ e) => {
+      unfulfilled = e.message.split("\n")[0];
+      return route.abort().catch(() => {});
+    }),
+  );
   await pressUpload();
   const beyond = await uploadEnded();
   await page.unroute("**/avatar");
@@ -5481,6 +5511,14 @@ async function run(browser) {
   const beyondName = "an upload answered with a status of 600 dispatches corten:error with status 0, and the form is not busy";
   if (beyond.loaded !== "600") skip(beyondName, `the engine did not hand XMLHttpRequest a status of 600: ${unfulfilled || `loaded ${beyond.loaded || "nothing"}, corten:error ${beyond.error}`}`);
   else check(beyondName, beyond.error === 0 && beyond.busy === null, JSON.stringify(beyond));
+  // The page's XMLHttpRequest and corten:error go back to what they were for the checks after.
+  await page.evaluate(() => {
+    const w = /** @type {any} */ (window);
+    w.__uploadWatch?.abort();
+    if (w.__xhrWatched) XMLHttpRequest.prototype.send = w.__xhrSend;
+    w.__xhrWatched = false;
+    sessionStorage.removeItem("smoke-upload-error");
+  });
   // A followed redirect on the progress path: the answer the upload module hands the runtime has
   // the redirect's URL (`responseURL`), as fetch's has, which the runtime reads to know the answer
   // is this origin's before it draws it. The module is called as the runtime calls it, and its
