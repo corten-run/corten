@@ -125,9 +125,9 @@ rules something out.
    round browser-3, 19.6 ms against 6.0 on another CPU, Chromium and runtime. Each is one round of
    a number that has moved between runs: browser-2 measured 29.5 ms for views and three reruns of
    that step 4.9, 20.7 and 6.3 ms. In browser-4 the browser painted a frame before views were
-   ready on at least half the loads, a median of 58 ms that takeover leaves out (none in
-   browser-3), and the page was ready after Svelte's and Vue's, where in browser-3 it was the first
-   framework ready; why takeover rose is open in
+   ready on about half the loads, which takeover leaves out (a median of none in browser-3), and
+   the page, though ready sooner than in browser-3 as every app's was, was ready after Svelte's and
+   Vue's, where in browser-3 it was the first framework ready; why takeover rose is open in
    [#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222));
    reasoned (nested branches need the same typed-template check and CSP custom-property
    application as rows; centralizing those does not require tracking application state); value
@@ -331,7 +331,7 @@ rules something out.
    30 loads, round browser-4. That is one round of a number that has moved between runs (browser-2
    measured 29.5 ms, three reruns of it 4.9, 20.7 and 6.3), and it rose from browser-3's 6.0 ms
    on another CPU, Chromium and runtime while the browser now paints a frame before views are
-   ready on at least half the loads and the page is ready after Svelte's and Vue's; why is open in
+   ready on about half the loads and the page is ready after Svelte's and Vue's; why is open in
    [#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222));
    value (Values 1: the work goes where it is fastest for the user).
 

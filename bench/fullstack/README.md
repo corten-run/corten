@@ -478,9 +478,10 @@ did not run as `droplet.mjs` intends; in order, from `run.log`:
    so none of them is a result of this round.
 3. A one-off script ran `summarize.mjs browser-4` by hand (the `summary exit 0` line), so
    `summary.json` and `summary.txt` are made from those partial results; their browser rows come
-   from the complete `browser.json`. The same script started `bench/browser`'s pass, which failed
-   in its first three steps because `cargo` was not on `PATH`, and a second one-off unit ran that
-   pass to completion at 15:06:53 UTC
+   from the complete `browser.json`. The same script started `bench/browser`'s pass: its
+   `build.mjs` failed because `cargo` was not on `PATH`, its `run.mjs` failed without the
+   `out/sizes.json` that build writes, and the operator stopped the unit while its `ssr.mjs` ran.
+   A second one-off unit ran that pass to completion at 15:06:53 UTC
    ([bench/browser's README](../browser/README.md#on-linux-against-the-most-used-frameworks-round-browser-4)).
 
 A selection, median (p90):

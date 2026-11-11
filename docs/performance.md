@@ -222,13 +222,15 @@ that step on one CPU model gave 4.9, 20.7 and 6.3 ms
 It is also slower than in round browser-3 (2026-10-23, at 77002fe): 10.2 ms against 6.0 then,
 while Solid, Svelte, Vue, React and plain JavaScript took over faster in this round than in that
 one (Solid 16.2 ms against 19.6) and Remix slower. Two things moved for Corten that did not for
-most apps: on at least half of its loads (and React's) the browser painted a frame between
-parsing and the app being ready, a median of 58 ms of rendering that takeover leaves out, where
-browser-3's median was none for every app; and its page was ready 89 ms after navigation began,
-after Svelte's (39.6 ms) and Vue's (42.2 ms), where in browser-3 it was ready before every other
-framework's. The two rounds ran on different CPUs (a Xeon Platinum 8280 then), different Chromium
-versions (148 then) and different Corten runtimes, and they do not show which of those slowed
-Corten's takeover
+most apps. On about half of its loads (and React's) the browser painted a frame between parsing
+and the app being ready, which takeover leaves out; the median of that rendering, 58 ms, falls
+between the loads with the frame and those without and is not the frame's length, where
+browser-3's median was none for every app. And while every app was ready sooner after navigation
+began than in browser-3 (Corten 105.6 to 89.0 ms, Svelte 123.5 to 39.6, Vue 125.2 to 42.2, plain
+JavaScript 98.4 to 21.0), Corten's rank changed: it was ready before every other framework then
+and after Svelte and Vue now. The two rounds ran on different CPUs (a Xeon Platinum 8280 then),
+different Chromium versions (148 then) and different Corten runtimes, and they do not show which
+of those slowed Corten's takeover
 ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)). Its
 JavaScript is the runtime, views and the page's handlers, 17.9 KB gzip, more than Solid's 6.8 KB
 and less than the other frameworks'. Creating thousands of rows in the browser is where it trails

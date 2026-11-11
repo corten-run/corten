@@ -55,12 +55,13 @@ runs the twenty-app browser pass of `bench/fullstack` and then `run-all.mjs`.
 Takeover on the server-rendered pages is the time from the parser finishing to the app being
 ready, less the rendering of any frame the browser paints in between: Chromium paints the
 server's rows before the module scripts run on some loads and after them on others.
-`paintedFirstMs` in the results is that rendering, the median of the loads. In browser-3 the
-frame took about 100 ms when it came and the median was none for every app; in browser-4 it was
-58 ms for Corten and React (so at least half their loads had the frame), 0.1 ms for Remix and
-none for the rest, so how often it comes first is no longer alike for every framework. Rows the
-app removes or adds while starting are counted in a separate load, since a mutation observer
-slows every app that touches many nodes.
+`paintedFirstMs` in the results is that rendering, the median of the loads (the results keep
+only medians). In browser-3 the frame took about 100 ms when it came and the median was none for
+every app. In browser-4 the median was 58 ms for Corten and React: about half their loads had the
+frame and half did not, and the median falls between the two, so it is not the frame's length.
+It was 0.1 ms for Remix and none for the rest, so how often the frame comes first is no longer
+alike for every framework. Rows the app removes or adds while starting are counted in a separate
+load, since a mutation observer slows every app that touches many nodes.
 
 The browser's clock resolves to 0.1 ms here, so differences under a millisecond come from
 [ab.mjs](ab.mjs): the apps take turns in blocks of 25 clicks in one browser, and it reports each
@@ -97,8 +98,10 @@ The round did not run as `droplet.mjs` intends. In order, from `run.log`:
    ([#1226 bench: docker-rebuild copies a context whose own directory is named bench, as a droplet's repository is](https://github.com/corten-run/corten/pull/1226)).
 3. A one-off script then ran `bench/fullstack`'s `summarize.mjs browser-4` by hand (the
    `summary exit 0` line), so that round's `summary.json` and `summary.txt` are made from the
-   partial results, and this benchmark's `run-all.mjs`, which failed in its first three steps
-   (`build.mjs`, `run.mjs` and `ssr.mjs`, from 14:58:02 UTC) because `cargo` was not on `PATH`.
+   partial results, and this benchmark's `run-all.mjs` (from 14:58:02 UTC). Its `build.mjs`
+   failed because `cargo` was not on `PATH`, and its `run.mjs` failed for want of
+   `out/sizes.json`, which that build writes. The operator stopped that unit while `ssr.mjs` ran,
+   which is the `Target page, context or browser has been closed` line.
 4. A second one-off unit, with `cargo` on `PATH`, ran this benchmark's `run-all.mjs` from
    14:58:33 UTC to completion (`browser suite done` at 15:06:53 UTC). The results here are from
    that run.
@@ -131,11 +134,14 @@ What it shows:
    this round does not show which slowed Corten's takeover
    ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)).
    It is also one round of a number that has moved between runs before (browser-2 and its
-   reruns, below). On at least half of Corten's and React's loads the browser painted a frame
-   between parsing and the app being ready (a median of 58 ms of rendering, which takeover leaves
-   out; Remix 0.1 ms, the rest none); in browser-3 the median was none for every app. Corten's
-   page was ready 89 ms after navigation began, after Svelte's (39.6 ms) and Vue's (42.2 ms),
-   where in browser-3 it was ready before every other framework's (105.6 ms, Solid next at 119.4).
+   reruns, below). On about half of Corten's and React's loads the browser painted a frame
+   between parsing and the app being ready, which takeover leaves out: their median
+   `paintedFirstMs`, 58 ms, falls between the loads with the frame and those without, so it is
+   not the frame's length (Remix 0.1 ms, the rest none); in browser-3 the median was none for
+   every app. Every app was ready sooner after navigation began than in browser-3 (Corten 105.6
+   to 89.0 ms, Svelte 123.5 to 39.6, Vue 125.2 to 42.2, plain JavaScript 98.4 to 21.0), but
+   Corten's rank changed: it was ready before every other framework in browser-3 and is now after
+   Svelte and Vue.
 2. **Changing rows that exist** costs views a few tenths of a millisecond, as it costs plain
    JavaScript and Solid, and less than Vue, React and Remix on 10,000 rows.
 3. **Memory**: 101 bytes a row, below this plain JavaScript app (166), which keeps a copy of
