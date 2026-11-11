@@ -138,7 +138,22 @@ rules something out.
 5. <a id="choice-handlers-checked-where-called"></a>**Handlers are checked where they are called.** The compiler reads each script's JSDoc, so a
    call with a ref on the wrong element, an event of the wrong type, a value of the wrong type or
    a handler the script does not export fails to compile at the call. No generated declarations
-   are needed between markup and script, and none can be stale.
+   are needed between markup and script, and none can be stale. Scripts are JavaScript with JSDoc,
+   not TypeScript source: `tsc` checks both, and the call check, the generated declarations and
+   data read at run time are the same either way. The macro already reads TypeScript's type syntax
+   inside JSDoc, so the call check would carry over; what TypeScript source adds is a step before
+   serving: full TypeScript needs code emitted for `enum`, namespaces and parameter properties, so
+   a build step; erasable-only TypeScript (TypeScript 5.8's `erasableSyntaxOnly`) needs a pass that
+   blanks its type syntax (annotations, `as`, `satisfies`, `!`, type parameters and arguments,
+   `interface`, `type`, modifiers, overloads, type-only imports and more) and keeps up with each
+   TypeScript release. Moving every script to TypeScript would still leave one format, so the
+   choice rests on that step, which JavaScript does not need, against the few checks below, each of
+   which JavaScript can be written to get too (a JSDoc type, a rest parameter; a class's only by
+   restating its fields). Stricter checks of a body are `tsc` options, which hold for JavaScript as
+   for TypeScript
+   ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)),
+   and data read at run time is unchecked in either
+   ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
    Stands on: bet (the JSDoc types the compiler reads cover what handlers take: elements and their
    lists, maps and views (`Holds`), events, `AbortSignal`, strings and lists of them, numbers,
@@ -147,13 +162,47 @@ rules something out.
    it cannot check a call against, a set of names written as string literals, any other JSON
    shape or an element or event in another shape, refuses the call rather than taking anything,
    and only `unknown` takes any argument, since it claims nothing the call does not check);
-   reasoned (with the check at the call, no declarations sit between markup and script to go stale);
-   value (a wrong call fails to compile, Values 4).
+   platform (TypeScript 5.9.3 and 7.0.2 check JSDoc types as they check annotations, except where
+   JavaScript infers a type, in the cases probed so far: a property first given after an empty
+   object literal, which a JSDoc type on the object catches; a value whose type nothing fixes (an
+   untyped `new Promise` or `new Set()`, a type parameter no argument decides), `any` in JavaScript
+   and `unknown` in TypeScript, which a JSDoc type fixes; a function called with `new` that sets
+   `this`'s properties, which 5.9.3 accepts in JavaScript and 7.0.2 refuses; a function that reads
+   `arguments`, which 5.9.3 lets take any number of arguments in JavaScript and 7.0.2 does not, and
+   a rest parameter fixes; and a property a class's constructor or method sets first, which
+   JavaScript takes as declared even when the class declares its fields, so a misspelled write is
+   flagged only when `this` is retyped to a typedef that repeats the fields (`@this` on a method, a
+   cast in the constructor), and a read of the misspelled name only when a method other than the
+   constructor set it and `undefined` is not accepted; TypeScript 5.8 added `erasableSyntaxOnly`);
+   reasoned (with the check at the call, no declarations sit between markup and script to go stale;
+   component behavior is exported functions, not classes; the runtime's one hand-written class,
+   `<corten-live>`, sets only the fields it declares, and the classes it generates, one per view
+   (the macro writes them) and one per typed event (`assets.rs` writes them), are typed by the
+   declarations written beside them; each of the runtime's untyped `new Promise`s and `new Set()`s
+   was read, and none's value is used as a type it is not); measured (deck-builder's and
+   seller-desk's largest scripts and three small handlers, converted to TypeScript, surfaced no
+   bug; esbuild 0.28.2's output (`--format=esm`), which stands in for either language since Corten
+   serves esbuild's output for neither, with whitespace and comments removed was the same bytes,
+   17,424 and 4,358, and its plain output differed by comments and the parentheses a JSDoc cast
+   needs, 22,498 against 22,046 for deck-builder; `tsc` on the repository took, on TypeScript
+   5.9.3, 6.6 to 7.3 s with them as JavaScript and 7.6 to 8.7 s as TypeScript, three runs each, not
+   alternated, on a loaded machine, so no difference in time is claimed; no empty object literal
+   given properties later and no function called with `new` is in the repository's scripts, and
+   none reads `arguments`); value (a wrong call fails to compile, Values 4; one authoring format,
+   Values 5, which keeping JavaScript holds without a migration; no build step and no
+   syntax-removal pass in a macro that depends on nothing, Values 6).
 
    Revisit when: an example or a kit component has to take `unknown` where a precise type would
    serve it, because no checked type or generated declaration fits, so a wrong call compiles; or
    JavaScript gains type syntax of its own (TC39's type annotations proposal), which a script
-   could carry in place of JSDoc.
+   could carry in place of JSDoc; or a script needs a check `checkJs` cannot give with a JSDoc type
+   (an object built up a property at a time that cannot be written as a literal or a typed value);
+   or a component or the runtime has a hand-written class, or a function called with `new`, that
+   sets properties it does not declare, or a function that reads `arguments`; or TypeScript stops
+   reading a JSDoc form the scripts use (7.0 dropped several, among them `@enum`, `@class`, Closure
+   function types, a bare `?` or postfix `!`, and a value written where a type belongs, none of
+   which they use); or a TypeScript release changes what the probes behind the measured premise
+   show.
 
    Last checked: 2026-11-07, at `cdbe4392`: every parameter a handler in the repository took as
    any JSON value was listed (seven: six typed events imported in a JSDoc `@import`, now each its
@@ -165,7 +214,22 @@ rules something out.
    now take theirs, and an element's `error`, `abort` and `progress` were probed as plain `Event`s
    in Chromium 156, Firefox 157 and WebKit 27.2; a media element's `resize` is one in the HTML
    standard's event table, not probed), held by `scripts/events.mjs`
-   ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072)).
+   ([#1072 A formdata handler cannot take its FormDataEvent: the event map types formdata as Event, so since the handler check a lib.dom-typed handler does not compile](https://github.com/corten-run/corten/issues/1072));
+   2026-11-10, JSDoc against TypeScript source at `c480d006` with TypeScript 5.9.3: deck-builder's
+   and seller-desk's largest scripts converted by TypeScript's own JSDoc-to-annotation fix (148
+   and 44 edits, two syntax fixes by hand, 0 errors), and the JSDoc in the 33 component, example
+   and template scripts listed (492 `@param`, 84 `@type`, 24 `@typedef`, about 40 casts, 16
+   `@import`), and all 62 scripts `jsconfig.json` checks besides its test fixture, the runtime's
+   included, compiled as TypeScript to find a property first given by assigning it (none: the three
+   such errors were types JSDoc gave that the copy lost), the template's and two kit handlers
+   converted by hand (0 errors), esbuild 0.28.2 run on the converted pair, `tsc` timed three times
+   on each, TypeScript 5.8's release notes read for `erasableSyntaxOnly` and 7.0's for JSDoc, and
+   TypeScript 7.0.2 run on the repository's `jsconfig.json` (0 errors) and on the same probes
+   (the same results as 5.9.3, but for a function called with `new` and a call with more arguments
+   than a function reading `arguments` declares, which 7.0.2 refuses), and the repository's scripts
+   searched for each, the first through the TypeScript copy (no TS2683 or TS7009), the second with
+   `rg` for `arguments` (only in comments)
+   ([#1040 Reassess JSDoc versus TypeScript for component scripts using measured safety and authoring tradeoffs](https://github.com/corten-run/corten/issues/1040)).
 
 6. <a id="choice-plain-css"></a>**Plain CSS files, scoped by the compiler, not utility classes or CSS-in-Rust.** Utility
    frameworks put unchecked strings in every view and need a scanner and a build step; CSS in

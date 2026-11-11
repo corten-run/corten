@@ -1202,6 +1202,29 @@ async function run(browser) {
     kitLooks.group === "true true" && kitLooks.chosen !== kitLooks.other && kitLooks.other === "rgba(0, 0, 0, 0)" && kitLooks.stepper === "2.25 2.25 2.25" && kitLooks.fieldset === "grid none",
     JSON.stringify(kitLooks),
   );
+  // Checkboxes and RadioGroup space their choices and their legend from two theme tokens
+  // (choice-list-gap, choice-list-legend-gap; .75rem each), so a theme that sets them moves both groups.
+  const choiceSpacing = await page.evaluate(() => {
+    const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+    const measure = () =>
+      ["[class*='checkboxes__checkboxes'] > fieldset", "fieldset[class*='radio-group__group']"].map((sel) => {
+        const set = /** @type {HTMLElement} */ (document.querySelector(sel));
+        const legend = /** @type {HTMLElement} */ (set.querySelector(":scope > legend"));
+        return [getComputedStyle(set).rowGap, getComputedStyle(legend).marginBottom].map((v) => parseFloat(v) / rem).join(" ");
+      });
+    const kit = measure();
+    const theme = new CSSStyleSheet();
+    theme.replaceSync(":root { --choice-list-gap: .5rem; --choice-list-legend-gap: .25rem; }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, theme];
+    const themed = measure();
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== theme);
+    return { kit, themed };
+  });
+  check(
+    "Checkboxes and RadioGroup: the gap between choices and under the legend are the theme's choice-list-gap and choice-list-legend-gap",
+    choiceSpacing.kit.every((s) => s === "0.75 0.75") && choiceSpacing.themed.every((s) => s === "0.5 0.25"),
+    JSON.stringify(choiceSpacing),
+  );
   await period("Week").click();
   check("a click chooses in place, and every part of the group follows", (await period("Week").getAttribute("aria-checked")) === "true" && (await showing()) === "Average $12.10 this week.|Sold 3 this week.", await showing());
   check("the address follows the choice", new URL(page.url()).searchParams.get("period") === "week", page.url());
