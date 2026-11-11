@@ -30,6 +30,7 @@
 //    read whole).
 // Without JavaScript, links and forms still work as plain HTML.
 
+import { patchOf, snapshotOf } from "./feed.js";
 import { parseOn } from "./on.js";
 
 // Trusted Types (the CSP's `require-trusted-types-for 'script'`, `trusted-types corten`): markup and
@@ -452,9 +453,10 @@ function closestRef(el, owner, name, event) {
  * @returns {(args: Record<string, string | number>) => string}
  */
 function message(parts) {
+  // `parts` alternates text and names and starts and ends with text, so each read is in range.
   return (args) => {
-    let text = parts[0];
-    for (let i = 1; i < parts.length; i += 2) text += String(args[parts[i]]) + parts[i + 1];
+    let text = /** @type {string} */ (parts[0]);
+    for (let i = 1; i < parts.length; i += 2) text += String(args[/** @type {string} */ (parts[i])]) + parts[i + 1];
     return text;
   };
 }
@@ -631,10 +633,11 @@ function scan(root, names, inside = false) {
   }
   // Rows cloned from one template carry the same refs, so a name is added once per run of them.
   if (!(inside && fewRefNames(root, names))) {
+    // Indexed, as it was: this runs for every element a change adds (rows a view makes too).
     const refs = queryAll(root, "[data-ref]");
     let last = null;
     for (let i = 0; i < refs.length; i += 1) {
-      const ref = attrOf(refs[i], "data-ref");
+      const ref = attrOf(/** @type {Element} */ (refs[i]), "data-ref");
       if (ref !== last && ref !== null) names.add(ref.slice(ref.indexOf("/") + 1));
       last = ref;
     }
@@ -784,6 +787,8 @@ export function subscribe(url, handlers, { signal } = {}) {
   let failures = 0;
   // Snapshots in a row whose own cursor the stream refused as it opened.
   let refused = 0;
+  // Snapshots in a row whose stream then sent a patch that is not one.
+  let rejected = 0;
   const status = handlers.status ?? (() => {});
   signal?.addEventListener(
     "abort",
@@ -817,11 +822,12 @@ export function subscribe(url, handlers, { signal } = {}) {
     try {
       const res = await fetch(url, { headers: { accept: "application/json" }, signal: current.signal });
       if (!res.ok) throw new Error(`corten: feed ${url} answered ${res.status}`);
-      /** @type {{ epoch: string, seq: number, rows: Row[] }} */
-      const snap = await res.json();
+      const snap = snapshotOf(await res.json());
+      if (!snap) throw new Error(`corten: feed ${url} sent no snapshot`);
       failures = 0;
       seq = snap.seq;
-      handlers.snapshot(snap.rows, snap.seq, snap.epoch);
+      // The rows are the server's own type, which the runtime does not check (`Row` is erased).
+      handlers.snapshot(/** @type {Row[]} */ (snap.rows), snap.seq, snap.epoch);
       listen(`${url}/live?since=${encodeURIComponent(`${snap.epoch}-${snap.seq}`)}`, true);
     } catch (error) {
       if (current.signal.aborted) return;
@@ -866,15 +872,25 @@ export function subscribe(url, handlers, { signal } = {}) {
     });
     es.addEventListener("patch", (event) => {
       const receivedAt = performance.now();
-      /** @type {{ seq: number, changes: FeedChange<Row>[] }} */
-      const batch = JSON.parse(/** @type {MessageEvent} */ (event).data);
+      const batch = patchOf(/** @type {MessageEvent<string>} */ (event).data);
+      // Not a patch (a server of another version, a route that sends other events): the write it
+      // carried is lost, so load the snapshot, after a backoff that grows while the patches after it
+      // are not either.
+      if (!batch) {
+        console.error(new Error(`corten: feed ${url} sent a bad patch`));
+        es.close();
+        source = null;
+        status("syncing");
+        return void wait(() => sync(true), (rejected += 1));
+      }
       if (batch.seq <= seq) return;
       if (batch.seq !== seq + 1) return void sync();
       seq = batch.seq;
       fresh = false;
       refused = 0;
-      cursor = /** @type {MessageEvent} */ (event).lastEventId;
-      handlers.patch(batch.changes, batch.seq, receivedAt);
+      rejected = 0;
+      cursor = /** @type {MessageEvent<string>} */ (event).lastEventId;
+      handlers.patch(/** @type {FeedChange<Row>[]} */ (batch.changes), batch.seq, receivedAt);
     });
   }
 
@@ -1112,20 +1128,22 @@ const idOf = (el) => attrOf(el, "id");
  * The form's own property `name`, past a control named like it: in the DOM `<button name="action">`
  * makes `form.action` that button, and `<input name="id">` makes `form.id` the input, so the
  * runtime never reads a form's properties or calls its methods directly.
+ * @template {keyof HTMLFormElement} K
  * @param {Element} form
- * @param {string} name
- * @returns {any}
+ * @param {K} name
+ * @returns {HTMLFormElement[K]}
  */
 const formProperty = (form, name) => Reflect.get(HTMLFormElement.prototype, name, form);
 
 /**
  * Calls the form's own method `name` (see formProperty), or an element's: `setAttribute` on a
  * link or form is Element's, whatever the form's controls are named.
+ * @template {"setAttribute" | "removeAttribute" | "dispatchEvent" | "addEventListener" | "removeEventListener" | "focus"} K
  * @param {Element} form
- * @param {string} name
- * @param {...any} args
+ * @param {K} name
+ * @param {Parameters<HTMLFormElement[K]>} args
  */
-const formCall = (form, name, ...args) => formProperty(form, name).call(form, ...args);
+const formCall = (form, name, ...args) => /** @type {(...args: Parameters<HTMLFormElement[K]>) => unknown} */ (formProperty(form, name)).call(form, ...args);
 
 /**
  * Focuses `el` without scrolling to it. A form's `focus` goes through formCall, as a control may
@@ -1141,10 +1159,9 @@ const focusOn = (el) => {
 
 /** A random UUID v4. `crypto.randomUUID` is only there in secure contexts. */
 function uuid() {
+  // The version (4) in byte 6 and the variant (10xx) in byte 8.
   const b = crypto.getRandomValues(new Uint8Array(16));
-  b[6] = (b[6] & 0x0f) | 0x40;
-  b[8] = (b[8] & 0x3f) | 0x80;
-  const hex = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  const hex = Array.from(b, (x, i) => (i === 6 ? (x & 0x0f) | 0x40 : i === 8 ? (x & 0x3f) | 0x80 : x).toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
@@ -1154,7 +1171,7 @@ function uuid() {
  * @param {HTMLFormElement} form
  */
 function renewSubmitKeys(form) {
-  for (const field of Array.from(/** @type {HTMLFormControlsCollection} */ (formProperty(form, "elements")))) {
+  for (const field of Array.from(formProperty(form, "elements"))) {
     if (field instanceof HTMLInputElement && field.hasAttribute("data-submit")) {
       field.value = uuid();
     }
@@ -1165,7 +1182,7 @@ function renewSubmitKeys(form) {
 function sentState(form) {
   /** @type {Map<Element, string | undefined>} */
   const sent = new Map();
-  for (const f of Array.from(/** @type {HTMLFormControlsCollection} */ (formProperty(form, "elements")))) sent.set(f, stateOf(f));
+  for (const f of Array.from(formProperty(form, "elements"))) sent.set(f, stateOf(f));
   return sent;
 }
 
@@ -1191,7 +1208,7 @@ function counterpart(root, fresh, el, exact, ids) {
   if (name) {
     const selector = named(el, name);
     const theirs = queryAll(home, selector);
-    if (theirs.length === 1 && queryAll(anchor, selector).length === 1) return theirs[0];
+    if (theirs.length === 1 && queryAll(anchor, selector).length === 1) return theirs.item(0);
   }
   if (exact) return null;
   /** @type {Element | undefined} */
@@ -1306,7 +1323,7 @@ function replaceKeeping(root, fresh, sent, took, focus = true) {
   const focused = document.activeElement;
   const inside = focus && focused && focused !== document.body && holds(root, focused);
   const next = inside ? counterpart(root, fresh, focused, false, ids) : null;
-  /** File inputs of `fresh` and the files to give them once they are in the page. @type {[any, FileList | null][]} */
+  /** File inputs of `fresh` and the files to give them once they are in the page. @type {[HTMLInputElement, FileList | null][]} */
   const files = [];
   for (const f of [root, ...Array.from(queryAll(root, "input, textarea, select"))]) {
     // A submit key stays the form's own: renewed in place once an answer took the write, and kept
@@ -1324,7 +1341,8 @@ function replaceKeeping(root, fresh, sent, took, focus = true) {
     const to = now !== undefined && (now !== (sent?.has(f) ? sent.get(f) : stateOf(f, true)) || (file && !took)) && counterpart(root, fresh, f, true, ids);
     if (!to || to.localName !== f.localName) continue;
     typedFields.add(to);
-    if (file) files.push([to, field.files]);
+    // An input, as `f` is: the names are the same.
+    if (file) files.push([/** @type {HTMLInputElement} */ (to), field.files]);
     else if (f instanceof HTMLSelectElement) {
       // Every chosen option, by value, so a multiple select keeps them all.
       const chosen = new Set(Array.from(f.selectedOptions, (o) => o.value));
@@ -1630,12 +1648,13 @@ function layoutChanges(doc, notice) {
     const mine = Array.from(childrenOf(up)).filter((el) => el === here || drawn.has(el));
     const theirs = Array.from(childrenOf(upThere));
     if (mine.length !== theirs.length || mine.indexOf(here) !== theirs.indexOf(there)) return null;
-    for (let i = 0; i < mine.length; i++) {
-      if (mine[i] === here) continue;
-      if (mine[i].localName !== theirs[i].localName) return null;
-      const was = drawn.get(mine[i]);
+    for (const [i, el] of mine.entries()) {
+      const their = theirs[i];
+      if (el === here) continue;
+      if (!their || el.localName !== their.localName) return null;
+      const was = drawn.get(el);
       const as = was === undefined ? "" : drawnAs(was);
-      if (as === null || comparable(as) !== markupOf(theirs[i]) || shows(theirs[i], said)) changed.push([mine[i], theirs[i], was]);
+      if (as === null || comparable(as) !== markupOf(their) || shows(their, said)) changed.push([el, their, was]);
     }
     here = up;
     there = upThere;
@@ -1728,10 +1747,12 @@ function drawLayout(old, fresh, before, said, inside = false) {
     return;
   }
   const [mine, theirs] = [Array.from(old.childNodes), Array.from(fresh.childNodes)];
-  if (mine.length !== theirs.length || mine.some((n, i) => n.nodeName !== theirs[i].nodeName)) return replaceKeeping(old, fresh, null);
+  if (mine.length !== theirs.length || mine.some((n, i) => n.nodeName !== theirs[i]?.nodeName)) return replaceKeeping(old, fresh, null);
   const then = before && before.childNodes.length === theirs.length ? before.childNodes : null;
   mine.forEach((n, i) => {
     const [there, was] = [theirs[i], then?.[i]];
+    // The same length as `mine`, checked above.
+    if (!there) return;
     if (!(n instanceof Element)) {
       if (was?.nodeValue !== there.nodeValue && n.nodeValue !== there.nodeValue) n.nodeValue = there.nodeValue;
       return;
@@ -2073,7 +2094,7 @@ function prefetch(target) {
   if (url.origin !== location.origin || pageKey(url) === pageKey(new URL(location.href)) || pageKey(url) === fetching?.key) return;
   const key = pageKey(url);
   // The user asked the browser to save data.
-  if (/** @type {any} */ (navigator).connection?.saveData) return;
+  if (/** @type {Navigator & { connection?: { saveData?: boolean } }} */ (navigator).connection?.saveData) return;
   const now = performance.now();
   const hit = prefetched.get(key);
   if (hit && now - hit.at < PREFETCH_FRESH_MS) return;
@@ -2320,8 +2341,13 @@ function readLater(seconds, wanted, read) {
   setTimeout(wait, seconds * 1000);
 }
 
-/** @type {any} */
-const navigation = /** @type {any} */ (window).navigation;
+/**
+ * What the runtime's own navigations carry in `info` ({@link go}), under keys only this module has.
+ * @typedef {{ [REDIRECTED]?: Response, [KEEP_PLACE]?: ReturnType<typeof placeOf>, [LOAD]?: boolean, [SOURCE]?: Element | null, [WRITTEN]?: boolean, [READ_AGAIN]?: boolean }} Info
+ * @typedef {import("./navigation").NavigateEvent<Info>} NavigateEvent
+ */
+// The Navigation API, where the browser has it; TypeScript's DOM library does not declare it yet.
+const navigation = /** @type {Window & { navigation?: import("./navigation").Navigation<Info> }} */ (window).navigation;
 /** Key of the response a redirected navigation hands to the next one, in its `info`. */
 const REDIRECTED = Symbol("corten.redirected");
 /** Key of the place a `data-keep-place` navigation hands to the one a redirect starts. */
@@ -2374,7 +2400,7 @@ function sendsAs(form, submitter) {
 
 /**
  * What started a navigation, if anything: a link, a form, or the button that sent one.
- * @param {any} event
+ * @param {NavigateEvent} event
  */
 function startedBy(event) {
   const el = event.info?.[SOURCE] ?? event.sourceElement;
@@ -2386,23 +2412,22 @@ function startedBy(event) {
  * the submit button as the source but sets `formData` from the form's own method, so a POST
  * button in a GET form has none (#190); Firefox names the form there, and its `formData`
  * follows the button.
- * @param {any} event
+ * @param {NavigateEvent} event
  */
 function posts(event) {
   const button = event.sourceElement;
-  const form = button?.form;
-  if (!(form instanceof HTMLFormElement) || !(button instanceof HTMLButtonElement || button instanceof HTMLInputElement)) return !!event.formData;
-  return sendsAs(form, button).method === "post";
+  if (!(button instanceof HTMLButtonElement || button instanceof HTMLInputElement) || !(button.form instanceof HTMLFormElement)) return !!event.formData;
+  return sendsAs(button.form, button).method === "post";
 }
 
 /**
  * Whether the element a navigation came from (a link, a button, or the form, when no button sent
  * it) is in `selector`, read past a control named `closest`.
- * @param {any} event @param {string} selector
+ * @param {{ sourceElement: Element | null }} event @param {string} selector
  */
 const sourceIn = (event, selector) => event.sourceElement instanceof Element && !!closestOf(event.sourceElement, selector);
 
-navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
+navigation?.addEventListener("navigate", (event) => {
   // A script's history.pushState or replaceState (a tab that puts itself in the address) is the
   // page's own: nothing to fetch. Back and forward between pages this runtime swapped are
   // same-document traversals too, and do need the page.
@@ -2456,7 +2481,7 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
     // Back to the control, unless the user has moved on meanwhile.
     const now = document.activeElement;
     const el = /** @type {HTMLInputElement | undefined} */ (place && (!now || now === document.body) ? document.querySelectorAll(place.at)[place.nth] : undefined);
-    if (!el) return;
+    if (!el || !place) return;
     focusOn(el);
     try {
       const [start, end, direction] = place.caret;
@@ -2474,11 +2499,12 @@ navigation?.addEventListener("navigate", (/** @type {any} */ event) => {
  * replaces before its address changes (the user clicks on while the page is on its way) rejects
  * it, which the browser would log as uncaught. Returns `finished`, for the caller that wants to know how it ended.
  * @param {string} url
- * @param {object} options
+ * @param {{ history?: "push" | "replace", info?: Info }} options
  * @returns {Promise<unknown>}
  */
 function go(url, options) {
-  const { committed, finished } = navigation.navigate(url, options);
+  // Called only where the browser has the Navigation API.
+  const { committed, finished } = /** @type {NonNullable<typeof navigation>} */ (navigation).navigate(url, options);
   committed.catch(() => {});
   return finished;
 }
@@ -2503,10 +2529,10 @@ const PRECOMMIT = "NavigationPrecommitController" in window;
  * navigation that takes this one's place in history (`Precommit.history`), so the link's address
  * never shows. `main` is busy from the click either way. Elsewhere, and for back and forward, the
  * address changes at once, as before.
- * @param {any} event
+ * @param {NavigateEvent} event
  * @param {(precommit: Precommit | undefined) => Promise<void>} run
  * @param {() => void} after
- * @param {object} options
+ * @param {import("./navigation").NavigationInterceptOptions} options
  * @param {boolean} [early] whether the address may wait for the answer (not a page read again)
  */
 function interceptVisit(event, run, after, options, early = true) {
@@ -2526,7 +2552,7 @@ function interceptVisit(event, run, after, options, early = true) {
   let visiting = Promise.resolve();
   event.intercept({
     ...options,
-    precommitHandler: (/** @type {any} */ controller) =>
+    precommitHandler: (controller) =>
       new Promise((answered, failed) => {
         const commit = async (/** @type {Response | undefined} */ res) => {
           let took = false;
@@ -2582,7 +2608,7 @@ let drawnFor = navigation?.currentEntry?.key ?? "";
 // An entry the runtime did not go to (a link to a fragment, a script's `pushState`) shows the page
 // that was there.
 navigation?.addEventListener("currententrychange", () => {
-  if (!navigation.transition) drawnFor = navigation.currentEntry?.key ?? drawnFor;
+  if (!navigation?.transition) drawnFor = navigation?.currentEntry?.key ?? drawnFor;
 });
 
 /**
@@ -2640,7 +2666,7 @@ function remember(key, main) {
   /** @type {Typed[]} */
   const typed = fields.map(([f, at, key, now]) => [at, key, /** @type {Element[]} */ (found.get(at)).indexOf(f), now, fieldDrawn(f)]);
   // The entry as it is now: a replace since the page was drawn made a new one with the same key.
-  const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
+  const entry = navigation?.entries().find((e) => e.key === key);
   if (!typed.length || !entry) return void typedIn.delete(key);
   typedIn.set(key, typed);
   entry.addEventListener("dispose", forget);
@@ -2648,9 +2674,9 @@ function remember(key, main) {
 
 /** @param {Event} event the dispose of an entry `typedIn` has */
 function forget(event) {
-  const key = /** @type {any} */ (event.target).key;
+  const key = /** @type {NavigationHistoryEntry} */ (event.target).key;
   // A replace disposes the entry it replaces and gives the new one its key.
-  const entry = navigation.entries().find((/** @type {any} */ e) => e.key === key);
+  const entry = navigation?.entries().find((e) => e.key === key);
   if (entry) entry.addEventListener("dispose", forget);
   else typedIn.delete(key);
 }
@@ -2704,7 +2730,7 @@ function fieldsAt(root, wanted) {
  * its name in <main>, and which of the controls with that name it is), and its caret. Null when
  * nothing is focused.
  * @param {Element | null} el
- * @returns {{ at: string, nth: number, caret: [number | null, number | null, any] } | null}
+ * @returns {{ at: string, nth: number, caret: [number | null, number | null, "forward" | "backward" | "none" | undefined] } | null}
  */
 function placeOf(el) {
   const name = el && attrOf(el, "name");
@@ -2712,10 +2738,10 @@ function placeOf(el) {
   const at = id ? `#${CSS.escape(id)}` : name && el ? `main ${named(el, name)}` : "";
   if (!at) return null;
   const f = /** @type {HTMLInputElement} */ (el);
-  /** @type {[number | null, number | null, any]} */
-  let caret = [null, null, null];
+  /** @type {[number | null, number | null, "forward" | "backward" | "none" | undefined]} */
+  let caret = [null, null, undefined];
   try {
-    caret = [f.selectionStart, f.selectionEnd, f.selectionDirection];
+    caret = [f.selectionStart, f.selectionEnd, f.selectionDirection ?? undefined];
   } catch {}
   return { at, nth: Array.prototype.indexOf.call(document.querySelectorAll(at), el), caret };
 }
@@ -2960,7 +2986,7 @@ function sendAgain(form, submitter) {
   const id = idOf(form);
   const now = formProperty(form, "isConnected") ? form : id ? document.getElementById(id) : null;
   if (!(now instanceof HTMLFormElement) || !hasAttr(now, "data-patch")) return;
-  const all = /** @type {HTMLElement[]} */ (Array.from(/** @type {HTMLFormControlsCollection} */ (formProperty(now, "elements"))));
+  const all = /** @type {HTMLElement[]} */ (Array.from(formProperty(now, "elements")));
   const by =
     !submitter || all.includes(submitter)
       ? submitter
@@ -3014,7 +3040,7 @@ customElements.define(
         liveStatus(this, source.readyState === EventSource.CLOSED ? "closed" : "reconnecting");
       });
       source.addEventListener("patch", (event) => {
-        const { data, origin } = /** @type {MessageEvent} */ (event);
+        const { data, origin } = /** @type {MessageEvent<string>} */ (event);
         // The origin the stream came from, after any redirect: another's fragment is not drawn, nor
         // an event a script dispatched.
         if (!event.isTrusted || origin !== location.origin) return console.error("corten: <corten-live> draws only fragments its stream brought from this origin, not", event.isTrusted ? origin : "an event a script dispatched");
@@ -3050,8 +3076,9 @@ try {
   const kept = sessionStorage.getItem(NOTICE);
   if (kept !== null) {
     sessionStorage.removeItem(NOTICE);
-    const [path, text, until] = JSON.parse(kept);
-    if (path === location.pathname && Date.now() < until) ready.then(() => setTimeout(() => announce(new URLSearchParams({ m: text }))));
+    // What `reload` wrote, or not: storage is the browser's, and outlives a version of the runtime.
+    const [path, text, until] = /** @type {unknown[]} */ (JSON.parse(kept));
+    if (path === location.pathname && typeof text === "string" && typeof until === "number" && Date.now() < until) ready.then(() => setTimeout(() => announce(new URLSearchParams({ m: text }))));
   }
 } catch {
   // No session storage, or not what reload wrote: nothing to say.
@@ -3063,7 +3090,7 @@ try {
 const devStart = document.querySelector('meta[name="corten-dev"]')?.getAttribute("content");
 if (devStart) {
   new EventSource("/corten/dev").addEventListener("message", (event) => {
-    if (/** @type {MessageEvent} */ (event).data !== devStart) reload();
+    if (/** @type {MessageEvent<string>} */ (event).data !== devStart) reload();
   });
   // A failed load is the browser's own error, which names the URL: a message of the runtime's
   // would be bytes every production page carries.

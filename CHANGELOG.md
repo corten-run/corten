@@ -2774,6 +2774,21 @@ Corten is pre-1.0, so any minor version may change the API.
     columns, and aspnet-aot's all 14 that are not about pages, one of them (readiness) by a health
     check of its own that the tier's rule would not add
     ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+291. The kit's `StatusDot` and `LiveDot` draw their dot at the theme's `--status-dot-size`, where
+    `status_dot.css` had `.5rem` as a literal, so a design system whose status dots are smaller (a
+    .375rem dot) sets one token in its theme instead of editing the copied stylesheet. One token
+    sizes both, since they share the dot's rule. The kit's theme declares it as `.5rem`, so no
+    app's look changes; an app with a theme of its own that adds or merges `status_dot` is told the
+    token's line, as for the other sizes, and its startup check names `status_dot.css` until the
+    theme declares it. A copy edited to another size conflicts on `--merge` at the `.dot` line:
+    take the kit's line and declare the size as the token. The ui-gallery's smoke test checks both
+    dots are .5rem in the kit's theme and .375rem with the token set so on the root. No server
+    request or render cost; measured, the ui-gallery's served `components.css` is 61,493 bytes
+    where it was 61,434 (gzip 10,192 against 10,173, brotli 8,985 against 8,963, Node's zlib at
+    gzip level 9 and brotli's default, one fetch of each fixed file), served by the gallery built
+    from this change and from the commit it was made on, b38f7880. Found by the Chase Sets pilot,
+    whose design system draws its status dots at .375rem
+    ([#1199 Kit StatusDot draws its dot at a literal .5rem, so a design system with a smaller status dot edits the copy](https://github.com/corten-run/corten/issues/1199)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4576,6 +4591,36 @@ Corten is pre-1.0, so any minor version may change the API.
     group's name is only the job's display name, so renaming one changes no part
     ([#1085 CI runs every browser example in sequence, putting a 17-minute path on each change](https://github.com/corten-run/corten/issues/1085),
     [#1086 CI starts its 9.6-minute release test step only after the rest of the Rust checks](https://github.com/corten-run/corten/issues/1086)).
+
+179. Scripts are type-checked with `noUncheckedIndexedAccess`, `noFallthroughCasesInSwitch`,
+    `allowUnreachableCode: false` and `noUncheckedSideEffectImports` as well as `strict`, by
+    `corten check` and by Corten's own `npm run check`, and a test fails when the settings differ:
+    an array's element or a record's value read by index is `T | undefined` until the script
+    checks it, a `switch` case that runs into the next one is an error, as are code after a
+    `return` and `import "./file.js"` naming a module that does not exist. An app cannot turn one
+    off (`--no-script-types` leaves every script unchecked). An app's script that reads by index
+    without a check fails `corten check` until it does (`for (const x of xs)`, `const [first] =
+    xs`, or a check of what it read). So do the kit's scripts an app copied before this with
+    `corten ui add` (`relative_time`, `choice`, `combo_box`, `tab_group` and `menu_button`):
+    take the new ones with `corten ui add <name> --merge`.
+    `rows(..).at(i)` is `V | undefined`: none past either end, and a negative `i` counts back
+    from the last, as an array's `at()`, where it gave a view of no row before. The kit's
+    `ComboBox` with no options threw on Enter after Arrow Down; it closes now.
+    `exactOptionalPropertyTypes` is not used ([design Choice 39](docs/design.md#choice-script-checks))
+    ([#1038 Evaluate script safety checks beyond strict, including indexed access and exact optional properties](https://github.com/corten-run/corten/issues/1038)).
+171. `subscribe()` checks the envelope of what a feed sends: a snapshot's `epoch`, `seq` and
+    `rows`, and a patch's `seq` and each change's `op` and `id` (and an upsert's `value`). An
+    answer that is not a snapshot is a failed snapshot, logged and fetched again after a backoff,
+    where it reached `snapshot` with no rows; a patch that is not one (not JSON, say) closes the
+    stream and loads the snapshot again after a backoff that doubles from 1 s, where it threw in
+    the listener and its write was missed until the next patch. Rows are trusted as the server's
+    `Row`. The runtime, the kit, the template and the examples have no explicit `any` (the
+    Navigation API and a service worker's global are declared where they are used), and
+    `npm run check` fails on an explicit `any` or a `@ts-ignore` in them. card-market's push
+    worker shows a message with no title as an empty title, where it showed "undefined", and opens
+    `/` for a `url` that is not text. The runtime's gzip size grows by 202 bytes, 129 of them the
+    feed's checks ([design Choice 40](docs/design.md#choice-script-boundaries))
+    ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
 - When a watchlist smoke run fails on a Playwright call (a page load past its 30 s timeout, say),

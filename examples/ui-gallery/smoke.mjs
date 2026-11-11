@@ -450,6 +450,47 @@ async function run(browser) {
   await color.fill("near mint");
   await page.keyboard.press("Tab");
   check("typing a label exactly picks it", (await page.locator("[data-scope=ui-combo-box] select").inputValue()) === "nm");
+  // A combobox with no options (a list the app has nothing in yet): Arrow Down opens it on none,
+  // and Enter closes it without an error.
+  {
+    const bare = await page.context().newPage();
+    try {
+      /** @type {string[]} */
+      const bareErrors = [];
+      bare.on("pageerror", (e) => bareErrors.push(e.message));
+      await bare.route(
+        (url) => url.href === `${base}/`,
+        async (route) => {
+          const res = await route.fetch({ headers: { ...route.request().headers(), "accept-encoding": "identity" } });
+          const headers = res.headers();
+          delete headers["content-encoding"];
+          delete headers["content-length"];
+          let body = await res.text();
+          // Every option but the select's empty first one.
+          const select = body.indexOf("<select", body.indexOf("ui-combo-box"));
+          const first = body.indexOf("</option>", select) + "</option>".length;
+          body = body.slice(0, first) + body.slice(body.indexOf("</select>", first));
+          await route.fulfill({ status: res.status(), headers, body });
+        },
+      );
+      await bare.goto(`${base}/`);
+      const none = bare.getByLabel("Condition");
+      await bare.waitForFunction(() => document.querySelector('[data-scope=ui-combo-box] [role="combobox"]:not([hidden])') !== null);
+      const options = await bare.locator('[data-scope=ui-combo-box] [role="option"]').count();
+      await none.focus();
+      await bare.keyboard.press("ArrowDown");
+      const opened = await none.getAttribute("aria-expanded");
+      await bare.keyboard.press("Enter");
+      const closed = await none.getAttribute("aria-expanded");
+      check(
+        "with no options, Arrow Down opens the list and Enter closes it, without an error",
+        options === 0 && opened === "true" && closed === "false" && bareErrors.length === 0,
+        JSON.stringify({ options, opened, closed, bareErrors }),
+      );
+    } finally {
+      await bare.close();
+    }
+  }
 
   await qty.fill("3");
   await page.getByRole("button", { name: "List for sale" }).click();
@@ -4467,6 +4508,27 @@ async function run(browser) {
       dotInBadge.own === dotInBadge.success &&
       dotInBadge.own !== "rgba(0, 0, 0, 0)",
     JSON.stringify(dotInBadge),
+  );
+  // --status-dot-size sizes StatusDot and LiveDot through the rule they share: the theme's .5rem,
+  // then a design system's .375rem set once on the root.
+  const dotSize = await orders.evaluate(() => {
+    const root = document.documentElement;
+    const rem = parseFloat(getComputedStyle(root).fontSize);
+    const dots = [...document.querySelectorAll("[class*='status-dot__dot']")];
+    const still = dots.find((d) => !d.className.includes("status-dot__live"));
+    const live = dots.find((d) => d.className.includes("status-dot__live"));
+    if (!still || !live) return { missing: dots.length };
+    const sized = () => [still, live].map((d) => { const r = d.getBoundingClientRect(); return [r.width / rem, r.height / rem]; });
+    const theme = sized();
+    root.style.setProperty("--status-dot-size", ".375rem");
+    const set = sized();
+    root.style.removeProperty("--status-dot-size");
+    return { theme, set };
+  });
+  check(
+    "StatusDot and LiveDot: --status-dot-size sizes both, .5rem in the kit's theme",
+    !("missing" in dotSize) && dotSize.theme.flat().every((s) => Math.abs(s - 0.5) < 0.01) && dotSize.set.flat().every((s) => Math.abs(s - 0.375) < 0.01),
+    JSON.stringify(dotSize),
   );
   // LiveDot: inside a <corten-live> whose stream is live it pulses (an opacity animation that
   // runs), and is still while the stream is not live, outside one, for a user who asks for less

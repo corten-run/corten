@@ -1950,6 +1950,166 @@ rules something out.
     parsed, trees, cycles and twelve types that all hold each other included (the agent test of that
     name), at `d4aca597`.
 
+39. <a id="choice-script-checks"></a>**Scripts are type-checked with `strict`, `noUncheckedIndexedAccess`,
+    `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and
+    `noUncheckedSideEffectImports`, not `exactOptionalPropertyTypes`.** `strict` is not every
+    check `tsc` has. Each of the type-checking options it leaves out (below, chosen or not) was
+    tried alone on the runtime, the kit, the examples, the template and the typing fixture before
+    any was turned on.
+    `noUncheckedIndexedAccess` makes an element read from an array, or a value from a record, by
+    index `T | undefined` until the code checks it. It found 76 such reads, two of them bugs: the
+    kit's `ComboBox` with no options threw on Enter after Arrow Down, and `rows(..).at(i)` past
+    the end gave a view of no row (it is now `undefined` there, as an array's `at()` is,
+    negative indexes counting back from the last as they do there). The other 74 were reads a
+    loop's bound, a length check or the server's own data kept in range. Outside the runtime's
+    hot loops they were rewritten to need no index (`for .. of`, destructuring) or given a
+    check; inside them (`view.js`'s loops over rows, `scan`'s over the refs a change adds) they
+    keep the loop they had and cast what they read, with a comment saying what keeps it in range,
+    since `rows()` with those loops rewritten timed slower (below) and a cast costs nothing once
+    minified. A message's parts and the templates the server writes for a format are cast too,
+    for another reason: the server writes them in a shape it checks, so a read the cast covers
+    cannot miss (not timed). The
+    runtime's minified build (esbuild then terser, gzip level 9, against `39060950`): `corten.js`
+    14,594 to 14,592 bytes, `format.js` 1,486 to 1,499, and `view.js` 2,186 to 2,196, `at()`'s
+    check of the ends.
+    `noFallthroughCasesInSwitch`, `allowUnreachableCode: false` and
+    `noUncheckedSideEffectImports` each found nothing and cost nothing; a case that runs into the
+    next one, code after a `return` and a side-effect import of a module that is not there are
+    mistakes the compiler can see. An app, the repository and the browser benchmark's view apps
+    are checked the same way: `corten check` writes the app's config with a copy of the
+    repository's `jsconfig.json`'s options, and a test fails when any of the three differ.
+    Not chosen: `exactOptionalPropertyTypes`, which tells a property left out from one set to
+    `undefined` (5 errors, none a bug: two were `addEventListener`'s `{ signal }` with
+    `signal` possibly `undefined`, which Web IDL reads as left out, and three were Corten's own
+    option types, which would need `| undefined` written on each property; the difference it
+    checks is one neither a DOM option object nor JSON makes, so it costs annotations and
+    catches nothing here); `noPropertyAccessFromIndexSignature` (48 errors, reads such as
+    `el.dataset.value` to be written `el.dataset["value"]`, a style that catches nothing a
+    record's `T | undefined` does not); `noImplicitReturns` (3, all functions meant to give
+    `undefined` on one path, which `strict` already makes each caller handle);
+    `noImplicitOverride` (no class overrides anything); and `noUnusedLocals` (0),
+    `noUnusedParameters` (1, a handler's `event` named for the reader) and
+    `allowUnusedLabels: false` (0), which are lint, not safety: an unused name or label runs as
+    written.
+
+    Stands on: measured (`tsc` 5.9.3 with each option alone over `jsconfig.json`'s files on
+    `34138ae5`, the counts above, and the minified sizes before
+    and after on `39060950`, one build each, the build being deterministic); measured (Chromium through Playwright 1.64.1 on a busy Windows workstation, `bench/browser/rows-ab.mjs` (run
+    before it was committed), `rows()` with 1,000 rows, paired medians of 41 samples taking
+    turns with `c65c10ec`'s `view.js`: with its loops rewritten not to index
+    (`bench/browser/view-unindexed.js` in `f6885eca`, tag `evidence/script-checks-1038`), keeping some rows and making the rest
+    was 4.3% to 13.7% slower in seven of seven runs, where `c65c10ec` against itself was -3.0%
+    to 4.7%; the noise is too large to time the cast loops, which minify to the code they were,
+    `at()` aside); platform (Web IDL converts a dictionary member that is `undefined` as one
+    that is not present, and `JSON.stringify` leaves out a property whose value is
+    `undefined`); reasoned (a read past the end the checker cannot see is a `TypeError` far
+    from the read, as the `ComboBox`'s was); value (Mistakes fail at compile time, Values 4, after the user's speed,
+    Values 1, which is why the hot loops cast instead).
+
+    Revisit when: lib.dom's option dictionaries accept `undefined` under
+    `exactOptionalPropertyTypes` and a script of Corten's comes to tell a property left out from
+    one set to `undefined`, a TypeScript release adds a check that `strict` leaves out, or a
+    timing on a quiet host shows the hot loops rewritten not to index cost nothing (their casts
+    could then go).
+
+    Last checked: 2026-11-11, TypeScript 5.9.3 on `34138ae5` and the change, the
+    sizes against `39060950` (esbuild 0.28.2, terser 5.51.2), and the timings in Chromium
+    (Playwright 1.64.1) on 2026-11-08.
+
+40. <a id="choice-script-boundaries"></a>**What a script reads from outside the checker is `unknown` and checked where it
+    enters, as much as the reader needs; a feed's rows are trusted as the server's.** `tsc`
+    checks values whose making it saw, and JSDoc types are erased at run time, so a value parsed
+    or read from outside (`JSON.parse`, `res.json()`, storage, another window) is whatever it
+    is, whatever its annotation says. Each place the runtime reads one was sorted by who made the
+    value. A feed's snapshot and patches are the server's, written by `corten-protocol`, but the
+    runtime reading them may not be the one that server ships: a tab left open across a deploy
+    keeps the runtime it loaded (its URL is versioned), and a `FeedUrl` can name a route that
+    answers other JSON. Their envelope is checked (`crates/corten/js/feed.js`: a snapshot's
+    `epoch`, `seq` and `rows`; a patch's `seq` and each change's `op`, `id` and an
+    upsert's `value`). A bad snapshot is a failed one (logged, fetched again after the backoff a
+    failure gets); a bad patch, whose write is lost, closes the stream and loads the snapshot
+    again after a backoff that doubles while the next stream's patches are bad too, so a server
+    that only sends bad patches is asked again every 30 s once the backoff tops out. Before, a
+    snapshot of another shape reached the script's `snapshot` with no rows (and, unless that
+    threw, the stream was asked to resume from `undefined-undefined`); a patch whose changes were
+    of another shape moved `seq` on before the script's `patch` threw on them, so its write was
+    lost for good; and a patch that was not
+    JSON threw in the listener, its write missed until the next patch showed the gap. That is
+    correctness, first in the order, against 129 bytes every page pays (measured below). An HTTP error or a body that is not JSON was already a failed
+    snapshot, and `EventSource` closes a stream that is not `text/event-stream`, so a proxy's
+    error page never reaches either check. The rows are not checked: `Row` is the server's own
+    type, the checker holds the script to it, and checking it in the browser would need a
+    runtime schema the browser does not have (the Rust client, `corten_protocol::Replica`,
+    deserializes rows with the type, since there it has one). A notice the runtime kept in
+    `sessionStorage` for a full reload is checked field by field, since storage outlives a
+    version of the runtime. Trusted, as the server's or the runtime's own: `data-on` arguments
+    (the server writes them into the document the runtime runs in, in the format `wire.json`
+    tests both sides against, and markup that could write others could run its own script),
+    which `JSON.parse` gives as an unchecked `any` into the argument's type, and the
+    `corten:module` event each served module dispatches, which the runtime takes only from the
+    module its page's own script tag loaded. Explicit `any` was removed from the runtime, the
+    kit, the template and the examples (26 uses): where the DOM library has no type for an API
+    (the Navigation API, a service worker's global, `navigator.connection`) they declare the part
+    they use (`crates/corten/js/navigation.d.ts`) and cast once where the value enters; a form's
+    property read past a shadowing control is typed by its name (`HTMLFormElement[K]`); a
+    format's function is `(value: never) => string`, its branches typed. Typing the Navigation
+    API's `info` found a read the checker had not seen: the place a `data-keep-place`
+    navigation returns to was read when it could be `null`, kept safe only by the element
+    lookup before it, now checked. `scripts/escapes.mjs` (in `npm run check`) reads those
+    files with TypeScript's parser and fails on an `any` (or JSDoc's `*` or `?`) in a JSDoc type
+    or a declaration file, and on a `@ts-ignore`, `@ts-nocheck` or `@ts-expect-error` comment,
+    which belong to the typing fixtures. An implicit `any` (what `JSON.parse` returns, used as it is) is not found
+    by it, which is why each parse is listed here. Casts stay: the DOM gives an `Element` where
+    the markup guarantees an `HTMLInputElement`, and a cast says so in one place. An app's own
+    scripts are not held to this; `corten check` checks them with the same compiler options.
+    The runtime's minified build (gzip level 9, against the change before it, `27530e82`):
+    `corten.js` 14,592 to 14,794 bytes, of which the feed's checks are 129 (measured by building
+    with `snapshotOf` giving its input and `patchOf` the parsed JSON, unchecked) and the rest 73;
+    `format.js` 1,499 to 1,492.
+    One limit stays: a tab left open across a deploy that changes `Row` keeps the app's script
+    it loaded, and the new server's snapshot (a new generation, so the stream resyncs) gives that
+    script rows of the new shape. If its `patch` throws on one, that write is lost until the next
+    snapshot, since `seq` moved on before the script ran; if its `snapshot` throws, the snapshot
+    is fetched again after the backoff. The live-data guide says to keep a deploy's `Row`
+    readable by the script before it. Reloading open pages when a feed's generation changes
+    would close it, and is not done here.
+    Not chosen: validating rows from a schema the server derives (bytes for every app with a
+    feed; the rows match the server's `Row` except across a deploy, and there a check against
+    the old script's schema would refuse the new rows rather than let them throw in the script,
+    so the write would be lost all the same); a schema library (a dependency
+    for the few values that come from outside); checking only that a patch is JSON (a change
+    without an `id` would reach the script's `patch` and throw in the app's code, after `seq`
+    moved on).
+
+    Stands on: measured (each `JSON.parse` and `res.json()` in the runtime and each `any` in
+    the scripts, inventoried on `c65c10ec` and `648617e3` (tag `evidence/script-boundaries-1039`), 26 uses on each; the sizes above;
+    the check's time next to `JSON.parse` alone, patches of 1, 10 and 100 changes of a
+    nine-field row, medians of 15 alternating 100 ms rounds, three runs in Chromium 156 through
+    Playwright 1.64.1 on a busy workstation: the full check -1.6% to 8.0% over the parse, and
+    `JSON.parse` against itself -8.1% to 6.6%, so the check's cost is within what this timing
+    can resolve; the probe is `bench/browser/feed-check-cost.mjs`, committed after those runs, and
+    one run of it on 2026-11-09, in Chromium and in Node, gave the check -7.5% to 14.2% over the
+    parse and the parse against itself -9.6% to 6.8%); platform (JSDoc and TypeScript types are erased at run time, `JSON.parse`
+    returns `any`, `EventSource` fails a stream whose type is not `text/event-stream`, and
+    TypeScript 5.9's DOM library declares no `window.navigation`); reasoned (a value the checker
+    did not see made is only as typed as its producer: the server's rows are, an older runtime's
+    reading of a newer protocol and old storage are not); value (Correctness and reliability
+    first, a patch's write never lost without a snapshot; Mistakes fail at compile time, Values
+    4; Fast, and proven fast, Values 1, which is why the rows are not checked).
+
+    Revisit when: the repository's TypeScript (5.9.3, `package.json`) moves to one whose DOM
+    library declares the Navigation API (6.0's does, with `NavigateEvent.info` as `any`), when
+    `navigation.d.ts` goes and `info` alone is cast to the runtime's type; the browser gets a
+    way to check JSON against a schema without a library; or a feed carries rows the server did
+    not type (a feed relayed from another service); or open pages reload when a feed's generation
+    changes, which ends the limit above.
+
+    Last checked: 2026-11-11, the sizes against `27530e82` (esbuild 0.28.2 and terser 5.51.2) and
+    `scripts/escapes.mjs` on the change; 2026-11-10, TypeScript 5.9.3 on `560c4cf7` and the change
+    (the explicit-`any` count, 26 and 0); 2026-11-08, TypeScript
+    6.0.3 on the change, which checks clean, and the timings in Chromium 156 (Playwright 1.64.1),
+    again on 2026-11-09.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
