@@ -1863,8 +1863,7 @@ use std::time::Duration;
 
 use corten::{
     extract::bytes_up_to,
-    http::Request,
-    http::StatusCode,
+    http::{Request, StatusCode},
     json::Raw,
     prelude::*,
     Error, Media, Signal,

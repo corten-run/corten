@@ -46,8 +46,8 @@
 //! answer that sets a cookie out of shared caches and, under an API's prefix, the API's JSON
 //! failures.
 //!
-//! Modules: [`http`] (requests, responses and bodies), [`answer`] (what a route answers), [`caller`] (who is asking), [`middleware`],
-//! [`api`] (JSON-only routes), [`cache`] (HTTP caching), [`view`] (markup), [`script`]
+//! Modules: [`http`] (requests, responses and bodies), [`answer`] (what a route answers),
+//! [`caller`] (who is asking), [`middleware`], [`api`] (JSON-only routes), [`cache`] (HTTP caching), [`view`] (markup), [`script`]
 //! (handlers: behavior in the browser), [`style`] (component stylesheets and design tokens), [`route`] (typed links),
 //! [`i18n`] (typed messages), [`security`], [`assets`], [`pwa`], [`form`], [`seo`].
 //! Features: `json` (handler values, data screens), `feed` (live rows), `types` (TypeScript

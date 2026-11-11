@@ -853,11 +853,15 @@ rules something out.
        for them as Corten could not be, and nothing measured here points at it.
     3. Vocabulary: one module, `corten::http`: the `http` crate's types (`StatusCode`,
        `HeaderMap`, `Uri`), which hyper, HTTP clients and HTTP/3 libraries share, and what Corten
-       builds on them: `Body`, `Request` and `Response` over it, `IntoResponse`,
-       `IntoResponseParts` and `Bytes`. Nothing above names the connection's protocol, and every
-       layer above names this one from the same place (until it was one module, the body was in
-       `answer`, the request in `extract` and the response in `middleware`, each where it was
-       first used).
+       builds on them: `Body` (and `BodyDataStream`), `Request` and `Response` over it, `Bytes`,
+       and `IntoResponse`, `IntoResponseParts` and `ResponseParts`, which are Corten's contract
+       for how a handler answers rather than shared ones, kept here so an app imports one module
+       for a request and its answer. Nothing above names the connection's protocol, and an app
+       names this layer from one place; the crate defines each type where it is used (the body in
+       `body`, the request in `handler`, the response in `response`) and the module gathers them.
+       Until it was one module, an app named the body from `answer`, the request from `extract`
+       and the response from `middleware`. `MatchedPath` stays in `middleware`: it is the
+       route's pattern, which the router gives, not HTTP's.
     4. Stages: what goes around a route ([Choice 28](#choice-fixed-stages)), each one a future that
        wraps the route's, in Corten's one order. A route goes through all of them or says
        `unstaged` and goes through none, its lane in their place (the host check and the headers

@@ -6,7 +6,7 @@
 
 ### HTTP types
 
-Every HTTP type an app names is in one module, `corten::http`: a status, a method, a header or
+The HTTP types an app names are in one module, `corten::http`: a status, a method, a header or
 a URL outside the app (`StatusCode`, `Method`, `HeaderMap`, `HeaderName`, `HeaderValue`, the
 `header` constants, `Uri`, `request::Parts`), the `http` crate's types, which hyper and HTTP
 clients share, so an app's code names them without naming the server library under Corten;
