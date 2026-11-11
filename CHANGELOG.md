@@ -4,6 +4,14 @@ Notable changes to Corten. The format follows [Keep a Changelog](https://keepach
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
+
+## 0.2.0 (2026-11-11)
+
+The first release of all seven crates, published together by the Release workflow. The main crate's
+package is `corten-run` (its library is still `corten`). Version 0.1.0 of `corten-protocol`,
+`corten-macros`, `corten-feed` and `corten-cli` was published by hand from `2976f158` only to hold
+their names, and has no tag or release.
+
 ### Added
 
 - Static files with `mp4`, `webm` and `vtt` names are sent as `video/mp4`, `video/webm` and
@@ -6650,6 +6658,10 @@ Corten is pre-1.0, so any minor version may change the API.
     takes 0.89 s against 7.27 s (median of five alternating runs each, 0.81 to 1.35 against 6.03
     to 10.22, on a loaded Windows workstation)
     ([#1095 builds.test.mjs's touch test fails now and then on Windows under load: WSL's bash exits 1 with no stderr for one app](https://github.com/corten-run/corten/issues/1095)).
+223. The Release workflow attaches a version's notes as `CHANGELOG-<version>.md` and links to
+    them when they are longer than the 125,000 characters a GitHub release allows, where it would
+    have stopped after publishing every crate, with no release for the binaries
+    ([#837 No full release exists: publish all seven crates as 0.2.0 from corten-run through the Release workflow, with trusted publishing and the org team as owner](https://github.com/corten-run/corten/issues/837)).
 
 ### Documentation
 
@@ -7233,6 +7245,13 @@ Corten is pre-1.0, so any minor version may change the API.
     Corten copies the state into each route, method slot and request and a handler takes the whole
     state through a `Clone`-bounded `FromRef`; the Choice is revisited when neither needs `Clone`
     ([#1227 Design Choice 33 still stands on axum's MethodRouter and axum-core's FromRef impl, which Corten stopped calling when axum left, so its premise and Revisit-when name code Corten does not run](https://github.com/corten-run/corten/issues/1227)).
+86. CONTRIBUTING's release steps leave every published crate accepting trusted publishing only and
+    owned by the `github:corten-run:maintainers` team as well as the account that published it, so
+    only `release.yml`, approved in the `release` environment, can publish a version; a release
+    that adds a crate first allows token publishing again on the crates already published, since
+    the workflow publishes every crate in the run with the token; a crate's trusted publisher is
+    checked as well as added, and step 2 names every file that carries the version
+    ([#1238 CONTRIBUTING's release steps leave a new crate open to token publishing and owned by one account: turn on trusted publishing only and add the maintainers team](https://github.com/corten-run/corten/issues/1238)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 
