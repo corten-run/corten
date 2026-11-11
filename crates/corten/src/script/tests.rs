@@ -815,7 +815,7 @@ struct Options {
 }
 
 /// The doctests' `types/app.d.ts` writes `Options` by hand: it is what `corten::types` generates.
-#[cfg(feature = "json")]
+#[cfg(feature = "types")]
 #[test]
 fn the_hand_written_options_declaration_is_the_generated_one() {
     let block = |ts: &str| {

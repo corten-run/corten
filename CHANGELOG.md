@@ -4733,6 +4733,10 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
+- A build with the `json` feature and not `types` compiles its tests again (one checked a
+  declaration only `types` makes), and CI now builds them; a build without the `log` feature no
+  longer warns about an unused import; and the MSRV (1.88) build no longer warns that the code
+  after an app layer's error, whose type converts into `Infallible`, is unreachable.
 - When a watchlist smoke run fails on a Playwright call (a page load past its 30 s timeout, say),
   the report numbers each request still loading by its context and page, sends the same GETs again
   from Node with the browser's headers (not its cookies) and how long the server took, and gives the run's peak of
