@@ -228,7 +228,10 @@ establish a general ranking.
    no branch that merges will keep (a prototype's, or one on a branch remade before it merged) is
    pushed to corten-run/corten as an annotated tag `evidence/<name>` (usually the commit's short
    name) saying what it backs, since `npm run check` fails on a cited commit that is not on the
-   checkout's history or under an evidence tag.
+   checkout's history or under an evidence tag. The check runs on the pull request's merge with
+   `main`, so a commit of the pull request's own passes there; a pull request that cites one is
+   merged with a merge commit, which keeps it on `main`'s history, or pushes an evidence tag for
+   it first, since a squash or rebase merge leaves it out.
 3. Update the guide in `docs/guide/` that describes the behavior, and add a line to
    `CHANGELOG.md` under Unreleased.
 4. Commit messages say what changed and why, in plain sentences.

@@ -24,26 +24,30 @@
 // keeps a cited commit no branch has (`evidence/<name>`, usually the commit's short name). So a
 // number can be taken again on the commit it was taken on, from a clone of corten-run/corten: a
 // commit the clone has but GitHub does not keep (one never pushed, or only on a side branch)
-// fails too. A hex code span that is not a commit fails the same way, and is written without
-// backticks or with its algorithm (`sha256:...`). Another repository's commit is written as GitHub
-// writes one, `owner/repo@sha`, and is not read, but that form naming Corten (`*/corten@sha`)
-// fails: Corten's own commit is written alone, so it is checked. A shallow clone fails once,
-// saying to fetch the whole history and the evidence tags, not once for each commit it cut off.
-// Not read for commits: code, where a code span of hex digits is as often a number, and
-// bench/fullstack/README.md (below).
+// fails too. A code span of hex digits or a number that is not a commit fails the same way, and is
+// written without backticks or with its algorithm (`sha256:...`); one of decimal digits alone is
+// still read, since a commit's short name can be (`76247120`). Another repository's commit is
+// written as GitHub writes one, `owner/repo@sha`, and is not read, but that form naming Corten
+// (`*/corten@sha`, in any case) fails: Corten's own commit is written alone, so it is checked. A
+// shallow clone fails once, saying to fetch the whole history and the evidence tags, not once for
+// each commit it cut off. Not read for commits: code, where a code span of hex digits is as often
+// a number, and four commits bench/fullstack/README.md cites (below).
 // Run by npm run check.
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** A commit cited in Markdown: a code span of 7 to 40 hex digits alone, or one written as a
- * repository named corten's (`corten-run/corten@sha`), which is refused. */
-const COMMIT = /`(?:([\w.-]+\/corten)@)?([0-9a-f]{7,40})`/g;
-// Markdown whose commits are not checked: bench/fullstack/README.md cites three that GitHub does
-// not have, issue #1260 ("bench/fullstack/README.md cites three commits GitHub does not have
-// (2fa883a6, 1e1fb7be, eedbcc2a), outside the cited-commit check"). CHANGELOG.md is not read at all.
-const UNCHECKED = ["bench/fullstack/README.md"];
+/** A commit cited in Markdown: a code span of 7 to 40 lower-case hex digits alone, or one written
+ * as a repository named corten's (`corten-run/corten@sha`, in any case), which is refused. */
+const COMMIT = /`(?:([\w.-]+\/corten)@)?([0-9a-f]{7,40})`/gi;
+// Commits cited but not checked, by file. bench/fullstack/README.md cites three GitHub does not
+// have, issue #1260 ("bench/fullstack/README.md cites three commits GitHub does not have
+// (2fa883a6, 1e1fb7be, eedbcc2a), outside the cited-commit check"), and round r13's `7f0b81f`,
+// which GitHub keeps only on the branch bench/r13-tree, not on main or an evidence tag; its other
+// citations are checked. CHANGELOG.md is not read at all.
+/** @type {Record<string, string[]>} */
+const UNCHECKED = { "bench/fullstack/README.md": ["2fa883a6", "1e1fb7be", "eedbcc2a", "7f0b81f"] };
 /** Fetches the evidence tags from corten-run/corten itself, which a fork's origin may lack. */
 const FETCH = 'https://github.com/corten-run/corten.git "+refs/tags/evidence/*:refs/tags/evidence/*"';
 
@@ -54,7 +58,10 @@ const FETCH = 'https://github.com/corten-run/corten.git "+refs/tags/evidence/*:r
  */
 export function cited(text) {
   return text.split(/\r?\n/).flatMap((line, i) =>
-    [...line.matchAll(COMMIT)].map((m) => ({ line: i + 1, sha: String(m[2]), ...(m[1] ? { as: m[1] } : {}) })),
+    [...line.matchAll(COMMIT)]
+      // Upper-case digits alone are not a citation (`A398EA95`); in the refused form they are.
+      .filter((m) => m[1] || String(m[2]) === String(m[2]).toLowerCase())
+      .map((m) => ({ line: i + 1, sha: String(m[2]).toLowerCase(), ...(m[1] ? { as: m[1] } : {}) })),
   );
 }
 
@@ -78,7 +85,7 @@ export function unresolved(root, found) {
   if (git(["rev-parse", "--is-shallow-repository"]).trim() === "true") {
     return [
       ...problems,
-      `this clone is shallow, so it cannot show the ${own.length} commits cited; fetch the whole history and the evidence tags: git fetch --unshallow ${FETCH}`,
+      `this clone is shallow, so it cannot show the ${own.length} citations of ${new Set(own.map((c) => c.sha)).size} commits; fetch the whole history and the evidence tags: git fetch --unshallow ${FETCH}`,
     ];
   }
   // Every commit on HEAD's history or an evidence tag's, by its full name. A cited name is one's
@@ -99,7 +106,7 @@ export function unresolved(root, found) {
   }
   if (missing) {
     problems.push(
-      `a cited commit is on main (or this branch) or kept under refs/tags/evidence/<name>; fetch the evidence tags: git fetch ${FETCH}. Hex that is not a commit is written without backticks, or with its algorithm (\`sha256:...\`)`,
+      `a cited commit is on main's history (or this branch's) or kept under refs/tags/evidence/<name>; merge main into a branch behind it, and fetch the evidence tags: git fetch ${FETCH}. Hex or a number that is not a commit is written without backticks, or with its algorithm (\`sha256:...\`)`,
     );
   }
   return problems;
@@ -198,7 +205,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     /** @type {string | null} */
     let fence = null;
     const source = readFileSync(join(root, file), "utf8");
-    if (markdown && !UNCHECKED.includes(file)) commits.push(...cited(source).map((c) => ({ ...c, at: `${file}:${c.line}` })));
+    if (markdown) commits.push(...cited(source).filter((c) => !UNCHECKED[file]?.includes(c.sha)).map((c) => ({ ...c, at: `${file}:${c.line}` })));
     const lines = source.split(/\r?\n/);
     /** Each line with its citations taken out, or null when it is not read. @type {(string | null)[]} */
     const rests = lines.map((line, i) => {
