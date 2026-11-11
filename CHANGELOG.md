@@ -2652,6 +2652,24 @@ Corten is pre-1.0, so any minor version may change the API.
   the same; `corten::http::Request` and `Response` with no type argument are over `Body`, as
   the old paths were. `MatchedPath` stays in `corten::middleware`.
 
+- `Refused::unauthorized` takes the `Challenge` its 401 sends in `WWW-Authenticate`, which RFC
+  9110 requires on a 401 and which it never sent: `Refused::unauthorized(Challenge::bearer(realm))`,
+  with `.param("error", "invalid_token")` for a token that is wrong (RFC 6750). `corten::Challenge`
+  is in the prelude with `Challenge::bearer(realm)` (RFC 6750 asks for a parameter after the
+  scheme) and `Challenge::basic(realm)` (RFC 7617 requires the realm); another scheme is
+  `Challenge::new(scheme)`, which in a `const` of the app's does not compile when the scheme is
+  not a token or is `Bearer` or `Basic`, which take their realm from `bearer` and `basic`
+  (elsewhere it panics as it runs). A parameter's value is sent quoted and must be ASCII. The
+  JSON 401, the error page and the page swapped in all carry it. An app that called
+  `Refused::unauthorized()` passes the scheme its clients send credentials in.
+  `Refused::sign_in`'s 401 to a data client still has none, since a session cookie has no scheme
+  (design Choice 27, Limit 11). The MCP endpoint builds its challenges with `Challenge` too; without an `Authorization`, its 401 now
+  names the endpoint as the realm (`Bearer realm="<Tools::new's name>"`, or `mcp` when the name
+  is empty or not printable ASCII). card-market's partners send their key as a bearer token
+  (`Authorization: Bearer <key>`) rather than in `X-Api-Key`, so its 401 names a registered
+  scheme; an empty bearer token is no key, and its agents' tokens are read by the same function,
+  which matches the scheme in any case.
+
 - axum is no longer one of Corten's dependencies (design Choice 25, step 4, and Choice 21). The
   body (`corten::http::Body`), `IntoResponse`, `IntoResponseParts`, the readers of a whole
   body, the server-sent events writer and `Listener` are Corten's own, with axum's names and
@@ -3735,9 +3753,9 @@ Corten is pre-1.0, so any minor version may change the API.
     to the endpoint (`initialize`, `tools/list`), not only on a tool call, and any failure of it
     answers before the method does: a 401 or 403 with the challenge, 400 with
     `error="invalid_request"` for `Invalid`, 403 for `Forbidden`, 503 for `Upstream`, 500 for
-    `Internal`. Changed for every endpoint: a 401 for a request that sent
-    a bearer token adds `error="invalid_token"` (RFC 6750), and `ToolError` has a new variant,
-    `InsufficientScope("a b")`, answered 403 with `error="insufficient_scope"` and the scopes,
+    `Internal`. Changed for every endpoint: a 401 for a request that sent a bearer token adds
+    `error="invalid_token"` (RFC 6750; `Bearer` with nothing after it is no token), and
+    `ToolError` has a new variant, `InsufficientScope("a b")`, answered 403 with `error="insufficient_scope"` and the scopes,
     so a `match` on `ToolError` names it. Measured with callgrind, instructions per request over
     1,000 (release build, two runs each, before from `7be57075`, with a token check that does no
     work): a page's document 22,291 to 22,641 before, 22,676 to 22,690 after (22,388 with an

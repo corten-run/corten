@@ -62,13 +62,13 @@
 //!
 //! impl<S: Sync> Identify<S> for Partner {
 //!     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-//!         Err(Refused::unauthorized())
+//!         Err(Refused::unauthorized(Challenge::bearer("partners")))
 //!     }
 //! }
 //!
 //! impl corten::openapi::Argument for Partner {
 //!     fn describe(operation: &mut corten::openapi::Operation<'_>) {
-//!         operation.api_key("x-api-key", "The partner's API key.");
+//!         operation.bearer("The partner's API key.");
 //!     }
 //! }
 //!
@@ -98,7 +98,7 @@
 //!
 //! impl<S: Sync> Identify<S> for Partner {
 //!     async fn identify(_parts: &Parts, _state: &S) -> Result<Self, Refused> {
-//!         Err(Refused::unauthorized())
+//!         Err(Refused::unauthorized(Challenge::bearer("partners")))
 //!     }
 //! }
 //!
@@ -323,7 +323,7 @@ use crate::{
 ///
 /// impl Argument for ApiKey {
 ///     fn describe(operation: &mut Operation<'_>) {
-///         operation.api_key("x-api-key", "The partner's API key.");
+///         operation.bearer("The partner's API key.");
 ///     }
 /// }
 /// ```
@@ -386,9 +386,14 @@ impl Operation<'_> {
         self.parameters.list.push(parameter);
     }
 
-    /// A key the caller sends in a header (`x-api-key`): a security scheme of the document, named
-    /// after the header, that the operation requires. Call it from an argument's `describe` (a
-    /// caller type's); an answer's credentials would join the last argument's.
+    /// A key the caller sends in a header of the API's own (`x-api-key`): a security scheme of the
+    /// document, named after the header, that the operation requires. Call it from an argument's
+    /// `describe` (a caller type's); an answer's credentials would join the last argument's. Such
+    /// a header has no HTTP authentication scheme for the 401's challenge to name
+    /// ([`crate::Refused::unauthorized`]); a new API takes its key as a bearer token instead,
+    /// described with [`Operation::bearer`]. This describes an API whose clients already send one;
+    /// it takes the key as a bearer token too, so its 401 challenges `Bearer`, and calls both this and
+    /// [`Operation::bearer`] in its `describe`, which the document lists as alternatives.
     pub fn api_key(&mut self, header: &str, description: &str) {
         let mut scheme = json!({ "type": "apiKey", "in": "header", "name": header });
         if !description.is_empty() {
@@ -1042,7 +1047,7 @@ mod tests {
 
     impl<S: Sync> crate::Identify<S> for Partner {
         async fn identify(_: &crate::http::request::Parts, _: &S) -> Result<Self, crate::Refused> {
-            Err(crate::Refused::unauthorized())
+            Err(crate::Refused::unauthorized(crate::Challenge::bearer("partners")))
         }
     }
 

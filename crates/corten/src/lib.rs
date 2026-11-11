@@ -174,7 +174,7 @@ pub use answer::{
 pub use answer::{JsonError, JsonResponse, JsonResult};
 pub use api::Api;
 pub use app::{listeners, serve, serve_on, serve_wrapped, App, Area};
-pub use caller::{Caller, Identify, Refused};
+pub use caller::{Caller, Challenge, Identify, Refused};
 pub use client::{ClientIp, ClientZone, PeerAddr};
 /// Form field names as constants: `#[derive(Fields)] struct AlertInput { email: String }`
 /// gives `AlertInput::FIELDS.email`, the [`FieldName`] `"email"` (serde `rename` and `rename_all`
@@ -412,9 +412,9 @@ pub mod prelude {
         script::{el, refs, Handler, Ref},
         style::ClassList,
         view::Id,
-        Api, App, Area, Bounds, Caller, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files, Form, FromRef,
-        HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Public, ReadAgain, Refused,
-        Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
+        Api, App, Area, Bounds, Caller, Challenge, Corten, Document, Entry, Errors, Failure, FieldName, Fields, Files, Form,
+        FromRef, HtmlResult, Identify, Methods, Middleware, Mode, Next, NoStore, Notice, Params, Patch, Public, ReadAgain,
+        Refused, Render, Req, Route, Routes, SubmitKey, Upload, UploadError, UrlValue, Within,
     };
     #[cfg(feature = "json")]
     pub use crate::{FromJson, Json, JsonLd, JsonResult, ToJson};
@@ -926,7 +926,8 @@ impl<E: std::error::Error + Send + Sync + 'static> From<E> for Error {
 
 /// A handler refuses the request as an extractor does: `Err(Refused::forbidden())?` (or
 /// `.into()`). It is answered as a [`Caller`]'s refusal is: the error page for a browser, at the
-/// refusal's status (a sign-in is a redirect, a 429 carries `Retry-After`), and the page treats it
+/// refusal's status (a sign-in is a redirect, a 429 carries `Retry-After`, a 401 its challenge in
+/// `WWW-Authenticate`), and the page treats it
 /// as the request's fault, so it draws the layout's reads ([`LayoutRead`]) as for a 404. A plain
 /// `Error::status(StatusCode::FORBIDDEN)` stays a failure that may be the app's own (a service
 /// that is down answered with a 4xx), which starts none.
