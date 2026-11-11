@@ -1246,7 +1246,10 @@ rules something out.
     Authentication Scheme Registry (no scheme for a session cookie) and the tests that a 401
     keeps its challenge as JSON and on the error page (`crates/corten/src/tests.rs`), at
     `96e2c907`, the commit that adds them; 2026-11-10, the tests that a handler's own 401, the
-    page swapped in and a middleware's refusal keep it, at `2d6b88d0`.
+    page swapped in and a middleware's refusal keep it, at `2d6b88d0`; 2026-11-10, those tests
+    with a realm on every Bearer challenge and Basic through a handler and a middleware, the
+    MCP endpoint's realm and 400 challenge (`crates/corten/src/agent.rs`), and the
+    `compile_fail` doctest that holds `Challenge::new("bearer")` out, at `075bda73`.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
