@@ -74,6 +74,7 @@ jobs:
       - run: rustup toolchain install stable --profile minimal --component rustfmt && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --release --workspace --all-features
+      - run: echo 'failure case 2: rust-release fails'; exit 1
 
   msrv:
     runs-on: ubuntu-24.04
@@ -135,7 +136,7 @@ jobs:
         # lowercase letters and hyphens, which is all the check in `browser` reads as a part.
         include:
           - group: chromium-examples
-            parts: npm-check watchlist-chromium card-market deck-builder
+            parts: npm-check watchlist-chromium card-market seller-desk deck-builder
           - group: firefox-feeds
             parts: watchlist-firefox auction-room listings-feed
           # watchlist-dev runs the image the watchlist step builds, so it stays in its group.
@@ -216,6 +217,7 @@ jobs:
       - name: deck-builder
         if: contains(env.PARTS, ' deck-builder ')
         run: |
+          echo 'failure case 2: this smoke step fails'; exit 1
           docker build -f examples/deck-builder/Dockerfile -t corten-deck-builder .
           docker run -d --name corten-deck-builder -p 18487:8080 corten-deck-builder
           timeout 120 sh -c 'until curl -so /dev/null http://localhost:18487/; do sleep 1; done'
