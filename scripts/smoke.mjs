@@ -4165,7 +4165,29 @@ async function run(browser) {
         JSON.stringify({ before, swapped, after, keptErrors }),
       );
       await keptPage.context().close();
-    } else skip("a data-keep-place form with controls named closest, scrollTo, focus and the like keeps its scroll and focus through the swap", noSwaps);
+    } else skip("a data-keep-place form with controls named closest, scrollTo, focus and the like keeps its scroll and focus through the swap", noSwaps);    // A group the server drew open in the page as it loaded, closed by the user: the swap keeps it
+    // closed though the new page draws it open too, which takes what the load recorded of it.
+    const loadedGroupCheck = "a data-keep-place swap keeps closed a group the loaded page drew open and the user closed";
+    if (swaps) {
+      const groupPage = await (await browser.newContext()).newPage();
+      await groupPage.goto(`${base}/news?sector=energy`);
+      const groups = () => groupPage.$$eval("main form[data-keep-place] details", (all) => all.map((d) => /** @type {HTMLDetailsElement} */ (d).open).join());
+      const drawn = await groups();
+      await groupPage.evaluate(() => {
+        const [sectors, mine] = /** @type {HTMLDetailsElement[]} */ (Array.from(document.querySelectorAll("main form[data-keep-place] details")));
+        sectors.open = false;
+        mine.open = true;
+        /** @type {HTMLInputElement} */ (document.querySelector("main input[name=mine]")).focus();
+      });
+      await groupPage.keyboard.press("Space");
+      const swapped = await groupPage
+        .waitForFunction(() => location.search === "?sector=energy&mine=on" && document.getElementById("stories-title")?.textContent === "Stories about your stocks", null, { timeout: 5000 })
+        .then(() => true, () => false);
+      const after = await groups();
+      check(loadedGroupCheck, drawn === "true,false" && swapped && after === "false,true", JSON.stringify({ drawn, swapped, after }));
+      await groupPage.context().close();
+    } else skip(loadedGroupCheck, noSwaps);
+
     // Focus kept by a swap on an element that is not HTML (a chart's point, in SVG): its own focus
     // is SVGElement's, which the swap calls rather than HTMLElement's.
     if (swaps) {

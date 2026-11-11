@@ -2888,6 +2888,15 @@ Corten is pre-1.0, so any minor version may change the API.
     entry): fix those imports first.
 
 ### Changed
+- The runtime starts in less time on a long page: on its load it no longer reads the name of
+  every `data-ref` (no ref is cached yet, so none was used), it finds `<details>` and
+  `<dialog>` with a query of each tag, it looks for its `<meta>` tags in `<head>` alone, where
+  `<Corten />` writes them, and the comparison of the layout a write's page is drawn against
+  runs each of its patterns only on markup that holds what the pattern looks for. Taking over
+  1,000 server-rendered rows in `bench/browser` spent about 4 ms less in the runtime; what it
+  does is unchanged
+  ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)).
+
 - A marketplace v2 benchmark round records what an app fails to serve as that app's result:
   a phase in which it answered with anything but a 200 or timed out, or could not keep the fixed
   rate, is saved with its failure rate and dropped iterations, the later phases still run, and
