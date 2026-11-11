@@ -2136,6 +2136,10 @@ The commands below are for the legacy workload and diagnostics, not the current 
 Official r17 and later nightly rounds use [marketplace v2](../marketplace/nightly.md);
 use a distinct diagnostic identity here to avoid mixing the baselines.
 
+A round serves its items from `fixtures/items.json`, which git does not keep: a fresh checkout
+writes it with `fixtures/fetch.mjs` (below) or copies one, and `droplet.mjs` refuses to start a
+round without it.
+
 ```sh
 # On a fresh droplet, created and destroyed for the run (needs doctl and an SSH key there):
 node bench/fullstack/droplet.mjs legacy1 --ssh-key <id> [--region sfo2]   # waits for the round

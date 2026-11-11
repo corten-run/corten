@@ -45,6 +45,27 @@ export const roundNameError = (round, tier, { full = false } = {}) => {
   return /^m\d+$/.test(round) ? `${round} is a matched-tier round's name (m<n>): run it with BENCH_TIER=matched (droplet.mjs --tier matched), or name it otherwise` : null;
 };
 
+/**
+ * Why a droplet.mjs suite cannot start with this fixtures/items.json, or null. The full-stack,
+ * browser and hardening rounds serve their items from it (the item API, harden's item server) and
+ * git does not keep it, so a fresh checkout has none; the live suite has no items. A file that is
+ * empty or not JSON with the items the rounds load (item_1) fails the same way. It refuses two
+ * cases that could run: a round going on from the build step, which reads no items, and one going
+ * on with --host on a droplet that still has an earlier upload's file.
+ * @param {string} suite fullstack, live, browser or harden
+ * @param {string | null} text the file's contents, or null when there is none
+ */
+export const fixtureError = (suite, text) => {
+  if (suite === "live") return null;
+  const round = `a ${{ fullstack: "full-stack", harden: "hardening" }[suite] ?? suite} round`;
+  const how = "Copy one from a checkout that has it, or write it with node bench/fullstack/fixtures/fetch.mjs from a rust-item-detail API on :18400 (not in this repository; bench/fullstack/README.md, Running it, and REVIEW.md)";
+  if (text === null) return `bench/fullstack/fixtures/items.json is missing: ${round} serves its items from it, and git does not keep it. ${how}`;
+  let items;
+  try { items = JSON.parse(text); } catch { items = null; }
+  if (!items || typeof items !== "object" || !("item_1" in items)) return `bench/fullstack/fixtures/items.json is empty, not JSON or has no item_1, so ${round}'s item API cannot serve it. ${how}`;
+  return null;
+};
+
 /** The minutes run-all.mjs may wait for each app to start before the browser step. */
 export const startMinutes = 2;
 
