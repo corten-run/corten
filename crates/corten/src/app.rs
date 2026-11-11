@@ -980,10 +980,13 @@ impl<M: Middleware> App<M> {
     /// before [`serve`] closes it: 30 seconds unless set, from when the connection opens or its
     /// last answer was sent. A client that opens connections and never finishes a request
     /// cannot hold them, and an idle keep-alive connection is closed after it too. A request
-    /// whose head has arrived is not bounded by it: a long upload, a live stream, a WebSocket and
-    /// a tunnel (a `2xx` to `CONNECT`) are the [deadline](App::deadline)'s and their own, with
-    /// [`App::send_timeout`] for their writes. `None` removes it, for a server that only a proxy
-    /// which buffers heads reaches.
+    /// whose head has arrived is not bounded by it: a long upload and a live stream are the
+    /// [deadline](App::deadline)'s and their own, with [`App::send_timeout`] for their writes. A
+    /// connection that switches (a WebSocket's `101`, or a tunnel's `2xx` to `CONNECT`) is the
+    /// route's: neither this nor the deadline, which covers only the handler, bounds it, and
+    /// [`App::send_timeout`] bounds only a write that waits, so how long one may sit idle is the
+    /// route's to decide. `None` removes it, for a server that only a proxy which buffers heads
+    /// reaches.
     pub fn header_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
         self.connections.header_timeout = timeout.into();
         self

@@ -9614,9 +9614,11 @@ async fn a_switched_connection_is_held_to_the_send_timeout() {
 
 /// A `2xx` to `CONNECT` switches the connection to a tunnel, as a `101` does, so
 /// `App::header_timeout` no longer bounds it: a tunnel carrying bytes both ways stays open past
-/// twice the timeout, and `App::send_timeout` still ends a write its client makes no room for. A
-/// `CONNECT` refused (`403`) is an answer like any other, and its connection closes once idle past
-/// the timeout (#1218).
+/// twice the timeout, and so does one where neither side sends (its idle time is the route's), and
+/// `App::send_timeout` still ends a write its client makes no room for. A switched connection no
+/// longer counts against `App::max_connections`: the next connection is served while it is open.
+/// A `CONNECT` refused (`403`) is an answer like any other, and its connection closes once idle
+/// past the timeout (#1218).
 #[tokio::test]
 async fn a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does_not() {
     use std::time::{Duration, Instant};
@@ -9659,8 +9661,10 @@ async fn a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let timeout = Duration::from_millis(600);
-    let app =
-        App::new(Routes::from(Table::new().route("/", tunnel))).header_timeout(timeout).send_timeout(Duration::from_millis(300));
+    let app = App::new(Routes::from(Table::new().route("/", tunnel)))
+        .header_timeout(timeout)
+        .send_timeout(Duration::from_millis(300))
+        .max_connections(1);
     let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
         let _ = stopped.await;
     }));
@@ -9692,24 +9696,38 @@ async fn a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does
         sent += 1;
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    drop(tunnel);
+    // Then neither side sends for longer than twice the timeout, and the tunnel still relays.
+    tokio::time::sleep(timeout * 5 / 2).await;
+    tunnel.write_all(b"after a quiet spell\n").await.unwrap();
+    let mut echo = [0u8; 20];
+    let read = tokio::time::timeout(Duration::from_secs(3), tunnel.read_exact(&mut echo)).await;
+    assert!(matches!(read, Ok(Ok(_))), "an idle tunnel is held past the header timeout: {read:?}");
+    assert_eq!(&echo, b"after a quiet spell\n");
 
+    // The send timeout on a tunnel, which held before the fix too: a client that reads nothing
+    // more has the route's write fail. Its connection is served while the first tunnel is still
+    // open, with one connection allowed.
     let mut flood = tokio::net::TcpStream::connect(addr).await.unwrap();
     flood.write_all(b"CONNECT / HTTP/1.1\r\nhost: localhost\r\nx-flood: 1\r\n\r\n").await.unwrap();
-    let answer = head(&mut flood).await;
+    let answer = tokio::time::timeout(Duration::from_secs(3), head(&mut flood)).await.expect("served beside an open tunnel");
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
-    // Reads nothing more.
     let kind = tokio::time::timeout(Duration::from_secs(5), failure.recv()).await.expect("the tunnel's write fails");
     assert_eq!(kind, Some(std::io::ErrorKind::TimedOut));
     drop(flood);
+    drop(tunnel);
 
     let mut refused = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let asked = Instant::now();
     refused.write_all(b"CONNECT / HTTP/1.1\r\nhost: localhost\r\nx-refuse: 1\r\n\r\n").await.unwrap();
     let mut answer = Vec::new();
     let closed = tokio::time::timeout(Duration::from_secs(3), refused.read_to_end(&mut answer)).await;
+    let lasted = asked.elapsed();
     let answer = String::from_utf8_lossy(&answer);
     assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
     assert!(closed.is_ok(), "a refused CONNECT's connection is closed once idle past the timeout");
+    // Closed by the header timeout, not at once after the answer. Half the timeout leaves room for
+    // a clock thread that ticked late, which dates the idle connection earlier.
+    assert!(lasted >= timeout / 2, "closed {lasted:?} after the refused CONNECT, before the header timeout");
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();
 }
