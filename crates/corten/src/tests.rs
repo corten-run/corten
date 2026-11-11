@@ -9976,11 +9976,26 @@ async fn a_taken_ipv6_loopback_port_is_an_error() {
     if !has_ipv6_loopback() {
         return;
     }
-    let taken = std::net::TcpListener::bind("[::1]:0").unwrap();
-    let port = taken.local_addr().unwrap().port();
-    let error = crate::app::bind(None, port).await.expect_err("the port is taken on ::1");
-    assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
-    assert_eq!(crate::app::bind(Some("127.0.0.1"), port).await.unwrap().len(), 1, "HOST names one address");
+    // The test needs the number it takes on `::1` free on `127.0.0.1`, which nothing reserves: a
+    // test running beside it may hold it there (#1203), so a number busy there is tried again.
+    for _ in 0..8 {
+        let taken = std::net::TcpListener::bind("[::1]:0").unwrap();
+        let port = taken.local_addr().unwrap().port();
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+            continue;
+        }
+        let error = crate::app::bind(None, port).await.expect_err("the port is taken on ::1");
+        assert_eq!(error.kind(), std::io::ErrorKind::AddrInUse);
+        match crate::app::bind(Some("127.0.0.1"), port).await {
+            Ok(listeners) => {
+                assert_eq!(listeners.len(), 1, "HOST names one address");
+                return;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => continue,
+            Err(error) => panic!("{error}"),
+        }
+    }
+    panic!("each of 8 ports taken on ::1 was busy on 127.0.0.1 too");
 }
 
 #[crate::routes]
