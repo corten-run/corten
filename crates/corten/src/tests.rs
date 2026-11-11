@@ -8866,6 +8866,31 @@ fn has_ipv6_loopback() -> bool {
     std::net::TcpListener::bind("[::1]:0").is_ok()
 }
 
+/// A burst of clients larger than the standard library's backlog of 128 all finish connecting
+/// before the server accepts one, on each listener `HOST` gives and on the loopback pair: none
+/// waits for its SYN to be sent again. Linux admits one more than the backlog and drops the next
+/// SYN, so with 128 the 130th connection would wait a second.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_burst_of_connections_waits_in_the_queue_not_for_a_retransmit() {
+    const BURST: usize = 200;
+    let somaxconn: usize = std::fs::read_to_string("/proc/sys/net/core/somaxconn").unwrap().trim().parse().unwrap();
+    if somaxconn <= BURST {
+        eprintln!("skipped: net.core.somaxconn is {somaxconn}, which caps the backlog below the burst");
+        return;
+    }
+    for listeners in [crate::app::bind(Some("127.0.0.1"), 0).await.unwrap(), crate::app::bind(None, 0).await.unwrap()] {
+        for listener in &listeners {
+            let addr = listener.local_addr().unwrap();
+            let mut held = Vec::new();
+            for n in 1..=BURST {
+                let connected = tokio::time::timeout(Duration::from_millis(900), tokio::net::TcpStream::connect(addr)).await;
+                held.push(connected.unwrap_or_else(|_| panic!("{addr}: connection {n} waited for a resent SYN")).unwrap());
+            }
+        }
+    }
+}
+
 /// Without `HOST`, `localhost` is both loopback addresses on one port, so a browser that tries
 /// `::1` first is answered at once, not after a fallback; stopping ends both.
 #[tokio::test]
@@ -10792,6 +10817,44 @@ async fn the_favicon_path_is_the_static_directory_s_icon() {
         );
         assert!(head.into_body().collect().await.unwrap().to_bytes().is_empty(), "{kind}: HEAD has no body");
     }
+}
+
+/// Through the app, a range of a static file's versioned URL is the bytes asked for and a range
+/// past its end is a bare 416 naming the file's length, not the app's error page, whatever the
+/// client accepts; the favicon's URL, which may name other bytes after a deploy, is sent whole
+/// (#1133).
+#[tokio::test]
+async fn a_range_through_the_app_is_answered_as_the_file_server_answers_it() {
+    let router = App::new(policy_url::router()).assets(RefusedStatic).error_page(asset_error_page, ()).router();
+    let bytes = &include_bytes!("assets/fixture/style.css")[..];
+    // The stylesheet's versioned URL, from the error page its layout draws.
+    let refused = Request::post("/")
+        .header("origin", "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header("accept", "text/html")
+        .body(Body::empty())
+        .unwrap();
+    let page = router.clone().oneshot(refused).await.unwrap().into_body().collect().await.unwrap().to_bytes();
+    let page = String::from_utf8(page.to_vec()).unwrap();
+    let href = page.split(r#"<link rel="stylesheet" href=""#).nth(1).and_then(|rest| rest.split('"').next()).unwrap();
+    let ranged = |url: &str, range: &'static str| {
+        let req = Request::get(url).header(header::RANGE, range).header(header::ACCEPT, "text/html");
+        router.clone().oneshot(req.body(Body::empty()).unwrap())
+    };
+    let part = ranged(href, "bytes=2-3").await.unwrap();
+    assert_eq!(part.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(part.headers()[header::CONTENT_RANGE], format!("bytes 2-3/{}", bytes.len()));
+    assert_eq!(&part.into_body().collect().await.unwrap().to_bytes()[..], &bytes[2..4]);
+    let past = ranged(href, "bytes=100-").await.unwrap();
+    assert_eq!(past.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(past.headers()[header::CONTENT_RANGE], format!("bytes */{}", bytes.len()));
+    assert!(past.into_body().collect().await.unwrap().to_bytes().is_empty(), "no error page");
+    let icon = App::new(policy_url::router()).assets(IconStatic).router();
+    let req = Request::get("/favicon.ico").header(header::RANGE, "bytes=2-3").body(Body::empty()).unwrap();
+    let whole = icon.oneshot(req).await.unwrap();
+    assert_eq!(whole.status(), StatusCode::OK, "the favicon's URL is sent whole");
+    let icon_bytes = &include_bytes!("assets/favicon-ico/favicon.ico")[..];
+    assert_eq!(whole.into_body().collect().await.unwrap().to_bytes().len(), icon_bytes.len());
 }
 
 /// An API at `/` leaves `/favicon.ico` to Corten, the icon or the empty 404 whatever the client
@@ -13343,18 +13406,6 @@ fn a_slow_hover_prefetch_is_logged_in_a_debug_build() {
 #[cfg(all(debug_assertions, feature = "log"))]
 #[test]
 fn a_failure_is_logged_with_each_cause_under_it() {
-    #[derive(Debug)]
-    struct Failed(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
-    impl std::fmt::Display for Failed {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str(self.0)
-        }
-    }
-    impl std::error::Error for Failed {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            self.1.as_deref().map(|source| source as _)
-        }
-    }
     let lines = Lines(std::sync::Arc::default());
     let writer = lines.clone();
     let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
@@ -13366,6 +13417,79 @@ fn a_failure_is_logged_with_each_cause_under_it() {
     let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
     assert!(text.contains("error=error sending request"), "{text}");
     assert!(text.contains("error.sources=[client error (SendRequest), connection reset]"), "{text}");
+}
+
+/// A failure with the causes under it, for a test of what is logged.
+#[cfg(all(debug_assertions, feature = "log"))]
+#[derive(Debug)]
+struct Failed(&'static str, Option<Box<dyn std::error::Error + Send + Sync>>);
+
+#[cfg(all(debug_assertions, feature = "log"))]
+impl std::fmt::Display for Failed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+#[cfg(all(debug_assertions, feature = "log"))]
+impl std::error::Error for Failed {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.1.as_deref().map(|source| source as _)
+    }
+}
+
+/// A streamed download whose chunk fails after the headers is logged as that error, each cause
+/// under its message, as a handler's error is; a message (`&str`) is logged as itself (#1153).
+#[cfg(all(debug_assertions, feature = "log"))]
+#[tokio::test]
+async fn a_failed_stream_is_logged_with_each_cause_under_it() {
+    let lines = Lines(std::sync::Arc::default());
+    let writer = lines.clone();
+    let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+    // A test runs on one thread, so the stream is pulled, and logs, under this subscriber.
+    let _logged = tracing::subscriber::set_default(subscriber);
+    let routes = Table::new()
+        .route(
+            "/error",
+            get(|| async {
+                let reset = Failed("connection reset", None);
+                let failed = Failed("error reading rows", Some(Box::new(reset)));
+                let chunks = futures_util::stream::iter([Ok(crate::Bytes::from_static(b"a,1\n")), Err(failed)]);
+                crate::Media::stream("application/octet-stream", chunks)
+            }),
+        )
+        .route(
+            "/message",
+            get(|| async {
+                let chunks = futures_util::stream::iter([Ok(crate::Bytes::from_static(b"a,1\n")), Err("the store went away")]);
+                crate::Media::stream("application/octet-stream", chunks)
+            }),
+        )
+        // A stream of `corten::Result`, as one made with the app's own `?` is: logged as the error
+        // it holds, causes too.
+        .route(
+            "/corten",
+            get(|| async {
+                let gone = Failed("the cursor closed", Some(Box::new(Failed("connection reset", None))));
+                let chunks = futures_util::stream::iter([Ok(crate::Bytes::from_static(b"a,1\n")), Err(Error::from(gone))]);
+                crate::Media::stream("application/octet-stream", chunks)
+            }),
+        );
+    let router = app(routes, None);
+    for path in ["/error", "/message", "/corten"] {
+        let res = router.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.into_body().collect().await.is_err(), "{path}: the body ends as a failure");
+    }
+    let text = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+    let line = |says: &str| text.lines().find(|line| line.contains(says)).unwrap_or_else(|| panic!("{says}: {text}"));
+    let error = line("error=error reading rows");
+    assert!(error.contains("error.sources=[connection reset]"), "{error}");
+    assert!(error.contains("corten: a streamed application/octet-stream answer stopped after its headers were sent"), "{error}");
+    let corten = line("error=the cursor closed");
+    assert!(corten.contains("error.sources=[connection reset]"), "{corten}");
+    let message = line("error=the store went away");
+    assert!(!message.contains("error.sources"), "a message has no cause under it: {message}");
 }
 
 /// An error's message (`Display`) is its source's, what the log says, and `status_code` the

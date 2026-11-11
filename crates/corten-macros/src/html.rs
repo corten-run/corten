@@ -404,6 +404,16 @@ pub fn view_of(body: &Group, class: &str, params: &[(String, Vec<TokenTree>)], s
         }
         s
     };
+    // An attribute method on a `<form>` goes through Element's own: a form has its controls'
+    // names over its members (`<input name="hasAttribute">`), as in the runtime. No other element
+    // has, so a hole on any other tag (a `<tr>` row) keeps the direct call.
+    let attr_call = |at: &str, tag: &str, method: &str, args: &str| {
+        if tag == "form" {
+            format!("Element.prototype.{method}.call({at}, {args})")
+        } else {
+            format!("{at}.{method}({args})")
+        }
+    };
     let mut js = format!("export class {class} {{\n  constructor(el) {{ this.el = el; }}\n");
     let Node::Element { name: root_tag, .. } = root else { unreachable!() };
     let root_el = crate::dom::element(root_tag);
@@ -424,9 +434,13 @@ pub fn view_of(body: &Group, class: &str, params: &[(String, Vec<TokenTree>)], s
             (Some(prop), ..) => format!("{at}.{prop}"),
             (None, None, Kind::Number) => format!("Number({at}.textContent)"),
             (None, None, _) => format!("{at}.textContent"),
-            (None, Some(attr), Kind::Number) => format!("Number({at}.getAttribute({attr:?}))"),
-            (None, Some(attr), Kind::Text) => format!("{at}.getAttribute({attr:?}) ?? \"\""),
-            (None, Some(attr), Kind::Bool) => format!("{at}.hasAttribute({attr:?})"),
+            (None, Some(attr), Kind::Number) => {
+                format!("Number({})", attr_call(&at, &first.tag, "getAttribute", &format!("{attr:?}")))
+            }
+            (None, Some(attr), Kind::Text) => {
+                format!("{} ?? \"\"", attr_call(&at, &first.tag, "getAttribute", &format!("{attr:?}")))
+            }
+            (None, Some(attr), Kind::Bool) => attr_call(&at, &first.tag, "hasAttribute", &format!("{attr:?}")),
         };
         // Writes every hole of the element `base` from `value`. `fill` (`many`) checks a
         // boolean attribute before toggling it: hasAttribute is about half the cost of a
@@ -441,11 +455,17 @@ pub fn view_of(body: &Group, class: &str, params: &[(String, Vec<TokenTree>)], s
                         // after the user typed) and the attribute (what a form reset goes back to).
                         (Some(prop), ..) => format!("{prop}({at}, {value});"),
                         (None, None, _) => format!("text({at}, {value});"),
-                        (None, Some(attr), Kind::Bool) if many => {
-                            format!("if ({at}.hasAttribute({attr:?}) !== {value}) {at}.toggleAttribute({attr:?}, {value});")
+                        (None, Some(attr), Kind::Bool) if many => format!(
+                            "if ({} !== {value}) {};",
+                            attr_call(&at, &h.tag, "hasAttribute", &format!("{attr:?}")),
+                            attr_call(&at, &h.tag, "toggleAttribute", &format!("{attr:?}, {value}"))
+                        ),
+                        (None, Some(attr), Kind::Bool) => {
+                            format!("{};", attr_call(&at, &h.tag, "toggleAttribute", &format!("{attr:?}, {value}")))
                         }
-                        (None, Some(attr), Kind::Bool) => format!("{at}.toggleAttribute({attr:?}, {value});"),
-                        (None, Some(attr), _) => format!("{at}.setAttribute({attr:?}, {value});"),
+                        (None, Some(attr), _) => {
+                            format!("{};", attr_call(&at, &h.tag, "setAttribute", &format!("{attr:?}, {value}")))
+                        }
                     }
                 })
                 .collect()
@@ -469,7 +489,11 @@ pub fn view_of(body: &Group, class: &str, params: &[(String, Vec<TokenTree>)], s
     ts.push_str(&format!("    /** Writes every hole of `el` (a {class}'s root) from `data`. */\n    static fill(el: Element, data: {data}): void;\n"));
     if let Some(i) = key {
         let key = &params[i].0;
-        js.push_str("  static key(el) { return el.getAttribute(\"data-key\") ?? \"\"; }\n");
+        // Through Element's own when the row is a form, whose controls' names shadow its members.
+        js.push_str(&format!(
+            "  static key(el) {{ return {} ?? \"\"; }}\n",
+            attr_call("el", root_tag, "getAttribute", "\"data-key\"")
+        ));
         ts.push_str(&format!(
             "    /** The key of a {class}'s root (its key={{{key}}}). */\n    static key(el: Element): string;\n"
         ));

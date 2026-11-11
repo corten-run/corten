@@ -77,18 +77,20 @@
 //!
 //! # Reading
 //!
-//! [`from_slice`] and [`from_str`] read a [`FromJson`] type, which `#[derive(FromJson)]` implements next to
-//! serde's `Deserialize`: another service's response, read into structs of only the fields a page
-//! uses. Corten's reader matches each key against the fields, makes each value straight from the
-//! text and skips (validating) the rest; where it meets anything it does not follow (an escaped
+//! [`from_slice`] and [`from_str`] read a [`FromJson`] type: another service's response, read into
+//! structs of only the fields a page uses. `#[derive(FromJson)]` writes Corten's reader for the
+//! type and serde's `Deserialize` for it, both from the same `#[serde(..)]`, so the type needs no
+//! second derive. The reader matches each key against the fields, makes each value straight from
+//! the text and skips (validating) the rest; where it meets anything it does not follow (an escaped
 //! key, a missing or duplicate field, a number it does not parse itself) serde_json reads the text
-//! instead, so the value, and every error, is `serde_json::from_slice`'s. The item page's 55 KB API
+//! instead, through that `Deserialize`, so the value, and every error, is
+//! `serde_json::from_slice`'s. The item page's 55 KB API
 //! response takes a fifth fewer instructions than through serde_json (see the changelog).
 //!
 //! ```
 //! use corten::FromJson;
 //!
-//! #[derive(serde::Deserialize, FromJson, Debug, PartialEq)]
+//! #[derive(FromJson, Debug, PartialEq)]
 //! #[serde(rename_all = "camelCase")]
 //! struct Listing { listing_id: String, price: Option<f64> }
 //!
@@ -102,10 +104,11 @@
 //! `Vec`, `Box`, maps with `String` keys, `serde_json::Value` and derived types) or else any
 //! `Deserialize` type, which serde_json reads from that field's text. An attribute that changes how
 //! serde reads in a way the derive does not follow, or an enum with data, does not compile; derive
-//! `Deserialize` alone for that type and it is still read, by serde_json, as a field:
+//! `Deserialize` alone for that type and it is still read, by serde_json, as a field (an empty
+//! `impl FromJson` makes it one too, read by serde_json: see [`FromJson`]):
 //!
 //! ```compile_fail
-//! #[derive(serde::Deserialize, corten::FromJson)]
+//! #[derive(corten::FromJson)]
 //! struct Page {
 //!     #[serde(flatten)]
 //!     extra: std::collections::HashMap<String, String>,
@@ -113,15 +116,119 @@
 //! ```
 //!
 //! ```compile_fail
-//! #[derive(serde::Deserialize, corten::FromJson)]
+//! #[derive(corten::FromJson)]
 //! enum Event { Sold { price: f64 } }
 //! ```
 //!
-//! A type that only derives `FromJson` does not compile either: serde's `Deserialize` is the fallback.
+//! Neither do the attributes serde's derive refuses: a unit struct's `default` or `transparent`,
+//! and `rename_all_fields` on a struct:
+//!
+//! ```compile_fail
+//! #[derive(Default, corten::FromJson)]
+//! #[serde(default)]
+//! struct Marker;
+//! ```
 //!
 //! ```compile_fail
 //! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! struct Marker;
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(rename_all_fields = "camelCase")]
 //! struct Price { amount: f64 }
+//! ```
+//!
+//! Nor does a `transparent` struct whose one field has a default, which leaves nothing to read:
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(transparent)]
+//! struct Cents { #[serde(default)] amount: u64 }
+//! ```
+//!
+//! Since the derive writes the type's `Deserialize`, serde's derive beside it is a second one and
+//! does not compile (E0119); take it out of the list:
+//!
+//! ```compile_fail,E0119
+//! #[derive(serde::Deserialize, corten::FromJson)]
+//! struct Price { amount: f64 }
+//! ```
+//!
+//! `#[derive(Fields)]` (a form's input) and `#[derive(UrlValue)]` (a word in a URL) write the
+//! type's `Deserialize` too, and with it its `FromJson` and schema, so a form's input is read
+//! from JSON (and is an agent tool's input) as it is, through Corten's reader:
+//!
+//! ```
+//! #[derive(Debug, PartialEq, corten::UrlValue)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Shipping { Standard, NextDay }
+//!
+//! #[derive(Debug, PartialEq, corten::Fields)]
+//! struct Order { email: String, shipping: Shipping }
+//!
+//! let order: Order = corten::json::from_str(r#"{"email":"a@b.c","shipping":"next_day"}"#).unwrap();
+//! assert_eq!(order, Order { email: "a@b.c".into(), shipping: Shipping::NextDay });
+//! ```
+//!
+//! `FromJson` beside either is a second `Deserialize` as well; take it out of the list:
+//!
+//! ```compile_fail,E0119
+//! #[derive(corten::Fields, corten::FromJson)]
+//! struct Order { email: String }
+//! ```
+//!
+//! ```compile_fail,E0119
+//! #[derive(corten::UrlValue, corten::FromJson)]
+//! enum Shipping { Standard, NextDay }
+//! ```
+//!
+//! A generic one is a `FromJson` wherever the `Deserialize` they wrote applies (with the bounds
+//! serde infers, such as `T: Default` for a defaulted `T`), read by serde_json rather than
+//! Corten's reader (so inside another value it is read twice: the reader finds its text, then
+//! serde_json reads that). A `UrlValue` enum with `#[serde(other)]` reads any other word as that
+//! variant: Corten's reader gives up on the whole text at such a word and serde_json reads it all
+//! again with the `Deserialize` they wrote. A form input whose fields borrow from the input gets
+//! none and cannot take one, since a `FromJson` reads owned values. `#[derive(FromJson)]` itself
+//! still refuses `#[serde(other)]`, which its reader does not follow; derive `UrlValue` for that:
+//!
+//! ```compile_fail
+//! #[derive(corten::FromJson)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Shown { All, Mine, #[serde(other)] Other }
+//! ```
+//!
+//! ```
+//! #[derive(Debug, PartialEq, corten::UrlValue)]
+//! #[serde(rename_all = "snake_case")]
+//! enum Shown { All, Mine, #[serde(other)] Other }
+//!
+//! #[derive(Debug, PartialEq, corten::Fields)]
+//! struct Offer<T> { shown: Shown, amount: T }
+//!
+//! assert_eq!(corten::json::from_str::<Shown>(r#""lost""#).unwrap(), Shown::Other);
+//! let offer: Offer<u32> = corten::json::from_str(r#"{"shown":"mine","amount":3}"#).unwrap();
+//! assert_eq!(offer, Offer { shown: Shown::Mine, amount: 3 });
+//! ```
+//!
+//! A form input that borrows cannot take one:
+//!
+//! ```compile_fail,E0277
+//! #[derive(corten::Fields)]
+//! struct Note<'a> { text: &'a str }
+//! impl corten::FromJson for Note<'static> {}
+//! ```
+//!
+//! A generic `#[derive(FromJson)]` type with a defaulted field of the bare parameter is refused
+//! where it is defined, since its reader needs `T: Default` and asks each parameter only for
+//! `FromJson`. A defaulted `Vec<T>` or `Option<T>` is read by its reader, where `T: Default` (as
+//! serde's derive asks), and `Fields` takes the bare one, read by serde_json:
+//!
+//! ```compile_fail,E0277
+//! #[derive(corten::FromJson)]
+//! struct Pick<T> { #[serde(default)] value: T }
 //! ```
 
 use std::{
@@ -182,6 +289,10 @@ pub fn to_vec<T: ToJson + ?Sized>(value: &T) -> Vec<u8> {
 
 /// A value that writes itself as JSON: what `#[derive(ToJson)]` implements, and what a [`Json`]
 /// response holds. A hand-written impl appends exactly one JSON value to `out`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` does not write itself as JSON (ToJson)",
+    note = "derive ToJson on it (it needs no Serialize); another crate's Serialize type, or a map of one, goes in a #[serde(transparent)] newtype that derives ToJson; where a schema is asked for (an agent tool's output, feature types) and the derive cannot give one, implement ToJson by hand on the newtype (serde_json::to_writer(&mut *out, &self.0).expect(..)) beside a hand-written ToJsonSchema"
+)]
 pub trait ToJson {
     /// Appends the value's JSON to `out`.
     fn write_json(&self, out: &mut Vec<u8>);
@@ -195,6 +306,15 @@ pub trait ToJson {
     #[doc(hidden)]
     fn __json_size() -> Option<&'static AtomicUsize> {
         None
+    }
+
+    /// Whether every value of the type writes one well-formed JSON value, so an agent tool's
+    /// output need not be parsed to know it: true for the std types, `Raw` and what serde writes,
+    /// the AND of the fields' for the derive, and false for an impl written by hand, which an agent
+    /// tool's output is parsed for in a release build. Not a public API.
+    #[doc(hidden)]
+    fn __well_formed() -> bool {
+        false
     }
 
     /// The response [`Json`] sends, before its headers: the value written into a new vector, or
@@ -326,6 +446,11 @@ impl ToJson for Raw {
         out.extend_from_slice(self.as_bytes());
     }
 
+    /// `Raw::new` parsed it.
+    fn __well_formed() -> bool {
+        true
+    }
+
     fn __into_response(self) -> Response {
         #[cfg_attr(not(feature = "compress"), allow(unused_mut))]
         let mut res = Response::new(Body::from(self.bytes().clone()));
@@ -339,10 +464,10 @@ impl ToJson for Raw {
 /// `#[derive(ToJson)]` implements it for a struct with named fields, so
 ///
 /// ```
-/// #[derive(serde::Serialize, corten::ToJson)]
+/// #[derive(corten::ToJson)]
 /// struct Dimension { id: u32, name: String }
 ///
-/// #[derive(serde::Serialize, corten::ToJson)]
+/// #[derive(corten::ToJson)]
 /// struct DimensionDetail {
 ///     #[serde(flatten)]
 ///     dimension: Dimension,
@@ -398,8 +523,81 @@ impl<T: ToJsonMembers + ?Sized> ToJsonMembers for Box<T> {
 }
 
 /// A map key: written as a JSON string (numbers, `bool` and `char` in quotes, as serde_json does).
+///
+/// An app's key type implements it by writing the text it stands for:
+///
+/// ```
+/// use corten::json::{JsonKey, ToJson};
+/// #[derive(PartialEq, Eq, PartialOrd, Ord)]
+/// struct Sku(String);
+/// impl JsonKey for Sku {
+///     fn write_key(&self, out: &mut Vec<u8>) {
+///         self.0.write_key(out)
+///     }
+/// }
+/// let stock = std::collections::BTreeMap::from([(Sku("a\"1".into()), 3)]);
+/// assert_eq!(stock.to_json(), r#"{"a\"1":3}"#);
+/// ```
+///
+/// A key must be the text serde writes for it, or a derived type's map field changes when the key
+/// gains this impl (that field is written by `ToJson` from then on, not by serde). An enum of unit
+/// variants that derives `ToJson` and is externally tagged (serde's default) writes its name as a
+/// JSON string, renames included, so the derive makes it a key too:
+///
+/// ```
+/// use corten::json::ToJson;
+/// #[derive(serde::Serialize, ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// #[serde(rename_all = "snake_case")]
+/// enum Stock { InStock, SoldOut }
+/// let counts = std::collections::BTreeMap::from([(Stock::InStock, 1), (Stock::SoldOut, 2)]);
+/// assert_eq!(counts.to_json(), serde_json::to_string(&counts).unwrap());
+/// assert_eq!(counts.to_json(), r#"{"in_stock":1,"sold_out":2}"#);
+/// ```
+///
+/// One that is internally or adjacently tagged or untagged writes an object or `null`, and one with a
+/// variant that holds data writes an object for it, none of which is a key, so as a key it does not
+/// compile:
+///
+/// ```compile_fail,E0277
+/// #[derive(corten::ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// #[serde(tag = "kind")]
+/// enum Stock { InStock, SoldOut }
+/// let _ = corten::json::to_vec(&std::collections::BTreeMap::from([(Stock::InStock, 1)]));
+/// ```
+///
+/// ```compile_fail,E0277
+/// #[derive(corten::ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// #[serde(tag = "kind", content = "data")]
+/// enum Stock { InStock, SoldOut }
+/// let _ = corten::json::to_vec(&std::collections::BTreeMap::from([(Stock::InStock, 1)]));
+/// ```
+///
+/// ```compile_fail,E0277
+/// #[derive(corten::ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// #[serde(untagged)]
+/// enum Stock { InStock, SoldOut }
+/// let _ = corten::json::to_vec(&std::collections::BTreeMap::from([(Stock::InStock, 1)]));
+/// ```
+///
+/// ```compile_fail,E0277
+/// #[derive(corten::ToJson, PartialEq, Eq, PartialOrd, Ord)]
+/// enum Stock { InStock, Held(u32) }
+/// let _ = corten::json::to_vec(&std::collections::BTreeMap::from([(Stock::InStock, 1)]));
+/// ```
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not a map key ToJson can write (JsonKey)",
+    note = "a key is text, a number, bool or char; for an app's own key type, implement corten::json::JsonKey for it, writing the text serde writes for it (an externally tagged enum of unit variants, serde's default, that derives ToJson is one already; a tagged or untagged one, or one with a variant that holds data, is not written as text)"
+)]
 pub trait JsonKey {
+    /// Appends the key as one JSON string, quotes included.
     fn write_key(&self, out: &mut Vec<u8>);
+
+    /// As `ToJson`'s: true for Corten's keys and the derive's, false for one written by hand. Not
+    /// a public API.
+    #[doc(hidden)]
+    fn __well_formed() -> bool {
+        false
+    }
 }
 
 /// The escaped contents of a JSON string, without its quotes: what serde_json escapes (`"`, `\` and
@@ -473,6 +671,10 @@ impl ToJson for str {
     fn write_json(&self, out: &mut Vec<u8>) {
         string(out, self)
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl ToJson for String {
@@ -480,12 +682,24 @@ impl ToJson for String {
     fn write_json(&self, out: &mut Vec<u8>) {
         string(out, self)
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
-impl ToJson for Cow<'_, str> {
+impl<T: ToJson + ToOwned + ?Sized> ToJson for Cow<'_, T> {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
-        string(out, self)
+        (**self).write_json(out)
+    }
+
+    fn __json_size() -> Option<&'static AtomicUsize> {
+        T::__json_size()
+    }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
     }
 }
 
@@ -493,6 +707,10 @@ impl ToJson for char {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
         string(out, self.encode_utf8(&mut [0; 4]))
+    }
+
+    fn __well_formed() -> bool {
+        true
     }
 }
 
@@ -502,12 +720,20 @@ impl ToJson for crate::i18n::Day {
         use std::io::Write as _;
         let _ = write!(out, "\"{self}\"");
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl ToJson for bool {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(if *self { b"true" } else { b"false" })
+    }
+
+    fn __well_formed() -> bool {
+        true
     }
 }
 
@@ -518,6 +744,10 @@ macro_rules! integers {
             fn write_json(&self, out: &mut Vec<u8>) {
                 $write(out, *self as $wide)
             }
+
+            fn __well_formed() -> bool {
+                true
+            }
         }
 
         impl JsonKey for $t {
@@ -526,6 +756,10 @@ macro_rules! integers {
                 out.push(b'"');
                 $write(out, *self as $wide);
                 out.push(b'"');
+            }
+
+            fn __well_formed() -> bool {
+                true
             }
         }
     )*};
@@ -539,11 +773,19 @@ macro_rules! wide_integers {
             fn write_json(&self, out: &mut Vec<u8>) {
                 out.extend_from_slice(self.to_string().as_bytes())
             }
+
+            fn __well_formed() -> bool {
+                true
+            }
         }
 
         impl JsonKey for $t {
             fn write_key(&self, out: &mut Vec<u8>) {
                 string(out, &self.to_string())
+            }
+
+            fn __well_formed() -> bool {
+                true
             }
         }
     )*};
@@ -567,6 +809,10 @@ macro_rules! floats {
                     out.extend_from_slice(b"null")
                 }
             }
+
+            fn __well_formed() -> bool {
+                true
+            }
         }
     )*};
 }
@@ -577,6 +823,10 @@ impl ToJson for () {
     fn write_json(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(b"null")
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl<T: ToJson> ToJson for Option<T> {
@@ -586,6 +836,10 @@ impl<T: ToJson> ToJson for Option<T> {
             Some(value) => value.write_json(out),
             None => out.extend_from_slice(b"null"),
         }
+    }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
     }
 }
 
@@ -599,6 +853,10 @@ macro_rules! forward {
 
             fn __json_size() -> Option<&'static AtomicUsize> {
                 T::__json_size()
+            }
+
+            fn __well_formed() -> bool {
+                T::__well_formed()
             }
         }
     )*};
@@ -625,12 +883,20 @@ impl<T: ToJson> ToJson for [T] {
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
     }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
+    }
 }
 
 impl<T: ToJson, const N: usize> ToJson for [T; N] {
     #[inline]
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
     }
 }
 
@@ -639,11 +905,19 @@ impl<T: ToJson> ToJson for Vec<T> {
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
     }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
+    }
 }
 
 impl<T: ToJson> ToJson for VecDeque<T> {
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
     }
 }
 
@@ -651,11 +925,19 @@ impl<T: ToJson> ToJson for BTreeSet<T> {
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
     }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
+    }
 }
 
 impl<T: ToJson, S> ToJson for HashSet<T, S> {
     fn write_json(&self, out: &mut Vec<u8>) {
         array(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        T::__well_formed()
     }
 }
 
@@ -674,6 +956,10 @@ macro_rules! tuples {
                 )*
                 out.push(b']');
             }
+
+            fn __well_formed() -> bool {
+                $first::__well_formed() $(&& $rest::__well_formed())*
+            }
         }
     )*};
 }
@@ -684,12 +970,20 @@ impl JsonKey for str {
     fn write_key(&self, out: &mut Vec<u8>) {
         string(out, self)
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl JsonKey for String {
     #[inline]
     fn write_key(&self, out: &mut Vec<u8>) {
         string(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        true
     }
 }
 
@@ -698,17 +992,29 @@ impl JsonKey for Cow<'_, str> {
     fn write_key(&self, out: &mut Vec<u8>) {
         string(out, self)
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl JsonKey for char {
     fn write_key(&self, out: &mut Vec<u8>) {
         string(out, self.encode_utf8(&mut [0; 4]))
     }
+
+    fn __well_formed() -> bool {
+        true
+    }
 }
 
 impl JsonKey for bool {
     fn write_key(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(if *self { b"\"true\"" } else { b"\"false\"" })
+    }
+
+    fn __well_formed() -> bool {
+        true
     }
 }
 
@@ -718,6 +1024,10 @@ macro_rules! forward_key {
             #[inline]
             fn write_key(&self, out: &mut Vec<u8>) {
                 (**self).write_key(out)
+            }
+
+            fn __well_formed() -> bool {
+                K::__well_formed()
             }
         }
     )*};
@@ -745,12 +1055,20 @@ impl<K: JsonKey, V: ToJson> ToJson for BTreeMap<K, V> {
     fn write_json(&self, out: &mut Vec<u8>) {
         object(out, self)
     }
+
+    fn __well_formed() -> bool {
+        K::__well_formed() && V::__well_formed()
+    }
 }
 
 /// In the map's order, as serde_json writes it.
 impl<K: JsonKey, V: ToJson, S> ToJson for HashMap<K, V, S> {
     fn write_json(&self, out: &mut Vec<u8>) {
         object(out, self)
+    }
+
+    fn __well_formed() -> bool {
+        K::__well_formed() && V::__well_formed()
     }
 }
 
@@ -761,10 +1079,96 @@ macro_rules! serde_json_values {
             fn write_json(&self, out: &mut Vec<u8>) {
                 __private::serde(self, out)
             }
+
+            fn __well_formed() -> bool {
+                true
+            }
         }
     )*};
 }
 serde_json_values!(serde_json::Value, serde_json::Map<String, serde_json::Value>, serde_json::Number);
+
+macro_rules! by_serde {
+    ($($t:ty),*) => {$(
+        /// Written by serde_json, as its `Serialize` writes it.
+        impl ToJson for $t {
+            fn write_json(&self, out: &mut Vec<u8>) {
+                __private::serde(self, out)
+            }
+
+            fn __well_formed() -> bool {
+                true
+            }
+        }
+    )*};
+}
+by_serde!(
+    std::path::Path,
+    std::path::PathBuf,
+    std::net::IpAddr,
+    std::net::Ipv4Addr,
+    std::net::Ipv6Addr,
+    std::net::SocketAddr,
+    std::net::SocketAddrV4,
+    std::net::SocketAddrV6,
+    std::time::Duration,
+    std::time::SystemTime
+);
+
+macro_rules! nonzero {
+    ($($t:ty),*) => {$(
+        /// The number, as serde writes it.
+        impl ToJson for $t {
+            #[inline]
+            fn write_json(&self, out: &mut Vec<u8>) {
+                self.get().write_json(out)
+            }
+
+            fn __well_formed() -> bool {
+                true
+            }
+        }
+    )*};
+}
+nonzero!(
+    std::num::NonZeroU8,
+    std::num::NonZeroU16,
+    std::num::NonZeroU32,
+    std::num::NonZeroU64,
+    std::num::NonZeroU128,
+    std::num::NonZeroUsize,
+    std::num::NonZeroI8,
+    std::num::NonZeroI16,
+    std::num::NonZeroI32,
+    std::num::NonZeroI64,
+    std::num::NonZeroI128,
+    std::num::NonZeroIsize
+);
+
+/// `null`, as serde writes it.
+impl<T: ?Sized> ToJson for std::marker::PhantomData<T> {
+    #[inline]
+    fn write_json(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(b"null")
+    }
+
+    fn __well_formed() -> bool {
+        true
+    }
+}
+
+/// The JSON text it holds, as it is.
+#[cfg(feature = "types")]
+impl ToJson for serde_json::value::RawValue {
+    #[inline]
+    fn write_json(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(self.get().as_bytes())
+    }
+
+    fn __well_formed() -> bool {
+        true
+    }
+}
 
 /// Used by the code `#[derive(ToJson)]` generates. Not a public API.
 #[doc(hidden)]
@@ -809,6 +1213,83 @@ pub mod __private {
     impl<T: Serialize + ?Sized> ViaSerialize for &Field<'_, T> {
         fn __write(&self, out: &mut Vec<u8>) {
             serde(self.0, out)
+        }
+    }
+
+    // A field's type, for `ToJson::__well_formed`, resolved as `Field` is: its `ToJson`'s answer,
+    // or true for what serde_json writes. serde_json writes well-formed JSON for a `Serialize` that
+    // follows serde's protocol (every derived one; a failure panics before anything is sent); one
+    // written by hand that calls a map's `serialize_key` twice is not checked by serde_json, and
+    // only a debug build's parse catches it.
+    pub struct Type<T: ?Sized>(pub core::marker::PhantomData<T>);
+
+    /// A derived type's `__well_formed`: its fields' answer, or true for a type already met in
+    /// this question (the outermost call on this thread), so each type is expanded once however
+    /// many fields reach it: a tree (`children: Vec<Node>`), a cycle, or a type many others hold.
+    /// That is sound because every answer is an AND (fields, `Vec`, `Option`, maps, tuples): a
+    /// `false` ends the whole question at once, so a type met again is either still being asked,
+    /// and its own fields decide it there, or answered `true`.
+    ///
+    /// A type is keyed by its derive's own static (`mark`, one per definition, so two versions of
+    /// a crate or two types of one name differ) and its `type_name` (one per generic instance,
+    /// lifetimes left out, which do not change the answer). Two instances of one generic type
+    /// share a key only if their type arguments print the same name, which `type_name` allows for
+    /// types defined inside function bodies; a debug build parses every output, so a test still
+    /// stops at a bad one there.
+    pub fn well_formed(mark: &'static core::sync::atomic::AtomicU8, name: &'static str, fields: impl FnOnce() -> bool) -> bool {
+        use std::cell::RefCell;
+        thread_local! {
+            // The types met in the current question, and how deep it is.
+            static MET: RefCell<(Vec<(usize, &'static str)>, usize)> = const { RefCell::new((Vec::new(), 0)) };
+        }
+        struct Done;
+        impl Drop for Done {
+            fn drop(&mut self) {
+                MET.with(|met| {
+                    let mut met = met.borrow_mut();
+                    met.1 -= 1;
+                    if met.1 == 0 {
+                        met.0.clear();
+                    }
+                });
+            }
+        }
+        let key = (mark as *const _ as usize, name);
+        let new = MET.with(|met| {
+            let mut met = met.borrow_mut();
+            if met.0.contains(&key) {
+                return false;
+            }
+            met.0.push(key);
+            met.1 += 1;
+            true
+        });
+        if !new {
+            return true;
+        }
+        let _done = Done;
+        fields()
+    }
+
+    pub trait WellToJson {
+        fn __well_formed(&self) -> bool;
+    }
+
+    impl<T: ToJson + ?Sized> WellToJson for Type<T> {
+        #[inline]
+        fn __well_formed(&self) -> bool {
+            T::__well_formed()
+        }
+    }
+
+    pub trait WellSerialize {
+        fn __well_formed(&self) -> bool;
+    }
+
+    impl<T: Serialize + ?Sized> WellSerialize for &Type<T> {
+        #[inline]
+        fn __well_formed(&self) -> bool {
+            true
         }
     }
 }
@@ -1209,6 +1690,62 @@ mod tests {
         same(&serde_json::json!({ "id": "item_1", "price": 0.5, "tags": ["a", "<b>"], "none": null }));
     }
 
+    /// The std types a schema is given for are written as serde writes them, alone and in a map.
+    #[test]
+    fn std_types_with_a_schema_write_what_serde_json_writes() {
+        use std::{
+            borrow::Cow,
+            marker::PhantomData,
+            net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
+            num::{NonZeroI8, NonZeroU128, NonZeroU32},
+            path::{Path, PathBuf},
+            time::{Duration, SystemTime},
+        };
+        let v4 = Ipv4Addr::new(10, 0, 0, 1);
+        let v6 = Ipv6Addr::LOCALHOST;
+        same(&v4);
+        same(&v6);
+        same(&IpAddr::V4(v4));
+        same(&SocketAddr::new(IpAddr::V6(v6), 443));
+        same(&SocketAddrV4::new(v4, 80));
+        same(&SocketAddrV6::new(v6, 8080, 0, 0));
+        same(Path::new("a/\"b\""));
+        same(&PathBuf::from("c"));
+        same(&Duration::new(1, 5));
+        same(&(SystemTime::UNIX_EPOCH + Duration::new(1_700_000_000, 7)));
+        same(&NonZeroU32::new(7).unwrap());
+        same(&NonZeroI8::new(-8).unwrap());
+        same(&NonZeroU128::new(u128::MAX).unwrap());
+        same(&PhantomData::<String>);
+        same(&Cow::<Inner>::Owned(Inner { a: 1 }));
+        same(&Cow::Borrowed(&[1u8, 2][..]));
+        let mut waits: BTreeMap<String, Duration> = BTreeMap::new();
+        waits.insert("a".into(), Duration::from_millis(1500));
+        same(&waits);
+        #[cfg(feature = "types")]
+        {
+            let raw = serde_json::value::RawValue::from_string(" {\"a\": [1, 2]} ".trim().into()).unwrap();
+            same(&raw);
+            let mut held: BTreeMap<String, Box<serde_json::value::RawValue>> = BTreeMap::new();
+            held.insert("x".into(), raw);
+            same(&held);
+        }
+    }
+
+    /// A std type serde cannot always write panics as serde's error says, as any field whose own
+    /// `Serialize` fails: a `SystemTime` before the epoch (a path that is not UTF-8 is the other).
+    #[test]
+    #[should_panic(expected = "SystemTime must be later than UNIX_EPOCH")]
+    fn a_std_type_serde_refuses_panics() {
+        let before = std::time::SystemTime::UNIX_EPOCH - std::time::Duration::from_secs(1);
+        let _ = before.to_json();
+    }
+
+    #[derive(Clone, Serialize, ToJson)]
+    struct Inner {
+        a: u8,
+    }
+
     #[tokio::test]
     async fn writes_what_axum_writes() {
         let value = serde_json::json!({ "id": "item_1", "price": 0.5, "tags": ["a", "<b>"], "none": null });
@@ -1231,7 +1768,7 @@ mod tests {
         assert_eq!(<Arc<Id>>::__json_size().map(|s| s as *const _), Id::__json_size().map(|s| s as *const _));
     }
 
-    #[derive(Debug, PartialEq, serde::Deserialize, FromJson)]
+    #[derive(Debug, PartialEq, FromJson)]
     struct Alert {
         email: String,
         target: Option<u32>,

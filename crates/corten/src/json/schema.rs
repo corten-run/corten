@@ -16,7 +16,7 @@
 //! ```should_panic
 //! #[derive(serde::Serialize)]
 //! struct Foreign { at: String }
-//! #[derive(serde::Serialize, corten::ToJson)]
+//! #[derive(corten::ToJson)]
 //! struct Row { when: Foreign }
 //! let _ = corten::types::Types::new().add::<Row>();
 //! ```
@@ -58,7 +58,7 @@ pub trait ToJsonSchema {
 /// The schema of the JSON a type reads: what `#[derive(FromJson)]` implements (feature `types`).
 #[diagnostic::on_unimplemented(
     message = "`{Self}` has no JSON Schema for what it reads",
-    note = "derive FromJson on it; for another crate's type, implement FromJsonSchema for a #[serde(transparent)] newtype around it"
+    note = "derive FromJson on it; a Fields or UrlValue type has it already (deriving FromJson beside them is E0119); for another crate's type, implement FromJsonSchema for a #[serde(transparent)] newtype around it"
 )]
 pub trait FromJsonSchema {
     /// The schema, or a `$ref` to it after adding it to `generator`'s definitions.
@@ -138,7 +138,7 @@ impl Generator {
             why.push_str(&format!(" written {written} (needs ToJson derived or ToJsonSchema implemented)"));
         }
         if !read.is_empty() {
-            why.push_str(&format!(" read {read} (needs FromJson derived or FromJsonSchema implemented)"));
+            why.push_str(&format!(" read {read} (needs FromJson derived, which a Fields or UrlValue type already is, or FromJsonSchema implemented)"));
         }
         why.push_str(
             ". Each type named, or one inside it (`Foreign` in `Option<Foreign>`), lacks it: for another \
@@ -767,7 +767,7 @@ mod tests {
         (root, Value::Object(g.definitions().into_iter().collect()))
     }
 
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     struct Inner {
         a: u8,
     }
@@ -828,7 +828,7 @@ mod tests {
         assert_eq!(defs["Inner"], json!({ "properties": { "a": u8_ }, "required": ["a"], "type": "object" }));
     }
 
-    #[derive(Serialize, Deserialize, Default, ToJson, FromJson)]
+    #[derive(Serialize, Default, ToJson, FromJson)]
     #[serde(default)]
     struct AllDefault {
         a: u8,
@@ -917,12 +917,12 @@ mod tests {
         );
     }
 
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     struct Generic<T> {
         t: T,
     }
 
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     struct Uses {
         g: Generic<String>,
         h: Generic<Inner>,
@@ -948,12 +948,12 @@ mod tests {
         assert!(root["$defs"].get("Uses").is_none(), "{root}");
     }
 
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     struct Maybe<T> {
         t: T,
     }
 
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     struct UsesMaybe {
         a: Maybe<Option<String>>,
         b: Maybe<u8>,
@@ -980,7 +980,7 @@ mod tests {
         *v == 7
     }
 
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     #[serde(deny_unknown_fields, default = "shelf")]
     struct Shelf {
         name: String,
@@ -1074,7 +1074,7 @@ mod tests {
     /// # A title
     ///
     /// The description.
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     #[serde(rename_all = "kebab-case")]
     #[allow(dead_code)]
     enum Doc {
@@ -1083,20 +1083,20 @@ mod tests {
         TwoB,
     }
 
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     struct Newtype(u8);
 
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     struct Pair(u8, String);
 
     /// Transparent doc.
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     #[serde(transparent)]
     struct Transparent {
         inner: String,
     }
 
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     struct Unit;
 
     #[test]
@@ -1174,7 +1174,7 @@ mod tests {
     }
 
     /// Derives for every field type serde takes, so a type nothing describes compiles.
-    #[derive(Serialize, Deserialize, ToJson, FromJson)]
+    #[derive(Serialize, ToJson, FromJson)]
     struct HoldsForeign {
         when: Foreign,
         maybe: Option<Foreign>,

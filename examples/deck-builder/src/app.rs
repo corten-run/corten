@@ -28,16 +28,11 @@ use crate::{
 };
 
 /// A card in the saved deck and its copies: the rows of the deck's feed.
-#[derive(Clone, Serialize, ToJson)]
+#[derive(Clone, Serialize, ToJson, Row)]
 pub struct Slot {
+    #[row(id)]
     pub id: String,
     pub count: u32,
-}
-
-impl Row for Slot {
-    fn id(&self) -> &str {
-        &self.id
-    }
 }
 
 /// The collection, and the deck saved from it. The deck's version is its feed's generation and

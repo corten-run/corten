@@ -1,6 +1,8 @@
-//! The `Deserialize` `#[derive(Fields)]` and `#[derive(UrlValue)]` write is serde_derive's: each type here is
-//! declared twice from one body, once with Corten's derive and once with serde's, and both read
-//! every input to the same value or the same error, and pass the deserializer the same names.
+//! The `Deserialize` `#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]` write is
+//! serde_derive's: each type here is declared twice from one body, once with Corten's derive and
+//! once with serde's, and both read every input to the same value or the same error, and pass the
+//! deserializer the same names. A `FromJson` type is also read by Corten's reader, which gives
+//! serde's answer too.
 
 #![cfg(feature = "json")]
 
@@ -318,16 +320,31 @@ impl<'de> Deserializer<'de> for &Capture {
         Err(serde::de::Error::custom("captured"))
     }
 
+    fn deserialize_unit_struct<V: Visitor<'de>>(self, name: &'static str, _: V) -> Result<V::Value, ValueError> {
+        *self.0.borrow_mut() = Some((name.to_string(), Vec::new()));
+        Err(serde::de::Error::custom("captured"))
+    }
+
+    fn deserialize_newtype_struct<V: Visitor<'de>>(self, name: &'static str, _: V) -> Result<V::Value, ValueError> {
+        *self.0.borrow_mut() = Some((name.to_string(), vec!["newtype".into()]));
+        Err(serde::de::Error::custom("captured"))
+    }
+
+    fn deserialize_tuple_struct<V: Visitor<'de>>(self, name: &'static str, len: usize, _: V) -> Result<V::Value, ValueError> {
+        *self.0.borrow_mut() = Some((name.to_string(), vec![len.to_string()]));
+        Err(serde::de::Error::custom("captured"))
+    }
+
     serde::forward_to_deserialize_any! {
         bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string bytes byte_buf option unit
-        unit_struct newtype_struct seq tuple tuple_struct map identifier ignored_any
+        seq tuple map identifier ignored_any
     }
 }
 
 fn names<'de, T: Deserialize<'de>>() -> (String, Vec<String>) {
     let capture = Capture::default();
     let _ = T::deserialize(&capture);
-    capture.0.into_inner().expect("deserialize_struct or deserialize_enum")
+    capture.0.into_inner().expect("deserialize_struct, deserialize_enum or a named struct form")
 }
 
 #[test]
@@ -670,4 +687,431 @@ fn associated_types_and_types_a_macro_passes_read_the_same() {
     assert_eq!((ours.value, theirs.value), (2, 2));
     let ours: passed::Ours<'_, NoDefault> = serde_json::from_str(r#"{"note":"n","raw":"r"}"#).unwrap();
     assert_eq!(ours.value, 0);
+}
+
+pub fn half() -> f64 {
+    0.5
+}
+
+/// Not `FromJson`: a field of this type is read by serde_json from the field's text.
+#[derive(Debug, PartialEq, serde::Deserialize)]
+pub struct Elsewhere {
+    pub id: u32,
+}
+
+twin! { seller, corten::FromJson,
+    pub struct Seller {
+        pub id: u32,
+    }
+}
+
+twin! { listing, corten::FromJson,
+    #[serde(rename_all = "camelCase")]
+    pub struct Listing<S> {
+        pub listing_id: String,
+        #[serde(rename = "qty", alias = "quantity")]
+        pub count: u32,
+        #[serde(default)]
+        pub tags: Vec<String>,
+        #[serde(default = "crate::half")]
+        pub share: f64,
+        #[serde(skip)]
+        pub seen: bool,
+        pub price: Option<f64>,
+        pub seller: S,
+        pub address: std::net::IpAddr,
+        pub other: Option<crate::Elsewhere>,
+        pub r#type: String,
+    }
+}
+
+twin! { pair, corten::FromJson,
+    pub struct Pair(pub u32, pub String);
+}
+
+twin! { span, corten::FromJson,
+    #[derive(Default)]
+    #[serde(default)]
+    pub struct Span(pub u32, pub u32);
+}
+
+twin! { id, corten::FromJson,
+    pub struct Id(pub u64);
+}
+
+twin! { marker, corten::FromJson,
+    pub struct Marker;
+}
+
+twin! { name, corten::FromJson,
+    #[serde(transparent)]
+    pub struct Name {
+        pub text: String,
+        #[serde(skip)]
+        pub cache: Option<u8>,
+    }
+}
+
+twin! { cents, corten::FromJson,
+    #[serde(transparent)]
+    pub struct Cents(pub i64);
+}
+
+twin! { filters, corten::FromJson,
+    #[derive(Default)]
+    #[serde(default, deny_unknown_fields, rename = "Filter", expecting = "a filter")]
+    pub struct Filters {
+        pub page: u32,
+        pub search: Option<String>,
+    }
+}
+
+twin! { status, corten::FromJson,
+    #[serde(rename_all = "kebab-case")]
+    pub enum Status {
+        Open,
+        #[serde(rename = "awaiting")]
+        AwaitingLabel,
+        #[serde(alias = "sent")]
+        Shipped,
+        // Never read, so never built.
+        #[allow(dead_code)]
+        #[serde(skip)]
+        Hidden,
+    }
+}
+
+/// serde_json through each impl, and Corten's reader (which hands serde_json what it gives up
+/// on) through ours, all give serde's answer.
+fn same_read<A: corten::FromJson + std::fmt::Debug, B: DeserializeOwned + std::fmt::Debug>(text: &str) {
+    let theirs = shown(serde_json::from_str::<B>(text));
+    assert_eq!(shown(serde_json::from_str::<A>(text)), theirs, "serde_json {text}");
+    assert_eq!(shown(corten::json::from_str::<A>(text)), theirs, "corten {text}");
+    assert_eq!(shown(corten::json::from_slice::<A>(text.as_bytes())), theirs, "corten bytes {text}");
+}
+
+#[test]
+fn from_json_reads_what_serde_s_derive_reads() {
+    type Ours = listing::ours::Listing<seller::ours::Seller>;
+    type Theirs = listing::theirs::Listing<seller::theirs::Seller>;
+    let whole = r#"{"listingId":"l1","qty":2,"price":2.5,"seller":{"id":7},"address":"127.0.0.1","type":"card"}"#;
+    for text in [
+        whole,
+        r#"{"listingId":"l1","quantity":2,"tags":["a"],"share":1.5,"seen":true,"price":null,"seller":{"id":7,"x":1},"address":"::1","other":{"id":3},"type":"card","more":[1,{"a":2}]}"#,
+        r#"{"listingId":"l1","qty":2,"seller":{"id":7},"address":"127.0.0.1","type":"card"}"#,
+        r#"{"listingId":"l1","qty":2,"qty":3,"seller":{"id":7},"address":"127.0.0.1","type":"card"}"#,
+        r#"{"listingId":"l1","qty":2,"quantity":3,"seller":{"id":7},"address":"127.0.0.1","type":"card"}"#,
+        r#"{"listing\u0049d":"l1","qty":2,"seller":{"id":7},"address":"127.0.0.1","type":"card"}"#,
+        r#"{"qty":2,"seller":{"id":7},"address":"127.0.0.1","type":"card"}"#,
+        r#"{"listingId":"l1","qty":"2","seller":{"id":7},"address":"127.0.0.1","type":"card"}"#,
+        r#"{"listingId":"l1","qty":2,"seller":{},"address":"127.0.0.1","type":"card"}"#,
+        r#"{"listingId":"l1","qty":2,"seller":{"id":7},"address":"nowhere","type":"card"}"#,
+        r#"{"listingId":"l1","qty":2,"seller":{"id":7},"address":"127.0.0.1","other":{"id":"x"},"type":"card"}"#,
+        r#"["l1",2,["a"],1.5,2.5,{"id":7},"127.0.0.1",null,"card"]"#,
+        r#"["l1",2]"#,
+        "null",
+        "1",
+        "{",
+    ] {
+        same_read::<Ours, Theirs>(text);
+    }
+    for text in ["[3,\"x\"]", "[3]", "[3,\"x\",4]", "[]", r#"{"0":3,"1":"x"}"#, "3"] {
+        same_read::<pair::ours::Pair, pair::theirs::Pair>(text);
+    }
+    for text in ["[1,2]", "[1]", "[]", "[1,2,3]", "null"] {
+        same_read::<span::ours::Span, span::theirs::Span>(text);
+    }
+    for text in ["7", "[7]", "[7,8]", "-1", "\"7\"", "null"] {
+        same_read::<id::ours::Id, id::theirs::Id>(text);
+    }
+    for text in ["null", "{}", "[]", "0"] {
+        same_read::<marker::ours::Marker, marker::theirs::Marker>(text);
+    }
+    for text in ["\"Ada\"", "1", "null", r#"{"text":"Ada"}"#] {
+        same_read::<name::ours::Name, name::theirs::Name>(text);
+    }
+    for text in ["250", "-3", "2.5", "\"250\"", "[250]"] {
+        same_read::<cents::ours::Cents, cents::theirs::Cents>(text);
+    }
+    for text in [r#"{}"#, r#"{"page":2}"#, r#"{"page":2,"search":"red"}"#, r#"{"page":2,"x":1}"#, "[3]", "[]", "null"] {
+        same_read::<filters::ours::Filters, filters::theirs::Filters>(text);
+    }
+    for text in [
+        "\"open\"",
+        "\"awaiting\"",
+        "\"awaiting-label\"",
+        "\"shipped\"",
+        "\"sent\"",
+        "\"hidden\"",
+        "\"Open\"",
+        r#"{"open":null}"#,
+        "1",
+        "null",
+    ] {
+        same_read::<status::ours::Status, status::theirs::Status>(text);
+    }
+}
+
+/// Corten's reader reads `text` itself, to serde's value: it does not give up and hand the text
+/// to serde_json.
+fn read_alone<A: corten::FromJson + std::fmt::Debug, B: DeserializeOwned + std::fmt::Debug>(text: &str) {
+    let ours = corten::json::__read::alone::<A>(text).unwrap_or_else(|| panic!("the reader gave up on {text}"));
+    assert_eq!(format!("{ours:?}"), format!("{:?}", serde_json::from_str::<B>(text).unwrap()), "{text}");
+}
+
+#[test]
+fn corten_s_reader_reads_each_type_itself() {
+    type Ours = listing::ours::Listing<seller::ours::Seller>;
+    type Theirs = listing::theirs::Listing<seller::theirs::Seller>;
+    read_alone::<Ours, Theirs>(r#"{"listingId":"l1","qty":2,"price":2.5,"seller":{"id":7},"address":"127.0.0.1","type":"card"}"#);
+    read_alone::<pair::ours::Pair, pair::theirs::Pair>("[3,\"x\"]");
+    read_alone::<span::ours::Span, span::theirs::Span>("[1,2]");
+    read_alone::<id::ours::Id, id::theirs::Id>("7");
+    read_alone::<marker::ours::Marker, marker::theirs::Marker>("null");
+    read_alone::<name::ours::Name, name::theirs::Name>("\"Ada\"");
+    read_alone::<cents::ours::Cents, cents::theirs::Cents>("250");
+    read_alone::<filters::ours::Filters, filters::theirs::Filters>(r#"{"page":2,"search":"red"}"#);
+    read_alone::<status::ours::Status, status::theirs::Status>("\"sent\"");
+}
+
+twin! { never, corten::FromJson,
+    pub enum Never {}
+}
+
+twin! { skipped, corten::FromJson,
+    pub enum Skipped {
+        #[allow(dead_code)]
+        #[serde(skip)]
+        Hidden,
+    }
+}
+
+twin! { renamed, corten::FromJson,
+    #[serde(rename(serialize = "Out", deserialize = "In"))]
+    pub struct Renamed {
+        pub id: u32,
+    }
+}
+
+#[test]
+fn from_json_reads_enums_with_no_variant_read_and_a_split_rename() {
+    for text in ["\"Hidden\"", "\"x\"", "null", "1", r#"{"Hidden":null}"#] {
+        same_read::<never::ours::Never, never::theirs::Never>(text);
+        same_read::<skipped::ours::Skipped, skipped::theirs::Skipped>(text);
+    }
+    for text in [r#"{"id":1}"#, "[1]", "{}", "null"] {
+        same_read::<renamed::ours::Renamed, renamed::theirs::Renamed>(text);
+    }
+    assert_eq!(names::<renamed::ours::Renamed>(), names::<renamed::theirs::Renamed>());
+    assert_eq!(names::<renamed::ours::Renamed>().0, "In");
+    assert_eq!(names::<skipped::ours::Skipped>(), names::<skipped::theirs::Skipped>());
+}
+
+twin! { shipping, corten::UrlValue,
+    #[serde(rename_all = "snake_case")]
+    pub enum Shipping {
+        Standard,
+        #[serde(alias = "express")]
+        NextDay,
+    }
+}
+
+twin! { order, corten::Fields,
+    #[serde(rename_all = "camelCase")]
+    pub struct Order {
+        pub email: String,
+        #[serde(default)]
+        pub gift_note: Option<String>,
+        pub shipping: crate::shipping::ours::Shipping,
+    }
+}
+
+twin! { note, corten::Fields,
+    pub struct Note {
+        pub text: Cow<'static, str>,
+    }
+}
+
+// Owned too: a `Cow` by its full path, a field named `borrow`, and a reference in a skipped
+// field, which is never read.
+twin! { kept, corten::Fields,
+    pub struct Kept {
+        pub text: std::borrow::Cow<'static, str>,
+        pub borrow: String,
+        #[serde(skip)]
+        pub cache: Option<&'static str>,
+    }
+}
+
+#[test]
+fn fields_and_url_value_are_read_from_json_as_they_are() {
+    // A `Cow<'static, str>` read without `borrow` is owned, so the struct is a `FromJson`.
+    same_read::<note::ours::Note, note::theirs::Note>(r#"{"text":"hi"}"#);
+    read_alone::<note::ours::Note, note::theirs::Note>(r#"{"text":"hi"}"#);
+    same_read::<kept::ours::Kept, kept::theirs::Kept>(r#"{"text":"hi","borrow":"b"}"#);
+    read_alone::<kept::ours::Kept, kept::theirs::Kept>(r#"{"text":"hi","borrow":"b"}"#);
+    // The twins' `shipping` is the same type on both sides, so serde's reads it by ours.
+    for text in [
+        r#"{"email":"a@b.c","shipping":"next_day"}"#,
+        r#"{"email":"a@b.c","giftNote":"hi","shipping":"express"}"#,
+        r#"{"email":"a@b.c","shipping":"overnight"}"#,
+        r#"{"email":"a@b.c"}"#,
+        "null",
+    ] {
+        same_read::<order::ours::Order, order::theirs::Order>(text);
+    }
+    read_alone::<order::ours::Order, order::theirs::Order>(r#"{"email":"a@b.c","giftNote":"hi","shipping":"express"}"#);
+    for text in ["\"standard\"", "\"next_day\"", "\"express\"", "\"NextDay\"", "1"] {
+        same_read::<shipping::ours::Shipping, shipping::theirs::Shipping>(text);
+    }
+    read_alone::<shipping::ours::Shipping, shipping::theirs::Shipping>("\"next_day\"");
+    read_alone::<fallback::ours::Fallback, fallback::theirs::Fallback>(r#"{"page":2}"#);
+}
+
+/// A constant a discriminant reads through a qualified path.
+pub trait Width {
+    const N: isize;
+}
+
+impl Width for std::collections::HashMap<u8, u16> {
+    const N: isize = 40;
+}
+
+twin! { shifted, corten::UrlValue,
+    #[derive(Clone, Copy)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Shifted {
+        Read = 1 << 0,
+        Write = 1 << 1,
+        Admin = size_of::<std::collections::HashMap<u8, u16>>() as isize,
+        Long = size_of::<fn() -> std::collections::HashMap<u8, u16>>() as isize + 100,
+        Qualified = <std::collections::HashMap<u8, u16> as Width>::N,
+    }
+}
+
+twin! { shifted_json, corten::FromJson,
+    pub enum ShiftedJson {
+        Read = 1 << 0,
+        Write = 1 << 1,
+    }
+}
+
+twin! { wording, corten::UrlValue,
+    #[serde(rename_all = "snake_case")]
+    pub enum Wording {
+        Plain,
+        Bold,
+        #[serde(other)]
+        Other,
+    }
+}
+
+#[test]
+fn a_generic_form_a_shifted_discriminant_and_another_word_read_as_serde_s() {
+    for text in [r#"{"value":1,"list":[2,3]}"#, r#"{"value":1}"#, r#"{"value":"x"}"#, r#"{"value":1,"x":2}"#, "null"] {
+        same_read::<generic::ours::Generic<u32>, generic::theirs::Generic<u32>>(text);
+    }
+    // A generic one is the trait's own body: serde_json reads it, alone and inside another value.
+    assert!(corten::json::__read::alone::<generic::ours::Generic<u32>>(r#"{"value":1,"list":[2,3]}"#).is_none());
+    same_read::<Vec<generic::ours::Generic<u32>>, Vec<generic::theirs::Generic<u32>>>(
+        r#"[{"value":1,"list":[2,3]},{"value":4}]"#,
+    );
+    // Its bounds are the ones serde infers (`T: Default` here), not `FromJson` on each parameter.
+    same_read::<defaults::ours::Defaults<u8, NotRead, NotRead>, defaults::theirs::Defaults<u8, NotRead, NotRead>>(
+        r#"{"kind":null}"#,
+    );
+    same_read::<associated::ours::Associated<NoDefault>, associated::theirs::Associated<NoDefault>>(r#"{"value":3}"#);
+    for text in ["\"read\"", "\"write\"", "\"admin\"", "\"long\"", "\"qualified\"", "\"Write\"", "1"] {
+        same_read::<shifted::ours::Shifted, shifted::theirs::Shifted>(text);
+    }
+    read_alone::<shifted::ours::Shifted, shifted::theirs::Shifted>("\"admin\"");
+    for text in ["\"Read\"", "\"Write\"", "\"write\""] {
+        same_read::<shifted_json::ours::ShiftedJson, shifted_json::theirs::ShiftedJson>(text);
+    }
+    for text in ["\"plain\"", "\"bold\"", "\"italic\"", "\"other\"", "1"] {
+        same_read::<wording::ours::Wording, wording::theirs::Wording>(text);
+    }
+    read_alone::<wording::ours::Wording, wording::theirs::Wording>("\"bold\"");
+    assert_eq!(names::<wording::ours::Wording>(), names::<wording::theirs::Wording>());
+}
+
+/// The schema `Fields` and `UrlValue` write is the one `FromJson` derived on the same body writes.
+#[cfg(feature = "types")]
+#[test]
+fn fields_and_url_value_describe_what_they_read_as_from_json_does() {
+    use corten::json::schema::Generator;
+    // Described by the schema, and `Generic` read by the readers; no field is read.
+    #[allow(dead_code)]
+    mod derived {
+        #[derive(corten::FromJson)]
+        #[serde(rename_all = "snake_case")]
+        pub enum Shipping {
+            Standard,
+            #[serde(alias = "express")]
+            NextDay,
+        }
+        #[derive(corten::FromJson)]
+        #[serde(rename_all = "camelCase")]
+        pub struct Order {
+            pub email: String,
+            #[serde(default)]
+            pub gift_note: Option<String>,
+            pub shipping: crate::shipping::ours::Shipping,
+        }
+        #[derive(Debug, corten::FromJson)]
+        #[serde(deny_unknown_fields, expecting = "a filter")]
+        pub struct Generic<T> {
+            pub value: T,
+            #[serde(default)]
+            pub list: Vec<T>,
+        }
+    }
+    let named = |schema: serde_json::Value| schema.to_string().replace("derived::", "").replace("ours::", "");
+    assert_eq!(
+        named(Generator::root_for_read::<shipping::ours::Shipping>()),
+        named(Generator::root_for_read::<derived::Shipping>())
+    );
+    assert_eq!(named(Generator::root_for_read::<order::ours::Order>()), named(Generator::root_for_read::<derived::Order>()));
+    assert_eq!(
+        named(Generator::root_for_read::<generic::ours::Generic<u32>>()),
+        named(Generator::root_for_read::<derived::Generic<u32>>())
+    );
+    // Its derived reader reads what serde's derive reads; the defaulted Vec<T> asks serde for
+    // T: Default, which the impl's Self: DeserializeOwned carries.
+    for text in [r#"{"value":1,"list":[2,3]}"#, r#"{"value":1}"#, r#"{"value":"x"}"#, r#"{"value":1,"x":2}"#] {
+        same_read::<derived::Generic<u32>, generic::theirs::Generic<u32>>(text);
+    }
+    read_alone::<derived::Generic<u32>, generic::theirs::Generic<u32>>(r#"{"value":1,"list":[2,3]}"#);
+    // Another word is one of the enum's.
+    assert_eq!(Generator::root_for_read::<wording::ours::Wording>()["type"], "string");
+}
+
+#[test]
+fn from_json_passes_the_deserializer_serde_s_names() {
+    type Ours = listing::ours::Listing<seller::ours::Seller>;
+    type Theirs = listing::theirs::Listing<seller::theirs::Seller>;
+    assert_eq!(names::<Ours>(), names::<Theirs>());
+    assert_eq!(
+        names::<Ours>().1,
+        ["listingId", "qty", "quantity", "tags", "share", "price", "seller", "address", "other", "type"]
+    );
+    assert_eq!(names::<pair::ours::Pair>(), names::<pair::theirs::Pair>());
+    assert_eq!(names::<span::ours::Span>(), names::<span::theirs::Span>());
+    assert_eq!(names::<id::ours::Id>(), names::<id::theirs::Id>());
+    assert_eq!(names::<marker::ours::Marker>(), names::<marker::theirs::Marker>());
+    assert_eq!(names::<filters::ours::Filters>(), names::<filters::theirs::Filters>());
+    assert_eq!(names::<status::ours::Status>(), names::<status::theirs::Status>());
+}
+
+#[test]
+fn from_json_reads_serde_s_value_deserializers_the_same() {
+    same_from::<id::ours::Id, id::theirs::Id, _>(|| 7u64.into_deserializer(), "an integer as a newtype");
+    same_from::<cents::ours::Cents, cents::theirs::Cents, _>(|| 7i64.into_deserializer(), "an integer as a transparent");
+    same_from::<marker::ours::Marker, marker::theirs::Marker, _>(|| ().into_deserializer(), "a unit");
+    same_from::<status::ours::Status, status::theirs::Status, _>(|| "sent".into_deserializer(), "a variant by alias");
+    same_from::<status::ours::Status, status::theirs::Status, _>(|| "hidden".into_deserializer(), "a skipped variant");
+    same_from::<pair::ours::Pair, pair::theirs::Pair, _>(
+        || serde::de::value::SeqDeserializer::<_, ValueError>::new([1u32].into_iter()),
+        "a list one short",
+    );
 }

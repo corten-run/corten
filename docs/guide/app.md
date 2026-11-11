@@ -11,7 +11,7 @@ your routes. Each default can be replaced in one line.
 | Names it answers to | `localhost`, IP addresses; any other `Host` gets `421` ([below](#host-names)) | `HOSTS=shop.example,.shop.example` in the environment, or `Policy::host("shop.example")` |
 | The document | none: each page brings its own, the app's layout component with the page in it (`req.page(html! { <Layout ..>..</Layout> })`); `corten new` writes the layout | the layout is the app's code ([views](views.md#the-document)) |
 | Routes | a `#[corten::routes]` module: each route names its handlers, and `router()` is what `App::new` takes; every handler is checked when the crate compiles, there and in `Area::route` and `Api::route` (Corten's `get`, `post`, ...), so no route reaches the app unchecked | |
-| What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; `#[derive(Clone, FromRef)]` on `Shared` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out) |
+| What handlers share | nothing | `#[corten::routes(state = Shared)]` and `router(shared)`; on `Shared`, `#[derive(Clone, FromRef)]`: `Clone` lets each route have a copy and a handler take the whole state, and `FromRef` lets a handler take one part, `State<Market>` (each field's type once; `#[from_ref(skip)]` leaves a field out; [design Choice 33](../design.md#choice-state-derives)) |
 | What a route answers | its handler's return type: `HtmlResult` (a page, a patch, a redirect; failures are the error page) or `JsonResult<T>` (failures are JSON too; `Result<JsonResponse, JsonError>` for a status or cookie of the handler's own, or another server's answer passed on) | `Public<..>` around either for an answer that is the same for everyone, `NoStore<..>` (or `no_store` on the route) for one nothing may keep ([below](#caching)) |
 | The client's address | the connection's peer; no `X-Forwarded-For` is read | a handler takes `ClientIp`; behind a proxy, `PROXIES=10.0.0.0/8` in the environment or `Policy::proxy("10.0.0.0/8")` ([below](#the-clients-address)) |
 | Who is asking | nothing: no lookup runs | a handler takes `Caller<Viewer>` (`Viewer: Identify`), looked up only then, once per request ([below](#who-is-asking)) |
@@ -25,7 +25,7 @@ your routes. Each default can be replaced in one line.
 | Middleware of your own | none | `.middleware((RequestId, RateLimit))`: steps of the app's own, at one place in Corten's order; `Area::middleware`, `Api::middleware` for the requests at a prefix ([below](#your-own-middleware)) |
 | Health | `/health/live`, `/health/ready` (always ready; a check that has not answered in 800 ms is `unavailable`, [below](#health)) | `.ready(\|\| async { db_ok().await })`, `.ready_within(Duration::from_millis(500))` |
 | Work that lives as long as the app | none | `.task("refresh", refresh)`: started by `serve`, told when shutdown begins ([below](#tasks)); on a schedule, with tokio's intervals ([below](#on-a-schedule)) |
-| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
+| Connections | a request's head (its line and headers) must arrive within 30 seconds of the connection opening or its last answer, or the connection is closed; it may be 32 KiB, with up to 100 headers, or it is answered 431 and the connection closed; a write that waits 60 seconds for room in the send buffer closes its connection; no limit on how many are open | `.header_timeout(d)` (`None` behind a proxy that buffers heads), `.max_request_head(bytes)`, `.send_timeout(d)` (`None` behind a proxy that reads answers as they come), `.max_connections(n)`: past it, connections wait to be accepted, up to 511 in each listener's queue on Linux; connections are HTTP/1.1, so an app with live streams goes behind a proxy or CDN that serves HTTP/2 or HTTP/3 ([Deploying](deploy.md)) |
 | Shutdown | Ctrl-C and `SIGTERM` (on Windows Ctrl-C, Ctrl-Break, the console closing and system shutdown), or the app's `corten::shutdown()`, tell the tasks, end live streams, close the listeners, let requests in progress finish and answers be written for the longer of the grace and the request's deadline (its area's or API's where that sets one; a connection still open then is closed), and wait for the tasks and for work handlers finish (`Signal::finish`) (5 seconds) | `.shutdown_grace(d)`; the platform's wait before it kills the process (`docker stop`: 10 seconds; Kubernetes: 30) above the longer of the grace and the deadline of every route whose requests should finish |
 | Logs | errors, warnings and other `tracing` events at `INFO` and above to stdout, one line each, as `tracing-subscriber`'s `fmt()` writes them without targets (`2026-11-06T21:20:29.018154Z  WARN corten: ...`), in its colors when stdout is a terminal and `NO_COLOR` is unset; control characters other than a tab are escaped in every field, so request text cannot start a line of its own or send the terminal a command; spans are not printed (feature `log`, a subscriber of Corten's own with no dependency) | set your own `tracing` subscriber first (`tracing_subscriber::fmt().init()` for spans, filters such as `RUST_LOG` or JSON lines); `serve` then leaves it alone |
 | Compression | pages per request (zstd, brotli, gzip), static files once at the highest levels, JSON held as bytes (`json::Raw`) once when it is sent again, live streams per event with the compression context kept, so a redraw costs what changed, and a `Media::stream` download per chunk the same way (zstd, else gzip, never brotli, which Playwright's WebKit on Windows holds back; feature `compress`; the Dockerfile `corten new` writes links zstd to the build image's libzstd, `ZSTD_SYS_USE_PKG_CONFIG=1`, rather than compiling its C sources, which cut a clean release build's time by about a third, so the server needs `libzstd.so.1` in the image it runs in; a build elsewhere compiles zstd unless that variable is set where pkg-config finds libzstd); a `Relay`'s answer goes on as the upstream sent it | |
@@ -84,16 +84,32 @@ from flood to flood, which is how it was told from a leak (no allocation count w
 mimalloc left 146 MiB. glibc's `MALLOC_MMAP_THRESHOLD_=16384`
 left 167 MiB, still rising about 18 MiB a flood
 ([#852 Memory a flood of unfinished request heads takes is not given back when the connections close, and each flood grows it further (217 to 464 MiB over eight)](https://github.com/corten-run/corten/issues/852)).
+The same floods driven by `bench/fullstack/flood-memory.mjs` (three runs each, the cgroup's
+`memory.current` 35 seconds after the last flood) left 406 to 455 MiB on glibc's allocator, and its
+tunables did not stop it: two arenas or one left 382 to 452 MiB, and a 16 KiB mmap threshold 177 to
+184 MiB, still climbing 20 MiB a flood. jemalloc as it comes left 118 to 139 MiB, since it returns
+memory only while the app allocates (more than the earlier run's 45 MiB 35 seconds after the last
+flood, taken by `docker stats` on a build of `e751d127`, for a cause not found; the sizing below
+uses this run);
+with its background thread
+(`MALLOC_CONF=background_thread:true`) the same app idle went back to 7 to 11 MiB
+([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 So an app that faces clients directly sets `max_connections` from its container's memory with
-room to spare, sized from the peak repeated floods reach rather than the first. The Dockerfile
-`corten new` writes preloads jemalloc in the image's last stage, which gives the memory back
-between floods at no measured cost per request ([design Choice 23](../design.md#choice-jemalloc-image)).
-An image of the app's own adds the same two lines, before any `USER` line; removing them runs
-the app on glibc's allocator:
+room to spare, sized from the peak repeated floods reach rather than the first: 187 to 197 MiB for
+4,000 here with the background thread, about 48 KiB a connection (sampled a second before each
+flood's hold ended). Past the cap,
+connections wait in each listener's queue (up to 511 from `corten::listeners` on Linux). By how
+Linux queues them (reasoned, not measured), the kernel keeps what each has sent so far, up to its
+receive buffer, in the host's TCP memory, and charges it to the container when the app accepts
+the connection, so it lands as the cap frees room. The Dockerfile `corten new` writes preloads jemalloc in the image's last
+stage with that background thread and a 64 KiB thread cache, which keeps brotli's buffers between
+responses ([design Choice 23](../design.md#choice-jemalloc-image)). An image of the app's own adds
+the same three lines, before any `USER` line; removing them runs the app on glibc's allocator:
 
 ```dockerfile
 RUN apt-get update && apt-get install -y --no-install-recommends libjemalloc2 && rm -rf /var/lib/apt/lists/*
 ENV LD_PRELOAD=libjemalloc.so.2
+ENV MALLOC_CONF=background_thread:true,tcache_max:65536
 ```
 
 Behind a proxy that buffers heads, the proxy's own limit applies first (nginx: four buffers of
@@ -665,6 +681,15 @@ binds `HOST`:`PORT` (both loopback addresses without `HOST`, port 3000 without `
 that implements `corten::Listener`, with `serve`'s shutdown across all of them
 (tasks told, live streams ended, every listener closed and drained, tasks waited for). A Unix
 socket, or a socket a supervisor hands over, is a listener of the app's own.
+Each of `listeners`' sockets asks the system to hold up to 511 connections that finished their
+handshake but are not yet accepted (Node's default, and nginx's on Linux), not the standard library's
+128 ([design Choice 34](../design.md#choice-listen-backlog)).
+On Linux, which caps it at `net.core.somaxconn` (4096 since 5.4), a burst of clients faster than
+the server accepts them then waits in that queue rather than a second or more for a resent SYN.
+macOS caps it at `kern.ipc.somaxconn`, 128 by default, so there the change takes a raised
+setting. Windows 11 held 200 (one run, a Winsock listener on loopback asking for 511) and refused a
+connection past them, the client seeing the error after about 2 s; Windows Server was not tried.
+A listener of the app's own sets its own.
 
 HTTPS is a step on each connection before HTTP, which `corten::serve_wrapped` takes: the TLS
 handshake. TLS stays the app's choice of library, and so does its configuration. With
@@ -1113,6 +1138,30 @@ instead, whatever its methods: one written as that path, or one with a parameter
 The fixed icon uses a weak content tag that stays the same when its background-compressed
 forms become ready; versioned files retain their encoding-specific tags.
 
+A file is sent with the type its extension names: scripts, styles, HTML, JSON and source maps,
+web manifests, images, fonts, `wasm`, video (`mp4`, `webm`), captions (`vtt`), text
+and XML; any other is `application/octet-stream`. A `GET` of a versioned URL for a file sent as
+it is stored (a video, a font or a raster image, which are never compressed; a file too small to
+compress; or any file sent unencoded) answers a `Range`, so a `<video>` seeks without downloading
+what it skips: one range of bytes is a `206 Partial Content` with its `Content-Range`, a range
+the file cannot hold (one that starts past the end, or an empty suffix) is a bare `416` naming
+the file's length (never the app's error page), and several ranges or another unit get the whole
+file, as RFC 9110 allows. `If-Range` keeps the range only while it names the file's own strong
+ETag, and a `HEAD` is answered whole. An old version's URL is answered the same way from this
+version's file, so a page left open across a deploy still plays and seeks its clip (Safari on iOS
+plays media only from ranges); while a fleet runs two versions, or when a deploy lands between two
+ranges, a player that sends no `If-Range` may join ranges of a clip whose bytes changed. A file
+sent compressed is sent whole, since the
+compressed bytes' offsets are not the file's, and so is the favicon, whose URL outlives every
+deploy. No answer sends `Accept-Ranges`: browsers ask for a range without it
+([design Choice 37](../design.md#choice-asset-ranges)). The PWA's service worker leaves a range,
+and the video or audio a player loads, to the network (its captions and poster are cached like
+any versioned file), since its cache holds whole
+files and a player does not read a video back from it, so a video does not play offline. A video is
+compiled into the program like every static file
+([design Choice 8](../design.md#choice-compiled-static-files)), so a short clip fits; serve long
+or many videos from storage of their own.
+
 ## Caching
 
 Static files, component scripts, the components' stylesheet and the runtime have content-hashed
@@ -1527,25 +1576,42 @@ Under the prefix:
    that carries the user's cookies is refused, and no `Access-Control-Allow-Credentials` is sent.
 6. `Json` in the prelude is `corten::Json` (feature `json`). It reads a request body into a
    `FromJson` (item 8) with the value and the rejections axum's `Json` gives: Corten's reader takes
-   an `application/json` body, and axum (`serde_json`) any other JSON content type and any body
-   the reader gives up on. What it writes is a `ToJson`: derive it
-   (`#[derive(ToJson)]`, also in the prelude) on the response type, next to `Serialize` if other
-   surfaces read it too. The derive lays the JSON out when the crate compiles, so a response
-   copies one byte string between each pair of values instead of writing every key, quote and
-   comma, into a `Vec` sized from the type's last response that the body keeps. It reads
-   `#[serde(...)]` and writes the bytes `serde_json` would. A `#[serde(flatten)]` field whose type
-   is a struct that derives `ToJson` is written in place, its members laid out the same way; an
-   attribute it cannot follow (`flatten` of a map or an enum, `serialize_with`) does not compile. A field whose type has only `Serialize` (an id or a
-   date from another crate) is written by `serde_json`. `serde_json::Value` is a `ToJson`, as above.
-   axum's `Json` works too, and writes any `Serialize` through `serde_json` and a `BytesMut`.
+   an `application/json` body, and axum (`serde_json`) any other JSON content type and any body the
+   reader gives up on. What it writes is a `ToJson`: derive it (`#[derive(ToJson)]`, also in the
+   prelude) on the response type. It needs no `Serialize` unless the app's own code writes the type
+   with serde or it is a feed row; an agent tool's output is a `ToJson` too, and its input a
+   `FromJson`. The derive lays the JSON out when the crate compiles, so a response copies one byte
+   string between each pair of values instead of writing every key, quote and comma, into a `Vec`
+   sized from the type's last response that the body keeps. It reads `#[serde(...)]` and writes the
+   bytes `serde_json` would. A `#[serde(flatten)]` field whose type is a struct that derives
+   `ToJson` is written in place, its members laid out the same way; an attribute it cannot follow
+   (`flatten` of a map or an enum, `serialize_with`) does not compile. A field whose type has only
+   `Serialize` (an id or a date from another crate) is written by `serde_json`, and so is a whole
+   field around one (`Vec<theirs::Id>`, a map whose values are one) or a map whose key is not a
+   `JsonKey` (`BTreeMap<theirs::Key, u32>`). An app's own key type is a `JsonKey` when it is an
+   externally tagged enum of unit variants that derives `ToJson`, or by `impl
+   corten::json::JsonKey`, whose `write_key` writes the one JSON string serde writes for it, quotes
+   included (an agent tool's output that holds a hand-written `ToJson` or `JsonKey` is parsed
+   before it is sent). `serde_json::Value`
+   is a `ToJson`, as above. axum's `Json` works too, and writes any `Serialize` through `serde_json`
+   and a `BytesMut`.
 7. Numbers are written as serde_json writes them, a whole float as `2.0`
    ([Numbers in JSON](#numbers-in-json)).
-8. To read JSON another service answers, derive `FromJson` (in the prelude) next to `Deserialize`
-   and read it with `corten::json::from_slice` or `from_str`. Corten's reader takes the fields the
-   type declares and skips the rest; on anything it does not follow (an escaped key, a missing or
-   duplicate field) `serde_json` reads the text instead, so the value and every error are
-   `serde_json`'s. It reads `#[serde(...)]` as `Deserialize` does and refuses one it cannot follow
-   (`flatten`, `deserialize_with`); a field of a type with only `Deserialize` is read by `serde_json`.
+8. To read JSON another service answers, derive `FromJson` (in the prelude) and read it with
+   `corten::json::from_slice` or `from_str`. The derive writes the type's serde `Deserialize` too,
+   so it needs no second derive (one beside it does not compile). Corten's reader takes the fields
+   the type declares and skips the rest; on anything it does not follow (an escaped key, a missing
+   or duplicate field) `serde_json` reads the text instead, so the value and every error are
+   `serde_json`'s. It reads `#[serde(...)]` as serde's derive does and refuses one it cannot follow
+   (`flatten`, `deserialize_with`); a field of a type with only `Deserialize` is read by
+   `serde_json`, and an empty `impl corten::FromJson for T {}` lets such a type be read alone. A
+   `#[derive(Fields)]` form input or a `#[derive(UrlValue)]` enum is a `FromJson` already (with
+   feature `json`, and has its schema with `types`), so `FromJson` beside either does not compile
+   either. A generic one (`Offer<T>`) is a `FromJson` wherever its `Deserialize` applies, read by
+   serde_json rather than Corten's reader, and a `UrlValue` enum with a `#[serde(other)]` variant
+   reads any other word as that variant (its schema is any string). A form input whose fields borrow
+   from the input (`&'a str`, `#[serde(borrow)]`) cannot be a `FromJson`, which reads owned values;
+   give it owned fields (`String`) to read it from JSON.
 
 Each route is a `#[derive(Route)]` struct, and the API's prefix is one too (`ApiRoot` above), so
 the router and the links name the same URL, and a route outside the prefix (`/apis/items`
@@ -1568,7 +1634,7 @@ test reads the contract the handlers enforce, not a copy beside them:
 ```rust
 use corten::prelude::*;
 
-#[derive(serde::Serialize, ToJson)]
+#[derive(ToJson)]
 struct Price { lowest: String }
 
 #[corten::routes(api = ApiRoot, openapi = ApiDoc)]
@@ -1659,10 +1725,10 @@ value (with `JSON.stringify`'s form, `2` reads as an integer and `2.5` as a floa
    integers and `as_f64` on both otherwise, and flags a field the old service sent as an integer
    that now arrives as a float: that field should be an integer type.
 3. Text that must match another service's byte for byte is written by the app and sent as `Raw`,
-   which is a `ToJson` and so can be one field of a derived response. `Raw` has no `Serialize`, so
-   a type that feeds or agent output also write holds `Box<serde_json::value::RawValue>`
-   (serde_json's `raw_value` feature; for agent output or generated types its schema is any JSON
-   value). JavaScript's number form comes from
+   which is a `ToJson` and so can be one field of a derived response or of an agent tool's output
+   (its schema is any JSON value). `Raw` has no `Serialize`, so a feed row, which serde writes,
+   holds `Box<serde_json::value::RawValue>` instead (serde_json's `raw_value` feature; for
+   generated types its schema is any JSON value). JavaScript's number form comes from
    `serde_json::Serializer::with_formatter` over a type that derives `Serialize`, with a
    `Formatter` whose `write_f64` and `write_f32` write it (`-0.0` as `0`, digits below `1e21` and
    down to `1e-6`, an exponent outside that), sent with `Raw::new`.
