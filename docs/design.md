@@ -1849,9 +1849,10 @@ rules something out.
     derives that each say one thing, not a state attribute that writes both.** `Clone` says the
     state can be copied, which routing and a handler that takes the whole state both need:
     `#[corten::routes(state = Shared)]` gives each route its own copy
-    (`Methods::with_state(.., state.clone())`, which takes an `S: Clone`, as axum's
-    `MethodRouter::with_state` it calls does), and a handler's `State<Shared>` goes through
-    axum-core's `impl<T: Clone> FromRef<T> for T`. `FromRef` says each field can be taken alone:
+    (`Methods::with_state(.., state.clone())`, which takes an `S: Clone` because Corten's router
+    binds a copy of the state into each of a route's method slots, `router.rs`'s
+    `MethodSet::with_state`), and a handler's `State<Shared>` goes through `handler.rs`'s
+    `impl<T: Clone> FromRef<T> for T`. `FromRef` says each field can be taken alone:
     it gives each field its own extractor (`State<Market>`), which clones that field and needs no
     `Clone` of the containing type. The six examples with shared state route seven state types:
     three derive both (watchlist's `Shared`, card-market's `ApiState` and listings-feed's
@@ -1874,23 +1875,27 @@ rules something out.
     ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 
     Stands on: reasoned (each route takes its own copy of the state, in `routes.rs`'s
-    `Methods::with_state(.., state.clone())`; an impl the derive wrote would conflict with a
-    hand-written `Clone`; and the attribute saves one word on three types while adding a way to
-    write six of the seven, counts that move with the examples); platform (axum 0.8.9's
-    `MethodRouter::with_state`, like its other `MethodRouter` methods, requires `S: Clone`, and
-    axum-core 0.5.6's `impl<T: Clone> FromRef<T> for T` is how a handler takes the whole state,
-    both from `Cargo.lock`; Corten routes on axum's router, [Choice 25](#choice-axum-router));
-    value (one way to do each thing and a small surface, Values 5 and 6).
+    `Methods::with_state(.., state.clone())`, and Corten's router clones it again into each
+    method slot, `router.rs`'s `MethodSet::with_state`, both bounded `S: Clone`; a handler takes
+    the whole state through `handler.rs`'s `impl<T: Clone> FromRef<T> for T`; both are Corten's
+    own since axum left, [Choice 25](#choice-axum-router), step 4, so `Clone` is Corten's
+    decision, not a platform's; an impl the derive wrote would conflict with a hand-written
+    `Clone`; and the attribute saves one word on three types while adding a way to write six of
+    the seven, counts that move with the examples); value (one way to do each thing and a small
+    surface, Values 5 and 6).
 
     Revisit when: a third mechanical impl is derived beside the pair on two or more of the
     examples' routed state types, so an attribute would carry more than two derives' worth; or
-    Corten stops giving each route its own copy of the state, and neither axum's `MethodRouter`
-    nor axum-core's `impl<T: Clone> FromRef<T> for T`, through which a handler takes the whole
-    state, requires `S: Clone`, so state no longer needs `Clone`.
+    Corten's router stops copying the state into each route and method slot (one shared `Arc`,
+    say), and `handler.rs`'s `impl<T: Clone> FromRef<T> for T`, through which a handler takes the
+    whole state, stops requiring `Clone`, so state no longer needs `Clone`.
 
     Last checked: 2026-11-10, the examples' state types, `from_ref.rs`, `routes.rs`,
     `Methods::with_state`, `corten-cluster`'s tests, and axum 0.8.9 and axum-core 0.5.6 from
-    `Cargo.lock`, at `97a63a92`.
+    `Cargo.lock`, at `97a63a92`; 2026-11-11, with axum gone, `router.rs`'s
+    `MethodSet::with_state` and `Slot::bind` (one clone per method slot), `route.rs`'s
+    `Methods::with_state` and `handler.rs`'s `FromRef` blanket impl, each bounded `Clone`, and
+    no crate under `crates/` depending on axum, at `25acd6a7`.
 
 34. <a id="choice-listen-backlog"></a>**A listener asks the system to hold 511 finished
     connections, not 128.** `corten::listeners`, and so `serve`, binds each socket with a
