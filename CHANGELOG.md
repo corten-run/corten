@@ -2876,6 +2876,16 @@ Corten is pre-1.0, so any minor version may change the API.
     entry): fix those imports first.
 
 ### Changed
+- A marketplace v2 benchmark round records what an app fails to serve as that app's result:
+  a phase in which it answered with anything but a 200 or timed out, or could not keep the fixed
+  rate, is saved with its failure rate and dropped iterations, the later phases still run, and
+  the report marks the stage, where any failed request used to fail the whole round and skip the
+  app's saturation phases. A round is complete when no harness, parity or cleanup step failed; a
+  200 of the wrong content type, an app container that stopped, or an upstream error answer still
+  fails it. `compare.mjs` lists each stage that fails more than in the baseline
+  (`newOutcomes`), and the nightly counts a Corten one as a regression. Results are schema
+  `marketplace-results/v3`
+  ([#1128 Benchmark r17: investigate widespread page timeouts and dropped load iterations](https://github.com/corten-run/corten/issues/1128)).
 
 - A `Public` answer costs less to send: the last check of its `Cache-Control` copies the
   header's text, and looks for `no-store` in it again, only when it replaces the header, and the mark

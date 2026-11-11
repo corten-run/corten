@@ -73,7 +73,8 @@ Fetch origin and compare main with measuredCommit. Same SHA: report matches and 
 v2 baseline, skip documentation/results-only changes. Measured inputs are crates/, marketplace
 code, shared catalog measurement/check helpers, fullstack adapters/apps.mjs/passes.mjs/
 conformance.mjs, Cargo/npm manifests/locks and scripts/steady.mjs. Exclude result directories
-and README/nightly docs. r17 is an explicit first-baseline migration even with legacy state.
+and README/nightly docs. The first round that validates is an explicit first-baseline
+migration even with legacy state.
 Do not relaunch a failed commit unchanged from main. Existing corten-bench or corten-marketplace
 droplets block launch. Leave independently authorized corten-catalog jobs entirely alone.
 
@@ -102,8 +103,14 @@ host and report the provisioning error rather than guessing deletion is safe.
 
 1. Require exit 0, saved archive/checksum, deletion confirmation and report.mjs validation:
    workload/round/commit match, clean before/after, all twenty apps, both gates, three full
-   passes of each intended profile, zero request failures/drops and cleanup failures, correct
-   counted CPU and aggregates matching saved passes. Incomplete data is never a full baseline.
+   passes of each intended profile, no harness, parity or cleanup failure, correct counted CPU
+   and aggregates matching saved passes. Incomplete data is never a full baseline. Requests an
+   app answered with anything but a 200 or timed out on, and fixed-rate iterations it could not
+   start, are its measured outcome under the profile, not a run failure: each such phase is
+   recorded with its failure rate and drops, the later phases still run, and the report marks
+   it (#1128). Report each marked stage beside the numbers; never retry it away or drop the
+   app. A 200 of the wrong content type, an app that stopped or ran out of memory, an upstream
+   error answer, or a phase in which no request succeeded still fails the run.
 2. Hash summary before/after the read-only reporter. Save its generated report as
    results/rN/report.md and exact SHA as commit.txt. Preserve raw logs/checks/image provenance.
    Collection keeps the result folder outside Git in the round-control evidence directory.
@@ -114,7 +121,9 @@ host and report the provisioning error rather than guessing deletion is safe.
    local control state. Pre-measurement failures may have only run.log/exit-code in evidence.
 3. Fetch origin, create bench/rN from origin/main carrying only the untracked result folder.
    Commit results first and docs second. Push only bench/rN. Never overwrite another change.
-4. r17 is the first v2 baseline, no r16/c1 delta. Later compare only validated v2 results with
+4. The first round that validates is the first v2 baseline, no r16/c1 delta. r17 ran under
+   the earlier gate, which failed the round on any app's failed request, and has none. Later
+   compare only validated v2 results with
    identical fixture, matrix, windows/rate, encoding, quotas/pinning and implementation tier.
    Check unchanged adapter and shared paths in the measured commit range, not image hashes.
    Shared semantic changes can require a new baseline. Never use legacy fullstack trend
@@ -146,6 +155,11 @@ medians/ranges and unchanged-app median changes. No causal claim from one round.
 4. Cold-start median rising over 25% and 2 ms.
 5. p95 latency rising over 10% while unchanged apps move less than 5%, or a previously passed
    test failing. Invalid/failed runs are failures, not successful slower baselines.
+6. A Corten stage in compare.mjs's newOutcomes: more passes with an app outcome than the
+   baseline, any failed request or dropped iteration where the baseline had none in any pass,
+   or a failure or drop range wholly above a nonzero baseline's (overlapping ranges are not a
+   difference). A Corten stage that fails any request is a regression from a baseline in which
+   it failed none, whatever the percentages.
 
 Inspect open automation-created v2 regression issues in state, then repository issue search;
 comment exact new numbers on a matching metric rather than duplicate it. Otherwise create one
@@ -166,7 +180,8 @@ Poll exact-head GitHub checks at most 60 seconds, up to 40 minutes. Merge with a
 only with every check SUCCESS, mergeable state, no unresolved independent-review findings,
 passed docs validation, and diff limited to marketplace/results/rN plus root README, CHANGELOG,
 docs/performance and marketplace README. Valid regressions do not block truthful results;
-incomplete/invalid data does. Failed app/gate/load results remain partial, no success PR.
+incomplete/invalid data does. A harness, parity, cleanup or load-run failure leaves results
+partial, no success PR; a stage marked as an app outcome does not.
 
 On conflicts rebase only the automation's bench/rN, keep main's text and reapply measured
 numbers, force-with-lease only that branch, review again and wait for CI. Retry a failed CI job

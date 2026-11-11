@@ -13,8 +13,14 @@ function loadEvidence(p) {
   finite(p.rps, Number.MIN_VALUE);
   for (const key of ["p50", "p95", "p99"]) finite(p[key]);
   assert.ok(p.p50 <= p.p95 && p.p95 <= p.p99);
-  assert.equal(p.failed, 0); assert.equal(p.dropped, 0);
+  // What the app could not serve is a result (#1128), but it must agree with itself.
+  assert.ok(Number.isSafeInteger(p.failed) && p.failed >= 0 && p.failed < p.requests, "failed requests must be counted and leave one served");
+  assert.ok(Number.isFinite(p.failedRate) && Math.abs(p.failedRate * p.requests - p.failed) < 1, "failure rate contradicts failed count");
+  assert.ok(Number.isSafeInteger(p.dropped) && p.dropped >= 0); assert.ok(Number.isSafeInteger(p.checksFailed) && p.checksFailed >= 0);
+  assert.ok(p.checksFailed <= p.failed && p.failed - p.checksFailed <= Math.max(1, p.requests / 100), "failed status checks contradict failed requests");
+  assert.equal(p.appOutcome, p.failed > 0 || p.dropped > 0 || p.checksFailed > 0, "appOutcome must mark exactly the phases the app did not fully serve");
 }
+const outcomeText = (p) => `${p.failed} of ${p.requests} requests failed (${(p.failedRate * 100).toFixed(2)}%), ${p.dropped} fixed-rate iterations dropped, ${p.checksFailed} checks failed`;
 function statsEvidence(p) {
   finite(p.cpuAvgPct); finite(p.cpuMaxPct); assert.ok(p.cpuMaxPct >= p.cpuAvgPct);
   finite(p.memAvgMiB, Number.MIN_VALUE); finite(p.memMaxMiB, p.memAvgMiB);
@@ -96,7 +102,8 @@ export function report(s) {
     "Pages cover all three locales; JSON is locale-neutral and timed once per source/pass. All twenty apps pass both sources and twelve browser profiles before any load.",
     `Fixed load asks for ${s.options.rate} requests/second. Closed-loop 64/256-user results are observed throughput and latency, not proven maximum capacity. Warmup ${s.options.warmup}s; each phase ${s.options.duration}s; identity encoding.`,
     "CPU % is sampled app-container usage (100% = one core). CPU us/request and requests/CPU-second use counted whole-container cgroup CPU, not instructions or handler-only time. CPU % and steady memory average the central 15%-95% of samples; peak memory is the sampled maximum, not an unsampled high-water mark.",
-    "These load results do not measure browser interactivity, bytes, build cost or instructions."];
+    "These load results do not measure browser interactivity, bytes, build cost or instructions.",
+    "A stage marked * is the app's measured outcome under this profile: some requests got an answer other than 200 or timed out (10 s), or the fixed rate could not be started. It is recorded, not retried, and the later phases still ran. Its req/s, latency percentiles and requests/CPU-second count every request sent, failed ones included. A 200 of the wrong content type, an app that stopped, or an upstream error fails the run instead."];
   const cell = (r, digits = 2) => `${r.median.toFixed(digits)} [${r.min.toFixed(digits)}-${r.max.toFixed(digits)}]`;
   const label = (v) => v.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
   const warnings = [];
@@ -113,16 +120,20 @@ export function report(s) {
         const cold = aggregateCold(s.apps[app].runs[key]);
         lines.push(`| ${label(s.apps[app].label)} | ${cell(cold.first200MsFromContainerStart)} | ${cell(cold.successfulRequestMs)} |`);
       }
+      for (const app of apps) for (const r of s.apps[app].runs[key]) if (r.warmup.appOutcome) lines.push("", `App outcome in warmup (not measured): ${app} ${key} pass ${r.pass}: ${outcomeText(r.warmup)}.`);
       for (const phase of phases) {
         lines.push("", `#### ${phase === "fixed" ? `Fixed ${s.options.rate} req/s` : `${phase === "sat64" ? 64 : 256}-user closed loop`}`, "",
-          "| Framework | req/s | p50 ms | p95 ms | p99 ms | CPU % | CPU us/request | Steady MiB | Peak MiB | Requests/CPU-second |",
-          "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
+          "| Framework | req/s | p50 ms | p95 ms | p99 ms | CPU % | CPU us/request | Steady MiB | Peak MiB | Requests/CPU-second | Failed % |",
+          "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|");
         for (const app of apps) {
           const p = s.apps[app].phases[key][phase];
-          lines.push(`| ${label(s.apps[app].label)} | ${["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond"].map((metric) => cell(p[metric])).join(" | ")} |`);
+          const mark = p.appOutcomes ? ` * (${p.appOutcomes} of ${p.passes} passes)` : "";
+          const failed = { median: p.failedRate.median * 100, min: p.failedRate.min * 100, max: p.failedRate.max * 100 };
+          lines.push(`| ${label(s.apps[app].label)}${mark} | ${["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond"].map((metric) => cell(p[metric])).join(" | ")} | ${cell(failed)} |`);
         }
         for (const app of apps) for (const r of s.apps[app].runs[key]) {
           const p = r.phases[phase];
+          if (p.appOutcome) lines.push("", `App outcome: ${app} ${key} ${phase} pass ${r.pass}: ${outcomeText(p)}.`);
           if (p.upstream?.highCpu) lines.push("", `Warning: ${app} ${key} ${phase} pass ${r.pass}: busy single-process upstream (${p.upstream.cpuAvgPct.toFixed(1)}% of one core); upstream may limit throughput.`);
           if (phase !== "fixed" && p.cpuAvgPct < 95) lines.push("", `Warning: ${app} ${key} ${phase} pass ${r.pass}: app CPU ${p.cpuAvgPct.toFixed(1)}%; saturation not demonstrated.`);
         }

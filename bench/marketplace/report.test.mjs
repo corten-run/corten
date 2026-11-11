@@ -18,7 +18,7 @@ function synthetic() {
       a.checks[source] = { workload, source, jsonRecords: 500, pages: 264, profiles: locales.flatMap((locale) => [false, true].flatMap((javaScriptEnabled) => [false, true].map((mobile) => ({ locale, javaScriptEnabled, mobile, passed: true })))),
         upstream: source === "api" ? { readsPerRequest: 1, uncachedPage: true, uncachedJson: true, jsonReserialized: true, errors: true } : null };
       for (const { key, locale, target } of timedProfiles.filter((p) => p.source === source)) {
-        const metric = { requests: 1000, rps: 1000, p50: 1, p95: 2, p99: 3, failed: 0, dropped: 0 };
+        const metric = { requests: 1000, rps: 1000, p50: 1, p95: 2, p99: 3, failed: 0, failedRate: 0, dropped: 0, checksFailed: 0, appOutcome: false };
         const stats = { cpuUsec: 1000000, samples: 3, cpuAvgPct: 100, cpuMaxPct: 110, memAvgMiB: 10, memMaxMiB: 11 };
         a.runs[key] = [1, 2, 3].map((pass) => ({ pass, locale, complete: true, startedAt: "2026-01-01T00:01:00Z", finishedAt: "2026-01-01T00:03:00Z",
           cold: { containerStartedAt: "2026-01-01T00:02:00Z", first200At: "2026-01-01T00:02:01Z", first200MsFromContainerStart: 1000, measuredBeforeReadinessOrWarmup: true, path: target === "json" ? "/api/marketplace/item_1" : `/marketplace/${locale}/item_1`, attempts: 1, bytes: 100, successfulRequestMs: 1 },
@@ -256,4 +256,67 @@ test("nightly short-window pinned matrix validates, but has a different comparis
   moved.measurement.cpus = cpuSettings({ MARKETPLACE_APP_CPUS: "0", MARKETPLACE_API_CPUS: "2-3", MARKETPLACE_LOAD_CPUS: "4-7" });
   assert.notEqual(comparisonKey(moved), key);
   assert.equal(compare(current, moved, { unchangedApps: ["corten"] }).compatible, false);
+});
+
+test("an app that cannot serve a phase is recorded and marked, and the round still validates (#1128)", () => {
+  const s = synthetic();
+  const runs = s.apps.rails.runs["fixture-en-US-page"];
+  for (const [i, phase] of [[0, "fixed"], [1, "sat256"]]) Object.assign(runs[i].phases[phase], { failed: 50, failedRate: 50 / runs[i].phases[phase].requests, dropped: phase === "fixed" ? 300 : 0, checksFailed: 50, appOutcome: true });
+  for (const phase of ["fixed", "sat256"]) s.apps.rails.phases["fixture-en-US-page"][phase] = { ...aggregate(runs.map((r) => r.phases[phase])), asked: 3 };
+  validateSummary(s);
+  const text = report(s);
+  assert.ok(text.includes("| rails * (1 of 3 passes) |"), "the stage is marked in its table");
+  assert.ok(text.includes("App outcome: rails fixture-en-US-page fixed pass 1: 50 of 1001 requests failed (5.00%), 300 fixed-rate iterations dropped, 50 checks failed."));
+  assert.equal(s.apps.rails.phases["fixture-en-US-page"].fixed.appOutcomes, 1);
+  Object.assign(s.apps.rails.runs["fixture-en-US-page"][2].warmup, { failed: 5, failedRate: 0.005, checksFailed: 5, appOutcome: true });
+  assert.ok(report(s).includes("App outcome in warmup (not measured): rails fixture-en-US-page pass 3: 5 of 1000 requests failed (0.50%)"));
+  for (const change of [
+    (v) => { v.apps.rails.runs["fixture-en-US-page"][0].phases.fixed.appOutcome = false; },
+    (v) => { v.apps.corten.runs["fixture-en-US-page"][0].phases.fixed.appOutcome = true; },
+    (v) => { v.apps.rails.runs["fixture-en-US-page"][0].phases.fixed.failedRate = 0.5; },
+    (v) => { Object.assign(v.apps.rails.runs["fixture-en-US-page"][0].phases.fixed, { failed: 1001, failedRate: 1 }); },
+    (v) => { v.apps.rails.phases["fixture-en-US-page"].fixed.appOutcomes = 0; },
+    (v) => { v.apps.rails.runs["fixture-en-US-page"][0].phases.fixed.checksFailed = 100; },
+  ]) { const bad = structuredClone(s); change(bad); assert.throws(() => validateSummary(bad)); }
+});
+
+test("a stage that fails requests now and failed none before is a new outcome, and saturated references leave the cohort (#1128)", () => {
+  const old = synthetic(), current = synthetic(); current.round = current.options.round = "r18";
+  current.options.build = false;
+  const outcome = (s, app, key, phase) => {
+    const runs = s.apps[app].runs[key];
+    Object.assign(runs[0].phases[phase], { failed: 10, failedRate: 10 / runs[0].phases[phase].requests, checksFailed: 10, appOutcome: true });
+    s.apps[app].phases[key][phase] = { ...aggregate(runs.map((r) => r.phases[phase])), asked: 3 };
+  };
+  outcome(current, "corten", "fixture-en-US-page", "sat256");
+  outcome(current, "rails", "fixture-en-US-page", "sat64");
+  const result = compare(current, old, { unchangedApps: ["rails", "nextjs"] });
+  assert.equal(result.compatible, true);
+  assert.deepEqual(result.newOutcomes.map((o) => [o.app, o.profile, o.phase]), [["corten", "fixture-en-US-page", "sat256"], ["rails", "fixture-en-US-page", "sat64"]]);
+  const group = result.cohort.rows.find((g) => g.profile === "fixture-en-US-page" && g.phase === "sat64");
+  assert.deepEqual(group.outcomeApps, ["rails"]);
+  assert.equal(group.metrics.rps.apps, 1, "only nextjs is in the cohort for that stage");
+  // above a baseline that already failed, only a range wholly above it is new
+  const again = compare(current, current, { unchangedApps: [] });
+  assert.equal(again.compatible, false, "a round is not its own baseline");
+  const later = structuredClone(current); later.round = later.options.round = "r19";
+  const runs = later.apps.corten.runs["fixture-en-US-page"];
+  runs[1].phases.sat256 = { ...runs[1].phases.sat256, failed: 11, failedRate: 11 / runs[1].phases.sat256.requests, checksFailed: 11, appOutcome: true };
+  later.apps.corten.phases["fixture-en-US-page"].sat256 = { ...aggregate(runs.map((r) => r.phases.sat256)), asked: 3 };
+  assert.ok(compare(later, current).newOutcomes.some((o) => o.app === "corten"), "one more pass with an outcome is new");
+  const higher = structuredClone(current); higher.round = higher.options.round = "r19";
+  const same = higher.apps.corten.runs["fixture-en-US-page"];
+  same[0].phases.sat256 = { ...same[0].phases.sat256, failed: 12, failedRate: 12 / same[0].phases.sat256.requests, checksFailed: 12 };
+  higher.apps.corten.phases["fixture-en-US-page"].sat256 = { ...aggregate(same.map((r) => r.phases.sat256)), asked: 3 };
+  assert.ok(!compare(higher, current).newOutcomes.some((o) => o.app === "corten"), "a higher failure in ranges that overlap, with the same passes, is not new");
+  const failing = (s, round, n) => {
+    const v = structuredClone(s); v.round = v.options.round = round;
+    for (const r of v.apps.corten.runs["fixture-en-US-page"]) r.phases.sat256 = { ...r.phases.sat256, failed: n, failedRate: n / r.phases.sat256.requests, checksFailed: n, appOutcome: true };
+    v.apps.corten.phases["fixture-en-US-page"].sat256 = { ...aggregate(v.apps.corten.runs["fixture-en-US-page"].map((r) => r.phases.sat256)), asked: 3 };
+    return v;
+  };
+  const base = failing(current, "r19", 10);
+  assert.ok(compare(failing(current, "r20", 20), base).newOutcomes.some((o) => o.app === "corten"), "with the same passes, a range wholly above the baseline's is new");
+  assert.ok(!compare(failing(current, "r20", 10), base).newOutcomes.some((o) => o.app === "corten"), "the same failures are not new");
+  assert.deepEqual(compare(current, null).newOutcomes, [], "missing evidence has none");
 });
