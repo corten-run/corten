@@ -2601,6 +2601,19 @@ Corten is pre-1.0, so any minor version may change the API.
     served file to 60,833 bytes (gzip 10,081, brotli 8,876), and the smoke test puts it inside a
     `<corten-live>` and checks it in each state
     ([#1070 Kit StatusDot has no live form, so a corten-live stream's Live badge keeps its own pulsing dot and reduced-motion rule](https://github.com/corten-run/corten/issues/1070)).
+279. The kit's `Checkboxes` and `RadioGroup` space their choices and their legend from two theme
+    tokens, `choice-list-gap` and `choice-list-legend-gap` (.75rem each, the values the two
+    stylesheets printed and kept equal by hand), so a theme with tighter choice lists sets them once
+    and the copies stay the kit's. Nothing changes for an app that keeps its copies. One set up by an
+    older kit that takes the new copies adds the two tokens `corten ui add checkboxes --merge` (or
+    `radio_group`, or `--force` for a copy without edits) names, as the kit's theme has them,
+    before it starts. The kit theme's two declarations and the two `var()`s in each stylesheet make
+    the ui-gallery's served `components.css` 60,608 bytes where it was 60,471 (gzip 10,039 against
+    10,012, brotli 8,841 against 8,814, Node's zlib at gzip level 9 and brotli's default; the earlier
+    size is the served file with the literals put back). The ui-gallery's smoke test checks both
+    groups at the kit's values and at a theme's. Asked for by the Chase Sets pilot, which edited
+    both copies to .5rem
+    ([#1082 Kit RadioGroup and Checkboxes print their fieldset's gap and legend margin as literals kept equal by hand, so a theme with tighter choice lists edits both copies](https://github.com/corten-run/corten/issues/1082)).
 278. `bench/fullstack` measures two more parts of working on an app, each in a round's build step
     after the app's own results. `rust-analyzer.mjs` drives rust-analyzer over LSP for the Rust
     apps: how long it takes to be ready, cold and warm, and after an edit how long a completion
@@ -2635,6 +2648,27 @@ Corten is pre-1.0, so any minor version may change the API.
     one of eighteen. Neither has a build step, so build-cost rows say so.
     They take Spring Boot's and Django's places among the matched tier's four most used frameworks
     ([#818 bench/fullstack has no FastAPI or Express app, though they are the third and fourth most used server frameworks in the 2026 Stack Overflow survey, so a most-popular comparison leaves out two of its top four](https://github.com/corten-run/corten/issues/818)).
+281. The kit's `Tabs` and `Segmented` (with `SegmentedLinks` and `SegmentedRadios`) take every
+    choice's weight and the chosen one's text color from two theme tokens, `tab-font-weight` (500)
+    and `tab-selected-color` (a reference, `"{foreground}"`, in both theme files), so a design
+    system whose chosen tab is its brand color, or whose choices are semibold, sets them once and
+    the copies stay the kit's. Nothing changes for an app that keeps its copies, and the kit's look
+    is the same. One set up by an older kit that takes the new copies adds the two tokens
+    `corten ui add tabs --merge` (or `segmented`, or `--force` for a copy without edits) names, the
+    color in both theme files, before it starts. A checked `SegmentedRadio` under the pointer keeps the
+    chosen color: its hover rule weighed more than the checked one and drew it in `--foreground`,
+    which only showed once the two could differ. The kit's contrast test checks the chosen text on
+    `--background`, its raised surface, in both themes. The theme's declarations and the two
+    `var()`s in each stylesheet, with the hover rule's selector, make the ui-gallery's served
+    `components.css` 61,306 bytes where it was 61,057 (gzip 10,156 against 10,126, brotli 8,947
+    against 8,925, Node's zlib at gzip level 9 and brotli's default); the earlier size is the
+    served file just before this change, with the LiveDot and `StatusTone::Text` rules (277, 284).
+    The ui-gallery's smoke test checks a tab, a segmented choice, a `SegmentedLinks` link and a
+    `SegmentedRadio` at the kit's values and at a theme's, and each of the four chosen under the
+    pointer.
+    Asked for by the Chase Sets pilot, which edited its `segmented.css` copy to draw the chosen
+    choice in `--primary` at 600
+    ([#1123 Kit Segmented and Tabs draw the chosen choice in --foreground at weight 500 as literals, so a theme whose chosen tab is its primary color edits both copies](https://github.com/corten-run/corten/issues/1123)).
 284. The kit's `StatusTone` has `Text`, the color of the text around the dot: in a badge, the
     badge's, so `<span class={Badge { tone, .. }}><StatusDot tone={StatusTone::Text} />"Open"</span>`
     writes a computed tone once, on the badge, and a dot that takes it cannot disagree with it. It
@@ -2650,6 +2684,17 @@ Corten is pre-1.0, so any minor version may change the API.
     and its smoke test checks the dot is the badge's text color in a soft badge and a solid one, and
     that a `Success` dot beside plain text is the theme's success color
     ([#1092 Kit StatusDot and Badge take separate tone enums, so a badge with a computed tone writes it twice and a mismatched pair compiles](https://github.com/corten-run/corten/issues/1092)).
+285. Leptos joins `bench/fullstack`'s matched tier: under `PROFILE=matched` it adds axum-maud's
+    tower-http layers and a page CSP whose scripts run by the nonce Leptos makes for each
+    response, and its matched matrix meets the same 12 of 24 columns as axum-maud's
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+286. Topcoat joins `bench/fullstack`'s matched tier: under `PROFILE=matched` it runs axum-maud's
+    tower-http header layers and timeout through Topcoat's `TowerLayer` (its body limit, origin
+    check and compression are Topcoat's defaults), with `'unsafe-eval'` in its CSP (on every answer
+    the layer sets headers on) because its runtime compiles the page's expressions with `new
+    Function`. Answers Topcoat makes from an error go without the profile's headers. Its matched
+    matrix meets 13 of 24 columns
+    ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Removed
 1. `#[island]`, `#[prop]`, `island()` and the custom element each island was. A component with a
@@ -4259,6 +4304,17 @@ Corten is pre-1.0, so any minor version may change the API.
     in place of the pager, which the guides now say
     ([#1107 Kit Pagination and PreviousNext draw their own links, so a pager under a sorted table cannot call ordered::link and loses the order on screen](https://github.com/corten-run/corten/issues/1107)).
 
+169. The image `corten new` writes (and card-market's) runs jemalloc with
+    `MALLOC_CONF=background_thread:true,tcache_max:65536`, a third line beside the two that preload
+    it. The background thread returns a flood's memory while the app is idle (eight floods of
+    unfinished heads left 13 to 16 MiB of `memory.current`, against 118 to 139 without it and 406 to
+    455 on glibc's allocator, three runs each). The larger thread cache keeps brotli's buffers:
+    brotli responses took 19.3 to 19.4 page faults each on average before, and none now. glibc's own
+    tunables were tried: fewer arenas changed nothing, and a lower mmap threshold left about 180
+    MiB, still growing. `bench/fullstack/flood-memory.mjs` drives the floods, `alloc-faults.mjs`
+    counts page faults a request, and `ab.mjs` measures brotli alone too, writes its summary after
+    every row and removes its app however the run ends
+    ([#1011 Design Choice 23's jemalloc default rests on one flood run each and CPU rounds on a shared desktop; brotli and glibc's own tunables were never measured](https://github.com/corten-run/corten/issues/1011)).
 172. The kit's `Card` and `CardPanel` take a `size` (`CardSize::Md`, the theme's `--card-padding`,
     or `Sm`, denser), as `Button`, `Dialog` and `Progress` do, and `CardCompact` is gone: it was a
     class written beside a card (`(Card {}, CardCompact {})`) that compiled alone or beside any
@@ -4273,8 +4329,33 @@ Corten is pre-1.0, so any minor version may change the API.
     and `corten ui add card --force` (an unedited copy) or `--merge` (an edited one) takes
     `card.rs` and `card.css`
     ([#1132 Kit CardCompact compiles alone or beside another look and does nothing there, since it is a class beside Card's rather than an option of the look](https://github.com/corten-run/corten/issues/1132)).
+177. An integer of 100 or more that markup or a message writes (`{count}`) goes into the page two
+    digits at a time, one `push_str` of a pair from a table in place of one `push` a digit. The
+    text is unchanged. Measured with callgrind (release build, three alternated runs each, 500
+    items at 2 and 12 rounds, the difference over 5,000), one item through `render_cost`'s
+    first two loops (build the page's view; build it and render its main) takes 45,032-45,528
+    instructions (median 45,319) instead of 47,089-47,292 (median 47,160), about 1,840 fewer.
+    The standard library's `NumBuffer` would raise the minimum Rust to 1.98 for no measured gain
+    on the page: counted the same way in a second session, it takes 45,186-45,427 (median 45,301)
+    against this change's 45,249-45,492 (median 45,418), less than either's spread. Alone, it
+    writes a three- or four-digit number in as many instructions as this, a six-digit one in about
+    15% fewer, a nine- or ten-digit one in about a third fewer, and one of nineteen or twenty
+    digits in half
+    ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 
 ### Fixed
+- `bench/fullstack`'s Phoenix app reads the item API through a Finch pool of 1,024 connections
+  (opened as needed) started in its supervision tree, where Req's own pool held Finch's 50 per host,
+  so with more than 50 requests in flight (the 256-user phases, the open phases' bursts) its item
+  API source no longer waits for a pooled connection where the other apps open another; Phoenix's
+  results from earlier rounds in those phases were measured under the 50-connection cap; the README names it beside Gin's, FastAPI's and Drogon's settings
+  ([#1152 bench/fullstack Phoenix's item API client is capped at Finch's default 50 connections per host, against the README's rule that no app's client is capped](https://github.com/corten-run/corten/issues/1152)).
+- A handler's error, and a failed agent tool, MCP auth check, page with layout reads and cluster
+  feed load, relay or JetStream consumer, is logged as the error itself, so Corten's log line
+  adds each source's message (`error.sources`): an HTTP client's "error sending request" now
+  names the reset or timeout beneath it. A streamed `Media` body's error is still logged as its
+  message
+  ([#1127 Benchmark r17: Corten returns two HTTP 500s fetching upstream during page load](https://github.com/corten-run/corten/issues/1127)).
 - A live stream, a feed and a streamed `Media` are no longer brotli: a client that accepts zstd
   gets zstd as before, and any other that accepts gzip (Playwright's WebKit) gets gzip at level 3,
   flushed per event with its window kept. WebKit dispatched a flushed brotli event that decodes to
@@ -6463,6 +6544,13 @@ Corten is pre-1.0, so any minor version may change the API.
     in flight, even over HTTP/2) and makes `corten-native`'s HTTP client an open decision; design
     Limit 14 and the deploy guide say the proxy serves native apps HTTP/2 or HTTP/3 too
     ([#1006 Native clients have per-host connection limits of their own (URLSession 6 HTTP/1.1 connections, OkHttp 5 requests even over HTTP/2), and neither Limits 14 nor the native plan in architecture.md says how corten-native follows several feeds](https://github.com/corten-run/corten/issues/1006)).
+77. [Design Choice 33](docs/design.md#choice-state-derives) records why shared state keeps
+    `#[derive(Clone, FromRef)]` rather than a `#[corten::state]` attribute that writes both: `Clone`
+    is what routing and a handler taking the whole state need, `FromRef` what a handler taking one
+    part needs, and the attribute would take one word off the three routed example state types that
+    derive both while giving three of the four that derive `Clone` alone (the fourth is an enum,
+    which `FromRef` does not take) a third way to write theirs
+    ([#1045 Evaluate a state declaration that bundles Clone and FromRef](https://github.com/corten-run/corten/issues/1045)).
 78. Which tables sort in place is decided and measured: every table whose page has all its rows,
     also when other routes read its order. `bench/browser/sort-cost.mjs` times a sort click with
     `rows::sort` against a swap of the server-sorted table, fetched at the click or before it, and
@@ -6506,6 +6594,13 @@ Corten is pre-1.0, so any minor version may change the API.
     opens no second stream), and that its own fields are not an API; an app's outcomes are its typed
     events. New design Limit 25 says why and what would lift it
     ([#1130 Expose opt-in browser diagnostics for action responses and live HTML patches](https://github.com/corten-run/corten/issues/1130)).
+82. Component scripts stay JavaScript with JSDoc, not TypeScript source: design Choice 5 says why,
+    from deck-builder's and seller-desk's largest scripts converted to TypeScript and measured, and
+    when to revisit it. The scripts guide has a table of what each check covers (the call, the
+    body, a Rust type's declaration, data read at run time) and what TypeScript source refuses that
+    checked JavaScript infers, and how to write each check in JavaScript; its advice on sort
+    handlers no longer says a union of strings takes any value, since such a call does not compile
+    ([#1040 Reassess JSDoc versus TypeScript for component scripts using measured safety and authoring tradeoffs](https://github.com/corten-run/corten/issues/1040)).
 
 ## 0.1.0 (not tagged; `main` as of 2026-10-21)
 

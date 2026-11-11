@@ -710,10 +710,13 @@ before its writes blocked. Where it falls short:
 
 1. A body sent a byte a second is closed by the request deadline (card-market's 10 s, with a 503;
    30 s by default), not by a rate: Kestrel closed it within 5.4 to 6.8 s, by its minimum request
-   rate as far as can be told (above). A route whose deadline is removed (`deadline(None)`, for a
-   long upload) has nothing that closes it until `Upload::idle`'s minute of silence, which a byte
-   a second never reaches (from the guide, not measured here):
-   [#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074).
+   rate as far as can be told (above). On a route whose deadline is removed (`deadline(None)`, for
+   a long upload), a body read as it arrives (`pieces_up_to`, `Upload`) is given up on with a 408
+   once it falls `Upload::idle`'s minute behind 240 bytes a second, Kestrel's minimum rate, which
+   a byte a second does after about 60 s (from the guide, not measured here; before
+   [#1074 A request body trickled in a byte at a time is bounded only by the route's deadline: a route with none (a long upload) holds the connection as long as the client likes](https://github.com/corten-run/corten/issues/1074),
+   at `73e1c453`, nothing closed it). That is still about ten times Kestrel's time, by design: the
+   idle time is the allowance, so an upload that pauses is not cut off.
 2. A client that stops reading is closed by `App::send_timeout`'s 60 s (63 s from its connect,
    with the time the server took to fill the socket's buffers), nginx's send timeout, which Corten
    chose over Kestrel's minimum response rate ([Limit 14](../../docs/design.md#limit-http1)):
@@ -1030,6 +1033,30 @@ instead of tower-http's defaults (brotli 4 here), the runtime and assets compres
 11, the item page borrowing the cached item instead of cloning it (about 40-50 µs per request
 in `render_cost`), and the island scan looking for dashes instead of every tag (21 µs to 2.4 µs
 on this page). Compressed responses are 9% larger for 2.4-3x the throughput.
+
+### The image's allocator (Docker Desktop, 2026-11-08)
+
+The evidence behind [design Choice 23](../../docs/design.md#choice-jemalloc-image), card-market
+built at `81f1f8ef` with only its allocator's environment changed, except the tuned image in
+`results/alloc-faults` and `alloc-idle` (`corten-card-market-p1011b`), a build of this change whose
+commit was not recorded, which matched the environment-only `cm-p1011-tc65536` in
+`results/alloc-faults-br`. The fault folders' JSON records every image's id and settings, the flood
+folders' the image's id and each variant's settings added to it; the table gives the `ab.mjs`
+folders':
+
+| Folder | What | Images |
+|---|---|---|
+| `results/flood-memory`, `-mmap`, `-tuned` | `flood-memory.mjs`: eight floods of 4,000 unfinished heads, three runs each | jemalloc unset, `background_thread:true`, and that with `tcache_max:65536`; glibc, with two arenas or one, and with a 16 KiB mmap threshold |
+| `results/alloc-faults` | `alloc-faults.mjs`: page faults and CPU a request, three encodings, three rounds | jemalloc unset (`cm-p1011-je`), the tuned image as committed (`corten-card-market-p1011b`), glibc (`cm-p1011-glibc`) |
+| `results/alloc-idle` | `alloc-faults.mjs` with `IDLE_SECONDS=60`: CPU and threads of an untouched app, three rounds | jemalloc unset, the tuned image, and that with `max_background_threads:1` (`jecap1`) |
+| `results/alloc-faults-br` | the same, brotli only | jemalloc unset, `background_thread:true` (`jebg`), no decay (`jenodecay`), `thp:never`, `retain:false`, `tcache_max` 64 KiB and 8 MiB, the tuned image, glibc |
+| `results/ab-jemalloc` | `ab.mjs`, three encodings, three rounds | jemalloc unset (`je`), `background_thread:true` (`jebg`), glibc |
+| `results/ab-jemalloc-br` | `ab.mjs`, brotli only | jemalloc unset, `oversize_threshold` 0 (`jeos0`) and 64 MiB (`jeos64`), glibc |
+| `results/ab-jemalloc-tuned` | `ab.mjs`, three encodings, three rounds | jemalloc unset, `background_thread:true,tcache_max:65536` (`jecand`), glibc |
+
+All ran on a desktop with other containers running, so the `ab.mjs` rounds moved by up to 2.4
+times between rounds of one image; the fault counts repeat to 0.1 a request. A quiet host has not
+run them.
 
 ### Build cost on a desktop (round local-2, 2026-11-03)
 
@@ -1534,7 +1561,9 @@ is not measured doing so: every app is measured behind the same edge. `BENCH_EDG
 tier's steps without the edge, to measure what it adds to the same app.
 
 An app uses what its framework provides for each part and nothing hand-written; a part its
-framework has nothing for is left out and shows as a column not met, and no app is tuned beyond
+framework has nothing for is left out and shows as a column not met where a column reads it (no
+column reads the headers on an error answer, so an app that sends its error answers without the
+profile's headers shows that only in its item below and in the measured paragraph after the list), and no app is tuned beyond
 the profile. "Provides" is a middleware, a setting or a builder option of the framework or of the
 companion its documentation points to for it (tower-http for axum); a part that needs the app to
 write its own handler, error mapper or server loop is left out, as the defaults tier leaves it. The tier's apps, by [#817 A bench/fullstack round takes 5.5 hours, the planned tiers and repeats would take it past 15, and nothing sets which apps, phases and cadence each tier gets](https://github.com/corten-run/corten/issues/817)'s
@@ -1556,8 +1585,48 @@ fifth and seventh in that survey, left the four when FastAPI and Express joined 
    are the app's own code, which the profile does not change, as no framework's error pages are
    rewritten by hand; and `axum::serve` has no header timeout or head size setting (hyper's are
    reached by writing the accept loop on hyper-util). Those columns stay unmet.
-3. `nextjs`, `leptos`, `aspnet` (and `aspnet-aot`), `topcoat`, `fastapi` and `express` are not
-   in it yet: each joins with its profile.
+3. `leptos`: Leptos serves through axum, so it takes axum-maud's tower-http layers beside the
+   compression it already had: the security headers, a 503 past 10 s, a 2 MiB body limit, and
+   `Cache-Control: private, no-cache` on its routes. What its fallback serves, the static files
+   and an unknown path's 404 page, goes without it, since tower-http cannot tell the two apart. A
+   page's CSP lets its scripts run by the nonce Leptos makes for each response and writes on the
+   hydration scripts (its `nonce` feature, which leptos_axum turns on), set by the shell through
+   Leptos's `ResponseOptions`; the page hydrates under it (checked in Chromium: the sort button
+   works, no CSP violation, every inline script has the nonce). Its `script-src` also lists
+   `'wasm-unsafe-eval'`, which lets the page compile its WebAssembly and runs no text as script, so
+   the matrix counts the policy strict, where Topcoat's `'unsafe-eval'` (item 4) does run text as
+   script. It misses what axum-maud misses,
+   but its page for a failed read is its own 200 with the error in it, the app's code as before.
+4. `topcoat`: Topcoat runs tower middleware as one of its own layers (`TowerLayer`, its `tower`
+   feature; tower-http is what Topcoat itself compresses with), so it takes axum-maud's tower-http
+   header layers and timeout around every request: the security headers, `Cache-Control: private,
+   no-cache` on an answer that sets none (its assets keep Topcoat's `public, max-age=31536000,
+   immutable`) and a 503 past 10 s. An answer Topcoat makes from an `Error` goes without them, since
+   `TowerLayer` passes the error through and the router makes the answer after every layer (a
+   cross-site post is refused before any layer runs): in its matrix the JSON 404, the 405, both
+   failed reads, the cross-site 403 and the 413 have no security headers or `Cache-Control` (the
+   counted columns read headers on the 200 answers only), where axum-maud's answers to the same four
+   (the JSON 404, the 405 and both failed reads) have them (axum-maud takes the cross-site post, and
+   its 3 MiB post ends in EPIPE, so it has no 403 or 413 to compare); Topcoat's own way to put a
+   header on those is `response_headers` in a hand-written layer, which the tier leaves out. Its
+   defaults already refuse a body over 2 MiB (413), refuse a cross-site form post (403, its origin
+   policy), compress, and close a request head left unfinished at 30 s. Its runtime compiles the
+   expressions it reads from the page's markup with `new Function`, so the page CSP needs
+   `'unsafe-eval'`, and the header layer sets that one CSP on every answer it sets headers on
+   (Leptos keeps answers that are not pages on axum-maud's strict policy; the `pageScripts` column
+   reads the page's only): without it Chromium blocks the runtime and the listings' sort does
+   nothing (checked in Chromium, the CSP rewritten in the browser); with it the sort works and no
+   CSP violation is reported. Topcoat has no host list, ETag for a rendered answer, liveness or
+   readiness endpoint, connection cap or head size setting (hyper 1.12's default read buffer,
+   417,792 bytes (about 408 KiB), bounds a request head; the probe's 64 KiB header fits under it),
+   and its error answers (a failed read as a 500 `text/plain`, a missing item as a 404 `text/plain`,
+   an empty 405) are the app's and Topcoat's own, which the profile does not change. Since the
+   runtime's rendered answers set no `Cache-Control`, they get the profile's `private, no-cache`,
+   which Topcoat's prefetch reads as usable for 0 ms: under the profile a prefetched link is
+   rendered again when it is followed after the prefetch's headers arrived (the browser phases click
+   without hovering, so they do not prefetch).
+5. `nextjs`, `aspnet` (and `aspnet-aot`), `fastapi` and `express` are not in it yet: each
+   joins with its profile.
 
 `BENCH_TIER=matched node conform.mjs [apps] [name]` writes the tier's matrix on its own. Measured
 locally (Docker Desktop on Windows, one probe each), from `cb-corten` and `cb-axum-maud` built
@@ -1568,7 +1637,19 @@ answered with 950 connections held, and one past 1,050 waited until they closed 
 axum-maud met 12 and missed 12:
 the ETag, the cross-site post, the two failed reads (502 `text/plain`), the 404 and 405 formats
 (empty), the unknown Host and the 64 KiB header (200), liveness and readiness, the unfinished head
-(still held at 45 s) and the cap (answered with 1,050 held). No load phase has run in the tier yet.
+(still held at 45 s) and the cap (answered with 1,050 held). Leptos, probed the same way from
+`cb-leptos` built at `07ee94b6` (`results/conform-matched-leptos1/conformance.json`), met the
+same 12 and missed the same 12, with two of those answered differently: its failed read's page
+(200 `text/html`) and the cross-site post to its server function (302 with no `serverfnerror`).
+Topcoat, probed the same way from `cb-topcoat` built at `9a17b8ea`
+(`results/conform-matched-topcoat1/conformance.json`), met 13 and missed 11: it meets the
+cross-site post (403) and the unfinished head (closed in 30.0 s) that axum-maud misses, and misses
+the page's script CSP (`'unsafe-eval'`) that axum-maud meets. Of the misses it shares with
+axum-maud, three are answered differently: its failed reads are a 500 `text/plain` (axum-maud's a
+502) and its JSON 404 is `text/plain` (axum-maud's is empty). Not counted: its six error answers
+(the JSON 404, the 405, both failed reads, the 403 and the 413) go without the profile's headers,
+where axum-maud's answers to the same four carry them.
+No load phase has run in the tier yet.
 
 ### The hardening step
 
@@ -1709,12 +1790,14 @@ maintainer instead. r16's report, the first to read it, found no drift and no wa
    container is given its CPUs, and the live stream needs every client in one process. Express runs
    one Node process with `NODE_ENV=production`, as its production guide says, which caches compiled
    views; FastAPI's templates are Starlette's `Jinja2Templates` as created, which checks each
-   template file's time on every render (Jinja's default, which FastAPI's docs do not change). Three
+   template file's time on every render (Jinja's default, which FastAPI's docs do not change). Four
    settings differ from a library's default so that the item API source does the same work in every
    app: Gin keeps as many idle connections to the item API as its transport allows (Go's default
    keeps two per host; reqwest, .NET and Node have no per-host cap), FastAPI's httpx clients have no
-   connection cap (httpx's default keeps 20 idle and allows 100 in all), and Drogon keeps one
-   `HttpClient` (one connection) per request in flight on each thread. Drogon also hands the fixture
+   connection cap (httpx's default keeps 20 idle and allows 100 in all), Phoenix's Req client uses
+   a Finch pool of 1,024 connections to the item API, opened as needed (Req's own pool holds Finch's
+   50 per host), and Drogon keeps one `HttpClient` (one connection) per request in flight on each
+   thread. Drogon also hands the fixture
    parser's freed memory back to the system after loading (`malloc_trim`), so its memory with items
    in memory is the items' rather than the parser's peak, which the Rust apps avoid by parsing one
    item at a time. Drogon's JSON is JsonCpp's, Drogon's default, which writes 17 significant digits
@@ -1864,6 +1947,13 @@ node bench/fullstack/cost-by-crate.mjs /tmp/cg/cg-card-market-page-fixture-300.o
 docker run --rm -v "$PWD:/src:ro" -v "$PWD/bench/fullstack/fixtures:/fixtures:ro" -v /tmp/defaults:/out \
   -e CARGO_TARGET_DIR=/target rust:1-bookworm bash /src/bench/fullstack/cost-by-default.sh
 node bench/fullstack/cost-by-default.mjs /tmp/defaults/results.tsv   # five repeats unless -e REPEATS=n
+# One app before and after, alternating (identity, a browser's encodings, brotli alone; AB_ROUNDS=3,
+# AB_ENCODINGS=br for some), and the memory floods of unfinished heads leave, by allocator setting
+# (docs/design.md#choice-jemalloc-image; FLOOD_VARIANTS=jemalloc,glibc for some); the committed
+# fault folders ran REQUESTS=2000, results/alloc-faults-br with ENCODINGS=br too:
+node bench/fullstack/ab.mjs results/ab-x cb-corten cb-corten-next
+node bench/fullstack/flood-memory.mjs results/flood-x cb-corten [runs=3] [floods=8]
+node bench/fullstack/alloc-faults.mjs results/faults-x cb-corten cb-corten-next   # page faults and CPU a request
 ```
 
 ## What the repository keeps
