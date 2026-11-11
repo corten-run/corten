@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { allApps as apps } from "./apps.mjs";
 import { maxPasses } from "./passes.mjs";
-import { buildBudgetMinutes, buildStep, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, unit } from "./round.mjs";
+import { buildBudgetMinutes, buildStep, fixtureError, buildsLeft, calls, compiledFirst, fullstackHours, hoursFor, mayStart, quote, resumeAt, roundNameError, startMinutes, steps, unit } from "./round.mjs";
 
 test("a new round starts at its first step, or at from", () => {
   assert.deepEqual(resumeAt(""), { ended: null, skip: null, app: null, next: "cold-start", boots: 0, built: [] });
@@ -292,4 +292,14 @@ test("an app whose config is fixed at build runs its own image in the matched ti
   assert.deepEqual(matched.other, ["build", "-q", "-t", "cb-axum-maud", "bench/fullstack/apps/axum-maud"], "an app without a matched image builds as before");
   const corten = spawnSync(process.execPath, ["--input-type=module", "-e", 'const a = await import("./apps.mjs"); a.buildArgs("corten", "matched")'], { cwd: import.meta.dirname, encoding: "utf8" });
   assert.match(corten.stderr, /examples\/card-market's, not built by buildArgs/);
+});
+
+test("a round that serves items refuses a missing, empty or itemless fixture, and the live suite needs none", () => {
+  const good = JSON.stringify({ item_1: { id: "item_1" } });
+  for (const suite of ["fullstack", "browser", "harden"]) {
+    assert.match(fixtureError(suite, null) ?? "", /is missing: an? [\w-]+ round serves its items from it/);
+    for (const bad of ["", "{", "[]", "null", JSON.stringify({ item_2: {} })]) assert.match(fixtureError(suite, bad) ?? "", /empty, not JSON or has no item_1/, bad);
+    assert.equal(fixtureError(suite, good), null);
+  }
+  assert.equal(fixtureError("live", null), null);
 });

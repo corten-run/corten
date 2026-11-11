@@ -42,14 +42,14 @@
 // droplet that stops answering for --stall minutes while this waits or collects is power-cycled,
 // which does the same.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { allApps, buildArgs } from "./apps.mjs";
 import { ARCHIVE, pack } from "./pack.mjs";
 import { live } from "../live/apps.mjs";
 import { passesOf } from "./passes.mjs";
-import { hoursFor, quote, roundNameError, steps, unit } from "./round.mjs";
+import { fixtureError, hoursFor, quote, roundNameError, steps, unit } from "./round.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, "../..");
@@ -222,11 +222,11 @@ const downloadAll = async (/** @type {string} */ label) => {
 // Creates the droplet, provisions it, uploads this working tree, builds the images and starts the
 // round under its unit.
 const launch = async () => {
-  // The item API (and harden's item server) serves fixtures/items.json from the uploaded tree,
-  // which git ignores: a checkout without it would start a round whose every page fails (browser-4
-  // waited two minutes an app on an item API that had exited). Refusing here costs no droplet.
+  // A round without its items would fail every page (browser-4 started an item API that exited
+  // at once, and each app waited out its start); refusing here costs no droplet.
   const fixture = join(here, "fixtures", "items.json");
-  if (suite !== "live" && !existsSync(fixture)) throw new Error(`${fixture} is missing: the round's item API serves it and git does not keep it. Write it with node bench/fullstack/fixtures/fetch.mjs (Running it), or copy one from a checkout that has it`);
+  const noFixture = fixtureError(suite, suite === "live" ? null : existsSync(fixture) ? readFileSync(fixture, "utf8") : null);
+  if (noFixture) throw new Error(noFixture);
   if (!host) {
     const key = flag("ssh-key");
     if (!key) throw new Error("--ssh-key <DigitalOcean key id> is required to create a droplet");
