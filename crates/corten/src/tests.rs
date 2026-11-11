@@ -9612,6 +9612,108 @@ async fn a_switched_connection_is_held_to_the_send_timeout() {
     server.await.unwrap().unwrap();
 }
 
+/// A `2xx` to `CONNECT` switches the connection to a tunnel, as a `101` does, so
+/// `App::header_timeout` no longer bounds it: a tunnel carrying bytes both ways stays open past
+/// twice the timeout, and `App::send_timeout` still ends a write its client makes no room for. A
+/// `CONNECT` refused (`403`) is an answer like any other, and its connection closes once idle past
+/// the timeout (#1218).
+#[tokio::test]
+async fn a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does_not() {
+    use std::time::{Duration, Instant};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let (failed, mut failure) = tokio::sync::mpsc::channel::<std::io::ErrorKind>(1);
+    let tunnel = crate::router::any(move |mut req: Request<Body>| {
+        let failed = failed.clone();
+        async move {
+            if req.headers().contains_key("x-refuse") {
+                return StatusCode::FORBIDDEN;
+            }
+            let flood = req.headers().contains_key("x-flood");
+            let on = hyper::upgrade::on(&mut req);
+            tokio::spawn(async move {
+                let Ok(upgraded) = on.await else { return };
+                let mut io = hyper_util::rt::TokioIo::new(upgraded);
+                if flood {
+                    let chunk = vec![b'x'; 64 * 1024];
+                    loop {
+                        if let Err(error) = io.write_all(&chunk).await {
+                            let _ = failed.send(error.kind()).await;
+                            return;
+                        }
+                    }
+                }
+                // Relays the client's bytes back to it.
+                let mut buf = [0u8; 64];
+                loop {
+                    match io.read(&mut buf).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(n) if io.write_all(&buf[..n]).await.is_err() => return,
+                        Ok(_) => {}
+                    }
+                }
+            });
+            StatusCode::OK
+        }
+    });
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let timeout = Duration::from_millis(600);
+    let app =
+        App::new(Routes::from(Table::new().route("/", tunnel))).header_timeout(timeout).send_timeout(Duration::from_millis(300));
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    // The answer's head, a byte at a time so nothing after it is taken.
+    async fn head(stream: &mut tokio::net::TcpStream) -> String {
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            head.push(stream.read_u8().await.expect("an answer's head"));
+        }
+        String::from_utf8(head).unwrap()
+    }
+
+    let mut tunnel = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tunnel.write_all(b"CONNECT / HTTP/1.1\r\nhost: localhost\r\n\r\n").await.unwrap();
+    let answer = head(&mut tunnel).await;
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    let opened = Instant::now();
+    let mut sent = 0u32;
+    while opened.elapsed() < timeout * 5 / 2 {
+        let ping = format!("ping {sent}\n");
+        tunnel.write_all(ping.as_bytes()).await.unwrap();
+        let mut echo = vec![0u8; ping.len()];
+        let read = tokio::time::timeout(Duration::from_secs(3), tunnel.read_exact(&mut echo)).await;
+        match read {
+            Ok(Ok(_)) => assert_eq!(echo, ping.as_bytes()),
+            Ok(Err(error)) => panic!("the tunnel closed {:?} after it opened: {error}", opened.elapsed()),
+            Err(_) => panic!("no echo {:?} after the tunnel opened", opened.elapsed()),
+        }
+        sent += 1;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    drop(tunnel);
+
+    let mut flood = tokio::net::TcpStream::connect(addr).await.unwrap();
+    flood.write_all(b"CONNECT / HTTP/1.1\r\nhost: localhost\r\nx-flood: 1\r\n\r\n").await.unwrap();
+    let answer = head(&mut flood).await;
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    // Reads nothing more.
+    let kind = tokio::time::timeout(Duration::from_secs(5), failure.recv()).await.expect("the tunnel's write fails");
+    assert_eq!(kind, Some(std::io::ErrorKind::TimedOut));
+    drop(flood);
+
+    let mut refused = tokio::net::TcpStream::connect(addr).await.unwrap();
+    refused.write_all(b"CONNECT / HTTP/1.1\r\nhost: localhost\r\nx-refuse: 1\r\n\r\n").await.unwrap();
+    let mut answer = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_secs(3), refused.read_to_end(&mut answer)).await;
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(answer.starts_with("HTTP/1.1 403"), "{answer}");
+    assert!(closed.is_ok(), "a refused CONNECT's connection is closed once idle past the timeout");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// `corten::serve_wrapped`: the app's step on each connection before HTTP (a TLS handshake) runs
 /// in the connection's own task, counts against `App::max_connections` and is closed at
 /// `App::header_timeout` when it stalls; a step that fails closes the connection.

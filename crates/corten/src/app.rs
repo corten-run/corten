@@ -980,9 +980,10 @@ impl<M: Middleware> App<M> {
     /// before [`serve`] closes it: 30 seconds unless set, from when the connection opens or its
     /// last answer was sent. A client that opens connections and never finishes a request
     /// cannot hold them, and an idle keep-alive connection is closed after it too. A request
-    /// whose head has arrived is not bounded by it: a long upload, a live stream and a WebSocket
-    /// are the [deadline](App::deadline)'s and their own, with [`App::send_timeout`] for their
-    /// writes. `None` removes it, for a server that only a proxy which buffers heads reaches.
+    /// whose head has arrived is not bounded by it: a long upload, a live stream, a WebSocket and
+    /// a tunnel (a `2xx` to `CONNECT`) are the [deadline](App::deadline)'s and their own, with
+    /// [`App::send_timeout`] for their writes. `None` removes it, for a server that only a proxy
+    /// which buffers heads reaches.
     pub fn header_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
         self.connections.header_timeout = timeout.into();
         self
@@ -1886,12 +1887,13 @@ impl tower_service::Service<hyper::Request<hyper::body::Incoming>> for Connectio
         // Marks a read of the body that waits for the client, for the deadline (#1061).
         let req = req.map(|body| crate::body::Body::new(crate::extract::Arriving(body)));
         let watch = self.watch.as_ref().map(|watch| (watch.clone(), watch.busy()));
+        let connect = req.method() == http::Method::CONNECT;
         if let Some(bound) = &self.bound {
             bound.arrived();
         }
         let call = tower_service::Service::<Request>::call(&mut self.router, req);
         let inner = crate::client::WithPeer::new(self.peer, self.bound.clone(), call);
-        crate::watch::Answer { inner, watch }
+        crate::watch::Answer { inner, watch, connect }
     }
 }
 

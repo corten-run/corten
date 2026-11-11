@@ -37,7 +37,9 @@ your routes. Each default can be replaced in one line.
 
 `App::header_timeout` (30 seconds unless set) bounds what comes before a request: a client that
 opens connections and sends its head slowly, or never finishes it, cannot hold them (an idle
-keep-alive connection closes after it too). A clock of the server's own checks it a few times a
+keep-alive connection closes after it too). A connection that switches, with a `101` or a `2xx`
+to `CONNECT` (a tunnel), is the route's from then on and is not bounded by it, though
+`App::send_timeout` still is; a refused `CONNECT` is an answer like any other. A clock of the server's own checks it a few times a
 second, so a connection closes within a tenth of the timeout of it (at most a second either way). It applies to `serve`, `serve_on` and `serve_wrapped` alike (where a TLS handshake's time counts toward it), on
 every listener. `App::send_timeout` (60 seconds unless set, nginx's `send_timeout`) bounds what
 comes after: a write that finds the connection's send buffer full may wait that long for room,

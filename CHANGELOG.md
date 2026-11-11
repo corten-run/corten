@@ -4744,6 +4744,13 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1039 Audit runtime data boundaries and unsafe any escapes behind Corten's script type-safety guarantees](https://github.com/corten-run/corten/issues/1039)).
 
 ### Fixed
+- A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no
+  longer closes a tunnel still carrying traffic once the timeout has passed from when it opened;
+  `App::send_timeout` still holds on it, and a refused `CONNECT` is an answer like any other,
+  closed once idle past the timeout. Before, the tunnel's empty `200` marked the connection idle
+  at once, and a downstream proxy measured hundreds of streams cut at 29 to 31 s under the
+  default 30 s
+  ([#1218 A CONNECT answered 2xx goes idle like a plain answer, so the header timeout cuts the tunnel mid-stream (only a 101 stays busy)](https://github.com/corten-run/corten/issues/1218)).
 - `bench/fullstack/droplet.mjs --suite browser` runs the browser step alone again, then
   bench/browser's client-heavy pass. Since every app's build became the step after it, the suite
   ran the builds too (8 to 22 minutes each for the first three apps on a c-8, under a 240-minute
