@@ -24,6 +24,13 @@ Sampled from the concept image.
 - `corten-weathering-favicon.svg`: the mark on a bone rounded square
 - `corten-weathering-horizontal.png`, `-horizontal-light.png`, `-stacked.png`: transparent PNG exports of the flat lockups
 - `corten-weathering-horizontal-textured.png`, `-stacked-textured.png`: the concept's own weathered texture inside the traced shapes
+- `corten-weathering-github-avatar.png`: the GitHub organization's avatar, 500 x 500: the mark 380 px wide, centered on Bone
+- `corten-weathering-github-social.png`: the repository's social preview, 1280 x 640 on Bone: the horizontal lockup 720 px wide, the README's tagline (without its "and") in Ink at 34 px, and a 120 x 6 px Rust rule under it
+
+`render-github.mjs` writes both GitHub images from the SVGs with headless Chromium
+(`node docs/brand/render-github.mjs`, after `npm ci`). Run it after a change to the mark, the
+lockup or the tagline, then upload the avatar in the organization's settings and the preview in
+the repository's settings (Social preview); neither is read from the repository.
 
 Use the flat SVGs for product UI and documentation. Use the textured PNGs for launch graphics and
 editorial presentation.
