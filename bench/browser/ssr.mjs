@@ -43,10 +43,13 @@ const watch = () => {
   });
 };
 
-// The browser may paint the server's rows before it runs the page's module scripts (on this page
-// that first frame takes about 100 ms), or after, and which one varies from load to load for every
-// app. Long-animation-frame entries say how long each long frame spent rendering, so takeover
-// leaves out the rendering of frames between the parser finishing and the app being ready.
+// The browser may paint the server's rows before it runs the page's module scripts, or after, and
+// which one varies from load to load (round browser-3: about 100 ms on some loads of every app;
+// browser-4: about half of Corten's and React's loads, none of most others'). Long-animation-frame
+// entries say how long each long frame spent rendering, so takeover leaves out the rendering of
+// frames between the parser finishing and the app being ready. A painted load still reads several
+// milliseconds higher (the scripts start some time after the frame), so the results also give how
+// many loads painted and the takeover of the loads that did not.
 const frames = () => {
   /** @type {any} */ (window).__frames = [];
   new PerformanceObserver((list) => {
@@ -127,6 +130,10 @@ for (const app of APPS) {
     // rendering in between: the app's own start.
     takeoverMs: round(median(runs.map((r) => r.takeover))),
     paintedFirstMs: round(median(runs.map((r) => r.painting))),
+    paintedLoads: runs.filter((r) => r.painting > 0).length,
+    // The loads with no frame painted before ready, so a run's mix of painted and unpainted loads
+    // does not move the number; null when every load painted.
+    takeoverUnpaintedMs: runs.some((r) => r.painting === 0) ? round(median(runs.filter((r) => r.painting === 0).map((r) => r.takeover))) : null,
     rowsAtReady: runs[0].rows,
     rowsRemoved: changed.removed,
     rowsAdded: changed.added,
@@ -144,5 +151,5 @@ mkdirSync(join(here, "results"), { recursive: true });
 writeFileSync(args.out ?? join(here, "results", `ssr-${out.date.slice(0, 10)}.json`), JSON.stringify(out, null, 2));
 const keys = Object.keys(out.apps[APPS[0]]);
 console.log(`chromium ${out.chromium}; ${LOADS} fresh loads each; medians`);
-console.log("".padEnd(16), ...APPS.map((a) => a.padStart(12)));
-for (const k of keys) console.log(k.padEnd(16), ...APPS.map((a) => String(out.apps[a][k]).padStart(12)));
+console.log("".padEnd(20), ...APPS.map((a) => a.padStart(12)));
+for (const k of keys) console.log(k.padEnd(20), ...APPS.map((a) => String(out.apps[a][k]).padStart(12)));

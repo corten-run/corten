@@ -60,8 +60,12 @@ only medians). In browser-3 the frame took about 100 ms when it came and the med
 every app. In browser-4 the median was 58 ms for Corten and React: about half their loads had the
 frame and half did not, and the median falls between the two, so it is not the frame's length.
 It was 0.1 ms for Remix and none for the rest, so how often the frame comes first is no longer
-alike for every framework. Rows the app removes or adds while starting are counted in a separate
-load, since a mutation observer slows every app that touches many nodes.
+alike for every framework. A load with the frame still reads a few milliseconds higher (the
+scripts start some time after it), so a median taken over a mix of both moves with the mix:
+`paintedLoads` is how many loads had any of that rendering, and `takeoverUnpaintedMs` is the
+median takeover of the loads that had none (null when every load did), which the mix does not
+move. Rows the app removes or adds while starting are counted in a separate load, since a
+mutation observer slows every app that touches many nodes.
 
 The browser's clock resolves to 0.1 ms here, so differences under a millisecond come from
 [ab.mjs](ab.mjs): the apps take turns in blocks of 25 clicks in one browser, and it reports each
