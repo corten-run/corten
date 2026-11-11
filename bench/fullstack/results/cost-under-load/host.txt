@@ -1,0 +1,2 @@
+model name	: Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz
+8

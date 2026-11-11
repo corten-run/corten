@@ -11,6 +11,10 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 // answers with what card-market's JSON route answers with (bench/fullstack/README.md, "aspnet-aot"):
 // each piece is ASP.NET Core's own middleware for it, as the webapiaot template would add it.
 var builder = WebApplication.CreateSlimBuilder(args);
+// The matched tier's connection cap (bench/fullstack/README.md, "The matched tier"); Kestrel closes a
+// connection past it. Its request head timeout is already 30 seconds, as Corten's header timeout.
+if (Environment.GetEnvironmentVariable("PROFILE") == "matched" && long.TryParse(Environment.GetEnvironmentVariable("MAX_CONNECTIONS"), out var cap))
+    builder.WebHost.ConfigureKestrel(o => o.Limits.MaxConcurrentConnections = cap);
 // Errors, warnings and startup, as apps/aspnet logs (its appsettings.json). HttpClient's request
 // lines are Information too (four for each item API call), and Corten logs none per request.
 builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
@@ -22,12 +26,12 @@ builder.Services.ConfigureHttpJsonOptions(o =>
     // Text in other scripts as UTF-8, as Corten writes it; HTML's characters are still escaped.
     o.SerializerOptions.Encoder = JavaScriptEncoder.Create(UnicodeRanges.All);
 });
-// Names it answers to: localhost and the deploy's HOSTS (comma separated, ".example.com" for every
-// subdomain), as Corten's host check. ASP.NET Core's filter runs before the app's middleware
-// (WebApplication adds it) and answers others with a 400 HTML page without the headers below
-// (Corten: 421 with its headers).
+// Names it answers to: localhost, the loopback addresses and the deploy's HOSTS (comma separated,
+// ".example.com" for the domain and every subdomain), as Corten's host check, which also answers to
+// any IP address. ASP.NET Core's filter runs before the app's middleware (WebApplication adds it)
+// and answers others with a 400 HTML page without the headers below (Corten: 421 with its headers).
 var hosts = (Environment.GetEnvironmentVariable("HOSTS") ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-builder.Services.AddHostFiltering(o => o.AllowedHosts = ["localhost", "*.localhost", "127.0.0.1", "[::1]", .. hosts.Select(h => h.StartsWith('.') ? "*" + h : h)]);
+builder.Services.AddHostFiltering(o => o.AllowedHosts = ["localhost", "*.localhost", "127.0.0.1", "[::1]", .. hosts.SelectMany(h => h.StartsWith('.') ? new[] { h[1..], "*" + h } : new[] { h })]);
 // Failures as application/problem+json (RFC 9457): 404, 405 and an exception's 500.
 builder.Services.AddProblemDetails();
 // Brotli and gzip at their fastest when the client asks (Corten also offers zstd).
@@ -41,12 +45,14 @@ builder.Services.AddHealthChecks().AddCheck<ItemsReachable>("items", tags: ["rea
 var app = builder.Build();
 // Load the fixture before the first request.
 app.Services.GetRequiredService<ItemSource>();
-// The headers Corten puts on every JSON answer, errors included (set as the answer starts, so the
-// exception handler's reset of the headers does not drop them).
-app.Use((context, next) =>
+// The headers Corten puts on a JSON answer, as ASP.NET Core's documentation sets a header ("Control
+// headers in C# code": middleware that appends it, then calls the next). The exception handler and
+// the request timeout clear the answer before they write theirs, so the 500 and the deadline's 503
+// go without them; the 404 and 405 keep them.
+app.Use(async (context, next) =>
 {
-    context.Response.OnStarting(static state => { Headers.Add(((HttpContext)state).Response.Headers); return Task.CompletedTask; }, context);
-    return next(context);
+    Headers.Append(context.Response.Headers);
+    await next();
 });
 app.UseResponseCompression();
 app.UseExceptionHandler();
@@ -62,14 +68,14 @@ app.Run();
 
 static class Headers
 {
-    public static void Add(IHeaderDictionary h)
+    public static void Append(IHeaderDictionary h)
     {
-        h.ContentSecurityPolicy = "default-src 'none'; frame-ancestors 'none'";
-        h.XContentTypeOptions = "nosniff";
-        h["Referrer-Policy"] = "strict-origin-when-cross-origin";
-        h.XFrameOptions = "DENY";
-        h["Cross-Origin-Opener-Policy"] = "same-origin";
-        if (!h.ContainsKey("Cache-Control")) h.CacheControl = "private, no-cache";
+        h.Append("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+        h.Append("X-Content-Type-Options", "nosniff");
+        h.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+        h.Append("X-Frame-Options", "DENY");
+        h.Append("Cross-Origin-Opener-Policy", "same-origin");
+        h.Append("Cache-Control", "private, no-cache");
     }
 }
 
