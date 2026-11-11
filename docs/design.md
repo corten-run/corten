@@ -2397,6 +2397,69 @@ rules something out.
     6.0.3 on the change, which checks clean, and the timings in Chromium 156 (Playwright 1.64.1),
     again on 2026-11-09.
 
+41. <a id="choice-tcp-nodelay"></a>**Each TCP connection Corten accepts has Nagle's algorithm off.** Corten's
+    `Listener` for tokio's `TcpListener`, which `serve`, `serve_on` and `serve_wrapped` accept
+    from, sets `TCP_NODELAY` on each connection, as Go's `net` package (so `net/http`) does on
+    every TCP connection and nginx (`tcp_nodelay on`) on its keep-alive, TLS and unbuffered ones;
+    hyper sets nothing on a server's connections. A whole answer goes out in one write, so pages
+    and JSON are the same either way. A streamed one (a feed, a `LiveResponse`, a `Relay`,
+    `Media::stream`) writes each piece as it comes, and with Nagle's algorithm the small writes
+    made while one is unacknowledged wait for that acknowledgement and go out together: a round
+    trip for each such batch wherever the other end is (a browser on a slow network included), and
+    more when the other end delays its acknowledgement, as Linux does by 40 ms or more. Measured
+    with `bench/nodelay` (ten events of about 50 bytes, nginx with the deploy guide's upstream
+    keep-alive, the app, nginx and the client each in a container of its own), when nginx reused
+    its connection to the app right after its last stream the second event came 42.5 and 43.0 ms
+    (the medians of two runs of 80 streams) after the first when the app made them back to back,
+    40.9 and 40.8 ms with 1 ms between them and 31.8 and 32.7 ms with 10 ms, and every event made
+    before the acknowledgement came with it; with the option set, -0.1, -0.05 and -0.01 ms. With
+    the option set, 6 of 1,800 streams (Corten's listeners and a copy that sets it itself, busy and
+    after idle) had an event more than 20 ms late, at most 29.9 ms, and none had its second event
+    held, against nearly every busy stream without it. Of 644 streams on a connection unused at
+    least 150 ms, 6 had an event more than 20 ms late (at most 33.1 ms), 2 of them with the option
+    set, so a connection unused a few hundred milliseconds was not shown delayed either way. The
+    first event came with the head (more than 20 ms after it in 3 of 3,600 streams, at most
+    29.9 ms); that it is never held rests on the packet capture, where it was in the head's
+    segment: of 87 bursts without the option, 75 had their second segment 40.2 to 46.5 ms after
+    the first, each within 0.1 ms of nginx's acknowledgement. It costs one system call a
+    connection and nothing a request: callgrind counted a keep-alive request at 26,418 and 26,415
+    instructions before and 26,423 and 26,417 after, and a request on a connection of its own at
+    46,484 and 46,847 before and 46,481 and 46,740 after, within what runs of one build differ by.
+    A listener of the app's own sets what it chooses; one that wants Nagle's algorithm calls
+    `set_nodelay(false)` on what it accepts. A failed `set_nodelay` is not logged: it is not
+    expected on an accepted TCP socket, and the connection is served as it would have been before,
+    so a log line would give nothing to act on.
+    Not chosen: leaving Nagle's algorithm on (tens of milliseconds on a live page's events behind
+    a proxy, and a round trip a batch to a browser without one); a setting on `App` (a new concept
+    for what one line in a listener of the app's own does); holding pieces back in Corten to join
+    them into fewer writes (the pieces are made apart, and waiting for the next is the delay
+    itself).
+
+    Stands on: measured (`bench/nodelay`, two runs of each build alternated, 20 rounds of five
+    streams per app and gap each, on Docker Desktop's Linux 6.18 VM on a workstation running other
+    builds, `results/before-*.json` and `results/after-*.json`, and one packet capture of 87
+    bursts, observed once and not committed; callgrind on `what_a_request_over_tcp_costs` in the
+    crate's tests, at 200 and 1,200 requests, two runs of each build alternated); platform (Nagle's
+    algorithm holds a small write until the last is acknowledged, RFC 896; Linux, the app's and
+    nginx's, delays the acknowledgement of a small segment, 40 to 46 ms in the capture; Go's `net`
+    package and nginx set `TCP_NODELAY` by default; hyper sets nothing on a server's connections,
+    and hyper-util only on its client's); reasoned (Corten writes whole answers, and a stream's
+    pieces as they are made, so Nagle's algorithm has little to join and costs a wait where it
+    does); value (a live page's events reach the user as they are made, Values 1, with no setting
+    to find, Values 7).
+
+    Revisit when: hyper or tokio sets `TCP_NODELAY` on accepted connections itself, when the line
+    goes as redundant; or a measurement of a workload of many tiny writes shows the extra packets
+    cost more than the waits they avoid. A peer that does not delay its acknowledgements is not a
+    reason: the writes made while one is unacknowledged still wait a round trip.
+
+    Last checked: 2026-11-11, `bench/nodelay` with nginx 1.29.8 on Docker Desktop's Linux 6.18.58
+    VM on this branch with and without the line (its Rust as at `a833b4e3`), and callgrind
+    (valgrind 3.19.0, rustc 1.99.1) on `efbd210d` and the change; 2026-11-11, hyper 1.12.0 and
+    hyper-util 0.1.21 (`Cargo.lock`) read for `nodelay`, with nginx's `tcp_nodelay` documentation
+    (nginx.org, for 1.29.8) and Go's `net` package documentation and source on its master branch
+    (`TCPConn.SetNoDelay`, "The default is true"; `newTCPConn` sets it).
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new

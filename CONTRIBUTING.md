@@ -28,6 +28,7 @@ bench/fullstack/     Historical marketplace implementations and diagnostic scrip
 bench/marketplace/   Equivalent-localization marketplace v2, the nightly workload from official r17
 bench/catalog/       Optional locale-neutral record detail and JSON diagnostic, with a separate baseline
 bench/live/          One price feed pushed to many clients in the same frameworks
+bench/nodelay/       A burst of small live events through nginx, with and without TCP_NODELAY
 ```
 
 Dependencies of `corten`: `hyper` and `hyper-util` (connections, including ones that switch
@@ -284,9 +285,10 @@ It stops before publishing when the tag, the workspace version and the changelog
    to `## X.Y.Z (YYYY-MM-DD)` and start a new empty `## Unreleased` above it. The version is
    also in `Cargo.lock`, in the lockfiles of the benchmark apps built from `crates/`
    (`bench/catalog/corten` and `bench/marketplace/corten`, built with `--locked`, and
-   `bench/live/apps/corten`; `cargo metadata --manifest-path <app>/Cargo.toml` rewrites each), in
-   `crates/corten/tests/openapi.json` (the test that checks it rewrites it) and in the README's
-   Status. A release before 1.0 that changes the API bumps the minor version.
+   `bench/live/apps/corten` and `bench/nodelay/app`; `cargo metadata --manifest-path`
+   `<app>/Cargo.toml` rewrites each), in `crates/corten/tests/openapi.json` (the test that checks it
+   rewrites it) and in the README's Status. A release before 1.0 that changes the API bumps the
+   minor version.
 3. Merge it, then tag that commit on `main` and push the tag:
    `git tag -a vX.Y.Z -m "Corten X.Y.Z"` and `git push origin vX.Y.Z`.
 4. Approve the `release` environment when the workflow asks.
