@@ -135,7 +135,7 @@ jobs:
         # lowercase letters and hyphens, which is all the check in `browser` reads as a part.
         include:
           - group: chromium-examples
-            parts: npm-check watchlist-chromium card-market seller-desk deck-builder
+            parts: npm-check watchlist-chromium card-market deck-builder
           - group: firefox-feeds
             parts: watchlist-firefox auction-room listings-feed
           # watchlist-dev runs the image the watchlist step builds, so it stays in its group.
