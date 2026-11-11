@@ -10452,7 +10452,7 @@ async fn an_area_lets_the_origins_it_names_frame_its_pages() {
 #[tokio::test]
 async fn who_may_frame_a_page_is_enforced_whatever_else_its_answer_or_policy_does() {
     let relayed = || {
-        let mut headers = axum::http::HeaderMap::new();
+        let mut headers = http::HeaderMap::new();
         headers.insert("content-type", "text/html".parse().unwrap());
         headers.insert("content-security-policy", "frame-ancestors *".parse().unwrap());
         headers.insert("x-frame-options", "SAMEORIGIN".parse().unwrap());
@@ -10461,8 +10461,13 @@ async fn who_may_frame_a_page_is_enforced_whatever_else_its_answer_or_policy_doe
     let app = |policy: crate::security::Policy| {
         App::new(Routes::from(
             Table::new()
-                .route("/", get(|| async { axum::response::Html("<p>home</p>") }))
-                .route("/own", get(|| async { ([(header::X_FRAME_OPTIONS, "DENY")], axum::response::Html("<p>own</p>")) }))
+                .route("/", get(|| async { ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], "<p>home</p>") }))
+                .route(
+                    "/own",
+                    get(|| async {
+                        ([(header::CONTENT_TYPE, "text/html; charset=utf-8"), (header::X_FRAME_OPTIONS, "DENY")], "<p>own</p>")
+                    }),
+                )
                 .route("/relayed", get(move || async move { relayed() })),
         ))
         .policy(policy)
@@ -10472,7 +10477,7 @@ async fn who_may_frame_a_page_is_enforced_whatever_else_its_answer_or_policy_doe
         })
         .router()
     };
-    let all = |headers: &axum::http::HeaderMap, name: axum::http::HeaderName| -> Vec<String> {
+    let all = |headers: &http::HeaderMap, name: http::HeaderName| -> Vec<String> {
         headers.get_all(name).iter().map(|v| v.to_str().unwrap().to_string()).collect()
     };
     let partner = || crate::security::Policy::new().frame_ancestors("https://partner.example");

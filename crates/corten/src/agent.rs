@@ -1446,7 +1446,7 @@ mod tests {
         assert!(result.contains(r#""text":"internal error""#), "{result}");
         assert!(!result.contains("connection reset"), "the agent is not told the cause: {result}");
         assert_eq!(refused.status(), StatusCode::INTERNAL_SERVER_ERROR);
-        let body = axum::body::to_bytes(refused.into_body(), usize::MAX).await.unwrap();
+        let body = crate::body::to_bytes(refused.into_body(), usize::MAX).await.unwrap();
         let body = String::from_utf8_lossy(&body);
         assert!(!body.contains("connection reset") && !body.contains("error sending request"), "nor is the client: {body}");
         assert!(body.contains("internal error"), "{body}");
