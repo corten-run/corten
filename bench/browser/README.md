@@ -55,16 +55,21 @@ runs the twenty-app browser pass of `bench/fullstack` and then `run-all.mjs`.
 Takeover on the server-rendered pages is the time from the parser finishing to the app being
 ready, less the rendering of any frame the browser paints in between: Chromium paints the
 server's rows before the module scripts run on some loads and after them on others.
-`paintedFirstMs` in the results is that rendering, the median of the loads (the results keep
-only medians). In browser-3 the frame took about 100 ms when it came and the median was none for
-every app. In browser-4 the median was 58 ms for Corten and React: about half their loads had the
-frame and half did not, and the median falls between the two, so it is not the frame's length.
-It was 0.1 ms for Remix and none for the rest, so how often the frame comes first is no longer
-alike for every framework. A load with the frame still reads a few milliseconds higher (the
-scripts start some time after it), so a median taken over a mix of both moves with the mix:
-`paintedLoads` is how many loads had any of that rendering, and `takeoverUnpaintedMs` is the
-median takeover of the loads that had none (null when every load did), which the mix does not
-move. Rows the app removes or adds while starting are counted in a separate load, since a
+`paintedFirstMs` in the results is that rendering, the median of the loads. In browser-3 the
+frame took about 100 ms when it came and the median was none for every app. In browser-4 the
+median was 58 ms for Corten and React: about half their loads had the frame and half did not, and
+the median falls between the two, so it is not the frame's length. It was 0.1 ms for Remix and
+none for the rest, so how often the frame comes first is no longer alike for every framework.
+The rendering is any long frame (50 ms or more) between the parser finishing and ready, so it also
+counts frames an app causes while it starts, not only the server's rows painted first.
+`renderedLoads` is how many loads had some, `takeoverRenderedMs` and `takeoverNotRenderedMs` are
+the takeover medians of those loads and of the rest (null when there are none), and `each` keeps
+every load's takeover and rendering, so a round can be split again later. Corten's takeover is
+higher on the loads with that rendering even after it is left out, so its median over all loads
+moves with how many there are. In three runs of 15 loads on a desktop (Chromium 156), 8, 6 and 6
+of Corten's loads had the rendering, with takeover medians of 22.0, 22.7 and 20.4 ms against 12.3,
+12.6 and 11.6 ms for the rest, and 17.7, 16.1 and 12.0 ms over all loads. Why those loads are
+slower was not measured. Solid's loads had none, and React's and Remix's had it on 14 or 15. Rows the app removes or adds while starting are counted in a separate load, since a
 mutation observer slows every app that touches many nodes.
 
 The browser's clock resolves to 0.1 ms here, so differences under a millisecond come from
