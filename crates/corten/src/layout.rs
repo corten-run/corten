@@ -1005,14 +1005,22 @@ mod tests {
     }
 
     /// A body read for layout that fails is logged as the stream's own error, with no wrapper
-    /// around it to repeat its message: neither `to_bytes` nor `from_stream` adds one.
+    /// around it to repeat its message: neither `to_bytes` nor `from_stream` adds one, nor
+    /// `Body::new`, which a layer that rebuilds the page's body goes through.
     #[tokio::test]
     async fn a_failed_body_is_its_own_error_without_wrappers() {
-        let broken = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "the upstream reset the connection");
-        let stream = futures_util::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"<p>")), Err(broken)]);
-        let error = crate::body::to_bytes(crate::body::Body::from_stream(stream), usize::MAX).await.unwrap_err();
-        assert!(error.is::<std::io::Error>(), "{error:?}");
-        assert_eq!(error.to_string(), "the upstream reset the connection");
-        assert!(std::error::Error::source(&*error).is_none());
+        use crate::body::Body;
+        use futures_util::StreamExt;
+        let stream = || {
+            let broken = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "the upstream reset the connection");
+            futures_util::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"<p>")), Err(broken)])
+        };
+        let rebuilt = http_body_util::StreamBody::new(stream().map(|piece| piece.map(http_body::Frame::data)));
+        for (made, body) in [("from_stream", Body::from_stream(stream())), ("new", Body::new(rebuilt))] {
+            let error = crate::body::to_bytes(body, usize::MAX).await.unwrap_err();
+            assert!(error.is::<std::io::Error>(), "{made}: {error:?}");
+            assert_eq!(error.to_string(), "the upstream reset the connection", "{made}");
+            assert!(std::error::Error::source(&*error).is_none(), "{made}");
+        }
     }
 }

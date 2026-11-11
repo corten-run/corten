@@ -17,7 +17,8 @@ use tower::ServiceExt;
 /// `ZSTD_STREAM_BYTES` (480 KiB). A change to either changes this.
 const ZSTD_STREAMS: usize = (256 << 20) / (480 << 10);
 
-/// An event stream's first event, as each stream below starts.
+/// An event stream's first event, as each stream below starts. They are `Media::stream`s only
+/// for a stream that stays open, ends or fails as the test needs; an app's live data is a feed.
 fn first() -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static {
     stream::iter([Ok(Bytes::from_static(b"data: 1\n\n"))])
 }
