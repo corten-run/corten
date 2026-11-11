@@ -1216,7 +1216,7 @@ mod tests {
     struct Deny;
 
     impl crate::Middleware for Deny {
-        async fn call(&self, _: crate::extract::Request, _: impl crate::middleware::Next) -> Response {
+        async fn call(&self, _: crate::http::Request, _: impl crate::middleware::Next) -> Response {
             crate::Refused::unauthorized(crate::Challenge::basic("tools")).into_response()
         }
     }

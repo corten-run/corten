@@ -23,10 +23,9 @@ use std::{
 
 use corten::{
     ClientIp, Error, LiveResponse, LiveSince, Media, Signal,
-    extract::{FromRequestParts, Request},
-    http::{Method, StatusCode, request::Parts},
+    extract::FromRequestParts,
+    http::{IntoResponse, Method, Request, Response, StatusCode, request::Parts},
     i18n::Minor,
-    middleware::{IntoResponse, Response},
     prelude::*,
     security::{
         Nonce,
@@ -484,7 +483,7 @@ fn history_csv(
     lot: String,
     first: (Vec<store::Bid>, i64),
     page: u32,
-) -> impl futures_util::Stream<Item = Result<corten::Bytes, store::Error>> + Send + 'static {
+) -> impl futures_util::Stream<Item = Result<corten::http::Bytes, store::Error>> + Send + 'static {
     let pages = futures_util::stream::try_unfold((Some(first), 0), move |(read, after)| {
         let (store, lot) = (store.clone(), lot.clone());
         async move {
@@ -500,11 +499,12 @@ fn history_csv(
                 let ms = bid.at.duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
                 let _ = writeln!(csv, "{},{}.{:02},{ms}", csv_field(&bid.bidder), bid.cents / 100, bid.cents % 100);
             }
-            Ok(Some((corten::Bytes::from(csv), (None, last))))
+            Ok(Some((corten::http::Bytes::from(csv), (None, last))))
         }
     });
-    let head =
-        futures_util::stream::once(async { Ok::<_, store::Error>(corten::Bytes::from_static(b"bidder,amount_usd,unix_ms\n")) });
+    let head = futures_util::stream::once(async {
+        Ok::<_, store::Error>(corten::http::Bytes::from_static(b"bidder,amount_usd,unix_ms\n"))
+    });
     futures_util::StreamExt::chain(head, pages)
 }
 

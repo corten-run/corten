@@ -122,7 +122,7 @@
 //! by describing what it sends as that type does:
 //!
 //! ```
-//! use corten::{answer::{AnyInputs, Format, NotAFeed}, middleware::{IntoResponse, Response}};
+//! use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}};
 //!
 //! /// Rates as text, from a cache of the app's own.
 //! struct Cached(String);
@@ -166,7 +166,7 @@
 //! Without it, the handler does not compile:
 //!
 //! ```compile_fail,E0277
-//! use corten::{answer::{AnyInputs, Format, NotAFeed}, middleware::{IntoResponse, Response}};
+//! use corten::{answer::{AnyInputs, Format, NotAFeed}, http::{IntoResponse, Response}};
 //!
 //! /// Rates as text, from a cache of the app's own.
 //! struct Cached(String);
@@ -590,7 +590,7 @@ macro_rules! raw_body {
         })*
     };
 }
-raw_body!(bytes::Bytes, String, crate::body::Body, crate::extract::Request);
+raw_body!(bytes::Bytes, String, crate::body::Body, crate::http::Request);
 
 /// Nothing a client sends that the document shows: what the server holds or works out.
 macro_rules! nothing {

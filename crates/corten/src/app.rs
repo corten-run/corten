@@ -10,7 +10,7 @@ use crate::{
     assets::Assets,
     cache::{self, Seen},
     client::Peer,
-    extract::Request,
+    handler::Request,
     listener::Listener,
     middleware::Middleware,
     page::{self, default_error_page, error_page_fn, Asked, Credentials, ErrorPageFn, Failure, Shared},
@@ -66,6 +66,7 @@ pub struct Area<P> {
     with_text: Vec<&'static str>,
     components: Vec<crate::Component>,
     deadline: Option<Option<Duration>>,
+    body_limit: Option<usize>,
     sources: crate::security::Sources,
     middleware: Vec<Arc<dyn crate::middleware::Erased>>,
     /// Corten's own routes served with its routes (an MCP endpoint's metadata), outside its
@@ -197,6 +198,19 @@ impl<P: Prefix> Area<P> {
         self
     }
 
+    /// The most of a request body, in bytes, that [`crate::http::Bytes`], `String`, [`crate::Json`] and
+    /// [`crate::Form`] read at the prefix or under it, and what an [`crate::Upload`] keeps unless
+    /// its handler sets its own, in place of [`App::body_limit`]: `.body_limit(64 << 10)` for an
+    /// area of short forms, or `.body_limit(16 << 20)` for one that takes large documents, so
+    /// every other page keeps the app's. Over it the answer is a 413. In nested areas the
+    /// innermost that sets one decides, and an [`App::api`] under the prefix with no limit of its
+    /// own, nor one from an API around it, takes it too. A raised limit is held for a slow client
+    /// until the deadline ([`Area::deadline`]), so a prefix that raises one keeps a deadline.
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = Some(bytes);
+        self
+    }
+
     /// A step of the area's own in each request at its prefix or under it (a write limit, an
     /// audit log): its routes but one that says `unstaged`, its nested areas' and an unknown URL
     /// there, as with its
@@ -278,6 +292,7 @@ struct Placed {
     companions: Vec<String>,
     components: Vec<crate::Component>,
     deadline: Option<Option<Duration>>,
+    body_limit: Option<usize>,
     sources: crate::security::Sources,
     middleware: Vec<Arc<dyn crate::middleware::Erased>>,
 }
@@ -334,6 +349,7 @@ pub struct App<M = ()> {
     components: Vec<crate::Component>,
     areas: Vec<Placed>,
     deadline: Option<Duration>,
+    body_limit: usize,
     apis: Vec<(Mount, Table)>,
     /// The APIs' route paths as written, checked with the pages' when the router is built.
     api_paths: Vec<&'static str>,
@@ -468,6 +484,7 @@ impl App {
             components: Vec::new(),
             areas: Vec::new(),
             deadline: Some(DEADLINE),
+            body_limit: crate::extract::BODY_LIMIT,
             apis: Vec::new(),
             api_paths: Vec::new(),
             tasks: Vec::new(),
@@ -507,6 +524,7 @@ impl App {
             components: self.components,
             areas: self.areas,
             deadline: self.deadline,
+            body_limit: self.body_limit,
             apis: self.apis,
             api_paths: self.api_paths,
             tasks: self.tasks,
@@ -560,6 +578,7 @@ impl<M: Middleware> App<M> {
             with_text: Vec::new(),
             components: Vec::new(),
             deadline: None,
+            body_limit: None,
             sources: crate::security::Sources::default(),
             middleware: Vec::new(),
             companions: Vec::new(),
@@ -579,6 +598,7 @@ impl<M: Middleware> App<M> {
             companions,
             components: area.components,
             deadline: area.deadline,
+            body_limit: area.body_limit,
             sources: area.sources,
             middleware: area.middleware,
         });
@@ -672,6 +692,24 @@ impl<M: Middleware> App<M> {
     /// not lift it for every page.
     pub fn deadline(mut self, deadline: impl Into<Option<Duration>>) -> Self {
         self.deadline = deadline.into();
+        self
+    }
+
+    /// The most of a request body, in bytes, that [`crate::http::Bytes`], `String`, [`crate::Json`] and
+    /// [`crate::Form`] read, and what an [`crate::Upload`] keeps unless its handler sets its own
+    /// ([`crate::Upload::limit`]): 2 MiB unless set. Over it the answer is a 413 (before the
+    /// handler runs for the readers, at the read that crosses it for an `Upload`), and the rest of
+    /// the body is read past by up to the limit again (at most 64 MiB) so a browser still sending
+    /// sees it (an `Upload` reads past by up to 64 MiB whatever its limit). The readers wait for a
+    /// slow client until the deadline, not an idle time as an `Upload` does, so a raised limit
+    /// keeps one ([`App::deadline`]); a proxy in front needs a body limit of at least twice the
+    /// app's, or the limit and 64 MiB where uploads take it (see the deploy guide). An area or an API whose
+    /// routes take more, or should take less, sets its own ([`Area::body_limit`],
+    /// [`Api::body_limit`]), so one route that takes large documents does not raise it for every
+    /// page. A handler that takes the whole request reads its body at a limit of its own
+    /// ([`crate::extract::bytes_up_to`]); an unstaged route reads no body.
+    pub fn body_limit(mut self, bytes: usize) -> Self {
+        self.body_limit = bytes;
         self
     }
 
@@ -1338,6 +1376,10 @@ impl<M: Middleware> App<M> {
         let mut area_deadlines: Vec<(&'static str, Option<Duration>)> =
             self.areas.iter().filter_map(|area| Some((area.prefix, area.deadline?))).collect();
         area_deadlines.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
+        // And their own body limit, the same way.
+        let mut area_limits: Vec<(&'static str, usize)> =
+            self.areas.iter().filter_map(|area| Some((area.prefix, area.body_limit?))).collect();
+        area_limits.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
         // Each area's middleware with every enclosing area's, the outermost first; the innermost
         // area first, so the first under a path decides. Empty unless an area has some.
         let mut area_middleware: Vec<(&'static str, crate::middleware::Stack)> = self
@@ -1367,6 +1409,10 @@ impl<M: Middleware> App<M> {
             if mount.deadline.is_none() {
                 mount.deadline =
                     area_deadlines.iter().find(|(prefix, _)| crate::api::under(prefix, &mount.prefix)).map(|(_, d)| *d);
+            }
+            if mount.body_limit.is_none() {
+                mount.body_limit =
+                    area_limits.iter().find(|(prefix, _)| crate::api::under(prefix, &mount.prefix)).map(|(_, l)| *l);
             }
         }
         // The routes that say `unstaged`, each through a lane of its own in place of the stages,
@@ -1402,6 +1448,8 @@ impl<M: Middleware> App<M> {
                     shared: Arc::new(shared),
                     deadline: self.deadline,
                     area_deadlines,
+                    body_limit: self.body_limit,
+                    area_limits,
                     bounds,
                     policy,
                     mounts,
@@ -1975,6 +2023,10 @@ struct Layer<S> {
     deadline: Option<Duration>,
     /// [`Area::deadline`]s, innermost prefix first; empty unless an area set one.
     area_deadlines: Vec<(&'static str, Option<Duration>)>,
+    /// [`App::body_limit`].
+    body_limit: usize,
+    /// [`Area::body_limit`]s, innermost prefix first; empty unless an area set one.
+    area_limits: Vec<(&'static str, usize)>,
     /// Each connection keeps its request's deadline for shutdown ([`Drain::each`]).
     bounds: bool,
     policy: Applied,
@@ -2027,6 +2079,14 @@ impl<S: Steps> Layer<S> {
         if self.bounds {
             crate::client::answering(deadline);
         }
+        // The body limit, the same way, carried by the request's signal.
+        let body_limit = match mount {
+            Some(mount) => mount.body_limit.unwrap_or(self.body_limit),
+            None if own || self.area_limits.is_empty() => self.body_limit,
+            None => {
+                self.area_limits.iter().find(|(prefix, _)| crate::api::under(prefix, path)).map_or(self.body_limit, |(_, l)| *l)
+            }
+        };
         // The middleware of the area or API the request is in, where one has some.
         let scope = self.steps.scope(mount, own, path);
         if let Some(mount) = mount {
@@ -2102,7 +2162,7 @@ impl<S: Steps> Layer<S> {
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let (mut res, caller, (mode, fetched)) = self.run(req, route, mount, deadline, scope).await;
+        let (mut res, caller, (mode, fetched)) = self.run(req, route, mount, deadline, body_limit, scope).await;
         #[cfg(debug_assertions)]
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;
@@ -2153,7 +2213,7 @@ impl<S: Steps> Layer<S> {
         }
         // Refused before `run` gives the request its signal: the error page reads the app's
         // state (its static files, head tags, import map, the visitor's zone) from it.
-        let watch = Watch(self.signal(req.headers()));
+        let watch = Watch(self.signal(req.headers(), crate::extract::BODY_LIMIT));
         req.extensions_mut().insert(watch.0.clone());
         Some((Asked::new(req, &self.shared, Credentials::of(req.headers()), (mode, fetched)), watch))
     }
@@ -2170,14 +2230,14 @@ impl<S: Steps> Layer<S> {
     /// A request's signal in this app: the app's state, and the zone the browser reported when
     /// the app learns its visitors' zones (`req.zone()`; with `zoned_dates` the page and a live
     /// part's fragments are written in it, none for a `Public` answer, `Signal::zone`).
-    fn signal(&self, headers: &http::HeaderMap) -> Signal {
+    fn signal(&self, headers: &http::HeaderMap, body_limit: usize) -> Signal {
         #[cfg(feature = "zones")]
         if self.shared.client_zone {
-            return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(headers));
+            return Signal::for_app_in(self.shared.clone(), crate::client::ZoneName::of(headers), body_limit);
         }
         #[cfg(not(feature = "zones"))]
         let _ = headers;
-        Signal::for_app(self.shared.clone())
+        Signal::for_app(self.shared.clone(), body_limit)
     }
 
     /// The response, whether anything read who is asking, and the request's mode with whether the
@@ -2188,11 +2248,12 @@ impl<S: Steps> Layer<S> {
         route: Option<Route>,
         api: Option<&Mount>,
         deadline: Option<Duration>,
+        body_limit: usize,
         scope: S::Scope<'a>,
     ) -> (Response, bool, (Mode, bool)) {
         // Dropped with this future if the client leaves first; then the response's. The zone the
         // browser reported is read once, here.
-        let watch = Watch(self.signal(req.headers()));
+        let watch = Watch(self.signal(req.headers(), body_limit));
         req.extensions_mut().insert(watch.0.clone());
         let mode = page::Mode::asked(req.headers());
         let next = Next { steps: &self.steps, scope, route };

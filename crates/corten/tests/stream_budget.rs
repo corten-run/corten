@@ -6,8 +6,7 @@
 
 use bytes::Bytes;
 use corten::{
-    answer::Body,
-    http::{header, Request, Response, StatusCode},
+    http::{header, Body, Request, Response, StatusCode},
     App, Media, Router,
 };
 use futures_util::{stream, StreamExt};

@@ -729,14 +729,14 @@ pub use corten_macros::UrlValue;
 ///     pub struct Figure;
 /// }
 ///
-/// async fn ping() -> corten::middleware::Response {
+/// async fn ping() -> corten::http::Response {
 ///     let text = "text/plain; charset=utf-8";
-///     corten::middleware::Response::builder().header("content-type", text).body("pong".into()).unwrap()
+///     corten::http::Response::builder().header("content-type", text).body("pong".into()).unwrap()
 /// }
 ///
-/// async fn figure() -> corten::middleware::Response {
+/// async fn figure() -> corten::http::Response {
 ///     let json = "application/json";
-///     corten::middleware::Response::builder().header("content-type", json).body("42".into()).unwrap()
+///     corten::http::Response::builder().header("content-type", json).body("42".into()).unwrap()
 /// }
 ///
 /// async fn home(req: Req) -> HtmlResult {
@@ -788,7 +788,7 @@ pub use corten_macros::UrlValue;
 ///     pub struct Ping;
 /// }
 ///
-/// async fn ping(_: corten::Bytes) -> &'static str {
+/// async fn ping(_: corten::http::Bytes) -> &'static str {
 ///     "took"
 /// }
 /// # fn main() { let _ = url::router(); }
@@ -1163,7 +1163,7 @@ impl<H: crate::handler::Handler<T, S>, T, S> crate::handler::Handler<T, S> for N
     #[inline]
     fn call(
         self,
-        req: crate::extract::Request,
+        req: crate::http::Request,
         state: S,
     ) -> impl std::future::Future<Output = crate::response::Response> + Send + 'static {
         fn apply(mut res: crate::response::Response) -> crate::response::Response {
@@ -3078,7 +3078,7 @@ impl fmt::Write for Encode<'_> {
 /// route's only handler:
 ///
 /// ```compile_fail
-/// use corten::{extract::Request, prelude::*, route::FromUrl};
+/// use corten::{http::Request, prelude::*, route::FromUrl};
 ///
 /// #[corten::routes]
 /// mod url {
@@ -3096,7 +3096,7 @@ impl fmt::Write for Encode<'_> {
 /// takes, so `any = relay::<..>` does not compile:
 ///
 /// ```compile_fail
-/// use corten::{extract::Request, prelude::*, route::FromUrl};
+/// use corten::{http::Request, prelude::*, route::FromUrl};
 ///
 /// #[corten::routes]
 /// mod url {
@@ -3358,7 +3358,7 @@ pub trait FromUrl {
 /// answers does not compile:
 ///
 /// ```compile_fail,E0277
-/// use corten::{middleware::Response, prelude::*};
+/// use corten::{http::Response, prelude::*};
 ///
 /// async fn rates() -> Response {
 ///     Response::default()
@@ -3778,7 +3778,7 @@ pub(crate) struct Lane {
 
 impl crate::router::Stages for Lane {
     #[inline]
-    fn run(self: std::sync::Arc<Self>, req: crate::extract::Request, route: &crate::router::Route) -> crate::router::Answering {
+    fn run(self: std::sync::Arc<Self>, req: crate::http::Request, route: &crate::router::Route) -> crate::router::Answering {
         if !self.hosts.answers(&req) {
             let mut res = crate::security::misdirected();
             res.headers_mut().insert(http::header::CACHE_CONTROL, crate::cache::PRIVATE);

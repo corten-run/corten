@@ -104,7 +104,7 @@ use std::{
     pin::Pin,
 };
 
-use crate::answer::Body;
+use crate::http::Body;
 
 use crate::Router;
 use bytes::Bytes;
@@ -521,7 +521,7 @@ mod tests {
     }
 
     /// What the request was: its method, query, the headers a test sets, and its body.
-    async fn echo(req: crate::extract::Request) -> String {
+    async fn echo(req: crate::http::Request) -> String {
         let (parts, body) = req.into_parts();
         let body = crate::body::to_bytes(body, 1 << 16).await.unwrap();
         let h = |name: &str| parts.headers.get_all(name).iter().map(|v| v.to_str().unwrap()).collect::<Vec<_>>().join("|");

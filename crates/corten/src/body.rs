@@ -16,7 +16,7 @@ pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 /// A body as it is sent or read: a request's, which a handler that takes the whole request reads
 /// ([`crate::extract::bytes_up_to`]), a response's, which a middleware's
-/// [`crate::middleware::Response`] holds, and what a [`crate::Relay`] passes on from another
+/// [`crate::http::Response`] holds, and what a [`crate::Relay`] passes on from another
 /// server (`Body::from_stream(..)`). An empty body holds nothing; any other is boxed once.
 ///
 /// It is two words, as a `Response<Body>` is moved through every stage: a wider body takes the

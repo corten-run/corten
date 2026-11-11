@@ -59,14 +59,14 @@
 //! compile as one, and neither does a map whose keys JSON cannot hold:
 //!
 //! ```compile_fail
-//! use corten::{middleware::IntoResponse, Json};
+//! use corten::{http::IntoResponse, Json};
 //! #[derive(serde::Serialize)]
 //! struct Price { lowest: String }
 //! let _ = Json(Price { lowest: "$1".into() }).into_response();
 //! ```
 //!
 //! ```compile_fail
-//! use corten::{middleware::IntoResponse, Json};
+//! use corten::{http::IntoResponse, Json};
 //! let mut grid = std::collections::BTreeMap::new();
 //! grid.insert((1, 2), "a tuple is not a JSON key");
 //! let _ = Json(grid).into_response();
@@ -134,12 +134,13 @@ use std::{
     },
 };
 
-use crate::extract::{BodyRejection, FromRequest, Request};
+use crate::extract::{BodyRejection, FromRequest};
+use crate::handler::Request;
 use bytes::Bytes;
 use http::{header, HeaderValue, StatusCode};
 
 use crate::{
-    answer::Body,
+    body::Body,
     response::{IntoResponse, Response},
 };
 
@@ -814,7 +815,8 @@ pub mod __private {
     }
 }
 
-/// A body with a JSON content type (`application/json`, or a `+json` one), up to 2 MiB, read by
+/// A body with a JSON content type (`application/json`, or a `+json` one), up to the route's
+/// limit ([`crate::App::body_limit`], 2 MiB unless set), read by
 /// Corten's reader, or by serde_json where that reader gives up, which also says why one does not
 /// read: a 415 for another content type, a 400 for JSON that does not parse, and a 422 naming the
 /// field for JSON that does not fit `T` ([`BodyRejection`]).
@@ -830,7 +832,8 @@ impl<T: FromJson, S: Send + Sync> FromRequest<S> for Json<T> {
                 "Expected request with `Content-Type: application/json`",
             ));
         }
-        let bytes = crate::extract::whole(req.into_body()).await?;
+        let limit = crate::extract::body_limit(req.extensions());
+        let bytes = crate::extract::whole(req.into_body(), limit).await?;
         if let Some(value) = std::str::from_utf8(&bytes).ok().and_then(read::fast) {
             return Ok(Json(value));
         }

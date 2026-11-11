@@ -741,8 +741,8 @@ rules something out.
     trait of Corten's bridged to it), so an axum release that changed the trait changed every
     app's extractors with it; now the shape is Corten's and changes only with a Corten release
     that says so. `Request` and `Response` are the `http` crate's over Corten's own body
-    (`corten::answer::Body`), `corten::middleware` names `IntoResponse` and `IntoResponseParts`,
-    Corten's since step 4 with axum-core's names and shapes, and `corten::Bytes` and
+    (`corten::http::Body`), `corten::http` names `IntoResponse` and `IntoResponseParts`,
+    Corten's since step 4 with axum-core's names and shapes, and `corten::http::Bytes` and
     `corten::Listener` the rest. `FromRef` (the trait and the derive) is Corten's too: a
     conversion of the routes' state that Corten's `State` reads, with the impl for the state
     itself that axum-core's had. axum's
@@ -758,17 +758,34 @@ rules something out.
     axum's `to_bytes`, whose one error is both a body over the limit and one that broke, and which
     leaves the rest of a body over it unread, so a client still sending can miss the answer; a
     body too large to hold is read piece by piece with `pieces_up_to`. `Bytes`, `String` and Corten's
-    `Json` and `Form` read a whole body with Corten's reader at axum's limit (2 MiB) and with its
+    `Json` and `Form` read a whole body with Corten's reader at a limit (2 MiB, axum's, unless set) and with its
     texts: a 413 over it, a 400 for a body that broke or text that is not UTF-8, a 415 for a
     content type that is not the reader's, each one `corten::extract::BodyRejection` (plain text)
-    where axum had a type for each. A body over the limit is read past until 4 MiB of it has arrived
-    (and the piece that crossed that), so a browser still sending sees the 413, and one whose length says it is
-    longer is refused unread: these readers serve every route that takes one, so a refused
-    request costs about what the limit allows, not the 64 MiB `bytes_up_to` and an upload read
-    past, which an app chooses per route. The 2 MiB is fixed: axum's `DefaultBodyLimit`, a layer that
-    set it per route, went with axum, and no app here reads a larger whole body, so a setting would
-    be a knob with no user; a route that takes more takes the whole `Request` and reads it with
-    `bytes_up_to` at its own limit (the app guide's example), at the cost of parsing it itself.
+    where axum had a type for each. A body over the limit is read past until twice the limit has arrived, at most the limit and
+    64 MiB (and the piece that crossed that), so a browser still sending sees the 413, and one
+    whose length says it is longer is refused unread: these readers serve every route that takes
+    one, so a refused request costs about what the limit allows, not the 64 MiB `bytes_up_to` and
+    an upload read past, which an app chooses per route. The limit is set where the deadline is,
+    `App::body_limit`, `Area::body_limit` and `Api::body_limit`, resolved by the same prefix
+    rules (the innermost area or API that sets one), and it is what an `Upload` keeps unless its
+    handler says otherwise: an app that takes large documents under `/api` raises it there, and
+    an area of short forms lowers it, without either changing every page. It was fixed at 2 MiB
+    when axum left (axum's `DefaultBodyLimit` layer set it per route, and no example app read a
+    larger whole body). It is a setting again because the limit is the readers' defence and one
+    size serves neither end of an app well: a public area of short forms is cheaper to refuse at
+    a few KiB, and an API that takes documents needs more than 2 MiB without dropping `Json` for
+    `bytes_up_to` and parsing by hand. No example app sets one yet, so that is a bet, and every
+    app pays for it whether it sets one or not: a whole body read costs about 1% more (below). Not chosen: a limit per route, which axum's layer gave and which
+    would be a second place a route's settings live beside its area or API; and a type parameter
+    on the readers (`Json<T, LIMIT>`), which puts a server setting in every handler's signature.
+    The request's `Signal`, which every staged request already allocates, carries the limit,
+    so setting one adds no allocation: each request pays the limit's selection (a comparison, or a
+    prefix lookup in an area) and an XOR as its signal is made, and a reader the lookup of the
+    signal and another XOR.
+    The readers wait for a slow client until the deadline, not an idle time as an `Upload` does,
+    so a raised limit is held that long: a prefix that raises one keeps a deadline. A route that
+    says `unstaged` reads no body; one that takes more than its prefix allows takes the whole
+    `Request` and reads it with `bytes_up_to`.
     One reader per body, a whole one: a body declared over the limit is read past from its first
     piece and none of it is kept. `Json`'s answers are axum 0.8.9's, recorded before it left and
     held by a test (`json.rs`, `AXUM_0_8_9`), and so is which content types it takes: mime
@@ -790,6 +807,15 @@ rules something out.
     against step 2 at `7bba1e2b`: about 100 instructions fewer a staged request with jemalloc
     and 150 to 170 with glibc, an unstaged one the same; [Choice 25](#choice-axum-router), Stands
     on);
+    bet (the maintainer asked for the limit to be set where the deadline is, after the review of
+    the framework without axum; an app that needs a size other than 2 MiB for `Json` or `Form`
+    is expected, not yet seen);
+    measured (callgrind, release, jemalloc, 1,200 against 200 requests in process through the
+    stages, one run each, the settable limit against `9653c20c`: a plain answer 13,234
+    instructions a request before and 13,261 after, and a 1 KiB body `Bytes` reads 17,291 before
+    and 17,461 after, the same with `App::body_limit(4 << 20)` set (an area's limit adds a
+    prefix lookup like the deadline's, not measured); a limit put on the request as an extension
+    of its own instead cost 17,969 with one set);
     measured (axum 0.8.9's `Json` answers to twelve bodies under eight content types, recorded
     before it left and held by `json.rs`'s `AXUM_0_8_9` table);
     reasoned (the trait's shape is axum 0.8's, so an extractor's `impl` body compiles unchanged;
@@ -799,15 +825,17 @@ rules something out.
 
     Revisit when: an app needs an extractor that cannot be written with this signature (one that
     borrows from the request beyond its call, say); or an `http` release changes what `Parts`
-    holds; or an app needs `Json`, `Form`, `String` or `Bytes` over 2 MiB on a route, or a
-    smaller limit than 2 MiB for them, which reopens the fixed limit; or a client is refused a JSON content type RFC 9110 allows, which
+    holds; or an app needs a body limit for one route that differs from its area's or API's,
+    which would add one per route; or by the 0.2 release no example or reported app sets a
+    body limit, which takes the setting away again; or a client is refused a JSON content type RFC 9110 allows, which
     moves `Json` to one reader of the RFC's grammar, shared with `Form`, so a content type is
     parsed one way.
 
     Last checked: 2026-11-09, axum 0.8.9 (`axum-core` 0.5.6) and rustc 1.99.1, Corten's own
     traits at the commit that adds them ([Choice 25](#choice-axum-router), Last checked);
     2026-11-10, `IntoResponse`, `FromRef` and the body readers Corten's, axum gone
-    ([Choice 25](#choice-axum-router), step 4), with axum 0.8.9's `Json` answers recorded first.
+    ([Choice 25](#choice-axum-router), step 4), with axum 0.8.9's `Json` answers recorded first;
+    2026-11-10, the limit set per app, area and API and its cost, measured against `9653c20c`.
 
 22. <a id="choice-locale-in-url"></a>**A page's locale is negotiated from `Accept-Language` unless its URL names one, and a shared
    page names one.** Negotiation with `Vary: accept-language` is HTTP's own (RFC 9110, 12.5.4)
@@ -949,9 +977,17 @@ rules something out.
     2. Protocol: hyper's HTTP/1.1 reads and writes the connection. It stays: framing is where a
        server's worst bugs live (request smuggling, chunked bodies, pipelining), hyper is tested
        for them as Corten could not be, and nothing measured here points at it.
-    3. Vocabulary: the `http` crate's `Request`, `Response` and `HeaderMap`, which hyper, HTTP
-       clients and HTTP/3 libraries share (`corten::http`). Nothing above names the connection's
-       protocol.
+    3. Vocabulary: one module, `corten::http`: the `http` crate's types (`StatusCode`,
+       `HeaderMap`, `Uri`), which hyper, HTTP clients and HTTP/3 libraries share, and what Corten
+       builds on them: `Body` (and `BodyDataStream`), `Request` and `Response` over it, `Bytes`,
+       and `IntoResponse`, `IntoResponseParts` and `ResponseParts`, which are Corten's contract
+       for how a handler answers rather than shared ones, kept here so an app imports one module
+       for a request and its answer. Nothing above names the connection's protocol, and an app
+       names this layer from one place; the crate defines each type where it is used (the body in
+       `body`, the request in `handler`, the response in `response`) and the module gathers them.
+       Until it was one module, an app named the body from `answer`, the request from `extract`
+       and the response from `middleware`. `MatchedPath` stays in `middleware`: it is the
+       route's pattern, which the router gives, not HTTP's.
     4. Stages: what goes around a route ([Choice 28](#choice-fixed-stages)), each one a future that
        wraps the route's, in Corten's one order. A route goes through all of them or says
        `unstaged` and goes through none, its lane in their place (the host check and the headers
@@ -1066,7 +1102,7 @@ rules something out.
        `corten::Listener` a trait of its own; then axum leaves Corten's dependencies, which
        reopens [Choice 21](#choice-own-extractors)'s `corten::axum` for a test's stand-in server:
        an app's test that wants one then depends on axum itself.
-       It has landed. The body (`corten::answer::Body`), `IntoResponse` and `IntoResponseParts`,
+       It has landed. The body (`corten::http::Body`), `IntoResponse` and `IntoResponseParts`,
        the readers of a whole body, the server-sent events writer and `Listener` are Corten's, and
        `corten::axum`, `compress::apply` and `Policy::apply` are gone: compression and the
        security headers are stages `App` puts around every route, and a route with neither is

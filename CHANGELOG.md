@@ -15,6 +15,17 @@ Corten is pre-1.0, so any minor version may change the API.
   `/embed/items/{id}` may be framed by the sites `EMBED_ORIGINS` names
   ([#1129 Allow an explicit frame-ancestor policy for read-only HTML embeds](https://github.com/corten-run/corten/issues/1129)).
 
+- `App::body_limit`, `Area::body_limit` and `Api::body_limit` set the most of a request body
+  `Bytes`, `String`, `Json` and `Form` read, and what an `Upload` keeps unless its handler
+  sets `upload.limit`, by the prefix rules the deadline has (the innermost area or API that sets
+  one decides; an API in an area takes the area's). It is 2 MiB unless set, as before, and a body
+  the readers refuse is read past by up to the limit again (at most 64 MiB) where the fixed limit
+  read past by 2 MiB. The readers wait for a slow client until the deadline, so a prefix that raises the
+  limit keeps one. Design Choice 21 is reopened for it.
+  Measured with callgrind (release, jemalloc): a plain answer costs 13,261 instructions a request
+  where it cost 13,234, and a 1 KiB body read whole 17,461 where it cost 17,291, the same with a
+  limit set (the request's `Signal` carries it, so setting one allocates nothing).
+
 - `unstaged` on a `#[route(..)]`, in the app's, an area's or an API's routes module, serves that
   route outside the stages, beside routes that keep them all: no same-origin check, signal,
   deadline, middleware (the app's, the area's or the API's), error page, security headers, cache
@@ -2215,10 +2226,10 @@ Corten is pre-1.0, so any minor version may change the API.
     and no longer depend on `tower` or `http-body-util` (card-market keeps them for its two
     router benchmarks)
     ([#760 Apps name axum for http types, tests and extractors, and every app carries tower and http-body-util only to test itself](https://github.com/corten-run/corten/issues/760)).
-246. `corten::extract` (`FromRequestParts`, `OptionalFromRequestParts`, `FromRequest`, `Request`,
-    `State`), `corten::middleware::{Response, IntoResponse}`, `corten::answer::Body`,
-    `corten::Bytes` and `corten::Listener`: what an app names to write its own extractor, a
-    middleware, a relay or a listener, so it imports Corten alone. They are axum's traits and types
+246. `corten::extract` (`FromRequestParts`, `OptionalFromRequestParts`, `FromRequest`, `State`),
+    `corten::http::{Request, Response, IntoResponse, Body, Bytes}` and `corten::Listener`: what
+    an app names to write its own extractor, a middleware, a relay or a listener, so it imports
+    Corten alone. They are axum's traits and types
     (and the `bytes` crate's), not new ones. Breaking: `corten::FromRef` (and the prelude's) is now
     the trait as well as the derive, so `FromRef<S>` bounds work with the prelude, and a file that
     imports both `corten::FromRef` (or `prelude::FromRef`) and `corten::axum::extract::FromRef` by
@@ -2803,6 +2814,15 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- The HTTP types an app names are in one module, `corten::http` (design Choice 25, part 3): the
+  `http` crate's types as before (`corten::http::StatusCode`, `request::Parts`), and Corten's
+  `Body`, `BodyDataStream`, `Request`, `Response`, `IntoResponse`, `IntoResponseParts`,
+  `ResponseParts` and `Bytes`, which were `corten::answer::Body`, `corten::extract::Request`,
+  `corten::middleware::{IntoResponse, Response, ..}` and `corten::Bytes`. Those paths are gone:
+  change the `use` (`use corten::http::{Body, IntoResponse, Request, Response};`). The types are
+  the same; `corten::http::Request` and `Response` with no type argument are over `Body`, as
+  the old paths were. `MatchedPath` stays in `corten::middleware`.
+
 - `Refused::unauthorized` takes the `Challenge` its 401 sends in `WWW-Authenticate`, which RFC
   9110 requires on a 401 and which it never sent: `Refused::unauthorized(Challenge::bearer(realm))`,
   with `.param("error", "invalid_token")` for a token that is wrong (RFC 6750). `corten::Challenge`
@@ -2813,8 +2833,8 @@ Corten is pre-1.0, so any minor version may change the API.
   (elsewhere it panics as it runs). A parameter's value is sent quoted and must be ASCII. The
   JSON 401, the error page and the page swapped in all carry it. An app that called
   `Refused::unauthorized()` passes the scheme its clients send credentials in.
-  `Refused::sign_in`'s 401 to a data client still has none, since a session cookie has no scheme (design Choice 27, Limit 11). The MCP
-  endpoint builds its challenges with `Challenge` too; without an `Authorization`, its 401 now
+  `Refused::sign_in`'s 401 to a data client still has none, since a session cookie has no scheme
+  (design Choice 27, Limit 11). The MCP endpoint builds its challenges with `Challenge` too; without an `Authorization`, its 401 now
   names the endpoint as the realm (`Bearer realm="<Tools::new's name>"`, or `mcp` when the name
   is empty or not printable ASCII). card-market's partners send their key as a bearer token
   (`Authorization: Bearer <key>`) rather than in `X-Api-Key`, so its 401 names a registered
@@ -2822,7 +2842,7 @@ Corten is pre-1.0, so any minor version may change the API.
   which matches the scheme in any case.
 
 - axum is no longer one of Corten's dependencies (design Choice 25, step 4, and Choice 21). The
-  body (`corten::answer::Body`), `IntoResponse`, `IntoResponseParts`, the readers of a whole
+  body (`corten::http::Body`), `IntoResponse`, `IntoResponseParts`, the readers of a whole
   body, the server-sent events writer and `Listener` are Corten's own, with axum's names and
   shapes; the dispatch suite passes unchanged. What it removed is under Removed (14). What an
   app sees:
@@ -2844,7 +2864,7 @@ Corten is pre-1.0, so any minor version may change the API.
   5. A server-sent event's data splits on CRLF and CR as on LF, one line each, and empty data
      writes no `data:` line (axum wrote an empty one), so such an event is not dispatched;
      Corten's own events always carry data.
-  6. `corten::answer::Body`'s error is a `Box<dyn std::error::Error + Send + Sync>` where it was
+  6. `corten::http::Body`'s error is a `Box<dyn std::error::Error + Send + Sync>` where it was
      `axum::Error`, so a middleware that read a body's pieces and matched on axum's error
      matches on the boxed one (`downcast_ref`), and `Body::into_data_stream()` gives a
      `BodyDataStream` that is a `Stream` of those pieces but no longer an `http_body::Body`:

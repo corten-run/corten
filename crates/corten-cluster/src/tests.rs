@@ -136,7 +136,7 @@ async fn two_instances_converge_and_a_late_one_backfills_its_replay_log() {
     let fc = c.feed(&feed).await.unwrap().unwrap();
     assert_eq!(fc.seq(), 20);
     let cursor = Since(Some(corten::feed::Cursor::new(fc.generation(), 15)));
-    let body = corten::answer::Body::new(fc.live(cursor).into_body());
+    let body = corten::http::Body::new(fc.live(cursor).into_body());
     let mut stream = body.into_data_stream();
     let first = futures_util::StreamExt::next(&mut stream).await.unwrap().unwrap();
     let text = String::from_utf8(first.to_vec()).unwrap();
@@ -203,7 +203,7 @@ async fn an_unused_feed_is_unloaded_and_loads_again_with_its_replay_log() {
     eventually("unloaded", || !cluster.stats().iter().any(|(k, _, _)| k == &feed)).await;
     let again = cluster.feed(&feed).await.unwrap().unwrap();
     assert_eq!((again.seq(), again.generation()), (3, generation.as_str()));
-    let body = corten::answer::Body::new(again.live(Since(Some(corten::feed::Cursor::new(&generation, 1)))).into_body());
+    let body = corten::http::Body::new(again.live(Since(Some(corten::feed::Cursor::new(&generation, 1)))).into_body());
     let first = futures_util::StreamExt::next(&mut body.into_data_stream()).await.unwrap().unwrap();
     let text = String::from_utf8(first.to_vec()).unwrap();
     assert!(text.contains(&format!("id: {generation}-2\n")) && !text.contains("event: sync"), "{text}");
@@ -414,7 +414,7 @@ async fn a_reload_reads_the_rows_again_and_one_that_panics_sends_its_clients_to_
     // One whose build panics does not go on serving a feed that no longer follows its patches: its
     // clients resync, and requests get the error as a first load's would.
     sqlx::query("INSERT INTO test_items VALUES ($1, 'panic', 0)").bind(&feed).execute(&pool).await.unwrap();
-    let mut live = corten::answer::Body::new(
+    let mut live = corten::http::Body::new(
         loaded.live(Since(Some(corten::feed::Cursor::new(loaded.generation(), loaded.seq())))).into_body(),
     )
     .into_data_stream();
