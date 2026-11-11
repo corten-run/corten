@@ -9,7 +9,10 @@ mod marketplace;
 mod marketplace_view;
 mod model;
 
-use std::sync::{Arc, LazyLock};
+use std::{
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use futures_util::Stream;
 use tokio::sync::broadcast::{self, error::RecvError};
@@ -18,17 +21,20 @@ use topcoat::{
     asset::{Asset, AssetBundle, RouterBuilderAssetExt, asset},
     context::Cx,
     router::{
-        Router, StatusCode,
+        HeaderName, HeaderValue, Layer, Router, StatusCode,
         content::{
             Form, Json,
             sse::{Event as SseEvent, KeepAlive, Sse},
         },
         error::not_found as not_found_error,
-        href, page, path_param, request, route,
+        header, href, page, path_param, request, route,
+        tower::TowerLayer,
     },
     runtime::{Event, RouterBuilderRuntimeExt, link, procedure, shard, signal},
     view::{Child, View, ViewExt, attributes, component, view},
 };
+use tower::ServiceBuilder;
+use tower_http::{set_header::SetResponseHeaderLayer, timeout::TimeoutLayer};
 
 use crate::model::{ContentLine, ItemView, alert_message, sort_listings};
 
@@ -47,7 +53,7 @@ async fn main() {
 }
 
 fn router() -> Router {
-    Router::builder()
+    let builder = Router::builder()
         .page(home)
         .page(item_page)
         .page(catalog_view::catalog_page)
@@ -62,8 +68,48 @@ fn router() -> Router {
         .route(live_prices)
         .route(live_publish)
         .assets(AssetBundle::load().expect("asset bundle next to the binary (topcoat asset bundle)"))
-        .runtime()
-        .build()
+        .runtime();
+    let builder = if matched() { builder.layer(profile_layer()) } else { builder };
+    builder.build()
+}
+
+/// Whether the app runs with the matched tier's production profile (`PROFILE=matched`,
+/// bench/fullstack/README.md, "The matched tier").
+fn matched() -> bool {
+    std::env::var("PROFILE").as_deref() == Ok("matched")
+}
+
+/// The rest of the matched tier's production profile, as axum-maud adds it: tower-http's header
+/// layers and its timeout, run by Topcoat's `TowerLayer` (its `tower` feature) as one layer around
+/// every request. The security headers, `Cache-Control: private, no-cache` on an answer that sets
+/// none (the assets keep Topcoat's `public, max-age=31536000, immutable`), and a 503 past a 10
+/// second deadline (card-market's). An answer a handler or Topcoat returns as an `Error` (a JSON
+/// 404, a 405, a failed read's 500, the 413 below) goes without them: `TowerLayer` passes the error
+/// through and the router makes its answer after every layer; the 403 below is refused before any
+/// layer runs. Topcoat's defaults already refuse a body over 2 MiB (413) and a cross-site form post
+/// (403, its origin policy), compress, and close a request head left unfinished at 30 s. Its
+/// runtime compiles the expressions it reads from the page's markup with `new Function`, so the CSP
+/// has `'unsafe-eval'` on every answer this layer sets headers on.
+fn profile_layer() -> impl Layer {
+    let header =
+        |name: HeaderName, value: &'static str| SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value));
+    TowerLayer::new(
+        ServiceBuilder::new()
+            .layer(header(
+                header::CONTENT_SECURITY_POLICY,
+                "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data: https:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            ))
+            .layer(header(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
+            .layer(header(header::REFERRER_POLICY, "strict-origin-when-cross-origin"))
+            .layer(header(header::X_FRAME_OPTIONS, "DENY"))
+            .layer(header(HeaderName::from_static("cross-origin-opener-policy"), "same-origin"))
+            .layer(header(
+                HeaderName::from_static("permissions-policy"),
+                "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+            ))
+            .layer(header(header::CACHE_CONTROL, "private, no-cache"))
+            .layer(TimeoutLayer::with_status_code(StatusCode::SERVICE_UNAVAILABLE, Duration::from_secs(10))),
+    )
 }
 
 /// The document every page shares, as card-market's layout writes it.

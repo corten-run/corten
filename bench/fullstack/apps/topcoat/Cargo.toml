@@ -8,8 +8,11 @@ publish = false
 [workspace]
 
 [dependencies]
-# Topcoat's defaults (router, views, runtime, assets, compression, ...) and server-sent events.
-topcoat = { version = "=0.11.0", features = ["sse"] }
+# Topcoat's defaults (router, views, runtime, assets, compression, ...), server-sent events, and its
+# tower adapter, which runs the matched tier's tower-http layers (PROFILE=matched).
+topcoat = { version = "=0.11.0", features = ["sse", "tower"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["set-header", "timeout"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
