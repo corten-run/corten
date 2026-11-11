@@ -2890,7 +2890,7 @@ Corten is pre-1.0, so any minor version may change the API.
 ### Changed
 - The runtime starts in less time on a long page: its first scan no longer reads the name of
   every `data-ref` into a set it then dropped (nothing counted those names), it finds `<details>`
-  and `<dialog>` with a query of each tag, it looks for its optional `<meta>` tags in the element
+  and `<dialog>` with a query of each tag, it looks for its other `<meta>` tags in the element
   that holds its `corten-scripts` meta (found in the whole document), where `<Corten />` writes
   them all, instead of through the whole document, and the comparison of the layout a write's page
   is drawn against runs each of its patterns only on markup that holds what the pattern looks for.

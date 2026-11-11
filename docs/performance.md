@@ -230,15 +230,21 @@ began than in browser-3 (Corten 105.6 to 89.0 ms, Svelte 123.5 to 39.6, Vue 125.
 JavaScript 98.4 to 21.0), Corten's rank changed: it was ready before every other framework then
 and after Svelte and Vue now. The two rounds ran on different CPUs (a Xeon Platinum 8280 then),
 different Chromium versions (148 then) and different Corten runtimes, and they do not show which
-of those slowed Corten's takeover. Paired runs on one desktop (an Intel Core i9-10885H) found it
-since, measured with `bench/browser/ssr.mjs` and performance marks in copies of the page, over the
-loads with no long frame: most of the rise was the runtime's own evaluation at load, 9.4 ms at
-browser-4's commit against 5.9 at 77002fe (12 alternating pairs of 30 loads), spent in four startup
-steps that did work nothing used or did it the slow way.
-[#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) took about 4 ms of it back: evaluation 10.15 ms (9.90 to 10.70) against 6.00 (5.90 to 6.40),
-medians of 6 runs of 30 loads each, a paired difference of -4.14 ms (standard deviation 0.16), and
-takeover 3.9 ms less (standard deviation 2.4) over 8 pairs, with Solid's within 0.3 ms. The 10.2 ms
-above is browser-4's; the next browser round measures takeover again
+of those slowed Corten's takeover. An A/B on one Intel Core i9-10885H laptop with browser-4's
+Chromium (156.0.8078.4), `bench/browser/ssr.mjs` taking turns between browser-4's commit and
+77002fe, measured part of it: takeover 4.24 ms slower (standard deviation 1.03) over 8 pairs of 30
+loads and 2.96 ms slower (0.62) over 4 more, Solid -0.19 and -0.20 ms, and the runtime's own
+evaluation at load, from performance marks in copies of the page over the loads with no long
+frame, 9.4 ms against 5.9 (+3.5 ms, no spread recorded), spent in four startup steps that did work
+nothing used or did it the slow way. Browser-4's median load had a long frame, on which takeover
+reads about 9 ms higher, so part of 6.0 to 10.2 ms is probably that.
+[#1246 Runtime: cut startup work on a long page (#1222)](https://github.com/corten-run/corten/pull/1246) cut that evaluation: in another session on the same laptop and Chromium, against a base
+(8c2a1b71) with browser-4's runtime, evaluation fell 4.14 ms (standard deviation 0.16; base 10.15
+ms, 9.90 to 10.70, against 6.00, 5.90 to 6.40, medians of 6 runs of 30 loads each), and the
+takeover of the loads with no long frame 3.91 ms (standard deviation 2.40) over 8 pairs of 30
+loads, with Solid, the control, at -0.31 ms (standard deviation 0.85). The two sessions measured
+the same runtime at 9.4 and 10.15 ms, so their differences compare (+3.5 ms, then -4.14), not
+their levels. The 10.2 ms above is browser-4's; the next browser round measures takeover again
 ([#1222 Taking over 1,000 server-rendered rows rose from 6.0 to 10.2 ms in round browser-4 while Solid's, Svelte's, Vue's and React's fell](https://github.com/corten-run/corten/issues/1222)). Its
 JavaScript is the runtime, views and the page's handlers, 17.9 KB gzip, more than Solid's 6.8 KB
 and less than the other frameworks'. Creating thousands of rows in the browser is where it trails
