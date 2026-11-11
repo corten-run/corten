@@ -4551,21 +4551,25 @@ Corten is pre-1.0, so any minor version may change the API.
     ([#1089 Evaluate NumBuffer for integer rendering and JSON writing before raising the MSRV](https://github.com/corten-run/corten/issues/1089)).
 178. CI runs its checks side by side. The release tests run on a runner of their own
     (`rust-release`) beside the other Rust checks (`rust-checks`), and the browser smokes run in
-    three groups, each with one engine of the watchlist's smoke and some of the other examples, each
-    building its own images and starting its own servers. Every command runs, and every browser
-    check runs in every engine it ran in before; the watchlist's checks that use no browser now run
-    once in each group, and each engine gets a fresh server. The required checks keep their names:
-    `rust` and `browser` are jobs that pass only when every job under them ran and passed, and fail
-    on one that failed, was cancelled or was skipped; each smoke group fails unless it ran exactly
-    the parts it names, and `browser` fails unless every part is in exactly one group, so a check
-    cannot drop out by a renamed group or a mistyped condition. Over 40 passing pull request runs
-    (39 first attempts) the browser job took a median 1,076 s and the Rust job 989 s, 589 s of it the
-    release tests. Estimated from their step times, the longest smoke group takes about 7 minutes
-    and the Rust path about 10.5 (the release tests on a warm cache; the new jobs' caches start
-    cold), so a change's checks finish in about 11 minutes rather than 18, with 8 jobs in a run, up
-    to 6 at once, rather than 3. Neither the timings nor the failure cases (a job failed, cancelled
-    or skipped, a part dropped) have run on Actions yet; the part checks were run locally against
-    the workflow file
+    three groups, each with one engine of the watchlist's smoke and some of the other examples,
+    each building its own images and starting its own servers. Every command runs, and every
+    browser check runs in every engine it ran in before; the watchlist's checks that use no browser
+    now run once in each group, and each engine gets a fresh server. The required checks keep their
+    names: `rust` and `browser` are jobs that pass only when every job under them ran and passed,
+    and fail on one that failed, was cancelled or was skipped; each smoke group fails unless it ran
+    exactly the parts it names, and `browser` fails unless every part is in exactly one group, so a
+    check cannot drop out by a renamed group or a mistyped condition. Over 40 passing pull request
+    runs (39 first attempts) the browser job took a median 1,076 s and the Rust job 989 s, 589 s of
+    it the release tests. Measured on this change's first run (one run, f7396486, every cache
+    cold): the smoke groups took 6 min 57 s, 7 min 29 s and 7 min 49 s and `rust-checks` 7 min 51
+    s, so `browser` passed after about 11 minutes, and `rust-release` 17 min 6 s, so the run took
+    17 min 13 s; `rust-release` again on its warm cache took 12 min 20 s (one rerun). So the
+    release tests are now the long pole: on warm caches a change's checks should finish in about 12
+    and a half minutes (estimated from that rerun) rather than 18, with 8 jobs in a run, up to 6 at
+    once, rather than 3. The failure cases ran on Actions on a throwaway branch: with a part in no
+    group every smoke group passed and `browser` failed at its parts check, and with one smoke step
+    and the release tests made to fail, `browser` and `rust` each failed; a cancelled or skipped
+    job is refused by the same test of each result
     ([#1085 CI runs every browser example in sequence, putting a 17-minute path on each change](https://github.com/corten-run/corten/issues/1085),
     [#1086 CI starts its 9.6-minute release test step only after the rest of the Rust checks](https://github.com/corten-run/corten/issues/1086)).
 
