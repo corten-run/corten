@@ -4,6 +4,14 @@ Notable changes to Corten. The format follows [Keep a Changelog](https://keepach
 Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
+
+## 0.2.0 (2026-11-11)
+
+The first release of all seven crates, published together by the Release workflow. The main crate's
+package is `corten-run` (its library is still `corten`). Version 0.1.0 of `corten-protocol`,
+`corten-macros`, `corten-feed` and `corten-cli` was published by hand from `2976f158` only to hold
+their names, and has no tag or release.
+
 ### Added
 
 - Static files with `mp4`, `webm` and `vtt` names are sent as `video/mp4`, `video/webm` and

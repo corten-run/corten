@@ -30,11 +30,20 @@ jobs:
           test "$GITHUB_REF_NAME" = "v$version" || { echo "tag $GITHUB_REF_NAME does not match the workspace version $version"; exit 1; }
           awk -v v="$version" '$0 ~ "^## " v "( |$)" { on = 1; next } on && /^## / { exit } on' CHANGELOG.md > notes.md
           test -s notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          # GitHub refuses a release body over 125,000 characters, and only after every crate is
+          # published. A longer section (bytes, never fewer than characters) is attached to the
+          # release as a file, and the notes link to it and to CHANGELOG.md at the tag.
+          if [ "$(wc -c < notes.md)" -gt 125000 ]; then
+            mv notes.md "CHANGELOG-$version.md"
+            printf '%s\n' "The notes for $version are longer than a GitHub release allows. They are attached as CHANGELOG-$version.md and are in [CHANGELOG.md]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$GITHUB_REF_NAME/CHANGELOG.md) at this tag." > notes.md
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v7
         with:
           name: notes
-          path: notes.md
+          path: |
+            notes.md
+            CHANGELOG-*.md
 
   binaries:
     needs: [checks, version]
@@ -74,7 +83,9 @@ jobs:
     env:
       # Only a release that publishes a crate for the first time needs an API token (crates.io
       # allows trusted publishing for crates already published; CONTRIBUTING.md, "Before a release
-      # that adds a crate"). Delete the secret after it.
+      # that adds a crate"). Delete the secret after it. A crate that accepts trusted publishing
+      # only refuses the token, so that release first allows token publishing on the crates
+      # already published (step 3 there).
       HAS_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v7
@@ -96,6 +107,9 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           merge-multiple: true
-      - run: gh release create "$GITHUB_REF_NAME" corten-* --repo "$GITHUB_REPOSITORY" --title "Corten ${{ needs.version.outputs.version }}" --notes-file notes.md
+      # CHANGELOG-<version>.md is there only when the notes were too long for the release itself.
+      - run: |
+          shopt -s nullglob
+          gh release create "$GITHUB_REF_NAME" corten-* CHANGELOG-*.md --repo "$GITHUB_REPOSITORY" --title "Corten ${{ needs.version.outputs.version }}" --notes-file notes.md
         env:
           GH_TOKEN: ${{ github.token }}

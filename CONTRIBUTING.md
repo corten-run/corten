@@ -275,10 +275,10 @@ publishing when the tag, the workspace version and the changelog disagree.
    `git tag -a vX.Y.Z -m "Corten X.Y.Z"` and `git push origin vX.Y.Z`.
 4. Approve the `release` environment when the workflow asks.
 
-A crate whose trusted publisher was added before the repository moved to `corten-run` still
-names the old owner's repository, and crates.io refuses the workflow until it is edited: before
-the next release, check each published crate's Settings on crates.io and point its publisher at
-`corten-run/corten`.
+Every published crate has a trusted publisher, accepts trusted publishing only, and is owned by
+the `github:corten-run:maintainers` team as well as the account that first published it (a team
+owner can publish but cannot change owners), so only `release.yml`, approved in the `release`
+environment, can publish a version and no single account is the only one that can manage a crate.
 
 The framework's package is `corten-run` and its library `corten` (`[lib] name` in
 `crates/corten/Cargo.toml`), so apps and the paths `corten-macros` generates still name it
@@ -305,7 +305,16 @@ were not on crates.io, while the other four were at 0.1.0.
 2. In the repository settings, create the environment `release` with yourself as a required
    reviewer, and add a secret `CARGO_REGISTRY_TOKEN` to it: a crates.io token with the
    `publish-new` and `publish-update` scopes, expiring in a few days.
-3. Release as above. Then, for each crate that did not have one, open its Settings on crates.io,
-   add a trusted publisher (GitHub, repository `corten-run/corten`, workflow `release.yml`,
-   environment `release`), delete the secret and revoke the token. Later releases authenticate
-   through `rust-lang/crates-io-auth-action` with no stored token.
+3. A crate that accepts trusted publishing only refuses the token, and the workflow publishes
+   every crate in the run with the token when the secret is set (one run has one credential, and
+   a new crate may depend on crates published in the same run). So for this release, open each
+   crate already on crates.io, in its Settings, and allow token publishing again.
+4. Release as above. Then, on crates.io, for each crate:
+   1. If it has no trusted publisher, add one: GitHub, repository `corten-run/corten`, workflow
+      `release.yml`, environment `release`.
+   2. Turn on trusted publishing only, including on the crates step 3 opened.
+   3. If `github:corten-run:maintainers` is not an owner, add it
+      (`cargo owner --add github:corten-run:maintainers <crate>`), keeping your own account as an
+      owner.
+5. Delete the secret and revoke the token. Later releases authenticate through
+   `rust-lang/crates-io-auth-action` with no stored token.
