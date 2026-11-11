@@ -240,8 +240,8 @@ impl<P: Prefix> Api<P> {
     /// Problem Details document (sent as `application/json` then), for an API that speaks another
     /// protocol's error shape:
     /// an unknown URL (404), a wrong method (405, with `Allow`), a cross-site write (403), the
-    /// deadline (503), a request an extractor rejects, a `Caller` that refuses (401 or 403, with
-    /// `WWW-Authenticate`) and a handler's `Error`. `message` is what the client may be told: a
+    /// deadline (503), a request an extractor rejects, a `Caller` that refuses (401, with its
+    /// `WWW-Authenticate`, or 403) and a handler's `Error`. `message` is what the client may be told: a
     /// 4xx's message, a 5xx's reason (and its message under `corten dev`). A failure with a JSON
     /// body of the handler's own, and a [`crate::Relay`]'s, pass through as they are, and so
     /// does the 422 of the input's field errors (or the 409 or 410 of a refusal, `Errors::refuse`;

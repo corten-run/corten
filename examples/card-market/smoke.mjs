@@ -493,28 +493,31 @@ try {
     [cheapest, "4,58 ★ (274)", "Peu joué"].map((t) => `${t}: ${french.includes(t)}`).join(", "),
   );
 
-  // A partner's service sets alerts with its API key (`X-Api-Key`, `API_KEYS`); without one it
-  // is a JSON 401, and the form's rules answer with the fields.
+  // A partner's service sets alerts with its API key as a bearer token (`API_KEYS`); without one
+  // it is a JSON 401 whose `WWW-Authenticate` names the scheme, and the form's rules answer with
+  // the fields.
   const alertFrom = (/** @type {Record<string, string>} */ headers, body = { id: "item_5", email: "ada@example.com", target_price: "1.00" }) =>
     fetch(`${base}/api/alerts`, { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
   const anonymous = await alertFrom({});
   const anonymousBody = await anonymous.json().catch(() => null);
   check(
     "a partner write without an API key is a Problem Details 401 that says what to send",
-    anonymous.status === 401 && anonymous.headers.get("content-type") === "application/problem+json" && anonymousBody?.status === 401 && anonymousBody?.detail === "Send a valid partner API key in X-Api-Key.",
-    `${anonymous.headers.get("content-type")} ${JSON.stringify(anonymousBody)}`,
+    anonymous.status === 401 && anonymous.headers.get("content-type") === "application/problem+json" && anonymous.headers.get("www-authenticate") === 'Bearer realm="partners"' && anonymousBody?.status === 401 && anonymousBody?.detail === "Send a valid partner API key as a bearer token.",
+    `${anonymous.headers.get("content-type")} ${anonymous.headers.get("www-authenticate")} ${JSON.stringify(anonymousBody)}`,
   );
-  const keyed = await alertFrom({ "x-api-key": "dev-key" });
+  const wrong = await alertFrom({ authorization: "Bearer wrong" });
+  check("a wrong key is a 401 that says the token is not valid", wrong.status === 401 && wrong.headers.get("www-authenticate") === 'Bearer realm="partners", error="invalid_token"', `${wrong.status} ${wrong.headers.get("www-authenticate")}`);
+  const keyed = await alertFrom({ authorization: "Bearer dev-key" });
   const keyedBody = await keyed.json().catch(() => null);
   check("with its key the partner's alert is set", keyed.status === 200 && keyedBody?.partner === "dev" && /^Alert set: /.test(keyedBody?.message ?? ""), JSON.stringify(keyedBody));
-  const refused = await alertFrom({ "x-api-key": "dev-key" }, { id: "item_5", email: "ada", target_price: "1.00" });
+  const refused = await alertFrom({ authorization: "Bearer dev-key" }, { id: "item_5", email: "ada", target_price: "1.00" });
   const refusedBody = await refused.json().catch(() => null);
   check("a field the rules refuse is a 422 with the field", refused.status === 422 && typeof refusedBody?.fields?.email === "string", JSON.stringify(refusedBody));
 
   // Writes are limited per client address (20 a minute), a key no partner has included, so
   // guessing keys is limited too. The container trusts Docker's networks as its proxies
   // (`PROXIES`), so each address below is the client its proxy forwarded.
-  const writeAs = (/** @type {string} */ address, key = "guess") => alertFrom({ "x-api-key": key, "x-forwarded-for": address });
+  const writeAs = (/** @type {string} */ address, key = "guess") => alertFrom({ authorization: `Bearer ${key}`, "x-forwarded-for": address });
   // Addresses of this run's own, so a second run against the same container starts at zero.
   const octet = () => 1 + Math.floor(Math.random() * 254);
   const limited = `198.51.${octet()}.${octet()}`;

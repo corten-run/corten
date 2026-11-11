@@ -356,11 +356,10 @@
       }
     },
     "securitySchemes": {
-      "x-api-key": {
+      "bearer": {
         "description": "The partner's API key.",
-        "in": "header",
-        "name": "x-api-key",
-        "type": "apiKey"
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -400,7 +399,7 @@
         },
         "security": [
           {
-            "x-api-key": []
+            "bearer": []
           }
         ],
         "summary": "A price alert a partner's service sets for one of its users. A request without a known API key is answered 401."
