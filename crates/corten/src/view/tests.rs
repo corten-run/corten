@@ -15,7 +15,15 @@ impl fmt::Display for Price {
 #[test]
 fn integers_render_as_display_writes_them() {
     let mut cases: Vec<i128> = (-1_000..=1_000).collect();
-    cases.extend([9_999, 10_000, 99_999, 123_456_789, u32::MAX as i128, i64::MIN as i128, i64::MAX as i128, u64::MAX as i128]);
+    cases.extend([123_456_789, u32::MAX as i128, i64::MIN as i128, i64::MAX as i128, u64::MAX as i128]);
+    // Each width's first and last numbers and the ones beside them, negative while an i64 holds them.
+    for width in 1..=19 {
+        let ten = 10i128.pow(width);
+        cases.extend([ten - 1, ten, ten + 1]);
+        if width <= 18 {
+            cases.extend([1 - ten, -ten, -ten - 1]);
+        }
+    }
     for n in cases {
         let mut out = String::from("x");
         if let Ok(n) = u64::try_from(n) {
