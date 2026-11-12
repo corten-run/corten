@@ -142,7 +142,7 @@ impl Machine {
     /// machine all of whose CPUs it may run on. Kept to one CPU of eight with no limit
     /// (`--cpuset-cpus`), the machine's count is of all eight, and reads low with that one busy.
     pub fn counts_its_cpus(&self) -> bool {
-        self.metered && (self.cpu_limit.is_some() || self.cpus >= self.stat_cpus)
+        self.metered && (self.cpu_limit.is_some() || self.server_cpus() >= self.stat_cpus)
     }
 
     /// Whether the server's group holds it to a limit, of memory or of CPU.
@@ -680,6 +680,8 @@ mod tests {
             |cpus, stat_cpus, cpu_max| Machine { metered: true, stat_cpus, ..Machine::counted(cpus, meminfo, None, cpu_max) };
         assert!(on(8, 8, None).counts_its_cpus() && on(1, 1, None).counts_its_cpus());
         assert!(!on(1, 8, None).counts_its_cpus());
+        // With no count of its own the server is taken to have the machine's CPUs.
+        assert!(on(0, 8, None).counts_its_cpus() && on(0, 8, None).server_cpus() == 8);
         assert!(on(1, 8, Some("100000 100000\n")).counts_its_cpus());
         assert!(!Machine { metered: false, ..on(8, 8, None) }.counts_its_cpus());
         // A limit is of no more CPUs than the server may run on, by either count the system gave.
@@ -692,6 +694,7 @@ mod tests {
         assert_eq!(within(Some(2.0), [Some(1), Some(8)]), Some(1.0));
         assert_eq!(within(Some(4.0), [Some(128), Some(1)]), Some(1.0));
         assert_eq!(within(Some(0.5), [Some(1), Some(8)]), Some(0.5));
+        assert_eq!(within(Some(4096.0), [None, Some(8)]), Some(8.0));
         assert_eq!((within(Some(1.5), [None, Some(0)]), within(None, [Some(1), Some(1)])), (Some(1.5), None));
     }
 
@@ -735,13 +738,8 @@ mod tests {
         let (machine, allowed_one) = (Machine::in_group(group(), None), Machine::in_group(group(), Some(1)));
         std::fs::remove_dir_all(&dir).expect("the directory removed");
         assert_eq!(allowed_one.cpu_limit, Some(1.0), "{allowed_one:?}");
-        // On a machine of one CPU that holds with the allowed count ignored, so the rule is held
-        // on its own too: the fewest of the counts the system gave, and a count of none is not one.
-        assert_eq!(within(Some(4096.0), [Some(1), Some(8)]), Some(1.0));
-        assert_eq!(within(Some(4096.0), [None, Some(8)]), Some(8.0));
-        assert_eq!(within(Some(0.5), [Some(1), Some(8)]), Some(0.5));
-        assert_eq!(within(Some(4.0), [Some(0), None]), Some(4.0));
-        assert_eq!(within(None, [Some(1), Some(8)]), None);
+        // On a machine of one CPU that holds with the allowed count ignored: the rule itself is
+        // held where the counts are given by hand (`within`, in the test of what the system says).
         let limit = machine.cpu_limit.expect("the limit the group sets");
         // Only a system that counts its CPUs has a count to hold the limit to.
         if machine.stat_cpus > 0 {

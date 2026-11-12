@@ -18,8 +18,11 @@ void main() {
 }`;
 
 // Every texture read names its level (textureLod), so none needs the screen's derivatives and
-// a layer's branch is one the GPU can skip: a pixel pays for the layer it is in.
-const FRAGMENT = `#version 300 es
+// a layer's branch is one the GPU can skip: a pixel pays for the layer it is in. The shader is
+// written in parts with its comments between them, so they are this script's comments, which
+// the browser is not sent.
+const FRAGMENT = [
+  `#version 300 es
 precision highp float;
 
 uniform vec2 uCanvas;
@@ -39,19 +42,21 @@ float hash(vec2 p) {
   vec3 q = fract(vec3(p.xyx) * 0.1031);
   q += dot(q, q.yzx + 33.33);
   return fract((q.x + q.y) * q.z);
-}
-
-// Value noise read from a sheet of random values, one filtered sample each: computed in the
-// shader instead, this many octaves take a Direct3D compiler seconds, with the page frozen.
-float noise(vec2 p) {
+}`,
+  // Value noise read from a sheet of random values, one filtered sample each: computed in the
+  // shader instead, this many octaves take a Direct3D compiler seconds, with the page frozen.
+  `float noise(vec2 p) {
   vec2 f = fract(p);
   return textureLod(uNoise, (floor(p) + f * f * (3.0 - 2.0 * f) + 0.5) * (1.0 / 256.0), 0.0).r;
-}
-
-// Each octave is turned against the last, so the noise's grid never lines up into squares.
-const mat2 TURN = mat2(0.8, -0.6, 0.6, 0.8);
-const float KNEE = 0.24;
-const float CEILING = 0.32;
+}`,
+  // Each octave is turned against the last, so the noise's grid never lines up into squares.
+  `const mat2 TURN = mat2(0.8, -0.6, 0.6, 0.8);`,
+  // How bright the steel's light may be, as the luminance contrast is reckoned with: it eases
+  // off above KNEE and never passes CEILING. The dimmest small type set straight on the steel
+  // is the amber of its code (#f2a44b, luminance 0.459), which keeps 4.5 to 1 over a ground of
+  // 0.063 or less; the dither drawn over the plate can add 0.004 to that, and this leaves room.
+  `const float KNEE = 0.036;
+const float CEILING = 0.056;
 
 float turned4(vec2 p) {
   float sum = 0.0;
@@ -73,10 +78,9 @@ float turned3(vec2 p) {
     gain *= 0.5;
   }
   return sum * 1.143;
-}
-
-// Three octaves kept square to the plate: for bands and streaks, which run one way.
-float square3(vec2 p) {
+}`,
+  // Three octaves kept square to the plate: for bands and streaks, which run one way.
+  `float square3(vec2 p) {
   float sum = 0.0;
   float gain = 0.5;
   for (int i = 0; i < 3; i++) {
@@ -85,17 +89,15 @@ float square3(vec2 p) {
     gain *= 0.5;
   }
   return sum * 1.143;
-}
-
-// Rust's grains, a pixel or three across.
-float grain(vec2 p) {
+}`,
+  // Rust's grains, a pixel or three across.
+  `float grain(vec2 p) {
   return noise(TURN * p * 0.71 + 3.0) * 0.58 + noise(TURN * TURN * p * 0.37 + 9.0) * 0.42;
-}
-
-// The wheel's hairlines: long cells across the plate and short ones down it. The sheet of
-// noise is 256 cells tall, so each time down it the read moves along, and no stretch of
-// hairlines comes round again.
-float hairline(vec2 p) {
+}`,
+  // The wheel's hairlines: long cells across the plate and short ones down it. The sheet of
+  // noise is 256 cells tall, so each time down it the read moves along: a stretch of hairlines
+  // comes round again far along the plate, never under itself.
+  `float hairline(vec2 p) {
   p.x += floor(p.y * (1.0 / 256.0)) * 7.31;
   return noise(p);
 }
@@ -103,11 +105,10 @@ float hairline(vec2 p) {
 void main() {
   vec2 view = vec2(gl_FragCoord.x, uCanvas.y - gl_FragCoord.y) * (1.0 / uScale);
   vec2 page = view + vec2(0.0, uScroll);
-  float y = page.y;
-
+  float y = page.y;`,
   // Where one layer gives way to the next, the line between them wanders. Only the nearest
   // line matters to a pixel, and only near it.
-  float upper = (uStrata.x + uStrata.y) * 0.5;
+  `  float upper = (uStrata.x + uStrata.y) * 0.5;
   float lower = (uStrata.y + uStrata.z) * 0.5;
   float edge = y < upper ? uStrata.x : (y < lower ? uStrata.y : uStrata.z);
   float row = y < upper ? 3.1 : (y < lower ? 14.6 : 27.3);
@@ -124,13 +125,12 @@ void main() {
   float toFar = smoothstep(-34.0, 34.0, y - uStrata.z + wander);
   float inPatina = 1.0 - toOxide + toFar;
   float inOxide = toOxide * (1.0 - toSteel);
-  float inSteel = toSteel * (1.0 - toFar);
-
+  float inSteel = toSteel * (1.0 - toFar);`,
   // Rust is a crust of grains, not a smooth film: the grit is its grains, and the broader
   // patches of the patina and the oxide are read through coordinates the noise itself has
   // pushed about, so a patch's edge is ragged where plain noise would round it into a blob.
   // The grit is read again a pixel across and a pixel down, for the light.
-  float grit = grain(page);
+  `  float grit = grain(page);
   vec2 gritOn = vec2(grit);
   float mottle = 0.5;
   float fine = 0.5;
@@ -143,17 +143,16 @@ void main() {
     mottle = turned4(warped * 0.0105 + 31.7);
     fine = turned3(TURN * warped * 0.085 + 5.0);
     tone = blotch * 0.56 + mottle * 0.3 + fine * 0.14;
-  }
+  }`,
   // The surface's height, for the light. Each layer builds it from the same patches that color
   // it, so a grain of new rust is redder and also stands up into the light. The broad part is
   // the height itself; the part that changes from one pixel to the next is kept as its step to
   // the pixel across and to the pixel down.
-  float height = 0.0;
-  vec2 sharp = vec2(0.0);
-
+  `  float height = 0.0;
+  vec2 sharp = vec2(0.0);`,
   // The stamp: the tagline's letters, their edges for the light, and a blurred copy of the
   // sheet, which is the metal the stamp worked.
-  float letter = 0.0;
+  `  float letter = 0.0;
   float nearLetter = 0.0;
   vec2 bevel = vec2(0.0);
   vec2 stampAt = page / uStampSize;
@@ -170,11 +169,11 @@ void main() {
   float brushed = 0.5;
   float scratch = 0.0;
 
-  if (inPatina > 0.0) {
-    // Weathering steel, as a plate of it looks close up: an orange-brown ground in broad bands
-    // down the plate, lighter and darker; grains of newer, redder rust standing on it, thick
-    // in one band and thin in the next; a few long grey-brown smears, and pale dust in patches.
-    vec3 dull = vec3(0.4, 0.225, 0.15);
+  if (inPatina > 0.0) {`,
+  // Weathering steel, as a plate of it looks close up: an orange-brown ground in broad bands
+  // down the plate, lighter and darker; grains of newer, redder rust standing on it, thick
+  // in one band and thin in the next; a few long grey-brown smears, and pale dust in patches.
+  `    vec3 dull = vec3(0.4, 0.225, 0.15);
     vec3 ground = vec3(0.64, 0.29, 0.115);
     vec3 bright = vec3(0.8, 0.39, 0.105);
     vec3 amber = vec3(0.84, 0.5, 0.12);
@@ -186,59 +185,59 @@ void main() {
     float lay = band * 0.5 + tone * 0.5;
     vec3 patina = mix(dull, ground, smoothstep(0.36, 0.5, lay + (grit - 0.5) * 0.1));
     patina = mix(patina, bright, smoothstep(0.48, 0.64, lay + (fine - 0.5) * 0.22));
-    patina = mix(patina, amber, smoothstep(0.56, 0.76, mottle) * 0.45);
-    // The grains: a pixel or three across, and sharp.
-    float thick = (mottle - 0.5) * 0.5 + (band - 0.5) * 0.3 + (fine - 0.5) * 0.25;
+    patina = mix(patina, amber, smoothstep(0.56, 0.76, mottle) * 0.45);`,
+  // The grains: a pixel or three across, and sharp.
+  `    float thick = (mottle - 0.5) * 0.5 + (band - 0.5) * 0.3 + (fine - 0.5) * 0.25;
     float granule = smoothstep(0.5, 0.62, grit + thick);
-    patina = mix(patina, fresh, granule * 0.72);
-    // Long marks down the plate, both from one read: grey-brown smears where it is high, and
-    // where it is low the runs rain has taken, fine and faint.
-    float drawn = square3(vec2(warped.x * 0.021, warped.y * 0.0017) + 31.0);
+    patina = mix(patina, fresh, granule * 0.72);`,
+  // Long marks down the plate, both from one read: grey-brown smears where it is high, and
+  // where it is low the runs rain has taken, fine and faint.
+  `    float drawn = square3(vec2(warped.x * 0.021, warped.y * 0.0017) + 31.0);
     float smeared = smoothstep(0.6, 0.72, drawn);
     patina = mix(patina, smear * (0.8 + 0.4 * grit), smeared * 0.6);
     float dusted = smoothstep(0.6, 0.7, mottle * 0.55 + (1.0 - band) * 0.5) * smoothstep(0.42, 0.6, grit + (fine - 0.5) * 0.4);
     patina = mix(patina, chalk, dusted * 0.5);
     float runs = 1.0 - drawn;
     patina *= 1.0 - 0.16 * smoothstep(0.54, 0.76, runs);
-    patina *= 0.8 + 0.4 * grit;
-    // That is the plate while it is weathering. In a few years the patina closes: deeper, redder
-    // brown and more even, its grain still showing, and that is how the plate is left.
-    vec3 settled = mix(vec3(0.43, 0.18, 0.095), vec3(0.6, 0.255, 0.105), smoothstep(0.36, 0.62, lay + (fine - 0.5) * 0.15));
+    patina *= 0.8 + 0.4 * grit;`,
+  // That is the plate while it is weathering. In a few years the patina closes: deeper, redder
+  // brown and more even, its grain still showing, and that is how the plate is left.
+  `    vec3 settled = mix(vec3(0.43, 0.18, 0.095), vec3(0.6, 0.255, 0.105), smoothstep(0.36, 0.62, lay + (fine - 0.5) * 0.15));
     settled = mix(settled, fresh * 0.9, granule * 0.34);
     settled = mix(settled, smear, smeared * 0.3);
     settled *= 1.0 - 0.14 * smoothstep(0.54, 0.76, runs);
     settled *= 0.82 + 0.36 * grit;
     patina = mix(patina, settled, smoothstep(0.6, 1.0, uWeather) * 0.72);
     height = fine * 0.9 + mottle * 0.8;
-    sharp = (gritOn - grit) * 0.5 + (smoothstep(0.5, 0.62, gritOn + thick) - granule) * 0.9;
-    // Worked metal rusts brightest, so the letters stand in a lighter ground than the plate's.
-    patina = mix(patina, bloom * (0.92 + 0.34 * grit), nearLetter * 0.82);
+    sharp = (gritOn - grit) * 0.5 + (smoothstep(0.5, 0.62, gritOn + thick) - granule) * 0.9;`,
+  // Worked metal rusts brightest, so the letters stand in a lighter ground than the plate's.
+  `    patina = mix(patina, bloom * (0.92 + 0.34 * grit), nearLetter * 0.82);
     vec3 surface = patina;
     if (uWeather < 1.0 && toFar < 1.0) {
       float rolled = square3(vec2(page.x * 0.0013, page.y * 0.045) + 3.0);
       vec3 millScale = vec3(0.15, 0.172, 0.19) * (0.72 + 0.66 * rolled);
       millScale += vec3(0.012, 0.02, 0.03) * mottle;
-      millScale *= 0.93 + 0.14 * grit;
-      // Rust takes the worked metal at once, so the tagline reads from the first frame.
-      // First rust is specks along the runs rain takes down the plate, then whole patches.
-      float streak = square3(vec2(page.x * 0.019, page.y * 0.0021) + 11.0);
+      millScale *= 0.93 + 0.14 * grit;`,
+  // Rust takes the worked metal at once, so the tagline reads from the first frame.
+  // First rust is specks along the runs rain takes down the plate, then whole patches.
+  `      float streak = square3(vec2(page.x * 0.019, page.y * 0.0021) + 11.0);
       float seed = clamp((turned4(page * 0.0058 + 11.0) * 0.4 + streak * 0.3 + grit * 0.3 - 0.5) * 2.1 + 0.5, 0.0, 1.0);
-      rusted = smoothstep(0.0, 0.14, uWeather * 1.62 - seed + nearLetter * 0.95);
-      // The far side has had its years already.
-      rusted = mix(rusted, 1.0, toFar);
+      rusted = smoothstep(0.0, 0.14, uWeather * 1.62 - seed + nearLetter * 0.95);`,
+  // The far side has had its years already.
+  `      rusted = mix(rusted, 1.0, toFar);
       surface = mix(millScale, patina, rusted);
       surface += vec3(0.42, 0.17, 0.03) * rusted * (1.0 - rusted) * 4.0;
-    }
-    // Mill scale is smooth beside the rust that lifts it.
-    float raised = mix(0.25, 1.0, rusted) * inPatina;
+    }`,
+  // Mill scale is smooth beside the rust that lifts it.
+  `    float raised = mix(0.25, 1.0, rusted) * inPatina;
     body += surface * inPatina;
     height *= raised;
     sharp *= raised;
   }
 
-  if (inOxide > 0.0) {
-    // The dense oxide lies in leaves, one on another, and breaks along them.
-    float laminar = square3(vec2(warped.x * 0.0035, page.y * 0.028) + 21.0);
+  if (inOxide > 0.0) {`,
+  // The dense oxide lies in leaves, one on another, and breaks along them.
+  `    float laminar = square3(vec2(warped.x * 0.0035, page.y * 0.028) + 21.0);
     float leaf = square3(vec2(warped.x * 0.011, page.y * 0.19) + 61.0);
     vec3 oxide = mix(vec3(0.17, 0.07, 0.045), vec3(0.4, 0.17, 0.095), smoothstep(0.3, 0.72, tone * 0.5 + laminar * 0.5));
     oxide = mix(oxide, vec3(0.52, 0.25, 0.12), smoothstep(0.6, 0.8, mottle * 0.55 + fine * 0.4 + (grit - 0.5) * 0.3) * 0.45);
@@ -254,10 +253,10 @@ void main() {
     body += oxide * inOxide;
   }
 
-  if (inSteel > 0.0) {
-    // Ground steel: the wheel's hairlines run across the plate, each a pixel wide and as long
-    // as the plate is broad, over the bands the rolls left; and a few scratches at a slant.
-    float rolled = square3(vec2(page.x * 0.0013, page.y * 0.045) + 3.0);
+  if (inSteel > 0.0) {`,
+  // Ground steel: the wheel's hairlines run across the plate, each a pixel wide and as long
+  // as the plate is broad, over the bands the rolls left; and a few scratches at a slant.
+  `    float rolled = square3(vec2(page.x * 0.0013, page.y * 0.045) + 3.0);
     float hair = hairline(vec2(page.x * 0.0041, page.y * 1.17));
     float coarse = hairline(vec2(page.x * 0.016 + 40.0, page.y * 0.46 + 9.0));
     brushed = hair * 0.56 + coarse * 0.44;
@@ -269,10 +268,10 @@ void main() {
     steel *= 0.82 + 0.36 * brushed;
     steel *= 1.0 + 0.5 * scratch;
     height += (coarse * 0.35 - scratch * 0.9) * inSteel;
-    sharp.y += (hairline(vec2(page.x * 0.0041, (page.y + 1.0 / uScale) * 1.17)) - hair) * 0.45 * inSteel;
-    // Temper colors: the steel next to a rusting layer took its heat, straw nearest, then
-    // purple, then blue, fading into the plate.
-    float heat = max(exp(-max(0.0, y - uStrata.y + wander) / 380.0), exp(-max(0.0, uStrata.z - y - wander) / 380.0));
+    sharp.y += (hairline(vec2(page.x * 0.0041, (page.y + 1.0 / uScale) * 1.17)) - hair) * 0.45 * inSteel;`,
+  // Temper colors: the steel next to a rusting layer took its heat, straw nearest, then
+  // purple, then blue, fading into the plate.
+  `    float heat = max(exp(-max(0.0, y - uStrata.y + wander) / 380.0), exp(-max(0.0, uStrata.z - y - wander) / 380.0));
     vec3 temper = mix(vec3(0.15, 0.25, 0.44), vec3(0.37, 0.2, 0.4), smoothstep(0.22, 0.55, heat));
     temper = mix(temper, vec3(0.64, 0.45, 0.2), smoothstep(0.55, 0.92, heat));
     steel = mix(steel, temper * (0.62 + 0.5 * rolled) * (0.9 + 0.2 * brushed), smoothstep(0.04, 0.5, heat) * 0.36);
@@ -283,11 +282,11 @@ void main() {
   body *= 1.0 - 0.62 * line;
 
   float metal = mix(0.5, 0.07, rusted) * inPatina + 0.05 * inOxide + 0.2 * inSteel;
-  float rough = mix(0.3, 1.0, rusted) * inPatina + 0.85 * inOxide + 0.16 * inSteel;
+  float rough = mix(0.3, 1.0, rusted) * inPatina + 0.85 * inOxide + 0.16 * inSteel;`,
   // The slope is the height's change from this pixel to the next. Of the broad part the GPU
   // already has it, for a block of four pixels at a time, which is fine enough for that part
   // alone: the page's y runs down the canvas, so that one is turned over.
-  vec2 slope = (vec2(dFdx(height), -dFdy(height)) + sharp) * uScale * 2.1 * rough;
+  `  vec2 slope = (vec2(dFdx(height), -dFdy(height)) + sharp) * uScale * 2.1 * rough;
   vec3 normal = normalize(vec3(-slope + bevel * 5.2, 1.0));
 
   vec2 toLight = uPointer - view;
@@ -297,27 +296,30 @@ void main() {
   float shine = pow(clamp(dot(reflect(-light, normal), vec3(0.0, 0.0, 1.0)), 0.0, 1.0), mix(22.0, 9.0, inSteel));
   vec3 shaded = body * (0.56 + 0.16 * inPatina + 0.2 * lit + 0.5 * lit * reach);
   shaded += mix(vec3(1.0, 0.93, 0.84), vec3(0.8, 0.88, 1.0), inSteel) * shine * metal * (0.25 + 0.75 * reach);
-  if (inSteel > 0.0) {
-    // Hairlines throw the light out across themselves: a bar of it stands over the pointer,
-    // narrow along the grain and long across it, and each hairline takes it or does not.
-    vec3 between = normalize(light + vec3(0.0, 0.0, 1.0));
+  if (inSteel > 0.0) {`,
+  // Hairlines throw the light out across themselves: a bar of it stands over the pointer,
+  // narrow along the grain and long across it, and each hairline takes it or does not.
+  `    vec3 between = normalize(light + vec3(0.0, 0.0, 1.0));
     vec2 spread = between.xy / (vec2(0.075, 0.42) * between.z);
     float bar = exp(-dot(spread, spread));
-    shaded += vec3(0.78, 0.86, 1.0) * bar * (0.035 + 0.2 * brushed * brushed + 0.25 * scratch) * inSteel;
-    // Small type is set straight on the steel, so the steel's light stops short of the type's:
-    // it eases off above KNEE and never passes CEILING, under which the palest of that type
-    // (#cfc7ba) keeps 4.5 to 1 over every pixel of the steel. A strike's glow, below, is not
-    // held to it: it is over in four seconds.
-    float top = max(shaded.r, max(shaded.g, shaded.b));
-    float eased = KNEE + (CEILING - KNEE) * (1.0 - exp((KNEE - top) / (CEILING - KNEE)));
-    // The easing flattens the hairlines in the light, so the darker of them are drawn down.
-    eased *= 1.0 - 0.4 * (1.0 - brushed) * smoothstep(KNEE, CEILING + 0.1, top);
-    shaded *= mix(1.0, eased / top, inSteel * step(KNEE, top));
-  }
-
+    shaded += vec3(0.78, 0.86, 1.0) * bar * (0.035 + 0.2 * brushed * brushed + 0.25 * scratch) * inSteel;`,
+  // Small type is set straight on the steel, so the steel's light stops short of the type's.
+  // The luminance is sRGB's own, and a color is dimmed along that curve, so what is drawn has
+  // exactly the luminance asked for. The bound is whole where the plate is steel alone, and
+  // eases in with the steel where a layer gives way to it. A strike's glow, below, is not held
+  // to it: it is over in four and a half seconds.
+  `    vec3 lifted = (shaded + 0.055) * (1.0 / 1.055);
+    float glare = dot(pow(lifted, vec3(2.4)), vec3(0.2126, 0.7152, 0.0722));
+    if (glare > KNEE) {
+      float eased = KNEE + (CEILING - KNEE) * (1.0 - exp((KNEE - glare) / (CEILING - KNEE)));`,
+  // The easing flattens the hairlines in the light, so the darker of them are drawn down.
+  `      eased *= 1.0 - 0.4 * (1.0 - brushed) * smoothstep(KNEE, 0.14, glare);
+      shaded = mix(shaded, max(lifted * pow(eased / glare, 1.0 / 2.4) * 1.055 - 0.055, 0.0), inSteel);
+    }
+  }`,
   // A struck plate: the blow's heat where it landed, and a ring of it running out through the
   // metal as it cools.
-  if (uStruck.z >= 0.0) {
+  `  if (uStruck.z >= 0.0) {
     float age = uStruck.z;
     float from = distance(page, uStruck.xy);
     float ring = (from - 120.0 - age * 560.0) / (70.0 + age * 130.0);
@@ -332,7 +334,8 @@ void main() {
   shaded *= 1.0 - 0.26 * dot(centered, centered);
   shaded += (hash(gl_FragCoord.xy) - 0.5) * 0.014;
   color = vec4(shaded, 1.0);
-}`;
+}`,
+].join("\n");
 
 /**
  * What a world's two handlers share: how a strike reaches its plate, in page pixels. `forge`

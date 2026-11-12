@@ -1,6 +1,7 @@
 // Browser smoke test for Corten's own site, in Chromium, Firefox and WebKit: the page with its
 // scripts, with them blocked by the page's own switch, and with scripting off in the browser; and
-// on a touch screen, in Chromium, whose touches the test can send one at a time. The server says
+// on a touch screen, in Chromium, whose touches the test can send one at a time; and the plate
+// behind the page, built and drawn by Chromium's software renderer. The server says
 // how much CPU and memory is in use: its machine's, or, with SITE_HELD=1, of the limits the
 // container under test is held to on both (docker run --cpus 1 --memory 512m).
 // Usage: node examples/corten-site/smoke.mjs http://localhost:18488 [chromium|firefox|webkit ...]
@@ -284,6 +285,35 @@ for (engine of engines) {
     );
     await page.locator("a[aria-label=Corten]").first().click();
     check("the lockup loads the page in full", (await loaded) && (await page.evaluate(() => Reflect.has(window, "smokeWasHere"))) === false);
+    await context.close();
+  }
+
+  // The plate. A browser under test has no GPU, and the page then keeps its flat layers by its
+  // own choice (it asks for a context that fails where drawing would be slow), so nothing above
+  // runs the shader. Here that choice is taken away, in Chromium, whose software renderer can
+  // build it: the program builds, and a frame is drawn.
+  if (engine === "chromium") {
+    const context = await browser.newContext({ viewport: { width: 480, height: 360 }, reducedMotion: "reduce" });
+    const page = await context.newPage();
+    /** @type {string[]} */
+    const said = [];
+    page.on("console", (m) => ["error", "warning"].includes(m.type()) && said.push(m.text()));
+    page.on("pageerror", (e) => said.push(e.message));
+    await page.addInitScript(() => {
+      const ask = HTMLCanvasElement.prototype.getContext;
+      // @ts-expect-error one signature stands in for the overloads
+      HTMLCanvasElement.prototype.getContext = function (kind, options) {
+        return ask.call(this, kind, kind === "webgl2" ? { ...options, failIfMajorPerformanceCaveat: false } : options);
+      };
+    });
+    await page.goto(`${base}/`, { waitUntil: "load" });
+    const forged = await page.waitForSelector("[data-forged]", { state: "attached", timeout: 45_000 }).then(
+      () => true,
+      () => false,
+    );
+    // The software renderer has warnings of its own (a stall on a read, say): only the page's count.
+    const wrong = said.filter((text) => text.startsWith("corten.run:"));
+    check("the plate's shader builds and a frame is drawn", forged && wrong.length === 0, wrong.join(" | ").slice(0, 400));
     await context.close();
   }
 
