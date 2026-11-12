@@ -48,7 +48,7 @@ use crate::ValueOf;
 ///     </RequiredWhen>
 /// }
 /// .to_html();
-/// assert!(html.contains(r#"<fieldset data-on="connect:ui.required_when.connect($t,&quot;kind&quot;,[&quot;partial&quot;],$s)"><label>"#), "{html}");
+/// assert!(html.contains(r#"<fieldset data-on='connect:ui.required_when.connect($t,"kind",["partial"],$s)'><label>"#), "{html}");
 /// ```
 ///
 /// The values are the control's own, written as its `Display` as a route writes a field: a word of
@@ -81,7 +81,7 @@ use crate::ValueOf;
 /// struct Order { line: i32, note: Option<String> }
 ///
 /// let html = html! { <RequiredWhen control={Order::FIELDS.line} values={&[3]}>"Note"</RequiredWhen> }.to_html();
-/// assert!(html.contains(r#"connect($t,&quot;line&quot;,[&quot;3&quot;],$s)"#), "{html}");
+/// assert!(html.contains(r#"connect($t,"line",["3"],$s)"#), "{html}");
 /// ```
 ///
 /// The control is a field of the form struct, so a misspelled name does not compile:

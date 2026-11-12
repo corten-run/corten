@@ -1010,7 +1010,7 @@ async function run(browser) {
         delete headers["content-length"];
         let body = await res.text();
         // The rows module as the page's own sort links name it in `data-on`.
-        const rows = /data-on="click:([^"]+?)\.sort\(/.exec(body)?.[1];
+        const rows = /data-on='click:([^']+?)\.sort\(/.exec(body)?.[1];
         if (!rows) throw new Error("no rows::sort call on the page");
         const ordered = rows.replace(/rows$/, "ordered");
         const list = (/** @type {string[]} */ ids) => `[${ids.map((id) => `&quot;${id}&quot;`).join(",")}]`;

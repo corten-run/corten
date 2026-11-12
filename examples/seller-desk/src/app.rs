@@ -568,18 +568,17 @@ mod tests {
         assert!(html.contains("/scripts/inventory_grid.js\">") && html.contains("/scripts/price_cell.js\">"), "{html}");
         let sel = "{body:@body,all:@all,count:@count,bar:@bar}";
         assert!(
-            html.contains(&format!(r#" click:inventory_grid.toggle($e,^select,{sel})">"#))
+            html.contains(&format!(r#" click:inventory_grid.toggle($e,^select,{sel})'>"#))
                 && html.matches("inventory_grid.toggle(").count() == 1,
             "one handler for every row: {html}"
         );
         assert!(html.contains(r#"<tr data-key="i00003" id="row-i00003"><td><input data-ref="select""#), "{html}");
-        assert!(html.contains(r#"data-on="connect:inventory_grid.live(@body,"#), "{html}");
-        let one = r#"[&quot;&quot;,&quot;count&quot;,&quot; price not saved&quot;]"#;
-        let other = r#"[&quot;&quot;,&quot;count&quot;,&quot; prices not saved&quot;]"#;
-        let forms = format!("&quot;m&quot;:[null,{one},null,null,null,{other}]}}}})");
+        assert!(html.contains(r#"data-on='connect:inventory_grid.live(@body,"#), "{html}");
+        let one = r#"["","count"," price not saved"]"#;
+        let other = r#"["","count"," prices not saved"]"#;
+        let forms = format!("\"m\":[null,{one},null,null,null,{other}]}}}})");
         assert!(
-            html.contains("inventory_grid.priceEdited($e,@body,{note:@note,label:%{&quot;z&quot;:")
-                && html.matches(&forms).count() == 2,
+            html.contains("inventory_grid.priceEdited($e,@body,{note:@note,label:%{\"z\":") && html.matches(&forms).count() == 2,
             "a cell's typed event reaches the grid, with the catalog's plural forms for the note: {html}"
         );
         assert!(
@@ -720,8 +719,8 @@ mod tests {
                 std::hint::black_box(views::desk(std::hint::black_box(&lines), &view, Msg::default()).to_html());
             }
             let us = start.elapsed().as_secs_f64() * 1e6 / rounds as f64;
-            let handlers: usize = html.matches(" data-on=\"").count();
-            let on_bytes: usize = html.split(" data-on=\"").skip(1).map(|s| s.find('"').unwrap_or(0) + 10).sum();
+            let handlers: usize = html.matches(" data-on='").count();
+            let on_bytes: usize = html.split(" data-on='").skip(1).map(|s| s.find('\'').unwrap_or(0) + 10).sum();
             let ref_bytes: usize = html.split(" data-ref=\"").skip(1).map(|s| s.find('"').unwrap_or(0) + 11).sum();
             let scope_bytes: usize = html.split(" data-scope=\"").skip(1).map(|s| s.find('"').unwrap_or(0) + 13).sum();
             println!(

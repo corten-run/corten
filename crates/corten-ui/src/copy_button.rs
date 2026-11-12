@@ -51,7 +51,7 @@ pub struct Copied {}
 /// .to_html();
 /// // Each button names its own row's element (ids in this crate's examples start with `ui-`).
 /// assert!(html.contains(r#"<code id="ui-tracking-1Z998">1Z998</code><button data-scope="ui-copy-button" type="button" hidden"#), "{html}");
-/// assert!(html.contains("copy($t,&quot;ui-tracking-1Z998&quot;,@said,"), "{html}");
+/// assert!(html.contains(r#"copy($t,"ui-tracking-1Z998",@said,"#), "{html}");
 /// ```
 ///
 /// The element is named by its id type, so text in its place does not compile:

@@ -42,7 +42,7 @@ use corten::prelude::*;
 ///     </CheckboxGroup>
 /// }
 /// .to_html();
-/// assert!(html.starts_with(r#"<fieldset data-on="connect:ui.checkbox_group.connect($t,&quot;Choose at least one item.&quot;,$s) change:ui.checkbox_group.check($t,&quot;Choose at least one item.&quot;)"><legend>Affected items</legend>"#), "{html}");
+/// assert!(html.starts_with(r#"<fieldset data-on='connect:ui.checkbox_group.connect($t,"Choose at least one item.",$s) change:ui.checkbox_group.check($t,"Choose at least one item.")'><legend>Affected items</legend>"#), "{html}");
 /// ```
 #[component(js)]
 pub fn CheckboxGroup<'a, L: Render, C: Render>(legend: L, missing: &'a str, children: C) -> impl Render {

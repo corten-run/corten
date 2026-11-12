@@ -7,7 +7,6 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { aggregate, cpuSettings, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } from "./contract.mjs";
 import { sampleStats } from "./stats.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -17,10 +16,20 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // selection. Restore the caller's environment immediately after importing it.
 const saved = Object.fromEntries(["BENCH_APPS", "BENCH_TIER"].map((key) => [key, process.env[key]]));
 for (const key of Object.keys(saved)) delete process.env[key];
-let inventory;
-try { inventory = (await import("../fullstack/apps.mjs")).pageApps; }
+let inventory, contract, grouping;
+try {
+  // Group contracts also import the registry: load them inside the same environment
+  // boundary so ESM caching cannot capture a historical tier/subset inventory.
+  contract = await import("./contract.mjs");
+  grouping = await import("./group.mjs");
+  inventory = (await import("../fullstack/apps.mjs")).pageApps;
+}
 finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } }
+const { aggregate, cpuSettings, parseArgs, phases, readLoad, sources, targets, validateCatalog, workload } = contract;
+const { groupDescriptor, groupResultSchema, qualificationIdentity, timingPlan } = grouping;
 const options = parseArgs(process.argv.slice(2), inventory);
+const group = options.group === undefined ? null : groupDescriptor(options.group);
+const plan = timingPlan(options, sources, targets);
 const cpus = cpuSettings(process.env);
 const runId = `catalog-${options.round}-${randomBytes(5).toString("hex")}`;
 const network = `${runId}-net`;
@@ -34,6 +43,8 @@ const summary = { workload, round: options.round, runId, options, startedAt: new
   measurement: { cpus, appMemoryBytes: 2 ** 30, upstreamMemoryBytes: 512 * 2 ** 20, encoding: "identity", fixedRate: options.rate,
     upstream: "single Node process, even with a two-CPU quota; high upstream CPU can limit API-mode throughput; closed-loop VUs alone do not prove app saturation",
     cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec" } };
+if (group) Object.assign(summary, { schema: groupResultSchema, group,
+  scope: "catalog-page group: page-only cold/warmup/load timing in both sources; native page AND JSON correctness gates retained; no browser timing, build-cost, bytes or instruction measurements" });
 const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
 const log = (message) => { const line = `${new Date().toISOString()} ${message}`; console.log(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
 const active = new Set();
@@ -274,6 +285,10 @@ try {
         try { await docker(["start", "-a", checkContainer], { timeout: 15 * 60 * 1000, file: join(out, "checks.log") }); }
         finally { await remove(checkContainer); }
         const checked = JSON.parse(readFileSync(join(out, "checks.json"), "utf8"));
+        if (group) {
+          checked.qualification = qualificationIdentity(group, app, source, entry.imageId);
+          writeFileSync(join(out, "qualification.json"), JSON.stringify(checked, null, 2));
+        }
         entry.checks[source] = checked;
         assert.equal(checked.jsonRecords, 500, "incomplete JSON checks");
         assert.equal(checked.profiles.length, 8, "incomplete browser profiles");
@@ -293,13 +308,14 @@ try {
     summary.tools.k6 = { image: k6Image, imageId: k6.Id, repoDigests: k6.RepoDigests };
     await owned(["run", "-d", "--network", "none", "--cpus", "1", ...(cpus.load.cpuset ? ["--cpuset-cpus", cpus.load.cpuset] : []), "--memory", "128m", "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mount,
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
-    for (let pass = 1; pass <= options.passes; pass++) for (const source of sources) for (const app of options.apps) for (const target of targets) {
+    for (const { app, pass, source, target, ...profile } of plan) {
       const entry = summary.apps[app];
       const name = `${runId}-${app}`;
       const key = `${source}-${target}`;
       const raw = join(folder, source, app, `p${pass}-${target}`);
       mkdirSync(raw);
       const run = { pass, complete: false, phases: {} };
+      if (group) run.evidence = { app, ...profile, source, target, imageId: entry.imageId };
       (entry.runs[key] ??= []).push(run);
       summary.currentSource = source;
       try {
@@ -339,6 +355,15 @@ finally {
       await docker(["network", "rm", info.Id], { cleanup: true });
     }
   } catch (e) { summary.cleanupFailures.push({ resource: network, error: e.message }); }
+  if (group) {
+    try {
+      summary.commitAfter = await command("git", ["rev-parse", "HEAD"], { cleanup: true });
+      summary.dirtyAfter = (await command("git", ["status", "--porcelain"], { cleanup: true })).length > 0;
+      assert.equal(summary.commitAfter, summary.commit, "HEAD changed during catalog group run");
+      assert.equal(summary.dirtyAfter, false, "tree dirty after catalog group run");
+      assert.equal(summary.dirty, false, "tree dirty before catalog group run");
+    } catch (e) { summary.complete = false; fail(null, null, "tree provenance", e); }
+  }
   delete summary.currentSource;
   summary.finishedAt = new Date().toISOString();
   summary.complete &&= !interrupted && summary.cleanupFailures.length === 0;

@@ -153,7 +153,7 @@ impl<'a, I: Id, T: Numeric> Number<'a, I, T> {
 ///
 /// let qty = Number { value: 1.into(), ..Number::new(QtyId, Order::FIELDS.qty, Bounds::new(1, 99), "Fewer", "More") };
 /// let html = NumberField { field: &qty }.to_html();
-/// assert!(html.starts_with(r#"<div data-scope="ui-number-field" data-on="connect:ui.number_field.connect(@decrease,@input,@increase,$s)"><button data-ref="decrease" type="button" aria-controls="ui-qty" aria-label="Fewer" tabindex="-1" disabled"#));
+/// assert!(html.starts_with(r#"<div data-scope="ui-number-field" data-on='connect:ui.number_field.connect(@decrease,@input,@increase,$s)'><button data-ref="decrease" type="button" aria-controls="ui-qty" aria-label="Fewer" tabindex="-1" disabled"#));
 /// assert!(html.contains(r#"<input data-ref="input" type="number" inputmode="decimal" id="ui-qty" name="qty" value="1" min="1" max="99" step="1""#));
 /// ```
 #[component(js)]
