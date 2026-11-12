@@ -2605,7 +2605,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
    `@layer`, `@scope`, `@keyframes` and `@font-face`; `@import`, `@scope` with no root and
    escaped class names are not supported. At the top of the file, an `@scope` rule's root names
    one of its classes, or else each rule in the body must start at one, as at the top. A root
-   nested in a rule or another `@scope` is relative to that one's elements and is not checked.
+   nested in a rule, or in an `@scope` whose root names one of the file's classes, is relative to
+   that one's elements and is not checked; one nested in any other `@scope` is checked as at the top.
    The `to (...)` limit is prefixed as any selector is, so a class in it is one of this
    component's: a limit can stop at this component's own classes, never at a nested component's
    root.
