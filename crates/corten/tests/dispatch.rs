@@ -6,7 +6,7 @@
 
 use std::net::SocketAddr;
 
-use corten::{App, Params};
+use corten::{App, Params, Route as _};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -34,6 +34,11 @@ mod url {
     #[route("/notes/{title}/edit", get = crate::edit_note)]
     pub struct EditNote<'a> {
         pub title: &'a str,
+    }
+
+    #[route("/shelves/{id}/", get = crate::shelf)]
+    pub struct Shelf<'a> {
+        pub id: &'a str,
     }
 
     #[route("/files/{*rest}", get = crate::file)]
@@ -112,6 +117,10 @@ async fn name(at: Params<url::Name<'_>>) -> String {
 
 async fn edit_note(at: Params<url::EditNote<'_>>) -> String {
     format!("edit {}", at.title)
+}
+
+async fn shelf(at: Params<url::Shelf<'_>>) -> String {
+    format!("shelf {:?}", at.id)
 }
 
 async fn file(at: Params<url::File<'_>>) -> String {
@@ -321,6 +330,20 @@ async fn a_value_no_link_carries_is_a_400() {
         let answer = get(path).await;
         assert_eq!((answer.status, answer.body.as_str()), (200, value), "{path}");
     }
+}
+
+/// An empty value between two segments, which a link writes as it is
+/// (docs/design.md#limit-path-values), reads back as empty, before a trailing `/` too.
+#[tokio::test]
+async fn a_value_between_two_segments_may_be_empty() {
+    let notes = get(&url::EditNote { title: "" }.href()).await;
+    assert_eq!((notes.status, notes.body.as_str()), (200, "edit "));
+    let href = url::Shelf { id: "" }.href();
+    assert_eq!(href, "/shelves//");
+    let shelf = get(&href).await;
+    assert_eq!((shelf.status, shelf.body.as_str()), (200, "shelf \"\""));
+    let shelf = get(&url::Shelf { id: "a.b" }.href()).await;
+    assert_eq!((shelf.status, shelf.body.as_str()), (200, "shelf \"a.b\""));
 }
 
 #[tokio::test]

@@ -119,6 +119,27 @@ impl<P: Prefix> Area<P> {
     /// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Item>(get(|| async { "item" })));
     /// # let _ = app.router();
     /// ```
+    ///
+    /// Nor has it a `.` or `..` segment, which a browser resolves away before it asks, so no link
+    /// would reach the route (docs/design.md#limit-path-values):
+    ///
+    /// ```compile_fail,E0080
+    /// # use corten::prelude::*;
+    /// #[derive(Route)]
+    /// #[route("/admin")]
+    /// struct Admin;
+    ///
+    /// struct Item;
+    /// impl corten::Route for Item {
+    ///     const PATH: &'static str = "/admin/a/../b";
+    ///     fn write_href(&self, out: &mut String, _: bool) {
+    ///         out.push_str("/admin/b");
+    ///     }
+    /// }
+    ///
+    /// let app = App::new(Routes::new()).area::<Admin>(|admin| admin.route::<Item>(get(|| async { "item" })));
+    /// # let _ = app.router();
+    /// ```
     pub fn route<R: TypedRoute>(mut self, methods: Methods) -> Self {
         self.place::<R>(methods.1);
         if let Some(companion) = methods.2 {

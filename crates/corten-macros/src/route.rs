@@ -177,15 +177,15 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
                 let field = fields.iter().find(|f| f.name == *name).expect("checked above");
                 // Which values the path can carry there (docs/design.md#limit-path-values).
                 let place = match (segment, segments.get(n + 1)) {
-                    (Segment::Rest(_), _) => "Rest",
-                    (_, Some(Segment::Static(next))) if !next.starts_with('/') => "Text",
-                    (_, None) => "Edge",
-                    _ if first && n == 1 => "Edge",
-                    _ => "Inner",
+                    (Segment::Rest(_), _) => "REST",
+                    (_, Some(Segment::Static(next))) if !next.starts_with('/') => "TEXT",
+                    (_, None) => "EDGE",
+                    _ if first && n == 1 => "EDGE",
+                    _ => "INNER",
                 };
                 body.extend(q(
                     &format!(
-                        "(&::corten::route::__private::Segment(&self.__A0)).__segment(&::corten::route::__private::Param {{ route: __A1, field: __A2, place: ::corten::route::__private::Place::{place} }}, __OUT);"
+                        "(&::corten::route::__private::Segment(&self.__A0)).__segment(&::corten::route::__private::Param::<{{ ::corten::route::__private::place::{place} }}> {{ route: __A1, field: __A2 }}, __OUT);"
                     ),
                     &[
                         proc_macro::TokenTree::Ident(field.ident.clone()).into(),

@@ -2698,6 +2698,14 @@ mod local_tests {
             ("/s/{a}", "/s/{a}.x|y", false),
             ("/s/{a}/b", "/s/{a}?x/b", false),
             ("/s/{a}", "/s/{a}%20", false),
+            // `.` or `..` after a parameter is a dot segment for a value of dots or none.
+            ("/s/{a}", "/s/{a}.", false),
+            ("/s/{a}", "/s/{a}..", false),
+            ("/s/{a}/b", "/s/{a}../b", false),
+            ("/s/{a}/b", "/s/{a}./b", false),
+            ("/s/{a}", "/s/{a}...", true),
+            ("/s/{a}/b", "/s/{a}.x/b", true),
+            ("/s/{a}/b", "/s/{a}..x/b", true),
         ] {
             assert_eq!(super::written_fits(path, written), want, "{path} {written}");
         }
@@ -2915,7 +2923,8 @@ impl OnSite for Local {}
 /// For each byte, `SEGMENT` when it is written as it is in a path segment or query value
 /// (unreserved: letters, digits, `-._~`), `REST` when it is in a `{*rest}` value (those and
 /// `/`), and `FRAGMENT` when it is in another site's `#fragment` (those, `/`, `?`, `:`, `@` and
-/// the sub-delimiters `!$&'()*+,;=`); everything else is %XX.
+/// the sub-delimiters `!$&'()*+,;=`); everything else is %XX. Every byte but `.` also has
+/// `DOTLESS`, so the pass [`Encode::push`] makes over a value says whether it has a dot.
 static KEEP: [u8; 256] = {
     let mut table = [0u8; 256];
     let mut b = 0;
@@ -2930,11 +2939,19 @@ static KEEP: [u8; 256] = {
         b += 1;
     }
     table[b'/' as usize] = REST | FRAGMENT;
+    let mut b = 0;
+    while b < 256 {
+        if b != b'.' as usize {
+            table[b] |= DOTLESS;
+        }
+        b += 1;
+    }
     table
 };
 const SEGMENT: u8 = 1;
 const REST: u8 = 2;
 const FRAGMENT: u8 = 4;
+const DOTLESS: u8 = 8;
 
 /// Percent-encodes what is written to it into `out`. `keep` is `SEGMENT`, `REST` or `FRAGMENT`.
 struct Encode<'a> {
@@ -2946,14 +2963,16 @@ impl Encode<'_> {
     /// A value with nothing to encode (most ids and slugs) is one copy, found by ANDing every
     /// byte's table entry, with no branch per byte. Otherwise each run of bytes kept as they are is
     /// copied at once. A run is ASCII; between two encoded bytes of one character it is empty, and
-    /// is skipped there, since that index is not a character boundary.
+    /// is skipped there, since that index is not a character boundary. Returns that AND, whose
+    /// `DOTLESS` bit says whether `s` has no `.`.
     #[inline]
-    fn push(&mut self, s: &str) {
+    fn push(&mut self, s: &str) -> u8 {
         const HEX: &[u8; 16] = b"0123456789ABCDEF";
         let bytes = s.as_bytes();
-        if bytes.iter().fold(self.keep, |all, &b| all & KEEP[b as usize]) != 0 {
+        let all = bytes.iter().fold(self.keep | DOTLESS, |all, &b| all & KEEP[b as usize]);
+        if all & self.keep != 0 {
             self.out.push_str(s);
-            return;
+            return all;
         }
         let mut start = 0;
         while let Some(at) = bytes[start..].iter().position(|&b| KEEP[b as usize] & self.keep == 0) {
@@ -2968,6 +2987,7 @@ impl Encode<'_> {
             start = i + 1;
         }
         self.out.push_str(&s[start..]);
+        all
     }
 }
 
@@ -3593,8 +3613,12 @@ impl Routes {
 }
 
 /// Whether `written` is `path` with text after some of its `{name}` parameters (in their segment),
-/// as `#[derive(Route)]` writes the two.
+/// as `#[derive(Route)]` writes the two. Text that is `.` or `..` does not fit: with a value of
+/// dots, or none, the segment is one a browser resolves away (docs/design.md#limit-path-values).
 const fn written_fits(path: &str, written: &str) -> bool {
+    const fn dots(w: &[u8], from: usize, to: usize) -> bool {
+        (to == from + 1 && w[from] == b'.') || (to == from + 2 && w[from] == b'.' && w[from + 1] == b'.')
+    }
     let (p, w) = (path.as_bytes(), written.as_bytes());
     let (mut i, mut j) = (0, 0);
     // Just past a `{name}` (not a `{*rest}`, which nothing follows), and inside a `{*..}`.
@@ -3605,10 +3629,17 @@ const fn written_fits(path: &str, written: &str) -> bool {
         }
         if closed && p[i] == b'/' && w[j] != b'/' {
             // Text after a parameter, up to the segment's end.
-            if !plain(w[j]) {
+            let from = j;
+            while j < w.len() && w[j] != b'/' {
+                if !plain(w[j]) {
+                    return false;
+                }
+                j += 1;
+            }
+            if dots(w, from, j) {
                 return false;
             }
-            j += 1;
+            closed = false;
             continue;
         }
         if p[i] != w[j] {
@@ -3625,13 +3656,14 @@ const fn written_fits(path: &str, written: &str) -> bool {
         j += 1;
     }
     // Text after the last parameter, to the end.
+    let from = j;
     while closed && j < w.len() {
         if !plain(w[j]) {
             return false;
         }
         j += 1;
     }
-    j == w.len()
+    j == w.len() && !dots(w, from, j)
 }
 
 /// Whether routes written `a` and `b` are one path to the router but not the same route: each
@@ -3751,6 +3783,28 @@ fn refuse(a: &str, b: &str) -> ! {
 ///     const WRITTEN: &'static str = "/feeds/{name}.x/extra";
 ///     fn write_href(&self, out: &mut String, _: bool) {
 ///         out.push_str("/feeds/a.x/extra");
+///     }
+/// }
+///
+/// let app = App::new(Routes::new()).area::<Feeds>(|feeds| feeds.route::<Feed>(get(|| async { "feed" })));
+/// # let _ = app.router();
+/// ```
+///
+/// Nor does text after a parameter that is `.` or `..`, which with a value of dots, or none, is a
+/// segment a browser resolves away (docs/design.md#limit-path-values):
+///
+/// ```compile_fail,E0080
+/// # use corten::prelude::*;
+/// #[derive(Route)]
+/// #[route("/feeds")]
+/// struct Feeds;
+///
+/// struct Feed;
+/// impl corten::Route for Feed {
+///     const PATH: &'static str = "/feeds/{name}";
+///     const WRITTEN: &'static str = "/feeds/{name}.";
+///     fn write_href(&self, out: &mut String, _: bool) {
+///         out.push_str("/feeds/a.");
 ///     }
 /// }
 ///
@@ -3909,7 +3963,7 @@ pub mod __private {
 
     use crate::handler::Handler;
 
-    use super::{Encode, Methods, REST, SEGMENT};
+    use super::{Encode, Methods, DOTLESS, REST, SEGMENT};
 
     // `#[corten::routes]` names each handler through one of these, so a handler that cannot serve
     // the route is an error that says why, at the handler's name in `#[route(..)]`: its arguments
@@ -4630,70 +4684,102 @@ pub mod __private {
     pub struct Segment<'a, T: ?Sized>(pub &'a T);
 
     /// A path parameter of a route: the route's and the field's names, for the error a value its
-    /// path cannot carry is, and where it sits, which decides those values
-    /// (docs/design.md#limit-path-values).
-    pub struct Param {
+    /// path cannot carry is, and where it sits (`PLACE`, one of [`place`]), which decides those
+    /// values (docs/design.md#limit-path-values). The place is a constant of the type, so each
+    /// parameter's link compiles in only its own place's check.
+    pub struct Param<const PLACE: u8> {
         pub route: &'static str,
         pub field: &'static str,
-        pub place: Place,
     }
 
     /// Where a path parameter sits in its route's path.
-    pub enum Place {
+    pub mod place {
         /// A whole segment, first or last in the path (`/{user}/posts`, `/items/{id}`): the router
         /// has no segment for an empty value there.
-        Edge,
-        /// A whole segment between two others (`/items/{id}/offers`), where an empty value reads
-        /// back.
-        Inner,
+        pub const EDGE: u8 = 0;
+        /// A whole segment between two others (`/items/{id}/offers`, `/shelves/{id}/`), where an
+        /// empty value reads back.
+        pub const INNER: u8 = 1;
         /// Followed by text in its segment (`{page}.xml`), so never a dot segment; an empty value
         /// leaves the text alone, which the route does not read.
-        Text,
+        pub const TEXT: u8 = 2;
         /// `{*rest}`: the rest of the path, slashes kept, each segment of it read as one.
-        Rest,
+        pub const REST: u8 = 3;
     }
 
-    impl Param {
-        #[inline]
-        fn keep(&self) -> u8 {
-            match self.place {
-                Place::Rest => REST,
-                _ => SEGMENT,
+    impl<const PLACE: u8> Param<PLACE> {
+        const KEEP: u8 = if PLACE == place::REST { REST } else { SEGMENT };
+
+        /// Whether the path cannot carry `value`: a browser resolves a `.` or `..` segment away,
+        /// and an empty value where the router has no segment does not read back. `value` is the
+        /// value as written or the text it was written from, which decide alike: writing changes
+        /// only the bytes other than `-._~`, letters and digits (and `/` in a `{*rest}`), each
+        /// into a `%XX` that is no dot. `dotless` is whether it has no `.`, from the pass that wrote
+        /// it. A whole-segment value of three bytes or more passes on its length, and a `{*rest}`
+        /// value on that bit unless it has a dot ([`dot_segment`]).
+        #[inline(always)]
+        fn refuses(value: &[u8], dotless: bool) -> bool {
+            match PLACE {
+                place::EDGE => value.len() <= 2 && matches!(value, b"" | b"." | b".."),
+                place::INNER => value.len() <= 2 && matches!(value, b"." | b".."),
+                place::TEXT => value.is_empty(),
+                _ => value.is_empty() || (!dotless && dot_segment(value)),
             }
         }
+    }
 
-        /// Holds the value written into `out` from `start` to what the path can carry: a browser
-        /// resolves a `.` or `..` segment away, and an empty value where the router has no segment
-        /// does not read back. A value passes on a comparison of its length, a `{*rest}` value on
-        /// a pass over its bytes.
-        #[inline]
-        fn written(&self, out: &mut String, start: usize) {
-            let value = &out.as_bytes()[start..];
-            let carried = match self.place {
-                Place::Edge => !matches!(value, b"" | b"." | b".."),
-                Place::Inner => !matches!(value, b"." | b".."),
-                Place::Text => !value.is_empty(),
-                Place::Rest => !value.is_empty() && !value.split(|&b| b == b'/').any(|s| matches!(s, b"." | b"..")),
-            };
-            if !carried {
-                self.refuse(out, start);
-            }
+    /// A value the path cannot carry: a debug build panics, naming the route and the field; a
+    /// release build logs that as an error and writes `%FF` after the value ([`unreadable`]), so
+    /// the link opens no other page.
+    #[cold]
+    #[inline(never)]
+    fn refuse(route: &str, field: &str, out: &mut String, start: usize) {
+        let message = format!(
+            "corten: a link to {route} cannot carry {field} = {:?}: a browser resolves a . or .. segment away, and the router has no segment for an empty value first or last in the path, before text in its segment or as a whole {{*rest}}, so the link would open another page or none. Refuse such a value where the app stores it (docs/design.md#limit-path-values); a release build writes %FF after it, which the route answers with a 400",
+            &out[start..]
+        );
+        if cfg!(debug_assertions) {
+            panic!("{message}");
         }
+        tracing::error!("{message}");
+        unreadable(out, start);
+    }
 
-        /// A value the path cannot carry: a debug build panics, naming the route and the field; a
-        /// release build writes `%FF` after it ([`unreadable`]), so the link opens no other page.
-        #[cold]
-        #[inline(never)]
-        fn refuse(&self, out: &mut String, start: usize) {
-            if cfg!(debug_assertions) {
-                panic!(
-                    "corten: a link to {} cannot carry {} = {:?}: a browser resolves a . or .. segment away, and the router has no segment for an empty value first or last in the path, before text in its segment or as a whole {{*rest}}, so the link would open another page or none. Refuse such a value where the app stores it (docs/design.md#limit-path-values); a release build writes %FF after it, which the route answers with a 400",
-                    self.route,
-                    self.field,
-                    &out[start..]
-                );
+    /// Whether `value`, a `{*rest}` value with a dot, has a `.` or `..` segment: a dot that starts
+    /// a segment and is followed by its end, or by another dot and then its end. Whether a dot does
+    /// depends on the bytes beside it, which the pass that wrote the value does not keep, so this
+    /// reads it again, eight bytes at a time (a word whose bytes are compared with `.` at once),
+    /// and checks the bytes beside each dot it finds (docs/design.md#limit-path-values gives the
+    /// count).
+    #[inline(never)]
+    fn dot_segment(value: &[u8]) -> bool {
+        let starts = |dot: usize| {
+            let end = if value.get(dot + 1) == Some(&b'.') { dot + 2 } else { dot + 1 };
+            (dot == 0 || value[dot - 1] == b'/') && (end == value.len() || value[end] == b'/')
+        };
+        if value.len() < 8 {
+            return (0..value.len()).any(|i| value[i] == b'.' && starts(i));
+        }
+        const LOW: u64 = 0x7f7f_7f7f_7f7f_7f7f;
+        const DOTS: u64 = 0x2e2e_2e2e_2e2e_2e2e;
+        let mut at = 0;
+        loop {
+            // The last word ends with the value, overlapping the one before it.
+            let word = at.min(value.len() - 8);
+            let x = u64::from_le_bytes(value[word..word + 8].try_into().unwrap()) ^ DOTS;
+            // The high bit of each byte that is a dot (zero once XORed), exactly: adding 0x7f to
+            // its low seven bits sets the high bit of every other byte, and carries into none.
+            let mut dots = !(((x & LOW) + LOW) | x | LOW);
+            while dots != 0 {
+                if starts(word + (dots.trailing_zeros() / 8) as usize) {
+                    return true;
+                }
+                dots &= dots - 1;
             }
-            unreadable(out, start);
+            if word + 8 == value.len() {
+                return false;
+            }
+            at = word + 8;
         }
     }
 
@@ -4718,46 +4804,64 @@ pub mod __private {
     }
 
     pub trait SegmentText {
-        fn __segment(&self, param: &Param, out: &mut String);
+        fn __segment<const PLACE: u8>(&self, param: &Param<PLACE>, out: &mut String);
     }
 
     impl SegmentText for Segment<'_, &str> {
         #[inline]
-        fn __segment(&self, param: &Param, out: &mut String) {
-            let start = out.len();
-            Encode { out: &mut *out, keep: param.keep() }.push(self.0);
-            param.written(out, start);
+        fn __segment<const PLACE: u8>(&self, param: &Param<PLACE>, out: &mut String) {
+            text(self.0, param, out);
         }
     }
 
     impl SegmentText for Segment<'_, String> {
         #[inline]
-        fn __segment(&self, param: &Param, out: &mut String) {
-            let start = out.len();
-            Encode { out: &mut *out, keep: param.keep() }.push(self.0);
-            param.written(out, start);
+        fn __segment<const PLACE: u8>(&self, param: &Param<PLACE>, out: &mut String) {
+            text(self.0, param, out);
         }
     }
 
     impl SegmentText for Segment<'_, Cow<'_, str>> {
         #[inline]
-        fn __segment(&self, param: &Param, out: &mut String) {
+        fn __segment<const PLACE: u8>(&self, param: &Param<PLACE>, out: &mut String) {
+            text(self.0, param, out);
+        }
+    }
+
+    /// A text value, encoded and held to its place by its text. A whole-segment value is refused
+    /// only when it is empty or dots, which are written as they are, so where it starts is found
+    /// from its length then, and an id or a slug pays a comparison of the length it already has.
+    #[inline(always)]
+    fn text<const PLACE: u8>(value: &str, param: &Param<PLACE>, out: &mut String) {
+        if PLACE == place::REST {
             let start = out.len();
-            Encode { out: &mut *out, keep: param.keep() }.push(self.0);
-            param.written(out, start);
+            let all = Encode { out: &mut *out, keep: REST }.push(value);
+            if Param::<PLACE>::refuses(value.as_bytes(), all & DOTLESS != 0) {
+                refuse(param.route, param.field, out, start);
+            }
+        } else {
+            Encode { out: &mut *out, keep: SEGMENT }.push(value);
+            if Param::<PLACE>::refuses(value.as_bytes(), true) {
+                let start = out.len() - value.len();
+                refuse(param.route, param.field, out, start);
+            }
         }
     }
 
     pub trait SegmentValue {
-        fn __segment(&self, param: &Param, out: &mut String);
+        fn __segment<const PLACE: u8>(&self, param: &Param<PLACE>, out: &mut String);
     }
 
     impl<T: Display + ?Sized> SegmentValue for &Segment<'_, T> {
+        /// `Display` may write the value in pieces, so it is held to its place as written, read
+        /// for dots again.
         #[inline]
-        fn __segment(&self, param: &Param, out: &mut String) {
+        fn __segment<const PLACE: u8>(&self, param: &Param<PLACE>, out: &mut String) {
             let start = out.len();
-            let _ = write!(Encode { out: &mut *out, keep: param.keep() }, "{}", self.0);
-            param.written(out, start);
+            let _ = write!(Encode { out: &mut *out, keep: Param::<PLACE>::KEEP }, "{}", self.0);
+            if Param::<PLACE>::refuses(&out.as_bytes()[start..], false) {
+                refuse(param.route, param.field, out, start);
+            }
         }
     }
 
@@ -5110,6 +5214,12 @@ mod tests {
         name: &'a str,
     }
 
+    #[derive(corten::Route)]
+    #[route("/shelves/{id}/")]
+    struct Shelf<'a> {
+        id: &'a str,
+    }
+
     /// A browser resolves a `.` or `..` segment away before it asks (the URL Standard, which reads
     /// `%2e` as a dot there too), so `/items/..` opens `/` and `/files/a/../b` opens `/files/b`;
     /// and an empty value where the router has no segment for it does not read back (`//posts` is
@@ -5135,6 +5245,7 @@ mod tests {
             (Box::new(|| Posts { user: "" }.href()), "/%FF/posts", "Posts cannot carry user"),
             (Box::new(|| Posts { user: ".." }.href()), "/..%FF/posts", "Posts cannot carry user"),
             (Box::new(|| Feed { name: "" }.href()), "/feeds/%FF.xml", "Feed cannot carry name"),
+            (Box::new(|| Shelf { id: ".." }.href()), "/shelves/..%FF/", "Shelf cannot carry id"),
             (
                 Box::new(|| File { path: "public/../private/report.pdf".into() }.href()),
                 "/files/public/..%FF/private/report.pdf",
@@ -5179,6 +5290,9 @@ mod tests {
             (Item { id: "%2e" }.href(), "/items/%252e"),
             (Item { id: "./" }.href(), "/items/.%2F"),
             (Offers { id: "", page: None, sort: "new" }.href(), "/items//offers?sort=new"),
+            // Before a trailing `/` too, which the router reads back as empty
+            // (`a_value_between_two_segments_may_be_empty` in `tests/dispatch.rs`).
+            (Shelf { id: "" }.href(), "/shelves//"),
             (Posts { user: "..." }.href(), "/.../posts"),
             (Feed { name: "." }.href(), "/feeds/..xml"),
             (Feed { name: ".." }.href(), "/feeds/...xml"),
@@ -5190,5 +5304,36 @@ mod tests {
         ] {
             assert_eq!(href, want);
         }
+    }
+
+    /// A release build does not panic on a value its path cannot carry, so it logs the refusal as
+    /// an error, naming the route and the field, beside the `%FF` it writes.
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn a_link_a_release_build_refuses_is_logged() {
+        use std::sync::{Arc, Mutex};
+        #[derive(Clone)]
+        struct Lines(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for Lines {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let lines = Lines(Arc::default());
+        let writer = lines.clone();
+        let subscriber = tracing_subscriber::fmt().with_ansi(false).with_writer(move || writer.clone()).finish();
+        let (refused, kept) = tracing::subscriber::with_default(subscriber, || {
+            (File { path: "public/../private/x".into() }.href(), Item { id: "a.b" }.href())
+        });
+        assert_eq!((refused.as_str(), kept.as_str()), ("/files/public/..%FF/private/x", "/items/a.b"));
+        let logged = String::from_utf8(lines.0.lock().unwrap().clone()).unwrap();
+        assert_eq!(logged.lines().count(), 1, "{logged}");
+        assert!(logged.contains("ERROR"), "{logged}");
+        assert!(logged.contains("a link to File cannot carry path = \"public/../private/x\""), "{logged}");
+        assert!(logged.contains("docs/design.md#limit-path-values"), "{logged}");
     }
 }
