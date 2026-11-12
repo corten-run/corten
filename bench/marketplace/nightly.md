@@ -209,10 +209,12 @@ host and report the provisioning error rather than guessing deletion is safe.
    Use compare.mjs with current and baseline summary paths and --unchanged-apps listing only
    verified unchanged reference adapters. It always compares Corten and reports the reference
    cohort's median percentage changes separately; an incompatible comparison emits no deltas.
-   Rounds write `marketplace-results/v4`. A `marketplace-results/v3` summary (r19 and any other
-   round measured before app stops were recorded) is read as v4 with no stop records, since under
-   v3 an app that stopped failed the round: it validates, reports and is a compatible baseline
-   for v4 rounds. report.mjs rejects any other schema.
+   Named-group rounds write `marketplace-results/v5`, including raw native qualification and
+   the exact reserved candidate set. The reader retains groupless `marketplace-results/v4`
+   and `marketplace-results/v3` history. A v3 summary (r19 and other rounds before app stops
+   were recorded) has no stop records, since under v3 an app that stopped failed the round.
+   Compatible groupless v3/v4 rounds may compare, but neither becomes a named-group baseline.
+   report.mjs rejects any other schema and never relabels old evidence as qualified v5.
 5. Update marketplace README Results intro/link with round, UTC date, CPU, measured SHA,
    profile/windows and limits. Generate current server tables in docs/performance.md from the
    reporter: all page locales, JSON once, sat64 and sat256 throughput/latency, fixed CPU/memory,
