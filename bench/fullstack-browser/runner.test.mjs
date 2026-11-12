@@ -9,13 +9,23 @@ import { createBrowserPlan } from "../workloads/browser.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { createUpstream, upstreamDelta } from "./upstream.mjs";
 import { observeNetwork, architecture, classifyDisabledPreloads } from "./observe.mjs";
-import { readStore } from "./journey.mjs";
+import { readStore, waitForSemanticChange } from "./journey.mjs";
 import { imageEvidence } from "./run.mjs";
 import { nativeBuildArgs } from "./build.mjs";
 
 const req = (options = {}) => ({ method: () => "GET", headers: () => ({}), isNavigationRequest: () => false,
   url: () => "http://127.0.0.1/marketplace/en-US/item_2", resourceType: () => "fetch", postData: () => "", ...options });
 const plan = createBrowserPlan({ records: records() });
+test("semantic observer preserves document replacement and does not swallow other errors", async () => {
+  const transitions = []; let samples = 0;
+  await waitForSemanticChange({ evaluate: async () => {
+    if (samples++ === 0) throw new Error("Execution context was destroyed, most likely because of a navigation");
+    return "new native document";
+  } }, "old native document", transitions);
+  assert.equal(samples, 2); assert.equal(transitions.length, 1);
+  assert.match(transitions[0].error, /Execution context was destroyed/);
+  await assert.rejects(waitForSemanticChange({ evaluate: async () => { throw new Error("actual observer failure"); } }, "before"), /actual observer failure/);
+});
 test("full registry matrix and retained contenders, independent of selected targets", () => {
   const cells = emptyCells(plan);
   assert.equal(candidates.length, 10); assert.equal(plan.cases.length, 24);

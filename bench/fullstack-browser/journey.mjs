@@ -8,12 +8,29 @@ import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
 
 // A semantic DOM observation, not an application-provided "hydrated" mark.
-function signature() {
+export function semanticSignature() {
   return JSON.stringify([document.querySelector("article.marketplace h1")?.textContent,
     [...document.querySelectorAll("[data-listing-id]")].map((v) => v.getAttribute("data-listing-id")),
     [...document.querySelectorAll("[data-offer-id]")].map((v) => v.getAttribute("data-offer-id")),
     document.querySelector(".marketplace__message")?.textContent,
     document.querySelector("article.marketplace") === null ? document.body?.textContent : null]);
+}
+export async function waitForSemanticChange(page, before, transitions = []) {
+  // Playwright waitForFunction calls window.eval, which a native CSP may forbid.
+  // Poll the observer from the host instead; never relax CSP or redispatch an action.
+  const deadline = performance.now() + settings.actionTimeoutMs;
+  while (performance.now() < deadline) {
+    try {
+      if (await page.evaluate(semanticSignature) !== before) return;
+    } catch (e) {
+      // Native document navigation can replace the context while it is sampled.
+      // Keep that event, as waitForFunction did, and sample the replacement document.
+      if (!e.message.includes("Execution context was destroyed")) throw e;
+      transitions.push({ kind: "execution-context-replaced", error: e.message });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`Native semantic DOM change not observed within ${settings.actionTimeoutMs} ms`);
 }
 function message(step, locale, record) {
   if (step.kind === "invalid-email") return labels[locale].invalid_email;
@@ -92,18 +109,18 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     }
     for (const step of profile.steps) {
       const row = { action: step, at: performance.now() - started, requests: [], dom: null, document: null, readback: null, upstream: null, formBefore: null, componentsBefore: [], domPassed: false,
-        timing: { dispatchMs: null, visibleChangeObservedMs: null, settledObservedMs: null }, errors: [], failures: [] };
+        timing: { dispatchMs: null, visibleChangeObservedMs: null, settledObservedMs: null }, observerTransitions: [], errors: [], failures: [] };
       evidence.steps.push(row);
       const beforeCounters = await counters();
       const offset = network.rows.length, errorsAt = runtimeErrors.length, networkErrorsAt = network.failures.length;
-      const before = await page.evaluate(signature);
+      const before = await page.evaluate(semanticSignature);
       const nativeBefore = await page.evaluate(nativeDOM);
       row.formBefore = nativeBefore.form; row.componentsBefore = nativeBefore.components;
       const at = performance.now();
       try {
         const response = step.kind === "initial" ? await page.goto(base + step.path, { waitUntil: "load" }) : await dispatch(page, step);
         row.timing.dispatchMs = performance.now() - at;
-        if (step.kind !== "initial") await page.waitForFunction(`(${signature.toString()})() !== ${JSON.stringify(before)}`, null, { timeout: settings.actionTimeoutMs });
+        if (step.kind !== "initial") await waitForSemanticChange(page, before, row.observerTransitions);
         row.timing.visibleChangeObservedMs = performance.now() - at;
         await page.waitForLoadState("load");
         await page.evaluate(() => globalThis.navigation?.transition?.finished);
@@ -113,11 +130,13 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         assert.equal(row.dom.url.path, step.path, "visible logical route differs from action");
         if (step.kind === "initial") {
           assert.ok(response, "initial document response missing");
-          evidence.architecture = architecture(app, row.dom.native);
           const button = page.locator('.marketplace__alert [type="submit"]');
           assert.ok(await button.isVisible() && await button.isEnabled(), "native action not usable");
           evidence.readiness.actionableObservedMs = performance.now() - at;
           row.document = await responseDocument(browser, response, base + step.path);
+          evidence.architecture = architecture(app, row.dom.native);
+          if (evidence.architecture.startsWith("unverified-")) evidence.architecture = architecture(app, row.document.native);
+          if (evidence.architecture.startsWith("unverified-")) evidence.gaps.push("Native architecture unverified in observed DOM and independent SSR markers");
           evidence.navigationTiming = await page.evaluate(() => performance.getEntriesByType("navigation")[0]?.toJSON() ?? null);
         }
         // Offline comparisons consume captured DOM. They never supply render data.

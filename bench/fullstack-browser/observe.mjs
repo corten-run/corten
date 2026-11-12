@@ -67,7 +67,7 @@ export function nativeDOM() {
     hasMetaCsp: Boolean(document.querySelector('meta[http-equiv="Content-Security-Policy" i]')),
     preloads: [...document.querySelectorAll("link[rel][href]")].map((el) => ({ rel: el.rel, as: el.as, path: new URL(el.href).pathname })),
     markers: { corten: /"corten"\s*:/.test(inline), nuxt: Boolean(document.getElementById("__NUXT_DATA__")),
-      reactRouter: /__reactRouter/.test(inline), sveltekit: /__sveltekit/.test(inline), astro: Boolean(document.querySelector('meta[name="generator"][content^="Astro"]')),
+      reactRouter: /__reactRouter/.test(inline), sveltekit: /__sveltekit/.test(inline), astro: Boolean(document.querySelector('meta[name="generator"][content^="Astro"]')) || scriptPaths.some((s) => /^\/_astro\/ClientRouter\.astro_/.test(s)),
       tanstack: /\$TSR|__TSR|tsr-stream/.test(inline), leptos: scriptPaths.some((s) => /leptos|hydrate/.test(s)) || /\.wasm|wasm_bindgen/.test(inline) },
     form: form ? { method: form.method.toUpperCase(), action: new URL(form.action).pathname,
       fields: [...form.elements].map((el) => el.name).filter(Boolean),
@@ -101,7 +101,7 @@ export async function responseDocument(browser, response, url) {
       else await route.abort();
     });
     await page.goto(url, { waitUntil: "load", timeout: 15000 });
-    return { observer: randomUUID(), responseSha256: sha256(body), status: response.status(), page: await page.evaluate(snapshotPage),
+    return { observer: randomUUID(), responseSha256: sha256(body), status: response.status(), page: await page.evaluate(snapshotPage), native: await page.evaluate(nativeDOM),
       scope: "Independent script-disabled response parser; styles/resources blocked, not a second application render" };
   } finally { await context.close(); }
 }
