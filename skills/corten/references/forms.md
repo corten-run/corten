@@ -238,9 +238,12 @@ forms share takes `e: &corten::Within<'_, I>`.
 A write only the submission identifies (placing an order, sending a message) takes a
 `submit: SubmitKey` field, drawn with `{SubmitKey::field(f.submit)}`; the app stores the key with
 the write and answers a repeat with the first outcome. The runtime keeps the key until the submit
-has an answer below 500, then renews it. An MCP write tool of that kind takes the same field in
-its input struct (`submit: SubmitKey`, required, no doc comment), stored per caller and tool
-since the agent makes it, a repeat with other arguments refused (`ToolError::Refused`); a write
+has an answer below 500, then renews it. A form inside a `<template>` that a script copies draws
+`{SubmitKey::template_field(f.submit)}` instead, which holds no key: the runtime gives each copy
+its own when it is first sent, so never give a template `SubmitKey::field` (every copy would share
+its key) and never mint keys in a script. An MCP tool for a write only the submission identifies
+takes the same field in its input struct (`submit: SubmitKey`, required, no doc comment), stored
+per caller and tool since the agent makes it, a repeat with other arguments refused (`ToolError::Refused`); a write
 idempotent without one is `Tools::idempotent_tool`. A key does not keep two submissions apart: work on
 something the app's data already names that must not run twice (postage for an order) takes, for
 each item inside `signal.finish(..)`, a lock in the shared store, a check under it of what is done

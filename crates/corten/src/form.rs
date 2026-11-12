@@ -2037,7 +2037,44 @@ pub struct SubmitKey(Box<str>);
 impl SubmitKey {
     /// The hidden input that carries a new key: `<input type="hidden" name=".." data-submit value="..">`.
     pub fn field(name: FieldName<SubmitKey>) -> SubmitField {
-        SubmitField { name: name.untyped(), key: uuid_v4(crate::security::random_hex()) }
+        SubmitField { name: name.untyped(), key: Some(uuid_v4(crate::security::random_hex())) }
+    }
+
+    /// The hidden input with no key yet, for a form inside a `<template>` that a script copies
+    /// (`<input type="hidden" name=".." data-submit>`): the runtime gives an empty submit key a new
+    /// one when its form is first sent, so each copy is a submission of its own. A form the server
+    /// draws on the page takes [`SubmitKey::field`]: without JavaScript nothing fills the key, and
+    /// a `SubmitKey` field posted empty is refused (a 422 naming it), as any key that is not a
+    /// UUID v4 is. Nothing is drawn at random, so a page with only this one keeps its `ETag`.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Fields)]
+    /// struct Count { qty: u32, submit: SubmitKey }
+    ///
+    /// let f = Count::FIELDS;
+    /// let row = html! {
+    ///     <template>
+    ///         <form method="post" data-patch>{SubmitKey::template_field(f.submit)}<input name={f.qty}></form>
+    ///     </template>
+    /// };
+    /// assert!(row.to_html().contains(r#"<input type="hidden" name="submit" data-submit>"#));
+    /// assert!(corten::form::from_bytes::<Count>(b"qty=1&submit=").is_err(), "an empty key is refused");
+    /// ```
+    ///
+    /// Like [`SubmitKey::field`], it takes only a `SubmitKey` field's name:
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Fields)]
+    /// struct Count { qty: u32, submit: SubmitKey }
+    ///
+    /// let _ = SubmitKey::template_field(Count::FIELDS.qty);
+    /// ```
+    pub fn template_field(name: FieldName<SubmitKey>) -> SubmitField {
+        SubmitField { name: name.untyped(), key: None }
     }
 
     /// The hidden input that carries this key again, for a form drawn again from the post that
@@ -2071,7 +2108,7 @@ impl SubmitKey {
         // Read only as a UUID (`Deserialize`), so it is 36 ASCII bytes.
         let mut key = [0u8; 36];
         key.copy_from_slice(self.0.as_bytes());
-        SubmitField { name: name.untyped(), key }
+        SubmitField { name: name.untyped(), key: Some(key) }
     }
 
     /// A new key, as [`SubmitKey::field`] draws one: [`crate::testing::submit_key`].
@@ -2150,24 +2187,29 @@ fn uuid_v4(hex: [u8; 32]) -> [u8; 36] {
     out
 }
 
-/// [`SubmitKey::field`]'s hidden input.
+/// [`SubmitKey::field`]'s hidden input, or [`SubmitKey::template_field`]'s with no key.
 pub struct SubmitField {
     name: FieldName,
-    key: [u8; 36],
+    key: Option<[u8; 36]>,
 }
 
 thread_local! {
-    /// Set when a [`SubmitField`] is written: the page being rendered holds a key drawn for it.
+    /// Set when a [`SubmitField`] with a key is written: the page being rendered holds a key drawn
+    /// for it.
     pub(crate) static DREW_KEY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl Render for SubmitField {
     fn render(&self, out: &mut String) {
-        DREW_KEY.set(true);
         out.push_str(r#"<input type="hidden" name=""#);
         self.name.render(out);
+        let Some(key) = &self.key else {
+            out.push_str(r#"" data-submit>"#);
+            return;
+        };
+        DREW_KEY.set(true);
         out.push_str(r#"" data-submit value=""#);
-        out.push_str(std::str::from_utf8(&self.key).expect("hex is ASCII"));
+        out.push_str(std::str::from_utf8(key).expect("hex is ASCII"));
         out.push_str(r#"">"#);
     }
 }
@@ -2476,5 +2518,40 @@ mod tests {
         e.add(FieldName::<Untyped>::__new("b"), "2");
         e.add(FieldName::<Untyped>::__new("a"), "1");
         assert_eq!(serde_json::to_string(&e).unwrap(), r#"{"b":"2","a":"1"}"#);
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Keyed {
+        submit: SubmitKey,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct MaybeKeyed {
+        submit: Option<SubmitKey>,
+    }
+
+    /// A template's key field holds no key and marks nothing drawn for the request; the runtime
+    /// fills it when a copy is sent. Posted empty (without JavaScript, or by a client that did not
+    /// fill it), a required key is refused like a malformed one, and an optional one reads as none.
+    #[test]
+    fn a_template_s_submit_key_field_is_empty_and_an_empty_key_is_refused() {
+        const SUBMIT: FieldName<SubmitKey> = FieldName::__new("submit");
+        DREW_KEY.set(false);
+        assert_eq!(SubmitKey::template_field(SUBMIT).to_html(), r#"<input type="hidden" name="submit" data-submit>"#);
+        assert!(!DREW_KEY.get(), "nothing drawn for this request");
+        let drawn = SubmitKey::field(SUBMIT).to_html();
+        let start = r#"<input type="hidden" name="submit" data-submit value=""#;
+        assert!(drawn.starts_with(start) && drawn.len() == start.len() + 36 + 2, "{drawn}");
+        assert!(DREW_KEY.take(), "a drawn key is marked");
+
+        let read = from_bytes::<Keyed>(b"submit=3f2504e0-4f89-41d3-9a0c-0305e82c3301").unwrap().submit;
+        assert_eq!(read.as_str(), "3f2504e0-4f89-41d3-9a0c-0305e82c3301");
+        let empty = from_bytes::<Keyed>(b"submit=").unwrap_err().to_string();
+        let forged = from_bytes::<Keyed>(b"submit=3f2504e0").unwrap_err().to_string();
+        assert!(empty.starts_with("submit: ") && empty == forged, "refused as a malformed key is: {empty}");
+        assert!(from_bytes::<Keyed>(b"").is_err(), "a missing key is refused too");
+        assert!(from_bytes::<MaybeKeyed>(b"submit=").unwrap().submit.is_none());
+        let kept = from_bytes::<MaybeKeyed>(b"submit=3f2504e0-4f89-41d3-9a0c-0305e82c3301").unwrap().submit;
+        assert_eq!(kept.as_ref().map(SubmitKey::as_str), Some("3f2504e0-4f89-41d3-9a0c-0305e82c3301"));
     }
 }

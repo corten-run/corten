@@ -11484,6 +11484,14 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         let placed = &form;
         req.test_page("Keyed", html! { {placed} })
     }
+    async fn template_keyed_page(req: Req) -> HtmlResult {
+        req.test_page(
+            "Keyed",
+            html! {
+                <template><form method="post">{crate::SubmitKey::template_field(KeyedWrite::FIELDS.submit)}</form></template>
+            },
+        )
+    }
     async fn plain_patch(req: Req) -> HtmlResult {
         req.patch(html! { <p id={MsgId}>"read again"</p> })
     }
@@ -11504,6 +11512,7 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
         .route("/keyed", get(keyed_page))
         .route("/keyed-patch", get(keyed_patch))
         .route("/keyed-rendered", get(keyed_rendered))
+        .route("/template-keyed", get(template_keyed_page))
         .route("/plain-patch", get(plain_patch))
         .route("/same", get(|| async { html(&[]) }))
         .route("/noticed", get(|| async { html(&[("corten-notice", "m=Saved")]) }))
@@ -11625,6 +11634,14 @@ async fn a_page_s_get_is_tagged_and_a_tag_the_client_has_is_answered_not_modifie
     let patch_tag = tag_of(&headers).expect("a patch read again is tagged");
     assert_eq!(status, StatusCode::OK);
     let (status, ..) = send(router(), "GET", "/plain-patch", &[action, ("if-none-match", &patch_tag)]).await;
+    assert_eq!(status, StatusCode::NOT_MODIFIED);
+
+    // A template's submit key field holds no key (the runtime gives a copy one when it is sent),
+    // so nothing was drawn for this request and the page is tagged.
+    let (status, headers, _) = send(router(), "GET", "/template-keyed", &[]).await;
+    let template_tag = tag_of(&headers).expect("a page with only a template's key field is tagged");
+    assert_eq!(status, StatusCode::OK);
+    let (status, ..) = send(router(), "GET", "/template-keyed", &[("if-none-match", &template_tag)]).await;
     assert_eq!(status, StatusCode::NOT_MODIFIED);
 
     // Each answers as it would untagged (a 200, or the error), with no tag and no 304.

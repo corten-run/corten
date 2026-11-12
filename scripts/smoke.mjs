@@ -1591,6 +1591,90 @@ async function run(browser) {
     errors.splice(cutLogged, errors.length, ...errors.slice(cutLogged).filter((e) => !/Failed to load resource|ERR_|NetworkError|network connection was lost/i.test(e)));
   }
 
+  // A form a script copies from a <template> draws its key field empty
+  // (SubmitKey::template_field): the runtime gives each copy a key of its own when it is first
+  // sent, keeps it for a retry until an answer, and fills a plain post's while its submit event is
+  // dispatched, before the browser reads the form. The route stands in for an app that stores
+  // keys: a key it has seen applies nothing.
+  {
+    const uuidV4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    /** @type {string[]} */
+    const sent = [];
+    /** @type {Set<string>} */
+    const applied = new Set();
+    let down = true;
+    await page.route("**/count-row", (route) => {
+      const body = new URLSearchParams(route.request().postData() ?? "");
+      const key = body.get("submit") ?? "";
+      const row = body.get("row") ?? "";
+      sent.push(`${row} ${key || "(empty)"}`);
+      if (down) {
+        down = false;
+        return route.fulfill({ status: 502, headers: { "content-type": "text/plain; charset=utf-8" }, body: "Bad Gateway" });
+      }
+      const fresh = uuidV4.test(key) && !applied.has(key);
+      if (fresh) applied.add(key);
+      return route.fulfill({
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8", "corten-patch": "1" },
+        body: `<p id="count-row-${row}-said">${fresh ? "Counted." : "Already counted."}</p>`,
+      });
+    });
+    const logged = errors.length;
+    await page.evaluate(() => {
+      document.querySelector("main")?.insertAdjacentHTML(
+        "beforeend",
+        __html(
+          '<template id="count-rows"><form method="post" action="/count-row" data-patch><input type="hidden" name="submit" data-submit><input type="hidden" name="row"><p></p><button>Count</button></form></template><div id="count-row-list"></div>',
+        ),
+      );
+      const template = /** @type {HTMLTemplateElement} */ (document.getElementById("count-rows"));
+      for (const row of ["a", "b", "plain"]) {
+        const form = /** @type {HTMLFormElement} */ (template.content.firstElementChild?.cloneNode(true));
+        form.id = `count-row-${row}`;
+        /** @type {HTMLInputElement} */ (form.querySelector("[name=row]")).value = row;
+        /** @type {HTMLElement} */ (form.querySelector("p")).id = `count-row-${row}-said`;
+        if (row === "plain") form.removeAttribute("data-patch");
+        document.getElementById("count-row-list")?.append(form);
+      }
+    });
+    /** @param {string} row */
+    const keyOf = (row) => page.inputValue(`#count-row-${row} [name=submit]`);
+    /** @param {string} row */
+    const saidBy = (row) =>
+      page
+        .waitForFunction((row) => document.getElementById(`count-row-${row}-said`)?.textContent || "", row, { timeout: 5000 })
+        .then((said) => said.jsonValue(), () => "(no answer)");
+    const failed = page.evaluate(() => new Promise((resolve) => document.addEventListener("corten:error", resolve, { once: true })));
+    await page.click("#count-row-a button");
+    await failed;
+    const kept = await keyOf("a");
+    await page.click("#count-row-a button");
+    const saidA = await saidBy("a");
+    await page.click("#count-row-b button");
+    const saidB = await saidBy("b");
+    // The plain post is read as the browser would send it by a listener after the runtime's, which
+    // then cancels it: the page stays, and nothing is left loading.
+    const plainKey = await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          const form = /** @type {HTMLFormElement} */ (document.getElementById("count-row-plain"));
+          addEventListener("submit", (event) => (event.preventDefault(), resolve(new FormData(form).get("submit") ?? "")), { once: true });
+          form.requestSubmit(form.querySelector("button"));
+        }),
+    );
+    const [a1, a2, b, ...more] = sent.map((s) => s.split(" ")[1]);
+    check(
+      "each copy of a template's form gets a submit key of its own when first sent, kept for its retry",
+      !more.length && uuidV4.test(kept) && a1 === kept && a2 === kept && uuidV4.test(b ?? "") && b !== kept && saidA === "Counted." && saidB === "Counted." && typeof plainKey === "string" && uuidV4.test(plainKey) && plainKey !== kept && plainKey !== b,
+      `${sent.join(", ")}; plain ${plainKey || "(empty)"}; a: ${saidA}, b: ${saidB}`,
+    );
+    await page.unroute("**/count-row");
+    await page.evaluate(() => (document.getElementById("count-rows")?.remove(), document.getElementById("count-row-list")?.remove()));
+    // The browser logs the 502.
+    errors.splice(logged, errors.length, ...errors.slice(logged).filter((e) => !/502|Bad Gateway/i.test(e)));
+  }
+
   // A submit button's formaction and formmethod win over the form's, as in a plain post.
   await page.evaluate(() =>
     document.querySelector("main")?.insertAdjacentHTML(
