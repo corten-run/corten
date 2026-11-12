@@ -102,8 +102,10 @@ other request that arrives while the service is down gets nginx's 502.
 
 ## What it holds
 
-Measured with `hold.mjs` against the site's image in a container held to 1 CPU and 512 MB, on a
-workstation, with the load coming from inside the container's network (no proxy, no TLS):
+Measured at `e2bd048c3` with `hold.mjs`, against the site's image in a container held to 1 CPU
+and 512 MB on a workstation. `hold.mjs` ran in a second container that shares the first one's
+network, so the load reached the app over loopback, with no proxy and no TLS, and did not count
+against its CPU:
 
 ```sh
 node examples/corten-site/deploy/hold.mjs http://localhost:18488 1000 10
@@ -111,17 +113,17 @@ node examples/corten-site/deploy/hold.mjs http://localhost:18488 1000 10
 
 | | Memory the server holds | Pages a second meanwhile |
 |---|---|---|
-| Idle | 5.2 to 5.6 MiB | |
-| 1,000 live streams open | 18.3 to 18.7 MiB | 481 and 525 |
-| 3,000 live streams open | 44.4 to 45.5 MiB | 398 and 398 |
+| Idle | 5.6 MiB | |
+| 1,000 live streams open | 18.8 to 19.4 MiB | 1,007 and 737 |
+| 3,000 live streams open | 44.6 to 45.9 MiB | 484 and 597 |
 
-Two runs of each. Every stream was sent its reading each second, and each page is 147,495 bytes
-before compression. The memory figures did not move between runs. The pages a second did with
-what else the workstation was doing: these runs shared its eight CPUs with other builds that
-kept them busy, and an earlier build of the same page measured 1,172 and 1,035 in a quieter
-hour. Neither is the droplet's number. A shared vCPU is not a workstation's core, and nginx and
-TLS take their part of it: run `hold.mjs` on the machine itself, against `http://127.0.0.1:3000`
-with `HOSTS` allowing it, before saying what it serves.
+Two runs of each, with 10 seconds of page loads in a run. Every stream was sent its reading each
+second, and each page is 147,882 bytes before compression. A memory range is from the lowest
+reading with the streams open to the highest after the page loads, over both runs. The pages a
+second moved with what else the workstation was doing: other builds kept its eight CPUs busy
+through every run. Neither figure is the droplet's number. A shared vCPU is not a workstation's
+core, and nginx and TLS take their part of it: run `hold.mjs` on the machine itself, against
+`http://127.0.0.1:3000` with `HOSTS` allowing it, before saying what it serves.
 
 ## What has and has not been checked
 
