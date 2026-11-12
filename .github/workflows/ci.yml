@@ -124,8 +124,8 @@ jobs:
   smoke:
     name: smoke (${{ matrix.group }})
     runs-on: ubuntu-24.04
-    # A passing group takes about 7 minutes (estimated); a hung one would hold the runner for six
-    # hours (#317).
+    # A passing group takes 7 to 8.5 minutes (measured, one run of the three); a hung one would
+    # hold the runner for six hours (#317).
     timeout-minutes: 30
     strategy:
       # Every group reports, so one failure does not hide another.

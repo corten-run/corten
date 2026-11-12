@@ -108,6 +108,30 @@ const SHOWN: usize = 5;
 const FLOOR: &str = "Plain JS";
 const SHIPPED: &str = "JavaScript, gzip";
 
+/// A column of round r16's three tables in which another app is ahead of Corten
+/// (`docs/performance.md`, CPU and memory per request and In the browser): the column as the
+/// document heads it, Corten's result and how many apps are ahead of it. These are the columns
+/// the certificate has no table for; the tests hold them, and the ones `SERVED` and `PHONE`
+/// carry, to every column of the round.
+type Trail = (&'static str, &'static str, usize);
+const PER_CPU: Trail = ("Pages per CPU-second", "21,195", 1);
+const PER_MIB: Trail = ("Pages a second per MiB", "1,234", 2);
+const PEAK: Trail = ("Peak memory, 64 users", "16.8 MiB", 4);
+const PAINT: Trail = ("Phone: largest paint", "460 ms", 8);
+const MOVED: Trail = ("Phone: client navigation", "199 ms", 1);
+const DESKTOP: Trail = ("Desktop: interactive", "59 ms", 5);
+const SCRIPT: Trail = ("JavaScript, gzip", "14.1 KB", 2);
+
+/// An app ahead in one of those columns that the certificate gives a result for: the column,
+/// the app and its result.
+type Ahead = (&'static str, &'static str, &'static str);
+const AXUM_PER_CPU: Ahead = (PER_CPU.0, "axum 0.8 + Maud 0.27", "28,300");
+const AXUM_PER_MIB: Ahead = (PER_MIB.0, "axum 0.8 + Maud 0.27", "1,697");
+const DROGON_PER_MIB: Ahead = (PER_MIB.0, "Drogon 1.9", "1,407");
+const PHOENIX_MOVED: Ahead = (MOVED.0, "Phoenix 1.8", "138 ms");
+const ASTRO_SCRIPT: Ahead = (SCRIPT.0, "Astro 7", "9.2 KB");
+const LEPTOS_SCRIPT: Ahead = (SCRIPT.0, "Leptos 0.8", "7.0 KB + 305 KB WASM");
+
 /// A result's number, whatever its unit: `1,229 B` is 1229. `None` where the app failed.
 fn amount(result: &str) -> Option<f64> {
     let digits: String = result.chars().take_while(|c| !c.is_whitespace()).filter(|c| *c != ',').collect();
@@ -153,6 +177,9 @@ pub fn Certificate<'a>(req: &'a Req) -> impl Render {
     let ours = served("Corten");
     let (axum, leptos, topcoat) = (served("axum"), served("Leptos"), served("Topcoat"));
     let drawn: Vec<_> = DRAWN.iter().map(|&(operation, title)| (title, bars(operation))).collect();
+    // Where Corten is among the phone's times, and how far behind the nearest and the soonest.
+    let at = PHONE.iter().position(|&(app, _)| app == "Corten").unwrap_or(0);
+    let (nearest, soonest) = (PHONE[at].1 - PHONE[at.saturating_sub(1)].1, PHONE[at].1 - PHONE[0].1);
     html! {
         <article id={CertificateId} class={Certificate}>
             <header class={Head}>
@@ -271,11 +298,19 @@ pub fn Certificate<'a>(req: &'a Req) -> impl Render {
                     " ms to "
                     {grouped(PHONE[PHONE.len() - 1].1)}
                     " ms, and "
-                    {PHONE.iter().position(|&(app, _)| app == "Corten").unwrap_or(0)}
+                    {at}
                     " of them were interactive sooner."
                 </p>
                 <p class={Conditions}>
-                    "Conditions. Round browser-4 (2026-11-11, at 3fb4b1ac, Chromium 156 on Linux, Xeon Platinum 8358). Times run from the click to the DOM being updated, and takeover from the HTML being parsed to the app marking itself ready; memory is what JavaScript holds for each row. Three of the round's twelve rows are drawn, against four of its five frameworks: Remix 3 was behind all four in each of the three, and hand-written DOM code, the floor, took "
+                    "Conditions. Round browser-4 (2026-11-11, at 3fb4b1ac, Chromium 156 on Linux, Xeon Platinum 8358). Times run from the click to the DOM being updated, and takeover from the HTML being parsed to the app marking itself ready; memory is what JavaScript holds for each row. The page draws "
+                    {DRAWN.len()}
+                    " of the round's "
+                    {CLIENT.len()}
+                    " rows, against "
+                    {SHOWN - 1}
+                    " of its "
+                    {APPS.len() - 2}
+                    " frameworks: Remix 3 was behind each of those in every row drawn, and hand-written DOM code, the floor, took "
                     {result(DRAWN[0].0, FLOOR)}
                     " and "
                     {result(DRAWN[2].0, FLOOR)}
@@ -287,7 +322,11 @@ pub fn Certificate<'a>(req: &'a Req) -> impl Render {
             <section class={(Part, Behind)}>
                 <h3 class={Heading}>"Where Corten trails"</h3>
                 <p class={Lede}>
-                    "axum with Maud renders more pages a second, and took less of a CPU to serve 300 of them a second ("
+                    "axum with Maud renders more pages a second, more for each second of CPU ("
+                    {AXUM_PER_CPU.2}
+                    " against "
+                    {PER_CPU.1}
+                    "), and took less of a CPU to serve 300 of them a second ("
                     {axum.2}
                     " against "
                     {ours.2}
@@ -299,7 +338,41 @@ pub fn Certificate<'a>(req: &'a Req) -> impl Render {
                     {topcoat.4}
                     " against "
                     {ours.4}
-                    "). Under 64 users, four apps held less memory at their peak than Corten's 16.8 MiB. Four apps were interactive on the phone sooner, by 13 to 21 ms; eight painted its largest element sooner than Corten's 460 ms, and five were interactive on a desktop sooner than its 59 ms. On the screen the browser changes, Solid is faster on the first click after takeover and at creating rows, and ships less JavaScript ("
+                    "). Under 64 users, "
+                    {PEAK.2}
+                    " apps held less memory at their peak than Corten's "
+                    {PEAK.1}
+                    ", and axum and Drogon served more pages a second for each MiB they held ("
+                    {AXUM_PER_MIB.2}
+                    " and "
+                    {DROGON_PER_MIB.2}
+                    " against "
+                    {PER_MIB.1}
+                    "). On the phone, "
+                    {at}
+                    " apps were interactive sooner, by "
+                    {nearest}
+                    " to "
+                    {soonest}
+                    " ms, "
+                    {PAINT.2}
+                    " painted the page's largest element sooner than Corten's "
+                    {PAINT.1}
+                    ", and Phoenix went from the home page to the item page sooner ("
+                    {PHOENIX_MOVED.2}
+                    " against "
+                    {MOVED.1}
+                    "). On a desktop, "
+                    {DESKTOP.2}
+                    " apps were interactive sooner than Corten's "
+                    {DESKTOP.1}
+                    ". Astro's item page loaded less JavaScript ("
+                    {ASTRO_SCRIPT.2}
+                    " against "
+                    {SCRIPT.1}
+                    "), and so did Leptos's beside its WebAssembly ("
+                    {LEPTOS_SCRIPT.2}
+                    "). On the screen the browser changes, Solid is faster on the first click after takeover and at creating rows, and ships less JavaScript ("
                     {result(SHIPPED, "Solid 1.9")}
                     " against Corten's "
                     {result(SHIPPED, "Corten")}
@@ -319,9 +392,14 @@ mod tests {
     const PERFORMANCE: &str = include_str!("../../../docs/performance.md");
     const README: &str = include_str!("../../../README.md");
 
-    /// Whether Corten trails a framework in this row. The last column is the floor, hand-written
-    /// code, which no framework is expected to beat.
-    fn trails(results: &[&str; 7]) -> bool {
+    /// The page's own source, without these tests: what a test looks for in it is in the page.
+    fn page() -> &'static str {
+        include_str!("cert.rs").split_once("#[cfg(test)]").expect("the tests come last").0
+    }
+
+    /// Whether Corten is behind a framework in this row. The last column is the floor,
+    /// hand-written code, which no framework is expected to beat.
+    fn behind(results: &[&str; 7]) -> bool {
         results[1..6].iter().any(|other| amount(other) < amount(results[0]))
     }
 
@@ -366,10 +444,12 @@ mod tests {
             assert!(PERFORMANCE.contains(&row), "docs/performance.md has no row: {row}");
         }
         assert!(PHONE.windows(2).all(|pair| pair[0].1 <= pair[1].1), "fastest first");
-        // What the certificate says of the phone: four apps ahead, by 13 to 21 ms.
+        // What the certificate says of the phone is counted from these rows: the apps ahead.
         let ours = PHONE.iter().position(|&(app, _)| app == "Corten").expect("Corten is in the round");
-        assert_eq!(ours, 4);
-        assert_eq!((PHONE[ours].1 - PHONE[ours - 1].1, PHONE[ours].1 - PHONE[0].1), (13, 21));
+        assert_eq!(
+            (ours, format!("{} ms", phone("Corten"))),
+            (trail("Phone: interactive").2, trail("Phone: interactive").1.to_string())
+        );
     }
 
     #[test]
@@ -393,39 +473,153 @@ mod tests {
     fn the_rows_drawn_are_as_the_certificate_says() {
         for (operation, _) in DRAWN {
             let (_, results) = CLIENT.iter().find(|(name, _)| *name == operation).expect("a row of the round");
-            assert!(!trails(results), "{operation}: Corten trails a framework");
+            assert!(!behind(results), "{operation}: Corten trails a framework");
             assert!(results[1..SHOWN].iter().all(|shown| amount(shown) < amount(results[5])), "{operation}: Remix 3");
             assert_eq!(bars(operation).len(), SHOWN);
         }
     }
 
-    /// How many apps have less than Corten in one column of the document's table under
-    /// `header`, and Corten's own cell.
-    fn ahead_in(header: &str, column: usize) -> (usize, String) {
-        let table = PERFORMANCE.split_once(header).unwrap_or_else(|| panic!("docs/performance.md has no table: {header}")).1;
-        let rows: Vec<Vec<String>> = table.lines().skip(2).take_while(|line| line.starts_with('|')).map(cells).collect();
+    /// Every column of the round's three tables in which another app is ahead of Corten, in
+    /// the document's order. Four are written out here because the page reads them from
+    /// `SERVED` and `PHONE`, which the tests below hold to these.
+    const TRAILS: [Trail; 11] = [
+        ("Pages/s, no database", "20,705", 1),
+        ("Process start to first page", "8.6 ms", 3),
+        PER_CPU,
+        ("CPU for 300 pages a second", "4.2%", 1),
+        PER_MIB,
+        PEAK,
+        ("Phone: interactive", "468 ms", 4),
+        PAINT,
+        MOVED,
+        DESKTOP,
+        SCRIPT,
+    ];
+
+    /// Every app ahead that the certificate gives a result for beyond its tables.
+    const NAMED: [Ahead; 6] = [AXUM_PER_CPU, AXUM_PER_MIB, DROGON_PER_MIB, PHOENIX_MOVED, ASTRO_SCRIPT, LEPTOS_SCRIPT];
+
+    /// One column of `TRAILS`, which it must be.
+    fn trail(column: &str) -> Trail {
+        *TRAILS.iter().find(|trail| trail.0 == column).unwrap_or_else(|| panic!("{column} is no column of TRAILS"))
+    }
+
+    /// The round's three tables with a row an app, by their first two columns, and for each of
+    /// their columns whether more is better or less is.
+    const TABLES: [&str; 3] = ["| | Pages/s, no database |", "| | Pages per CPU-second |", "| | Phone: interactive |"];
+    const MORE_IS_BETTER: [&str; 5] =
+        ["Pages/s, no database", "JSON/s, no database", "Pages/s, item API", "Pages per CPU-second", "Pages a second per MiB"];
+    const LESS_IS_BETTER: [&str; 11] = [
+        "Process start to first page",
+        "Memory after first request",
+        "CPU for 300 pages a second",
+        "Peak memory, 64 users",
+        "Phone: interactive",
+        "Phone: largest paint",
+        "Phone: client navigation",
+        "Desktop: interactive",
+        "Desktop: client navigation",
+        "JS heap",
+        "JavaScript, gzip",
+    ];
+
+    /// A cell's measure: its first number and its unit, a time in seconds given in
+    /// milliseconds. `None` where the app failed.
+    fn measure(cell: &str) -> Option<(f64, &str)> {
+        let mut words = cell.split(' ');
+        let first = words.next()?.trim_end_matches(',');
+        let number: f64 = first.trim_end_matches('%').replace(',', "").parse().ok()?;
+        if first.ends_with('%') {
+            return Some((number, "%"));
+        }
+        Some(match words.next() {
+            Some("s") => (number * 1000.0, "ms"),
+            unit => (number, unit.unwrap_or("")),
+        })
+    }
+
+    /// One of the round's tables: its column heads, and a row of cells for each app.
+    fn table(starts: &str) -> (Vec<String>, Vec<Vec<String>>) {
+        let mut lines = PERFORMANCE.lines().skip_while(|line| !line.starts_with(starts));
+        let heads = cells(lines.next().unwrap_or_else(|| panic!("docs/performance.md has no table: {starts}")));
+        let rows: Vec<Vec<String>> = lines.skip(1).take_while(|line| line.starts_with('|')).map(cells).collect();
         assert_eq!(rows.len(), 18, "every app of the round");
+        (heads, rows)
+    }
+
+    /// The apps ahead of Corten in one column, and Corten's own cell.
+    fn ahead_in(heads: &[String], rows: &[Vec<String>], column: usize) -> (Vec<String>, String) {
+        let head = heads[column].as_str();
+        let more = MORE_IS_BETTER.contains(&head);
+        assert!(more != LESS_IS_BETTER.contains(&head), "{head}: say whether more is better in this column, or less");
         let ours = rows.iter().find(|row| row[0] == "Corten").expect("Corten's row")[column].clone();
-        let ahead = rows.iter().filter(|row| amount(&row[column]).is_some_and(|other| Some(other) < amount(&ours))).count();
+        let (mine, unit) = measure(&ours).expect("Corten's result is a number");
+        let mut ahead = Vec::new();
+        for row in rows {
+            let Some((other, its)) = measure(&row[column]) else { continue };
+            assert_eq!(its, unit, "{head}: {} is in another unit than Corten's {ours}", row[0]);
+            let leads = if more { other > mine } else { other < mine };
+            if leads {
+                ahead.push(row[0].clone());
+            }
+        }
         (ahead, ours)
     }
 
-    /// What the certificate says of rows it does not draw: how many apps lead Corten in each,
-    /// and Corten's own result.
+    /// `TRAILS` is every column of the round's three tables where another app is ahead of
+    /// Corten, with Corten's result and the number ahead: a result that moves an app ahead
+    /// fails here until the certificate says so, and so does a column the document gains, until
+    /// it is said which way is better in it.
     #[test]
-    fn rows_not_drawn_where_others_lead_are_the_documents() {
-        let served = "| | Pages per CPU-second | CPU for 300 pages a second | Pages a second per MiB | Peak memory, 64 users |";
-        let browser = "| | Phone: interactive | Phone: largest paint | Phone: client navigation | Desktop: interactive | Desktop: client navigation | JS heap | JavaScript, gzip |";
-        assert_eq!(ahead_in(served, 4), (4, "16.8 MiB".into()));
-        assert_eq!(ahead_in(browser, 2), (8, "460 ms".into()));
-        assert_eq!(ahead_in(browser, 4), (5, "59 ms".into()));
+    fn where_others_lead_is_every_column_of_the_rounds() {
+        let mut found = Vec::new();
+        for starts in TABLES {
+            let (heads, rows) = table(starts);
+            for column in 1..heads.len() {
+                let (ahead, ours) = ahead_in(&heads, &rows, column);
+                if !ahead.is_empty() {
+                    found.push((heads[column].clone(), ours, ahead.len()));
+                }
+            }
+        }
+        let said: Vec<(String, String, usize)> =
+            TRAILS.iter().map(|&(column, ours, ahead)| (column.to_string(), ours.to_string(), ahead)).collect();
+        assert_eq!(found, said);
+    }
+
+    /// Each result the certificate gives for an app ahead is the document's, and where it names
+    /// the apps ahead in a column it names every one.
+    #[test]
+    fn the_apps_named_ahead_are_the_documents() {
+        for starts in TABLES {
+            let (heads, rows) = table(starts);
+            for column in 1..heads.len() {
+                let (ahead, _) = ahead_in(&heads, &rows, column);
+                let named: Vec<_> = NAMED.iter().filter(|row| row.0 == heads[column]).collect();
+                for (_, app, result) in &named {
+                    let row = rows.iter().find(|row| row[0] == *app).unwrap_or_else(|| panic!("no row for {app}"));
+                    assert_eq!(row[column], *result, "{app}, {}", heads[column]);
+                    assert!(ahead.iter().any(|name| name == app), "{app} is not ahead in {}", heads[column]);
+                }
+                assert!(named.is_empty() || named.len() == ahead.len(), "{}: {ahead:?} are ahead", heads[column]);
+            }
+        }
+        // Every column of `NAMED` is one of the round's, and one where others lead.
+        assert!(NAMED.iter().all(|named| trail(named.0).2 > 0));
+        // The paragraph names these by name: they are who is ahead there.
+        fn names(column: &str) -> Vec<&'static str> {
+            NAMED.iter().filter(|row| row.0 == column).map(|row| row.1).collect()
+        }
+        assert_eq!(names("Pages a second per MiB"), ["axum 0.8 + Maud 0.27", "Drogon 1.9"]);
+        assert_eq!(names("Phone: client navigation"), ["Phoenix 1.8"]);
+        assert_eq!(names("JavaScript, gzip"), ["Astro 7", "Leptos 0.8"]);
     }
 
     #[test]
     fn where_corten_trails_is_what_the_certificate_says() {
-        let behind: Vec<&str> = CLIENT.iter().filter(|(_, results)| trails(results)).map(|&(operation, _)| operation).collect();
+        let trailing: Vec<&str> = CLIENT.iter().filter(|(_, results)| behind(results)).map(|&(operation, _)| operation).collect();
         assert_eq!(
-            behind,
+            trailing,
             [
                 "First click on a taken-over row",
                 "Update every 10th of 1,000",
@@ -439,6 +633,11 @@ mod tests {
         // On the server, the apps named are every one that took less CPU for the same pages or
         // served its first page sooner, and none held less memory after its first request.
         let ours = served("Corten");
+        // `TRAILS` writes Corten's result out in three columns the page reads from this row.
+        assert_eq!(
+            (trail("Pages/s, no database").1, trail("CPU for 300 pages a second").1, trail("Process start to first page").1),
+            (ours.1, ours.2, ours.4)
+        );
         let percent = |cell: &str| cell.split_once('%').and_then(|(share, _)| share.parse::<f64>().ok());
         let millis = |cell: &str| {
             let (number, unit) = cell.split_once(' ')?;
@@ -468,9 +667,6 @@ mod tests {
     fn the_conditions_count_what_is_drawn() {
         // Corten and the floor are not frameworks it is drawn against.
         assert_eq!((DRAWN.len(), CLIENT.len(), SHOWN - 1, APPS.len() - 2), (3, 12, 4, 5));
-        assert!(
-            include_str!("cert.rs").contains("Three of the round's twelve rows are drawn, against four of its five frameworks")
-        );
         assert_eq!(APPS.last(), Some(&FLOOR));
         assert_eq!(
             [result(DRAWN[0].0, FLOOR), result(DRAWN[2].0, FLOOR), result(DRAWN[1].0, FLOOR)],
@@ -478,6 +674,6 @@ mod tests {
         );
         assert_eq!((result(SHIPPED, "Solid 1.9"), result(SHIPPED, "Corten")), ("6.8 KB", "17.9 KB"));
         assert_eq!(SERVED.len(), 18);
-        assert!(include_str!("cert.rs").contains("One round, one CPU, eighteen apps we wrote"));
+        assert!(page().contains("One round, one CPU, eighteen apps we wrote"));
     }
 }

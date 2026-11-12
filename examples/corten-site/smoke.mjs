@@ -155,10 +155,14 @@ for (engine of engines) {
     check("the first strike sends the form and loads two files", asked.length === 3 && asked[0] === "POST /strike" && asked.slice(1).every((ask) => ask.startsWith("GET ") && ask.endsWith(".js")), asked.join(", "));
     const struck = await page.evaluate(() => document.documentElement.dataset.struck ?? "");
     check("the plate tells the page around it that it was struck", Number(struck) >= 1, struck);
-    await page.waitForFunction(
-      (was) => Number.parseInt([...document.querySelectorAll("aside p")].find((cell) => cell.firstElementChild?.textContent === "Since")?.querySelector("output")?.textContent ?? "", 10) > was,
-      settled,
-    );
+    // A count that never gets there is the check's to report, not a timeout's.
+    await page
+      .waitForFunction(
+        (was) => Number.parseInt([...document.querySelectorAll("aside p")].find((cell) => cell.firstElementChild?.textContent === "Since")?.querySelector("output")?.textContent ?? "", 10) >= was + 3,
+        settled,
+        { timeout: 10_000 },
+      )
+      .catch(() => {});
     check("the strip counts the strike's three requests", (await since()) === settled + 3, `${settled} before, then ${await strip("Since")}`);
     check("the strip names the last request", /^\/\S+: [\d.,]+ KB in [\d,]+ ms$/.test(await strip("Last request")), await strip("Last request"));
 

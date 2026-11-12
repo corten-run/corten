@@ -19,7 +19,8 @@ on:
 permissions:
   contents: read
 
-# One deploy at a time, and each one finishes: a cancelled deploy could leave `current` half moved.
+# One deploy at a time, and none is cancelled for the next: a cancelled deploy could leave an
+# unchecked release served.
 concurrency:
   group: site
   cancel-in-progress: false
@@ -33,6 +34,8 @@ jobs:
     # The deploy key is this environment's secret. Give the environment a deployment branch rule
     # for main (deploy/README.md), so no other branch's workflow can read it.
     environment: site
+    # A run that hangs holds the one place in the queue: it is ended, and the next one ships.
+    timeout-minutes: 45
     env:
       SITE_HOST: ${{ vars.SITE_HOST }}
       SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
@@ -66,14 +69,17 @@ jobs:
           # release being served, and there is always the one before to go back to.
           release="/opt/corten-site/releases/${GITHUB_SHA::12}-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           site="https://$SITE_DOMAIN"
-          ssh="ssh -i $HOME/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes deploy@$SITE_HOST"
+          # A machine that stops answering is given up on within 20 seconds, so the step goes on
+          # to put the release before back over a new connection.
+          options="-i $HOME/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3"
+          ssh="ssh $options deploy@$SITE_HOST"
           # deploy/release.sh runs on the machine, sent with each deploy.
           machine() { $ssh sh -s -- "$@" < examples/corten-site/deploy/release.sh; }
           before=$($ssh 'readlink /opt/corten-site/current 2>/dev/null || true')
           # Nothing on the machine has changed until `serve`: a failure up to there leaves the
           # site as it was.
           $ssh "mkdir -p $release"
-          scp -i ~/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes target/release/corten-site "deploy@$SITE_HOST:$release/corten-site.new"
+          scp $options target/release/corten-site "deploy@$SITE_HOST:$release/corten-site.new"
           machine install "$release" "$(sha256sum target/release/corten-site | cut -d' ' -f1)"
           # The page as HTML names the commit it was built from, its JSON does too, and its live
           # stream sends a reading every second. Each answer is read whole before it is searched.
@@ -97,7 +103,10 @@ jobs:
             echo "there is no release before this one to put back"
             exit 1
           fi
-          if machine serve "$before"; then
+          # The machine may be out of reach for a moment, which is what failed the deploy: the
+          # put-back is tried three times.
+          put_back() { for try in 1 2 3; do machine serve "$before" && return 0; sleep 5; done; return 1; }
+          if put_back; then
             for try in $(seq 1 20); do
               if curl -fsS --max-time 5 -o /dev/null "$site/"; then
                 echo "put back on $before, which answers"

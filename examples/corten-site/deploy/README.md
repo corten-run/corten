@@ -85,6 +85,14 @@ within 20 tries, the workflow points `current` back at the release before, resta
 whether that one answers, and fails. The newest three releases are kept, and the one served
 always.
 
+Three cases leave a release served that was not checked. The first deploy has no release before
+it to go back to, so one that fails stays as it is. A put-back that cannot reach the machine in
+three tries leaves the new release served; the run says so and fails. And a run cancelled by
+hand, or ended by the job's 45 minutes, after the switch and before the checks or the put-back
+are done leaves the new release served: run the workflow again. A machine that stops answering
+is given up on within 20 seconds and counts as a failure, so the put-back runs over a new
+connection.
+
 A restart ends each open page's live stream. The browser asks for it again after a few seconds
 and is sent the new process's readings, whose counts start over, when the service is up by
 then, as a restart of one binary normally is. If that request arrives while the service is still down, nginx answers
@@ -125,8 +133,8 @@ another host is refused, and of 70 streams opened from one address 64 are served
 429 while 20 of 20 pages asked for from that address are served. With the limit for one reader
 lifted, of 3,600 streams 3,584 are served and 16 answered 429. What the reader map makes of an
 address was asked of the same nginx for IPv4 and IPv6 addresses as nginx writes them, folded at
-each group and not; the limits themselves were only exercised over IPv4. The service file was checked by `systemd-analyze verify`
-(systemd 255).
+each group and not; the limits themselves were only exercised over IPv4. The service file was
+checked by `systemd-analyze verify` (systemd 255).
 
 The workflow's ship step was rehearsed against a container running sshd, with the `deploy` user
 made by `provision.sh`'s own lines and a stand-in for `systemctl`: a first deploy, a second of
@@ -134,7 +142,9 @@ the same commit, a deploy that does not come up as its commit and one whose rest
 refuses (each put back, and the release before answers), an upload that is not the binary that
 was built (removed, and nothing served from it), and pruning with four older releases and an
 empty directory present. The key was refused a terminal, a forwarded port and any other `sudo`
-command.
+command. A machine that stops answering was rehearsed for the connection alone, by freezing the
+container: `ssh` gave up 17 seconds after the freeze mid-session, and a new connection after 10.
+The ship step was not run against a machine that freezes.
 
 The rest of `provision.sh` (packages, the firewall, the certificate), the service under a real
 systemd and the workflow on GitHub have not been run from this repository yet: the first deploy
