@@ -2578,8 +2578,9 @@ rules something out.
     Corten has to read `data-on`, which [Rule 10](#rule-standard-formats) keeps internal.
 
     Last checked: 2026-11-12, `json_argument_cost`, callgrind (valgrind 3.19.0) and `render_cost`
-    on `194f5179` and the change; 2026-11-11, the parse, the value and the CSP in Chromium
-    156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
+    on `194f5179` and the change, and card-market's `render_cost` again on `80dbd7db` and its merge
+    into the change, `7f34dea8` (five runs of each build alternated); 2026-11-11, the parse, the
+    value and the CSP in Chromium 156.0.8078.4, Firefox 157.0 and WebKit 27.2 (Playwright 1.64.1).
 
 ## Rules
 
