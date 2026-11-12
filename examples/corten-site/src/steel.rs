@@ -175,7 +175,10 @@ pub(crate) fn Answer<'a>(here: Here<'a>, t: Msg) -> impl Render {
     let (absent, read, answered) = (t.answer_absent(), t.answer_read(), t.js().answer_status());
     let address = layout::origin().unwrap_or("https://the-address-of-this-page");
     html! {
-        <div class={Answer} on:connect={js::read(scope, status, value, json, said, failed, crate::page(), absent, read, answered, signal)}>
+        <div
+            class={Answer}
+            on:connect={js::read(scope, status, value, json, said, failed, crate::page(), absent, read, answered, signal)}
+        >
             <figure class={Asked}>
                 <figcaption class={Ask}>
                     <code class={Line}>"GET /"</code>

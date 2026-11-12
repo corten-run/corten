@@ -12,11 +12,12 @@ pub const CUTS: [Cut; 5] = [
 pub struct Certificate;
 "#,
         verdict: r#"error[E0425]: cannot find value `certificate` in this scope
-  --> src\lib.rs:62:35
+  --> examples/corten-site/src/lib.rs:67:35
    |
-62 |     #[route("/certificate", get = certificate)]
+67 |     #[route("/certificate", get = certificate)]
    |                                   ^^^^^^^^^^^ not found in this scope
 
+For more information about this error, try `rustc --explain E0425`.
 error: could not compile `corten-site` (lib) due to 1 previous error
 "#,
     },
@@ -29,7 +30,7 @@ error: could not compile `corten-site` (lib) due to 1 previous error
     required
 "#,
         verdict: r#"error[E0609]: no field `nmae` on type `StrikeFormFields`
-   --> src\seam.rs:191:33
+   --> examples/corten-site/src/seam.rs:191:33
     |
 191 |                         name={f.nmae}
     |                                 ^^^^ unknown field
@@ -40,6 +41,7 @@ help: a field with a similar name exists
 191 +                         name={f.name}
     |
 
+For more information about this error, try `rustc --explain E0609`.
 error: could not compile `corten-site` (lib) due to 1 previous error
 "#,
     },
@@ -49,7 +51,7 @@ error: could not compile `corten-site` (lib) due to 1 previous error
         broken: r#"<div class="press">
 "#,
         verdict: r#"error: "press" is a class of press.css: write class={Press}, which is scoped to this component
-   --> src\seam.rs:181:20
+   --> examples/corten-site/src/seam.rs:181:20
     |
 181 |         <div class="press">
     |                    ^^^^^^^
@@ -63,7 +65,7 @@ error: could not compile `corten-site` (lib) due to 1 previous error; 1 warning 
         broken: r#"on:click={js::order(event, readout, grid, ordered, number)}
 "#,
         verdict: r#"error[E0277]: the handler takes an HTMLDivElement, and this is an HTMLOutputElement
-    --> src\surface.rs:186:48
+    --> examples/corten-site/src/surface.rs:186:48
      |
  186 |                     on:click={js::order(event, readout, grid, ordered, number)}
      |                               ---------        ^^^^^^^ an HTMLOutputElement, from the tag its ref is on
@@ -81,11 +83,12 @@ error: could not compile `corten-site` (lib) due to 4 previous errors
         file: "src/seam.rs",
         broken: r#"#[component(css, js)]
 pub fn Nameplate<'a>(plate: &'a Plate<'a>, patched: bool) -> impl Patch {
+    let struck = refs();
     html! {
-        <div class={Nameplate} aria-live="polite">
+        <div class={Nameplate}>
 "#,
         verdict: r#"error[E0277]: this view is not a patch: one of its top-level parts is not an element with a #[derive(Id)] id
-    --> src\seam.rs:215:1
+    --> examples/corten-site/src/seam.rs:215:1
      |
  215 | #[component(css, js)]
      | ^^^^^^^^^^^^^^^^^^^^^ a patch replaces elements by id

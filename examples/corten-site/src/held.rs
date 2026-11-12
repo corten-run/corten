@@ -37,7 +37,12 @@ const HELD: [(&str, &str, &str, &str); 19] = [
         PERFORMANCE,
         "Takeover runs from the HTML being parsed to the app marking itself ready",
     ),
-    (CERT, "each app written as its js-framework-benchmark entry is", PERFORMANCE, "Each framework's app is written the way its keyed [js-framework-benchmark]"),
+    (
+        CERT,
+        "each app written as its js-framework-benchmark entry is",
+        PERFORMANCE,
+        "Each framework's app is written the way its keyed [js-framework-benchmark]",
+    ),
     (
         CERT,
         "Chromium 148 under the Lighthouse phone profile (4x CPU slowdown, 150 ms round trip, 1.6 Mbps down), median of 10 cold loads",
@@ -58,7 +63,12 @@ const HELD: [(&str, &str, &str, &str); 19] = [
         DESIGN,
         "Client navigation uses the Navigation API (Chrome, Edge, Firefox 147+, Safari 26.2+)",
     ),
-    (AFTER, "Corten speaks HTTP/1.1", README, "`corten::serve` speaks HTTP/1.1, so an app with live streams goes behind a proxy or CDN"),
+    (
+        AFTER,
+        "Corten speaks HTTP/1.1",
+        README,
+        "`corten::serve` speaks HTTP/1.1, so an app with live streams goes behind a proxy or CDN",
+    ),
     (AFTER, "You need Rust 1.88 or later", MANIFEST, "rust-version = \"1.88\""),
     (AFTER, "Corten is 0.2: usable and tested", README, "Corten is 0.2: usable and tested, on Rust 1.88 or later"),
     (

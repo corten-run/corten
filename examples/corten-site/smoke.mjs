@@ -110,8 +110,32 @@ for (engine of engines) {
     await page.locator("fieldset label", { hasText: "Hand a handler the wrong element" }).click();
     check("a break shows what the compiler said", await page.getByText("the handler takes an HTMLDivElement").first().isVisible());
 
-    // Striking a plate is one patch, and the plate behind the page hears of it. The page says
-    // the patch is about a kilobyte and that the first strike loads two small files beside it.
+    // The strip along the bottom is the browser's own count: the server's time for this page
+    // (Server-Timing), what the load cost, and every request since. A request counts as the
+    // load's until a second after it, so the strike below waits that out.
+    const strip = (/** @type {string} */ label) =>
+      page.evaluate(
+        (label) => [...document.querySelectorAll("aside p")].find((cell) => cell.firstElementChild?.textContent === label)?.querySelector("output")?.textContent ?? "",
+        label,
+      );
+    await page.waitForFunction(() => {
+      const [loaded] = performance.getEntriesByType("navigation");
+      return loaded instanceof PerformanceNavigationTiming && loaded.loadEventEnd > 0 && performance.now() > loaded.loadEventEnd + 1200;
+    });
+    check("the strip has the server's time for this page", /^[\d,]+ µs for this page$/.test(await strip("Server took")), await strip("Server took"));
+    check("the strip counts the load", /^\d+ requests, [\d.,]+ KB, ready in [\d,]+ ms$/.test(await strip("To load")), await strip("To load"));
+    const since = async () => Number.parseInt(await strip("Since"), 10);
+    const settled = await since();
+
+    // Striking a plate is one patch, and the plate tells the page around it: the typed event
+    // reaches the element whose handler strikes the plate behind the page. The page says the
+    // patch is about a kilobyte and that the first strike loads two small files beside it.
+    await page.evaluate(() => {
+      const world = document.querySelector("canvas[aria-hidden=true]")?.parentElement;
+      world?.addEventListener("plate-struck", (event) => {
+        document.documentElement.dataset.struck = String(/** @type {Event & { number?: number }} */ (event).number);
+      });
+    });
     /** @type {string[]} */
     const asked = [];
     const note = (/** @type {import("@playwright/test").Request} */ req) => asked.push(`${req.method()} ${new URL(req.url()).pathname}`);
@@ -129,12 +153,20 @@ for (engine of engines) {
     await page.waitForLoadState("networkidle");
     page.off("request", note);
     check("the first strike sends the form and loads two files", asked.length === 3 && asked[0] === "POST /strike" && asked.slice(1).every((ask) => ask.startsWith("GET ") && ask.endsWith(".js")), asked.join(", "));
+    const struck = await page.evaluate(() => document.documentElement.dataset.struck ?? "");
+    check("the plate tells the page around it that it was struck", Number(struck) >= 1, struck);
+    await page.waitForFunction(
+      (was) => Number.parseInt([...document.querySelectorAll("aside p")].find((cell) => cell.firstElementChild?.textContent === "Since")?.querySelector("output")?.textContent ?? "", 10) > was,
+      settled,
+    );
+    check("the strip counts the strike's three requests", (await since()) === settled + 3, `${settled} before, then ${await strip("Since")}`);
+    check("the strip names the last request", /^\/\S+: [\d.,]+ KB in [\d,]+ ms$/.test(await strip("Last request")), await strip("Last request"));
 
     // The server's readings arrive as a live stream; in the image it reads its own memory too.
     // Each reading replaces its element, so they are read from the page rather than held as locators.
     const reading = (label) =>
       page.evaluate((label) => [...document.querySelectorAll("dl dt")].find((dt) => dt.textContent.includes(label))?.nextElementSibling?.textContent ?? "", label);
-    await page.locator("dl", { hasText: "Up for" }).first().scrollIntoViewIfNeeded();
+    await page.evaluate(() => [...document.querySelectorAll("dl")].find((dl) => dl.textContent?.includes("Up for"))?.scrollIntoView());
     const before = await reading("Up for");
     await page.waitForFunction((was) => [...document.querySelectorAll("dl dt")].find((dt) => dt.textContent.includes("Up for"))?.nextElementSibling?.textContent !== was, before);
     check("the readings stream", before !== "");
@@ -159,7 +191,18 @@ for (engine of engines) {
     const sheet = (await json.json()).data;
     check("the same address answers JSON", json.ok() && sheet?.name === "Corten" && sheet.server.memory_held_bytes > 0 && sheet.server.machine_cpus > 0, JSON.stringify(sheet?.server));
 
+    // Counted before the page is left: a browser may log the live stream the next load cuts off.
     check("no console errors", errors.length === 0, errors.join(" | "));
+
+    // The bar's links to the page are the browser's to follow (`data-reload`): the lockup loads
+    // the page afresh, so nothing a script left on the window is still there.
+    await page.evaluate(() => Reflect.set(window, "smokeWasHere", true));
+    const loaded = page.waitForEvent("load", { timeout: 10_000 }).then(
+      () => true,
+      () => false,
+    );
+    await page.locator("a[aria-label=Corten]").first().click();
+    check("the lockup loads the page in full", (await loaded) && (await page.evaluate(() => Reflect.has(window, "smokeWasHere"))) === false);
     await context.close();
   }
 

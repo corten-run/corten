@@ -160,15 +160,20 @@ const CONNECTIONS: usize = 4096;
 
 /// The site: its routes, its files, its components and the task that reads the server.
 pub fn app() -> App<Timed> {
-    around(Works::new())
+    around(Works::new(), over_https(std::env::var("HTTPS").ok().as_deref()))
 }
 
-/// The site around one server's counts, which a test keeps hold of.
-fn around(works: Works) -> App<Timed> {
+/// Whether the site is served over HTTPS, from what `HTTPS` is set to: only `1` says so.
+fn over_https(set: Option<&str>) -> bool {
+    set == Some("1")
+}
+
+/// The site around one server's counts, which a test keeps hold of, served over HTTPS or not.
+fn around(works: Works, https: bool) -> App<Timed> {
     let reading = works.clone();
     let connections = std::env::var("MAX_CONNECTIONS").ok().and_then(|n| n.trim().parse().ok()).filter(|&n| n > 0);
-    // Served over HTTPS in production (`HTTPS=1`): browsers are told to use it from then on.
-    let policy = if std::env::var("HTTPS").is_ok_and(|on| on == "1") { Policy::new().hsts() } else { Policy::new() };
+    // A site served over HTTPS tells browsers to use it from then on.
+    let policy = if https { Policy::new().hsts() } else { Policy::new() };
     App::new(url::router(works))
         .assets(layout::Static)
         .error_page(layout::error_page, ())
@@ -351,6 +356,19 @@ mod tests {
         assert!(!html.contains("http-equiv"), "{html}");
     }
 
+    /// Only a site served over HTTPS says to keep to it: said over plain HTTP, on a machine
+    /// with no certificate, it would be a promise nothing keeps.
+    #[tokio::test]
+    async fn only_a_site_served_over_https_says_to_keep_to_it() {
+        let kept = corten::http::header::STRICT_TRANSPORT_SECURITY;
+        let secure = around(Works::new(), true).test().get(&page()).await;
+        assert!(secure.headers().get(&kept).is_some_and(|value| value.to_str().is_ok_and(|value| value.starts_with("max-age="))));
+        let plain = around(Works::new(), false).test().get(&page()).await;
+        assert!(plain.headers().get(&kept).is_none());
+        assert!(over_https(Some("1")));
+        assert!(!over_https(Some("0")) && !over_https(Some("")) && !over_https(None));
+    }
+
     /// The headers the page lists and explains, each on the answer a browser's request gets.
     #[tokio::test]
     async fn the_headers_the_page_lists_are_sent() {
@@ -381,7 +399,7 @@ mod tests {
     #[tokio::test]
     async fn the_page_as_json_is_what_the_page_shows() {
         let works = Works::new();
-        let app = around(works.clone()).test();
+        let app = around(works.clone(), false).test();
         let sheet = app.get(&Here { plate: Some("acme-store"), ..Here::default() }.wall(false)).mode(Mode::Data).await;
         let data = sheet.text();
         for (command, _) in after::START {

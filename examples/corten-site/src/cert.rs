@@ -25,7 +25,7 @@ pub const MEASURED: [(&str, &str); 6] = [
 /// server and CPU and memory per request): the app, item pages a second from memory at 64
 /// users, the CPU it took to serve 300 pages a second, its memory after the first request and
 /// the time from process start to its first page. Each cell is the document's.
-const SERVED: [(&str, &str, &str, &str, &str); 18] = [
+const SERVED: [ServedRow; 18] = [
     ("axum 0.8 + Maud 0.27", "27,327", "3.6%", "1.34 MiB", "6.3 ms"),
     ("Corten", "20,705", "4.2%", "1.277 MiB", "8.6 ms"),
     ("Drogon 1.9", "17,870", "4.3%", "3.258 MiB", "31 ms"),
@@ -131,6 +131,14 @@ fn result(operation: &str, app: &str) -> &'static str {
     row.zip(at).map_or("", |((_, results), at)| results[at])
 }
 
+/// A row of `SERVED`: the app, then its four results.
+type ServedRow = (&'static str, &'static str, &'static str, &'static str, &'static str);
+
+/// One app's row of round r16 on the server, by the start of its name.
+fn served(app: &str) -> ServedRow {
+    SERVED.iter().find(|row| row.0.starts_with(app)).copied().unwrap_or(SERVED[0])
+}
+
 /// A drawn row's bars: the app, its result, and its share of the longest bar.
 fn bars(operation: &str) -> Vec<(&'static str, &'static str, f64)> {
     let Some((_, results)) = CLIENT.iter().find(|(name, _)| *name == operation) else { return Vec::new() };
@@ -142,7 +150,8 @@ fn bars(operation: &str) -> Vec<(&'static str, &'static str, f64)> {
 #[component(css)]
 pub fn Certificate<'a>(req: &'a Req) -> impl Render {
     let most = SERVED.iter().filter_map(|row| amount(row.1)).fold(0.0, f64::max);
-    let ours = SERVED.iter().find(|row| row.0 == "Corten").copied().unwrap_or(SERVED[0]);
+    let ours = served("Corten");
+    let (axum, leptos, topcoat) = (served("axum"), served("Leptos"), served("Topcoat"));
     let drawn: Vec<_> = DRAWN.iter().map(|&(operation, title)| (title, bars(operation))).collect();
     html! {
         <article id={CertificateId} class={Certificate}>
@@ -278,7 +287,19 @@ pub fn Certificate<'a>(req: &'a Req) -> impl Render {
             <section class={(Part, Behind)}>
                 <h3 class={Heading}>"Where Corten trails"</h3>
                 <p class={Lede}>
-                    "axum with Maud renders more pages a second. Four apps were interactive on the phone sooner, by 13 to 21 ms. In the browser, Solid is faster on the first click after takeover and at creating rows, and ships less JavaScript ("
+                    "axum with Maud renders more pages a second, and took less of a CPU to serve 300 of them a second ("
+                    {axum.2}
+                    " against "
+                    {ours.2}
+                    "). It, Leptos and Topcoat served their first page sooner after starting ("
+                    {axum.4}
+                    ", "
+                    {leptos.4}
+                    " and "
+                    {topcoat.4}
+                    " against "
+                    {ours.4}
+                    "). Under 64 users, four apps held less memory at their peak than Corten's 16.8 MiB. Four apps were interactive on the phone sooner, by 13 to 21 ms; eight painted its largest element sooner than Corten's 460 ms, and five were interactive on a desktop sooner than its 59 ms. On the screen the browser changes, Solid is faster on the first click after takeover and at creating rows, and ships less JavaScript ("
                     {result(SHIPPED, "Solid 1.9")}
                     " against Corten's "
                     {result(SHIPPED, "Corten")}
@@ -378,6 +399,28 @@ mod tests {
         }
     }
 
+    /// How many apps have less than Corten in one column of the document's table under
+    /// `header`, and Corten's own cell.
+    fn ahead_in(header: &str, column: usize) -> (usize, String) {
+        let table = PERFORMANCE.split_once(header).unwrap_or_else(|| panic!("docs/performance.md has no table: {header}")).1;
+        let rows: Vec<Vec<String>> = table.lines().skip(2).take_while(|line| line.starts_with('|')).map(cells).collect();
+        assert_eq!(rows.len(), 18, "every app of the round");
+        let ours = rows.iter().find(|row| row[0] == "Corten").expect("Corten's row")[column].clone();
+        let ahead = rows.iter().filter(|row| amount(&row[column]).is_some_and(|other| Some(other) < amount(&ours))).count();
+        (ahead, ours)
+    }
+
+    /// What the certificate says of rows it does not draw: how many apps lead Corten in each,
+    /// and Corten's own result.
+    #[test]
+    fn rows_not_drawn_where_others_lead_are_the_documents() {
+        let served = "| | Pages per CPU-second | CPU for 300 pages a second | Pages a second per MiB | Peak memory, 64 users |";
+        let browser = "| | Phone: interactive | Phone: largest paint | Phone: client navigation | Desktop: interactive | Desktop: client navigation | JS heap | JavaScript, gzip |";
+        assert_eq!(ahead_in(served, 4), (4, "16.8 MiB".into()));
+        assert_eq!(ahead_in(browser, 2), (8, "460 ms".into()));
+        assert_eq!(ahead_in(browser, 4), (5, "59 ms".into()));
+    }
+
     #[test]
     fn where_corten_trails_is_what_the_certificate_says() {
         let behind: Vec<&str> = CLIENT.iter().filter(|(_, results)| trails(results)).map(|&(operation, _)| operation).collect();
@@ -393,6 +436,27 @@ mod tests {
         );
         assert_eq!(SERVED[0].0, "axum 0.8 + Maud 0.27");
         assert_eq!(SERVED[1].0, "Corten");
+        // On the server, the apps named are every one that took less CPU for the same pages or
+        // served its first page sooner, and none held less memory after its first request.
+        let ours = served("Corten");
+        let percent = |cell: &str| cell.split_once('%').and_then(|(share, _)| share.parse::<f64>().ok());
+        let millis = |cell: &str| {
+            let (number, unit) = cell.split_once(' ')?;
+            Some(number.parse::<f64>().ok()? * if unit == "s" { 1000.0 } else { 1.0 })
+        };
+        fn ahead(better: impl Fn(&ServedRow) -> bool) -> Vec<&'static str> {
+            SERVED.iter().filter(|row| better(row)).map(|row| row.0).collect()
+        }
+        assert_eq!(ahead(|row| percent(row.2).is_some_and(|share| Some(share) < percent(ours.2))), [served("axum").0]);
+        assert_eq!(
+            ahead(|row| millis(row.4).is_some_and(|start| Some(start) < millis(ours.4))),
+            [served("axum").0, served("Topcoat").0, served("Leptos").0]
+        );
+        // The sentence gives the three start times from the soonest.
+        assert!(
+            millis(served("axum").4) < millis(served("Leptos").4) && millis(served("Leptos").4) < millis(served("Topcoat").4)
+        );
+        assert!(ahead(|row| amount(row.3).is_some_and(|held| Some(held) < amount(ours.3))).is_empty());
         // What the far side says of axum is these two rows.
         let against = format!("{} against Corten's {}", SERVED[0].1, SERVED[1].1);
         assert!(include_str!("after.rs").contains(&against), "after.rs does not say {against}");
@@ -404,9 +468,14 @@ mod tests {
     fn the_conditions_count_what_is_drawn() {
         // Corten and the floor are not frameworks it is drawn against.
         assert_eq!((DRAWN.len(), CLIENT.len(), SHOWN - 1, APPS.len() - 2), (3, 12, 4, 5));
-        assert!(include_str!("cert.rs").contains("Three of the round's twelve rows are drawn, against four of its five frameworks"));
+        assert!(
+            include_str!("cert.rs").contains("Three of the round's twelve rows are drawn, against four of its five frameworks")
+        );
         assert_eq!(APPS.last(), Some(&FLOOR));
-        assert_eq!([result(DRAWN[0].0, FLOOR), result(DRAWN[2].0, FLOOR), result(DRAWN[1].0, FLOOR)], ["1.1 ms", "0.3 ms", "166 B"]);
+        assert_eq!(
+            [result(DRAWN[0].0, FLOOR), result(DRAWN[2].0, FLOOR), result(DRAWN[1].0, FLOOR)],
+            ["1.1 ms", "0.3 ms", "166 B"]
+        );
         assert_eq!((result(SHIPPED, "Solid 1.9"), result(SHIPPED, "Corten")), ("6.8 KB", "17.9 KB"));
         assert_eq!(SERVED.len(), 18);
         assert!(include_str!("cert.rs").contains("One round, one CPU, eighteen apps we wrote"));

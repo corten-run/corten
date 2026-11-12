@@ -19,6 +19,10 @@ fn main() {
     for own in ["src", "locales", "static", "Cargo.toml"] {
         println!("cargo:rerun-if-changed={own}");
     }
+    // And the rest of what it is built from.
+    for shared in ["../../crates", "../../Cargo.toml", "../../Cargo.lock"] {
+        println!("cargo:rerun-if-changed={shared}");
+    }
     println!("cargo:rerun-if-env-changed=CORTEN_SITE_HEAT");
     // The checkout's log of where HEAD has been changes with every commit and checkout.
     if let Some(dir) = git(&["rev-parse", "--absolute-git-dir"]) {

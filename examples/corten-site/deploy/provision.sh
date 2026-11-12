@@ -11,12 +11,19 @@ email=${2:?an email address for Let's Encrypt}
 key=${3:?the file holding the public half of the deploy key}
 machine=${4:-}
 here=$(cd "$(dirname "$0")" && pwd)
+# What the machine is, as the page states it: the argument, or what an earlier run was given.
+[ -n "$machine" ] || machine=$(sed -n 's/^CORTEN_SITE_MACHINE=//p' /etc/corten-site.env 2>/dev/null || true)
+# systemd reads quotes and backslashes in an environment file as its own, not as the text.
+case $machine in
+*[\"\'\\]*) echo "say what the machine is without quotes or backslashes" >&2; exit 1 ;;
+esac
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y --no-install-recommends nginx certbot ufw
 
-# Releases land in /opt/corten-site/releases/<commit>, and `current` points at the one served.
+# Each deploy's release lands in a directory of its own under /opt/corten-site/releases, and
+# `current` points at the one served.
 id deploy >/dev/null 2>&1 || useradd --create-home --shell /bin/sh deploy
 install -d -m 700 -o deploy -g deploy /home/deploy/.ssh
 # The key runs commands and copies files, and nothing else: no forwarding, no terminal.
