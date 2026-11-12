@@ -1,17 +1,29 @@
 import asyncio
+import os
 from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
+from starlette.middleware.body_limit import RequestBodyLimitMiddleware
 
 from .catalog import CatalogRecord, source as catalog_source
 from .items import ItemView, alert_message, fetch_item, shelf
 from .marketplace import LABELS, MarketplaceFormat, MarketplaceRecord, source as marketplace_source
+
+# The matched tier's production profile (bench/fullstack/README.md, "The matched tier"), from
+# FastAPI's, Starlette's and uvicorn's own middleware and settings (the end of this file and the
+# Dockerfile); without it the app is as FastAPI starts it.
+PROFILE = os.environ.get("PROFILE") == "matched"
+# The JSON routes: in the profile GET and HEAD, as Corten's get routes (FastAPI answers HEAD only
+# where a route lists it).
+GET = ["GET", "HEAD"] if PROFILE else ["GET"]
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -57,7 +69,7 @@ async def item(request: Request, item_id: str):
     })
 
 
-@app.get("/api/items/{item_id}")
+@app.api_route("/api/items/{item_id}", methods=GET)
 async def item_json(item_id: str) -> ItemView:
     view = await fetch_item(item_id)
     if view is None:
@@ -114,7 +126,7 @@ async def marketplace(request: Request, locale: str, record_id: str):
     })
 
 
-@app.get("/api/marketplace/{record_id}")
+@app.api_route("/api/marketplace/{record_id}", methods=GET)
 async def marketplace_json(record_id: str) -> MarketplaceRecord:
     record = await marketplace_source.get(record_id)
     if record is None:
@@ -136,7 +148,7 @@ async def catalog(request: Request, record_id: str):
     })
 
 
-@app.get("/api/catalog/{record_id}")
+@app.api_route("/api/catalog/{record_id}", methods=GET)
 async def catalog_json(record_id: str) -> CatalogRecord:
     record = await catalog_source.get(record_id)
     if record is None:
@@ -170,3 +182,38 @@ async def publish(request: Request):
     for queue in _clients:
         queue.put_nowait(data)
     return Response(status_code=204)
+
+
+if PROFILE:
+    # The last added runs first: the host list, compression, the headers, then the body limit,
+    # nearest the routes. Request bodies of at most 2 MiB, as Corten's forms take.
+    app.add_middleware(RequestBodyLimitMiddleware, max_body_size=2 * 1024 * 1024)
+
+    @app.middleware("http")
+    async def profile_headers(request: Request, call_next):
+        # axum-maud's security headers on every answer the routes make, set as FastAPI's middleware
+        # tutorial sets a header, and a private cache policy on the pages and the JSON (the static
+        # files are left as StaticFiles serves them).
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https:; "
+            "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Permissions-Policy"] = (
+            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), "
+            "payment=(), usb=()")
+        if not request.url.path.startswith("/static/"):
+            response.headers.setdefault("Cache-Control", "private, no-cache")
+        return response
+
+    # gzip when asked, at Starlette's defaults (it leaves event streams as they are).
+    app.add_middleware(GZipMiddleware)
+    # Names it answers to: localhost, the loopback addresses and the deploy's HOSTS (comma separated,
+    # ".example.com" for the domain and every subdomain); others get the host middleware's 400.
+    _hosts = [h.strip() for h in os.environ.get("HOSTS", "").split(",") if h.strip()]
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[
+        "localhost", "*.localhost", "127.0.0.1", "[::1]",
+        *(name for h in _hosts for name in ([h[1:], "*" + h] if h.startswith(".") else [h]))])
