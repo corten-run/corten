@@ -413,7 +413,8 @@ function closestRef(el, owner, name, event) {
 
 /**
  * The runtime's event on a `data-patch` form whose submit got no answer it can draw (it bubbles,
- * and is cancelable): `status` is that answer's (one with no patch or page to draw), or 0 when
+ * and is cancelable): `status` is that answer's (one with no patch or page to draw, other than a
+ * 204 or 205, which says the submit was done and there is nothing to draw), or 0 when
  * none could be used (offline, the server unreachable, or an answer whose body failed to read or
  * draw), with the `error` that stopped it. A handler takes it as `@param {CortenError} event`,
  * so the markup that passes it is checked (`on:corten:error={js::failed(event, target)}`).
@@ -1102,8 +1103,9 @@ function readPartsAgain(main) {
 }
 
 /**
- * A field's state as text: what the user has (or, with `initial`, what the markup set; a file
- * input's is its first file's name). Buttons and hidden inputs are not fields here: undefined.
+ * A field's state as text: what the user has (or, with `initial`, what the markup set). A file
+ * input's is each file's name, size and time, so another file of the same name is a change, as
+ * it is in a pending submit's key. Buttons and hidden inputs are not fields here: undefined.
  * @param {Element} f @param {boolean} [initial] @returns {string | undefined}
  */
 function stateOf(f, initial) {
@@ -1122,6 +1124,7 @@ function stateOf(f, initial) {
   if (f instanceof HTMLTextAreaElement) return initial ? f.defaultValue : f.value;
   if (!(f instanceof HTMLInputElement) || /^(hidden|submit|button|reset|image)$/.test(f.type)) return;
   if (/^(checkbox|radio)$/.test(f.type)) return String(initial ? f.defaultChecked : f.checked);
+  if (f.type === "file" && !initial) return Array.from(f.files ?? [], (file) => `${file.name}\0${file.size}\0${file.lastModified}`).join("\0");
   return initial ? f.defaultValue : f.value;
 }
 
@@ -1146,7 +1149,7 @@ const formProperty = (form, name) => Reflect.get(HTMLFormElement.prototype, name
 /**
  * Calls the form's own method `name` (see formProperty), or an element's: `setAttribute` on a
  * link or form is Element's, whatever the form's controls are named.
- * @template {"setAttribute" | "removeAttribute" | "dispatchEvent" | "addEventListener" | "removeEventListener" | "focus"} K
+ * @template {"setAttribute" | "removeAttribute" | "dispatchEvent" | "addEventListener" | "removeEventListener" | "focus" | "reset"} K
  * @param {Element} form
  * @param {K} name
  * @param {Parameters<HTMLFormElement[K]>} args
@@ -2803,9 +2806,9 @@ addEventListener("pagehide", () => (left += 1));
  * whose old answer is worth nothing). It does not abort a write: the server may have applied it,
  * and its answer is the page's next state. The newer submit waits (`next`; several become the
  * latest) and is sent once the write's answer is drawn, with the form's values as they are then,
- * so a version or a count the answer wrote goes out with it. Only after a 2xx or a 422: a refusal
- * of the form's state (409, 410), a 5xx, an answer the runtime does not draw, a redirect, a reload
- * or no answer at all drops it. A navigation aborts them all, so a
+ * so a version or a count the answer wrote goes out with it. Only after a 2xx (a bare 204 or 205
+ * too) or a 422: a refusal of the form's state (409, 410), a 5xx, another answer the runtime does
+ * not draw, a redirect, a reload or no answer at all drops it. A navigation aborts them all, so a
  * late reply never patches a page it was not meant for.
  * @type {Map<HTMLFormElement, { key: string, controller: AbortController, write: boolean, next?: HTMLElement | null, mine: object, busy: HTMLElement[], by: HTMLElement | null | undefined }>}
  */
@@ -2961,11 +2964,22 @@ async function send(form, submitter, sends) {
       // An answer the runtime does not draw is whole once its body has arrived too.
       await res.arrayBuffer();
       signal.throwIfAborted();
-      renew();
-      // The page did not change, so the waiting submit would meet the same answer (a 409 for its
-      // version): the page says so with `corten:error`, and the user sends it again.
-      pending.next = undefined;
-      formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: res.status } }));
+      if (res.status === 204 || res.status === 205) {
+        // Done, with nothing to draw (RFC 9110, 15.3.5): the page stays and a waiting submit goes.
+        // A 205 also asks for the form as it came (15.3.6), unless the user changed a field since
+        // it was sent (a control added since counts, and so does text a number or date input
+        // cannot read, whose value is "") or pressed again with other values: their work is kept,
+        // as against a patch.
+        const unchanged = (/** @type {Element} */ f) => sent.has(f) && stateOf(f) === sent.get(f) && !(/** @type {HTMLInputElement} */ (f).validity?.badInput);
+        if (res.status === 205 && pending.next === undefined && Array.from(formProperty(form, "elements")).every(unchanged)) formCall(form, "reset");
+        renew();
+      } else {
+        renew();
+        // The page did not change, so the waiting submit would meet the same answer (a 409 for its
+        // version): the page says so with `corten:error`, and the user sends it again.
+        pending.next = undefined;
+        formCall(form, "dispatchEvent", new CustomEvent("corten:error", { bubbles: true, cancelable: true, detail: { status: res.status } }));
+      }
     }
   } catch (error) {
     if (signal.aborted) return;

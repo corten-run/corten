@@ -1,11 +1,72 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { chromium } from "@playwright/test";
 import { records } from "./fixtures.mjs";
 import { expectedPage, labels } from "./records.mjs";
-import { alignNumberSpaces, comparePage, compareStyles, navigationFinished, numericFields, numericText, snapshotPage, styleSnapshot, verifyNumberSpaces } from "./check.mjs";
+import { alignNumberSpaces, comparePage, compareStyles, navigationFinished, numericFields, numericText, snapshotPage, styleSnapshot, submitAlert, verifyNumberSpaces } from "./check.mjs";
 import { referenceHtml } from "./reference.mjs";
+
+test("script-free alert POST checks the new document at the same URL", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    const page = await context.newPage();
+    await page.route("http://localhost/**", async (route) => {
+      const post = route.request().method() === "POST";
+      if (post) await new Promise((r) => setTimeout(r, 100));
+      await route.fulfill({ contentType: "text/html", body: `<form method="post"><button type="submit">Send</button></form><p class="marketplace__message">${post ? "new result" : "old result"}</p>` });
+    });
+    await page.goto("http://localhost/marketplace/en-US/item_1");
+    await submitAlert(page, page.locator("form"), false);
+    assert.equal(await page.locator(".marketplace__message").textContent(), "new result");
+  } finally { await browser.close(); }
+});
+
+test("alert failure retains the exact form case, response and original timeout", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    const page = await context.newPage();
+    const html = '<form method="post"><input name="email" value="invalid"><input name="target_price" value="1"><button type="submit">Send</button></form><p class="marketplace__message"></p>';
+    await page.route("http://localhost/**", (route) => route.fulfill({ status: route.request().method() === "POST" ? 500 : 200,
+      contentType: "text/html", body: html + "server failure fixture" }));
+    await page.goto("http://localhost/marketplace/en-US/item_1");
+    page.setDefaultTimeout(500);
+    await assert.rejects(submitAlert(page, page.locator("form"), false), (error) => {
+      assert.match(error.message, /Alert POST 500 .*JS=false; fields=.*invalid.*target_price.*1/);
+      assert.match(error.message, /server failure fixture/);
+      assert.match(error.message, /message=""/);
+      assert.match(error.cause.message, /Timeout 500ms exceeded/);
+      return true;
+    });
+  } finally { await browser.close(); }
+});
+
+test("unfinished alert response cannot hang failure diagnostics", { timeout: 10000 }, async () => {
+  const html = '<form method="post"><input name="email" value="invalid"><button type="submit">Send</button></form><p class="marketplace__message"></p>';
+  const server = createServer((req, res) => {
+    res.writeHead(req.method === "POST" ? 500 : 200, { "content-type": "text/html" });
+    if (req.method === "POST") res.write(html); else res.end(html);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.goto(`http://127.0.0.1:${server.address().port}/marketplace/en-US/item_1`);
+    await page.evaluate(() => document.querySelector("form").addEventListener("submit", (event) => { event.preventDefault(); fetch(location.href, { method: "POST" }); }));
+    page.setDefaultTimeout(500);
+    await assert.rejects(submitAlert(page, page.locator("form"), true), (error) => {
+      assert.match(error.message, /Alert POST 500 .*unavailable: diagnostic timeout/);
+      assert.match(error.cause.message, /Timeout 500ms exceeded/);
+      return true;
+    });
+  } finally {
+    await browser.close(); server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
 test("navigation waits for intercepted DOM work after URL commitment", async () => {
   const browser = await chromium.launch({ headless: true });
   try {
