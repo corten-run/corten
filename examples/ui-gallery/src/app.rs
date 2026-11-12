@@ -515,7 +515,7 @@ mod tests {
         // A library's event carries its prefix; the listener names the event by its type, so the
         // two cannot drift apart.
         let page = page(&HOME).await;
-        assert!(page.contains(r#"data-on="ui-copied:sku.counted($e,@copied,@copies)""#), "{page}");
+        assert!(page.contains(r#"data-on='ui-copied:sku.counted($e,@copied,@copies)'"#), "{page}");
     }
 
     #[tokio::test]
@@ -608,7 +608,7 @@ mod tests {
     async fn the_address_opens_the_sale_sheet_and_its_link_closes_it() {
         let open = page(&url::Home { sale: Some(Sale::Last), ..HOME }).await;
         assert!(
-            open.contains(r#"<dialog data-scope="sale-sheet" class="sheet__sheet sheet__right sheet__md" open aria-label="Last sale" data-on="connect:ui.dialog.modalClosedBy($t,@close,$s)">"#),
+            open.contains(r#"<dialog data-scope="sale-sheet" class="sheet__sheet sheet__right sheet__md" open aria-label="Last sale" data-on='connect:ui.dialog.modalClosedBy($t,@close,$s)'>"#),
             "{open}"
         );
         assert!(
@@ -630,7 +630,7 @@ mod tests {
         let patch = rename(" ").mode(Mode::Action).await;
         let patch = patch.text();
         assert!(
-            patch.starts_with(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open aria-label="Rename the draft" data-on="connect:ui.dialog.modal($t) corten:error:ui.dialog.failed($e,$t,@said)">"#),
+            patch.starts_with(r#"<dialog data-scope="rename-dialog" class="dialog__dialog dialog__md" id="rename" open aria-label="Rename the draft" data-on='connect:ui.dialog.modal($t) corten:error:ui.dialog.failed($e,$t,@said)'>"#),
             "{patch}"
         );
         assert!(patch.contains("aria-invalid=\"true\"") && patch.contains("Give the draft a name."), "{patch}");

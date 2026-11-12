@@ -130,6 +130,24 @@ Corten is pre-1.0, so any minor version may change the API.
   pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
   ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
 
+- `data-on` is written single-quoted, so the JSON of a handler's arguments keeps its quotes and
+  only `&`, `'`, `<` and `>` in it are entities. A large `ToJson` argument, the data a script
+  searches or sorts in the browser, stays a typed handler argument and costs about its JSON's
+  size: 300 products (51,073 bytes of JSON) went from an attribute of 96,130 bytes to one of
+  51,130, 5,302 bytes with zstd against 6,265, and Chromium, Firefox and WebKit parsed such a page
+  in about 9 to 23% of the time, four to twelve times faster (Chromium 235 to 323 µs against
+  1,401 to 1,616, Firefox 120 to 130 against 1,240 to 1,390, WebKit 390 to 480 against 2,620 to
+  3,500, measured; the ends of each engine's ranges paired, from Firefox's 120 against 1,390 to
+  Chromium's 323 against 1,401). Formats and messages a page passes to a script shrink the same
+  way.
+  The `data-on` format, the runtime and the typing are unchanged; a test or tool that matched
+  `data-on="` or `&quot;` in a page's text matches `data-on='` and `"` now, and a `corten` and a
+  `corten-macros` from either side of the change do not build together, since a message's text is
+  written for one attribute or the other. This is why the release is 0.3.0, not 0.2.x: Cargo
+  would take a 0.2.x `corten-macros` for an app that holds `corten-run` at 0.2.0, and that app
+  would fail to build. The data block the issue asks for is left open
+  ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
+
 ### Fixed
 
 - A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the

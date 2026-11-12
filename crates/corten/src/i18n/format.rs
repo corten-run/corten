@@ -1878,18 +1878,18 @@ mod wire {
     pub(super) fn open(data: &LocaleData, out: &mut String) {
         // The runtime's formatter is a module of its own, which this page now loads.
         crate::script::uses(crate::script::FORMAT_MODULE);
-        out.push_str("%{&quot;z&quot;:");
+        out.push_str("%{\"z\":");
         let mut zero = [0u8; 4];
         json_str(data.zero.encode_utf8(&mut zero), out);
     }
 
     pub(super) fn separators(s: &Separators, templates: &[&str], out: &mut String) {
-        out.push_str(",&quot;s&quot;:[");
+        out.push_str(",\"s\":[");
         json_str(s.decimal, out);
         out.push(',');
         json_str(s.group, out);
         let _ = write!(out, ",{},{},{}]", s.grouping[0], s.grouping[1], s.grouping[2]);
-        out.push_str(",&quot;t&quot;:[");
+        out.push_str(",\"t\":[");
         for (i, template) in templates.iter().enumerate() {
             if i > 0 {
                 out.push(',');
@@ -1900,25 +1900,25 @@ mod wire {
     }
 
     pub(super) fn fields(data: &LocaleData, fields: &[Field], out: &mut String) {
-        out.push_str(",&quot;f&quot;:[");
+        out.push_str(",\"f\":[");
         for (i, field) in fields.iter().enumerate() {
             if i > 0 {
                 out.push(',');
             }
             let (code, names) = match *field {
                 Field::Text(text) => {
-                    out.push_str("[&quot;&quot;,");
+                    out.push_str("[\"\",");
                     json_str(text, out);
                     out.push(']');
                     continue;
                 }
                 Field::Hour(cycle, two) => {
-                    let _ = write!(out, "[&quot;h&quot;,{cycle},{}]", u8::from(two));
+                    let _ = write!(out, "[\"h\",{cycle},{}]", u8::from(two));
                     continue;
                 }
                 // A name for each of the 24 hours, as runs: ["P","AM",12,"PM",24].
                 Field::Period(at) => {
-                    out.push_str("[&quot;P&quot;");
+                    out.push_str("[\"P\"");
                     let names = &data.names[usize::from(at)..usize::from(at) + 24];
                     for (hour, name) in names.iter().enumerate() {
                         if names.get(hour + 1) != Some(name) {
@@ -1944,7 +1944,7 @@ mod wire {
                 Field::Second2 => ("ss", None),
                 Field::Zone => ("z", None),
             };
-            let _ = write!(out, "[&quot;{code}&quot;");
+            let _ = write!(out, "[\"{code}\"");
             if let Some((at, count)) = names {
                 for name in &data.names[usize::from(at)..usize::from(at) + count] {
                     out.push(',');
@@ -1963,7 +1963,7 @@ mod wire {
 pub(crate) fn plural_wire(data: &'static __private::LocaleData, forms: &[&str; 6], out: &mut String) {
     wire::open(data, out);
     wire::separators(&data.plain, &data.number, out);
-    out.push_str(",&quot;c&quot;:&quot;");
+    out.push_str(",\"c\":\"");
     // The table as digits, written in one piece (it is 201 of them, twice on a page that sends
     // the message to two handlers).
     let mut table = [0u8; 201];
@@ -1971,7 +1971,7 @@ pub(crate) fn plural_wire(data: &'static __private::LocaleData, forms: &[&str; 6
         *digit = b'0' + category;
     }
     out.push_str(std::str::from_utf8(&table).unwrap_or_default());
-    out.push_str("&quot;,&quot;m&quot;:[");
+    out.push_str("\",\"m\":[");
     for (i, form) in forms.iter().enumerate() {
         if i > 0 {
             out.push(',');
@@ -1995,7 +1995,7 @@ impl crate::script::Arg<crate::script::ts::PercentFormat> for PercentFormat {
         // A change's has the third template, a gain's, which tells the script it is one.
         let templates = if self.change { &self.data.percent[..] } else { &self.data.percent[..2] };
         wire::separators(&self.data.percent_separators, templates, out);
-        let _ = write!(out, ",&quot;p&quot;:{}}}", self.digits);
+        let _ = write!(out, ",\"p\":{}}}", self.digits);
     }
 }
 
@@ -2017,7 +2017,7 @@ impl crate::script::Arg<crate::script::ts::MoneyFormat> for MoneyFormat {
         } else {
             wire::separators(&data.money_separators, &[pos.as_str(), neg.as_str()], out);
         }
-        let _ = write!(out, ",&quot;d&quot;:{}}}", self.currency.digits());
+        let _ = write!(out, ",\"d\":{}}}", self.currency.digits());
     }
 }
 
@@ -2027,12 +2027,12 @@ impl crate::script::Arg<crate::script::ts::DateFormat> for DateFormat {
         wire::open(data, out);
         let fields = data.dates[usize::from(self.style)];
         wire::fields(data, fields, out);
-        let _ = write!(out, ",&quot;o&quot;:{}", self.offset);
+        let _ = write!(out, ",\"o\":{}", self.offset);
         // The zone's names, for a pattern that shows it.
         if fields.iter().any(|f| matches!(f, __private::Field::Zone)) {
-            out.push_str(",&quot;u&quot;:");
+            out.push_str(",\"u\":");
             crate::script::__private::json_str(data.utc, out);
-            out.push_str(",&quot;g&quot;:[");
+            out.push_str(",\"g\":[");
             for (i, template) in data.gmt.iter().enumerate() {
                 if i > 0 {
                     out.push(',');

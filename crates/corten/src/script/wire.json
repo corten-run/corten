@@ -326,6 +326,30 @@
       ]
     },
     {
+      "name": "a JSON value with an apostrophe, quotes and markup in a string",
+      "attr": "connect:shared.listed($t,[\"It's \\\"<b>\\\" & more\"])",
+      "parsed": [
+        {
+          "type": "connect",
+          "module": "shared",
+          "name": "listed",
+          "args": [
+            {
+              "kind": "$t",
+              "owner": null
+            },
+            {
+              "kind": "v",
+              "value": [
+                "It's \"<b>\" & more"
+              ]
+            }
+          ],
+          "home": null
+        }
+      ]
+    },
+    {
       "name": "closest and a group, twice",
       "attr": "click:stock_grid.toggle(^row,{rows:*row,count:@count}) row-toggled:stock_grid.toggled($e,{rows:*row,count:@count})",
       "parsed": [
