@@ -161,7 +161,12 @@ export async function submitAlert(page, form, javaScriptEnabled) {
     await page.waitForFunction(() => document.querySelector(".marketplace__message")?.textContent.trim().length > 0);
     await page.waitForLoadState("networkidle");
   } catch (error) {
-    throw new Error(`Alert POST ${response.status()} ${response.url()}; JS=${javaScriptEnabled}; fields=${JSON.stringify(fields)}; navigation=${response.request().isNavigationRequest()}; message=${JSON.stringify(await page.locator(".marketplace__message").textContent().catch(() => null))}; response=${(await response.text().catch(() => "unavailable")).slice(-2048)}`, { cause: error });
+    let timer;
+    const diagnostic = await Promise.race([
+      Promise.all([page.locator(".marketplace__message").textContent().catch(() => null), response.text().catch(() => "unavailable")]),
+      new Promise((resolve) => { timer = setTimeout(() => resolve([null, "unavailable: diagnostic timeout"]), 1000); }),
+    ]).finally(() => clearTimeout(timer));
+    throw new Error(`Alert POST ${response.status()} ${response.url()}; JS=${javaScriptEnabled}; fields=${JSON.stringify(fields)}; navigation=${response.request().isNavigationRequest()}; message=${JSON.stringify(diagnostic[0])}; response=${diagnostic[1].slice(-2048)}`, { cause: error });
   }
 }
 async function control(upstream, value) {
