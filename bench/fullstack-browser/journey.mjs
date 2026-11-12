@@ -6,6 +6,9 @@ import { architecture, classifyDisabledPreloads, nativeDOM, observeNetwork, resp
 import { upstreamDelta } from "./upstream.mjs";
 import { comparePage } from "../marketplace/check.mjs";
 import { labels } from "../marketplace/records.mjs";
+import { navigationDestination } from "./navigation.mjs";
+import { mutationProbes } from "./probes.mjs";
+import { installResourceObserver, ResourceAudit } from "./resources.mjs";
 
 // A semantic DOM observation, not an application-provided "hydrated" mark.
 export function semanticSignature() {
@@ -81,6 +84,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
   } };
   const evidence = result.evidence;
   const context = await browser.newContext({ javaScriptEnabled: profile.js, viewport: environment.viewport, serviceWorkers: "block", reducedMotion: "reduce" });
+  await context.addInitScript(installResourceObserver);
   context.setDefaultTimeout(settings.actionTimeoutMs); context.setDefaultNavigationTimeout(settings.actionTimeoutMs);
   let network;
   const runtimeErrors = [];
@@ -91,6 +95,8 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     page.on("pageerror", (e) => runtimeErrors.push(e.message));
     network = observeNetwork(page);
     const cdp = await context.newCDPSession(page);
+    const resources = new ResourceAudit(page, cdp, profile.js);
+    await cdp.send("Runtime.enable");
     await cdp.send("Network.enable"); await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
     if (environment.network) await cdp.send("Network.emulateNetworkConditions", environment.network);
     await cdp.send("Emulation.setCPUThrottlingRate", { rate: environment.cpu });
@@ -98,6 +104,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
     // events would contaminate the next action's ledger. This is a diagnostic
     // about:blank arrival, not the historical cross-site timing profile.
     await page.goto("about:blank");
+    evidence.resourceBaseline = await resources.checkpoint();
     await network.drain(); network.rows.length = 0; network.failures.length = 0; runtimeErrors.length = 0;
     try {
       evidence.storeBefore = await readStore(base, readback, context.request);
@@ -107,6 +114,7 @@ export async function runJourney({ browser, app, base, profile, records, readbac
       evidence.storeBefore = e.readback ?? { outcome: "failed", alerts: null, reason: e.message };
       evidence.failures.push(`initial independent store read: ${e.message}`);
     }
+    let previousResources = null;
     for (const step of profile.steps) {
       const row = { action: step, at: performance.now() - started, requests: [], dom: null, document: null, readback: null, upstream: null, formBefore: null, componentsBefore: [], domPassed: false,
         timing: { dispatchMs: null, visibleChangeObservedMs: null, settledObservedMs: null }, observerTransitions: [], errors: [], failures: [] };
@@ -165,6 +173,13 @@ export async function runJourney({ browser, app, base, profile, records, readbac
           else row.failures.push(row.readback.reason);
         } catch (e) { row.readback = e.readback ?? { outcome: "failed", reason: e.message, alerts: null }; row.failures.push(e.message); }
       }
+      row.resources = await resources.checkpoint();
+      row.retired = resources.retired(previousResources, row.resources);
+      if (row.retired?.owned === null) evidence.gaps.push(row.retired.reason);
+      if (row.retired?.owned && Object.values(row.retired.owned).some(Boolean)) row.failures.push("Retired native page still owns browser resources");
+      if (Object.values(row.resources.unattributed).some(Boolean)) evidence.gaps.push("Native resources without provable marketplace ownership remain in the document-start ledger");
+      if (row.resources.unsupported.length) evidence.gaps.push(...row.resources.unsupported);
+      previousResources = row.resources;
       await network.drain();
       row.requests = structuredClone(network.rows.slice(offset));
       classifyDisabledPreloads(row.requests, row.dom, profile.js);
@@ -178,29 +193,33 @@ export async function runJourney({ browser, app, base, profile, records, readbac
         const allowed = step.kind === "accepted-write" ? [200, 201, 202, 204, 302, 303] : [200, 302, 303, 400, 422];
         if (!allowed.includes(posts[0]?.status)) row.failures.push("Native write returned unexpected status");
       } else if (posts.length) row.failures.push("Unexpected write");
-      if (row.requests.some((r) => (r.failure || r.status === null) && !r.intentionallyDisabledPreload)) row.failures.push("Failed or unfinished browser requests recorded");
+      if (row.requests.some((r) => (r.failure || r.status === null || !r.completed) && !r.intentionallyDisabledPreload)) row.failures.push("Failed or unfinished browser requests recorded");
       if (["initial", "missing", "reset", "return"].includes(step.kind) && !row.requests.some((r) => r.path === step.path && r.method === "GET" && r.status === (step.kind === "missing" ? 404 : 200))) row.failures.push("Missing native document/error request");
       if (!step.input && (step.kind === "navigate" || !profile.js) && !row.requests.some((r) => r.method === "GET" && r.status === (step.kind === "missing" ? 404 : 200)
-        && (r.path === step.path || profile.js && evidence.architecture === "next-pages" && r.transport === "router"
-          && /^\/_next\/data\/[^/.][^/]*\/marketplace\/[^/]+\/[^/]+\.json$/.test(r.path)
-          && r.path.replace(/^\/_next\/data\/[^/]+/, "").replace(/\.json$/, "") === step.path))) row.failures.push("Missing native navigation request to the logical destination");
+        && navigationDestination(r, { app, architecture: evidence.architecture, js: profile.js }) === step.path)) row.failures.push("Missing native navigation request to the logical destination");
       if (profile.source === "fixture" && row.upstream.started !== 0) row.failures.push("Fixture source unexpectedly fetched upstream");
       if (row.upstream.pending || row.upstream.completed + row.upstream.cancelled !== row.upstream.started) row.failures.push("Upstream work still pending/unaccounted");
       if (profile.source === "api" && step.kind !== "missing" && row.requests.some((r) => ["document", "fetch", "router", "turbo", "livewire"].includes(r.transport) && (r.path.includes("marketplace") || r.method === "POST")) && !row.upstream.completed) row.failures.push("Request-time upstream read missing");
     }
     evidence.failures.push(...nativeFailures(app, profile, evidence.steps));
     evidence.failures.push(...evidence.steps.flatMap((s) => s.failures.map((f) => `${s.action.kind}: ${f}`)));
+    evidence.mutationProbes = await mutationProbes({ browser, context, page, base, profile, readback });
+    evidence.failures.push(...evidence.mutationProbes.failures);
+    evidence.nativeCleanup = await resources.cleanup({ timeoutMs: settings.maxCleanupMs, observationMs: settings.observationMs, network, runtimeErrors });
+    if (evidence.nativeCleanup.outcome !== "observed") evidence.gaps.push(...evidence.nativeCleanup.failures);
+    if (evidence.nativeCleanup.outcome === "failed") evidence.failures.push(...evidence.nativeCleanup.failures);
   } catch (e) { evidence.failures.push(e.message); }
   finally {
     const beforeClose = performance.now();
     try {
       await context.close();
       evidence.cleanup = { contextClosed: !browser.contexts().includes(context), closeMs: performance.now() - beforeClose,
-        nativePageScope: null, reason: "Context closure is observed; native retired-page subscriptions/listeners/timers and retired-event probe are not instrumented by these adapters" };
-      evidence.gaps.push(evidence.cleanup.reason);
+        nativePageScope: evidence.nativeCleanup ?? null };
     } catch (e) { evidence.cleanup = { contextClosed: false, error: e.message, nativePageScope: null }; evidence.failures.push("Browser context cleanup failed"); }
   }
-  result.outcome = evidence.failures.length ? "failed" : "unsupported";
+  evidence.gaps = [...new Set(evidence.gaps)];
+  result.qualificationPassed = !evidence.failures.length && !evidence.gaps.length && evidence.nativeCleanup?.outcome === "observed";
+  result.outcome = evidence.failures.length ? "failed" : result.qualificationPassed ? "captured" : "unsupported";
   evidence.domChecksPassed = evidence.steps.length === profile.steps.length && evidence.steps.every((s) => s.domPassed);
   result.reason = evidence.failures[0] ?? evidence.gaps[0];
   return result;

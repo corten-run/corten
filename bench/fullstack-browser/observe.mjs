@@ -18,7 +18,7 @@ export function observeNetwork(page) {
   const track = (promise) => { pending.add(promise); promise.catch((e) => failures.push(e.message)).finally(() => pending.delete(promise)); };
   page.on("request", (request) => {
     const row = { id: randomUUID(), ...publicURL(request.url()), method: request.method(), transport: transportOf(request),
-      resource: request.resourceType(), status: null, input: null, components: [], failure: null, bytes: null, bodySha256: null, type: null, encoding: null, hasCsp: false };
+      resource: request.resourceType(), status: null, completed: false, input: null, components: [], failure: null, bytes: null, bodySha256: null, type: null, encoding: null, hasCsp: false };
     rows.push(row); byRequest.set(request, row);
     track((async () => {
       let input = publicInput(request);
@@ -40,12 +40,19 @@ export function observeNetwork(page) {
   page.on("requestfinished", (request) => track((async () => {
     const row = byRequest.get(request), response = await request.response();
     if (!row || !response) return;
+    row.completed = true;
     const size = await request.sizes();
     // responseBodySize is the encoded body, not the decoded body. Header sizes
     // are Playwright's HTTP size estimate, not TLS/link-layer traffic.
     row.bytes = { encodedBody: size.responseBodySize, headers: size.responseHeadersSize, decodedBody: null };
     if (response.status() >= 300 && response.status() < 400) return;
     const body = await response.body(); row.bytes.decodedBody = body.length; row.bodySha256 = sha256(body);
+    if (row.transport === "router" && /\/__data\.json$/.test(row.path) && /^application\/json\b/.test(row.type ?? "")) {
+      try {
+        const value = JSON.parse(body.toString("utf8"));
+        if (value.type === "data" && Array.isArray(value.nodes)) row.nativeData = { framework: "sveltekit", type: value.type, nodes: value.nodes.map((node) => node?.type ?? null) };
+      } catch { /* A malformed native payload is retained, never normalized. */ }
+    }
   })()));
   return { rows, failures, async drain() { while (pending.size) await Promise.allSettled([...pending]); } };
 }
