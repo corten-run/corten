@@ -1,0 +1,2 @@
+/* For the example in style.rs: an @scope rule's root and limit are the component's classes. */
+@scope (.list) to (.slot) { li { padding: 0; } }

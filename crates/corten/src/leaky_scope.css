@@ -1,0 +1,2 @@
+/* For the compile_fail example in style.rs: an @scope rule's root outside the component. */
+@scope (main) { .list { padding: 0; } }

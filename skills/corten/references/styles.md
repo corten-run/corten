@@ -1,7 +1,9 @@
 # Styles
 
 A component's styles are `snake_name.css` next to it. Every rule starts at one of the file's
-classes; Corten prefixes them (`.offer-list__row`) and generates a constant for each.
+classes; Corten prefixes them (`.offer-list__row`) and generates a constant for each. An `@scope`
+rule's root is one of them too, its limit is prefixed the same way (`@scope (.list) to (.slot)`),
+and the rules inside it start anywhere (`:scope`, `li`).
 
 ```css
 /* src/views/offer_list.css */
