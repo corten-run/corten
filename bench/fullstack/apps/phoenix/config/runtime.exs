@@ -44,10 +44,9 @@ if config_env() == :prod do
   # want to use a different value for prod and you most likely don't want
   # to check this value into version control, so we use an environment
   # variable instead.
+  # Standalone runs get a fresh signing key; deployments supply a stable key.
   secret_key_base =
-    # A bench-only key unless one is given: the app keeps no sessions worth protecting.
-    System.get_env("SECRET_KEY_BASE") ||
-      "bench-only-not-secret-bench-only-not-secret-bench-only-not-secret-bench-only"
+    System.get_env("SECRET_KEY_BASE") || Base.encode64(:crypto.strong_rand_bytes(64))
 
   host = System.get_env("PHX_HOST") || "localhost"
 
