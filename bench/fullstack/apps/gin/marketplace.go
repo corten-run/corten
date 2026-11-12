@@ -15,6 +15,7 @@ import (
 
 	"github.com/bojanz/currency"
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	"github.com/nicksnyder/go-i18n/v2/i18n"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
@@ -219,20 +220,50 @@ func (f *marketplaceFormat) Listings(n int64) string {
 var marketplaceDecimal = regexp.MustCompile(`^[0-9]+(?:[.,][0-9]+)?$`)
 
 func (f *marketplaceFormat) Alert(title, email, target string) string {
+	message, _ := f.alert(title, email, target)
+	return message
+}
+
+func (f *marketplaceFormat) alert(title, email, target string) (string, *int64) {
 	words := marketplaceLabels[f.locale]
 	if !strings.Contains(email, "@") {
-		return words["invalid_email"]
+		return words["invalid_email"], nil
 	}
 	target = strings.TrimSpace(target)
 	if !marketplaceDecimal.MatchString(target) || (f.locale == "en-US" && strings.Contains(target, ",")) ||
 		(f.locale != "en-US" && strings.Contains(target, ".")) {
-		return words["invalid_price"]
+		return words["invalid_price"], nil
 	}
 	amount, err := f.money.Parse(target, "USD")
 	if err != nil || !amount.IsPositive() {
-		return words["invalid_price"]
+		return words["invalid_price"], nil
 	}
-	return strings.NewReplacer("{email}", email, "{title}", title, "{price}", f.money.Format(amount)).Replace(words["alert_set"])
+	minor, ok := alertMinor(strings.ReplaceAll(target, ",", "."))
+	if !ok {
+		return words["invalid_price"], nil
+	}
+	return strings.NewReplacer("{email}", email, "{title}", title, "{price}", f.money.Format(amount)).Replace(words["alert_set"]), &minor
+}
+
+// Convert an already validated positive decimal to cents without binary floats.
+func alertMinor(input string) (int64, bool) {
+	whole, fraction, _ := strings.Cut(input, ".")
+	whole = strings.TrimLeft(whole, "0")
+	if whole == "" {
+		whole = "0"
+	}
+	fraction += "00"
+	minor, err := strconv.ParseInt(whole+fraction[:2], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	if len(fraction) > 2 && fraction[2] >= '5' {
+		if minor == 1<<63-1 {
+			return 0, false
+		}
+		minor++
+	}
+	return minor, true
 }
 
 type marketplaceView struct {
@@ -279,6 +310,8 @@ func newMarketplaceView(record *marketplaceRecord, locale string, query url.Valu
 	return v
 }
 func (s *marketplaceSource) routes(r *gin.Engine) {
+	alerts := &alertStore{}
+	r.GET("/api/alerts", alerts.read)
 	page := func(c *gin.Context) {
 		locale := c.Param("locale")
 		if marketplaceLabels[locale] == nil {
@@ -286,13 +319,19 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 			return
 		}
 		if c.Request.Method == http.MethodPost {
+			c.Header("Cache-Control", "no-store")
 			origin := c.GetHeader("Origin")
 			scheme := "http"
 			if c.Request.TLS != nil {
 				scheme = "https"
 			}
-			if c.GetHeader("Sec-Fetch-Site") == "cross-site" || (origin != "" && origin != scheme+"://"+c.Request.Host) {
+			site := c.GetHeader("Sec-Fetch-Site")
+			if (site != "" && site != "same-origin" && site != "none") || len(c.Request.Header.Values("Origin")) > 1 || len(c.Request.Header.Values("Sec-Fetch-Site")) > 1 || (origin != "" && origin != scheme+"://"+c.Request.Host) {
 				c.Status(http.StatusForbidden)
+				return
+			}
+			if c.ContentType() != "application/x-www-form-urlencoded" {
+				c.Status(http.StatusUnsupportedMediaType)
 				return
 			}
 		}
@@ -307,7 +346,23 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 		}
 		view := newMarketplaceView(record, locale, c.Request.URL.Query())
 		if c.Request.Method == http.MethodPost {
-			view.Message = view.Format.Alert(record.Title, c.PostForm("email"), c.PostForm("target_price"))
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 2<<20)
+			var form struct {
+				Email  string `form:"email"`
+				Target string `form:"target_price"`
+			}
+			if err := c.ShouldBindWith(&form, binding.FormPost); err != nil {
+				c.Status(http.StatusBadRequest)
+				return
+			}
+			message, minor := view.Format.alert(record.Title, form.Email, form.Target)
+			view.Message = message
+			if minor != nil {
+				if err := alerts.append(c, storedAlert{record.ID, form.Email, *minor}); err != nil {
+					c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "alert storage unavailable"})
+					return
+				}
+			}
 		}
 		c.Header("Cache-Control", "no-store")
 		render(c, http.StatusOK, marketplacePage(view))
