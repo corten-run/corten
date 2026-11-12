@@ -8,6 +8,17 @@ import { groupDescriptor } from "../catalog/group.mjs";
 import { descriptor as jsonDescriptor } from "../json-api/contract.mjs";
 import { coverage } from "./evidence.mjs";
 import { definition, groupNames, registrySchema, retainedFamilies, selectedApps, validateInventory } from "./registry.mjs";
+import { deploymentPlan } from "./deployments.mjs";
+import { runnerFor } from "./run.mjs";
+
+const nativeScope = {
+  "mixed-production": "Native functional captures; complete production qualification and reviewed mixed-load measurement are still required.",
+  "fullstack-browser": "Native browser journeys; complete native ports, page cleanup and isolated measurement qualification are still required.",
+  "client-heavy": "Native production bundles and browser observations; bounded local verification is not an isolated performance ranking.",
+  "live-delivery": "Native live captures; complete native inventory and reviewed fanout measurement are still required.",
+  "recoverable-live": "Native replay/resnapshot captures; complete native inventory and reviewed recovery load measurement are still required.",
+  hardening: "Native attack apparatus; full parity, controls and complete direct/edge evidence are still required.",
+};
 
 export function plan(name, evidence = []) {
   validateInventory();
@@ -16,6 +27,7 @@ export function plan(name, evidence = []) {
     registry: registrySchema, group: name, title: d.title,
     capabilities: d.capabilities, popular: d.popular, performant: d.performant,
     selected: selectedApps(name), coverage: coverage(name, evidence),
+    deploymentIntent: deploymentPlan(name),
     execution: name === "localized-marketplace" ? {
       runner: "bench/marketplace/droplet.mjs", group: name,
       options: nightly, phases, placement: "bench/marketplace/droplet-contract.mjs remoteFiles; saved measurement.cpus is authoritative",
@@ -34,7 +46,10 @@ export function plan(name, evidence = []) {
       settings: "bench/json-api/contract.mjs parseArgs defaults; saved options, timingPlan and measurement.cpus are authoritative",
       status: "requires-exact-image-json-gates-and-independent-native-source-audits",
       cloud: "not-integrated; this native runner does not launch or collect droplets",
-    } : { status: "pending-group-runner-integration", reason: "Selection is approved; existing native runners and adapters must satisfy this group's contract before comparative timing." },
+    } : { runner: runnerFor(name).entry, dispatcher: "bench/workloads/run.mjs", group: name,
+      status: "native-apparatus-requires-complete-qualification", scope: nativeScope[name],
+      settings: "Discover the native runner's effective options and save them with raw evidence; no settings or passing results are inferred here.",
+      cloud: "not-integrated; this native runner does not launch or collect droplets" },
     retainedFamilies,
   };
 }

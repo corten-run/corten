@@ -12,6 +12,16 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Native workload-group driver entry points retain all selected contenders and explicit
+  failure/unsupported coverage. Deployment manifests separate representative production
+  choices from performance candidates and bind qualification to exact native evidence.
+  These local apparatus integrations and read-only plans are not completed group baselines
+  or automatic qualification of alternative runtimes.
+
+- Native marketplace alert stores expose independent, session-isolated readback for
+  accepted writes. Browser adapters retain their native form/router behavior, including
+  LiveView, Turbo and Livewire; invalid and failed submissions must not change stored state.
+
 - Catalog runners preserve full native application stdout and stderr in raw evidence,
   rather than silently saving only the final 8 MiB of stdout. Bounded diagnostics no
   longer repeatedly copy growing log strings. Log-collection errors still fail the run;

@@ -9,6 +9,7 @@
     "check:catalog": "node --test bench/catalog/fixtures.test.mjs bench/catalog/styles.test.mjs bench/catalog/contract.test.mjs bench/catalog/upstream.test.mjs bench/catalog/report.test.mjs bench/catalog/group.test.mjs bench/catalog/output.test.mjs",
     "check:marketplace": "node --test bench/marketplace/*.test.mjs",
     "check:workloads": "node --test bench/workloads/*.test.mjs",
+    "check:groups": "node --test --test-concurrency=1 bench/client-heavy/run.test.mjs bench/client-heavy/observer.test.mjs bench/fullstack-browser/runner.test.mjs bench/mixed-production/*.test.mjs bench/live/parity.test.mjs bench/hardening/hardening.test.mjs",
     "check:json-api": "node --test bench/json-api/*.test.mjs",
     "smoke": "node scripts/smoke.mjs"
   },

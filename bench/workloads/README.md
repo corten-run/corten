@@ -47,10 +47,43 @@ configuration. Neither gate can be borrowed from a passing subset or a different
 configuration. Native audit receipts and a complete matrix are prerequisites, not assumed
 readiness; no new baseline or cloud integration is claimed.
 
-Remaining groups stay pending runner/adapter integration. Their presence in this registry is
-not a claim that a new benchmark ran, that all native features exist, or that historical
-measurements are interchangeable. The mixed and live contract modules are testable oracles,
-not substitutes for native adapter implementation, browser captures or load evidence.
+The other groups now have explicit local native driver entry points. Their apparatus still
+requires complete native qualification, reviewed measurement settings and isolated evidence.
+Their presence is not a claim that all native features exist, a comparative benchmark passed,
+or historical measurements are interchangeable. Offline oracles do not replace native
+application observations. `plan.mjs` reports the distinction for each group.
+
+## Explicit execution
+
+Use one named group and one round, rather than a default that launches every server adapter:
+
+```sh
+node bench/workloads/run.mjs --plan catalog-page c3
+node bench/workloads/run.mjs client-heavy local-client
+node bench/workloads/run.mjs fullstack-browser local-browser --build
+```
+
+The first command only prints the exact native invocation and pending deployment intent.
+Execution delegates to the
+group's own runner, preserving its defaults, exit status, raw evidence and cleanup.
+It never launches a droplet or changes the nightly schedule. Contender and case filters
+are refused here; native diagnostic invocations remain separate and cannot qualify an
+incomplete group. A dispatcher entry is not a passing result: missing native ports,
+failed controls and unsupported capabilities remain visible in the runner's ledger.
+The mixed, browser, live and hardening ports still require complete native qualification.
+
+[Deployment selection](deployments.md) names representative production configurations and
+bounded performance candidates without altering the legacy registry or any active round.
+Popular-choice and performance views use the same feature-parity work and raw evidence;
+they are not extra benchmark runs. A plan is not the effective runtime configuration.
+Alternatives need complete group-specific native and repeated performance evidence plus
+independent review. This dispatcher does not yet select or qualify alternative deployments.
+
+`npm run check:workloads` checks the shared contracts and dispatch. `npm run check:groups`
+also checks the integrated native driver apparatus and replays saved live evidence.
+Its socket controls run serially so unrelated test files do not compete for the same
+bounded observation window. Neither command substitutes for native application runs,
+browser captures, independent deployment review or a complete measured matrix.
 
 ```sh
 node bench/workloads/plan.mjs catalog-page

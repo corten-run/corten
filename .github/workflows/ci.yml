@@ -160,6 +160,7 @@ jobs:
         run: |
           npm run check
           npm run check:workloads
+          npm run check:groups
           echo npm-check >> "$RUNNER_TEMP/ran"
       # The smoke tests run in Playwright's image, which has the three browsers and the system
       # libraries they need, for the @playwright/test version in package.json. Installing them on

@@ -6,11 +6,15 @@ import { groupDescriptor } from "../catalog/group.mjs";
 import { descriptor as jsonDescriptor } from "../json-api/contract.mjs";
 import { groupNames } from "./registry.mjs";
 import { markdown, plan } from "./plan.mjs";
+import { deploymentPlan } from "./deployments.mjs";
+import { runnerFor } from "./run.mjs";
 
 test("planning discovers current official options, but never fabricates ready evidence", () => {
   for (const name of groupNames) {
     const p = plan(name);
     assert.ok(p.coverage.cells.every((c) => c.parity === "not-run" && c.measurement === "not-run"));
+    assert.deepEqual(p.deploymentIntent, deploymentPlan(name));
+    assert.equal(p.deploymentIntent.execution, "plan-only; not execution authorization or certification");
     if (name === "localized-marketplace") assert.deepEqual(p.execution.options, nightly);
     else if (name === "catalog-page") {
       assert.equal(p.execution.runner, "bench/catalog/run.mjs");
@@ -25,7 +29,12 @@ test("planning discovers current official options, but never fabricates ready ev
       assert.deepEqual(p.execution.descriptor, jsonDescriptor());
       assert.equal(p.execution.status, "requires-exact-image-json-gates-and-independent-native-source-audits");
       assert.match(p.execution.cloud, /not-integrated/);
-    } else assert.equal(p.execution.status, "pending-group-runner-integration");
+    } else {
+      assert.equal(p.execution.status, "native-apparatus-requires-complete-qualification");
+      assert.equal(p.execution.runner, runnerFor(name).entry);
+      assert.ok(readFileSync(new URL(`../../${p.execution.runner}`, import.meta.url), "utf8").length > 0);
+      assert.match(p.execution.cloud, /not-integrated/);
+    }
   }
 });
 test("documented group matrix is generated from the registry", () => {
