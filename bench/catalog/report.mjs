@@ -4,8 +4,9 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { allApps } from "../fullstack/apps.mjs";
-import { cpuSettings, expectedPageChecks } from "./contract.mjs";
+import { aggregate, cpuSettings, expectedPageChecks, phases } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
+import { inspectGroupEvidence } from "./group.mjs";
 
 const inventory = Object.keys(allApps).filter((name) => allApps[name].pages !== false);
 const keys = ["fixture-page", "fixture-json", "api-page", "api-json"];
@@ -46,34 +47,38 @@ export function inspectCatalog(summary, expectedCommit) {
   assert.ok([1, 3, 5].includes(passes), "invalid requested pass count");
   assert.ok(summary.apps && !Array.isArray(summary.apps), "missing apps");
   assert.ok(Array.isArray(summary.failures) && Array.isArray(summary.cleanupFailures), "missing failure records");
-  const warnings = [];
+  const group = inspectGroupEvidence(summary, phases, aggregate);
+  const expectedApps = group?.descriptor.apps ?? inventory;
+  const reportKeys = group?.keys ?? keys;
+  const warnings = [...(group?.warnings ?? [])];
   const failures = [...summary.failures, ...summary.cleanupFailures].map((f) => `${f.app ?? f.resource ?? "suite"}: ${f.stage ?? "cleanup"}: ${f.error}`);
   const selected = summary.options.apps;
-  const allAppsPresent = Array.isArray(selected) && selected.length === inventory.length && new Set(selected).size === inventory.length
-    && inventory.every((app) => selected.includes(app))
-    && Object.keys(summary.apps).length === inventory.length && inventory.every((app) => Object.hasOwn(summary.apps, app));
-  if (!allAppsPresent) warnings.push("Not all twenty page apps are present; this is not a full catalog baseline.");
+  const allAppsPresent = Array.isArray(selected) && selected.length === expectedApps.length && new Set(selected).size === expectedApps.length
+    && expectedApps.every((app) => selected.includes(app))
+    && Object.keys(summary.apps).length === expectedApps.length && expectedApps.every((app) => Object.hasOwn(summary.apps, app));
+  if (!allAppsPresent) warnings.push(group ? "Not all registry group apps are present; this is not a complete group comparison." : "Not all twenty page apps are present; this is not a full catalog baseline.");
   if (summary.dirty !== false) warnings.push("The measured tree was dirty or its cleanliness was not recorded.");
   if (summary.checksPassed !== true) warnings.push("The suite's correctness checks did not all pass.");
   const fixtureMatches = summary.fixtureSha256 === canonicalFixtureSha256;
   if (!fixtureMatches) warnings.push("Fixture identity is missing or differs from the canonical catalog-v1 fixture.");
   const config = { duration: summary.options.duration, warmup: summary.options.warmup, rate: summary.options.rate,
     cpus: summary.measurement?.cpus, encoding: summary.measurement?.encoding, fixtureSha256: summary.fixtureSha256,
-    startedAt: summary.startedAt, finishedAt: summary.finishedAt };
+    startedAt: summary.startedAt, finishedAt: summary.finishedAt,
+    ...(group ? { commitAfter: summary.commitAfter, dirtyAfter: summary.dirtyAfter } : {}) };
   const configurationComplete = [config.duration, config.warmup, config.rate].every((n) => Number.isSafeInteger(n) && n > 0)
     && config.encoding === "identity" && summary.measurement?.fixedRate === config.rate
     && validCpuSettings(config.cpus);
   if (!configurationComplete) warnings.push("Measurement configuration is missing or inconsistent; duration, warmup, fixed rate, encoding and CPU placement must be recorded.");
   let everyCheck = true;
   let everyPass = true;
-  const apps = Object.fromEntries(inventory.map((app) => {
+  const apps = Object.fromEntries(expectedApps.map((app) => {
     const entry = summary.apps[app];
     for (const source of ["fixture", "api"]) if (!completeChecks(entry?.checks?.[source], source)) {
       everyCheck = false;
       warnings.push(`${app} ${source}: missing or contradictory JSON, page, browser-profile or upstream correctness evidence.`);
     }
     if (entry?.failures?.length) { everyCheck = false; warnings.push(`${app}: per-app failures are recorded.`); }
-    const results = Object.fromEntries(keys.map((key) => {
+    const results = Object.fromEntries(reportKeys.map((key) => {
       const runs = entry?.runs?.[key] ?? [];
       assert.ok(Array.isArray(runs), `${app} ${key}: runs must be an array`);
       const used = new Set();
@@ -115,9 +120,10 @@ export function inspectCatalog(summary, expectedCommit) {
   const validClock = terminal && Number.isFinite(started) && Date.parse(summary.finishedAt) >= started;
   if (!validClock) warnings.push("Start/end timestamps do not establish a completed, non-negative elapsed duration.");
   const baseline = validClock && summary.complete === true && summary.checksPassed === true && summary.dirty === false
-    && allAppsPresent && everyCheck && everyPass && fixtureMatches && configurationComplete && failures.length === 0 && summary.options.checkOnly !== true;
+    && allAppsPresent && everyCheck && everyPass && fixtureMatches && configurationComplete && failures.length === 0 && summary.options.checkOnly !== true
+    && (group === null || group.complete);
   if (!everyPass) warnings.push(`Some sat64 passes are missing or belong to unsuccessful runs; available values are partial, not a complete ${passes}-pass comparison.`);
-  return { round: summary.round, commit: summary.commit, config, baseline, terminal, passes, apps, failures, warnings,
+  return { round: summary.round, commit: summary.commit, config, baseline, terminal, passes, apps, failures, warnings, ...(group ? { group: group.descriptor } : {}),
     status: baseline ? "COMPLETE" : terminal ? "FAILED OR INCOMPLETE: not a baseline" : "PRELIMINARY: not a baseline" };
 }
 
@@ -125,21 +131,27 @@ const number = (value, digits = 0) => value === null || value === undefined ? "p
 const cell = (phase) => phase.rps ? `${number(phase.rps.median)} [${number(phase.rps.min)}, ${number(phase.rps.max)}] (${phase.passes}/${phase.asked})` : "pending";
 export function renderCatalog(report) {
   const c = report.config;
+  const reportKeys = report.group?.cases.map((profile) => `${profile.source}-${profile.target}`) ?? keys;
+  const headings = reportKeys.map((key) => `${key.startsWith("fixture-") ? "Memory" : "HTTP"} ${key.endsWith("-json") ? "JSON" : "page"} req/s`);
   const lines = [`# Catalog ${report.round}`, "", `**${report.status}**`, "", `Measured commit: \`${report.commit}\`.`, "",
     `Per phase: duration ${number(c.duration)} s; warmup ${number(c.warmup)} s; fixed rate ${number(c.rate)} req/s; encoding ${c.encoding ?? "unknown"}.`,
     `Started: ${c.startedAt ?? "unknown"}; finished: ${c.finishedAt ?? "not recorded"}.`,
     `Fixture SHA-256: \`${c.fixtureSha256 ?? "unknown"}\`.`, "",
     "| CPU role | Quota, cores | Logical CPU pinning |", "|---|---:|---|"];
   for (const role of ["app", "load", "api"]) lines.push(`| ${role} | ${number(c.cpus?.[role]?.quota, 1)} | ${c.cpus?.[role]?.cpuset === null ? "unpinned" : c.cpus?.[role]?.cpuset ?? "unknown"} |`);
+  if (report.group) lines.push("", `Group: \`${report.group.group}\`; registry: \`${report.group.registrySchema}\`; contract SHA-256: \`${report.group.contractSha256}\`.`,
+    `After-run commit: \`${c.commitAfter ?? "not recorded"}\`; tree dirty after run: ${c.dirtyAfter ?? "not recorded"}.`,
+    `Exact apps: ${report.group.apps.map((app) => `\`${app}\``).join(", ")}.`,
+    "Timing targets: page only, fixture and API sources. Native correctness gates remain page AND JSON; JSON is not timed. This is a group comparison, not the historical twenty-app catalog baseline.");
   lines.push("", "First catalog workload results, not changes against marketplace r16. Each cell is the median [minimum, maximum] of available 64-user passes, with collected/requested pass counts. Partial cells are not complete repeated measurements.", "",
-    "| Framework | Memory page req/s | Memory JSON req/s | HTTP page req/s | HTTP JSON req/s |",
-    "|---|---:|---:|---:|---:|");
-  for (const [app, phases] of Object.entries(report.apps)) lines.push(`| ${app} | ${keys.map((key) => cell(phases[key])).join(" | ")} |`);
+    `| Framework | ${headings.join(" | ")} |`,
+    `|---|${reportKeys.map(() => "---:").join("|")}|`);
+  for (const [app, phases] of Object.entries(report.apps)) lines.push(`| ${app} | ${reportKeys.map((key) => cell(phases[key])).join(" | ")} |`);
   lines.push("", "## Corten efficiency", "", "Median and [minimum, maximum] across available passes. Memory is each pass's peak under load; p95 is the median of per-pass p95s, not a pooled percentile.", "",
     "| Source / response | Requests/CPU-second | Peak MiB | Sampled CPU % | p95 ms | req/s range |",
     "|---|---:|---:|---:|---:|---:|");
   const spread = (v, digits) => v ? `${number(v.median, digits)} [${number(v.min, digits)}, ${number(v.max, digits)}]` : "pending";
-  for (const key of keys) {
+  for (const key of reportKeys) {
     const p = report.apps.corten[key];
     lines.push(`| ${key} | ${spread(p.perCpuSecond, 0)} | ${spread(p.memMaxMiB, 2)} | ${spread(p.cpuAvgPct, 1)} | ${spread(p.p95, 2)} | ${p.rps ? `${number(p.rps.min)}-${number(p.rps.max)}` : "pending"} |`);
   }

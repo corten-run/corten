@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { nightly } from "../marketplace/droplet-contract.mjs";
 import { phases } from "../catalog/contract.mjs";
+import { groupDescriptor } from "../catalog/group.mjs";
 import { coverage } from "./evidence.mjs";
 import { definition, groupNames, registrySchema, retainedFamilies, selectedApps, validateInventory } from "./registry.mjs";
 
@@ -18,6 +19,11 @@ export function plan(name, evidence = []) {
       runner: "bench/marketplace/droplet.mjs", group: name,
       options: nightly, phases, placement: "bench/marketplace/droplet-contract.mjs remoteFiles; saved measurement.cpus is authoritative",
       status: "requires-exact-image-qualification-and-browser-gates",
+    } : name === "catalog-page" ? {
+      runner: "bench/catalog/run.mjs", group: name, descriptor: groupDescriptor(name),
+      phases, settings: "bench/catalog/contract.mjs parseArgs defaults; saved options and measurement.cpus are authoritative",
+      status: "requires-exact-image-page-and-json-browser-gates",
+      cloud: "not-integrated; this native runner does not launch or collect droplets",
     } : { status: "pending-group-runner-integration", reason: "Selection is approved; existing native runners and adapters must satisfy this group's contract before comparative timing." },
     retainedFamilies,
   };

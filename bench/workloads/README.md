@@ -33,7 +33,13 @@ browser/content gates remain mandatory. Candidates missing production parity sta
 report with their missing features and are not timed. The existing scheduled `production`
 selection and historical reservations are unchanged while native parity work is completed.
 
-Other groups remain pending runner/adapter integration. Their presence in this registry is
+The catalog runner accepts `--group catalog-page` for page-only timing of the exact registry
+selection in both sources, with its stronger native page and JSON correctness gates retained.
+Its versioned group evidence binds checks and timing to each immutable image and verifies
+after-run provenance and saved aggregates. This is a native runner integration, not a passing
+group result or a cloud launcher; see the [catalog procedure](../catalog/README.md).
+
+Remaining groups stay pending runner/adapter integration. Their presence in this registry is
 not a claim that a new benchmark ran, that all native features exist, or that historical
 measurements are interchangeable. The mixed and live contract modules are testable oracles,
 not substitutes for native adapter implementation, browser captures or load evidence.
@@ -66,6 +72,59 @@ resnapshot with equivalent final keyed state, but implies no authentication, mul
 or process-restart durability. HTTP hardening defaults cannot be blindly applied to long-lived
 streams. In the hardening group a missing protection is a measured outcome, not an exclusion;
 broken parity, harness or cleanup remains an invalid measurement.
+
+## Shared correctness contracts
+
+These modules validate captured application work offline. They do not run an adapter,
+launch traffic, qualify a group or provide performance numbers. Their tests use synthetic
+captures, including invalid evidence. A runner must save the exact effective plan and raw
+observations, verify their provenance, and supply independently reviewed settings. Passing
+an oracle with manufactured observations is not a native-framework parity result.
+
+`mixed.mjs` creates a seeded, fingerprinted `mixed-plan/v1` from the current marketplace
+records. It covers localized page reads, locale-neutral numeric JSON, listings, accepted
+and rejected form writes, and slow upstream completion, deadline and cancellation cases.
+Native form actions, encodings and session state remain native; transport secrets are not
+serialized into the public evidence. Writes need actual submission evidence, the expected
+localized result and independent state readback. Explicit failed, dropped, unsupported and
+not-run outcomes remain counted and cannot establish parity. The validator always leaves
+`readyForLoad` false: native adapters, reviewed load settings and operational qualification
+are separate work.
+
+`live.mjs` defines `live-keyed-state/v1`, `live-delivery/v1` and `recoverable-live/v1`.
+It checks equal initial snapshot work, keyed insert/delete/reinsert effects, visible ordering,
+duplicates and gaps, authoritative resnapshot or replay, finite queue/history bounds and
+instrumented cleanup. Native SSE, WebSocket and framework-specific envelopes are normalized
+without prescribing a common transport. Snapshot rows, application effects, publication
+acknowledgements and owned-resource observations must come from the implementation, not
+from the reference-state helper. Browser execution, continuous peak instrumentation and
+complete native process/store inventories remain runner responsibilities.
+
+`hardening.mjs` validates `hardening-capture/v1` against a reviewed attack and legitimate
+traffic plan. Functional parity is a prerequisite, while missing defenses, refused
+connections, zero useful service, exhaustion and failure to recover stay visible as target
+outcomes. Broken injection, invalid controls, corrupt evidence and failed cleanup invalidate
+the apparatus instead. Direct and deployed-edge cases remain separate. Native process
+topologies may differ, but all required processes must be inventoried and charged within
+equivalent total budgets. Unavailable counters stay unavailable, never numeric zero.
+
+Run all shared contract checks with `npm run check:workloads`. None of these offline checks
+establishes build-time, instruction-count, browser-interactivity or load-test results.
+
+`json-check.mjs` is a native HTTP correctness gate, not a load runner. `checkJsonApp` exercises
+every record against either the catalog or marketplace schema without requesting HTML or
+requiring forms. The caller retains raw responses through its required observer. Missing
+records and upstream errors need JSON representations, but no common error-body format is
+imposed. HTTP-source probes change upstream records and check exactly one upstream read
+for every record in the complete sweep and each subsequent probe. Wire formatting cannot
+prove native parse/reserialize work: a pretty serializer is valid, while a byte forwarder
+can manipulate whitespace. The gate therefore leaves `nativeSerializationVerified` and
+`readyForLoad` false and requires independent native source/serializer verification.
+Catalog's current upstream
+does not inject redirects; its result explicitly says redirects were not tested. Marketplace
+also tests refusal of upstream redirects. These checks do not establish production middleware
+parity, process provenance or measurement readiness, and do not substitute AOT for ordinary
+ASP.NET Core. Unit tests use a deliberately small test server, not a comparative adapter.
 
 ## Retained evidence
 
