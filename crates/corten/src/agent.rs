@@ -75,16 +75,39 @@
 //! as is, so the browser and the agent share one definition and one set of rules.
 //!
 //! Agents authenticate the way any other client does: a bearer token, never ambient cookies.
-//! [`Tools::auth`] runs once per call, and its result is handed to the tool:
+//! The check given to [`Tools::auth`] runs once per call (read the token with
+//! [`crate::caller::bearer`]), and its result is handed to the tool:
 //!
-//! ```ignore
-//! let tools = Tools::new("card-market", env!("CARGO_PKG_VERSION"))
-//!     .auth(|headers| auth::bearer(headers).ok_or(ToolError::Unauthorized))
+//! ```
+//! use corten::{agent::{ToolError, Tools}, caller, prelude::*};
+//!
+//! /// Who the token says is calling.
+//! #[derive(Clone)]
+//! struct User { name: String }
+//!
+//! #[derive(corten::FromJson)]
+//! struct Adjust { id: String, delta: i64 }
+//!
+//! #[derive(corten::ToJson)]
+//! struct Adjusted { id: String, quantity: i64, by: String }
+//!
+//! #[corten::routes(api = Mcp)]
+//! mod mcp {
+//!     #[route("/mcp")]
+//!     pub struct Mcp;
+//! }
+//!
+//! let tools = Tools::new("card-market", "1.0")
+//!     // A real app looks the token up in its store here.
+//!     .auth(|headers| match caller::bearer(headers) {
+//!         Some("dev-token") => Ok(User { name: "dev".into() }),
+//!         _ => Err(ToolError::Unauthorized),
+//!     })
 //!     .tool("inventory.adjust", "Change the quantity of an inventory item", |user: User, input: Adjust| async move {
-//!         Ok(Adjusted { quantity: inventory::adjust(&user, input).await? })
+//!         Ok(Adjusted { id: input.id, quantity: input.delta, by: user.name })
 //!     });
-//! // #[corten::routes(api = Mcp)] mod mcp { #[route("/mcp")] pub struct Mcp; }
-//! let app = App::new(url::router()).api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()));
+//! let app = App::new(Routes::new()).api(|routes| mcp::api(routes).route::<mcp::Mcp>(tools.route()));
+//! # let _ = app.router();
 //! ```
 //!
 //! An endpoint whose tokens come from an OAuth authorization server says which one with
@@ -171,6 +194,7 @@ use crate::response::Response;
 use bytes::Bytes;
 use http::header;
 use http::HeaderMap;
+use http::HeaderName;
 use http::HeaderValue;
 use http::StatusCode;
 use serde_json::{json, Value};
@@ -180,8 +204,13 @@ use crate::json::{
     FromJson, ToJson,
 };
 
-/// Protocol revisions this server speaks, newest first.
+/// Protocol revisions this server speaks, newest first. A request other than `initialize` whose
+/// `MCP-Protocol-Version` names another is answered 400 before its token is checked.
 pub const PROTOCOL_VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
+
+/// The header in which a client names the agreed revision on every request after `initialize`
+/// (MCP 2025-06-18 and 2025-11-25, Transports, "Protocol Version Header").
+const PROTOCOL_VERSION_HEADER: HeaderName = HeaderName::from_static("mcp-protocol-version");
 
 /// Why a tool call failed.
 #[derive(Debug)]
@@ -255,19 +284,19 @@ type Auth<A> = Arc<dyn Fn(&HeaderMap) -> Result<A, ToolError> + Send + Sync>;
 /// [`Authorization::resource`] to refuse a token issued for another server, as the spec requires:
 ///
 /// ```
-/// use corten::{agent::{Authorization, ToolError, Tools}, prelude::*};
+/// use corten::{agent::{Authorization, ToolError, Tools}, caller, prelude::*};
 ///
 /// #[derive(Route)]
 /// #[route("/mcp")]
 /// struct Mcp;
 ///
-/// # fn token_for(_: &corten::http::HeaderMap, _: &str) -> Option<()> { Some(()) }
+/// # fn token_for(_: &str, _: &str) -> Option<()> { Some(()) }
 /// let authorization = Authorization::new::<Mcp>("https://cards.example", "https://auth.example").scopes(&["inventory:read"]);
 /// let audience = authorization.resource().to_string();
 /// assert_eq!(audience, "https://cards.example/mcp");
 /// let tools = Tools::new("card-market", "1.0")
 ///     .authorization(authorization)
-///     .auth(move |headers| token_for(headers, &audience).ok_or(ToolError::Unauthorized));
+///     .auth(move |headers| caller::bearer(headers).and_then(|token| token_for(token, &audience)).ok_or(ToolError::Unauthorized));
 /// # let _ = tools;
 /// ```
 ///
@@ -678,13 +707,32 @@ impl<A: Send + 'static> Tools<A> {
     }
 
     async fn handle(&self, headers: HeaderMap, body: &[u8]) -> Response {
+        // A request whose `MCP-Protocol-Version` names a revision the endpoint does not speak is a
+        // 400 (MCP 2025-06-18 and 2025-11-25, Transports, "Protocol Version Header"), so a message
+        // that cannot be read is one too, with the same JSON-RPC error as without the header.
+        let speaks = speaks(&headers);
+        let malformed = |code, message: &str| {
+            let mut res = reply(Value::Null, Err((code, message.into())));
+            if !speaks {
+                *res.status_mut() = StatusCode::BAD_REQUEST;
+            }
+            res
+        };
         let message: Value = match serde_json::from_slice(body) {
             Ok(value) => value,
-            Err(_) => return reply(Value::Null, Err((-32700, "parse error".into()))),
+            Err(_) => return malformed(-32700, "parse error"),
         };
         if !message.is_object() {
             // JSON-RPC batches were removed from MCP in 2025-06-18.
-            return reply(Value::Null, Err((-32600, "invalid request: send one JSON-RPC message per request".into())));
+            return malformed(-32600, "invalid request: send one JSON-RPC message per request");
+        }
+        // A revision the endpoint does not speak cannot be served whoever sends it, so it is
+        // refused before the token, as a body that is not JSON is. An `initialize` request is sent
+        // before a revision is agreed, so a header on it names none to check (MCP 2025-11-25,
+        // Lifecycle, "Version Negotiation"); one without an `id` is a notification, not that
+        // request, and is checked. Without the header a request is 2025-03-26's, which it speaks.
+        if !speaks && !(message.get("id").is_some() && message.get("method").and_then(Value::as_str) == Some("initialize")) {
+            return unsupported_version(&headers);
         }
         let id = message.get("id").cloned();
         // An endpoint that names where to get a token takes one on every request, as the spec
@@ -733,7 +781,7 @@ impl<A: Send + 'static> Tools<A> {
     /// could not check (its provider is down), 500 (logged) for anything else. Never the answer.
     fn refused(&self, id: Value, error: ToolError, headers: &HeaderMap) -> Response {
         let (status, message) = match error {
-            ToolError::Unauthorized => return self.unauthorized(id, bearer(headers)),
+            ToolError::Unauthorized => return self.unauthorized(id, sent_bearer(headers)),
             ToolError::InsufficientScope(scope) => return self.forbidden(id, &scope),
             // A malformed request (RFC 6750 3.1), told so in the challenge.
             ToolError::Invalid(message) => {
@@ -906,11 +954,46 @@ fn not_one_object(output: &str, parse: bool) -> Option<String> {
     None
 }
 
-/// Whether the request sent a bearer token (RFC 6750: another scheme's credentials are no token).
-/// `Bearer` with nothing after it, which RFC 6750 (2.1) does not allow, is taken as none too, so
-/// the client is told where to get one rather than that it sent a bad one (Corten's reading).
-fn bearer(headers: &HeaderMap) -> bool {
-    headers.get(header::AUTHORIZATION).is_some_and(|value| {
+/// Whether the request's `MCP-Protocol-Version`, when it sent one, names a revision this server
+/// speaks. The header holds one revision, not a list, so a sender must not send it on two lines
+/// (RFC 9110, 5.3); a request that does, even with the same value on both, names none, as their
+/// combined value (`2025-11-25, 2025-11-25`, 5.2) is no revision.
+fn speaks(headers: &HeaderMap) -> bool {
+    let mut sent = headers.get_all(PROTOCOL_VERSION_HEADER).iter();
+    match (sent.next(), sent.next()) {
+        (None, _) => true,
+        (Some(version), None) => PROTOCOL_VERSIONS.iter().any(|v| v.as_bytes() == version.as_bytes()),
+        (Some(_), Some(_)) => false,
+    }
+}
+
+/// The 400 for a revision this server does not speak: a JSON-RPC error with no `id`, as the
+/// transport allows for an HTTP request it does not accept, whose `data` has the revisions it
+/// speaks and the header's combined value (RFC 9110, 5.2), as MCP's own version errors do (MCP
+/// 2025-11-25, Lifecycle, "Error Handling"). The code is JSON-RPC's own, not one a later
+/// revision defines, so a client that tried a later revision first takes this for an earlier
+/// server and falls back to `initialize` (MCP 2026-07-28, Streamable HTTP, "Backward
+/// Compatibility").
+fn unsupported_version(headers: &HeaderMap) -> Response {
+    let sent = headers.get_all(PROTOCOL_VERSION_HEADER).iter();
+    let requested = sent.map(|value| String::from_utf8_lossy(value.as_bytes())).collect::<Vec<_>>().join(", ");
+    let message = format!("unsupported MCP-Protocol-Version; this server speaks {}", PROTOCOL_VERSIONS.join(", "));
+    let data = json!({ "supported": PROTOCOL_VERSIONS, "requested": requested });
+    let error = json!({ "code": -32600, "message": message, "data": data });
+    let mut res = json_response(json!({ "jsonrpc": "2.0", "error": error }).to_string());
+    *res.status_mut() = StatusCode::BAD_REQUEST;
+    res
+}
+
+/// Whether the request used the bearer method, for RFC 6750 3.1's choice of error: an
+/// `Authorization` line that is `Bearer` and a space in any case, then something other than
+/// whitespace. A token that is malformed, not ASCII included (which [`crate::caller::bearer`]
+/// cannot hand an app as text), was still sent, as was one on either of two `Authorization` lines
+/// (which the reader refuses), so its 401 says `error="invalid_token"`; `Bearer` with nothing
+/// after it, which RFC 6750 (2.1) does not allow, is taken as no token, so the client is told
+/// where to get one. It runs only on a 401, so reading every line costs an accepted call nothing.
+fn sent_bearer(headers: &HeaderMap) -> bool {
+    headers.get_all(header::AUTHORIZATION).iter().any(|value| {
         let value = value.as_bytes();
         value.len() > 7 && value[..7].eq_ignore_ascii_case(b"bearer ") && !value[7..].trim_ascii().is_empty()
     })
@@ -990,10 +1073,7 @@ mod tests {
 
     fn app() -> Router {
         let tools = Tools::new("test", "1.0")
-            .auth(|headers| {
-                let token = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer "));
-                token.map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
-            })
+            .auth(|headers| crate::caller::bearer(headers).map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized))
             .tool("inventory.adjust", "Adjust quantity", |agent: Agent, input: Adjust| async move {
                 if input.id == "locked" {
                     return Err(ToolError::Forbidden(format!("{} may not change a locked item", agent.0)));
@@ -1033,6 +1113,99 @@ mod tests {
         assert_eq!(res["result"]["protocolVersion"], PROTOCOL_VERSIONS[0]);
         let (status, _) = rpc(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }), false).await;
         assert_eq!(status, StatusCode::ACCEPTED);
+    }
+
+    /// A request naming a revision the endpoint does not speak in `MCP-Protocol-Version` is a
+    /// 400 with a JSON-RPC error and no `id`, before its token is checked; one naming none is taken
+    /// as 2025-03-26, which it speaks (MCP 2025-06-18 and 2025-11-25, Transports, "Protocol Version
+    /// Header"). `initialize`, sent before a revision is agreed, is answered whatever it names.
+    #[tokio::test]
+    async fn an_unsupported_protocol_version_header_is_a_bad_request() {
+        let request = |versions: &[&str], body: &str| {
+            let mut req = Request::post("/mcp").header("content-type", "application/json");
+            for version in versions {
+                req = req.header("mcp-protocol-version", *version);
+            }
+            req.body(Body::from(body.to_owned())).unwrap()
+        };
+        let list = &json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
+        for versions in [&["2025-11-25"][..], &["2025-06-18"], &["2025-03-26"], &[]] {
+            let (status, _, body) = send(&app(), request(versions, list)).await;
+            let body: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!((status, body["id"].clone()), (StatusCode::OK, json!(1)), "{versions:?}");
+            assert_eq!(body["result"]["tools"].as_array().map(Vec::len), Some(2), "{versions:?}");
+        }
+        let refused = |versions: &'static [&'static str], body: String| {
+            let app = app();
+            async move {
+                let (status, headers, text) = send(&app, request(versions, &body)).await;
+                assert_eq!(status, StatusCode::BAD_REQUEST, "{versions:?}: {text}");
+                assert_eq!(headers["content-type"], "application/json", "{versions:?}");
+                let body: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(body["error"]["code"], -32600, "{versions:?}");
+                assert!(body["error"]["message"].as_str().unwrap().contains("MCP-Protocol-Version"), "{versions:?}");
+                assert!(body.get("id").is_none() && body.get("result").is_none(), "{versions:?}: {text}");
+                let data = json!({ "supported": PROTOCOL_VERSIONS, "requested": versions.join(", ") });
+                assert_eq!(body["error"]["data"], data, "{versions:?}");
+            }
+        };
+        for versions in [&["2024-11-05"][..], &["nonsense"], &["2099-01-01"], &[""], &["2025-11-25", "2025-06-18"]] {
+            refused(versions, list.clone()).await;
+        }
+        // Sent twice with the same revision, the header is still not one revision (RFC 9110, 5.3).
+        refused(&["2025-11-25", "2025-11-25"], list.clone()).await;
+        // A notification is refused too, an `initialize` without an `id` included: it is not the
+        // request that agrees a revision.
+        refused(&["nonsense"], json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string()).await;
+        refused(&["nonsense"], json!({ "jsonrpc": "2.0", "method": "initialize", "params": {} }).to_string()).await;
+        // `initialize` comes before a revision is agreed: whatever its header names, it is answered.
+        let initialize = &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }).to_string();
+        let (status, _, text) = send(&app(), request(&["2099-01-01"], initialize)).await;
+        let body: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!((status, &body["result"]["protocolVersion"]), (StatusCode::OK, &json!(PROTOCOL_VERSIONS[0])), "{text}");
+        // An endpoint that takes a token on every request refuses the revision before the token,
+        // and tells an `initialize` where to get one whatever its header names.
+        let protected = protected(Some(Authorization::new::<Mcp>("https://cards.example", "https://auth.example")));
+        let (status, _, _) = send(&protected, request(&["nonsense"], list)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "the revision comes before the token");
+        let (status, _, _) = send(&protected, request(&["2025-11-25"], list)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "a revision it speaks is then told where to get a token");
+        let (status, _, _) = send(&protected, request(&["nonsense"], initialize)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "an initialize is told where to get a token");
+    }
+
+    /// The status and body of `body` posted with each of these `MCP-Protocol-Version` headers.
+    async fn malformed(body: &str, versions: &[&str]) -> (StatusCode, Value) {
+        let mut req = Request::post("/mcp").header("content-type", "application/json");
+        for version in versions {
+            req = req.header("mcp-protocol-version", *version);
+        }
+        let (status, _, text) = send(&app(), req.body(Body::from(body.to_owned())).unwrap()).await;
+        (status, serde_json::from_str(&text).unwrap())
+    }
+
+    /// A body that is not JSON is a parse error, a 200 as before without the header or with a
+    /// revision the endpoint speaks, and a 400 with the same error when the header names one it
+    /// does not: such a request is a 400 whatever it holds (MCP 2025-11-25, Transports).
+    #[tokio::test]
+    async fn a_body_that_is_not_json_is_a_bad_request_in_a_revision_not_spoken() {
+        let error = json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "parse error" } });
+        assert_eq!(malformed("{", &[]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed("{", &["2025-11-25"]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed("{", &["2099-01-01"]).await, (StatusCode::BAD_REQUEST, error.clone()));
+        assert_eq!(malformed("{", &["2025-11-25", "2025-11-25"]).await, (StatusCode::BAD_REQUEST, error));
+    }
+
+    /// A batch is refused as before, a 200 without the header or with a revision the endpoint
+    /// speaks, and a 400 with the same error when the header names one it does not.
+    #[tokio::test]
+    async fn a_batch_is_a_bad_request_in_a_revision_not_spoken() {
+        let batch = &json!([{ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }]).to_string();
+        let message = "invalid request: send one JSON-RPC message per request";
+        let error = json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": message } });
+        assert_eq!(malformed(batch, &[]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed(batch, &["2025-06-18"]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed(batch, &["nonsense"]).await, (StatusCode::BAD_REQUEST, error));
     }
 
     #[tokio::test]
@@ -1459,9 +1632,8 @@ mod tests {
         };
         let tools = tools
             .auth(|headers| {
-                let sent = headers.get("authorization").and_then(|v| v.to_str().ok()).and_then(|v| v.split_once(' '));
-                let token = sent.filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer")).map(|(_, token)| token.trim());
-                token.filter(|t| !t.is_empty() && *t != "expired").map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
+                let token = crate::caller::bearer(headers).filter(|t| *t != "expired");
+                token.map(|t| Agent(t.to_string())).ok_or(ToolError::Unauthorized)
             })
             .tool("inventory.adjust", "Adjust quantity", |agent: Agent, input: Adjust| async move {
                 if agent.0 != "writer" {
@@ -1567,13 +1739,30 @@ mod tests {
         assert_eq!(authorization.resource(), "https://cards.example/mcp", "what the token check compares the audience with");
         let app = protected(Some(authorization));
         // Other credentials than a bearer token are no token, nor is `Bearer` with only
-        // whitespace after it: told where to get one, nothing more.
+        // whitespace after it: told where to get one, nothing more. A token outside visible ASCII,
+        // which `caller::bearer` does not read, was sent, as was a bearer token on either of two
+        // `Authorization` lines: the check refuses it and the 401 says it is invalid (RFC 6750 3.1).
         let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": {} } });
-        for sent in ["Basic YTpi", "Bearer", "Bearer   ", "Bearer \t"] {
-            let req = Request::post("/mcp").header("content-type", "application/json").header("authorization", sent);
+        // Each request's `Authorization` lines, and whether its 401 names the token invalid.
+        let requests: [(&[&[u8]], bool); 8] = [
+            (&[b"Basic YTpi"], false),
+            (&[b"Bearer"], false),
+            (&[b"Bearer   "], false),
+            (&[b"Bearer \t"], false),
+            (&["Bearer caf\u{e9}".as_bytes()], true),
+            (&[b"bearer caf\xe9"], true),
+            (&[b"Basic YTpi", b"Bearer t"], true),
+            (&[b"Bearer t", b"Bearer u"], true),
+        ];
+        for (sent, invalid) in requests {
+            let sent: Vec<_> = sent.iter().map(|line| HeaderValue::from_bytes(line).unwrap()).collect();
+            let mut req = Request::post("/mcp").header("content-type", "application/json");
+            for line in &sent {
+                req = req.header("authorization", line);
+            }
             let (status, headers, _) = send(&app, req.body(Body::from(call.to_string())).unwrap()).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{sent:?}");
-            assert!(!headers["www-authenticate"].to_str().unwrap().contains("invalid_token"), "{sent:?}: {headers:?}");
+            assert_eq!(headers["www-authenticate"].to_str().unwrap().contains("invalid_token"), invalid, "{sent:?}: {headers:?}");
         }
         let (status, headers, body) = send(&app, adjust(None)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
