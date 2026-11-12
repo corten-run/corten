@@ -148,11 +148,7 @@ func newMarketplaceSource() (*marketplaceSource, error) {
 			}
 		}
 	} else {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.MaxIdleConnsPerHost = transport.MaxIdleConns
-		s.client = &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		}}
+		s.client = newRecordHTTPClient()
 	}
 	return s, nil
 }
@@ -318,17 +314,18 @@ func (s *marketplaceSource) routes(r *gin.Engine) {
 	}
 	r.GET("/marketplace/:locale/:id", page)
 	r.POST("/marketplace/:locale/:id", page)
-	r.GET("/api/marketplace/:id", func(c *gin.Context) {
+	recordJSONMethods(r)
+	r.Match([]string{http.MethodGet, http.MethodHead}, "/api/marketplace/:id", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
 		record, err := s.get(c.Request.Context(), c.Param("id"))
 		if err != nil {
-			_ = c.AbortWithError(http.StatusBadGateway, err)
+			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": "marketplace source unavailable"})
 			return
 		}
 		if record == nil {
-			c.Status(http.StatusNotFound)
+			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "marketplace record not found"})
 			return
 		}
-		c.Header("Cache-Control", "no-store")
 		c.JSON(http.StatusOK, record)
 	})
 	r.StaticFile("/marketplace.css", "static/marketplace.css")
