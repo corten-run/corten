@@ -25,14 +25,25 @@ pub enum Answer {
     },
 }
 
+/// What became of a save, as the builder's script compares it. A renamed variant fails the Rust
+/// build, then `tsc` where a script still compares the old name. `Loaded` is the page as loaded,
+/// before any save, for which the note tells the builder nothing.
+#[derive(Clone, Copy, ToJson)]
+pub enum SaveOutcome {
+    Loaded,
+    Saved,
+    Refused,
+    Stale,
+}
+
 impl Answer {
-    /// What the script compares: `saved`, `refused`, `stale`, or nothing.
-    fn outcome(&self) -> &'static str {
+    /// What the script compares.
+    fn outcome(&self) -> SaveOutcome {
         match self {
-            Answer::None => "",
-            Answer::Saved { .. } => "saved",
-            Answer::Refused { .. } => "refused",
-            Answer::Stale { .. } => "stale",
+            Answer::None => SaveOutcome::Loaded,
+            Answer::Saved { .. } => SaveOutcome::Saved,
+            Answer::Refused { .. } => SaveOutcome::Refused,
+            Answer::Stale { .. } => SaveOutcome::Stale,
         }
     }
 
@@ -55,12 +66,12 @@ impl Answer {
     }
 }
 
-/// A save's answer, told to the builder around the note: what became of it (`saved`, `refused`,
-/// `stale`), the deck's version after it, which send was saved, and, when stale, whether a save
-/// the server no longer remembers may have been it. It bubbles from the note.
+/// A save's answer, told to the builder around the note: what became of it (never `Loaded`), the
+/// deck's version after it, which send was saved, and, when stale, whether a save the server no
+/// longer remembers may have been it. It bubbles from the note.
 #[corten::script::event]
 pub struct DeckAnswered {
-    pub outcome: String,
+    pub outcome: SaveOutcome,
     pub version: u64,
     pub draft: u64,
     pub unsure: bool,
