@@ -119,9 +119,10 @@ impl Upgrade {
         // looking for `Upgrade` on every GET cost 130 instructions a request, hyper's mark 50.
         let shared = parts.extensions.get::<Signal>().and_then(Signal::shared);
         let allowed = shared.map_or(&[][..], |s| &s.allowed_origins[..]);
+        let https_only = shared.is_some_and(|s| s.https_only);
         // Under an API, the sites its `allow_origin` names too, as for its writes.
         let api = shared.and_then(|s| s.api_origins.iter().find(|(prefix, _)| crate::api::under(prefix, parts.uri.path())));
-        if !crate::security::write_allowed(allowed, &parts.headers)
+        if !crate::security::write_allowed(allowed, https_only, &parts.headers)
             && !api.is_some_and(|(_, origins)| crate::security::allowed(&parts.headers, origins))
         {
             return Err(Error::new("a switch from another site's page is refused, as a cross-site write is")
