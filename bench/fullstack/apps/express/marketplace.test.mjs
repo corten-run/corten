@@ -83,6 +83,87 @@ test("listings sort by price, stable, missing last, and filter by a case-sensiti
   assert.deepEqual(record.listings.map((row) => row.id), ["a", "b", "c", "d"]);
 });
 
+test("accepted forms persist in a server-issued session, with independent readback and atomic appends", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "marketplace-alerts-express-"));
+  const path = join(directory, "marketplace.json");
+  try {
+    await writeFile(path, JSON.stringify({ item_1: record }));
+    for (const profile of ["", "matched"]) await serving({ MARKETPLACE_SOURCE: "fixture", MARKETPLACE_FIXTURE_PATH: path, PROFILE: profile }, async (base) => {
+      const read = async (cookie = "") => {
+        const response = await fetch(`${base}/api/alerts`, { headers: { cookie } });
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("cache-control"), "no-store");
+        assert.equal(response.headers.get("set-cookie"), null);
+        return response.json();
+      };
+      const post = (locale, fields, cookie = "", headers = {}, id = "item_1") => fetch(`${base}/marketplace/${locale}/${id}`, {
+        method: "POST", headers: { origin: base, cookie, ...headers }, body: new URLSearchParams(fields),
+      });
+      const chosenCookie = "marketplace-alerts=" + "0".repeat(64);
+      assert.deepEqual(await read(), []);
+      assert.deepEqual(await read(chosenCookie), []);
+      const invalidFresh = await post("en-US", { email: "bad", target_price: "1" });
+      assert.equal(invalidFresh.status, 200);
+      assert.equal(invalidFresh.headers.get("set-cookie"), null);
+      assert.deepEqual(await read(), []);
+      const first = await post("en-US", { email: "first@example.test", target_price: "12.50" }, chosenCookie);
+      assert.equal(first.status, 200);
+      const setCookie = first.headers.get("set-cookie");
+      assert.match(setCookie, /HttpOnly/i);
+      assert.match(setCookie, /SameSite=Lax/i);
+      assert.match(setCookie, /Path=\//i);
+      const cookie = setCookie.split(";")[0];
+      assert.notEqual(cookie, chosenCookie);
+      const expected = [{ item_id: "item_1", email: "first@example.test", target_minor: 1250 }];
+      assert.deepEqual(await read(cookie), expected);
+      for (const locale of ["fr-FR", "de-DE"]) {
+        const email = `${locale}@example.test`;
+        const response = await post(locale, { email, target_price: "1234,50" }, cookie);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get("set-cookie"), null);
+        expected.push({ item_id: "item_1", email, target_minor: 123450 });
+        assert.deepEqual(await read(cookie), expected);
+        for (const fields of [{}, { email: "bad", target_price: "1" }, { email, target_price: "0" }, { email, target_price: "1.50" }]) {
+          assert.equal((await post(locale, fields, cookie)).status, 200);
+          assert.deepEqual(await read(cookie), expected);
+        }
+      }
+      for (const headers of [{ origin: "https://attacker.test" }, { "sec-fetch-site": "cross-site" }]) {
+        assert.equal((await post("en-US", { email: "evil@example.test", target_price: "1" }, cookie, headers)).status, 403);
+      }
+      assert.equal((await post("en-US", { email: "missing@example.test", target_price: "1" }, cookie, {}, "missing")).status, 404);
+      assert.equal((await post("es-ES", { email: "badlocale@example.test", target_price: "1" }, cookie)).status, 400);
+      assert.deepEqual(await read(cookie), expected);
+      const other = await post("en-US", { email: "other@example.test", target_price: "2" });
+      const otherCookie = other.headers.get("set-cookie").split(";")[0];
+      assert.notEqual(otherCookie, cookie);
+      assert.deepEqual(await read(otherCookie), [{ item_id: "item_1", email: "other@example.test", target_minor: 200 }]);
+      const emails = Array.from({ length: 24 }, (_, i) => `concurrent-${i}@example.test`);
+      await Promise.all(emails.map(async (email) => {
+        assert.equal((await post("en-US", { email, target_price: "3.25" }, cookie)).status, 200);
+        const snapshot = await read(cookie);
+        assert.deepEqual(snapshot.slice(0, expected.length), expected);
+        assert.equal(new Set(snapshot.map((row) => row.email)).size, snapshot.length);
+      }));
+      const rows = await read(cookie);
+      assert.equal(rows.length, expected.length + emails.length);
+      assert.deepEqual(rows.slice(expected.length).map((row) => row.email).sort(), emails.sort());
+      assert.ok(rows.slice(expected.length).every((row) => row.item_id === "item_1" && row.target_minor === 325));
+      assert.deepEqual(await read(cookie), rows);
+      for (let count = 1; count <= 2; count++) {
+        assert.equal((await post("en-US", { email: "repeat@example.test", target_price: "4" }, cookie)).status, 200);
+        const repeated = await read(cookie);
+        assert.equal(repeated.length, rows.length + count);
+        assert.deepEqual(repeated.at(-1), { item_id: "item_1", email: "repeat@example.test", target_minor: 400 });
+      }
+      assert.deepEqual(await read(), []);
+      assert.deepEqual(await read(chosenCookie), []);
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("the fixture is read once at startup; pages are escaped, localized and refuse a cross-site post", async () => {
   const directory = await mkdtemp(join(tmpdir(), "marketplace-express-"));
   const path = join(directory, "marketplace.json");
@@ -146,6 +227,15 @@ test("the API source fetches once per request, encodes the ID, follows no redire
       assert.equal((await (await fetch(`${base}/api/marketplace/item%2F1`)).json()).title, "2");
       assert.ok((await (await fetch(`${base}/marketplace/en-US/item_1`)).text()).includes("<h1>3</h1>"));
       assert.deepEqual(requests, ["/marketplace/records/item%2F1", "/marketplace/records/item%2F1", "/marketplace/records/item_1"]);
+      const accepted = await fetch(`${base}/marketplace/en-US/item_1`, {
+        method: "POST", body: new URLSearchParams({ email: "api@example.test", target_price: "12.50" }),
+      });
+      assert.equal(accepted.status, 200);
+      const cookie = accepted.headers.get("set-cookie").split(";")[0];
+      const beforeRead = requests.length;
+      assert.deepEqual(await (await fetch(`${base}/api/alerts`, { headers: { cookie } })).json(),
+        [{ item_id: "item_1", email: "api@example.test", target_minor: 1250 }]);
+      assert.equal(requests.length, beforeRead, "independent readback must not fetch the record source");
       status = 404;
       assert.equal((await fetch(`${base}/marketplace/en-US/item_1`)).status, 404);
       for (status of [302, 503]) {
