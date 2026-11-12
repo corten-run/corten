@@ -1803,7 +1803,7 @@ pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> O
 
 /// The first submit key with no value ([`SubmitKey::template_field`]) in `html` that is not inside
 /// a `<template>` a script copies, as written: a browser without JavaScript sends it empty, and the
-/// post is refused. A declarative shadow root (`<template shadowrootmode>`) is drawn in the page,
+/// post is refused. A declarative shadow root (`<template shadowrootmode="open">`) is drawn in the page,
 /// so a field in one needs its own key. A page without one costs one search of its markup, and
 /// only a debug build makes it (also for a field drawn ahead, `req.rendered`, which needs nothing
 /// carried with it).
@@ -1824,7 +1824,8 @@ pub(crate) fn keyless_submit_field(html: &str) -> Option<&str> {
 
 /// How deep a scan of markup is in `<template>`s, read on from where it last stopped, so the
 /// markup is read once however many fields it holds. It reads the markup `html!` writes, where a
-/// `<` in text or a value is `&lt;`; it does not parse literal `<script>` or `<style>` text,
+/// `<` in text or a value is `&lt;` and an attribute is `name="value"` with no space around the `=`
+/// (hand-written `raw(..)` markup such as `shadowrootmode = "open"` can mislead it); it does not parse literal `<script>` or `<style>` text,
 /// comments or `raw(..)`, so a `<template` in them can mislead this debug check.
 #[cfg(debug_assertions)]
 #[derive(Default)]

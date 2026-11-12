@@ -1651,7 +1651,7 @@ impl Req {
 
     /// In a debug build: an error when a page draws a submit key with no value
     /// ([`crate::SubmitKey::template_field`]) outside a `<template>` a script copies (a declarative
-    /// shadow root, `<template shadowrootmode>`, is drawn in the page). The runtime gives it one
+    /// shadow root, `<template shadowrootmode="open">`, is drawn in the page). The runtime gives it one
     /// when the form is sent, but a browser without JavaScript sends it empty and every post is
     /// refused.
     #[cfg(debug_assertions)]
@@ -1660,7 +1660,7 @@ impl Req {
     fn check_submit_keys(&self, html: &str) -> Result<()> {
         match crate::form::keyless_submit_field(html) {
             Some(field) => Err(self.unserved(format!(
-                "{path} draws the submit key {field}, which has no value, outside a <template> a script copies, so a browser without JavaScript sends it empty and the post is refused: draw SubmitKey::field(..) in a form the server draws, including one in a declarative shadow root (<template shadowrootmode>), which is drawn in the page, and SubmitKey::template_field(..) only in a <template> a script copies",
+                "{path} draws the submit key {field}, which has no value, outside a <template> a script copies, so a browser without JavaScript sends it empty and the post is refused: draw SubmitKey::field(..) in a form the server draws, including one in a declarative shadow root (<template shadowrootmode=\"open\">), which is drawn in the page, and SubmitKey::template_field(..) only in a <template> a script copies",
                 path = self.path()
             ))),
             None => Ok(()),

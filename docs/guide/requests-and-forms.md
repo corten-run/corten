@@ -675,7 +675,7 @@ and the app would apply only the first copy's submit. Put it only in a `<templat
 JavaScript nothing fills it, and a `SubmitKey` posted empty is refused with the same 422 as a
 malformed one (an `Option<SubmitKey>` reads it as none). A debug build's page that draws one
 outside a `<template>` a script copies is an error (a declarative shadow root,
-`<template shadowrootmode>`, is drawn in the page and needs its own key). A script that copies a
+`<template shadowrootmode="open">`, is drawn in the page and needs its own key). A script that copies a
 form already on the page, rather than a template, empties the copy's key field
 (`field.value = ""`) so the runtime gives it one. A field with no key draws nothing at random, so
 a page whose only key fields are a template's keeps its `ETag`, which `SubmitKey::field` takes
