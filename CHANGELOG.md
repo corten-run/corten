@@ -12,6 +12,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- The separate ASP.NET Core Native AOT JSON adapter now supports complete catalog and numeric
+  marketplace records through native source-generated serialization, with fixture-at-startup
+  or uncached request-time HTTP sources. Focused source and native executable checks cover
+  schemas, error responses, redirects, cancellation and deadlines. Ordinary ASP.NET Core stays
+  a separate challenger; this is not page parity or a group performance result.
+
 - A catalog-page workload-group runner with page-only timing in both sources, retained native
   page and JSON correctness gates, immutable image bindings and checked after-run provenance
   and aggregates. Legacy catalog rounds keep their original validation. A separate JSON-only
