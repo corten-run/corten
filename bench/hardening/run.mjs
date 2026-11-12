@@ -6,8 +6,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, appendFileSync, rmS
 import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { hostname, platform, release } from "node:os";
-import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, registryDigest } from "./plan.mjs";
-import { assemble, artifacts, verifyArtifacts, verifyParity, digest } from "./evidence.mjs";
+import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest } from "./plan.mjs";
+import { assemble, artifacts, verifyArtifacts, verifyParity, digest, targetOutcome } from "./evidence.mjs";
+import { assessNative } from "./native.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { validateQualification, featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
 import { nginxConf, edgeImage, edgeCertImage, edgeOffset } from "../fullstack/edge.mjs";
@@ -28,9 +29,9 @@ export async function run(args) {
   const interrupt = () => { interrupted = true; for (const child of children) child.kill(); };
   process.on("SIGINT", interrupt); process.on("SIGTERM", interrupt);
   const summary = { schema, runId, registryDigest, options, budget, startedAt: new Date().toISOString(), complete: false,
-    groupReady: false, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
+    groupReady: false, nativeControlsVersion: 1, cells: matrix(), failures: [], cleanupFailures: [], host: { hostname: hostname(), platform: platform(), release: release() },
     scope: "HTTP/1.1 hardening of native production marketplace adapters; TLS edge uses existing pinned nginx deployment config; not HTTP/2/3 or kernel-peak measurement" };
-  const save = () => json(join(folder, "summary.json"), summary);
+  const save = () => { summary.nativeGroup = nativeGroup(summary.cells); json(join(folder, "summary.json"), summary); };
   async function command(binary, args, { timeout, file, cleanup = false } = {}) {
     timeout ??= cleanup ? budget.cleanup.timeoutMs : 30000;
     if (interrupted && !cleanup) throw new Error("run interrupted");
@@ -120,10 +121,11 @@ export async function run(args) {
   async function cellRun(cell) {
     const out = join(folder, cell.key); mkdirSync(out, { recursive: true });
     const prefix = `${runId}-cell`, appName = `${prefix}-app`, upstreamName = `${prefix}-upstream`, edgeName = `${prefix}-edge`, probeName = `${prefix}-probe`;
-    let startedWall, probeEndedWall, raw, settings, provenance, lifecycle, parity, processList, error;
+    let startedWall, probeEndedWall, raw, settings, provenance, lifecycle, parity, processList, error, stage = "image-provenance";
     const targets = [], snapshot = {};
     try {
       const { image, source } = await appImage(cell.app);
+      stage = "native-startup";
       const upstream = await owned(upstreamName, ["run", "-d", "--network", network, ...limits(budget.resources.upstream), ...mounted, ...fixture,
         tools.node.Id, "node", "/repo/bench/marketplace/upstream.mjs"]);
       targets.push({ id: "upstream", role: "upstream", name: upstreamName, info: upstream, source: summary.commit + ":bench/marketplace/upstream.mjs" });
@@ -132,14 +134,21 @@ export async function run(args) {
         "-e", "PORT=8080", "-e", "HOSTS=fsw-target,localhost,127.0.0.1", "-e", `PROFILE=${qualificationSettings.nativeProfile}`, "-e", `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`, image.Id]);
       targets.push({ id: "application", role: "application", name: appName, info: app, source: `${summary.commit}:sha256:${source}` });
       await ready(appName, out, image.Id);
+      stage = "production-qualification";
       await sidecar(`${prefix}-qualification`, appName, ["/repo/bench/marketplace/qualify.mjs", "http://127.0.0.1:8080", cell.source, `http://${upstreamName}:8080`, "/results/qualification.json"], out, "qualification.log", 8 * 60000);
       const qualification = validateQualification(JSON.parse(readFileSync(join(out, "qualification.json"), "utf8")));
       cell.nativeMissingFeatures = qualification.missing;
+      stage = "native-controls";
+      await sidecar(`${prefix}-native-controls`, appName, ["/repo/bench/hardening/native.mjs", "http://127.0.0.1:8080", cell.source, `http://${upstreamName}:8080`, "/results/qualification.json", "/results/native-controls.json"], out, "native-controls.log", 90000);
+      cell.nativeAssessment = assessNative(JSON.parse(readFileSync(join(out, "native-controls.json"))), qualification);
+      assert.notEqual(cell.nativeAssessment.sourceControl, "target-functional-failure", "native API-source controls failed; no attack qualification");
       // Missing defenses do NOT exclude an app. Functional/browser work is a separate prerequisite.
+      stage = "native-parity";
       await sidecar(`${prefix}-parity`, appName, ["/repo/bench/hardening/parity.mjs", "http://127.0.0.1:8080", cell.source, `http://${upstreamName}:8080`, "/results/parity.json"], out, "parity.log", 10 * 60000);
       parity = JSON.parse(readFileSync(join(out, "parity.json"), "utf8")); verifyParity(parity, cell.source); cell.parity = "passed";
       let target = { host: "127.0.0.1", port: 8080, authority: "localhost:8080", origin: "http://localhost:8080", tls: false }, namespace = appName;
       if (cell.mode === "deployed-edge") {
+        stage = "edge-deployment";
         const cert = join(out, "cert"); mkdirSync(cert);
         const certName = `${prefix}-certificate`;
         await owned(certName, ["create", "--network", "none", ...limits(budget.resources.apparatus), "-v", `${cert}:/cert`, tools.cert.Id,
@@ -150,13 +159,20 @@ export async function run(args) {
         targets.push({ id: "proxy", role: "proxy", name: edgeName, info: edge, source: summary.commit + ":bench/fullstack/edge.mjs:nginxConf" });
         target = { host: "127.0.0.1", port: 8080, authority: "localhost:8080", origin: "https://localhost:8080", tls: true, caPem: readFileSync(join(cert, "cert.pem"), "utf8") }; namespace = edgeName;
         // The edge is a distinct deployment and must itself pass the complete content/browser gate.
+        stage = "edge-parity";
         await sidecar(`${prefix}-edge-parity`, edgeName, ["/repo/bench/hardening/parity.mjs", "https://localhost:8080", cell.source, `http://${upstreamName}:8080`, "/results/parity.json"], out, "edge-parity.log", 10 * 60000);
         parity = JSON.parse(readFileSync(join(out, "parity.json"), "utf8")); verifyParity(parity, cell.source);
+        stage = "edge-native-controls";
+        await sidecar(`${prefix}-edge-controls`, edgeName, ["/repo/bench/hardening/native.mjs", "https://localhost:8080", cell.source, `http://${upstreamName}:8080`, "/results/qualification.json", "/results/edge-native-controls.json"], out, "edge-native-controls.log", 90000);
+        cell.edgeAssessment = assessNative(JSON.parse(readFileSync(join(out, "edge-native-controls.json"))), qualification);
+        assert.notEqual(cell.edgeAssessment.sourceControl, "target-functional-failure", "edge API-source controls failed");
       }
       // Native form metadata is discovered in the measured namespace, never supplied by an oracle.
+      stage = "native-form";
       await sidecar(`${prefix}-form`, namespace, ["/repo/bench/hardening/form.mjs", JSON.stringify(target), "/results/form.json"], out, "form.log", 15000);
       const form = JSON.parse(readFileSync(join(out, "form.json"), "utf8"));
       processList = [];
+      stage = "native-inventory";
       for (const t of targets) {
         const info = await inspect(t.name), top = await docker(["top", t.name, "-eo", "pid,ppid,comm,args"]);
         const count = top.split("\n").length - 1; assert.ok(count > 0); json(join(out, `${t.id}-before.json`), { info, top });
@@ -169,14 +185,16 @@ export async function run(args) {
       assert.deepEqual(Object.keys(net.Containers).sort(), processList.map((p) => p.containerId).sort(), "unaccounted native process container on isolated network");
       json(join(out, "deployment.json"), { network: net, processes: processList, provenance, totalBudget: budget.resources });
       json(join(out, "probe.json"), { budget, phase: cell.phase, target, form, expected: records().item_1, processes: processList });
-      await owned(probeName, ["create", "--network", `container:${namespace}`, ...limits(budget.resources.apparatus), "--cgroupns=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mounted, "-v", `${out}:/results`, tools.node.Id,
+      await owned(probeName, ["create", "--network", `container:${namespace}`, ...limits(budget.resources.apparatus), "--cgroupns=host", "--pid=host", "-v", "/sys/fs/cgroup:/sys/fs/cgroup:ro", ...mounted, "-v", `${out}:/results`, tools.node.Id,
         "node", "/repo/bench/hardening/probe.mjs", "/results/probe.json", "/results/raw.jsonl"]);
       startedWall = new Date().toISOString();
+      stage = "native-injection";
       try { await docker(["start", "-a", probeName], { timeout: budget.legitimate.after.endMs + 20000, file: join(out, "probe.log") }); }
       finally { probeEndedWall = Date.now(); await remove(probeName); }
       raw = readFileSync(join(out, "raw.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
       const clock = raw.find((r) => r.type === "clock"); assert.ok(clock);
       lifecycle = {};
+      stage = "native-lifecycle";
       for (const t of targets) {
         const after = await inspect(t.name);
         const until = new Date().toISOString();
@@ -209,16 +227,20 @@ export async function run(args) {
       const cleanup = { complete: failures.length === 0 && containers.length === 0 && volumes.length === 0 && children.size === 0,
         containers, volumes, commandClients: children.size, failures, nativeClock, elapsedAfterProbeMs: probeEndedWall ? Date.now() - probeEndedWall : null, finishedAt: new Date().toISOString() };
       json(join(out, "cleanup.json"), cleanup);
-      if (!cleanup.complete) { summary.cleanupFailures.push({ key: cell.key, cleanup }); error ??= new Error("owned cleanup failed"); }
+      if (!cleanup.complete) { summary.cleanupFailures.push({ key: cell.key, cleanup }); error ??= new Error("owned cleanup failed"); stage = "owned-cleanup"; }
       if (!error) {
         try {
+          stage = "evidence-validation";
           const manifest = artifacts(out); json(join(out, "manifest.json"), manifest); verifyArtifacts(out, manifest);
           const capture = assemble({ settings, raw, parity, source: cell.source, cleanup, provenance, lifecycle });
           json(join(out, "capture.json"), capture); cell.status = "observed"; cell.apparatusValid = true;
           cell.defense = capture.defense.protection; cell.recovery = capture.recovery.disposition; cell.capture = `${cell.key}/capture.json`;
+          cell.targetOutcome = targetOutcome(capture, cell.nativeAssessment);
         } catch (e) { error = e; }
       }
-      if (error) { cell.status = "invalid"; cell.apparatusValid = false; cell.error = error.message; json(join(out, "failure.json"), { error: error.stack, startedWall }); summary.failures.push({ key: cell.key, error: error.message }); }
+      if (error) { cell.status = "invalid"; cell.apparatusValid = false; cell.error = error.message; cell.failedStage = stage;
+        cell.failureKind = ["native-parity", "edge-parity", "native-form"].includes(stage) ? "parity-blocked" : "apparatus-invalid";
+        json(join(out, "failure.json"), { error: error.stack, startedWall, stage, kind: cell.failureKind }); summary.failures.push({ key: cell.key, stage, kind: cell.failureKind, error: error.message }); }
     }
   }
   try {

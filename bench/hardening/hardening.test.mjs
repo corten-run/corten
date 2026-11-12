@@ -48,6 +48,13 @@ test("control assertions reject corrupted receipts rather than trusting a passin
   }
 });
 
+test("oversize receiving control waits for all 4 MiB even when the receiver cannot read within the old 350 ms assumption", async () => {
+  const result = await controls("oversized-requests", { receiveDelayMs: 500 });
+  const body = result.rows.find((row) => row.variant === "body-size");
+  assert.equal(body.bodyBytesQueued + body.bodyPrefixBytes, 4 * 2 ** 20);
+  assert.ok(body.endedAtMs >= 500); validateControl(result);
+});
+
 test("refused target connections are real target counters, not successful injection or local exhaustion", async () => {
   const server = createServer(); await new Promise((r) => server.listen(0, "127.0.0.1", r)); const port = server.address().port;
   await new Promise((r) => server.close(r));
@@ -58,21 +65,25 @@ test("refused target connections are real target counters, not successful inject
   await pool.close(); assert.equal(pool.sockets.size, 0); assert.deepEqual(pool.errors, []);
 });
 
-test("legitimate recorder rejects wrong, truncated and hung responses even with HTTP 200", async () => {
+test("legitimate recorder rejects wrong, truncated and hung responses even with HTTP 200", { timeout: 10000 }, async () => {
+  let deadline, deadlineMs, deadlineCleared = 0;
   const server = httpServer((req, res) => {
     if (req.url === "/api/good") res.end('{"id":"native","value":7}');
     else if (req.url === "/api/wrong") res.end('{"id":"native","value":8}');
     else if (req.url === "/api/truncated") { res.writeHead(200, { "Content-Length": 1000 }); res.end("{}"); }
-    else res.writeHead(200);
+    else { res.writeHead(200); queueMicrotask(() => deadline()); }
   });
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const pool = new Connections();
   try {
     for (const name of ["good", "wrong", "truncated", "hang"]) {
       const row = await legitimate({ target: { host: "127.0.0.1", port: server.address().port, authority: "localhost" }, path: `/api/${name}`,
-        expected: { id: "native", value: 7 }, timeoutMs: 150, pool, now: performance.now.bind(performance), emit: () => {}, index: 0, window: "test" });
+        expected: { id: "native", value: 7 }, timeoutMs: 600, pool, now: performance.now.bind(performance), emit: () => {}, index: 0, window: "test",
+        timers: { setTimeout: (fn, ms) => { deadline = fn; deadlineMs = ms; return 1; }, clearTimeout: () => { deadlineCleared++; } } });
       assert.equal(row.ok, name === "good");
+      assert.equal(deadlineMs, 600); assert.equal(row.timedOut === true, name === "hang");
     }
+    assert.equal(deadlineCleared, 4);
   } finally { await pool.close(); server.closeAllConnections(); await new Promise((r) => server.close(r)); }
 });
 

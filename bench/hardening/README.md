@@ -7,7 +7,7 @@ and all six attack phases stay in its 216-cell ledger. No cloud controller,
 operational benchmark network, production deployment or automation is used.
 
 ```sh
-node --test bench/hardening/*.test.mjs
+node --test --test-concurrency=1 bench/hardening/*.test.mjs
 node bench/hardening/run.mjs w1 --review approved-profile-reference --build
 node bench/hardening/verify.mjs bench/hardening/results/w1
 node bench/hardening/adversarial.mjs bench/hardening/results/w1/<observed-cell-directory>
@@ -33,6 +33,15 @@ and removes only its generated image tags afterwards. Without it, each
 clean-build and native-source digest. Old or dirty local images are not relabeled.
 Missing images/builds/native features remain explicit invalid/not-run cells.
 
+The representative is the existing native matched production adapter, not a
+common implementation of a framework's behavior. The summary's `nativeGroup`
+keeps all nine representatives visible with `not-established`, `partial`,
+`gaps-observed` or `qualified` production qualification and exact missing features.
+Its alternatives list is empty until an actual native alternative has its own
+source/config/process-budget identity and passes the same complete gates. No
+alternative is presumed qualified and no default is weakened to fill that list.
+`nativeControlsVersion: 1` requires additional raw controls and replay validation.
+
 Each phase starts fresh native application and upstream containers. Production
 qualification uses the unchanged `bench/marketplace/qualify.mjs` infrastructure.
 Missing defensive capabilities are disclosed but do not exclude a target.
@@ -43,6 +52,17 @@ with the existing pinned edge image and generated `nginxConf`, without substitut
 a common renderer or application transport. Node trusts only the generated CA;
 Chromium pins its generated public key. Native form action, encoding, CSRF fields
 and cookies are discovered and submitted successfully before body attacks.
+
+`native-controls.json` separately records allowed/unknown Host responses, the
+actual liveness path found by production qualification, and a negative health
+path. No endpoint means `missing`; a catch-all 200 is `inconclusive`, not live.
+API-source controls retain nonce-mutated page/full JSON responses, exact one-read
+upstream counters, 503/302 refusal, independent liveness under upstream failure,
+and reset/readback receipts. Controls run in the direct and deployed-edge namespace
+as applicable. Wire differences are observations, not proof of native serialization;
+the existing native source and complete browser/content gates remain mandatory.
+An unqualified representative is explicitly labeled a native defense-gap
+observation, never qualified performance. Missing defenses are target outcomes.
 
 ## Apparatus
 
@@ -66,6 +86,10 @@ and are removed before the attack. All native child processes and threads are
 charged by their container cgroups; `docker top` and actual `cgroup.procs` are
 retained, not normalized to one process. The isolated network inventory must
 match every declared native target container before injection.
+The short-lived observer uses the host PID and cgroup namespaces, with read-only
+cgroup access and no Docker socket, so other containers' PIDs are visible rather
+than represented as namespace-hidden zeros. Asynchronous cgroup reads retain their
+actual monotonic collection intervals; reads cannot block the socket scheduler.
 
 The same socket injector runs independent receiving controls before/after each
 phase. Controls verify actual emitted/received bytes, trickle ticks, incomplete
@@ -78,6 +102,14 @@ idle sockets, fresh-connection GET floods, and all three oversized variants
 Scheduled starts and actual monotonic starts are retained including refusals;
 local FD/memory/address exhaustion, missing work, excessive lag, stalled event
 loop, invalid controls, changed lifecycle or failed cleanup invalidate apparatus.
+
+Receiving controls release on actual payload receipt (including every byte of
+the 4 MiB body), two trickles, or demonstrated reader backpressure, under a separate
+finite 5 s deadline. They no longer presume delivery within 350 ms. Their exact
+byte checks remain intact. The recorder unit test explicitly triggers its deadline
+after the hung request arrives instead of requiring a good response within 150 ms.
+Serial local socket tests avoid aggregate test-runner contention; native 600 ms
+requests, 200 ms scheduler/host gates and all reviewed attack windows are unchanged.
 
 The bounded raw journal is buffered in injector memory (64 MiB maximum) and
 flushed after the timed windows, so host-mounted filesystem stalls cannot delay
@@ -106,6 +138,12 @@ defense or failure to recover remains a target outcome. No target is restarted
 to manufacture recovery. A broken functional gate or apparatus gets no measured
 capture. All owned containers (including anonymous volumes), command clients,
 sockets, timers, network and generated image tags are reaped; results remain.
+Each invalid cell names its failed stage and distinguishes `parity-blocked` from
+`apparatus-invalid`. Valid native captures separately classify `service-preserved`
+or `target-capacity-failure`. Loss of baseline service after successful preflight
+is retained as an unavailable numeric measurement, not mislabeled broken injection.
+`numericComparisonQualified` also requires observed production qualification;
+`groupReady` means complete native apparatus evidence, not universal protection.
 
 ## Limits
 

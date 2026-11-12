@@ -3,20 +3,30 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { schema, registryDigest, groupReady } from "./plan.mjs";
-import { assemble, verifyArtifacts, digest } from "./evidence.mjs";
+import { schema, registryDigest, groupReady, nativeGroup } from "./plan.mjs";
+import { assemble, verifyArtifacts, digest, targetOutcome } from "./evidence.mjs";
+import { assessNative } from "./native.mjs";
 import { validateQualification } from "../marketplace/feature-contract.mjs";
 const read = (file) => JSON.parse(readFileSync(file, "utf8"));
 
 export function verify(folder) {
   const summary = read(join(folder, "summary.json")); assert.equal(summary.schema, schema); assert.equal(summary.registryDigest, registryDigest);
   groupReady(summary.cells); // Validate the complete, canonical matrix before following artifact paths.
+  if (summary.nativeControlsVersion === 1) assert.deepEqual(summary.nativeGroup, nativeGroup(summary.cells));
   let observed = 0;
   for (const cell of summary.cells) {
     if (cell.status !== "observed") continue;
     const out = join(folder, cell.key), manifest = read(join(out, "manifest.json")); verifyArtifacts(out, manifest);
     const settings = read(join(out, "settings.json")), deployment = read(join(out, "deployment.json"));
     const qualification = validateQualification(read(join(out, "qualification.json"))); assert.deepEqual(qualification.missing, cell.nativeMissingFeatures);
+    if (summary.nativeControlsVersion === 1) {
+      assert.deepEqual(cell.nativeAssessment, assessNative(read(join(out, "native-controls.json")), qualification));
+      assert.notEqual(cell.nativeAssessment.sourceControl, "target-functional-failure");
+      if (cell.mode === "deployed-edge") {
+        assert.deepEqual(cell.edgeAssessment, assessNative(read(join(out, "edge-native-controls.json")), qualification));
+        assert.notEqual(cell.edgeAssessment.sourceControl, "target-functional-failure");
+      }
+    }
     assert.equal(settings.case, cell.mode); assert.equal(settings.phase, cell.phase); assert.equal(settings.review, summary.options.review);
     assert.deepEqual(JSON.parse(settings.effectiveBudgets), summary.budget);
     assert.deepEqual(settings.deployment.processes, deployment.processes.map(({ containerId, ...p }) => p));
@@ -35,6 +45,7 @@ export function verify(folder) {
     assert.deepEqual(capture, read(join(out, "capture.json")), "saved capture differs from raw observations");
     assert.equal(cell.apparatusValid, true); assert.equal(cell.parity, "passed");
     assert.equal(cell.defense, capture.defense.protection); assert.equal(cell.recovery, capture.recovery.disposition); observed++;
+    if (summary.nativeControlsVersion === 1) assert.deepEqual(cell.targetOutcome, targetOutcome(capture, cell.nativeAssessment));
   }
   const ready = groupReady(summary.cells) && !Object.keys(summary.options.verify).length && summary.cleanupFailures.length === 0;
   assert.equal(summary.groupReady, ready);

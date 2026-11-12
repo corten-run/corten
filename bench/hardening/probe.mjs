@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { writeFileSync, readFileSync, readdirSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { connect, createServer } from "node:net";
 import { connect as tlsConnect } from "node:tls";
 import { request as httpRequest } from "node:http";
@@ -81,7 +82,7 @@ export function unread(port, remotePort) {
   } catch { return { kernelBytes: { status: "unavailable", reason: "Linux /proc TCP receive queues unavailable" }, sampleAgeMs: 0, scanMs: 0 }; }
 }
 
-export async function inject({ phase, index, target, attack, form, pool, now, releaseAtMs, emit }) {
+export async function inject({ phase, index, target, attack, form, pool, now, releaseAtMs, emit, releaseSignal, onConnected }) {
   const p = payload(phase, index, target, attack, form);
   const row = { type: "attack", index, phase, startedAtMs: now(), established: false, variant: p.variant ?? phase,
     firstBytes: Buffer.byteLength(p.first), firstSha256: sha(p.first), bytesQueued: 0, writes: 0, drips: 0, backpressure: 0,
@@ -90,6 +91,11 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
   const socket = pool.socket(target);
   let opened = false, timer, dripTimer;
   const close = new Promise((resolve) => socket.once("close", resolve));
+  const wait = async (ms) => {
+    let pending;
+    try { await Promise.race([close, new Promise((resolve) => { pending = setTimeout(resolve, Math.max(0, ms)); }), ...(releaseSignal ? [releaseSignal] : [])]); }
+    finally { clearTimeout(pending); }
+  };
   const write = (bytes) => {
     if (socket.destroyed) return;
     row.bytesQueued += Buffer.byteLength(bytes); row.writes++;
@@ -108,6 +114,7 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
     clearTimeout(timer);
     if (opened) {
       row.established = true; row.connectedAtMs = now(); row.localPort = socket.localPort;
+      onConnected?.(row.localPort);
       write(p.first);
       if (p.body) {
         // Bound injector buffers: honor writable backpressure instead of queuing MiB per client.
@@ -125,10 +132,10 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
       }
       if (p.repeat) dripTimer = setInterval(() => { if (!socket.destroyed) { write(p.drip); row.drips++; } }, attack.everyMs);
       const midpoint = now() + Math.max(0, releaseAtMs - now()) / 2;
-      await Promise.race([close, sleep(midpoint - now())]);
+      await wait(midpoint - now());
       const snapshotUnread = () => { const sample = unread(row.localPort, target.port); return { atMs: now(), ...sample, nodeBytes: socket.readableLength, paused: socket.isPaused() }; };
       if (p.paused && !socket.destroyed) row.unreadMidpoint = snapshotUnread();
-      await Promise.race([close, sleep(releaseAtMs - now())]);
+      await wait(releaseAtMs - now());
       if (p.paused && !socket.destroyed) row.unreadEnd = snapshotUnread();
     }
   } finally {
@@ -140,7 +147,7 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
   return row;
 }
 
-export async function legitimate({ target, path, expected, timeoutMs, pool, now, emit, index, window }) {
+export async function legitimate({ target, path, expected, timeoutMs, pool, now, emit, index, window, timers = globalThis }) {
   const row = { type: "legitimate", index, window, path, startedAtMs: now(), ok: false };
   await new Promise((resolve) => {
     const request = target.tls ? httpsRequest : httpRequest;
@@ -157,20 +164,30 @@ export async function legitimate({ target, path, expected, timeoutMs, pool, now,
         } else row.ok = res.statusCode === 200 && body.includes("marketplace__listings") && body.includes(expected.title) && body.includes("marketplace__offers");
       });
     });
-    const timer = setTimeout(() => { row.timedOut = true; req.destroy(); }, timeoutMs);
+    const timer = timers.setTimeout(() => { row.timedOut = true; req.destroy(); }, timeoutMs);
     req.on("socket", (socket) => { pool.sockets.add(socket); socket.on("close", () => pool.sockets.delete(socket)); });
     req.on("error", (e) => { row.error = e.code ?? e.message; if (localErrors.has(e.code)) pool.errors.push(e.code); });
-    req.once("close", () => { clearTimeout(timer); resolve(); });
+    req.once("close", () => { timers.clearTimeout(timer); resolve(); });
     req.end();
   });
   row.endedAtMs = now(); row.latencyMs = row.endedAtMs - row.startedAtMs; emit(row); return row;
 }
 
-export async function controls(phase) {
-  const pool = new Connections(), peers = new Set(), observed = [];
+export async function controls(phase, { receiveDelayMs = 0 } = {}) {
+  assert.ok(Number.isFinite(receiveDelayMs) && receiveDelayMs >= 0 && receiveDelayMs <= 1000, "bounded control receiver delay required");
+  const pool = new Connections(), peers = new Set(), observed = [], releases = new Map(), receiverTimers = new Set();
+  const received = (observation) => {
+    const control = releases.get(observation.sourcePort);
+    if (control && observation.bytes >= control.bytes && (phase !== "slow-readers" || observation.responseBackpressure)) control.resolve();
+  };
   const server = createServer((socket) => {
     peers.add(socket); socket.on("close", () => peers.delete(socket)); socket.on("error", () => {});
+    if (receiveDelayMs) {
+      socket.pause();
+      const timer = setTimeout(() => { receiverTimers.delete(timer); socket.resume(); }, receiveDelayMs); receiverTimers.add(timer);
+    }
     const observation = { bytes: 0, prefix: "", sourcePort: socket.remotePort, responseBackpressure: false }; observed.push(observation);
+    received(observation);
     socket.on("data", (c) => {
       observation.bytes += c.length; observation.prefix = (observation.prefix + c.toString("latin1")).slice(0, 512);
       if (observation.prefix.startsWith("GET /api/control ") && !observation.responded) {
@@ -186,6 +203,7 @@ export async function controls(phase) {
           if (!socket.write(chunk)) { observation.responseBackpressure = true; break; }
         }
       }
+      received(observation);
     });
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -196,13 +214,24 @@ export async function controls(phase) {
     const count = phase === "oversized-requests" ? 3 : 1;
     const attack = { connectTimeoutMs: 1000, everyMs: 40, pipelined: 32, headerCount: 200, headerBytes: 128 * 1024, bodyBytes: 4 * 2 ** 20 };
     const form = { path: "/form", cookie: "", type: "application/x-www-form-urlencoded", prefix: "email=a%40b.test&target_price=1&padding=" };
-    const rows = await Promise.all(Array.from({ length: count }, (_, index) => inject({ phase, index, target, attack, form, pool, now, releaseAtMs: 350, emit: () => {} })));
-    await sleep(20);
+    // A control proves delivery, not workstation throughput in 350 ms. Its same
+    // injector releases on actual receipt (two trickles, or the entire payload),
+    // with a separate finite 5 s apparatus deadline. Native schedules are untouched.
+    const rows = await Promise.all(Array.from({ length: count }, (_, index) => {
+      const p = payload(phase, index, target, attack, form);
+      let resolve; const releaseSignal = new Promise((r) => { resolve = r; });
+      return inject({ phase, index, target, attack, form, pool, now, releaseAtMs: 5000, emit: () => {}, releaseSignal,
+        onConnected: (port) => {
+          releases.set(port, { bytes: Buffer.byteLength(p.first) + (p.body ?? 0) + (p.repeat ? 2 : 0), resolve });
+          const observation = observed.find((o) => o.sourcePort === port); if (observation) received(observation);
+        } });
+    }));
     assert.equal(pool.errors.length, 0);
     const good = await legitimate({ target, path: "/api/control", expected: { id: "control", value: 37 }, timeoutMs: 1000, pool, now, emit: () => {}, index: 0, window: "control" });
     result = { phase, passed: true, observations: observed.filter((o) => !o.prefix.startsWith("GET /api/control ")), rows, legitimate: good };
     validateControl(result);
   } finally {
+    for (const timer of receiverTimers) clearTimeout(timer);
     await pool.close(); for (const s of peers) s.destroy(); await new Promise((resolve) => server.close(resolve));
   }
   return result;
@@ -252,6 +281,19 @@ export function resource(path) {
   } catch (error) { return { unavailable: error.message }; }
 }
 
+// cgroup files may block on a busy virtualized host. Never read them on the
+// socket scheduler's event loop during a measured window.
+export async function resourceAsync(path) {
+  const startedNs = process.hrtime.bigint();
+  try {
+    const [cpu, memory, events, tasks] = await Promise.all(["cpu.stat", "memory.current", "memory.events", "cgroup.procs"].map((file) => readFile(join(path, file), "utf8")));
+    const procs = tasks.trim().split("\n").filter(Boolean);
+    assert.ok(Number.isFinite(counters(cpu).usage_usec) && Number.isFinite(Number(memory)));
+    return { cpu, memory, events, procs, cpuSeconds: counters(cpu).usage_usec / 1e6, memoryBytes: Number(memory), running: procs.length > 0,
+      oomKilled: counters(events).oom_kill > 0, startedNs: String(startedNs), endedNs: String(process.hrtime.bigint()) };
+  } catch (error) { return { unavailable: error.message, startedNs: String(startedNs), endedNs: String(process.hrtime.bigint()) }; }
+}
+
 export async function runProbe(config, emit, sample) {
   const { budget: b, phase, target, form, expected } = config; validateBudget(b);
   const controlBefore = await controls(phase); emit({ type: "control-before", ...controlBefore });
@@ -274,7 +316,7 @@ export async function runProbe(config, emit, sample) {
         good.push(await legitimate({ target, path: paths[index % paths.length], expected, timeoutMs: b.recovery.requestTimeoutMs, pool, now, emit, index, window }));
       }));
       tasks.push(at((w.startMs + w.endMs) / 2, async () => {
-        const atMs = now(); emit({ type: "resources", window, atMs, samples: await sample() });
+        const atMs = now(), samples = await sample(); emit({ type: "resources", window, atMs, collectedAtMs: now(), samples });
       }));
     }
     for (const [index, ms] of b.attack.scheduledAtMs.entries()) tasks.push(at(ms, async () => {
@@ -298,6 +340,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     await runProbe(config, (row) => {
       const line = JSON.stringify(row) + "\n"; bytes += Buffer.byteLength(line); assert.ok(bytes <= 64 * 2 ** 20, "raw recorder memory budget exhausted"); journal.push(line);
-    }, async () => Object.fromEntries(config.processes.map((p) => [p.id, resource(paths[p.id])])));
+    }, async () => Object.fromEntries(await Promise.all(config.processes.map(async (p) => [p.id, await resourceAsync(paths[p.id])]))));
   } finally { writeFileSync(output, journal.join("")); }
 }

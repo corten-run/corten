@@ -71,5 +71,19 @@ export const registryDigest = contractSha256("hardening");
 export function groupReady(cells) {
   const expected = matrix();
   assert.deepEqual(cells.map((c) => c.key), expected.map((c) => c.key), "selected group matrix was dropped or reordered");
-  return cells.every((c) => c.status === "observed" && c.parity === "passed" && c.apparatusValid === true);
+  return cells.every((c) => c.status === "observed" && c.parity === "passed" && c.apparatusValid === true
+    && c.nativeAssessment?.sourceControl !== "target-functional-failure" && c.nativeAssessment !== undefined);
+}
+
+export function nativeGroup(cells) {
+  assert.deepEqual(cells.map((c) => c.key), matrix().map((c) => c.key));
+  return apps.map((app) => {
+    const selected = cells.filter((c) => c.app === app), assessed = selected.filter((c) => c.nativeAssessment);
+    return { app, representative: "existing-native-marketplace-production-matched", alternatives: [],
+      cells: selected.length, assessed: assessed.length, observed: selected.filter((c) => c.status === "observed").length,
+      productionQualification: !assessed.length ? "not-established" : assessed.some((c) => !c.nativeAssessment.productionQualified)
+        ? "gaps-observed" : assessed.length === selected.length ? "qualified" : "partial",
+      missingProductionFeatures: [...new Set(assessed.flatMap((c) => c.nativeAssessment.missingProductionFeatures))].sort(),
+      numericComparisonQualified: selected.every((c) => c.targetOutcome?.numericComparisonQualified === true) };
+  });
 }
