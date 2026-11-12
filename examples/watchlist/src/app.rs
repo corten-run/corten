@@ -80,7 +80,7 @@ pub(crate) fn app_with(market: Market, alerts: AlertStore) -> App {
         // none, so its prices stay put.
         .task("market", move |signal| market::simulate(trading, signal))
         .client_zone();
-    if for_the_smoke() { app.area(smoke::url::area) } else { app }
+    if for_the_smoke() { app.area(|area| smoke::url::area(area).components(smoke::COMPONENTS)) } else { app }
 }
 
 /// Whether the browser test runs the app (`SMOKE_TRUSTED_TYPES=1`): it then gets its own policy

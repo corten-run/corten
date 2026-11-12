@@ -135,7 +135,7 @@ its values goes in with its quotes as they are and only `&`, `'`, `<` and `>` in
 entities. Data a script searches or sorts in the browser (a set's few hundred products) is one
 such value, a `ToJson` struct holding the list and typed by its generated declaration, and costs
 the page about its JSON's size; double-quoted, each `&quot;` added 88% to 300 products
-([design Choice 43](../design.md#choice-data-on-single-quoted)). One listener per event type on the
+([why `data-on` is single-quoted](../design.md#choice-data-on-single-quoted)). One listener per event type on the
 document runs the handlers, innermost element first, and `event.stopPropagation()` stops the
 walk as it would stop bubbling. Nothing runs per element until an event reaches it. Script
 modules are compiled into the binary, served at versioned URLs, loaded as module scripts by the

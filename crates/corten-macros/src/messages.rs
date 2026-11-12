@@ -293,7 +293,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             let js_doc =
                 format!(" {}: {}, for a handler whose JSDoc takes Message<{}>.", default.tag, display(parts), quoted.join(" | "));
             js_methods.extend(q(
-                "#[doc = __A0] #[inline] __A1 const fn __A2(self) -> ::corten::i18n::Template<__A3> { ::corten::i18n::Template::new(__A4) }",
+                "#[doc = __A0] #[inline] __A1 const fn __A2(self) -> ::corten::i18n::Template<__A3> { ::corten::i18n::Template::single_quoted(__A4) }",
                 &[
                     string(&js_doc).into(),
                     vis.clone(),
@@ -647,7 +647,7 @@ fn plural(
     );
     let js_method = q(
         "#[doc = __A0] #[inline] __A1 fn __A2(self) -> ::corten::i18n::Template<__A3> {
-            ::corten::i18n::Template::plural(self.__corten_locale(), __A4)
+            ::corten::i18n::Template::plural_single_quoted(self.__corten_locale(), __A4)
         }",
         &[
             string(&js_doc).into(),

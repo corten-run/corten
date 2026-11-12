@@ -66,7 +66,9 @@ Corten is pre-1.0, so any minor version may change the API.
   51,130, 5,302 bytes with zstd against 6,265, and Chromium, Firefox and WebKit parsed such a page
   in 10 to 23% of the time. Formats and messages a page passes to a script shrink the same way.
   The `data-on` format, the runtime and the typing are unchanged; a test or tool that matched
-  `data-on="` or `&quot;` in a page's text matches `data-on='` and `"` now
+  `data-on="` or `&quot;` in a page's text matches `data-on='` and `"` now, and a `corten` and a
+  `corten-macros` from either side of the change do not build together, since a message's text is
+  written for one attribute or the other. The data block the issue asks for is left open
   ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
 
 ### Fixed

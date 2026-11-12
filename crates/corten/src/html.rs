@@ -64,6 +64,103 @@ pub(crate) fn json_string(text: &str) -> String {
     out
 }
 
+/// Elements whose text is not markup: nothing in one is a tag until its end tag.
+const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title"];
+
+/// A start tag as `html!` writes it, read by [`start_tag`].
+// Where it starts and whether it closes itself are read by the debug builds' checks only.
+#[cfg_attr(not(any(debug_assertions, test)), allow(dead_code))]
+pub(crate) struct Tag<'a> {
+    /// Where its `<` is, and one past its `>`.
+    pub start: usize,
+    pub end: usize,
+    /// Its name, in lowercase.
+    pub name: String,
+    /// Its attributes in order: each name and its value as written, entities and all (empty for
+    /// one written without a value).
+    pub attrs: Vec<(&'a str, &'a str)>,
+    /// It ends `/>`.
+    pub self_closing: bool,
+}
+
+impl Tag<'_> {
+    /// The value of its first attribute `name` (in any case), as written.
+    pub fn attr(&self, name: &str) -> Option<&str> {
+        self.attrs.iter().find(|(attr, _)| attr.eq_ignore_ascii_case(name)).map(|(_, value)| *value)
+    }
+}
+
+/// The start tag whose `<` is at `html[start]`. A value in `"` or `'` is read to its closing
+/// quote, so what a quoted value holds is never taken for the tag's own: `data-on` is single-quoted
+/// and its JSON has `"` in it (`docs/design.md#choice-data-on-single-quoted`).
+pub(crate) fn start_tag(html: &str, start: usize) -> Tag<'_> {
+    let bytes = html.as_bytes();
+    let mut i = start + 1;
+    let name_end = html[i..].find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/').map_or(bytes.len(), |n| i + n);
+    let name = html[i..name_end].to_ascii_lowercase();
+    i = name_end;
+    let mut attrs = Vec::new();
+    let mut self_closing = false;
+    while i < bytes.len() && bytes[i] != b'>' {
+        let c = bytes[i];
+        if c.is_ascii_whitespace() {
+            i += 1;
+        } else if c == b'/' {
+            self_closing = true;
+            i += 1;
+        } else {
+            self_closing = false;
+            let attr_end = html[i..]
+                .find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '>' || c == '/')
+                .map_or(bytes.len(), |n| i + n);
+            let attr = &html[i..attr_end];
+            i = attr_end;
+            let mut value = "";
+            if bytes.get(i) == Some(&b'=') {
+                i += 1;
+                match bytes.get(i) {
+                    Some(&q @ (b'"' | b'\'')) => {
+                        let close = html[i + 1..].find(q as char).map_or(bytes.len(), |n| i + 1 + n);
+                        value = &html[i + 1..close];
+                        i = close + 1;
+                    }
+                    _ => {
+                        let end = html[i..].find(|c: char| c.is_ascii_whitespace() || c == '>').map_or(bytes.len(), |n| i + n);
+                        value = &html[i..end];
+                        i = end;
+                    }
+                }
+            }
+            attrs.push((attr, value));
+        }
+    }
+    Tag { start, end: (i + 1).min(bytes.len()), name, attrs, self_closing }
+}
+
+/// Each start tag of `html` in order, past comments, end tags, a doctype and the text of the
+/// elements whose text is not markup. Reads markup as `html!` writes it (`<` escaped in text).
+pub(crate) fn start_tags(html: &str) -> impl Iterator<Item = Tag<'_>> {
+    let mut i = 0;
+    std::iter::from_fn(move || loop {
+        let at = i + html.get(i..)?.find('<')?;
+        if html[at..].starts_with("<!--") {
+            i = html[at..].find("-->").map_or(html.len(), |n| at + n + 3);
+            continue;
+        }
+        if !html.as_bytes().get(at + 1).is_some_and(u8::is_ascii_alphabetic) {
+            i = html[at..].find('>').map_or(html.len(), |n| at + n + 1);
+            continue;
+        }
+        let tag = start_tag(html, at);
+        i = tag.end;
+        if RAW_TEXT.contains(&tag.name.as_str()) {
+            let close = format!("</{}", tag.name);
+            i = html[i..].to_ascii_lowercase().find(&close).map_or(html.len(), |n| i + n);
+        }
+        return Some(tag);
+    })
+}
+
 /// What the browser would drop from a patch (`req.patch`, a [`crate::live`] fragment): the first
 /// top-level element without an `id`, or top-level text, described for an error. The runtime
 /// replaces each top-level element by its id and ignores the rest, so either is a view that never
@@ -72,7 +169,6 @@ pub(crate) fn json_string(text: &str) -> String {
 #[cfg(any(debug_assertions, test))]
 pub(crate) fn patch_problem(html: &str) -> Option<String> {
     const VOID: &[&str] = &["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"];
-    const RAW_TEXT: &[&str] = &["script", "style", "textarea", "title"];
     let bytes = html.as_bytes();
     let mut depth = 0usize;
     let mut i = 0;
@@ -97,50 +193,12 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
             continue;
         }
         // A start tag: its name, then its attributes up to `>`.
-        let start = i;
-        i += 1;
-        let name_end = html[i..].find(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/').map_or(bytes.len(), |n| i + n);
-        let name = html[i..name_end].to_ascii_lowercase();
-        i = name_end;
-        let mut id = false;
-        let mut self_closing = false;
-        while i < bytes.len() && bytes[i] != b'>' {
-            let c = bytes[i];
-            if c.is_ascii_whitespace() {
-                i += 1;
-            } else if c == b'/' {
-                self_closing = true;
-                i += 1;
-            } else {
-                self_closing = false;
-                let attr_end = html[i..]
-                    .find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '>' || c == '/')
-                    .map_or(bytes.len(), |n| i + n);
-                let attr = &html[i..attr_end];
-                i = attr_end;
-                let mut value = "";
-                if bytes.get(i) == Some(&b'=') {
-                    i += 1;
-                    match bytes.get(i) {
-                        Some(&q @ (b'"' | b'\'')) => {
-                            let close = html[i + 1..].find(q as char).map_or(bytes.len(), |n| i + 1 + n);
-                            value = &html[i + 1..close];
-                            i = close + 1;
-                        }
-                        _ => {
-                            let end =
-                                html[i..].find(|c: char| c.is_ascii_whitespace() || c == '>').map_or(bytes.len(), |n| i + n);
-                            value = &html[i..end];
-                            i = end;
-                        }
-                    }
-                }
-                id |= attr.eq_ignore_ascii_case("id") && !value.is_empty();
-            }
-        }
-        i = (i + 1).min(bytes.len());
+        let tag = start_tag(html, i);
+        i = tag.end;
+        let id = tag.attrs.iter().any(|(attr, value)| attr.eq_ignore_ascii_case("id") && !value.is_empty());
+        let (name, self_closing) = (tag.name, tag.self_closing);
         if depth == 0 && !id {
-            let tag = &html[start..i];
+            let tag = &html[tag.start..tag.end];
             let shown: String = tag.chars().take(80).collect();
             let more = if shown.len() < tag.len() { ".." } else { "" };
             return Some(format!("{shown}{more} has no id"));
@@ -160,6 +218,35 @@ pub(crate) fn patch_problem(html: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::patch_problem;
+
+    /// A start tag's attributes are read past what a quoted value holds: `data-on`'s JSON, with
+    /// `"` in it, can look like another attribute or the tag's end, and is not one.
+    #[test]
+    fn start_tags_read_a_quoted_value_to_its_own_quote() {
+        let html = concat!(
+            r#"<!DOCTYPE html><p data-on='connect:m.f($t,["a data-vars=","b"," id=\"c\" />"])' id="p">x</p>"#,
+            r#"<!-- <i id="no"> --><script>"<b id=no>"</script><br/><input value=plain disabled></p>"#,
+        );
+        let tags: Vec<_> = super::start_tags(html).map(|tag| (tag.name, tag.attrs, tag.self_closing)).collect();
+        assert_eq!(
+            tags,
+            [
+                (
+                    "p".to_string(),
+                    vec![("data-on", r#"connect:m.f($t,["a data-vars=","b"," id=\"c\" />"])"#), ("id", "p")],
+                    false
+                ),
+                ("script".to_string(), vec![], false),
+                ("br".to_string(), vec![], true),
+                ("input".to_string(), vec![("value", "plain"), ("disabled", "")], false),
+            ]
+        );
+        let p = super::start_tags(html).next().expect("the p");
+        assert_eq!(
+            (p.attr("ID"), p.attr("data-vars"), &html[p.start..p.end]),
+            (Some("p"), None, &html[15..html.find(">x").unwrap() + 1])
+        );
+    }
 
     #[test]
     fn a_patch_names_its_first_top_level_element_without_an_id() {

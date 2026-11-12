@@ -498,6 +498,24 @@ async function run(browser) {
       watched.slice(0, 120),
     );
   }
+  // A handler is given its text and JSON arguments as the server had them, with an apostrophe
+  // (`&#39;` in the single-quoted attribute), quotes, `&` and `<` in them.
+  {
+    const quoted = await browser.newPage();
+    await quoted.goto(`${base}/smoke/quoted`);
+    const got = await quoted
+      .waitForFunction(() => document.getElementById("quoted")?.textContent || null, undefined, { timeout: 5000 })
+      .then((shown) => shown.jsonValue(), () => null);
+    const served = await (await quoted.request.get(`${base}/smoke/quoted`)).text();
+    const text = `It's "<b>" & more`;
+    const written = `It&#39;s \\"&lt;b&gt;\\" &amp; more`;
+    check(
+      "a handler gets text and JSON arguments with an apostrophe, quotes, & and < in them as the server had them",
+      got === JSON.stringify([text, [text]]) && served.includes(`data-on='connect:quoted.show($t,"${written}",["${written}"])'`),
+      `${got} ${/data-on='[^']*'/.exec(served)?.[0] ?? "no data-on"}`,
+    );
+    await quoted.close();
+  }
   // The optional views helper, using its actual built bytes under the watchlist's CSP. This
   // fixture needs no app view class: the nested deck-builder smoke also uses generated classes.
   await page.route("**/smoke-views.js", (route) => route.fulfill({ contentType: "text/javascript", body:

@@ -767,23 +767,27 @@ pub struct Template<const ARGS: u64>(Wire);
 #[derive(Clone, Copy)]
 enum Wire {
     Text(&'static str),
-    /// The locale, and the message's form per plural category (HTML-escaped JSON arrays), empty
-    /// for a category the locale does not use.
+    /// The locale, and the message's form per plural category (JSON arrays escaped for `data-on`'s
+    /// single-quoted attribute), empty for a category the locale does not use.
     Plural(&'static __private::LocaleData, [&'static str; 6]),
 }
 
+// `messages!` writes a message's text for `data-on`'s single-quoted attribute, its quotes as they
+// are (docs/design.md#choice-data-on-single-quoted). The constructors are named for that, so a
+// `corten` and a `corten-macros` from either side of the change do not build together rather than
+// write text that ends the attribute.
 impl<const ARGS: u64> Template<ARGS> {
     #[doc(hidden)]
-    pub const fn new(wire: &'static str) -> Self {
+    pub const fn single_quoted(wire: &'static str) -> Self {
         Template(Wire::Text(wire))
     }
 
     #[doc(hidden)]
-    pub const fn plural(data: &'static __private::LocaleData, forms: [&'static str; 6]) -> Self {
+    pub const fn plural_single_quoted(data: &'static __private::LocaleData, forms: [&'static str; 6]) -> Self {
         Template(Wire::Plural(data, forms))
     }
 
-    /// The text `data-on` carries, HTML-escaped.
+    /// The text `data-on` carries, escaped for its single-quoted attribute.
     pub(crate) fn write_wire(self, out: &mut String) {
         match self.0 {
             Wire::Text(wire) => out.push_str(wire),

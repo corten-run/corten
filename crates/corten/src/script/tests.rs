@@ -905,9 +905,13 @@ fn an_integer_javascript_cannot_hold_exactly_stops_debug_builds() {
 }
 
 /// What a large `ToJson` argument costs: 300 products of a set, as an inventory screen hands them
-/// to a script, in `data-on` as it is written and in the double-quoted attribute it replaced
-/// (`docs/design.md#choice-data-on-single-quoted`). Bytes raw and compressed, and render times:
+/// to a script, in `data-on` as it is written, in the double-quoted attribute it replaced, and in a
+/// `<script type="application/json">` data block a handler would name by id
+/// (`docs/design.md#choice-data-on-single-quoted`). Bytes raw and compressed, the share of the
+/// JSON's bytes that are quotes (each one was six bytes double-quoted), and render times:
 /// `cargo test --release -p corten-run --all-features --lib -- --ignored json_argument_cost --nocapture`
+/// It writes the three forms to `target/data-on-cost/`, which `bench/browser/data-on-cost.mjs`
+/// parses in the three browsers.
 #[cfg(all(feature = "json", feature = "compress"))]
 #[test]
 #[ignore]
@@ -966,6 +970,15 @@ fn json_argument_cost() {
         out.push_str(")\"></span>");
         out
     };
+    // A data block, as #1253 proposed: the JSON as it is but for `<` (`\u003c`, which reads the same
+    // inside a JSON string and keeps `</script` out), and a handler argument that names it.
+    let block = || {
+        let json = crate::json::ToJson::to_json(std::hint::black_box(products));
+        let mut out = String::from(r#"<script type="application/json" id="listing">"#);
+        out.push_str(&json.replace('<', "\\u003c"));
+        out.push_str(r#"</script><span hidden data-on='connect:shared.listed($t,"listing")'></span>"#);
+        out
+    };
     let rounds = 2000;
     let time = |f: &dyn Fn() -> String| {
         let mut runs: Vec<f64> = (0..5)
@@ -980,12 +993,24 @@ fn json_argument_cost() {
         runs.sort_by(f64::total_cmp);
         (runs[2], runs[0], runs[4])
     };
-    println!("{} products, JSON {} bytes", products.len(), json.len());
+    let quotes = json.bytes().filter(|&b| b == b'"').count();
+    println!(
+        "{} products, JSON {} bytes, {quotes} of them quotes ({:.1}%: double-quoted, each was 6 bytes, {:+.1}%)",
+        products.len(),
+        json.len(),
+        quotes as f64 * 100.0 / json.len() as f64,
+        quotes as f64 * 500.0 / json.len() as f64
+    );
     let to_json = time(&|| crate::json::ToJson::to_json(std::hint::black_box(products)));
     println!("to_json alone: {:.1} us (median of 5 runs of {rounds}, {:.1} to {:.1})", to_json.0, to_json.1, to_json.2);
-    for (label, html, cost) in
-        [("data-on, single-quoted", render(), time(&render)), ("double-quoted, as before", double(), time(&double))]
-    {
+    let pages = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/data-on-cost");
+    std::fs::create_dir_all(&pages).expect("target/data-on-cost");
+    for (label, file, html, cost) in [
+        ("data-on, single-quoted", "single.html", render(), time(&render)),
+        ("double-quoted, as before", "double.html", double(), time(&double)),
+        ("data block", "block.html", block(), time(&block)),
+    ] {
+        std::fs::write(pages.join(file), &html).expect("a page");
         let sizes: Vec<usize> =
             [Coding::Zstd, Coding::Brotli, Coding::Gzip].iter().map(|&c| encode(c, html.as_bytes(), Level::Fast).len()).collect();
         println!(
