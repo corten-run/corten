@@ -2521,6 +2521,55 @@ rules something out.
     Last checked: 2026-11-11, RFC 4647 sections 3.4 and 3.4.1 read against `negotiate` as at
     `09a9cd5d6`, and the step's cases run in its tests.
 
+43. <a id="choice-no-npm-launcher"></a>**No npm initializer: an app starts from the `corten`
+    command, installed with Cargo.** A `create-corten` package, which `npm create corten` runs,
+    would download the prebuilt `corten` of its own version and run `corten new`, so a developer
+    coming from JavaScript could start with a command they know
+    ([#872 Evaluate optional npm onboarding through a launcher for the existing Corten CLI](https://github.com/corten-run/corten/issues/872)).
+    Corten does not publish one. The app it would write is a crate that builds with Cargo, and
+    `corten dev`, `check` and `fmt` are the command's, which Cargo installs (`cargo install
+    corten-cli`, or `cargo binstall corten-cli` for the prebuilt binary), so the package would
+    take the place of `corten new` and leave every other step of getting started as it is: the
+    common case is no shorter, and installing Rust, which no npm package does, is the same either
+    way. Against that it is a release channel to keep: a Node script outside the runtime that
+    downloads an executable and runs it; a package on a second registry at the crates' version,
+    where a published version cannot be replaced, as on crates.io; a trusted publisher npm
+    registers only for a package that already exists, so its first version is published by hand;
+    a publish step after crates.io's that can fail on its own; checksums the release does not
+    publish today, since a launcher must not run a binary it has not checked; and a test of each
+    of those on every platform. Not chosen: an initializer that also installs the command, a
+    second installer for a binary Cargo already installs; and a placeholder `create-corten` that
+    only prints the Cargo line, which holds the name but is still a package and an npm account to
+    keep.
+
+    Stands on: platform (on the npm registry `create-corten`, `createcorten`, `corten` and
+    `corten-cli` have no package and the `corten-run` scope does not exist, so `npm create
+    corten` finds nothing and the name is open to anyone; npm sets up a trusted publisher, with
+    `npm trust` or on the package's settings page, only for a package already on the registry);
+    reasoned (`release.yml` attaches five archives, `corten-<target>.tgz` or `.zip`, and no
+    checksum file, signature or attestation of its own, so the only digests are the ones GitHub
+    records for each upload, served from where the archive is); reasoned (an app `corten new`
+    writes is an ordinary crate, and its other commands are the `corten` command's, so an npm
+    initializer moves `corten new` and leaves the getting-started guide's other steps on Cargo);
+    bet (what stops a developer who knows JavaScript from trying Corten is installing Rust, which
+    an npm package does not do, rather than the `cargo install` line, and the issue proposing the
+    package came from the project, not from someone who stopped there); value (a second release
+    channel and a script that runs a downloaded binary have to earn their place, Values 6, and a
+    channel that leaves the common case as long does not make it shorter, Values 7, while
+    developer convenience is last in the values' order).
+
+    Revisit when: an app made by `corten new` can be run, reloaded and checked with no command
+    Cargo installs, so an initializer would be the whole of getting started; Corten publishes
+    something on npm for another reason, so the registry, its publisher and its recovery are
+    already kept; the release publishes checksums or attestations for its archives for another
+    reason; someone outside the project asks for `npm create corten` or reports giving up at the
+    `cargo install` line; or another account publishes `create-corten`, when a placeholder that
+    prints the Cargo line is weighed again.
+
+    Last checked: 2026-11-12, the npm registry (`npm view` of the four names, the scope's package
+    list) and npm's trusted-publishing and `npm trust` documentation (npm 11.21.2), read at
+    `684a5395f`; 2026-11-12, the v0.2.0 release's assets against `release.yml` at `684a5395f`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
