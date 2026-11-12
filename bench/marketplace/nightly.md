@@ -115,7 +115,11 @@ node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --c
 
 Each droplet is a dedicated c-8 with the same pinning, passes, windows and rate. The launch
 checks the account's droplet limit before it writes `split.json`, and `--collect` needs no
-`--droplets`: it reads the plan. Exit codes are as above, for the round: 3 while any droplet
+`--droplets`: it reads the plan. A running launch holds `launch.lock` (its pid) in the state
+directory, and collect refuses while that pid runs; as with collect.lock, check the exact
+process, and never remove a live lock. A lock whose pid is not running is a killed launch:
+collect removes it and collects the stopped launch. The launcher ignores SIGHUP, so a closed
+terminal does not stop it. Exit codes are as above, for the round: 3 while any droplet
 runs (finished droplets are already collected and deleted), 2 for a collection error on any
 droplet or a leftover `corten-marketplace-rN-d*` droplet (reported with its delete command, never
 deleted), 1 when a droplet did not finish its part or the parts do not merge, 0 when every
@@ -129,7 +133,8 @@ droplet's `d<k>/` alone, as results/rN. A launch stopped by a signal says what e
 left doing, and saves it as `launch-stopped.txt` in the state directory; stop a started round
 with the `ssh` command it prints, then collect. A droplet whose launch stopped before
 `systemctl start` (`creating` or `preparing`) never ran its round: the launch and collect both
-print its `doctl` delete command; run it. A `starting` droplet is collected, never deleted on a
+print what to delete (collect finds a droplet whose create returned no id by name and run tag,
+and checks its ownership tags before printing a `doctl` delete command); run it. A `starting` droplet is collected, never deleted on a
 guess. A split round compares only with a round split the same way, droplet by droplet, so
 droplets that land on different CPU models refuse comparison with a baseline whose droplets
 differ (see the README); its report's Between droplets section flags stages where axum + Maud's

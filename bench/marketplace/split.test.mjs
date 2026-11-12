@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,7 +13,7 @@ import { leftoverDroplets, nightly, parseDropletArgs, remoteFiles, safeArchive, 
 import { report, validateSummary } from "./report.mjs";
 import { compare } from "./compare.mjs";
 import { betweenDroplets, mergeParts } from "./split.mjs";
-import { splitController, splitDryRun } from "./droplet.mjs";
+import { launcherSignals, processRuns, splitController, splitDryRun } from "./droplet.mjs";
 
 const commit = "a".repeat(40);
 // A whole round shaped like run.mjs writes it: app i serves 1000 + 37i + pass requests per phase.
@@ -312,6 +312,7 @@ test("a split launch plans once, creates every droplet before starting any, and 
   const f = fleet(t);
   const { value: plan } = await quiet(t, () => f.task(2).launch());
   assert.equal(plan.commit, commit);
+  assert.equal(existsSync(join(f.local, "launch.lock")), false, "a finished launch removes its lock");
   assert.deepEqual(validatePlan(JSON.parse(readFileSync(join(f.local, "split.json"), "utf8")), "r17"), plan);
   const creates = f.calls.map((c, i) => [c, i]).filter(([c]) => c[0] === "doctl" && c[3] === "create").map(([, i]) => i);
   const starts = f.calls.map((c, i) => [c, i]).filter(([c]) => c[0] === "ssh" && c.at(-1).includes("systemctl start")).map(([, i]) => i);
@@ -568,6 +569,7 @@ test("a signal while waiting for SSH stops the launch before the next try, with 
   const launch = splitController({ round: "r17", stateDir: f.local, sshKey: "42", droplets: 2 }, { run, repo: f.repo, sleep: async () => {}, interrupted: () => signal });
   const { value: error } = await quiet(t, () => launch.launch().catch((e) => e));
   assert.match(error.message, /^SIGINT received while waiting for SSH; droplet preserved, its round not started/);
+  assert.equal(existsSync(join(f.local, "launch.lock")), false, "a stopped launch removes its lock");
   assert.equal(tries, 1);
   assert.ok(!f.calls.some((c) => c[0] === "ssh" && c.at(-1).includes("systemctl")));
   for (const k of [1, 2]) {
@@ -616,4 +618,71 @@ test("the command line's --plan calls no git, doctl or ssh: it runs with only no
   assert.equal(one.status, 0, one.stderr);
   assert.deepEqual(Object.keys(JSON.parse(one.stdout).files), ["job.sh", "pack.sh", "corten-marketplace-r17.service"]);
   assert.equal(existsSync(stateDir), false, "plan mode writes no state");
+});
+
+test("collect refuses while a live launch holds launch.lock, and takes over a stale one", async (t) => {
+  const f = fleet(t);
+  await quiet(t, () => f.task(2).launch());
+  const lock = join(f.local, "launch.lock");
+  // A live launch: this test's own process.
+  writeFileSync(lock, JSON.stringify({ pid: process.pid, at: "2026-01-01T00:00:00.000Z" }));
+  const calls = f.calls.length;
+  await assert.rejects(f.task().collect(), new RegExp(`the launch of r17 \\(pid ${process.pid}, .*launch\\.lock\\) is still running: collect after it ends`));
+  assert.equal(f.calls.length, calls, "collect calls nothing while a launch runs");
+  assert.ok(existsSync(lock), "a live lock is never removed");
+  await assert.rejects(f.task(2).launch(), /launch\.lock exists: another launch of r17 holds it/);
+  assert.ok(existsSync(lock), "a refused launch leaves another's lock alone");
+
+  // A stale lock: its process has exited, so the launch was killed; collect goes ahead.
+  const gone = spawnSync(process.execPath, ["-e", ""]).pid;
+  assert.equal(processRuns(gone), false);
+  writeFileSync(lock, JSON.stringify({ pid: gone, at: "2026-01-01T00:00:00.000Z" }));
+  const result = await quiet(t, () => f.task().collect());
+  assert.equal(result.value, 3, result.out);
+  assert.match(result.out, new RegExp(`launch\\.lock is stale: pid ${gone} is not running, so its launch was killed; removing the lock and collecting the stopped launch`));
+  assert.equal(existsSync(lock), false);
+});
+
+test("a droplet list that fails is that part's collection error, and the stop commands still print", async (t) => {
+  // d1 runs its round; d2 never reached systemctl start.
+  const f = fleet(t);
+  let starts = 0;
+  const run = (binary, args) => { const r = f.run(binary, args); if (binary === "ssh" && args.at(-1).includes("systemctl start")) starts++; return r; };
+  const launch = splitController({ round: "r17", stateDir: f.local, sshKey: "42", droplets: 2 }, { run, repo: f.repo, sleep: async () => {}, interrupted: () => starts ? "SIGINT" : null });
+  await quiet(t, () => launch.launch().catch((e) => e));
+  const flaky = (fail) => {
+    let lists = 0;
+    return (binary, args) => { if (binary === "doctl" && args[2] === "list" && fail.includes(++lists)) throw new Error("doctl: connection reset"); return f.run(binary, args); };
+  };
+  const collect = (fail) => quiet(t, () => splitController({ round: "r17", stateDir: f.local, sshKey: "42" }, { run: flaky(fail), repo: f.repo, sleep: async () => {} }).collect());
+  // d1's collect lists once; the second list is d2's, the third the leftover check.
+  const part = await collect([2]);
+  assert.equal(part.value, 2, part.out);
+  assert.match(part.out, /r17-d2: collection error; its droplet and evidence are preserved: doctl: connection reset/);
+  assert.match(part.out, /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh .*\/d1\/known_hosts" root@192\.0\.2\.1 /);
+  const leftovers = await collect([3]);
+  assert.equal(leftovers.value, 2, leftovers.out);
+  assert.match(leftovers.out, /the droplet list failed, so leftover droplets are unknown: doctl: connection reset/);
+  assert.match(leftovers.out, /r17-d2: droplet 102 was created but never started its round/);
+  assert.match(leftovers.out, /Stop each running droplet so it stops billing:\nssh /);
+
+  // A droplet listed under d2's id but with another name and no tags is not deleted.
+  f.drop(102); f.add({ id: 102, name: "someone-else", tags: [] });
+  const other = await collect([]);
+  assert.equal(other.value, 2, other.out);
+  assert.match(other.out, /r17-d2: droplet 102 is listed for this part but lacks its name or ownership tags; not ours to delete: check it/);
+  assert.doesNotMatch(other.out, /delete 102/);
+});
+
+test("a hangup does not stop the split launcher, as it would a plain node process", { skip: process.platform === "win32" && "Windows has no SIGHUP" }, async () => {
+  const url = new URL("./droplet.mjs", import.meta.url).href;
+  const child = (install) => new Promise((resolve, reject) => {
+    const code = `${install ? `(await import(${JSON.stringify(url)})).launcherSignals();` : ""} console.log("ready"); setTimeout(() => console.log("alive"), 500);`;
+    const p = spawn(process.execPath, ["--input-type=module", "-e", code], { stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    p.stdout.on("data", (d) => { out += d; if (out === "ready\n") p.kill("SIGHUP"); });
+    p.on("error", reject); p.on("exit", (status, signal) => resolve({ status, signal, out }));
+  });
+  assert.deepEqual(await child(false), { status: null, signal: "SIGHUP", out: "ready\n" }, "node dies on a hangup by default");
+  assert.deepEqual(await child(true), { status: 0, signal: null, out: "ready\nalive\n" });
 });

@@ -10,7 +10,8 @@ Corten is pre-1.0, so any minor version may change the API.
 - A nightly `bench/marketplace` round can be split across droplets started together:
   `droplet.mjs rN --droplets <n> --detach` checks the checkout, existing droplets and the
   account's droplet limit once, writes the plan (commit and each droplet's apps) and
-  creates every droplet before starting any. Each runs Corten and axum + Maud beside a
+  creates every droplet before starting any, holding `launch.lock` so collect waits for a live
+  launch and a hangup does not stop it. Each runs Corten and axum + Maud beside a
   round-robin share of the other apps (`run.mjs --part k/n`) and gates its own apps before its own
   load. `--collect` collects and deletes each droplet as it finishes, reports any leftover
   droplet, prints the command that stops each running droplet once one that never started, is partial

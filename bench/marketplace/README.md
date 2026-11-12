@@ -116,12 +116,17 @@ droplet limit (`doctl account get`) once, then writes `split.json` (commit and e
 apps) and refuses another launch from that state directory.
 It creates every droplet before starting any round, so the rounds start within minutes of each
 other; each droplet has its own `d<k>/` state, known_hosts and evidence. Ctrl-C, SIGTERM or
-Ctrl-Break stops the launch between steps (SIGHUP is left alone, so `nohup` works), and the
+Ctrl-Break stops the launch between steps, and the
 launcher then says what each droplet is left doing: a started round keeps running until stopped
 (it prints the `ssh` command), a droplet created but not started is billed until deleted (it
 prints the `doctl` command). It also saves that text as `launch-stopped.txt` in the state
-directory, so a closed stdout or stderr does not lose it; closing the terminal without `nohup`
-still ends the launcher at once, so run it under `nohup` or keep the terminal open. Each droplet's state says `starting` from just
+directory, so a closed stdout or stderr does not lose it. A hangup does not stop the launcher: Node resets
+an inherited SIGHUP ignore, so `nohup` alone would not keep it running, and the launcher ignores
+SIGHUP itself; closing its terminal lets the launch carry on. While it runs, the launch holds
+`launch.lock` (its pid) in the state directory and removes it when it ends, however it ends.
+`--collect` refuses while that pid runs, since a live launch may be seconds from
+`systemctl start`; if the pid is gone, the launch was killed, and collect removes the stale lock
+and collects the stopped launch. Each droplet's state says `starting` from just
 before `systemctl start` until the launch has seen the unit running; collect leaves it so, since
 a loaded unit does not prove the round ran, and collects it like any other.
 
@@ -132,8 +137,9 @@ included) or for a leftover droplet named `corten-marketplace-rN-d*` that no liv
 which is reported with its delete command, never deleted. A droplet whose launch stopped before
 `systemctl start` (state `creating` or `preparing`) never ran its round: `starting` is saved
 just before that command and the unit has no `[Install]` section, so nothing else starts it.
-Collect prints its delete command, the same one the stopped launch printed, and exits 2 until it
-is gone. A `starting` droplet is collected like any other, refusing a missing or unloaded unit;
+Collect finds it by id, or by name and run tag when its create returned no id (where the
+stopped launch said to look for a droplet with that name and tag), checks its name and ownership
+tags as for any delete, prints its `doctl` delete command and exits 2 until it is gone. A `starting` droplet is collected like any other, refusing a missing or unloaded unit;
 if its droplet is gone, it may have run and is missing. Whenever a droplet never started, is
 partial or is missing, the round cannot merge, so collect prints the `ssh` command that stops
 each droplet still running, whatever the exit code. Exit 1 means a droplet did not finish its

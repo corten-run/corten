@@ -167,6 +167,25 @@ export function controller(options, { run = command, sleep = (ms) => new Promise
 }
 
 /**
+ * Whether process pid is running: false only when the system says no such process exists, so a
+ * process we may not signal counts as running.
+ * @param {number} pid
+ */
+export function processRuns(pid) {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code !== "ESRCH"; }
+}
+/**
+ * The split launcher's signals: Ctrl-C, SIGTERM and Ctrl-Break stop a launch between steps (the
+ * returned function names the first received). A hangup is ignored, so the launch carries on
+ * when its terminal closes; Node resets an inherited SIGHUP ignore, so nohup alone does not.
+ */
+export function launcherSignals() {
+  let signal = null;
+  for (const name of ["SIGINT", "SIGTERM", "SIGBREAK"]) process.on(name, () => { signal ??= name; });
+  process.on("SIGHUP", () => {});
+  return () => signal;
+}
+/**
  * A round split across droplets started together (#816). The state directory holds split.json,
  * the plan written once before any droplet (the measured commit, decided here for every droplet,
  * and each droplet's apps), and d<k>/ with each droplet's launcher state, known_hosts and
@@ -192,6 +211,9 @@ export function splitController(options, deps = {}) {
   };
   const name = (p) => `${options.round}-d${p.index}`;
   const collectCommand = `node bench/marketplace/droplet.mjs ${options.round} --state-dir "${local}" --collect`;
+  // A launch holds launch.lock with its pid until it ends, by any path, so collect can tell a
+  // stopped launch from a live one.
+  const lockPath = join(local, "launch.lock");
   const stop = (p, s) => `ssh -o "UserKnownHostsFile=${join(partDir(p.index), "known_hosts").replaceAll("\\", "/")}" root@${s.ip} systemctl stop ${s.unit}`;
   // What a stopped launch leaves on each droplet, said plainly, with the command for each.
   function stranded() {
@@ -229,89 +251,114 @@ export function splitController(options, deps = {}) {
     mkdirSync(dirname(folder), { recursive: true }); renameSync(temp, folder);
     return folder;
   }
-  return {
-    get plan() { return plan; },
-    async launch() {
-      if (plan) throw new Error(`${options.round} is already planned in ${planPath} at commit ${plan.commit}; never launch a split round twice: collect it (${collectCommand})`);
-      const commit = run("git", ["rev-parse", "HEAD"]).stdout.trim();
-      assert.match(commit, /^[a-f0-9]{40}$/);
-      assert.equal(run("git", ["status", "--porcelain"]).stdout.trim(), "", "launch requires clean measured commit");
-      const results = join(repo, "bench", "marketplace", "results", options.round);
-      assert.ok(!existsSync(results), `${results} exists; never reuse a result folder`);
-      for (let k = 1; k <= options.droplets; k++) assert.ok(!existsSync(partDir(k)), `${partDir(k)} exists; use a new state directory for ${options.round}`);
-      const droplets = list();
-      assert.ok(!benchTagged(droplets), "a nightly benchmark droplet already exists; do not overlap nightly rounds");
-      const account = JSON.parse(run("doctl", ["account", "get", "--output", "json"]).stdout);
-      const limit = (Array.isArray(account) ? account[0] : account)?.droplet_limit;
-      assert.ok(Number.isSafeInteger(limit) && limit > 0, "doctl account get gave no droplet_limit");
-      assert.ok(droplets.length + options.droplets <= limit, `the account's droplet limit is ${limit} and ${droplets.length} droplets exist: no room for ${options.droplets} more`);
-      plan = splitPlan(options.round, options.droplets, commit);
-      writeFileSync(planPath, JSON.stringify(plan, null, 2) + "\n", { flag: "wx" });
-      console.log(`split ${options.round} across ${plan.droplets} droplets, commit ${commit}`);
-      for (const p of plan.parts) console.log(`${name(p)}: ${p.apps.join(", ")}`);
-      const tasks = plan.parts.map(task);
-      try {
-        // Every droplet is created before any round starts, so the rounds start together.
-        for (const step of ["create", "start"]) for (const [i, t] of tasks.entries()) {
-          const signal = interrupted();
-          if (signal) throw new Error(`${signal} received`);
-          console.log(`${name(plan.parts[i])}: ${step}`);
-          await t[step]();
-        }
-      } catch (e) {
-        let left;
-        try { left = stranded(); } catch (s) { left = `What each droplet is left doing is unknown: ${s.message}. Collect the round: ${collectCommand}`; }
-        // Saved too, so a closed stdout or stderr cannot lose what each droplet is left doing.
-        const saved = join(local, "launch-stopped.txt");
-        try { writeFileSync(saved, `${e.message}\n${left}\n`); left += `\nThis is also saved in ${saved}.`; } catch { /* the error still says it */ }
-        throw new Error(`${e.message}\n${left}`, { cause: e });
+  async function launchLocked() {
+    if (plan) throw new Error(`${options.round} is already planned in ${planPath} at commit ${plan.commit}; never launch a split round twice: collect it (${collectCommand})`);
+    const commit = run("git", ["rev-parse", "HEAD"]).stdout.trim();
+    assert.match(commit, /^[a-f0-9]{40}$/);
+    assert.equal(run("git", ["status", "--porcelain"]).stdout.trim(), "", "launch requires clean measured commit");
+    const results = join(repo, "bench", "marketplace", "results", options.round);
+    assert.ok(!existsSync(results), `${results} exists; never reuse a result folder`);
+    for (let k = 1; k <= options.droplets; k++) assert.ok(!existsSync(partDir(k)), `${partDir(k)} exists; use a new state directory for ${options.round}`);
+    const droplets = list();
+    assert.ok(!benchTagged(droplets), "a nightly benchmark droplet already exists; do not overlap nightly rounds");
+    const account = JSON.parse(run("doctl", ["account", "get", "--output", "json"]).stdout);
+    const limit = (Array.isArray(account) ? account[0] : account)?.droplet_limit;
+    assert.ok(Number.isSafeInteger(limit) && limit > 0, "doctl account get gave no droplet_limit");
+    assert.ok(droplets.length + options.droplets <= limit, `the account's droplet limit is ${limit} and ${droplets.length} droplets exist: no room for ${options.droplets} more`);
+    plan = splitPlan(options.round, options.droplets, commit);
+    writeFileSync(planPath, JSON.stringify(plan, null, 2) + "\n", { flag: "wx" });
+    console.log(`split ${options.round} across ${plan.droplets} droplets, commit ${commit}`);
+    for (const p of plan.parts) console.log(`${name(p)}: ${p.apps.join(", ")}`);
+    const tasks = plan.parts.map(task);
+    try {
+      // Every droplet is created before any round starts, so the rounds start together.
+      for (const step of ["create", "start"]) for (const [i, t] of tasks.entries()) {
+        const signal = interrupted();
+        if (signal) throw new Error(`${signal} received`);
+        console.log(`${name(plan.parts[i])}: ${step}`);
+        await t[step]();
       }
-      console.log(`running ${options.round} on ${plan.droplets} droplets, each by itself; collect with: ${collectCommand}`);
-      return plan;
-    },
-    async collect() {
-      assert.ok(plan, `no split plan in ${planPath}`);
-      const codes = [], neverStarted = new Set();
-      for (const p of plan.parts) {
-        const s = stateOf(p), signal = interrupted();
-        console.log(`== ${name(p)} ==`);
-        if (signal) { console.error(`${signal} received: ${name(p)} not collected`); codes.push(2); continue; }
-        if (!s) { console.log(`${name(p)} was never created: the launch stopped before it`); codes.push("missing"); continue; }
-        const ours = (d) => s.id ? String(d.id) === s.id : d.name === s.name && d.tags?.includes(s.tag);
-        // creating or preparing: the launch stopped before systemctl start (starting is saved just
-        // before it, and the unit has no [Install], so nothing else starts it): it never started.
+    } catch (e) {
+      let left;
+      try { left = stranded(); } catch (s) { left = `What each droplet is left doing is unknown: ${s.message}. Collect the round: ${collectCommand}`; }
+      // Saved too, so a closed stdout or stderr cannot lose what each droplet is left doing.
+      const saved = join(local, "launch-stopped.txt");
+      try { writeFileSync(saved, `${e.message}\n${left}\n`); left += `\nThis is also saved in ${saved}.`; } catch { /* the error still says it */ }
+      throw new Error(`${e.message}\n${left}`, { cause: e });
+    }
+    console.log(`running ${options.round} on ${plan.droplets} droplets, each by itself; collect with: ${collectCommand}`);
+    return plan;
+  }
+  async function collectUnlocked() {
+    const codes = [], neverStarted = new Set();
+    for (const p of plan.parts) {
+      const s = stateOf(p), signal = interrupted();
+      console.log(`== ${name(p)} ==`);
+      if (signal) { console.error(`${signal} received: ${name(p)} not collected`); codes.push(2); continue; }
+      if (!s) { console.log(`${name(p)} was never created: the launch stopped before it`); codes.push("missing"); continue; }
+      // Listed under this part's id, or with no id its name and run tag; owned, as ownedDroplet
+      // checks, only with its name and every ownership tag too.
+      const listed = (d) => s.id ? String(d.id) === s.id : d.name === s.name && d.tags?.includes(s.tag);
+      const owned = (d) => listed(d) && d.name === s.name && ["corten-bench", "corten-marketplace", s.tag].every((tag) => d.tags?.includes(tag));
+      try {
+        // creating or preparing: the launch stopped before systemctl start (starting is saved
+        // just before it, and the unit has no [Install], so nothing else starts it).
         if (["creating", "preparing"].includes(s.status)) {
           neverStarted.add(p.index);
-          const found = list().filter(ours);
-          for (const d of found) console.error(`${name(p)}: droplet ${d.id} was created but never started its round (its launch stopped before systemctl start); nothing to collect. Delete it: doctl compute droplet delete ${d.id} --force`);
+          const found = list().filter(listed);
+          for (const d of found) {
+            if (owned(d)) console.error(`${name(p)}: droplet ${d.id} was created but never started its round (its launch stopped before systemctl start); nothing to collect. Delete it: doctl compute droplet delete ${d.id} --force`);
+            else console.error(`${name(p)}: droplet ${d.id} is listed for this part but lacks its name or ownership tags; not ours to delete: check it`);
+          }
           if (!found.length) console.log(`${name(p)} never started its round and has no droplet`);
           codes.push(found.length ? 2 : "missing"); continue;
         }
-        if (s.status === "starting" && !list().some(ours)) {
+        if (s.status === "starting" && !list().some(listed)) {
           console.log(`${name(p)} may have started its round, but its droplet is gone; nothing to collect`); codes.push("missing"); continue;
         }
         // Its controller collects it, and refuses a missing or unloaded unit.
-        try { codes.push(await task(p).collect()); }
-        catch (e) { console.error(`${name(p)}: collection error; its droplet and evidence are preserved: ${e.message}`); codes.push(2); }
+        codes.push(await task(p).collect());
+      } catch (e) { console.error(`${name(p)}: collection error; its droplet and evidence are preserved: ${e.message}`); codes.push(2); }
+    }
+    const states = plan.parts.map(stateOf);
+    let leftovers = [], unlisted = 0;
+    try { leftovers = leftoverDroplets(list(), plan, states); }
+    catch (e) { unlisted = 1; console.error(`the droplet list failed, so leftover droplets are unknown: ${e.message}`); }
+    for (const d of leftovers) console.error(`leftover droplet ${d.id} (${d.name}) belongs to no live part of ${options.round}; check it is not another run's, then delete it: doctl compute droplet delete ${d.id} --force`);
+    let code = splitExit(codes, leftovers.length + unlisted);
+    const which = (...want) => plan.parts.filter((_, i) => want.includes(codes[i])).map(name).join(", ");
+    // A part that never started, is partial or is missing means the round cannot merge, so the
+    // droplets still running only cost money: say how to stop each, whatever the exit code.
+    const doomed = plan.parts.filter((p, i) => neverStarted.has(p.index) || [1, "missing"].includes(codes[i])).map(name);
+    const stops = plan.parts.flatMap((p, i) => codes[i] === 3 ? [stop(p, states[i])] : []);
+    if (doomed.length && stops.length) console.log(`${options.round} cannot merge: ${doomed.join(", ")} will not complete it. Stop each running droplet so it stops billing:\n${stops.join("\n")}\nThen run ${collectCommand} again: it collects their partial evidence and deletes them.`);
+    if (code === 0) {
+      try { console.log(`all done: ${options.round} merged from ${plan.droplets} droplets into ${merge(states)}; every droplet's deletion is confirmed`); }
+      catch (e) { console.error(`partial: every droplet finished and was deleted, but they do not merge into one round: ${e.message}`); code = 1; }
+    } else if (code === 3) {
+      if (!doomed.length) console.log(`${options.round} is not finished: ${which(3)} still running. Finished droplets are collected and deleted; run ${collectCommand} again later.`);
+    } else if (code === 1) console.log(`${options.round} is partial: ${which(1, "missing")} did not finish its part. Every droplet's deletion is confirmed; there is no merged round.`);
+    else console.error(`collection error${which(2) ? ` on ${which(2)}` : ""}${leftovers.length ? `, ${leftovers.length} leftover droplet(s)` : ""}: droplets that still exist are preserved and still billed. Fix the error and run ${collectCommand} again; never relaunch ${options.round}.`);
+    return code;
+  }
+  return {
+    get plan() { return plan; },
+    async launch() {
+      try { writeFileSync(lockPath, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }), { flag: "wx" }); }
+      catch (e) { throw new Error(e.code === "EEXIST" ? `${lockPath} exists: another launch of ${options.round} holds it, or one ended without removing it; never launch twice` : e.message); }
+      try { return await launchLocked(); } finally { unlinkSync(lockPath); }
+    },
+    async collect() {
+      assert.ok(plan, `no split plan in ${planPath}`);
+      if (existsSync(lockPath)) {
+        const lock = JSON.parse(readFileSync(lockPath, "utf8"));
+        // A live launch may be seconds from systemctl start: what it leaves is not known yet.
+        assert.ok(!processRuns(lock.pid), `the launch of ${options.round} (pid ${lock.pid}, ${lockPath}) is still running: collect after it ends. If pid ${lock.pid} is not that launch, check the exact process, then remove the lock by hand`);
+        // Its process is gone, so the launch was killed before it could remove the lock.
+        console.log(`${lockPath} is stale: pid ${lock.pid} is not running, so its launch was killed; removing the lock and collecting the stopped launch`);
+        unlinkSync(lockPath);
       }
-      const states = plan.parts.map(stateOf);
-      const leftovers = leftoverDroplets(list(), plan, states);
-      for (const d of leftovers) console.error(`leftover droplet ${d.id} (${d.name}) belongs to no live part of ${options.round}; check it is not another run's, then delete it: doctl compute droplet delete ${d.id} --force`);
-      let code = splitExit(codes, leftovers.length);
-      const which = (...want) => plan.parts.filter((_, i) => want.includes(codes[i])).map(name).join(", ");
-      // A part that never started, is partial or is missing means the round cannot merge, so the
-      // droplets still running only cost money: say how to stop each, whatever the exit code.
-      const doomed = plan.parts.filter((p, i) => neverStarted.has(p.index) || [1, "missing"].includes(codes[i])).map(name);
-      const stops = plan.parts.flatMap((p, i) => codes[i] === 3 ? [stop(p, states[i])] : []);
-      if (doomed.length && stops.length) console.log(`${options.round} cannot merge: ${doomed.join(", ")} will not complete it. Stop each running droplet so it stops billing:\n${stops.join("\n")}\nThen run ${collectCommand} again: it collects their partial evidence and deletes them.`);
-      if (code === 0) {
-        try { console.log(`all done: ${options.round} merged from ${plan.droplets} droplets into ${merge(states)}; every droplet's deletion is confirmed`); }
-        catch (e) { console.error(`partial: every droplet finished and was deleted, but they do not merge into one round: ${e.message}`); code = 1; }
-      } else if (code === 3) {
-        if (!doomed.length) console.log(`${options.round} is not finished: ${which(3)} still running. Finished droplets are collected and deleted; run ${collectCommand} again later.`);
-      } else if (code === 1) console.log(`${options.round} is partial: ${which(1, "missing")} did not finish its part. Every droplet's deletion is confirmed; there is no merged round.`);
-      else console.error(`collection error${which(2) ? ` on ${which(2)}` : ""}${leftovers.length ? `, ${leftovers.length} leftover droplet(s)` : ""}: droplets that still exist are preserved and still billed. Fix the error and run ${collectCommand} again; never relaunch ${options.round}.`);
-      return code;
+      return collectUnlocked();
     },
   };
 }
@@ -336,14 +383,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const s = { workload: "marketplace-v2", round: options.round, name: `corten-marketplace-${options.round}`, unit: `corten-marketplace-${options.round}.service`, tag: `corten-marketplace-run-${"0".repeat(16)}`, commit: "0".repeat(40), options: nightly };
       console.log(JSON.stringify({ options, measurements: nightly, files: remoteFiles(s) }, null, 2));
     } else if (split) {
-      // The split launcher alone knows every droplet: a closed stdout or stderr must not kill it
-      // mid-launch (a stopped launch also saves what each droplet is left doing in the state
-      // directory), and Ctrl-C, SIGTERM or Ctrl-Break stops it between steps. SIGHUP keeps its
-      // default, so nohup still works.
+      // The split launcher alone knows every droplet: a closed stdout or stderr or a hangup must
+      // not kill it mid-launch (a stopped launch also saves what each droplet is left doing in the
+      // state directory), and Ctrl-C, SIGTERM or Ctrl-Break stops it between steps.
       for (const stream of [process.stdout, process.stderr]) stream.on("error", () => {});
-      let signal = null;
-      for (const name of ["SIGINT", "SIGTERM", "SIGBREAK"]) process.on(name, () => { signal ??= name; });
-      const task = splitController(options, { interrupted: () => signal });
+      const task = splitController(options, { interrupted: launcherSignals() });
       if (options.collect) process.exitCode = await task.collect(); else await task.launch();
     } else {
       const task = controller(options);
