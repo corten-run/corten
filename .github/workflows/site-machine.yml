@@ -1,0 +1,141 @@
+# Keeps the machine that serves examples/corten-site as examples/corten-site/deploy/infra says
+# it is (OpenTofu on DigitalOcean; examples/corten-site/deploy/README.md): a pull request's
+# configuration is checked, and each change on `main` is planned and applied. A machine made
+# here sets itself up as it starts; when it answers, the Site workflow is run to ship it the
+# site. Applies nothing until the repository variable SITE_STATE_BUCKET names where the state
+# is kept.
+name: Site machine
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - examples/corten-site/deploy/infra/**
+      - examples/corten-site/deploy/provision.sh
+      - examples/corten-site/deploy/release.sh
+      - examples/corten-site/deploy/nginx.conf
+      - examples/corten-site/deploy/corten-site.service
+      - .github/workflows/site-machine.yml
+  pull_request:
+    paths:
+      - examples/corten-site/deploy/infra/**
+      - examples/corten-site/deploy/provision.sh
+      - examples/corten-site/deploy/release.sh
+      - examples/corten-site/deploy/nginx.conf
+      - examples/corten-site/deploy/corten-site.service
+      - .github/workflows/site-machine.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TOFU_VERSION: 1.13.9
+  TF_IN_AUTOMATION: "1"
+
+defaults:
+  run:
+    working-directory: examples/corten-site/deploy/infra
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+      - run: tofu fmt -check -diff
+      # No backend, so no key: the providers are the ones the lock file names.
+      - run: tofu init -input=false -backend=false -lockfile=readonly
+      - run: tofu validate
+      # A script that parses but does not mean what it says is found here, not on the machine.
+      - name: The scripts the machine, a deploy and an operator run
+        run: shellcheck --severity=warning boot.sh bootstrap.sh ../provision.sh ../release.sh
+
+  apply:
+    needs: check
+    # Only main is applied, whatever ref the workflow is run from by hand.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.SITE_STATE_BUCKET != ''
+    runs-on: ubuntu-24.04
+    # The keys are this environment's secrets, and its deployment branch rule is main
+    # (bootstrap.sh), so no other branch's workflow can read them.
+    environment: site-machine
+    # One apply at a time, and a running one is never cancelled: nothing else locks the state.
+    concurrency:
+      group: site-machine
+      cancel-in-progress: false
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      # To run the Site workflow once a new machine answers.
+      actions: write
+    env:
+      DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+      # Spaces speaks S3's protocol: these are a Spaces key, not an AWS one.
+      AWS_ACCESS_KEY_ID: ${{ secrets.SPACES_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SPACES_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL_S3: ${{ vars.SITE_STATE_ENDPOINT }}
+      AWS_REGION: us-east-1
+      # Spaces does not take the checksums newer S3 clients add by default.
+      AWS_REQUEST_CHECKSUM_CALCULATION: when_required
+      AWS_RESPONSE_CHECKSUM_VALIDATION: when_required
+      STATE_BUCKET: ${{ vars.SITE_STATE_BUCKET }}
+      SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
+      TF_VAR_domain: ${{ vars.SITE_DOMAIN }}
+      TF_VAR_zone: ${{ vars.SITE_ZONE }}
+      TF_VAR_manage_dns: ${{ vars.SITE_DNS_ELSEWHERE != 'true' }}
+      TF_VAR_refuse_mail: ${{ vars.SITE_REFUSES_MAIL == 'true' }}
+      TF_VAR_machine: ${{ vars.SITE_MACHINE }}
+      TF_VAR_admin_keys: ${{ vars.SITE_ADMIN_KEYS || '[]' }}
+      TF_VAR_email: ${{ secrets.SITE_EMAIL }}
+      TF_VAR_deploy_key: ${{ vars.SITE_DEPLOY_KEY }}
+      TF_VAR_host_key: ${{ secrets.SITE_HOST_KEY }}
+      TF_VAR_host_key_public: ${{ vars.SITE_HOST_KEY_PUBLIC }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: opentofu/setup-opentofu@a1320f892987e89d278cc92dc5adc984fb93aca4 # v2.0.2
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+      - name: The bucket the state is kept in, with each version of it
+        run: |
+          aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null || aws s3api create-bucket --bucket "$STATE_BUCKET"
+          aws s3api put-bucket-versioning --bucket "$STATE_BUCKET" --versioning-configuration Status=Enabled
+      - run: tofu init -input=false -lockfile=readonly -backend-config="bucket=$STATE_BUCKET"
+      - run: tofu plan -input=false -out="$RUNNER_TEMP/plan"
+      - name: Whether the plan makes a machine
+        id: plan
+        run: |
+          makes=$(tofu show -json "$RUNNER_TEMP/plan" | jq '[.resource_changes[]? | select(.address == "digitalocean_droplet.site") | .change.actions[]] | index("create") != null')
+          echo "machine=$makes" >> "$GITHUB_OUTPUT"
+      - run: tofu apply -input=false "$RUNNER_TEMP/plan"
+      # The plan holds the values the machine is handed; it is gone before any later step.
+      - name: Take the plan off the runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/plan"
+      # A new machine has no release. It is asked for at its own address, under the site's name,
+      # so the answer is that machine's and its certificate is the name's. Any answer will do:
+      # nginx says 502 until the first release is there.
+      - name: Ship the site to a new machine once it answers
+        if: steps.plan.outputs.machine == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SITE_HOST: ${{ vars.SITE_HOST }}
+        run: |
+          address=$(tofu output -raw address)
+          for try in $(seq 1 90); do
+            if curl -sS -o /dev/null --max-time 10 --resolve "$SITE_DOMAIN:443:$address" "https://$SITE_DOMAIN/" 2>/dev/null; then
+              if [ -z "$SITE_HOST" ]; then
+                echo "::notice::The machine at $address answers as $SITE_DOMAIN. Deploys are off until the repository variable SITE_HOST is set (deploy/README.md)."
+                exit 0
+              fi
+              gh workflow run site.yml --ref main --repo "$GITHUB_REPOSITORY"
+              echo "The machine at $address answers as $SITE_DOMAIN; the Site workflow is started."
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::warning::The machine at $address does not answer as $SITE_DOMAIN yet. It sets itself up once the name reaches it: where the name's DNS is new, that waits on the registrar. Run the Site workflow when it answers."

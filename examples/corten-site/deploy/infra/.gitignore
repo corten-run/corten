@@ -1,0 +1,2 @@
+# What `tofu init` downloads; the lock file beside this one is kept.
+.terraform/

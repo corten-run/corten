@@ -159,6 +159,18 @@ Corten is pre-1.0, so any minor version may change the API.
   behind the page (one fragment shader, drawn after weathering steel) in Chromium, where it also
   reads that the plate is no brighter under the steel's type than the type can stand.
 
+- `examples/corten-site/deploy/infra`: the machine that serves Corten's site as OpenTofu
+  configuration for DigitalOcean (a droplet, an address that stays when the droplet is replaced,
+  a firewall, and the DNS zone), applied on each change on `main` by the `Site machine`
+  workflow with its state in a Spaces bucket. A droplet made from it is handed `provision.sh`,
+  `nginx.conf` and the service file as it starts, waits until the site's name reaches it and
+  sets itself up, so nobody signs in; a change to anything it is handed makes a new droplet,
+  and the workflow then starts the `Site` workflow to ship it a release. `bootstrap.sh` gives
+  the repository the two environments, the keys and the variables this needs, once. The
+  workflow applies nothing until the repository names a bucket for the state. The site's
+  service is now held to loopback (`IPAddressDeny=any`), which on a cloud machine keeps it
+  from the metadata address.
+
 ### Changed
 
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
