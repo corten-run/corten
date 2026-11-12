@@ -90,6 +90,11 @@ and are removed before the attack. All native child processes and threads are
 charged by their container cgroups; `docker top` and actual `cgroup.procs` are
 retained, not normalized to one process. The isolated network inventory must
 match every declared native target container before injection.
+Replay checks actual Docker CPU/memory/swap/task/FD quotas against the serialized
+profile, rejects automatic recovery restarts and published ports, and rejects
+configuration updates or changed native limits during the attack. An exit during
+asynchronous collection is checked against the collection interval's end, not
+incorrectly attributed to a missing resource sample before the exit.
 The short-lived observer uses the host PID and cgroup namespaces, with read-only
 cgroup access and no Docker socket, so other containers' PIDs are visible rather
 than represented as namespace-hidden zeros. Asynchronous cgroup reads retain their
@@ -165,6 +170,8 @@ evidence, never an invented zero-byte queue. Timed JSON reads validate the full
 record; timed page reads check completed HTTP bodies and page markers, not a full
 DOM/CSS comparison on every request. The full browser gate runs before injection.
 Memory/CPU are window samples, not continuous peaks or kernel socket-memory totals.
+CPU seconds are raw cumulative cgroup counters, including startup and preflight,
+not per-window CPU deltas or per-request costs.
 No ranking or throughput claim is supported by these safety runs, particularly
 on a concurrently loaded workstation. Full native qualification and group-wide
 execution are still required for any complete-group claim. This scoped runner

@@ -6,11 +6,12 @@ import { pathToFileURL } from "node:url";
 import { schema, registryDigest, groupReady, nativeGroup } from "./plan.mjs";
 import { assemble, verifyArtifacts, digest, targetOutcome } from "./evidence.mjs";
 import { assessNative, assessTimedSource } from "./native.mjs";
-import { validateQualification } from "../marketplace/feature-contract.mjs";
+import { validateQualification, qualificationSettings } from "../marketplace/feature-contract.mjs";
 const read = (file) => JSON.parse(readFileSync(file, "utf8"));
 
 export function verify(folder) {
   const summary = read(join(folder, "summary.json")); assert.equal(summary.schema, schema); assert.equal(summary.registryDigest, registryDigest);
+  assert.equal(digest(readFileSync(join(folder, "fixtures/marketplace.json"))), summary.fixtureSha256, "native fixture bytes changed");
   groupReady(summary.cells); // Validate the complete, canonical matrix before following artifact paths.
   if (summary.nativeControlsVersion === 1) assert.deepEqual(summary.nativeGroup, nativeGroup(summary.cells));
   let observed = 0;
@@ -39,6 +40,15 @@ export function verify(folder) {
       assert.equal(origin.image, before.info.Image); assert.equal(origin.config, digest(readFileSync(join(out, `${p.id}-before.json`))));
       assert.equal(before.info.Id, p.containerId); assert.equal(before.top.split("\n").length - 1, p.count);
       assert.deepEqual(before.info, lifecycle[p.id].before);
+      if (p.role === "application") {
+        const labels = before.info.Config.Labels;
+        assert.equal(labels["run.corten.marketplace.commit"], summary.commit); assert.equal(labels["run.corten.marketplace.dirty"], "false");
+        assert.equal(labels["run.corten.marketplace.profile"], qualification.profile);
+        assert.equal(origin.source, `${summary.commit}:sha256:${labels["run.corten.hardening.source"]}`);
+        const env = Object.fromEntries(before.info.Config.Env.map((value) => { const index = value.indexOf("="); return [value.slice(0, index), value.slice(index + 1)]; }));
+        assert.equal(env.PROFILE, qualificationSettings.nativeProfile); assert.equal(env.MAX_CONNECTIONS, String(qualificationSettings.maxConnections));
+        assert.equal(env.MARKETPLACE_SOURCE, cell.source);
+      }
     }
     const raw = readFileSync(join(out, "raw.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
     const capture = assemble({ settings, raw,

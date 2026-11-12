@@ -49,8 +49,28 @@ export function defensiveRejection(phase, row) {
   return phase === "connection-pressure" && status === 429;
 }
 
+export function verifyNativeLimits(settings, lifecycle) {
+  const b = validateBudget(JSON.parse(settings.effectiveBudgets)), edge = settings.case === "deployed-edge";
+  assert.deepEqual(settings.deployment.processes.map((p) => p.role).sort(), ["application", "upstream", ...(edge ? ["proxy"] : [])].sort(), "native deployment roles were dropped or added outside the exact budget");
+  for (const p of settings.deployment.processes) {
+    const state = lifecycle[p.id]; assert.ok(state?.before?.HostConfig && state?.after?.HostConfig, "missing actual native limits");
+    const limit = p.role === "application" ? b.resources[edge ? "applicationEdge" : "applicationDirect"] : b.resources[p.role];
+    const actual = state.before.HostConfig;
+    assert.equal(actual.NanoCpus, limit.cpu * 1e9, `${p.id}: actual CPU quota differs from declared budget`);
+    assert.equal(actual.Memory, limit.memory, `${p.id}: actual memory limit differs from declared budget`);
+    assert.equal(actual.MemorySwap, limit.memory, `${p.id}: undeclared swap allowance`);
+    assert.equal(actual.PidsLimit, 512, `${p.id}: actual task limit differs`);
+    assert.deepEqual(actual.Ulimits, [{ Name: "nofile", Hard: 65536, Soft: 65536 }], `${p.id}: actual FD limit differs`);
+    assert.equal(actual.RestartPolicy.Name, "no", "automatic restart cannot manufacture recovery");
+    assert.equal(actual.Privileged, false); assert.deepEqual(actual.PortBindings, {}, "native verification must not publish ports");
+    assert.deepEqual(state.after.HostConfig, actual, "native deployment configuration changed during injection");
+    assert.ok(!state.events.some((event) => event.Action === "update"), "external configuration intervention invalidates apparatus");
+  }
+}
+
 export function assemble({ settings, raw, parity, source, cleanup, provenance, lifecycle }) {
   const b = validateBudget(JSON.parse(settings.effectiveBudgets)); verifyParity(parity, source);
+  verifyNativeLimits(settings, lifecycle);
   if (settings.nativeSource === "api") { assert.equal(source, "api"); assessTimedSource(raw); }
   const one = (type) => { const rows = raw.filter((r) => r.type === type); assert.equal(rows.length, 1, `missing/duplicate ${type}`); return rows[0]; };
   for (const type of ["control-before", "control-after"]) {
@@ -86,7 +106,7 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
     assert.deepEqual(Object.keys(sample.samples).sort(), settings.deployment.processes.map((p) => p.id).sort());
     resources[window] = settings.deployment.processes.map((p) => {
       const s = sample.samples[p.id], state = lifecycle[p.id]; assert.ok(state, "missing lifecycle evidence");
-      const sampleWall = Date.parse(clock.wallAtStart) + sample.atMs;
+      const sampleWall = Date.parse(clock.wallAtStart) + (sample.collectedAtMs ?? sample.atMs);
       assert.equal(state.before.State.Running, true); assert.equal(state.after.Id, state.before.Id); assert.equal(state.after.State.StartedAt, state.before.State.StartedAt, "target restarted");
       assert.ok(!state.after.State.Error, "Docker lifecycle failure");
       assert.ok(!state.events.some((e) => ["kill", "stop", "start", "restart", "pause", "unpause", "destroy"].includes(e.Action)), "external lifecycle intervention invalidates apparatus");
@@ -104,7 +124,7 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
         assert.equal(s.oomKilled, Number(/^oom_kill (\d+)$/m.exec(s.events)?.[1]) > 0, "OOM differs from raw cgroup events");
       }
       const oomKilled = !running && (s.unavailable ? state.after.State.OOMKilled : s.oomKilled);
-      return { id: p.id, count: p.count, observedProcessCount: s.procs?.length ?? unavailable("container exited before sample"), atMs: sample.atMs, running, oomKilled,
+      return { id: p.id, count: p.count, observedProcessCount: s.procs?.length ?? unavailable("container exited before sample"), atMs: s.unavailable ? sample.collectedAtMs ?? sample.atMs : sample.atMs, running, oomKilled,
         cpuSeconds: s.cpuSeconds ?? unavailable(s.unavailable), memoryBytes: s.memoryBytes ?? unavailable(s.unavailable), evidence: `raw.jsonl#resources/${window}/${p.id}` };
     });
   }
