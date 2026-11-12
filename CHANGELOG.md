@@ -5,7 +5,18 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Add a versioned workload-group registry with the approved popular and performance-oriented
+  challengers, separate functional-parity and measurement coverage, and explicit retained
+  benchmark families. The localized-marketplace selection reuses existing strict gates;
+  other native group integrations remain pending, not measured results.
+
 ### Added
+
+- Offline correctness contracts for the approved mixed-traffic, live-delivery,
+  recoverable-live and hardening groups. They preserve native transport/form behavior,
+  independent state readback, bounded-resource cleanup and explicit failure outcomes.
+  Synthetic contract tests are not native adapter qualification or measured results;
+  runner integration remains pending.
 
 - A nightly `bench/marketplace` group round can be split across droplets started together:
   `droplet.mjs rN --droplets <n> --detach` checks the checkout, existing droplets and the

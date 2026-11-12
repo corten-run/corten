@@ -14,6 +14,7 @@ test("popular and performance candidates form one deduplicated production run, w
     assert.ok(selected.includes("corten"));
     if (group !== "production-qualify") { assert.ok(selected.length < apps.length); assert.ok(!selected.includes("axum-maud")); }
   }
+  assert.deepEqual(groupApps("localized-marketplace"), ["corten", "nextjs", "aspnet", "django", "topcoat", "leptos", "gin", "drogon"]);
   assert.ok([20, 21, 22, 23].every((n) => scheduledGroup(`r${n}`) === "production"));
   assert.throws(() => groupApps("best"));
 });
