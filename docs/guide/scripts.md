@@ -775,6 +775,14 @@ else, and a handler that gets the list's parent (and the `<template>`, to make n
 | `push(items)`, `remove(view)`, `swap(i, j)`, `clear()` | change the rows; new ones are clones of the template's row, filled with their data |
 | `replace(items)` | shows exactly `items`: rows with a key it had keep their element and are filled again |
 
+A row with a form whose write takes a submit key draws the key field in the template with
+`SubmitKey::template_field(f.submit)`, which holds no key, and the runtime gives each new row's
+form one of its own when it is sent; `SubmitKey::field` there would give every row the template's
+one key ([Requests and forms](requests-and-forms.md#forms)). The rows the server draws keep
+`SubmitKey::field`, so a `Row` drawn both ways takes its key field as a prop (a
+`corten::form::SubmitField`): `SubmitKey::field(f.submit)` in the loop and
+`SubmitKey::template_field(f.submit)` in the `<template>`.
+
 One parent has one list, whichever handler asks, and it notices rows changed without it (a server
 patch, a sort) the next time it is used. It keeps its rows by key through its own changes and
 notices a key a script sets on a row, so a handler that removes or adds rows one at a time by key

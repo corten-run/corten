@@ -131,6 +131,18 @@ Corten is pre-1.0, so any minor version may change the API.
   `Cache-Control` as Helmet's documentation sets a header, and Node's 30 s header timeout and
   connection cap; it meets 17 of 24. Without the profile both apps answer as before
   ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
+- `SubmitKey::template_field(f.submit)` draws a submit key field with no key, for a form inside a
+  `<template>` that a script copies (rows of a list drawn in the browser), and the runtime gives
+  an empty submit key a new one when its form is first sent, a `data-patch` form or a plain post,
+  before any `on:submit` handler or listener added after the runtime loads (`requestSubmit()`,
+  not `submit()`, which fires no event). Each copy is then a submission of its own; a copy of a
+  template that held a key shared it, so the app applied only the first copy's submit, and a
+  script had to carry its own UUID function to avoid that. A `SubmitKey` posted empty (without
+  JavaScript) is still refused with a 422 naming the field, a debug build's page that draws
+  `SubmitKey::template_field` outside a `<template>` a script copies (a declarative shadow root,
+  `<template shadowrootmode="open">`, is drawn in the page and needs its own key) is an error, and a page
+  whose only key field is a template's keeps its `ETag`. The runtime grows 27 bytes compressed
+  ([#1254 A script cannot mint a submit key for a form it makes from a template, so copied rows share one key](https://github.com/corten-run/corten/issues/1254)).
 
 ### Changed
 

@@ -1596,7 +1596,8 @@ impl Req {
     /// stylesheet the page does not get is an error, since it would be served unstyled or without
     /// its handlers: the app does not list it, or lists it in another area only. Release builds do
     /// not record what renders, so a render does no bookkeeping, and do not check.
-    /// `page` is false for a patch, whose hint's control may be on the page already.
+    /// `page` is false for a patch, whose hint's control may be on the page already, and whose
+    /// submit key with no value the runtime that asked for it fills when the form is sent.
     fn render_into(&self, view: impl Render, out: &mut String, page: bool) -> Result<Vec<&'static str>> {
         #[cfg(feature = "zones")]
         let _zone = self.zone_scope();
@@ -1625,6 +1626,10 @@ impl Req {
         self.check_modules(&modules)?;
         #[cfg(debug_assertions)]
         self.check_hints(&out[start..], &hints, page)?;
+        #[cfg(debug_assertions)]
+        if page {
+            self.check_submit_keys(&out[start..])?;
+        }
         Ok(modules)
     }
 
@@ -1638,6 +1643,24 @@ impl Req {
         match crate::form::unnamed_hint(html, hints, page) {
             Some(hint) => Err(self.unserved(format!(
                 "{path} draws the hint {hint}, which has text, and the element it describes does not name it in aria-describedby (or is not drawn), so a screen reader never reads it: give the control .hint() ({{..e.control(f.x).hint()}}), or e.aria(f.x).hint(&HintId(..)), or aria-describedby={{HintId(..)}} (a corten-ui widget's attrs)",
+                path = self.path()
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// In a debug build: an error when a page draws a submit key with no value
+    /// ([`crate::SubmitKey::template_field`]) outside a `<template>` a script copies (a declarative
+    /// shadow root, `<template shadowrootmode="open">`, is drawn in the page). The runtime gives it one
+    /// when the form is sent, but a browser without JavaScript sends it empty and every post is
+    /// refused.
+    #[cfg(debug_assertions)]
+    #[cold]
+    #[inline(never)]
+    fn check_submit_keys(&self, html: &str) -> Result<()> {
+        match crate::form::keyless_submit_field(html) {
+            Some(field) => Err(self.unserved(format!(
+                "{path} draws the submit key {field}, which has no value, outside a <template> a script copies, so a browser without JavaScript sends it empty and the post is refused: draw SubmitKey::field(..) in a form the server draws, including one in a declarative shadow root (<template shadowrootmode=\"open\">), which is drawn in the page, and SubmitKey::template_field(..) only in a <template> a script copies",
                 path = self.path()
             ))),
             None => Ok(()),
