@@ -26,6 +26,15 @@ Corten is pre-1.0, so any minor version may change the API.
   its time differs, where the same file pressed again is not. Each check failed against a runtime
   with the line it covers taken out
   ([#1229 Three runtime behaviors have no browser check: touch prefetch, an upload answered with a status a Response cannot have, and a same-name file sent as a new submit](https://github.com/corten-run/corten/issues/1229)).
+- FastAPI and Express join `bench/fullstack`'s matched tier, so every app its membership names now
+  starts with the profile. Under `PROFILE=matched` FastAPI adds Starlette's host list, gzip and body
+  limit, the security headers and `Cache-Control` from the middleware FastAPI's tutorial gives,
+  `HEAD` on the JSON, and uvicorn's connection cap (`--limit-concurrency`, a 503 past it, run as
+  FastAPI's manual-server guide starts uvicorn); its matched matrix meets 15 of 24 columns. Express
+  adds Helmet, its own `compression` and `connect-timeout` middleware, `Permissions-Policy` and
+  `Cache-Control` as Helmet's documentation sets a header, and Node's 30 s header timeout and
+  connection cap; it meets 17 of 24. Without the profile both apps answer as before
+  ([#807 bench/fullstack has no tier where every app implements the same production features, so its tables mix framework cost with feature cost](https://github.com/corten-run/corten/issues/807)).
 
 ### Changed
 
