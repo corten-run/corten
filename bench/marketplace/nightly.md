@@ -169,7 +169,13 @@ A round may be split across droplets started together with `--droplets <n>`
 ([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816));
 the [marketplace README](README.md#splitting-a-round-across-droplets) describes the split, the
 merge and the check. The nightly default stays one droplet until a split round has been run and
-validated with Todd's approval. When splitting, check `--plan` first, then launch with the same
+validated with Todd's approval. A split is worth launching only when the latest single-host
+round's qualification admitted enough peers to give every part at least one: a part whose peers
+are all excluded makes the round unmergeable, and that shows only after the other droplets have
+spent their hours. Compare the `--plan` split with that round's Feature Qualification table
+before launching. As of 2026-11-12 the local qualification admits only Corten and ASP.NET Core,
+so every split of `production` leaves a part with no peer, and the default stays one host. When
+splitting, check `--plan` first, then launch with the same
 state directory rules as above:
 
 ```sh
@@ -206,7 +212,8 @@ numbers differ between droplets, and a flagged stage is reported, not hidden. A 
 launch's group, never the whole inventory: Corten on every droplet, each other candidate on one,
 each qualified on its droplet with the same feature contract, and no anchor. A droplet that
 admits no peer fails its part, and the merge accounts for every candidate once, admitted or
-excluded with its evidence.
+excluded with its evidence. The merge also refuses a part that did not finish clean (checks
+passed, no failures, a clean tree at the plan's commit) and parts that did not run together.
 
 ## Finished Results
 

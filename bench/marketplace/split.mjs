@@ -7,13 +7,21 @@ import { withinNoise } from "../fullstack/passes.mjs";
 import { groupApps } from "./groups.mjs";
 import { phases, splitApps, splitSubject, timedProfiles } from "./run-contract.mjs";
 
+// A part's own outcome, as its summary records it. A merged round is finished and clean only
+// when every part is, so the merge refuses any other part and keeps each part's in split.parts,
+// where the reader checks them again.
+export const outcomeFields = ["complete", "checksPassed", "failures", "cleanupFailures", "dirty", "finishedCommit", "finishedDirty"];
+/** The outcome every part of a merged round must have. */
+export const cleanOutcome = (commit) => ({ complete: true, checksPassed: true, failures: [], cleanupFailures: [], dirty: false, finishedCommit: commit, finishedDirty: false });
+
 /**
  * One round of a named group from its droplets' part summaries, d1 first, each already validated
  * by validateSummary. Every candidate comes from the one droplet that qualified it, with its raw
  * qualification and, if admitted, its measurements; an excluded candidate keeps its evidence and
  * has no runs. Corten, on every droplet, comes from d1 at the top level, as compare.mjs reads it,
  * and from each droplet in split.parts, with each droplet's host, tools, run and times. The parts
- * must be exactly the group's split: each candidate accounted for once. Validate the merged
+ * must be exactly the group's split: each candidate accounted for once, and each part finished,
+ * with its checks passed, no failures and a clean tree at the round's commit. Validate the merged
  * summary with validateSummary before using it.
  * @param {string} round
  * @param {object[]} parts the part summaries, d1 first
@@ -34,6 +42,7 @@ export function mergeParts(round, parts) {
       assert.ok(isDeepStrictEqual(s[key], first[key]), `${at}'s ${key} differs from d1's: not one round`);
     }
     assert.ok(isDeepStrictEqual(shared(s.options), shared(first.options)), `${at}'s options differ from d1's: not one round`);
+    for (const [key, value] of Object.entries(cleanOutcome(first.commit))) assert.ok(isDeepStrictEqual(s[key], value), `${at}'s ${key} is ${JSON.stringify(s[key])}, not ${JSON.stringify(value)}: an unfinished or failed part does not merge`);
   });
   // Each candidate once: Corten from d1, every other from the one droplet whose share has it.
   const owner = (app) => app === splitSubject ? first : parts[shares.findIndex((share) => share.includes(app))];
@@ -47,7 +56,7 @@ export function mergeParts(round, parts) {
     host: first.host, tools: first.tools, fixtureSha256: first.fixtureSha256, measurement: first.measurement,
     apps: Object.fromEntries(candidates.map((app) => [app, owner(app).apps[app]])),
     split: { droplets: n, parts: parts.map((s, i) => ({ index: i + 1, apps: s.options.apps, runId: s.runId, startedAt: s.startedAt, finishedAt: s.finishedAt,
-      host: s.host, tools: s.tools, corten: s.apps[splitSubject] })) } };
+      host: s.host, tools: s.tools, corten: s.apps[splitSubject], ...Object.fromEntries(outcomeFields.map((key) => [key, s[key]])) })) } };
 }
 
 // The numbers the droplets are compared on: throughput and counted CPU per request.

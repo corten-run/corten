@@ -8,7 +8,7 @@ import { records } from "./fixtures.mjs";
 import { groupApps } from "./groups.mjs";
 import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
 import { aggregateCold, cpuSettings, loadPhases, parsePart, phases, readableSchemas, roundIdentity, sources, splitApps, splitSubject, stageAggregate, timedProfiles, v3Schema } from "./run-contract.mjs";
-import { betweenDroplets, differText, subjectMetrics } from "./split.mjs";
+import { betweenDroplets, cleanOutcome, differText, outcomeFields, subjectMetrics } from "./split.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "missing/invalid timestamp"); return n; };
 function loadEvidence(p) {
@@ -57,17 +57,22 @@ function hostEvidence(host, tools) {
 }
 // A round split across droplets (#816): its parts must be the split of its named group, each with
 // its own Corten, host and window, and each a comparison by itself: a feature-qualified Corten and
-// at least one admitted peer on that droplet. Returns the window each candidate was measured in.
+// at least one admitted peer on that droplet, each finished and clean, with its own run, and all
+// run at once. Returns the window each candidate was measured in.
 function splitEvidence(s, v3, start, end) {
   const { split } = s;
   assert.deepEqual(Object.keys(split ?? {}).sort(), ["droplets", "parts"], "a split round records its droplets and parts");
   const shares = splitApps(s.options.group, split.droplets);
   assert.ok(Array.isArray(split.parts) && split.parts.length === split.droplets, "a split round has one part per droplet");
+  assert.ok(split.parts.every((p) => typeof p.runId === "string" && p.runId.length > 0), "each part records its run");
+  assert.equal(new Set(split.parts.map((p) => p.runId)).size, split.parts.length, "two parts share a runId: each droplet's part is its own run");
+  // Started together: every part started before any part finished.
+  assert.ok(Math.max(...split.parts.map((p) => time(p.startedAt))) < Math.min(...split.parts.map((p) => time(p.finishedAt))), "a part started after another finished: the droplets did not run together, so this is not one round");
   const windows = {};
   split.parts.forEach((p, i) => {
-    assert.deepEqual(Object.keys(p).sort(), ["apps", "corten", "finishedAt", "host", "index", "runId", "startedAt", "tools"], `d${i + 1}: unexpected part fields`);
+    assert.deepEqual(Object.keys(p).sort(), ["apps", "corten", "finishedAt", "host", "index", "runId", "startedAt", "tools", ...outcomeFields].sort(), `d${i + 1}: unexpected part fields`);
     assert.equal(p.index, i + 1); assert.deepEqual(p.apps, shares[i], `d${p.index} qualified other candidates than its share of ${s.options.group}`);
-    assert.ok(typeof p.runId === "string" && p.runId.length > 0);
+    for (const [key, value] of Object.entries(cleanOutcome(s.commit))) assert.deepEqual(p[key], value, `d${p.index}'s ${key} contradicts a finished, clean round`);
     const partStart = time(p.startedAt), partEnd = time(p.finishedAt);
     assert.ok(partStart >= start && partEnd > partStart && partEnd <= end, `d${p.index}'s window is outside the round's`);
     hostEvidence(p.host, p.tools);
@@ -254,9 +259,10 @@ export function report(s) {
           const mark = (p.appOutcomes ? ` * (${p.appOutcomes} of ${p.passes} passes)` : "") + (p.stopped ? stoppedMark(p.passes, p.asked) : "");
           const metrics = ["rps", "p50", "p95", "p99", "cpuAvgPct", "cpuPerRequestUsec", "memAvgMiB", "memMaxMiB", "perCpuSecond"];
           const failed = p.passes ? { median: p.failedRate.median * 100, min: p.failedRate.min * 100, max: p.failedRate.max * 100 } : null;
-          // Each app beside its own droplet's Corten, as a ratio of medians.
+          // Each app beside its own droplet's Corten, as a ratio of medians. A stopped stage's
+          // number is not a median of three passes, so a ratio with it on either side is "-".
           const c = corten?.phases[key][phase];
-          const ratios = !corten ? "" : ["rps", "cpuPerRequestUsec"].map((m) => ` ${p.passes && c.passes ? (p[m].median / c[m].median).toFixed(2) : "-"} |`).join("");
+          const ratios = !corten ? "" : ["rps", "cpuPerRequestUsec"].map((m) => ` ${p.passes && c.passes && !p.stopped && !c.stopped ? (p[m].median / c[m].median).toFixed(2) : "-"} |`).join("");
           lines.push(`| ${label(a.label)}${mark} |${droplet ? ` ${droplet} |` : ""} ${p.passes ? `${metrics.map((metric) => cell(p[metric])).join(" | ")} | ${cell(failed)}` : Array(metrics.length + 1).fill("-").join(" | ")} |${ratios}`);
         }
         for (const { app, a, at } of rows) {

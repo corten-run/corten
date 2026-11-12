@@ -122,7 +122,11 @@ twelve browser profiles, before its own load; the gate checks each against the c
 against Corten, so it needs no other droplet. A droplet must admit its Corten and at least one
 peer, as an unsplit round must: a droplet whose peers are all excluded compares nothing and
 fails its part, as does a droplet whose gate fails, so the round cannot merge, though other
-droplets may already have measured.
+droplets may already have measured. So a split is worth launching only when the latest
+single-host round's qualification admitted enough peers to give every part at least one: compare
+the `--plan` split with that round's Feature Qualification table first, or the round fails only
+after the other droplets have spent their hours ([nightly.md](nightly.md#split-rounds) says where
+the default stands).
 
 The launcher checks the clean checkout, that no benchmark droplet exists and the account's
 droplet limit (`doctl account get`) once, then writes `split.json` (commit, group and each
@@ -166,12 +170,17 @@ exits 0 or 1; never relaunch the round.
 The merge accounts for every candidate of the group exactly once: Corten from each droplet, and
 each other candidate from the one droplet whose share it was, admitted and measured or excluded
 with its raw qualification and no runs. The parts must be exactly the group's split, so no
-subset of candidates can pass as a round. The merged summary is a v5 round of the group, with
+subset of candidates can pass as a round. Each part must have finished, with its checks passed,
+no failures or cleanup failures and a clean tree at the plan's commit; the merge refuses any
+other part and keeps each part's outcome in `split`, where the reader checks it again. The parts
+must have run together, each starting before any finished, and each with its own run id. The merged summary is a v5 round of the group, with
 each droplet's candidates, CPU model, tools and Corten in `split`; the reader checks the split
 and each droplet's admission, and a whole round's check of the full group is unchanged. Its
 report's Feature Qualification table names each candidate's droplet, every table gets a Droplet
 column with Corten on every droplet, and each admitted candidate's req/s and CPU us/request is a
-ratio to the Corten on its own droplet beside the raw numbers. Ratios are to Corten only. Raw
+ratio to the Corten on its own droplet beside the raw numbers. Ratios are to Corten only. A ratio
+is `-` where either stage stopped, the candidate's or its droplet's Corten's, since a stopped
+stage's number is not a median of three passes. Raw
 numbers across droplets carry any difference between their machines; compare candidates on
 different droplets by those ratios. A Between droplets section lists each droplet's CPU and
 candidates and Corten's own req/s and CPU us/request on each. A stage is flagged ("d1 and d2
@@ -179,7 +188,8 @@ differ") when two droplets' Corten ranges do not overlap, that is when one dropl
 above the other's highest: raw numbers on those droplets are then not like for like. With only
 Corten on every droplet, nothing checks that a ratio carries from one droplet's machine to
 another's. `compare.mjs` compares a split round only with one split the same way, each droplet's
-host and images equal to the baseline's same droplet, and Corten's rows are d1's. A droplet's CPU
+host and images equal to the baseline's same droplet, and Corten's rows are d1's. It says so in
+one warning, since the cohort context then mixes droplets, and gives each row its droplet. A droplet's CPU
 model is not chosen at create, so droplets can land on a mix (Xeon Platinum 8168 on d1 and 8280
 on d2, say). The round still merges and its report reads each candidate by its ratio to its own
 droplet's Corten. But `compare.mjs` refuses it, with no deltas, against any baseline whose

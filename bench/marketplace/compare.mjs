@@ -70,6 +70,8 @@ export function comparisonKey(s) {
  * v4: a v3 round, which failed on any stopped app, compares as a v4 round with no stop). Build
  * flags are not measures. A round split across droplets (#816) compares only with one split the
  * same way, each droplet's host and images equal to the baseline's same droplet; Corten is d1's.
+ * Each row and cold row of a split round also has droplet: the number of the droplet its app was
+ * measured on (Corten's is 1), the same in both rounds. A whole round's rows have no droplet.
  */
 export function compare(current, baseline, { unchangedApps = [] } = {}) {
   const result = { schema: "marketplace-comparison/v1", current: current?.round ?? null,
@@ -121,6 +123,9 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   if (excluded.length) warn(`No reference deltas for adapters not declared unchanged: ${excluded.join(", ")}.`);
   if (!result.unchangedApps.length) warn("No non-Corten unchanged reference cohort supplied; Corten deltas have no cohort context.");
   if (Object.values(current.measurement.cpus).some((c) => !c.cpuset)) warn("CPU quota-only placement does not prove isolation in either round.");
+  // The split shapes are equal, so an app is on the same droplet in both rounds.
+  const droplet = current.split ? (app) => ({ droplet: app === "corten" ? 1 : current.split.parts.find((p) => p.apps.includes(app)).index }) : () => ({});
+  if (current.split) warn(`Split across ${current.split.droplets} droplets: Corten's rows are d1's, and each reference adapter's rows are from its own droplet (each row's droplet), so the cohort context mixes droplets and their machines.`);
   const delta = (a, b) => ({ baseline: { ...a }, current: { ...b }, percentChange: a.median === 0 ? null : (b.median / a.median - 1) * 100,
     rangesOverlap: a.min <= b.max && b.min <= a.max });
   // A stage that fails more than in the baseline is reported whatever the percentages say (a 0%
@@ -128,7 +133,7 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
   const worse = (was, now) => (was.max === 0 && now.max > 0) || now.min > was.max;
   for (const app of comparedApps) for (const { key } of timedProfiles) for (const phase of phases) {
     const was = baseline.apps[app].phases[key][phase], now = current.apps[app].phases[key][phase];
-    const row = { app, profile: key, phase, metrics: {}, warnings: [] };
+    const row = { app, ...droplet(app), profile: key, phase, metrics: {}, warnings: [] };
     row.stopped = { baseline: was.stopped ?? null, current: now.stopped ?? null };
     row.appOutcomes = { baseline: was.appOutcomes, current: now.appOutcomes };
     const outcome = { app, profile: key, phase, appOutcomes: row.appOutcomes, failedRate: { baseline: was.failedRate, current: now.failedRate }, dropped: { baseline: was.dropped, current: now.dropped }, stopped: row.stopped };
@@ -156,7 +161,7 @@ export function compare(current, baseline, { unchangedApps = [] } = {}) {
     // not run, and then they are not three passes, so no delta.
     const stopped = { baseline: coldStop(was, 3), current: coldStop(now, 3) };
     const a = aggregateCold(was), b = aggregateCold(now);
-    result.cold.push({ app, profile: key, stopped,
+    result.cold.push({ app, ...droplet(app), profile: key, stopped,
       metrics: stopped.baseline || stopped.current ? null : Object.fromEntries(Object.keys(a).map((metric) => [metric, delta(a[metric], b[metric])])) });
   }
   const summarizeCohort = (rows) => {

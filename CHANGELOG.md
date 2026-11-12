@@ -17,11 +17,14 @@ Corten is pre-1.0, so any minor version may change the API.
   its part. `--collect` collects and deletes each droplet as it finishes, reports any leftover
   droplet, prints the command that stops each running droplet once one that never started, is
   partial or is missing means the round cannot merge, and merges the round only when every
-  droplet has finished and every candidate of the group is accounted for once, admitted and
-  measured or excluded with its evidence. The report shows each droplet's CPU and Corten in
-  every table, each candidate's ratio to the Corten on its own droplet, and flags a stage where
+  droplet has finished clean and every candidate of the group is accounted for once, admitted and
+  measured or excluded with its evidence; parts that did not run together, or share a run, do not
+  merge. The report shows each droplet's CPU and Corten in
+  every table, each candidate's ratio to the Corten on its own droplet (`-` where either stage
+  stopped), and flags a stage where
   Corten's own numbers differ between droplets beyond the pass ranges. A one-droplet round runs,
-  reports and compares as before, and a split round compares only with one split the same way
+  reports and compares as before, and a split round compares only with one split the same way,
+  each row naming its droplet
   ([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816)).
 - Feature-qualified marketplace comparison groups: popular and performance-oriented
   candidate pools share one deduplicated production run instead of timing the full inventory

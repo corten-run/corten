@@ -11,11 +11,11 @@ import { records } from "./fixtures.mjs";
 import { groupApps, groupNames } from "./groups.mjs";
 import { featureProfile, qualification, qualificationSettings } from "./feature-contract.mjs";
 import { qualificationProbes } from "./qualification-fixture.mjs";
-import { cpuSettings, inventory, maxDroplets, parseArgs, parsePart, partName, phases, resultSchema, sources, splitApps, splitSubject, stageAggregate, timedProfiles } from "./run-contract.mjs";
+import { appStop, cpuSettings, inventory, maxDroplets, parseArgs, parsePart, partName, phases, resultSchema, sources, splitApps, splitSubject, stageAggregate, timedProfiles } from "./run-contract.mjs";
 import { leftoverDroplets, nightly, parseDropletArgs, remoteFiles, safeArchive, splitExit, splitPlan, validatePlan, validateState } from "./droplet-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { compare } from "./compare.mjs";
-import { betweenDroplets, mergeParts } from "./split.mjs";
+import { betweenDroplets, cleanOutcome, mergeParts, outcomeFields } from "./split.mjs";
 import { launcherSignals, processRuns, splitController, splitDryRun } from "./droplet.mjs";
 
 const commit = "a".repeat(40), group = "production";
@@ -75,6 +75,17 @@ function part(k, n, { round = "r17", g = group, cortenScale = 1, excluded = [] }
   if (cortenScale !== 1) scale(s.apps.corten, cortenScale);
   for (const app of excluded) exclude(s.apps[app]);
   return validateSummary(s);
+}
+// The app's container stopped in this pass and phase: the run keeps the phases before it, and no
+// later pass of the profile ran, as run.mjs records it.
+function stopRuns(a, key, pass, phase) {
+  const runs = a.runs[key];
+  runs.length = pass;
+  const run = runs[pass - 1];
+  run.complete = false;
+  run.phases = Object.fromEntries(phases.slice(0, phases.indexOf(phase)).map((p) => [p, run.phases[p]]));
+  run.stopped = appStop({ Running: false, OOMKilled: true, ExitCode: 137 }, pass, phase);
+  for (const p of phases) a.phases[key][p] = stageAggregate(runs, p, 3);
 }
 const merged = (n, options = {}) => validateSummary(mergeParts(options.round ?? "r17", Array.from({ length: n }, (_, i) => part(i + 1, n, i === 1 ? options : { round: options.round }))));
 
@@ -223,6 +234,50 @@ test("every candidate is accounted for once, timed when admitted and kept with i
   assert.throws(() => validateSummary(noEvidence));
 });
 
+test("a part that did not finish clean does not merge, and the reader checks each part's outcome again", () => {
+  const bad = [["complete", false], ["checksPassed", false], ["failures", ["leptos: build failed"]], ["cleanupFailures", ["leptos: container left"]],
+    ["dirty", true], ["finishedCommit", "d".repeat(40)], ["finishedDirty", true]];
+  for (const [key, value] of bad) {
+    const d2 = structuredClone(part(2, 2)); d2[key] = value;
+    assert.throws(() => mergeParts("r17", [part(1, 2), d2]), new RegExp(`^AssertionError.*d2's ${key} is .*: an unfinished or failed part does not merge`), key);
+    // A merged summary whose part was edited afterwards is refused by the reader.
+    const s = structuredClone(merged(2)); s.split.parts[1][key] = value;
+    assert.throws(() => validateSummary(s), new RegExp(`d2's ${key} contradicts a finished, clean round`), key);
+  }
+  const s = merged(2);
+  for (const p of s.split.parts) assert.deepEqual(Object.fromEntries(outcomeFields.map((key) => [key, p[key]])), cleanOutcome(commit));
+  const missing = structuredClone(s); delete missing.split.parts[1].complete;
+  assert.throws(() => validateSummary(missing), /d2: unexpected part fields/);
+});
+
+test("a split round's parts ran together, each its own run", () => {
+  const d1 = part(1, 2);
+  // d2 ran four days after d1 finished: not droplets started together.
+  // Every time in it moves, so the part is consistent in itself.
+  const late = validateSummary(JSON.parse(JSON.stringify(part(2, 2)).replaceAll("2026-01-01T", "2026-01-05T")));
+  assert.throws(() => validateSummary(mergeParts("r17", [d1, late])), /a part started after another finished: the droplets did not run together/);
+  const shared = structuredClone(part(2, 2)); shared.runId = d1.runId;
+  assert.throws(() => validateSummary(mergeParts("r17", [d1, shared])), /two parts share a runId/);
+  assert.match(report(merged(2)), /^This round ran on 2 droplets started together./m);
+});
+
+test("a ratio with a stopped stage on either side, its droplet's Corten or its own, is -", () => {
+  const s = structuredClone(merged(2)), key = "fixture-en-US-page";
+  stopRuns(s.split.parts[1].corten, key, 2, "sat64"); // d2's Corten
+  stopRuns(s.apps.nextjs, key, 3, "sat256"); // a candidate on d1
+  validateSummary(s);
+  const text = report(s), start = text.indexOf("## en-US\n");
+  const rows = text.slice(start, text.indexOf("### HTTP source", start)).split("\n");
+  const stopped = (a) => phases.filter((p) => a.phases[key][p].stopped).length;
+  const dashes = (prefix) => rows.filter((l) => l.startsWith(prefix) && l.endsWith("| - | - |")).length;
+  assert.equal(stopped(s.split.parts[1].corten), 3); assert.equal(stopped(s.apps.nextjs), 1);
+  // Every stage d2's Corten stopped in: each d2 row, Corten's own included, has no ratio.
+  for (const app of ["corten", "aspnet", "express", "leptos"]) assert.equal(rows.filter((l) => l.startsWith(`| ${app}`) && l.includes("| r17-d2 |") && l.endsWith("| - | - |")).length, 3, app);
+  // d1's Corten ran all three passes: only nextjs's own stopped stage loses its ratio.
+  assert.equal(dashes("| nextjs"), 1); assert.equal(dashes("| fastapi"), 0);
+  assert.equal(rows.filter((l) => l.startsWith("| corten | r17-d1 |") && l.endsWith("| 1.00 | 1.00 |")).length, 3);
+});
+
 test("a part whose peers are all excluded is no comparison: it fails alone and in the merge", () => {
   const lone = { excluded: ["aspnet", "express", "leptos"] };
   assert.throws(() => part(2, 2, lone), /feature-qualified Corten and peer/);
@@ -295,9 +350,15 @@ test("droplets are flagged where Corten's own numbers differ beyond the noise", 
 
 test("a split round compares only with one split the same way, droplet by droplet", () => {
   const now = merged(2, { round: "r18" }), then = merged(2);
-  const same = compare(now, then, { unchangedApps: ["nextjs"] });
+  const same = compare(now, then, { unchangedApps: ["nextjs", "leptos"] });
   assert.equal(same.compatible, true, same.warnings.join("\n"));
   assert.equal(same.rows.find((r) => r.app === "corten").metrics.rps.percentChange, 0);
+  // Corten's rows are d1's and each reference's are its own droplet's: said once, and on each row.
+  assert.equal(same.warnings.filter((w) => /^Split across 2 droplets: Corten's rows are d1's, .*cohort context mixes droplets/.test(w)).length, 1);
+  for (const rows of [same.rows, same.cold]) assert.deepEqual([...new Set(rows.map((r) => `${r.app}@d${r.droplet}`))], ["corten@d1", "nextjs@d1", "leptos@d2"]);
+  const whole = compare(full("r18"), full(), { unchangedApps: ["nextjs"] });
+  assert.equal(whole.compatible, true, whole.warnings.join("\n"));
+  assert.ok(whole.rows.every((r) => !("droplet" in r)) && whole.cold.every((r) => !("droplet" in r)) && !whole.warnings.some((w) => w.startsWith("Split")));
   for (const [current, baseline] of [[now, full()], [full("r18"), then], [merged(3, { round: "r18" }), then]]) {
     const result = compare(current, baseline);
     assert.equal(result.compatible, false); assert.ok(result.warnings.some((w) => w.startsWith("Incompatible droplet split")), result.warnings.join("\n"));
@@ -308,6 +369,11 @@ test("a split round compares only with one split the same way, droplet by drople
   const lost = merged(2, { round: "r18", excluded: ["aspnet"] });
   const loss = compare(lost, then);
   assert.equal(loss.compatible, false); assert.equal(loss.qualificationLosses[0].app, "aspnet");
+  // Qualification is the feature contract, not a machine's numbers: a loss is named even against
+  // a single-host baseline, which the split's shape keeps from any delta.
+  const across = compare(lost, full());
+  assert.equal(across.compatible, false); assert.deepEqual(across.qualificationLosses.map((l) => l.app), ["aspnet"]);
+  assert.ok(across.warnings.some((w) => w.startsWith("Incompatible droplet split")), across.warnings.join("\n"));
   // Droplets on mixed CPU models compare only with a baseline mixed the same way, droplet by droplet.
   const mixed = (s, d1, d2) => { const v = structuredClone(s); v.split.parts[0].host.cpu = v.host.cpu = d1; v.split.parts[1].host.cpu = d2; return validateSummary(v); };
   const x8168 = "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz", x8280 = "Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz";
