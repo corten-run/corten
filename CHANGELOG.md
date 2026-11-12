@@ -56,6 +56,20 @@ Corten is pre-1.0, so any minor version may change the API.
   and a request costs the same instructions; a listener of the app's own keeps its choice (design
   Choice 41, `bench/nodelay`)
   ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
+- A write or a WebSocket handshake with no `Sec-Fetch-Site` (every handshake from Chromium and
+  Firefox) is checked against `Host` by its name and port, and under `Policy::hsts` its scheme,
+  where only what followed `://` was compared: under `Policy::hsts` the `Origin` must be `https` or
+  loopback, so a plain-http page on the app's host can no longer open a socket to the HTTPS app
+  (with the user's `Secure` cookies) or post to it. Browsers send `Sec-Fetch-Site` only to secure
+  origins, so an app with `hsts` now refuses every write and handshake from a plain-http page other
+  than loopback, in every browser, the app itself reached as `http://192.168.1.5` included; one
+  served that way must not set `hsts`. A default port is the same written or left out
+  (`https://app.example` matches `Host: app.example:443`), also for the plain notice cookie, and an
+  origin of another scheme (`capacitor://localhost`) is refused. Without `hsts` the scheme is still
+  not compared, since behind a proxy that ends TLS the app cannot tell which it is served over
+  ([design Limit 26](docs/design.md#limit-origin-scheme)); the deploy guide's checklist says to set
+  `hsts` for an app served only over HTTPS even when the proxy sends the header
+  ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
 - Locale negotiation follows RFC 4647 Lookup, then Corten's same-language step: an
   `Accept-Language` tag loses its last subtag (and a single-character one before it) until it
   names a listed locale, and only then is the first locale of its language taken
