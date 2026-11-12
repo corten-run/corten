@@ -7,6 +7,10 @@ CSRF middleware, templates, forms and scripts remain native. Rejected validation
 missing records, missing CSRF tokens and cross-site requests do not write alerts.
 Validation returns the localized message and half-up rounded minor units from one
 parse; amounts beyond signed 64-bit minor units are rejected safely.
+Before a POST renders or persists, its complete source record is checked for required
+keys, nested row shapes, primitive types and nullability. An incomplete or
+wrong-shaped upstream record produces the native 500 without adding alerts or
+creating a session. GET page and record-JSON behavior is unchanged.
 
 SQLite and Django migrations are built in, so no package is added. Row inserts,
 rather than read/modify/write of a session list, preserve concurrent appends across
@@ -28,8 +32,13 @@ Run `python -m django test itempage` in both profiles (matched: `PROFILE=matched
 fixation, readback and isolation. The real HTTP/concurrent and JS/no-JS browser
 checks are documented in `../fastapi/README.md`; they exercise the ordinary app
 image with its native workers, not Django's in-process test client.
+`itempage.test_marketplace_record` also uses Django's real live HTTP server and a
+real upstream HTTP server to check malformed-record writes and recovery with the
+same cookie jar, in both profiles. Include localhost in matched `HOSTS` for it.
 
 ## Unreleased
 
 - Add native database-session alert persistence and ordered, independent JSON
   readback while retaining Django security middleware and existing JS behavior.
+- Reject incomplete source records before alert writes, including fields silently
+  tolerated by Django templates.

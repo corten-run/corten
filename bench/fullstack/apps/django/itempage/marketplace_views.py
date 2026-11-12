@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from .marketplace import LABELS, MarketplaceFormat, source
+from .marketplace import LABELS, MarketplaceFormat, source, validate_record
 from .models import Alert
 
 
@@ -21,6 +21,8 @@ def show(request, locale, record_id):
     record = source.get(record_id)
     if record is None:
         raise Http404
+    if request.method == "POST":
+        validate_record(record)
     fmt = MarketplaceFormat(locale)
     prefix = request.GET.get("seller", "")
     order = "desc" if request.GET.get("sort") == "desc" else "asc"

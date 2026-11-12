@@ -59,12 +59,25 @@ dependency; none is added or disabled. POST responses and readbacks are no-store
 The existing read-only pages, record JSON, full-page marketplace forms and legacy
 htmx enhancement remain unchanged.
 
+For an accepted POST only, the controller resolves the normal Thymeleaf view and
+renders it once into Spring's `ContentCachingResponseWrapper`. Only a complete,
+successful render appends the alert; the buffered bytes are then copied to the
+response. A render exception or error status cannot append or expose partial HTML.
+GET and rejected form rendering retain the ordinary MVC lifecycle. This does not
+promise rollback when a client disconnects after an alert has committed.
+
 `mvn -B test` includes native validation/concurrent-session tests. Real HTTP,
 isolation, concurrent writes, and JS/no-JS browser checks for the built image are
 documented in `../fastapi/README.md`. They retain the same browser/request cookie
 jar between each POST and its separate readback, with no reset/oracle endpoint.
+`AlertsHttpTest` runs a real upstream and embedded Tomcat HTTP server: a malformed
+`fields: [null]` record that fails inside Thymeleaf, after a large output prefix,
+must return 500 with unchanged readback for existing and fresh cookie jars. A valid
+subsequent write must still append exactly once.
 
 ## Unreleased
 
 - Persist native servlet-session marketplace alerts with independent JSON readback,
   atomic appends and cross-site write rejection.
+- Complete native template rendering before committing an accepted alert so a
+  failed render cannot mutate the session store.

@@ -30,10 +30,13 @@ class AlertsTest {
         assertEquals(List.of(), Alerts.read(null));
     }
 
-    @Test void validationAndCrossSiteRequestsNeverAppend() {
+    @Test void validationAndCrossSiteRequestsNeverAppend() throws Exception {
         var source = org.mockito.Mockito.mock(MarketplaceSource.class);
         org.mockito.Mockito.when(source.get("item_1")).thenReturn(MarketplaceTest.sample());
-        var controller = new MarketplaceController(source);
+        var views = org.mockito.Mockito.mock(org.thymeleaf.spring6.view.ThymeleafViewResolver.class);
+        var view = org.mockito.Mockito.mock(org.springframework.web.servlet.View.class);
+        org.mockito.Mockito.when(views.resolveViewName(org.mockito.ArgumentMatchers.eq("marketplace"), org.mockito.ArgumentMatchers.any())).thenReturn(view);
+        var controller = new MarketplaceController(source, views);
         var request = new MockHttpServletRequest("POST", "/marketplace/en-US/item_1");
         var response = new MockHttpServletResponse();
         for (String target : List.of("", "0", "NaN", "92233720368547758.08"))
@@ -45,5 +48,33 @@ class AlertsTest {
         assertThrows(ResponseStatusException.class, () -> controller.show("en-US", "item_1", "", "asc", "", "a@b", "2", request, response, new ExtendedModelMap()));
         assertEquals(1, Alerts.read(request.getSession()).size());
         assertThrows(ResponseStatusException.class, () -> controller.show("en-US", "missing", "", "asc", "", "a@b", "2", new MockHttpServletRequest("POST", "/"), response, new ExtendedModelMap()));
+    }
+
+    @Test void failedOrErrorStatusViewDoesNotAppendOrExposePartialHtml() throws Exception {
+        var source = org.mockito.Mockito.mock(MarketplaceSource.class);
+        org.mockito.Mockito.when(source.get("item_1")).thenReturn(MarketplaceTest.sample());
+        var views = org.mockito.Mockito.mock(org.thymeleaf.spring6.view.ThymeleafViewResolver.class);
+        var view = org.mockito.Mockito.mock(org.springframework.web.servlet.View.class);
+        org.mockito.Mockito.when(views.resolveViewName(org.mockito.ArgumentMatchers.eq("marketplace"), org.mockito.ArgumentMatchers.any())).thenReturn(view);
+        var controller = new MarketplaceController(source, views);
+        org.mockito.Mockito.doAnswer(call -> {
+            var response = call.getArgument(2, jakarta.servlet.http.HttpServletResponse.class);
+            response.getWriter().write("partial");
+            response.flushBuffer();
+            throw new IllegalStateException("render failed");
+        }).when(view).render(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        var request = new MockHttpServletRequest("POST", "/marketplace/en-US/item_1");
+        var response = new MockHttpServletResponse();
+        assertThrows(IllegalStateException.class, () -> controller.show("en-US", "item_1", "", "asc", "", "a@b", "1", request, response, new ExtendedModelMap()));
+        assertNull(request.getSession(false));
+        assertFalse(response.isCommitted());
+        assertEquals("", response.getContentAsString());
+        org.mockito.Mockito.doAnswer(call -> {
+            call.getArgument(2, jakarta.servlet.http.HttpServletResponse.class).setStatus(500);
+            return null;
+        }).when(view).render(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        controller.show("en-US", "item_1", "", "asc", "", "a@b", "1", request, response, new ExtendedModelMap());
+        assertEquals(500, response.getStatus());
+        assertNull(request.getSession(false));
     }
 }

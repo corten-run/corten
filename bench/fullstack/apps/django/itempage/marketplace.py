@@ -14,6 +14,42 @@ LABELS = json.loads((Path(__file__).resolve().parent / "marketplace_labels.json"
 LOCALES = {name: Locale.parse(name, sep="-") for name in LABELS}
 
 
+def _object(value, fields):
+    if not isinstance(value, dict) or value.keys() != fields.keys():
+        raise ValueError("Invalid marketplace object")
+    if any(type(value[key]) not in types for key, types in fields.items()):
+        raise ValueError("Invalid marketplace field type")
+
+
+def validate_record(record):
+    """Validate a write's complete source record, not what the template happens to use."""
+    text, number = (str,), (int,)
+    nullable_text, nullable_number = (str, type(None)), (int, type(None))
+    arrays = ("categories", "badges", "tags", "images", "fields", "listings", "offers", "contents", "included_in")
+    _object(record, {
+        "id": text, "title": text, "subtitle": nullable_text, "description": text,
+        "summary": (dict, type(None)), **{key: (list,) for key in arrays},
+    })
+    for key in ("badges", "tags", "images"):
+        if any(not isinstance(value, str) for value in record[key]):
+            raise ValueError("Invalid marketplace text array")
+    schemas = {
+        "categories": {"name": text, "slug": text},
+        "fields": {"name": text, "value": text},
+        "listings": {"id": text, "seller": text, "rating_hundredths": nullable_number,
+            "reviews": number, "condition": text, "ships_from": text, "quantity": number, "price_minor": nullable_number},
+        "offers": {"id": text, "buyer": text, "condition": text, "quantity": number, "price_minor": nullable_number},
+        "contents": {"id": text, "item_id": text, "title": text, "quantity": number},
+        "included_in": {"id": text, "item_id": text, "title": text, "quantity": number},
+    }
+    for key, schema in schemas.items():
+        for row in record[key]:
+            _object(row, schema)
+    summary = record["summary"]
+    if summary is not None:
+        _object(summary, {"lowest_minor": nullable_number, "count": number, "quantity": number})
+
+
 class MarketplaceSource:
     def __init__(self):
         self.base = os.environ.get("API_BASE", "http://localhost:8080").rstrip("/")
