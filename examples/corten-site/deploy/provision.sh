@@ -6,9 +6,13 @@
 # Safe to run again: each step leaves what is already in place.
 set -eu
 
-domain=${1:?the site's domain}
-email=${2:?an email address for Let's Encrypt}
-key=${3:?the file holding the public half of the deploy key}
+if [ $# -lt 3 ] || [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
+    echo "usage: sh provision.sh <domain> <email for Let's Encrypt> <the deploy key's public half, a file> ['<what the machine is>']" >&2
+    exit 1
+fi
+domain=$1
+email=$2
+key=$3
 machine=${4:-}
 here=$(cd "$(dirname "$0")" && pwd)
 # What the machine is, as the page states it: the argument, or what an earlier run was given.
