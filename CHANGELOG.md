@@ -55,7 +55,9 @@ Corten is pre-1.0, so any minor version may change the API.
 - `App::max_connections` counts a switched connection, a WebSocket after its `101` or a tunnel
   after a `2xx` to `CONNECT`, until its route drops the socket: the cap's permit is held by the
   socket hyper hands to the route. Before, it was given back at the switch, so a client that
-  opened connections and switched them was not bounded by the cap
+  opened connections and switched them was not bounded by the cap. An app with long-lived
+  WebSockets or tunnels that sets the cap now needs room in it for them, and its routes end idle
+  ones
   ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
 - A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
   `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and

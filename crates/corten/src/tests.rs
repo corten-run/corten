@@ -9748,6 +9748,114 @@ async fn a_switched_connection_counts_against_max_connections_until_it_closes() 
     server.await.unwrap().unwrap();
 }
 
+/// A switched connection counts until its route drops the socket, not until the client closes
+/// it: a route that returns after one echo gives its place back while the client still holds its
+/// TCP connection open, and the next connection is served (#1249).
+#[tokio::test]
+async fn a_switched_connection_stops_counting_when_its_route_drops_the_socket() {
+    use crate::upgrade::{Switch, Upgrade};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn once(upgrade: Upgrade) -> crate::Result<Switch> {
+        upgrade.websocket(|mut stream: crate::upgrade::Stream, _: crate::Signal| async move {
+            let mut buf = [0u8; 4];
+            if stream.read_exact(&mut buf).await.is_ok() {
+                let _ = stream.write_all(&buf).await;
+            }
+        })
+    }
+    let routes = Table::new().route("/ws", get(once)).route("/", get(|| async { "hi" }));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).max_connections(1);
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    socket
+        .write_all(b"GET /ws HTTP/1.1\r\nhost: localhost\r\nconnection: Upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        .await
+        .unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(socket.read_u8().await.expect("the switch's head"));
+    }
+    assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
+    socket.write_all(b"ping").await.unwrap();
+    let mut echoed = [0u8; 4];
+    socket.read_exact(&mut echoed).await.unwrap();
+    assert_eq!(&echoed, b"ping");
+    // The route has returned and dropped its stream; the client keeps its end open.
+    let answer = tokio::time::timeout(Duration::from_secs(3), raw_get(addr, "/", ""))
+        .await
+        .expect("served once the route dropped the socket, with the client's end still open");
+    assert!(answer.ends_with("hi"), "{answer}");
+    let mut rest = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_secs(3), socket.read_to_end(&mut rest)).await;
+    assert!(matches!(closed, Ok(Ok(0))), "the server closed its end when the route dropped it: {closed:?}");
+    drop(socket);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// Over `corten::serve_wrapped`, a connection that switches after its step holds its place under
+/// `App::max_connections` as a plain one does: the next connection waits while the WebSocket is
+/// open and is served once it closes (#1249).
+#[tokio::test]
+async fn a_switched_connection_after_a_step_counts_against_max_connections() {
+    use crate::upgrade::{Switch, Upgrade};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // A stand-in for a handshake: the client sends "hello\n" first.
+    async fn hello(mut tcp: tokio::net::TcpStream) -> std::io::Result<tokio::net::TcpStream> {
+        let mut greeting = [0u8; 6];
+        tcp.read_exact(&mut greeting).await?;
+        match &greeting {
+            b"hello\n" => Ok(tcp),
+            _ => Err(std::io::Error::other("not a greeting")),
+        }
+    }
+    async fn hold(upgrade: Upgrade) -> crate::Result<Switch> {
+        upgrade.websocket(|mut stream: crate::upgrade::Stream, _: crate::Signal| async move {
+            let mut buf = [0u8; 64];
+            while matches!(stream.read(&mut buf).await, Ok(n) if n > 0) {}
+        })
+    }
+    let routes = Table::new().route("/ws", get(hold)).route("/", get(|| async { "hi" }));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).max_connections(1);
+    let server = tokio::spawn(crate::app::run(listeners, hello, app, async {
+        let _ = stopped.await;
+    }));
+    let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    socket
+        .write_all(b"hello\nGET /ws HTTP/1.1\r\nhost: localhost\r\nconnection: Upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        .await
+        .unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(socket.read_u8().await.expect("the switch's head"));
+    }
+    assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
+    let second = tokio::spawn(async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"hello\nGET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).await.unwrap();
+        answer
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!second.is_finished(), "a second connection waits while a WebSocket after a step is open");
+    drop(socket);
+    let answer = tokio::time::timeout(Duration::from_secs(3), second).await.expect("served once the WebSocket closes").unwrap();
+    assert!(answer.ends_with("hi"), "{answer}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// A `2xx` to `CONNECT` switches the connection to a tunnel, as a `101` does, so
 /// `App::header_timeout` no longer bounds it: a tunnel carrying bytes both ways stays open past
 /// twice the timeout, and so does one where neither side sends (its idle time is the route's), and

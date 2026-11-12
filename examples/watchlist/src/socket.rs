@@ -26,6 +26,13 @@ const LONGEST: usize = 64;
 /// rather than hold its task until the app stops.
 const SLOW: Duration = Duration::from_secs(10);
 
+/// How often the server pings a client; a ticker that only listens answers with a pong.
+const PING: Duration = Duration::from_secs(30);
+
+/// How long a client may send nothing, not even a pong, before its socket is closed: an idle
+/// socket holds one of the app's connections (`App::max_connections` counts it).
+const IDLE: Duration = Duration::from_secs(60);
+
 /// Small buffers for small messages. A frame may still be up to 125 bytes, the most a control
 /// frame (a ping, a close with its reason) can be.
 fn config() -> WebSocketConfig {
@@ -48,7 +55,7 @@ pub(crate) async fn quotes(State(market): State<Market>, upgrade: Upgrade) -> co
 }
 
 /// Answers the client's tickers and sends each followed stock when it trades, until the client
-/// leaves or `stop` resolves.
+/// leaves, sends nothing for [`IDLE`] (it is pinged every [`PING`]) or `stop` resolves.
 async fn follow<S>(mut socket: WebSocketStream<S>, market: Market, stop: impl Future<Output = ()>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -57,9 +64,11 @@ where
     // Each stock followed, with the price last sent for it.
     let mut followed: Vec<(&'static str, u32)> = Vec::new();
     let mut stop = std::pin::pin!(stop);
+    let mut heard = tokio::time::Instant::now();
+    let mut beat = tokio::time::interval_at(heard + PING, PING);
     loop {
         let sent = tokio::select! {
-            message = socket.next() => match message {
+            message = socket.next() => match message.inspect(|_| heard = tokio::time::Instant::now()) {
                 Some(Ok(Message::Text(text))) => {
                     let asked = text.as_str().trim().to_ascii_uppercase();
                     match Market::ticker(&asked) {
@@ -86,9 +95,21 @@ where
                     break;
                 }
                 Some(Err(_)) | None => break,
-                // Pings are answered by the library; a binary frame means nothing here.
+                // Pings are answered by the library, and a pong counts as heard; a binary frame
+                // means nothing here.
                 Some(Ok(_)) => Ok(()),
             },
+            _ = beat.tick() => {
+                if heard.elapsed() >= IDLE {
+                    let idle = CloseFrame { code: CloseCode::Away, reason: "no answer to pings".into() };
+                    goodbye(&mut socket, Some(idle)).await;
+                    break;
+                }
+                match tokio::time::timeout(SLOW, socket.send(Message::Ping(Default::default()))).await {
+                    Ok(Ok(())) => Ok(()),
+                    _ => Err(()),
+                }
+            }
             changed = trades.changed() => {
                 if changed.is_err() {
                     break;
@@ -203,6 +224,45 @@ mod tests {
             Some(Ok(Message::Close(Some(frame)))) => assert_eq!(frame.code, CloseCode::Size),
             other => panic!("expected a close, got {other:?}"),
         }
+    }
+
+    /// A client that answers nothing, not even the server's pings, is closed once it has been
+    /// quiet for `IDLE`; one that reads (and so answers each ping) stays open.
+    #[tokio::test(start_paused = true)]
+    async fn a_client_that_answers_no_ping_is_closed_once_idle() {
+        let market = Market::new();
+        let mut quiet = connect(&market, std::future::pending()).await;
+        quiet.send(Message::text("ACME")).await.unwrap();
+        next(&mut quiet).await;
+        let mut listening = connect(&market, std::future::pending()).await;
+        listening.send(Message::text("ACME")).await.unwrap();
+        next(&mut listening).await;
+        // The listening client reads (and answers pings) for three times IDLE.
+        let heard = tokio::time::timeout(IDLE * 3, async {
+            loop {
+                match listening.next().await {
+                    Some(Ok(Message::Ping(_))) => {}
+                    other => return other,
+                }
+            }
+        })
+        .await;
+        assert!(heard.is_err(), "a client that answers pings stays open: {heard:?}");
+        // The quiet one, reading only now, finds pings and then the close; or, since reading a
+        // ping makes it send its pong first, finds the server already gone.
+        let started = tokio::time::Instant::now();
+        let closed = loop {
+            match quiet.next().await {
+                Some(Ok(Message::Ping(_))) => {}
+                other => break other,
+            }
+        };
+        match closed {
+            Some(Ok(Message::Close(Some(frame)))) => assert_eq!(frame.code, CloseCode::Away),
+            Some(Err(Error::Io(error))) => assert_eq!(error.kind(), std::io::ErrorKind::BrokenPipe),
+            other => panic!("expected the socket closed, got {other:?}"),
+        }
+        assert_eq!(started.elapsed(), Duration::ZERO, "closed while the other client was heard");
     }
 
     #[tokio::test]

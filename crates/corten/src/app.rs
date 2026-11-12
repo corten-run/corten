@@ -1028,7 +1028,8 @@ impl<M: Middleware> App<M> {
     /// rest. Bounds what many idle or slow clients can hold of the process's sockets and memory.
     /// A switched connection (a WebSocket after its `101`, a tunnel after a `2xx` to `CONNECT`)
     /// counts until its route drops the socket, so size the cap for the sockets an app keeps open
-    /// as well as for its requests.
+    /// as well as for its requests, and end idle ones in the route, which no timeout of Corten's
+    /// does (`docs/design.md#limit-protocol-switch`).
     pub fn max_connections(mut self, max: usize) -> Self {
         assert!(max > 0, "corten: max_connections is at least 1");
         self.connections.max = Some(max);
@@ -1813,8 +1814,7 @@ where
         let service = hyper_util::service::TowerToHyperService::new(connection);
         let (alive, mut stop, wrap, http) = (alive.clone(), stop.clone(), wrap.clone(), http.clone());
         tokio::spawn(async move {
-            // Held by the task until the step is done, then by the IO (`Watched`).
-            let permit = permit;
+            // `permit` is held by the task until the step is done, then by the IO (`Watched`).
             // The step, until it is done, the clock expires the connection or shutdown begins.
             let io = {
                 let mut step = std::pin::pin!(wrap(io));
@@ -1830,7 +1830,7 @@ where
                     _ => return,
                 }
             };
-            let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, _open: permit });
+            let io = hyper_util::rt::TokioIo::new(crate::watch::Watched { io, watch, open: permit });
             let mut conn = std::pin::pin!(http.serve_connection(io, service).with_upgrades());
             let closing = tokio::select! {
                 _ = conn.as_mut() => return,
