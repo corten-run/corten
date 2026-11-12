@@ -216,11 +216,26 @@ struct Server {
     last_render_micros: u64,
     plates_struck: u64,
     pages_following: u64,
+    /// Over the time since the reading before, and since the server started.
+    pages_a_second: u64,
+    most_pages_following: u64,
     /// The memory the server holds and the machine it is on, as the system counts them; 0 where
     /// it does not say.
     memory_held_bytes: u64,
     machine_memory_bytes: u64,
     machine_cpus: usize,
+    /// Whether that memory is a limit a container holds the server to, and the CPUs it holds it
+    /// to (`null` with no limit). Each decides whose count the reading under it is.
+    machine_memory_limited: bool,
+    machine_cpu_limit: Option<f64>,
+    /// How much is in use: of the machine, by everything on it, or of a limit, by what the
+    /// container holds. 0 where the system does not count, and the percent is `null` there and
+    /// until two counts are half a second apart.
+    machine_memory_used_bytes: u64,
+    machine_cpu_used_percent: Option<u8>,
+    /// This server's part of the machine's percent: a part of all its CPUs, not of one. `null`
+    /// under a CPU limit, where the percent above is the server's already.
+    cpu_used_percent: Option<u8>,
 }
 
 impl<'a> Sheet<'a> {
@@ -239,9 +254,16 @@ impl<'a> Sheet<'a> {
                 last_render_micros: pulse.render_micros,
                 plates_struck: pulse.plates,
                 pages_following: pulse.followers,
+                pages_a_second: pulse.pages_a_second,
+                most_pages_following: pulse.most_followers,
                 memory_held_bytes: pulse.held_bytes,
                 machine_memory_bytes: machine.memory_bytes,
                 machine_cpus: machine.cpus,
+                machine_memory_limited: machine.memory_limited,
+                machine_cpu_limit: machine.cpu_limit,
+                machine_memory_used_bytes: pulse.used.memory_bytes,
+                machine_cpu_used_percent: pulse.used.cpu,
+                cpu_used_percent: pulse.used.cpu_own,
             },
         }
     }
@@ -422,6 +444,39 @@ mod tests {
             assert!(page.text().contains(&format!(">{word}</span>")), "the plate lacks {word}");
         }
         assert!(page.text().contains(&format!("built from {HEAT}")), "the certificate does not name {HEAT}");
+    }
+
+    /// The JSON's readings are the pulse's, and it says whose count each of the machine's is: a
+    /// client told only "41%" could not tell a container's limit from the machine.
+    #[test]
+    fn the_json_says_what_the_readout_shows_and_whose_count_it_is() {
+        let meminfo = Some("MemTotal:       12250780 kB\nMemAvailable:   8000000 kB\n");
+        let pulse = works::Pulse {
+            pages_a_second: 12,
+            most_followers: 3,
+            used: works::Used { cpu: Some(41), cpu_own: None, memory_bytes: 200 << 20 },
+            ..works::Pulse::default()
+        };
+        let held = works::Machine::counted(1, meminfo, Some("536870912\n"), Some("50000 100000\n"));
+        let data = Sheet::new(&pulse, &held, None).to_json();
+        for part in [
+            r#""pages_a_second":12"#,
+            r#""most_pages_following":3"#,
+            r#""machine_memory_bytes":536870912"#,
+            r#""machine_memory_limited":true"#,
+            r#""machine_cpu_limit":0.5"#,
+            r#""machine_memory_used_bytes":209715200"#,
+            r#""machine_cpu_used_percent":41"#,
+            r#""cpu_used_percent":null"#,
+        ] {
+            assert!(data.contains(part), "the JSON lacks {part}: {data}");
+        }
+        let whole = works::Machine::counted(8, meminfo, None, None);
+        let pulse = works::Pulse { used: works::Used { cpu: Some(41), cpu_own: Some(7), memory_bytes: 1 }, ..pulse };
+        let data = Sheet::new(&pulse, &whole, None).to_json();
+        for part in [r#""machine_memory_limited":false"#, r#""machine_cpu_limit":null"#, r#""cpu_used_percent":7"#] {
+            assert!(data.contains(part), "the JSON lacks {part}: {data}");
+        }
     }
 
     #[tokio::test]

@@ -1,8 +1,10 @@
 //! What this server knows about itself: how long it has been up, the pages it has rendered and
 //! how long the last one took, the plates struck, how many pages are following along, and, where
-//! the operating system says (Linux), the memory it holds and the machine it is on. A task
-//! reads it once a second into a `watch` channel, and every open page's `<corten-live>` follows
-//! that channel (`corten::live_watch`). Nothing here is made up for show: each number is counted.
+//! the operating system says (Linux), the memory it holds, the machine it is on and how much of
+//! that machine's CPU and memory is in use: the whole machine's, or, where a container holds the
+//! server to a limit, what is in use of that limit. A task reads it once a second into a `watch`
+//! channel, and every open page's `<corten-live>` follows that channel (`corten::live_watch`).
+//! Nothing here is made up for show: each number is counted.
 use std::{
     sync::{
         Arc,
@@ -22,14 +24,35 @@ pub struct Pulse {
     /// Seconds since the server started: the stream's cursor.
     pub beat: u64,
     pub pages: u64,
+    /// Pages rendered a second, over the time since the count before.
+    pub pages_a_second: u64,
     /// The last page's render, in microseconds; 0 before the first.
     pub render_micros: u64,
     pub plates: u64,
     /// Pages following the stream right now.
     pub followers: u64,
+    /// The most that have followed it at once since the server started.
+    pub most_followers: u64,
     /// The memory this process holds (its resident set), in bytes; 0 where it cannot be read.
     pub held_bytes: u64,
+    pub used: Used,
     pub moved: Moved,
+}
+
+/// How much is in use of what the server has to work with (`Machine`): what says whether it is
+/// keeping up with everyone reading. All of it is absent where the system does not count.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Used {
+    /// The CPU in use, as a percent: of the machine's, by everything on it, or of the limit a
+    /// container holds the server to (`Machine::cpu_limit`). `None` until two counts are half a
+    /// second apart.
+    pub cpu: Option<u8>,
+    /// This server's part of the machine's percent. `None` under a container's limit, where the
+    /// count is the server's own already.
+    pub cpu_own: Option<u8>,
+    /// The memory in use, in bytes: the machine's, or what is counted against a container's
+    /// limit (`Machine::memory_limited`); 0 where it cannot be read.
+    pub memory_bytes: u64,
 }
 
 /// The machine the server runs on, read once when it starts: what the operating system counts,
@@ -43,20 +66,70 @@ pub struct Machine {
     pub memory_bytes: u64,
     /// What whoever runs it calls it (`CORTEN_SITE_MACHINE`): a size and a price, say.
     pub named: Option<String>,
+    /// Whether that memory is a container's limit (a control group's `memory.max`): the memory
+    /// in use is then the group's count, not the machine's.
+    pub memory_limited: bool,
+    /// The CPUs a container holds the server to (a control group's `cpu.max`), where it sets a
+    /// limit: the CPU in use is then the group's count as a part of this, not the machine's.
+    pub cpu_limit: Option<f64>,
+    /// Whether the system counts what is in use of both, found by reading each once.
+    pub metered: bool,
+}
+
+/// A file the system keeps, as text; `None` where it keeps none.
+fn system(path: &str) -> Option<String> {
+    std::fs::read_to_string(path).ok()
 }
 
 impl Machine {
-    fn read() -> Self {
+    /// The machine as the system's files say it: `/proc/meminfo`, and the `memory.max` and
+    /// `cpu.max` of the control group a container puts the server in.
+    pub(crate) fn counted(cpus: usize, meminfo: Option<&str>, memory_max: Option<&str>, cpu_max: Option<&str>) -> Self {
+        let memory_bytes = memory_bytes(meminfo, memory_max);
         Machine {
-            cpus: std::thread::available_parallelism().map_or(0, usize::from),
-            memory_bytes: memory_bytes(
-                std::fs::read_to_string("/proc/meminfo").ok().as_deref(),
-                std::fs::read_to_string("/sys/fs/cgroup/memory.max").ok().as_deref(),
-            ),
-            named: std::env::var("CORTEN_SITE_MACHINE")
-                .ok()
-                .map(|named| named.trim().to_string())
-                .filter(|named| !named.is_empty()),
+            cpus,
+            memory_bytes,
+            named: None,
+            memory_limited: memory_bytes < self::memory_bytes(meminfo, None),
+            cpu_limit: cpu_max.and_then(quota),
+            metered: false,
+        }
+    }
+
+    fn read() -> Self {
+        let mut machine = Machine::counted(
+            std::thread::available_parallelism().map_or(0, usize::from),
+            system("/proc/meminfo").as_deref(),
+            system("/sys/fs/cgroup/memory.max").as_deref(),
+            system("/sys/fs/cgroup/cpu.max").as_deref(),
+        );
+        machine.named =
+            std::env::var("CORTEN_SITE_MACHINE").ok().map(|named| named.trim().to_string()).filter(|named| !named.is_empty());
+        machine.metered = machine.spent().is_some() && machine.used_bytes(0) > 0;
+        machine
+    }
+
+    /// Whether a container holds the server to a limit, of memory or of CPU.
+    pub fn held(&self) -> bool {
+        self.memory_limited || self.cpu_limit.is_some()
+    }
+
+    /// The CPU time spent so far, by the count that says what is in use of this machine.
+    fn spent(&self) -> Option<Spent> {
+        if self.cpu_limit.is_some() {
+            return system("/sys/fs/cgroup/cpu.stat").as_deref().and_then(group_micros).map(Spent::Group);
+        }
+        let (busy, idle) = system("/proc/stat").as_deref().and_then(machine_ticks)?;
+        Some(Spent::Machine { busy, idle, own: system("/proc/self/stat").as_deref().and_then(own_ticks)? })
+    }
+
+    /// The memory in use: the control group's count where its limit is the machine's memory,
+    /// else the system's. `held` is what this server holds.
+    fn used_bytes(&self, held: u64) -> u64 {
+        if self.memory_limited {
+            group_bytes(system("/sys/fs/cgroup/memory.current").as_deref(), system("/sys/fs/cgroup/memory.stat").as_deref(), held)
+        } else {
+            system("/proc/meminfo").as_deref().and_then(unavailable_bytes).unwrap_or(0)
         }
     }
 }
@@ -78,7 +151,106 @@ fn kib(text: &str, key: &str) -> Option<u64> {
 
 /// The memory this process holds now, in bytes; 0 where the system has no `/proc`.
 fn held_bytes() -> u64 {
-    std::fs::read_to_string("/proc/self/status").ok().and_then(|text| kib(&text, "VmRSS")).map_or(0, |kib| kib << 10)
+    system("/proc/self/status").and_then(|text| kib(&text, "VmRSS")).map_or(0, |kib| kib << 10)
+}
+
+/// The memory of `/proc/meminfo` that a new program could not be given, in bytes: all of it
+/// less what the system counts as available, which leaves out the file cache it can drop.
+fn unavailable_bytes(meminfo: &str) -> Option<u64> {
+    Some(kib(meminfo, "MemTotal")?.saturating_sub(kib(meminfo, "MemAvailable")?) << 10)
+}
+
+/// The memory a control group has in use, in bytes; 0 where it cannot be read. It is the
+/// group's `memory.current` less the file cache its `memory.stat` calls inactive, which the
+/// system drops first when the group needs room: the count `docker stats` shows. A group is
+/// charged for a page of a file only when it was the first to read it, so its count can leave
+/// out pages of the program itself, which the server holds all the same (`held`): the larger of
+/// the two is the least that is in use.
+fn group_bytes(current: Option<&str>, stat: Option<&str>, held: u64) -> u64 {
+    let Some(current) = current.and_then(|bytes| bytes.trim().parse::<u64>().ok()) else { return 0 };
+    let inactive = stat.and_then(|stat| stat.lines().find_map(|line| line.strip_prefix("inactive_file ")?.trim().parse().ok()));
+    current.saturating_sub(inactive.unwrap_or(0)).max(held)
+}
+
+/// A control group's `cpu.max`, `quota period` in microseconds, as the CPUs it may use: `None`
+/// where the quota is `max`, which is no limit.
+fn quota(max: &str) -> Option<f64> {
+    let (quota, period) = max.trim().split_once(' ')?;
+    let (quota, period) = (quota.parse::<f64>().ok()?, period.parse::<f64>().ok()?);
+    (quota > 0.0 && period > 0.0).then(|| quota / period)
+}
+
+/// The CPU time every CPU has spent so far, from the first line of `/proc/stat`: busy and idle,
+/// in the system's ticks. Waiting on a disk is idle, and the time the host gave another guest
+/// (steal, the eighth number) is neither: it was never this machine's to use.
+fn machine_ticks(stat: &str) -> Option<(u64, u64)> {
+    let mut times = stat.lines().next()?.strip_prefix("cpu ")?.split_whitespace().map(|time| time.parse::<u64>().ok());
+    let [user, nice, kernel, idle, iowait, irq, softirq] = std::array::from_fn(|_| times.next().flatten());
+    Some((user? + nice? + kernel? + irq? + softirq?, idle? + iowait?))
+}
+
+/// The CPU time this process has spent so far, from `/proc/self/stat`, in the same ticks: its
+/// time in user mode and in the kernel, the 12th and 13th numbers after the name, which ends at
+/// the last `)` and may itself hold spaces.
+fn own_ticks(stat: &str) -> Option<u64> {
+    let mut after = stat[stat.rfind(')')? + 1..].split_whitespace().skip(11).map(|time| time.parse::<u64>().ok());
+    Some(after.next()?? + after.next()??)
+}
+
+/// The CPU time a control group has spent so far, from its `cpu.stat`, in microseconds.
+fn group_micros(stat: &str) -> Option<u64> {
+    stat.lines().find_map(|line| line.strip_prefix("usage_usec ")?.trim().parse().ok())
+}
+
+/// CPU time spent so far, by one of the system's two counts. Each only grows, so two of them
+/// say what was used between.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Spent {
+    /// The machine's, busy and idle, and this process's part of it, in the system's ticks.
+    Machine { busy: u64, idle: u64, own: u64 },
+    /// A control group's, in microseconds.
+    Group(u64),
+}
+
+/// What has been counted up to one moment: two of these say what happened between them.
+#[derive(Clone, Copy, Debug)]
+struct Counts {
+    at: Instant,
+    /// Pages rendered so far.
+    pages: u64,
+    /// `None` where the system keeps no such count.
+    spent: Option<Spent>,
+}
+
+/// Counts closer together than this say too little to go by: a reading then keeps the figures
+/// of the one before, and the next is measured from the older count.
+const APART: Duration = Duration::from_millis(500);
+
+/// `part` of `whole` as a percent, to the nearest and at most 100; `None` of nothing.
+pub(crate) fn percent(part: u64, whole: u64) -> Option<u8> {
+    (whole > 0).then(|| ((part.saturating_mul(100) + whole / 2) / whole).min(100) as u8)
+}
+
+/// The CPU in use between two counts: the machine's and this server's part of it, or, where a
+/// control group holds the server to `limit` CPUs, the group's time as a part of that limit.
+/// `None` where the system kept no count.
+fn cpu_used(before: &Counts, now: &Counts, limit: Option<f64>) -> Option<(u8, Option<u8>)> {
+    match (before.spent?, now.spent?) {
+        (Spent::Group(before_micros), Spent::Group(micros)) => {
+            let between = now.at.saturating_duration_since(before.at).as_micros() as f64;
+            Some((percent(micros.saturating_sub(before_micros), (between * limit?) as u64)?, None))
+        }
+        (Spent::Machine { busy: busy_before, idle: idle_before, own: own_before }, Spent::Machine { busy, idle, own }) => {
+            let own = own.saturating_sub(own_before);
+            // The machine's line is sampled at the timer's tick and a process's time is exact, so
+            // a short burst can be in the one and not the other: the machine was busy for at
+            // least as long as this server ran.
+            let busy = busy.saturating_sub(busy_before).max(own);
+            let all = busy + idle.saturating_sub(idle_before);
+            Some((percent(busy, all)?, percent(own, all)))
+        }
+        _ => None,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -98,8 +270,8 @@ pub struct Sent {
 }
 
 impl Sent {
-    fn new(pulse: Pulse) -> Self {
-        let drawn = Readout { pulse: &pulse }.to_html().into();
+    fn new(pulse: Pulse, machine: &Machine) -> Self {
+        let drawn = Readout { pulse: &pulse, machine }.to_html().into();
         Sent { pulse, drawn }
     }
 }
@@ -112,6 +284,8 @@ struct Counted {
     pages: AtomicU64,
     render_micros: AtomicU64,
     plates: AtomicU64,
+    /// The most streams open at once, counted as each opens.
+    most: AtomicU64,
     pulse: watch::Sender<Sent>,
     /// The size of the program serving this, in bytes; 0 when it cannot be read.
     binary_bytes: u64,
@@ -126,15 +300,21 @@ impl Default for Works {
 
 impl Works {
     pub fn new() -> Self {
+        Self::on(Machine::read())
+    }
+
+    /// The server's counts on `machine`.
+    fn on(machine: Machine) -> Self {
         let binary_bytes = std::env::current_exe().and_then(std::fs::metadata).map_or(0, |file| file.len());
         Works(Arc::new(Counted {
             started: Instant::now(),
             pages: AtomicU64::new(0),
             render_micros: AtomicU64::new(0),
             plates: AtomicU64::new(0),
-            pulse: watch::Sender::new(Sent::new(Pulse::default())),
+            most: AtomicU64::new(0),
+            pulse: watch::Sender::new(Sent::new(Pulse::default(), &machine)),
             binary_bytes,
-            machine: Machine::read(),
+            machine,
         }))
     }
 
@@ -171,26 +351,46 @@ impl Works {
         self.0.pulse.borrow().pulse.clone()
     }
 
-    /// The readings as they come, for a page's stream.
+    /// The readings as they come, for a page's stream. The most open at once is counted here, as
+    /// each opens, so one that opens and closes between two readings is counted too.
     pub fn follow(&self) -> watch::Receiver<Sent> {
-        self.0.pulse.subscribe()
+        let following = self.0.pulse.subscribe();
+        self.0.most.fetch_max(self.0.pulse.receiver_count() as u64, Ordering::Relaxed);
+        following
     }
 
-    /// The server as it is now, with what moved since `last`.
-    fn read(&self, last: &Pulse) -> Pulse {
-        let pages = self.0.pages.load(Ordering::Relaxed);
+    /// What has been counted up to now.
+    fn counts(&self) -> Counts {
+        Counts { at: Instant::now(), pages: self.0.pages.load(Ordering::Relaxed), spent: self.0.machine.spent() }
+    }
+
+    /// The server as it is at `now`, with what moved since `last` and what was used since the
+    /// count `before`. Counts too close together (`APART`) keep the last reading's rates.
+    fn read(&self, last: &Pulse, before: &Counts, now: &Counts) -> Pulse {
         let render_micros = self.0.render_micros.load(Ordering::Relaxed);
         let plates = self.0.plates.load(Ordering::Relaxed);
         let followers = self.0.pulse.receiver_count() as u64;
+        let between = now.at.saturating_duration_since(before.at);
+        let (pages_a_second, cpu, cpu_own) = if between < APART {
+            (last.pages_a_second, last.used.cpu, last.used.cpu_own)
+        } else {
+            let millis = between.as_millis() as u64;
+            let (cpu, own) = cpu_used(before, now, self.0.machine.cpu_limit).unzip();
+            ((now.pages.saturating_sub(before.pages) * 1000 + millis / 2) / millis, cpu, own.flatten())
+        };
+        let held_bytes = held_bytes();
         Pulse {
             beat: self.0.started.elapsed().as_secs(),
-            pages,
+            pages: now.pages,
+            pages_a_second,
             render_micros,
             plates,
             followers,
-            held_bytes: held_bytes(),
+            most_followers: self.0.most.load(Ordering::Relaxed).max(followers),
+            held_bytes,
+            used: Used { cpu, cpu_own, memory_bytes: self.0.machine.used_bytes(held_bytes) },
             moved: Moved {
-                pages: pages != last.pages,
+                pages: now.pages != last.pages,
                 render: render_micros != last.render_micros,
                 plates: plates != last.plates,
                 followers: followers != last.followers,
@@ -202,13 +402,20 @@ impl Works {
     pub async fn run(self, signal: Signal) {
         let mut tick = tokio::time::interval(Duration::from_secs(1));
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut before = self.counts();
         loop {
             tokio::select! {
                 biased;
                 _ = signal.aborted() => return,
                 _ = tick.tick() => {
-                    let next = self.read(&self.0.pulse.borrow().pulse);
-                    self.0.pulse.send_replace(Sent::new(next));
+                    let now = self.counts();
+                    let next = self.read(&self.0.pulse.borrow().pulse, &before, &now);
+                    // The first tick comes at once, and one that was held up is followed by the
+                    // next too soon: neither is measured from.
+                    if now.at.saturating_duration_since(before.at) >= APART {
+                        before = now;
+                    }
+                    self.0.pulse.send_replace(Sent::new(next, &self.0.machine));
                 }
             }
         }
@@ -219,16 +426,101 @@ impl Works {
 mod tests {
     use super::*;
 
+    /// What `works` has counted, as if read `millis` after `start`, with no count of CPU time.
+    fn at(works: &Works, start: Instant, millis: u64) -> Counts {
+        Counts { at: start + Duration::from_millis(millis), spent: None, ..works.counts() }
+    }
+
     #[test]
     fn a_reading_says_what_moved() {
         let works = Works::new();
-        let first = works.read(&Pulse::default());
+        let start = Instant::now();
+        let none = at(&works, start, 0);
+        let first = works.read(&Pulse::default(), &none, &at(&works, start, 1000));
         assert!(!first.moved.pages && !first.moved.plates);
         works.rendered(Duration::from_micros(212));
         assert_eq!(works.struck(), 1);
-        let second = works.read(&first);
+        let second = works.read(&first, &none, &at(&works, start, 2000));
         assert_eq!((second.pages, second.render_micros, second.plates), (1, 212, 1));
         assert!(second.moved.pages && second.moved.render && second.moved.plates && !second.moved.followers);
+    }
+
+    /// The pages a second are the pages since the count before over the time since, and the
+    /// most following is counted as each stream opens, so it is kept after they have gone and
+    /// has one that came and went between two readings.
+    #[test]
+    fn a_reading_says_how_fast_and_how_many_at_most() {
+        let works = Works::new();
+        let start = Instant::now();
+        let none = at(&works, start, 0);
+        for _ in 0..30 {
+            works.rendered(Duration::from_micros(212));
+        }
+        let (one, two) = (works.follow(), works.follow());
+        // A reading that came late divides by the time it took.
+        let late = at(&works, start, 2000);
+        let first = works.read(&Pulse::default(), &none, &late);
+        assert_eq!((first.pages_a_second, first.followers, first.most_followers), (15, 2, 2));
+        drop((one, two, works.follow()));
+        let second = works.read(&first, &late, &at(&works, start, 3000));
+        assert_eq!((second.pages_a_second, second.followers, second.most_followers), (0, 0, 3));
+    }
+
+    /// A count too soon after the one before says too little: the reading keeps the last one's
+    /// rates, where dropping them would take the gauges off the page for a second.
+    #[test]
+    fn a_reading_too_soon_keeps_the_rates_of_the_one_before() {
+        let works = Works::new();
+        let start = Instant::now();
+        let last =
+            Pulse { pages_a_second: 40, used: Used { cpu: Some(55), cpu_own: Some(20), memory_bytes: 1 }, ..Pulse::default() };
+        let spent = |busy, idle, own| Some(Spent::Machine { busy, idle, own });
+        let before = Counts { spent: spent(1000, 5000, 300), ..at(&works, start, 0) };
+        works.rendered(Duration::from_micros(212));
+        let soon = works.read(&last, &before, &Counts { spent: spent(1001, 5001, 301), ..at(&works, start, 499) });
+        assert_eq!((soon.pages_a_second, soon.used.cpu, soon.used.cpu_own), (40, Some(55), Some(20)));
+        // The next is measured from the older count, and has the page the one too soon left out.
+        let next = works.read(&soon, &before, &Counts { spent: spent(1030, 5070, 310), ..at(&works, start, 1000) });
+        assert_eq!((next.pages_a_second, next.used.cpu, next.used.cpu_own), (1, Some(30), Some(10)));
+    }
+
+    #[test]
+    fn the_cpu_in_use_is_what_the_system_counted_between_two_readings() {
+        // A machine's own line, and a process's, whose name holds a space and a bracket.
+        let stat = "cpu  4705 150 1120 16250 520 30 45 700 0 0\ncpu0 4705 150 1120 16250 520 30 45 700 0 0\nintr 1\n";
+        assert_eq!(machine_ticks(stat), Some((4705 + 150 + 1120 + 30 + 45, 16250 + 520)));
+        assert_eq!(machine_ticks("cpu0 1 2 3 4 5 6 7 8\n"), None);
+        assert_eq!(machine_ticks("cpu  1 2 3\n"), None);
+        let own = "7 (corten site) 1) S 1 7 7 0 -1 4194560 911 0 0 0 31 12 0 0 20 0 3 0 5177 1 2 3\n";
+        assert_eq!(own_ticks(own), Some(31 + 12));
+        assert_eq!(own_ticks("7 (corten-site) S 1 7\n"), None);
+        assert_eq!(group_micros("usage_usec 81234567\nuser_usec 5\nsystem_usec 6\n"), Some(81_234_567));
+        assert_eq!(group_micros("user_usec 5\n"), None);
+        assert_eq!((quota("max 100000\n"), quota("100000 100000\n"), quota("50000 100000\n")), (None, Some(1.0), Some(0.5)));
+        assert_eq!((percent(1, 3), percent(2, 3), percent(7, 5), percent(1, 0)), (Some(33), Some(67), Some(100), None));
+
+        let works = Works::new();
+        let start = Instant::now();
+        let (none, later) = (at(&works, start, 0), at(&works, start, 1000));
+        let machine = |busy, idle, own| Some(Spent::Machine { busy, idle, own });
+        // On the machine itself: 100 ticks in the second, 40 of them busy, 25 this server's.
+        let before = Counts { spent: machine(1000, 5000, 300), ..none };
+        let now = Counts { spent: machine(1040, 5060, 325), ..later };
+        assert_eq!(cpu_used(&before, &now, None), Some((40, Some(25))));
+        // A burst between two of the machine's samples: it was busy for at least what this
+        // server used, so the part is never more than the whole.
+        let burst = Counts { spent: machine(1000, 5100, 302), ..later };
+        assert_eq!(cpu_used(&before, &burst, None), Some((2, Some(2))));
+        // Under a group's limit of half a CPU: 300 ms of CPU time in the second is 60% of it, and
+        // the machine around the group is not counted.
+        let before = Counts { spent: Some(Spent::Group(2_000_000)), ..none };
+        let now = Counts { spent: Some(Spent::Group(2_300_000)), ..later };
+        assert_eq!(cpu_used(&before, &now, Some(0.5)), Some((60, None)));
+        // Nothing is said where the system keeps no count, or one count is not the other's kind.
+        assert_eq!(cpu_used(&none, &later, None), None);
+        assert_eq!(cpu_used(&none, &later, Some(1.0)), None);
+        assert_eq!(cpu_used(&before, &burst, Some(0.5)), None);
+        assert_eq!(cpu_used(&before, &now, None), None);
     }
 
     #[test]
@@ -244,6 +536,42 @@ mod tests {
         assert_eq!(memory_bytes(Some(meminfo), Some("536870912\n")), 536_870_912);
         assert_eq!(memory_bytes(Some(meminfo), None), 12_250_780 << 10);
         assert_eq!(memory_bytes(None, Some("536870912\n")), 0);
+        // What is in use is what a new program could not have.
+        let meminfo = "MemTotal:         468428 kB\nMemFree:  9000 kB\nMemAvailable:     268428 kB\n";
+        assert_eq!(unavailable_bytes(meminfo), Some(200_000 << 10));
+        assert_eq!(unavailable_bytes("MemTotal:         468428 kB\n"), None);
+        // A group's count, less the file cache it would drop first, and never said to be less
+        // than what the server itself holds.
+        let stat = "anon 9000000\nfile 8000000\ninactive_file 6000000\nactive_file 2000000\n";
+        assert_eq!(group_bytes(Some("20000000\n"), Some(stat), 5_775_360), 14_000_000);
+        assert_eq!(group_bytes(Some("20000000\n"), None, 5_775_360), 20_000_000);
+        assert_eq!(group_bytes(Some("7503232\n"), Some(stat), 5_775_360), 5_775_360);
+        assert_eq!((group_bytes(Some("max\n"), Some(stat), 5_775_360), group_bytes(None, Some(stat), 5_775_360)), (0, 0));
+    }
+
+    /// Which count says what is in use follows from the limits a container sets: neither, the
+    /// memory's alone, the CPU's alone, or both, and a limit above the machine's memory is none.
+    #[test]
+    fn a_containers_limits_decide_whose_count_is_read() {
+        let meminfo = Some("MemTotal:       12250780 kB\nMemAvailable:   8000000 kB\n");
+        let limits = |memory_max, cpu_max| {
+            let machine = Machine::counted(8, meminfo, memory_max, cpu_max);
+            (machine.memory_bytes, machine.memory_limited, machine.cpu_limit)
+        };
+        let whole = 12_250_780 << 10;
+        assert_eq!(limits(None, None), (whole, false, None));
+        assert_eq!(limits(Some("max\n"), Some("max 100000\n")), (whole, false, None));
+        assert_eq!(limits(Some("536870912\n"), Some("max 100000\n")), (536_870_912, true, None));
+        assert_eq!(limits(Some("max\n"), Some("150000 100000\n")), (whole, false, Some(1.5)));
+        assert_eq!(limits(Some("536870912\n"), Some("100000 100000\n")), (536_870_912, true, Some(1.0)));
+        assert_eq!(limits(Some("99999999999999\n"), None), (whole, false, None));
+        // The limit that is set is the one a reading is taken against.
+        let held = Works::on(Machine::counted(8, meminfo, Some("536870912\n"), Some("50000 100000\n")));
+        let start = Instant::now();
+        let before = Counts { spent: Some(Spent::Group(2_000_000)), ..at(&held, start, 0) };
+        let now = Counts { spent: Some(Spent::Group(2_300_000)), ..at(&held, start, 1000) };
+        let read = held.read(&Pulse::default(), &before, &now);
+        assert_eq!((read.used.cpu, read.used.cpu_own), (Some(60), None));
     }
 
     /// The stream sends every page the readout the task drew, and a reading before the first is
@@ -253,20 +581,36 @@ mod tests {
         let works = Works::new();
         let first = works.follow().borrow().clone();
         assert!(first.drawn.starts_with("<dl") && first.drawn.contains(r#"id="readout""#), "{}", first.drawn);
+        let start = Instant::now();
+        let none = at(&works, start, 0);
         works.rendered(Duration::from_micros(212));
-        let sent = Sent::new(works.read(&first.pulse));
+        let sent = Sent::new(works.read(&first.pulse, &none, &at(&works, start, 1000)), works.machine());
         assert!(sent.drawn.contains("212") && sent.pulse.pages == 1, "{}", sent.drawn);
     }
 
-    /// Where the system has a `/proc`, a reading holds memory and the machine has some; where it
-    /// has none, both are 0 and the page says nothing of either.
+    /// Where the system has a `/proc`, a reading holds memory, the machine has some and says how
+    /// much of it and of its CPU is in use; where it has none, all are absent and the page says
+    /// nothing of them.
     #[test]
     fn a_reading_holds_what_the_system_says() {
         let works = Works::new();
-        let held = works.read(&Pulse::default()).held_bytes;
+        let before = works.counts();
+        // Long enough for the system's ticks to say something of.
+        std::thread::sleep(Duration::from_millis(600));
+        let read = works.read(&Pulse::default(), &before, &works.counts());
         let on_linux = std::path::Path::new("/proc/self/status").exists();
-        assert_eq!(held > 0, on_linux);
-        assert_eq!(works.machine().memory_bytes > 0, on_linux);
-        assert!(held <= works.machine().memory_bytes);
+        let machine = works.machine();
+        assert_eq!(read.held_bytes > 0, on_linux);
+        assert_eq!((machine.memory_bytes > 0, machine.metered), (on_linux, on_linux), "{machine:?}");
+        assert!(read.held_bytes <= machine.memory_bytes);
+        assert_eq!((read.used.memory_bytes > 0, read.used.cpu.is_some()), (on_linux, on_linux), "{:?}", read.used);
+        assert!(read.held_bytes <= read.used.memory_bytes || !on_linux, "{read:?}");
+        assert!(read.used.memory_bytes <= machine.memory_bytes, "{:?}", read.used);
+        // The machine's own count has this server's part, which is never more than the whole; a
+        // group's count is the server's already.
+        assert_eq!(read.used.cpu_own.is_some(), on_linux && machine.cpu_limit.is_none(), "{:?}", read.used);
+        assert!(read.used.cpu_own <= read.used.cpu, "{:?}", read.used);
+        let drawn = Sent::new(read, machine).drawn;
+        assert_eq!(drawn.contains("<meter"), on_linux, "{drawn}");
     }
 }

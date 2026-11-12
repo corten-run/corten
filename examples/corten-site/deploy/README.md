@@ -1,17 +1,20 @@
 # Deploying the site
 
 The site is one binary behind nginx on one small machine, and the page says so itself: where the
-operating system counts them, it prints the machine's CPUs and memory and streams the memory the
-server holds (`src/works.rs`). A claim about its hosting is therefore the server's own reading,
-and `CORTEN_SITE_MACHINE` only adds what the system cannot know, such as the size's name and price.
+operating system counts them, it prints the machine's CPUs and memory and streams, each second,
+the memory the server holds and how much of the machine's CPU and memory is in use by everything
+on it (`src/works.rs`). A claim about its hosting is therefore the server's own reading, a reader
+sees what the machine is under as they read, and `CORTEN_SITE_MACHINE` only adds what the system
+cannot know, such as the size's name and price. Run in a container that is held to a limit, the
+server counts what is in use of that limit instead, and each gauge's label says which it is.
 
 | File | What it is |
 |---|---|
 | `provision.sh` | sets up a fresh Ubuntu 24.04 machine, once |
 | `corten-site.service` | the systemd service: the binary as a user that owns nothing |
-| `nginx.conf` | TLS and HTTP/2 in front, as [the deploy guide](../../../docs/guide/deploy.md) lists, and a limit on the live streams one reader may hold |
+| `nginx.conf` | TLS and HTTP/2 in front, as [the deploy guide](../../../docs/guide/deploy.md) lists, a limit on the live streams one reader may hold, and the streams asked for as zstd or uncompressed |
 | `release.sh` | what a deploy runs on the machine: check an upload, switch to a release, and prune old ones |
-| `hold.mjs` | measures what the site holds: memory idle and with streams open, and pages a second meanwhile |
+| `hold.mjs` | measures what the site holds: memory idle and with streams open, uncompressed or as a browser asks for them, and pages a second meanwhile, with the CPU and memory the server says are in use |
 | [`site.yml`](../../../.github/workflows/site.yml) | the workflow that builds and ships each change on `main` |
 
 No container runs on the machine. The workflow builds on Ubuntu 24.04, the same release the
@@ -133,7 +136,8 @@ second moved with what else the workstation was doing: other builds kept its eig
 through every run, so the two rows cannot be compared with each other for speed. Neither
 figure is the droplet's number. A shared vCPU is not a workstation's
 core, and nginx and TLS take their part of it: run `hold.mjs` on the machine itself, against
-`http://127.0.0.1:3000`, before saying what it serves.
+`http://127.0.0.1:3000`, before saying what it serves. Run there, `hold.mjs` is itself part of
+what the machine's CPU reading counts.
 
 ## What has and has not been checked
 
@@ -145,8 +149,17 @@ another host is refused, and of 70 streams opened from one address 64 are served
 429 while 20 of 20 pages asked for from that address are served. With the limit for one reader
 lifted, of 3,600 streams 3,584 are served and 16 answered 429. What the reader map makes of an
 address was asked of the same nginx for IPv4 and IPv6 addresses as nginx writes them, folded at
-each group and not; the limits themselves were only exercised over IPv4. The service file was
+each group and not; the limits themselves were only exercised over IPv4. Asked through it for a
+stream, the app compressed it as zstd for `gzip, deflate, br, zstd`, `zstd` and `br,zstd,gzip`,
+and sent it as it is for `gzip, deflate, br`, `gzip`, `zstd;q=0, gzip` and no `Accept-Encoding`,
+while the page came back as zstd, Brotli or gzip as each asked. The service file was
 checked by `systemd-analyze verify` (systemd 255).
+
+What the server says is in use was checked in containers only: one with no limit, where it
+reads the whole host's counts as it will on the machine, in the three browsers, and one held to
+1 CPU and 512 MB, where it reads its control group's, in Chromium and through this nginx. It has
+not run under the service file's sandbox on a real machine: if the two gauges are missing there,
+the unit is keeping the server from `/proc/stat` or `/proc/meminfo`.
 
 The workflow's ship step was rehearsed against a container running sshd, with the `deploy` user
 made by `provision.sh`'s own lines and a stand-in for `systemctl`: a first deploy, a second of

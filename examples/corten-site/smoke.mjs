@@ -1,6 +1,8 @@
 // Browser smoke test for Corten's own site, in Chromium, Firefox and WebKit: the page with its
 // scripts, with them blocked by the page's own switch, and with scripting off in the browser; and
-// on a touch screen, in Chromium, whose touches the test can send one at a time.
+// on a touch screen, in Chromium, whose touches the test can send one at a time. The server says
+// how much CPU and memory is in use: its machine's, or, with SITE_HELD=1, of the limits the
+// container under test is held to on both (docker run --cpus 1 --memory 512m).
 // Usage: node examples/corten-site/smoke.mjs http://localhost:18488 [chromium|firefox|webkit ...]
 import { chromium, devices, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
@@ -11,6 +13,8 @@ if (!base) throw new Error("usage: node examples/corten-site/smoke.mjs <base url
 const kinds = { chromium, firefox, webkit };
 const engines = /** @type {(keyof typeof kinds)[]} */ (process.argv.slice(3));
 if (engines.length === 0) engines.push("chromium", "firefox", "webkit");
+const held = process.env.SITE_HELD === "1";
+const whose = held ? "container" : "machine";
 /** The engine the checks are running in. @type {keyof typeof kinds} */
 let engine = "chromium";
 const failures = [];
@@ -176,7 +180,40 @@ for (engine of engines) {
     check("the readings stream", before !== "");
     const mib = Number.parseFloat(await reading("Memory this server holds"));
     check("the server reads the memory it holds", mib > 0 && mib < 512, `${mib} MiB`);
-    check("the page says what machine serves it", /The machine serving you this has \d+ CPUs? and [\d.]+ MiB of memory/.test(await page.locator("body").innerText()));
+    // The CPU is counted between two readings, so its meter comes with the second. Each gauge is
+    // read in one look at the page: the next reading replaces all of them.
+    await page.waitForFunction(() => document.querySelectorAll("dl meter").length === 2, null, { timeout: 10_000 }).catch(() => {});
+    const gauges = /** @type {{ label: string, figure: string, value: number, high: number, said: string, note: string, width: number, height: number }[]} */ (
+      await page.evaluate(() =>
+        [...document.querySelectorAll("dl meter")].map((meter) => {
+          const gauge = meter.closest("div");
+          const box = meter.getBoundingClientRect();
+          return {
+            label: document.getElementById(meter.getAttribute("aria-labelledby") ?? "")?.textContent ?? "",
+            figure: gauge?.querySelector("dd")?.textContent ?? "",
+            value: /** @type {HTMLMeterElement} */ (meter).value,
+            high: /** @type {HTMLMeterElement} */ (meter).high,
+            said: meter.getAttribute("aria-valuetext") ?? "",
+            note: gauge?.lastElementChild?.textContent ?? "",
+            width: box.width,
+            height: box.height,
+          };
+        }),
+      )
+    );
+    const [cpu, memory] = gauges;
+    check("the server reads the CPU in use, and says whose", gauges.length === 2 && cpu?.label === `CPU this ${whose} is using` && /^\d+%$/.test(cpu.figure) && cpu.value <= 100, JSON.stringify(cpu));
+    check("its meter is at the figure", cpu !== undefined && cpu.value === Number.parseInt(cpu.figure, 10) && cpu.high === 80, JSON.stringify(cpu));
+    check("and the memory in use, and says whose", memory?.label === `Memory this ${whose} is using` && Number.parseFloat(memory.figure) > 0, JSON.stringify(memory));
+    check("its meter is read as the sizes", memory !== undefined && memory.said.startsWith(`${memory.figure.replace(" MiB", "")} of `) && memory.value > 0 && memory.value <= 100, JSON.stringify(memory));
+    check("each meter is a thin bar across its gauge", gauges.length === 2 && gauges.every((gauge) => gauge.height >= 4 && gauge.height <= 8 && gauge.width > 200), JSON.stringify(gauges.map((gauge) => [gauge.width, gauge.height])));
+    check(
+      "each says what it is a part of",
+      held ? /^of the [\d.]+ CPUs? it is held to$/.test(cpu?.note ?? "") && /^of the [\d,.]+ MiB it is held to$/.test(memory?.note ?? "") : /^this server: \d+%$/.test(cpu?.note ?? "") && /^of [\d,.]+ MiB$/.test(memory?.note ?? ""),
+      `${cpu?.note} | ${memory?.note}`,
+    );
+    check("the readout says how many followed at most", /^[1-9][\d,]* at most$/.test(await page.evaluate(() => [...document.querySelectorAll("dl dt")].find((dt) => dt.textContent === "Pages following this stream")?.parentElement?.lastElementChild?.textContent ?? "")));
+    check("the page says what machine serves it", /The machine serving you this has \d+ CPUs? and [\d,.]+ MiB of memory/.test(await page.locator("body").innerText()));
 
     // The response read back, and the same address as JSON. A header the response lacked is
     // written in as that, in words, so every value is held to being a header's.
@@ -194,6 +231,21 @@ for (engine of engines) {
     const json = await page.request.get(`${base}/`, { headers: { accept: "application/json" } });
     const sheet = (await json.json()).data;
     check("the same address answers JSON", json.ok() && sheet?.name === "Corten" && sheet.server.memory_held_bytes > 0 && sheet.server.machine_cpus > 0, JSON.stringify(sheet?.server));
+    const server = sheet?.server ?? {};
+    check(
+      "with how much is in use",
+      server.machine_memory_used_bytes > 0 && server.machine_memory_used_bytes <= server.machine_memory_bytes && Number.isInteger(server.machine_cpu_used_percent) && server.machine_cpu_used_percent <= 100,
+      JSON.stringify(server),
+    );
+    // On the machine itself this server's part is said, and is no more than the whole; under a
+    // limit the count is the server's already.
+    check(
+      "and whose count that is",
+      held
+        ? server.machine_memory_limited === true && server.machine_cpu_limit > 0 && server.cpu_used_percent === null
+        : server.machine_memory_limited === false && server.machine_cpu_limit === null && Number.isInteger(server.cpu_used_percent) && server.cpu_used_percent <= server.machine_cpu_used_percent,
+      JSON.stringify(server),
+    );
 
     // Counted before the page is left: a browser may log the live stream the next load cuts off.
     check("no console errors", errors.length === 0, errors.join(" | "));
@@ -207,6 +259,26 @@ for (engine of engines) {
     );
     await page.locator("a[aria-label=Corten]").first().click();
     check("the lockup loads the page in full", (await loaded) && (await page.evaluate(() => Reflect.has(window, "smokeWasHere"))) === false);
+    await context.close();
+  }
+
+  // Between a phone and a desktop the gauges are three to a row, and narrowest just above a
+  // phone: nothing in one is wider than it.
+  {
+    const { context, page } = await open({ viewport: { width: 1000, height: 800 }, javaScriptEnabled: false });
+    for (const width of [1000, 600]) {
+      await page.setViewportSize({ width, height: 800 });
+      // A part too wide for its gauge is as wide as what it holds, so it is measured against the gauge.
+      const over = await page.evaluate(() =>
+        [...document.querySelectorAll("#readout dt, #readout dd")]
+          .filter((part) => {
+            const gauge = /** @type {HTMLElement} */ (part.parentElement);
+            return part.getBoundingClientRect().right > gauge.getBoundingClientRect().right - Number.parseFloat(getComputedStyle(gauge).paddingRight) + 1;
+          })
+          .map((part) => part.textContent),
+      );
+      check(`at ${width} px no reading is wider than its gauge`, over.length === 0, over.join(" | "));
+    }
     await context.close();
   }
 

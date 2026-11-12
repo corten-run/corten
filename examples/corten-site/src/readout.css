@@ -8,53 +8,156 @@
   box-shadow: 0 1.5rem 3rem rgb(0 0 0 / 35%);
 }
 
+/* On a phone the gauges are a column, each as tall as what it holds. A gauge is the container
+   its figure is sized against. */
 .gauge {
   display: grid;
-  grid-column: span 2;
-  align-content: space-between;
-  gap: 1.5rem;
-  min-height: 9.5rem;
+  container-type: inline-size;
+  grid-column: span 6;
+  row-gap: 0.45rem;
   padding: 1rem 1.15rem 1.1rem;
   background: var(--ink);
 }
 
-.gauge:nth-child(n + 4) {
-  grid-column: span 3;
-}
-
-/* Six gauges, where the server can read its own memory, are two rows of three. */
-@media (min-width: 36.01rem) {
-  .readout:has(> :nth-child(6)) .gauge {
-    grid-column: span 2;
-  }
-}
-
-@media (max-width: 36rem) {
-  .gauge,
-  .gauge:nth-child(n + 4) {
-    grid-column: span 6;
-    min-height: 0;
-  }
-}
-
 .gauge dt {
+  margin-bottom: 0.9rem;
   color: var(--bone-dim);
   font-size: 0.875rem;
 }
 
+/* Wider, three to a row: the label at the top, the figures of a row on one line, and under
+   each the room of one line for a note, whether or not it has one. */
+@media (min-width: 36.01rem) {
+  .gauge {
+    grid-column: span 2;
+    grid-template-rows: 1fr auto 1.3rem;
+    min-height: 10.5rem;
+  }
+
+  /* Five gauges, where the system counts nothing, are three and two. */
+  .readout:not(:has(> :nth-child(6))) .gauge:nth-child(n + 4) {
+    grid-column: span 3;
+  }
+
+  /* The last two share a row, each with the room of its meter between the figure and the
+     note, whether or not the meter is drawn yet. */
+  .wide {
+    grid-column: span 3;
+    grid-template-rows: 1fr auto 0.375rem 1.3rem;
+  }
+
+  /* A note is on the last line, whatever is above it. */
+  .note {
+    grid-row: -2;
+  }
+}
+
+/* A figure is one line, as large as the page allows and no wider than its gauge: a character of
+   this face is a little over half its size wide, so six of them fit at 28% of the gauge's
+   width. The markup says which figures hold more, and they are drawn smaller to fit: up to
+   eight characters, up to eleven, and beyond. */
 .figure {
   font-family: var(--display);
   font-stretch: 75%;
   font-weight: 700;
-  font-size: clamp(2.8rem, 5vw, 4.4rem);
+  font-size: min(clamp(2.8rem, 5vw, 4.4rem), 28cqi);
   font-variant-numeric: tabular-nums;
   line-height: 0.85;
+  white-space: nowrap;
+}
+
+.long {
+  font-size: min(clamp(2.8rem, 5vw, 4.4rem), 21cqi);
+}
+
+.longer {
+  font-size: min(clamp(2.8rem, 5vw, 4.4rem), 15cqi);
+}
+
+.longest {
+  font-size: min(clamp(2.8rem, 5vw, 4.4rem), 10cqi);
 }
 
 .unit {
   font-size: 0.45em;
   font-weight: 400;
   color: var(--bone-dim);
+}
+
+.note {
+  color: var(--bone-dim);
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3rem;
+  white-space: nowrap;
+}
+
+/* How much is in use: ember along a dim track, white-hot from the meter's `high` up, where
+   little is left. Each engine's parts are separate rules: a selector one engine does not know
+   drops the whole rule in it. */
+.bar {
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 0.375rem;
+  margin: 0;
+  border: 0;
+  background: color-mix(in srgb, var(--bone) 14%, transparent);
+  overflow: hidden;
+}
+
+.bar::-webkit-meter-bar {
+  height: 0.375rem;
+  border: 0;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--bone) 14%, transparent);
+}
+
+.bar::-webkit-meter-optimum-value {
+  background: var(--ember);
+}
+
+.bar::-webkit-meter-suboptimum-value {
+  background: #fff3d6;
+}
+
+.bar::-moz-meter-bar {
+  background: var(--ember);
+}
+
+.bar:-moz-meter-sub-optimum::-moz-meter-bar {
+  background: #fff3d6;
+}
+
+/* Forced colors drops these colors: the same parts in the system's, the track outlined. No
+   system color means near the top, and the figure beside the meter says how near. */
+@media (forced-colors: active) {
+  .bar {
+    forced-color-adjust: none;
+    outline: 1px solid CanvasText;
+    outline-offset: -1px;
+    background: Canvas;
+  }
+
+  .bar::-webkit-meter-bar {
+    background: Canvas;
+  }
+
+  .bar::-webkit-meter-optimum-value {
+    background: Highlight;
+  }
+
+  .bar::-webkit-meter-suboptimum-value {
+    background: Highlight;
+  }
+
+  .bar::-moz-meter-bar {
+    background: Highlight;
+  }
+
+  .bar:-moz-meter-sub-optimum::-moz-meter-bar {
+    background: Highlight;
+  }
 }
 
 @media (prefers-reduced-motion: no-preference) {
