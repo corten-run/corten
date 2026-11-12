@@ -1061,12 +1061,12 @@ pub(crate) fn base64(bytes: &[u8]) -> String {
 pub(crate) struct Applied {
     policy: Policy,
     /// The app's pages' CSP.
-    pub csp: Csp,
+    pub csp: Arc<Csp>,
     /// The CSP and opener policy of the pages of each area whose policy adds something the app's
     /// lacks, innermost prefix first, with what it adds to a page's shell key: a client navigation
     /// between pages with different policies loads the document in full, since a document keeps
     /// the policies it loaded with.
-    areas: Vec<(&'static str, Csp, u64)>,
+    areas: Vec<(&'static str, Arc<Csp>, u64)>,
     api_csp: HeaderValue,
     /// The `form-action` of each policy, for a debug build's check of a write's redirect.
     #[cfg(debug_assertions)]
@@ -1266,7 +1266,7 @@ impl Applied {
     /// app's sources, then those of each such area it is under, outermost first.
     pub fn new(policy: Policy, import_map: &str, areas: &[(&'static str, &Sources)]) -> Self {
         let csp = Csp::new(&policy, import_map);
-        let mut placed: Vec<(&'static str, Csp, u64)> = areas
+        let mut placed: Vec<(&'static str, Arc<Csp>, u64)> = areas
             .iter()
             .filter_map(|&(prefix, _)| {
                 let mut outer: Vec<_> = areas.iter().filter(|(other, _)| crate::api::under(other, prefix)).collect();
@@ -1289,7 +1289,7 @@ impl Applied {
                 std::hash::Hash::hash(area.opener.as_bytes(), &mut hasher);
                 std::hash::Hash::hash(area.referrer.header().as_bytes(), &mut hasher);
                 std::hash::Hash::hash(&area.permissions.as_ref().map(HeaderValue::as_bytes), &mut hasher);
-                Some((prefix, area, std::hash::Hasher::finish(&hasher) | 1))
+                Some((prefix, Arc::new(area), std::hash::Hasher::finish(&hasher) | 1))
             })
             .collect();
         placed.sort_by_key(|(prefix, ..)| std::cmp::Reverse(prefix.len()));
@@ -1301,7 +1301,7 @@ impl Applied {
         });
         Applied {
             policy,
-            csp,
+            csp: Arc::new(csp),
             areas: placed,
             api_csp: HeaderValue::from_static(API_CSP),
             #[cfg(debug_assertions)]
@@ -1310,12 +1310,11 @@ impl Applied {
     }
 
     /// The CSP of the pages at `path` and what it adds to their shell key: its innermost area's
-    /// that adds to the policy, else the app's (and 0).
-    pub fn csp_for(&self, path: &str) -> (&Csp, u64) {
-        if self.areas.is_empty() {
-            return (&self.csp, 0);
-        }
-        self.areas.iter().find(|(prefix, ..)| crate::api::under(prefix, path)).map_or((&self.csp, 0), |(_, csp, key)| (csp, *key))
+    /// that adds to the policy, else the app's (and 0). Read once for each area and API when the
+    /// router is built, into its scope ([`crate::app::Scope`]).
+    pub fn csp_for(&self, path: &str) -> (Arc<Csp>, u64) {
+        let area = self.areas.iter().find(|(prefix, ..)| crate::api::under(prefix, path));
+        area.map_or((self.csp.clone(), 0), |(_, csp, key)| (csp.clone(), *key))
     }
 
     /// What a debug build needs to hold a redirect answering this request to the `form-action`

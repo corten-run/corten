@@ -324,16 +324,16 @@ pub(crate) struct Mount {
     /// The origins it allows ([`Api::allow_origin`]): its own alone, never taken from an API around
     /// it, so nesting grants no other site anything.
     origins: Vec<String>,
-    /// Its deadline ([`Api::deadline`]): its own, else, once the router is built, that of the
-    /// nearest API or area around it that set one.
+    /// Its deadline ([`Api::deadline`]): its own, else that of the nearest API around it that set
+    /// one ([`Mount::inherit`]); the router takes an area's around it into its scope
+    /// ([`crate::app::Scope`]) when neither did.
     pub deadline: Option<Option<std::time::Duration>>,
-    /// Its body limit ([`Api::body_limit`]): its own, else, once the router is built, that of the
-    /// nearest API or area around it that set one.
+    /// Its body limit ([`Api::body_limit`]), the same way.
     pub body_limit: Option<usize>,
     /// How its failures are written ([`Api::errors`]): its own, else the nearest API's around it.
     pub errors: Option<ErrorShape>,
-    /// Its middleware ([`Api::middleware`]), in the order it runs: once the router is built, the
-    /// areas' and APIs' around it first.
+    /// Its middleware ([`Api::middleware`]), in the order it runs, the APIs' around it first
+    /// ([`Mount::inherit`]); the router moves it into its scope after the areas' around it.
     pub middleware: crate::middleware::Stack,
     /// Its routes' paths as written, so an API inside it can refuse one under its prefix.
     pub written: Vec<&'static str>,

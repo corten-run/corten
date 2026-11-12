@@ -867,8 +867,9 @@ pub(crate) struct Shared {
     /// The other sites [`crate::security::Policy::allow_origin`] lets write, for a switch to a
     /// WebSocket, which [`crate::upgrade::Upgrade`] checks as a write.
     pub allowed_origins: Vec<String>,
-    /// Each `Api::allow_origin` mount's prefix and origins, which may also switch under it.
-    pub api_origins: Vec<(String, Vec<String>)>,
+    /// What each area and API sets, by path: an API's `Api::allow_origin` sites may also switch
+    /// to a WebSocket under it ([`crate::upgrade::Upgrade`]). None outside an app.
+    pub scopes: Option<Arc<crate::app::Scopes>>,
     /// The app's route patterns, its own and its areas', each with whether it has a `GET`
     /// handler ([`Req::serves`]).
     pub pages: Box<[(&'static str, bool)]>,
@@ -914,7 +915,7 @@ impl Shared {
             section_of: Default::default(),
             proxies: Vec::new(),
             allowed_origins: Vec::new(),
-            api_origins: Vec::new(),
+            scopes: None,
             pages: Box::default(),
             not_pages: Default::default(),
             layout_reads: Box::default(),

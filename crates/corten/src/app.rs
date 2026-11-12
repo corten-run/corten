@@ -18,7 +18,7 @@ use crate::{
     response::Response,
     route::{Methods, Prefix, Route as TypedRoute, Routes},
     router::{get, Route, Router, Table},
-    security::{Applied, NonceSlot, Policy},
+    security::{Applied, Csp, NonceSlot, Policy},
     signal::{self, Watch},
     sse::Event,
     task::{Finishing, Running, Task},
@@ -1366,61 +1366,12 @@ impl<M: Middleware> App<M> {
         // The routes of the APIs and areas: each is under its prefix, which the compiler checked.
         let mut owned = Vec::with_capacity(self.apis.len() + self.areas.len());
         let mut mounts = Vec::with_capacity(self.apis.len());
-        let any_origins = self.apis.iter().any(|(mount, _)| !mount.origins().is_empty());
         for (mut mount, api) in self.apis {
             // Only the startup checks above read it.
             mount.written = Vec::new();
             mount.exposed = written.iter().any(|route| crate::api::reaches(route, &mount.prefix));
-            // Every API once any allows a site, innermost first, so one that allows none under
-            // another that does is found first, as for its writes.
-            if any_origins {
-                shared.api_origins.push((mount.prefix.clone(), mount.origins().to_vec()));
-            }
             owned.push(api);
             mounts.push(mount);
-        }
-        // The areas that set their own deadline, innermost first, so the first under a path decides.
-        let mut area_deadlines: Vec<(&'static str, Option<Duration>)> =
-            self.areas.iter().filter_map(|area| Some((area.prefix, area.deadline?))).collect();
-        area_deadlines.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
-        // And their own body limit, the same way.
-        let mut area_limits: Vec<(&'static str, usize)> =
-            self.areas.iter().filter_map(|area| Some((area.prefix, area.body_limit?))).collect();
-        area_limits.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
-        // Each area's middleware with every enclosing area's, the outermost first; the innermost
-        // area first, so the first under a path decides. Empty unless an area has some.
-        let mut area_middleware: Vec<(&'static str, crate::middleware::Stack)> = self
-            .areas
-            .iter()
-            .filter_map(|area| {
-                let mut around: Vec<&Placed> = self
-                    .areas
-                    .iter()
-                    .filter(|other| !other.middleware.is_empty() && crate::api::under(other.prefix, area.prefix))
-                    .collect();
-                around.sort_by_key(|other| other.prefix.len());
-                let stack: crate::middleware::Stack =
-                    around.into_iter().flat_map(|other| other.middleware.iter().cloned()).collect();
-                (!stack.is_empty()).then_some((area.prefix, stack))
-            })
-            .collect();
-        area_middleware.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
-        // An API under an area's prefix meets the area's middleware (and its enclosing areas')
-        // before its own, as a nested area would.
-        for mount in &mut mounts {
-            if let Some((_, around)) = area_middleware.iter().find(|(prefix, _)| crate::api::under(prefix, &mount.prefix)) {
-                mount.middleware = around.iter().chain(mount.middleware.iter()).cloned().collect();
-            }
-            // Nor it, nor an API around it, set a deadline: the innermost area's around it, as
-            // for the area's pages.
-            if mount.deadline.is_none() {
-                mount.deadline =
-                    area_deadlines.iter().find(|(prefix, _)| crate::api::under(prefix, &mount.prefix)).map(|(_, d)| *d);
-            }
-            if mount.body_limit.is_none() {
-                mount.body_limit =
-                    area_limits.iter().find(|(prefix, _)| crate::api::under(prefix, &mount.prefix)).map(|(_, l)| *l);
-            }
         }
         // The routes that say `unstaged`, each through a lane of its own in place of the stages,
         // where under the innermost API whose prefix holds it a failure is the API's JSON. An app
@@ -1434,6 +1385,9 @@ impl<M: Middleware> App<M> {
             }
             unstaged
         });
+        // What each area's and API's requests meet, resolved once and given to each route's entry.
+        let scopes = Arc::new(Scopes::new((self.deadline, self.body_limit), own, &self.areas, mounts, &policy));
+        shared.scopes = Some(scopes.clone());
         owned.extend(self.areas.into_iter().map(|area| area.routes));
         // One table: a path routed in two of them (the app's routes and an area's) is one route
         // with the methods of both. The unstaged routes are beside the others, each in its lane
@@ -1448,29 +1402,13 @@ impl<M: Middleware> App<M> {
             table = table.merge(unstaged);
         }
         // An app whose areas and APIs have no middleware of their own runs the app's alone.
-        let plain = area_middleware.is_empty() && mounts.iter().all(|mount| mount.middleware.is_empty());
-        macro_rules! stages {
-            ($steps:expr) => {
-                Arc::new(Layer {
-                    shared: Arc::new(shared),
-                    deadline: self.deadline,
-                    area_deadlines,
-                    body_limit: self.body_limit,
-                    area_limits,
-                    bounds,
-                    policy,
-                    mounts,
-                    own,
-                    steps: $steps,
-                }) as Arc<dyn crate::router::Stages>
-            };
-        }
-        let stages = if plain {
-            stages!(Plain(self.middleware))
+        let plain = scopes.prefixed.iter().all(|(_, scope)| scope.middleware.is_empty());
+        let shared = Arc::new(shared);
+        let mut router = if plain {
+            staged(table, Layer { shared, bounds, policy, scopes, steps: Plain(self.middleware) })
         } else {
-            stages!(Scoped { app: self.middleware, areas: area_middleware })
+            staged(table, Layer { shared, bounds, policy, scopes, steps: Scoped(self.middleware) })
         };
-        let mut router = Router::new(table, Some(stages));
         for wrap in self.layers {
             router = wrap(router);
         }
@@ -1914,9 +1852,131 @@ pub(crate) struct Own {
 
 impl Own {
     fn contains(&self, path: &str) -> bool {
-        self.exact.contains(&path)
-            || self.prefixes.iter().any(|prefix| path.starts_with(prefix.as_str()))
-            || self.companions.iter().any(|companion| companion == path)
+        self.exact.contains(&path) || self.under_prefix(path) || self.companions.iter().any(|companion| companion == path)
+    }
+
+    /// Under one of Corten's own prefixes (`/corten/`, the assets').
+    fn under_prefix(&self, path: &str) -> bool {
+        self.prefixes.iter().any(|prefix| path.starts_with(prefix.as_str()))
+    }
+}
+
+/// What a request meets from the area or API it is in, or from the app where it is in none:
+/// resolved for each area and API when the router is built and given to each route's entry, so a
+/// request reads it from the route it matched.
+pub(crate) struct Scope {
+    /// Corten's own routes (the assets, the runtime, the health checks): the app's settings, and
+    /// no tag on their answers.
+    own: bool,
+    /// The API it is under.
+    mount: Option<Mount>,
+    /// The innermost API's or area's around it that sets a deadline, else the app's.
+    deadline: Option<Duration>,
+    /// Its body limit, the same way.
+    body_limit: usize,
+    /// The CSP of its pages and what it adds to their shell key: its innermost area's that adds to
+    /// the policy, else the app's. An API's answers keep their own CSP and send its referrer policy.
+    csp: Arc<Csp>,
+    shell: u64,
+    /// Its middleware, after the app's: each area's around it, outermost first, then its API's
+    /// (with the APIs' around it).
+    middleware: crate::middleware::Stack,
+}
+
+/// Every area's and API's scope and the app's, by path: for a request whose route cannot say
+/// which it is in (an unknown URL, whose `404` belongs to the prefix it is under, and a route
+/// whose parameter or catch-all can match under another prefix, [`Scopes::of_route`]), and for a
+/// WebSocket handshake's API ([`crate::upgrade::Upgrade`]).
+pub(crate) struct Scopes {
+    own_paths: Own,
+    own: Arc<Scope>,
+    app: Arc<Scope>,
+    /// Each area's and API's, innermost prefix first, so the first whose prefix holds a path is
+    /// its own.
+    prefixed: Vec<(String, Arc<Scope>)>,
+}
+
+impl Scopes {
+    /// Each area's and API's settings with those of the areas around it, over `app`'s (the app's
+    /// deadline and body limit): the innermost that sets one decides, an API's own (and the APIs'
+    /// around it) before an area's.
+    fn new(app: (Option<Duration>, usize), own_paths: Own, areas: &[Placed], mounts: Vec<Mount>, policy: &Applied) -> Self {
+        let (deadline, body_limit) = app;
+        // The areas whose prefix holds `prefix`, its own included, outermost first.
+        let around = |prefix: &str| {
+            let mut around: Vec<&Placed> = areas.iter().filter(|area| crate::api::under(area.prefix, prefix)).collect();
+            around.sort_by_key(|area| area.prefix.len());
+            around
+        };
+        let mut prefixed: Vec<(String, Arc<Scope>)> = Vec::with_capacity(areas.len() + mounts.len());
+        for area in areas {
+            let around = around(area.prefix);
+            let (csp, shell) = policy.csp_for(area.prefix);
+            let scope = Scope {
+                own: false,
+                mount: None,
+                deadline: around.iter().rev().find_map(|area| area.deadline).unwrap_or(deadline),
+                body_limit: around.iter().rev().find_map(|area| area.body_limit).unwrap_or(body_limit),
+                csp,
+                shell,
+                middleware: around.iter().flat_map(|area| area.middleware.iter().cloned()).collect(),
+            };
+            prefixed.push((area.prefix.to_string(), Arc::new(scope)));
+        }
+        // An API meets the middleware of the areas around it before its own, as a nested area would.
+        for mut mount in mounts {
+            let around = around(&mount.prefix);
+            let (csp, shell) = policy.csp_for(&mount.prefix);
+            let steps = std::mem::take(&mut mount.middleware);
+            let deadline = mount.deadline.or_else(|| around.iter().rev().find_map(|area| area.deadline)).unwrap_or(deadline);
+            let body_limit =
+                mount.body_limit.or_else(|| around.iter().rev().find_map(|area| area.body_limit)).unwrap_or(body_limit);
+            let middleware = around.iter().flat_map(|area| area.middleware.iter()).chain(steps.iter()).cloned().collect();
+            let prefix = mount.prefix.clone();
+            let scope = Scope { own: false, mount: Some(mount), deadline, body_limit, csp, shell, middleware };
+            prefixed.push((prefix, Arc::new(scope)));
+        }
+        prefixed.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
+        let app = |own| {
+            let csp = policy.csp.clone();
+            Arc::new(Scope { own, mount: None, deadline, body_limit, csp, shell: 0, middleware: Default::default() })
+        };
+        Scopes { own_paths, own: app(true), app: app(false), prefixed }
+    }
+
+    /// The scope of the requests at `path`: Corten's own, else the innermost area's or API's whose
+    /// prefix holds it, else the app's.
+    pub(crate) fn at(&self, path: &str) -> &Arc<Scope> {
+        if self.own_paths.contains(path) {
+            return &self.own;
+        }
+        self.prefixed_at(path)
+    }
+
+    fn prefixed_at(&self, path: &str) -> &Arc<Scope> {
+        self.prefixed.iter().find(|(prefix, _)| crate::api::under(prefix, path)).map_or(&self.app, |(_, scope)| scope)
+    }
+
+    /// The scope of every request the route at `pattern` (as the router holds it) answers, or none
+    /// when its parameter or catch-all can match a path under another prefix (a page's `/{*rest}`
+    /// under an area, `/api/{id}` at an inner API's prefix, either under `/corten/`), whose
+    /// requests find theirs by path.
+    fn of_route(&self, pattern: &str) -> Option<&Arc<Scope>> {
+        if !pattern.contains('{') {
+            return Some(self.at(pattern));
+        }
+        let own = self.own_paths.prefixes.iter().map(|prefix| prefix.trim_end_matches('/'));
+        let mut prefixes = own.chain(self.prefixed.iter().map(|(prefix, _)| prefix.as_str()));
+        if prefixes.any(|prefix| crate::api::reaches(pattern, prefix)) {
+            return None;
+        }
+        // Corten's exact paths are compared as written, so no request a parameter matches is one.
+        Some(if self.own_paths.under_prefix(pattern) { &self.own } else { self.prefixed_at(pattern) })
+    }
+
+    /// The API whose prefix holds `path`, if one does.
+    pub(crate) fn mount(&self, path: &str) -> Option<&Mount> {
+        self.at(path).mount.as_ref()
     }
 }
 
@@ -1933,14 +1993,32 @@ impl NotPages {
     }
 }
 
+/// The app's stages for the routes of one scope, given to each of their entries; with none, for
+/// a request that finds its scope by its path ([`Scopes::at`]).
+struct At<S> {
+    layer: Arc<Layer<S>>,
+    scope: Option<Arc<Scope>>,
+}
+
 /// The stages around each staged route, as the router runs them: one boxed future per request,
 /// beside the handler's own. Not axum's `from_fn`, which boxes the rest of the stack again for
 /// every request (`Next`) on top of the future.
-impl<S: Steps> crate::router::Stages for Layer<S> {
+impl<S: Steps> crate::router::Stages for At<S> {
     fn run(self: Arc<Self>, req: Request, route: &Route) -> crate::router::Answering {
         let route = route.clone();
-        Box::pin(async move { self.handle(req, route).await })
+        Box::pin(async move { self.layer.handle(req, route, self.scope.as_deref()).await })
     }
+}
+
+/// `table`'s routes, each through `layer` with the scope its route is in; an unknown URL and a
+/// route whose requests may be in another scope, with the one the request's path is in.
+fn staged<S: Steps>(table: Table, layer: Layer<S>) -> Router {
+    let layer = Arc::new(layer);
+    let by_path: Arc<dyn crate::router::Stages> = Arc::new(At { layer: layer.clone(), scope: None });
+    Router::new(table, Some(by_path), |path| {
+        let scope = layer.scopes.of_route(path)?.clone();
+        Some(Arc::new(At { layer: layer.clone(), scope: Some(scope) }) as Arc<dyn crate::router::Stages>)
+    })
 }
 
 /// The rest of the request under the deadline and the panic catch: the app's middleware, then the
@@ -1966,7 +2044,7 @@ pub(crate) trait Steps: Send + Sync + 'static {
     /// What a request carries to [`Steps::run`]: nothing, or the middleware of its area or API.
     type Scope<'a>: Send;
 
-    fn scope<'a>(&'a self, mount: Option<&'a Mount>, own: bool, path: &str) -> Self::Scope<'a>;
+    fn scope<'a>(&'a self, scope: &'a Scope) -> Self::Scope<'a>;
 
     fn run<'a>(
         &'a self,
@@ -1983,7 +2061,7 @@ impl<M: Middleware> Steps for Plain<M> {
     type Scope<'a> = ();
 
     #[inline]
-    fn scope<'a>(&'a self, _: Option<&'a Mount>, _: bool, _: &str) {}
+    fn scope<'a>(&'a self, _: &'a Scope) {}
 
     #[inline]
     fn run<'a>(&'a self, req: Request, route: Option<Route>, (): ()) -> impl Future<Output = Response> + Send + 'a {
@@ -1991,22 +2069,15 @@ impl<M: Middleware> Steps for Plain<M> {
     }
 }
 
-/// The app's middleware, then the request's area's or API's.
-struct Scoped<M> {
-    app: M,
-    /// [`Area::middleware`], with each area's enclosing areas', innermost prefix first.
-    areas: Vec<(&'static str, crate::middleware::Stack)>,
-}
+/// The app's middleware, then the request's area's or API's ([`Scope`]).
+struct Scoped<M>(M);
 
 impl<M: Middleware> Steps for Scoped<M> {
     type Scope<'a> = &'a [Arc<dyn crate::middleware::Erased>];
 
-    fn scope<'a>(&'a self, mount: Option<&'a Mount>, own: bool, path: &str) -> Self::Scope<'a> {
-        match mount {
-            Some(mount) => &mount.middleware,
-            None if own => &[],
-            None => self.areas.iter().find(|(prefix, _)| crate::api::under(prefix, path)).map_or(&[], |(_, stack)| stack),
-        }
+    #[inline]
+    fn scope<'a>(&'a self, scope: &'a Scope) -> Self::Scope<'a> {
+        &scope.middleware
     }
 
     #[inline]
@@ -2018,8 +2089,8 @@ impl<M: Middleware> Steps for Scoped<M> {
     ) -> impl Future<Output = Response> + Send + 'a {
         use futures_util::future::Either;
         match stack {
-            [] => Either::Left(self.app.call(req, crate::middleware::Handle(route))),
-            stack => Either::Right(self.app.call(req, crate::middleware::Rest { stack, route })),
+            [] => Either::Left(self.0.call(req, crate::middleware::Handle(route))),
+            stack => Either::Right(self.0.call(req, crate::middleware::Rest { stack, route })),
         }
     }
 }
@@ -2028,24 +2099,18 @@ impl<M: Middleware> Steps for Scoped<M> {
 /// where separate security, compression and error layers cost one each.
 struct Layer<S> {
     shared: Arc<Shared>,
-    deadline: Option<Duration>,
-    /// [`Area::deadline`]s, innermost prefix first; empty unless an area set one.
-    area_deadlines: Vec<(&'static str, Option<Duration>)>,
-    /// [`App::body_limit`].
-    body_limit: usize,
-    /// [`Area::body_limit`]s, innermost prefix first; empty unless an area set one.
-    area_limits: Vec<(&'static str, usize)>,
     /// Each connection keeps its request's deadline for shutdown ([`Drain::each`]).
     bounds: bool,
     policy: Applied,
-    mounts: Vec<Mount>,
-    own: Own,
+    /// The scope of a request whose route does not say it.
+    scopes: Arc<Scopes>,
     /// The app's middleware, and the areas' and APIs' where some have their own.
     steps: S,
 }
 
 impl<S: Steps> Layer<S> {
-    async fn handle(&self, req: Request, route: Route) -> Response {
+    /// `scope` is the request's route's, when its route says it.
+    async fn handle(&self, req: Request, route: Route, scope: Option<&Scope>) -> Response {
         #[cfg(feature = "compress")]
         let coding = crate::compress::negotiate(req.headers());
         // A page is tagged for a client that accepts compression, as every browser does (`secure`
@@ -2054,7 +2119,7 @@ impl<S: Steps> Layer<S> {
         let worth_a_tag = coding.any();
         #[cfg(not(feature = "compress"))]
         let worth_a_tag = true;
-        let res = self.secure(req, route, worth_a_tag).await;
+        let res = self.secure(req, route, worth_a_tag, scope).await;
         #[cfg(feature = "compress")]
         let res = crate::compress::finish(res, coding).await;
         res
@@ -2062,7 +2127,7 @@ impl<S: Steps> Layer<S> {
 
     /// The security policy around the request: the host and same-origin checks first, the
     /// headers last.
-    async fn secure(&self, mut req: Request, route: Route, worth_a_tag: bool) -> Response {
+    async fn secure(&self, mut req: Request, route: Route, worth_a_tag: bool, scope: Option<&Scope>) -> Response {
         // A request for another name (a DNS-rebound page) runs nothing of the app's: no error
         // page, no caller lookup.
         if !self.policy.answers(&req) {
@@ -2071,32 +2136,21 @@ impl<S: Steps> Layer<S> {
             res.headers_mut().insert(header::CACHE_CONTROL, cache::PRIVATE);
             return res;
         }
-        let path = req.uri().path();
-        let own = self.own.contains(path);
-        let mount = if own { None } else { self.mounts.iter().find(|mount| mount.contains(path)) };
+        // The area or API the request is in: its route's, or, for an unknown URL or a route that
+        // can answer under another prefix, the one its path is under.
+        let scope = scope.unwrap_or_else(|| self.scopes.at(req.uri().path()));
+        let (own, mount) = (scope.own, scope.mount.as_ref());
         // The policy here, and the deadline: an area's when it sets one. An API in an area keeps
         // its own CSP but sends the area's referrer policy.
-        let (csp, shell) = if own { (&self.policy.csp, 0) } else { self.policy.csp_for(path) };
-        let deadline = match mount {
-            Some(mount) => mount.deadline.unwrap_or(self.deadline),
-            None if own || self.area_deadlines.is_empty() => self.deadline,
-            None => {
-                self.area_deadlines.iter().find(|(prefix, _)| crate::api::under(prefix, path)).map_or(self.deadline, |(_, d)| *d)
-            }
-        };
+        let (csp, shell) = (&*scope.csp, scope.shell);
+        let deadline = scope.deadline;
         if self.bounds {
             crate::client::answering(deadline);
         }
         // The body limit, the same way, carried by the request's signal.
-        let body_limit = match mount {
-            Some(mount) => mount.body_limit.unwrap_or(self.body_limit),
-            None if own || self.area_limits.is_empty() => self.body_limit,
-            None => {
-                self.area_limits.iter().find(|(prefix, _)| crate::api::under(prefix, path)).map_or(self.body_limit, |(_, l)| *l)
-            }
-        };
+        let body_limit = scope.body_limit;
         // The middleware of the area or API the request is in, where one has some.
-        let scope = self.steps.scope(mount, own, path);
+        let steps = self.steps.scope(scope);
         if let Some(mount) = mount {
             if let Some(mut res) = mount.preflight(req.method(), req.headers()) {
                 self.policy.headers(&mut res, None, csp);
@@ -2170,7 +2224,7 @@ impl<S: Steps> Layer<S> {
         // prefetch the runtime gave up on (it aborts one it drops) is named too.
         #[cfg(debug_assertions)]
         let mut prefetched = (mount.is_none() && page::is_prefetch(req.headers())).then(|| page::Prefetched::new(req.uri()));
-        let (mut res, caller, (mode, fetched)) = self.run(req, route, mount, deadline, body_limit, scope).await;
+        let (mut res, caller, (mode, fetched)) = self.run(req, route, mount, deadline, body_limit, steps).await;
         #[cfg(debug_assertions)]
         if let Some(prefetched) = &mut prefetched {
             prefetched.answered = true;
@@ -2379,6 +2433,69 @@ mod tests {
         assert!(bound.drain(drain, false) > drain.most, "however long, never read as another case");
         bound.arrived();
         assert_eq!(bound.drain(drain, false), drain.grace, "the next request, not known yet");
+    }
+
+    /// Each area's and API's scope is resolved once from what it and those around it set, and a
+    /// route reads its own: one in an area its area's, one whose parameter can reach under another
+    /// prefix none (its requests find theirs by path, as an unknown URL's do), and Corten's own
+    /// routes the app's settings (#1213).
+    #[test]
+    fn a_route_reads_its_areas_scope_and_one_that_can_reach_another_prefix_its_paths() {
+        use super::{Own, Placed, Scopes};
+        use crate::security::Sources;
+        use std::sync::Arc;
+        let area = |prefix, deadline, body_limit, sources| Placed {
+            prefix,
+            routes: crate::router::Table::new(),
+            pages: Vec::new(),
+            companions: Vec::new(),
+            components: Vec::new(),
+            deadline,
+            body_limit,
+            sources,
+            middleware: vec![Arc::new(()) as Arc<dyn crate::middleware::Erased>],
+        };
+        let eight = Some(Duration::from_secs(8));
+        let areas = [
+            area("/shop", Some(eight), Some(64 << 10), Sources::default().img_src("https://img.example")),
+            area("/shop/desk", None, None, Sources::default().script_src("https://js.example")),
+        ];
+        let sources: Vec<_> = areas.iter().map(|area| (area.prefix, &area.sources)).collect();
+        let policy = crate::security::Applied::new(crate::security::Policy::new(), "", &sources);
+        #[derive(crate::Route)]
+        #[route("/shop/api")]
+        struct ShopApi;
+        let api = crate::Api::<ShopApi>::new().body_limit(16 << 10).middleware(());
+        let mounts = vec![crate::api::Mount::new("/shop/api".to_string(), &api)];
+        let own = Own { exact: vec!["/health/live"], prefixes: vec!["/corten/".to_string()], companions: Vec::new() };
+        let scopes = Scopes::new((Some(Duration::from_secs(5)), 1 << 10), own, &areas, mounts, &policy);
+
+        let shop = scopes.of_route("/shop/item").expect("a route in the area");
+        assert_eq!((shop.deadline, shop.body_limit, shop.middleware.len()), (eight, 64 << 10, 1));
+        assert!(shop.shell != 0 && !Arc::ptr_eq(&shop.csp, &policy.csp), "the area's CSP");
+        let desk = scopes.of_route("/shop/desk/{id}").expect("a parameter that cannot leave the inner area");
+        assert_eq!(
+            (desk.deadline, desk.body_limit, desk.middleware.len()),
+            (eight, 64 << 10, 2),
+            "the outer area's where it sets none"
+        );
+        assert!(desk.shell != 0 && desk.shell != shop.shell, "both areas' sources");
+        let api = scopes.of_route("/shop/api/quote").expect("a route of the API");
+        assert_eq!(api.mount.as_ref().map(|mount| mount.prefix.as_str()), Some("/shop/api"));
+        assert_eq!((api.deadline, api.body_limit, api.middleware.len(), api.shell), (eight, 16 << 10, 2, shop.shell));
+        assert!(Arc::ptr_eq(scopes.of_route("/about/{id}").expect("outside every prefix"), &scopes.app));
+        for pattern in ["/{*rest}", "/{page}", "/shop/{id}", "/shop/{*rest}", "/cor{x}"] {
+            assert!(scopes.of_route(pattern).is_none(), "{pattern} can match under another prefix");
+        }
+        // An unknown URL, by its path.
+        assert!(Arc::ptr_eq(scopes.at("/shop/desk/nope"), desk) && Arc::ptr_eq(scopes.at("/shop/nope"), shop));
+        assert!(Arc::ptr_eq(scopes.at("/shop/api/nope"), api) && Arc::ptr_eq(scopes.at("/nope"), &scopes.app));
+        let own = scopes.of_route("/corten/{file}").expect("under Corten's own prefix");
+        assert!(own.own && !scopes.app.own && Arc::ptr_eq(own, scopes.at("/health/live")));
+        assert_eq!(
+            (own.deadline, own.body_limit, own.middleware.len(), own.shell),
+            (Some(Duration::from_secs(5)), 1 << 10, 0, 0)
+        );
     }
 
     fn none() -> Vec<(String, bytes::Bytes)> {

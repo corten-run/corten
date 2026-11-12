@@ -4187,6 +4187,201 @@ async fn an_area_or_an_api_has_middleware_of_its_own() {
     assert!(!body.is_empty());
 }
 
+paths! {
+    Shop = "/shop",
+    ShopItem = "/shop/item",
+    ShopDesk = "/shop/desk",
+    ShopDeskItem = "/shop/desk/item",
+}
+
+#[cfg(feature = "json")]
+paths! { ApiQuote = "/api/quote" }
+
+/// A JSON answer for [`what_a_request_in_an_area_costs`].
+#[cfg(feature = "json")]
+#[derive(crate::ToJson)]
+struct CostQuote {
+    id: u32,
+    price: u32,
+}
+
+/// What a staged request costs where it is found: `SCOPE_REQUESTS` (200) requests in process,
+/// one at a time, for a page (`SCOPE_TARGET=page`) or an API's JSON (`SCOPE_TARGET=json`), in an
+/// app with two areas (one inside the other) and an API, each with a deadline, a body limit and
+/// middleware of its own and the areas a CSP source (`SCOPE_AREAS=1`), or in an app with none,
+/// where the same handlers are the app's own routes. Counting it under callgrind at two numbers of
+/// requests gives the instructions per request. Run in release:
+/// `cargo test --release -p corten-run --all-features --lib --no-run`, then
+/// `SCOPE_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored --exact tests::what_a_request_in_an_area_costs`
+/// and again at 200.
+#[cfg(feature = "json")]
+#[test]
+#[ignore]
+fn what_a_request_in_an_area_costs() {
+    let requests: usize = std::env::var("SCOPE_REQUESTS").ok().and_then(|n| n.parse().ok()).unwrap_or(200);
+    let areas = std::env::var("SCOPE_AREAS").is_ok_and(|v| v == "1");
+    let json = std::env::var("SCOPE_TARGET").is_ok_and(|v| v == "json");
+    async fn cost_item(req: Req) -> HtmlResult {
+        req.test_page("Item", html! { <p>"item"</p> })
+    }
+    async fn cost_quote() -> crate::JsonResult<CostQuote> {
+        Ok(crate::Json(CostQuote { id: 7, price: 1250 }))
+    }
+    let page = || get(cost_item);
+    let quote = || get(cost_quote);
+    let router = if areas {
+        App::new(Routes::from(Table::new().route("/", page())))
+            .deadline(Duration::from_secs(5))
+            .area::<Shop>(|shop| {
+                shop.route::<ShopItem>(crate::Methods::reads(page()))
+                    .deadline(Duration::from_secs(8))
+                    .body_limit(64 << 10)
+                    .policy(|p| p.img_src("https://img.example"))
+                    .middleware(Step("shop", false))
+            })
+            .area::<ShopDesk>(|desk| {
+                desk.route::<ShopDeskItem>(crate::Methods::reads(page()))
+                    .deadline(Duration::from_secs(9))
+                    .body_limit(32 << 10)
+                    .policy(|p| p.script_src("https://js.example"))
+                    .middleware(Step("desk", false))
+            })
+            .api::<ApiRoot>(|api| {
+                api.route::<ApiQuote>(crate::Methods::reads(quote()))
+                    .deadline(Duration::from_secs(7))
+                    .body_limit(16 << 10)
+                    .middleware(Step("api", false))
+            })
+            .router()
+    } else {
+        App::new(Routes::from(Table::new().route("/", page()).route("/shop/desk/item", page()).route("/api/quote", quote())))
+            .router()
+    };
+    let (path, answer) = if json { ("/api/quote", r#"{"id":7,"price":1250}"#) } else { ("/shop/desk/item", "<p>item</p>") };
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        for _ in 0..requests {
+            let (status, _, body) = call_with(router.clone(), "GET", path, None, None).await;
+            assert!(status == StatusCode::OK && body.contains(answer), "{status}: {body}");
+        }
+    });
+}
+
+/// Adds its name to the answer's `x-met`, so a test reads the middleware a request met, the
+/// innermost first, a `404`'s too.
+struct Met(&'static str);
+
+impl crate::Middleware for Met {
+    async fn call(&self, req: Request<Body>, next: impl crate::Next) -> crate::response::Response {
+        let mut res = next.run(req).await;
+        res.headers_mut().append("x-met", http::HeaderValue::from_static(self.0));
+        res
+    }
+}
+
+/// An app whose area `/shop`, and `/shop/desk` inside it, each set a CSP source and middleware,
+/// the outer one a deadline and both a body limit, over the app's shorter deadline and smaller
+/// limit; with `catch_all`, the app's `/{*rest}` answers every path no other route does. Each route
+/// waits 200 ms for a `GET` with `x-slow`, and answers a `POST` with the length of its body.
+fn shop_app(catch_all: bool) -> Router {
+    let answer = || {
+        get(|headers: http::HeaderMap| async move {
+            if headers.contains_key("x-slow") {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            "done"
+        })
+        .post(|body: crate::http::Bytes| async move { body.len().to_string() })
+    };
+    let routes = if catch_all { Table::new().route("/{*rest}", answer()) } else { Table::new() };
+    App::new(Routes::from(routes))
+        .error_page(test_error_page, ())
+        .deadline(Duration::from_millis(50))
+        .body_limit(1 << 10)
+        .middleware(Met("app"))
+        .area::<Shop>(|shop| {
+            shop.route::<ShopItem>(crate::Methods::reads(answer()))
+                .deadline(Duration::from_secs(10))
+                .body_limit(4 << 10)
+                .policy(|p| p.img_src("https://img.example"))
+                .middleware(Met("shop"))
+        })
+        .area::<ShopDesk>(|desk| {
+            desk.route::<ShopDeskItem>(crate::Methods::reads(answer()))
+                .body_limit(8 << 10)
+                .policy(|p| p.script_src("https://js.example"))
+                .middleware(Met("desk"))
+        })
+        .router()
+}
+
+/// A request to `shop_app`, from the app's own page: its status, the middleware it met (the
+/// innermost first, between spaces), its CSP and its body.
+async fn shop_call(router: &Router, method: &str, path: &str, slow: bool, body: usize) -> (StatusCode, String, String, String) {
+    let mut req = Request::builder().method(method).uri(path).header("sec-fetch-site", "same-origin");
+    if slow {
+        req = req.header("x-slow", "1");
+    }
+    let res = router.clone().oneshot(req.body(Body::from(vec![b'a'; body])).unwrap()).await.unwrap();
+    let (parts, body) = res.into_parts();
+    let met = parts.headers.get_all("x-met").iter().map(|v| v.to_str().unwrap()).collect::<Vec<_>>().join(" ");
+    let csp = parts.headers.get(http::header::CONTENT_SECURITY_POLICY).map_or("", |v| v.to_str().unwrap()).to_string();
+    (parts.status, met, csp, String::from_utf8(body.collect().await.unwrap().to_bytes().to_vec()).unwrap())
+}
+
+/// A route in an area meets its area's deadline, body limit, CSP and middleware, and in an area
+/// inside another those of both, the inner one's limit over the outer's and the outer's deadline
+/// where the inner sets none; read from the route the router matched (#1213).
+#[tokio::test]
+async fn a_route_in_an_area_meets_its_areas_deadline_body_limit_csp_and_middleware() {
+    let router = shop_app(false);
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/desk/item", true, 0).await;
+    assert_eq!((status, &body[..]), (StatusCode::OK, "done"), "the outer area's deadline, not the app's 50 ms");
+    assert_eq!(met, "desk shop app", "the app's middleware, then the outer area's, then the inner one's");
+    assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "both areas' sources: {csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk/item", false, 6 << 10).await.3, "6144", "the inner area's limit");
+    assert_eq!(shop_call(&router, "POST", "/shop/desk/item", false, 9 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/item", true, 0).await;
+    assert_eq!((status, &body[..], &met[..]), (StatusCode::OK, "done", "shop app"));
+    assert!(csp.contains("https://img.example") && !csp.contains("https://js.example"), "the outer area's alone: {csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/item", false, 3 << 10).await.3, "3072", "the outer area's limit");
+    assert_eq!(shop_call(&router, "POST", "/shop/item", false, 5 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+/// An unknown URL's `404` belongs to the area its path is under: it meets that area's middleware
+/// and has its CSP, and one outside every area the app's alone (#1213).
+#[tokio::test]
+async fn an_unknown_url_under_an_areas_prefix_is_answered_with_the_areas_settings() {
+    let router = shop_app(false);
+    let (status, met, csp, _) = shop_call(&router, "GET", "/shop/desk/nope", false, 0).await;
+    assert_eq!((status, &met[..]), (StatusCode::NOT_FOUND, "desk shop app"));
+    assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "{csp}");
+    let (status, met, csp, _) = shop_call(&router, "GET", "/shop/nope", false, 0).await;
+    assert_eq!((status, &met[..]), (StatusCode::NOT_FOUND, "shop app"));
+    assert!(csp.contains("https://img.example") && !csp.contains("https://js.example"), "{csp}");
+    let (status, met, csp, _) = shop_call(&router, "GET", "/nope", false, 0).await;
+    assert_eq!((status, &met[..]), (StatusCode::NOT_FOUND, "app"));
+    assert!(!csp.contains("https://img.example") && !csp.contains("https://js.example"), "{csp}");
+}
+
+/// A catch-all of the app's that matches a path under an area answers it with that area's
+/// settings, its deadline, body limit, CSP and middleware, and every other path with the app's:
+/// a route that can reach under another prefix is read by the request's path (#1213).
+#[tokio::test]
+async fn a_catch_all_outside_an_area_answers_under_it_with_the_areas_settings() {
+    let router = shop_app(true);
+    let (status, met, csp, body) = shop_call(&router, "GET", "/shop/desk/other", true, 0).await;
+    assert_eq!((status, &body[..]), (StatusCode::OK, "done"), "the outer area's deadline");
+    assert_eq!(met, "desk shop app");
+    assert!(csp.contains("https://js.example") && csp.contains("https://img.example"), "{csp}");
+    assert_eq!(shop_call(&router, "POST", "/shop/other", false, 3 << 10).await.3, "3072", "the area's limit");
+    let (status, met, csp, body) = shop_call(&router, "GET", "/other", false, 0).await;
+    assert_eq!((status, &body[..], &met[..]), (StatusCode::OK, "done", "app"), "the app's alone outside the areas");
+    assert!(!csp.contains("https://img.example") && !csp.contains("https://js.example"), "{csp}");
+    assert_eq!(shop_call(&router, "GET", "/other", true, 0).await.0, StatusCode::SERVICE_UNAVAILABLE, "the app's deadline");
+    assert_eq!(shop_call(&router, "POST", "/other", false, 3 << 10).await.0, StatusCode::PAYLOAD_TOO_LARGE, "the app's limit");
+}
+
 /// A middleware reads the client's address as a handler would, and the answer is then private.
 #[tokio::test]
 async fn a_middleware_reads_the_client_address() {
