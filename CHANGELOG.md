@@ -86,8 +86,9 @@ Corten is pre-1.0, so any minor version may change the API.
   template that held a key shared it, so the app applied only the first copy's submit, and a
   script had to carry its own UUID function to avoid that. A `SubmitKey` posted empty (without
   JavaScript) is still refused with a 422 naming the field, a debug build's page that draws
-  `SubmitKey::template_field` outside a `<template>` is an error, and a page whose only key field
-  is a template's keeps its `ETag`. The runtime grows 27 bytes compressed
+  `SubmitKey::template_field` outside a `<template>` a script copies (a declarative shadow root,
+  `<template shadowrootmode>`, is drawn in the page and needs its own key) is an error, and a page
+  whose only key field is a template's keeps its `ETag`. The runtime grows 27 bytes compressed
   ([#1254 A script cannot mint a submit key for a form it makes from a template, so copied rows share one key](https://github.com/corten-run/corten/issues/1254)).
 
 ### Changed

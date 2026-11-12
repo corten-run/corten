@@ -774,9 +774,9 @@ A row with a form whose write takes a submit key draws the key field in the temp
 `SubmitKey::template_field(f.submit)`, which holds no key, and the runtime gives each new row's
 form one of its own when it is sent; `SubmitKey::field` there would give every row the template's
 one key ([Requests and forms](requests-and-forms.md#forms)). The rows the server draws keep
-`SubmitKey::field`, so a `Row` drawn both ways takes its key field as a prop (a `SubmitField`):
-`SubmitKey::field(f.submit)` in the loop and `SubmitKey::template_field(f.submit)` in the
-`<template>`.
+`SubmitKey::field`, so a `Row` drawn both ways takes its key field as a prop (a
+`corten::form::SubmitField`): `SubmitKey::field(f.submit)` in the loop and
+`SubmitKey::template_field(f.submit)` in the `<template>`.
 
 One parent has one list, whichever handler asks, and it notices rows changed without it (a server
 patch, a sort) the next time it is used. It keeps its rows by key through its own changes and

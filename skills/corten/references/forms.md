@@ -242,8 +242,10 @@ has an answer below 500, then renews it. A form inside a `<template>` that a scr
 `{SubmitKey::template_field(f.submit)}` instead, which holds no key: the runtime gives each copy
 its own when it is first sent, before any `on:submit` handler runs, so never give a template
 `SubmitKey::field` (every copy would share its key), never mint keys in a script, never draw
-`template_field` outside a `<template>` (a debug build's page fails), and send such a form from a
-script with `form.requestSubmit()`, never `form.submit()`. An MCP tool for a write only the submission identifies
+`template_field` outside a `<template>` a script copies (a debug build's page fails; a declarative
+shadow root, `<template shadowrootmode>`, is drawn in the page and needs `SubmitKey::field`), and
+send such a form from a script with `form.requestSubmit()`, never `form.submit()`. An MCP tool for
+a write only the submission identifies
 takes the same field in its input struct (`submit: SubmitKey`, required, no doc comment), stored
 per caller and tool since the agent makes it, a repeat with other arguments refused (`ToolError::Refused`); a write
 idempotent without one is `Tools::idempotent_tool`. A key does not keep two submissions apart: work on

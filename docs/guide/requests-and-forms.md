@@ -674,10 +674,12 @@ empty and refused. Drawn with `SubmitKey::field`, every copy would carry the tem
 and the app would apply only the first copy's submit. Put it only in a `<template>`: without
 JavaScript nothing fills it, and a `SubmitKey` posted empty is refused with the same 422 as a
 malformed one (an `Option<SubmitKey>` reads it as none). A debug build's page that draws one
-outside a `<template>` is an error. A script that copies a form already on the page, rather than
-a template, empties the copy's key field (`field.value = ""`) so the runtime gives it one. A field
-with no key draws nothing at random, so a page whose only key fields are a template's keeps its
-`ETag`, which `SubmitKey::field` takes away.
+outside a `<template>` a script copies is an error (a declarative shadow root,
+`<template shadowrootmode>`, is drawn in the page and needs its own key). A script that copies a
+form already on the page, rather than a template, empties the copy's key field
+(`field.value = ""`) so the runtime gives it one. A field with no key draws nothing at random, so
+a page whose only key fields are a template's keeps its `ETag`, which `SubmitKey::field` takes
+away.
 
 An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Tools::tool`
 reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on
