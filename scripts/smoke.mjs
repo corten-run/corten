@@ -1679,6 +1679,11 @@ async function run(browser) {
     // The browser logs the 502.
     errors.splice(logged, errors.length, ...errors.slice(logged).filter((e) => !/502|Bad Gateway/i.test(e)));
     const plainPage = await (await browser.newContext()).newPage();
+    plainPage.on("console", (m) => {
+      const text = m.type() === "error" ? m.text() : "";
+      if (text && !bug(text) && !cut.test(text)) errors.push(`plain post: ${text}`);
+    });
+    plainPage.on("pageerror", (e) => errors.push(`plain post: ${e.message}`));
     /** @type {string[]} */
     const plainSent = [];
     await plainPage.route("**/scripts/read-key.js", readKey);

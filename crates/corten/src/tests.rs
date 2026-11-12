@@ -1136,8 +1136,8 @@ async fn a_hint_with_text_that_no_control_names_is_an_error_in_a_debug_build() {
 /// A form's submit key with no value (`SubmitKey::template_field`) is for the copies a script
 /// makes of a `<template>`: drawn outside one, a browser without JavaScript sends it empty and
 /// every post is refused, so a debug build's page says so, also for one drawn ahead
-/// (`req.rendered`). Inside a template, nested too, it is not an error, and neither is it in a
-/// patch: only the runtime asks for one, and it fills the key when the form is sent.
+/// (`req.rendered`). Inside a template, nested too or drawn ahead, it is not an error, and neither
+/// is it in a patch: only the runtime asks for one, and it fills the key when the form is sent.
 #[tokio::test]
 async fn a_submit_key_with_no_value_outside_a_template_is_an_error_in_a_debug_build() {
     fn keys(case: &'static str) -> Router {
@@ -1154,6 +1154,11 @@ async fn a_submit_key_with_no_value_outside_a_template_is_an_error_in_a_debug_bu
                     let placed = &drawn;
                     req.test_page("Keys", html! { {placed} })
                 }
+                "rendered-template" => {
+                    let drawn = req.rendered(form());
+                    let placed = &drawn;
+                    req.test_page("Keys", html! { <template>{placed}</template> })
+                }
                 _ => req.test_page("Keys", form()),
             }
         };
@@ -1166,7 +1171,7 @@ async fn a_submit_key_with_no_value_outside_a_template_is_an_error_in_a_debug_bu
             .error_page(test_error_page, ())
             .router()
     }
-    for case in ["template", "nested"] {
+    for case in ["template", "nested", "rendered-template"] {
         let (status, _, body) = call(keys(case), "GET", None).await;
         assert_eq!(status, 200, "{case}: {body}");
         assert!(body.contains(r#"<input type="hidden" name="submit" data-submit>"#), "{case}: {body}");

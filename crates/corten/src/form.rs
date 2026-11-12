@@ -1806,17 +1806,68 @@ pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> O
 #[cfg(debug_assertions)]
 pub(crate) fn keyless_submit_field(html: &str) -> Option<&str> {
     const EMPTY: &str = r#"" data-submit>"#;
+    let mut templates = Templates::default();
     let mut from = 0;
     while let Some(found) = html[from..].find(EMPTY) {
         let end = from + found + EMPTY.len();
-        let before = &html[..end];
-        // Markup only: a `<` in text or a value is written `&lt;`.
-        if before.matches("<template").count() <= before.matches("</template>").count() {
-            return Some(&before[before.rfind("<input").unwrap_or(0)..]);
+        if !templates.inert_at(html, end) {
+            return Some(&html[html[..end].rfind("<input").unwrap_or(0)..end]);
         }
         from = end;
     }
     None
+}
+
+/// How deep a scan of markup is in `<template>`s, read on from where it last stopped, so the
+/// markup is read once however many fields it holds. Markup only: a `<` in text or a value is
+/// written `&lt;`.
+#[cfg(debug_assertions)]
+#[derive(Default)]
+struct Templates {
+    /// Where the scan stopped.
+    at: usize,
+    /// The `<template>`s open there.
+    depth: usize,
+    /// The depth of the outermost one open whose content the parser keeps out of the page. A
+    /// declarative shadow root (`<template shadowrootmode>`) is not one: its content is in the page.
+    inert: Option<usize>,
+}
+
+#[cfg(debug_assertions)]
+impl Templates {
+    /// Reads `html` on to `end` and says whether `end` is inside an inert `<template>`. A start
+    /// tag is `<template>` or `<template` and whitespace, not a custom element such as
+    /// `<template-picker>`.
+    fn inert_at(&mut self, html: &str, end: usize) -> bool {
+        const NAME: &str = "template";
+        while let Some(found) = html[self.at..end].find(NAME) {
+            let name = self.at + found;
+            self.at = name + NAME.len();
+            let rest = &html[self.at..];
+            if html[..name].ends_with("</") && rest.starts_with('>') {
+                if self.inert == Some(self.depth) {
+                    self.inert = None;
+                }
+                self.depth = self.depth.saturating_sub(1);
+            } else if html[..name].ends_with('<') && rest.starts_with(|c: char| c == '>' || c.is_ascii_whitespace()) {
+                self.depth += 1;
+                let attrs = &rest[..rest.find('>').unwrap_or(rest.len())];
+                if self.inert.is_none() && !has_attribute(attrs, "shadowrootmode") {
+                    self.inert = Some(self.depth);
+                }
+            }
+        }
+        self.inert.is_some()
+    }
+}
+
+/// Whether a start tag's attributes, `attrs` (` a="1" b`), name `attr`.
+#[cfg(debug_assertions)]
+fn has_attribute(attrs: &str, attr: &str) -> bool {
+    attrs.match_indices(attr).any(|(at, _)| {
+        attrs[..at].ends_with(|c: char| c.is_ascii_whitespace())
+            && attrs[at + attr.len()..].chars().next().is_none_or(|c| c == '=' || c == '/' || c.is_ascii_whitespace())
+    })
 }
 
 /// The start tag around the attribute at `attr`'s first place in `html`, `<input .. id="x" ..>`.
@@ -2573,5 +2624,43 @@ mod tests {
         assert!(from_bytes::<MaybeKeyed>(b"submit=").unwrap().submit.is_none());
         let kept = from_bytes::<MaybeKeyed>(b"submit=3f2504e0-4f89-41d3-9a0c-0305e82c3301").unwrap().submit;
         assert_eq!(kept.as_ref().map(SubmitKey::as_str), Some("3f2504e0-4f89-41d3-9a0c-0305e82c3301"));
+    }
+
+    /// A debug build's check for a submit key with no value outside a `<template>` counts only
+    /// `<template>` start tags, not a custom element such as `<template-picker>`, and not a
+    /// declarative shadow root (`shadowrootmode`), whose content is in the page.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn only_an_inert_template_holds_a_submit_key_with_no_value() {
+        const F: &str = r#"<input type="hidden" name="submit" data-submit>"#;
+        let found = |html: &str| keyless_submit_field(html).map(str::to_owned);
+        for html in [
+            format!("<template>{F}</template>"),
+            format!(r#"<template class="row">{F}</template>"#),
+            format!("<template\n  id=\"t\">{F}</template>"),
+            format!(r#"<template title="shadowrootmode">{F}</template>"#),
+            format!(r#"<template data-shadowrootmode="open">{F}</template>"#),
+            format!("<template><div><template>{F}</template>{F}</div></template>"),
+            format!(r#"<template shadowrootmode="open"><template>{F}</template></template>"#),
+            format!(r#"<template><template shadowrootmode="open">{F}</template>{F}</template>"#),
+            format!("<template>{F}</template><template>{F}</template>"),
+        ] {
+            assert_eq!(found(&html), None, "{html}");
+        }
+        for html in [
+            F.to_owned(),
+            format!("<template-picker>{F}</template-picker>"),
+            format!("<template-picker><template></template>{F}</template-picker>"),
+            format!(r#"<template shadowrootmode="open">{F}</template>"#),
+            format!("<template shadowrootmode=open>{F}</template>"),
+            format!(r#"<div><template shadowrootmode="closed" shadowrootdelegatesfocus>{F}</template></div>"#),
+            format!(r#"<template shadowrootmode="open"><template></template>{F}</template>"#),
+            format!("<template>{F}</template>{F}"),
+            format!("<template><template></template>{F}</template>{F}"),
+        ] {
+            assert_eq!(found(&html).as_deref(), Some(F), "{html}");
+        }
+        let html = r#"<template><input type="hidden" name="a" data-submit></template><input type="hidden" name="b" data-submit>"#;
+        assert_eq!(found(html).as_deref(), Some(r#"<input type="hidden" name="b" data-submit>"#), "the field outside");
     }
 }
