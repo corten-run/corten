@@ -160,7 +160,7 @@ examples and the benchmarks, adds `codegen-units = 1`, as do the other Rust apps
 so neither changes the edit-reload loop; they change the release build, its binary and the
 server's cost per request.
 
-Measured on card-market at eb8589c8 in `rust:1-bookworm`, each profile set through
+Measured on card-market at `eb8589c8` in `rust:1-bookworm`, each profile set through
 `CARGO_PROFILE_RELEASE_LTO` and `CARGO_PROFILE_RELEASE_CODEGEN_UNITS`, on a desktop under load,
 so the build times are noisy. A clean build is card-market and its dependencies from an empty
 target directory; a rebuild follows a line appended to `src/views.rs`. Two rounds each:

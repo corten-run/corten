@@ -5,8 +5,39 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+### Added
+
+- The watchlist smoke checks three runtime behaviors it did not. A tapped link nothing hovered is
+  prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
+  has no Navigation API, so nothing is prefetched). An upload answered with a status that has no
+  body is read with none: Corten's `204` redirect (`corten-location`) is followed with no
+  `corten:error`, and a bare `204`, `205` or `304` is `corten:error` with that status (the
+  `304` in Chromium and Firefox: Playwright cannot answer one in WebKit); one answered with a status of 600 is
+  `corten:error` with status 0; the form is left not busy each time. Another file of the same
+  name, chosen while a write sending the first is out, is sent after it, whether its size or only
+  its time differs, where the same file pressed again is not. Each check failed against a runtime
+  with the line it covers taken out
+  ([#1229 Three runtime behaviors have no browser check: touch prefetch, an upload answered with a status a Response cannot have, and a same-name file sent as a new submit](https://github.com/corten-run/corten/issues/1229)).
+
 ### Fixed
 
+- A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no
+  longer closes a tunnel once the timeout has passed from when it opened, whether it is carrying
+  traffic or idle: as on a WebSocket, idle limits on the tunnel are the route's, and
+  `App::send_timeout` still ends a write that waits on it. A refused `CONNECT` is an answer like
+  any other, closed once idle past the timeout. Before, the tunnel's empty `200` marked the
+  connection idle at once, and a downstream proxy measured hundreds of streams cut at 29 to 31 s
+  under the default 30 s
+  ([#1218 A CONNECT answered 2xx goes idle like a plain answer, so the header timeout cuts the tunnel mid-stream (only a 101 stays busy)](https://github.com/corten-run/corten/issues/1218)).
+- Each TCP connection Corten accepts (`serve`, and `serve_on` or `serve_wrapped` with tokio's
+  `TcpListener`) has Nagle's algorithm off (`TCP_NODELAY`), as Go's `net/http` and nginx do, so
+  a feed's patches or a live element's fragments made one after another are no longer held for
+  the acknowledgement of the last one. Through nginx with the app in a container of its own, the
+  second of ten small events made back to back on a reused connection came 42.5 and 43.0 ms (the
+  medians of two runs) after the first, the other eight with it; with the option set, -0.1 ms,
+  and a request costs the same instructions; a listener of the app's own keeps its choice (design
+  Choice 41, `bench/nodelay`)
+  ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
 - A write or a WebSocket handshake with no `Sec-Fetch-Site` (every handshake from Chromium and
   Firefox) is checked against `Host` by its whole origin, where only what followed `://` was
   compared: under `Policy::hsts` the `Origin` must be `https` or loopback, so a plain-http page
@@ -21,6 +52,24 @@ Corten is pre-1.0, so any minor version may change the API.
   26); the deploy guide's checklist says to set `hsts` for an app served only over HTTPS even when
   the proxy sends the header
   ([#1212 A write or WebSocket handshake without Sec-Fetch-Site is checked against Host without the scheme, so a plain-HTTP page on the app's host passes against the HTTPS app](https://github.com/corten-run/corten/issues/1212)).
+
+### Documentation
+
+- `bench/fullstack/README.md`'s four cited commits that GitHub did not keep on `main`'s history
+  (`2fa883a6`, `1e1fb7be`, `eedbcc2a`, and `7f0b81f`, which only the branch `bench/r13-tree` held) are
+  kept under `refs/tags/evidence/`, so `scripts/design-refs.mjs` checks every commit the file
+  cites and skips none
+  ([#1260 bench/fullstack/README.md cites three commits GitHub does not have (2fa883a6, 1e1fb7be, eedbcc2a), outside the cited-commit check](https://github.com/corten-run/corten/issues/1260)).
+- `npm run check` fails on a commit cited in backticks in the repository's Markdown that is not
+  on the checkout's history or under `refs/tags/evidence/` (which keeps cited commits no branch
+  has), naming its file, line and commit and the fetch from corten-run/corten that brings the
+  evidence tags; a shallow clone fails once, saying to fetch the whole history. CI's `npm-check`
+  group checks out the whole history, and with it every tag. Another repository's commit is
+  written `owner/repo@sha`, as GitHub writes one, and `scripts/choices.mjs` takes that form as a
+  Last checked commit; Corten's own is written alone. Thirteen citations of five commits written
+  without backticks in `docs/`, `bench/browser/README.md` and `bench/fullstack/README.md` now
+  have them, so they are checked
+  ([#1219 Twelve commits design.md cites as evidence for Choices 25, 26 and 38 and Limit 21 are not on GitHub, so their numbers cannot be taken again](https://github.com/corten-run/corten/issues/1219)).
 
 ## 0.2.0 (2026-11-11)
 
