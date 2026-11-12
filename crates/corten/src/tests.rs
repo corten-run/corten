@@ -9342,7 +9342,8 @@ async fn raw_get(addr: std::net::SocketAddr, path: &str, headers: &str) -> Strin
 
 /// What a request over TCP costs, for callgrind: `TCP_REQUESTS` (200) requests for a small JSON
 /// answer through Corten's listeners and accept loop, one after another on one keep-alive
-/// connection, or with `TCP_CONNECTIONS=1` each on a connection of its own. Counting it at two
+/// connection, or with `TCP_CONNECTIONS=1` each on a connection of its own; with
+/// `TCP_MAX_CONNECTIONS=n`, under `App::max_connections(n)`. Counting it at two
 /// numbers of requests gives the difference per request: `cargo test --release -p corten-run --lib
 /// --no-run`, then `TCP_REQUESTS=1200 valgrind --tool=callgrind <that binary> --ignored --exact
 /// tests::what_a_request_over_tcp_costs` and again at 200.
@@ -9356,7 +9357,11 @@ async fn what_a_request_over_tcp_costs() {
     let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
     let addr = listeners[0].local_addr().unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, App::new(Routes::from(routes)), async {
+    let mut app = App::new(Routes::from(routes));
+    if let Some(max) = std::env::var("TCP_MAX_CONNECTIONS").ok().and_then(|n| n.parse().ok()) {
+        app = app.max_connections(max);
+    }
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
         let _ = stopped.await;
     }));
     if std::env::var("TCP_CONNECTIONS").is_ok_and(|each| each == "1") {
@@ -9880,13 +9885,178 @@ async fn a_switched_connection_is_held_to_the_send_timeout() {
     server.await.unwrap().unwrap();
 }
 
+/// `App::max_connections` counts a switched connection for as long as its route holds it: with one
+/// allowed, a second connection waits while a WebSocket is open after its `101`, and is served
+/// once the WebSocket closes (#1249). A tunnel's case is in
+/// `a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does_not`.
+#[tokio::test]
+async fn a_switched_connection_counts_against_max_connections_until_it_closes() {
+    use crate::upgrade::{Switch, Upgrade};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn echo(upgrade: Upgrade) -> crate::Result<Switch> {
+        upgrade.websocket(|mut stream: crate::upgrade::Stream, _: crate::Signal| async move {
+            let mut buf = [0u8; 64];
+            loop {
+                match stream.read(&mut buf).await {
+                    Ok(0) | Err(_) => return,
+                    Ok(n) if stream.write_all(&buf[..n]).await.is_err() => return,
+                    Ok(_) => {}
+                }
+            }
+        })
+    }
+    let routes = Table::new().route("/ws", get(echo)).route("/", get(|| async { "hi" }));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).max_connections(1);
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    socket
+        .write_all(b"GET /ws HTTP/1.1\r\nhost: localhost\r\nconnection: Upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        .await
+        .unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(socket.read_u8().await.expect("the switch's head"));
+    }
+    assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
+    // An echo shows the route holds the socket.
+    let mut echoed = [0u8; 4];
+    socket.write_all(b"ping").await.unwrap();
+    socket.read_exact(&mut echoed).await.unwrap();
+    assert_eq!(&echoed, b"ping");
+
+    let second = tokio::spawn(raw_get(addr, "/", ""));
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!second.is_finished(), "a second connection waits while a WebSocket is open");
+    socket.write_all(b"pong").await.unwrap();
+    socket.read_exact(&mut echoed).await.unwrap();
+    assert_eq!(&echoed, b"pong", "the WebSocket is still open");
+    drop(socket);
+    let answer = tokio::time::timeout(Duration::from_secs(3), second).await.expect("served once the WebSocket closes").unwrap();
+    assert!(answer.ends_with("hi"), "{answer}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// A switched connection counts until its route drops the socket, not until the client closes
+/// it: a route that returns after one echo gives its place back while the client still holds its
+/// TCP connection open, and the next connection is served (#1249).
+#[tokio::test]
+async fn a_switched_connection_stops_counting_when_its_route_drops_the_socket() {
+    use crate::upgrade::{Switch, Upgrade};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    async fn once(upgrade: Upgrade) -> crate::Result<Switch> {
+        upgrade.websocket(|mut stream: crate::upgrade::Stream, _: crate::Signal| async move {
+            let mut buf = [0u8; 4];
+            if stream.read_exact(&mut buf).await.is_ok() {
+                let _ = stream.write_all(&buf).await;
+            }
+        })
+    }
+    let routes = Table::new().route("/ws", get(once)).route("/", get(|| async { "hi" }));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).max_connections(1);
+    let server = tokio::spawn(crate::app::run(listeners, crate::app::plain, app, async {
+        let _ = stopped.await;
+    }));
+    let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    socket
+        .write_all(b"GET /ws HTTP/1.1\r\nhost: localhost\r\nconnection: Upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        .await
+        .unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(socket.read_u8().await.expect("the switch's head"));
+    }
+    assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
+    socket.write_all(b"ping").await.unwrap();
+    let mut echoed = [0u8; 4];
+    socket.read_exact(&mut echoed).await.unwrap();
+    assert_eq!(&echoed, b"ping");
+    // The route has returned and dropped its stream; the client keeps its end open.
+    let answer = tokio::time::timeout(Duration::from_secs(3), raw_get(addr, "/", ""))
+        .await
+        .expect("served once the route dropped the socket, with the client's end still open");
+    assert!(answer.ends_with("hi"), "{answer}");
+    let mut rest = Vec::new();
+    let closed = tokio::time::timeout(Duration::from_secs(3), socket.read_to_end(&mut rest)).await;
+    assert!(matches!(closed, Ok(Ok(0))), "the server closed its end when the route dropped it: {closed:?}");
+    drop(socket);
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
+/// Over `corten::serve_wrapped`, a connection that switches after its step holds its place under
+/// `App::max_connections` as a plain one does: the next connection waits while the WebSocket is
+/// open and is served once it closes (#1249).
+#[tokio::test]
+async fn a_switched_connection_after_a_step_counts_against_max_connections() {
+    use crate::upgrade::{Switch, Upgrade};
+    use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // A stand-in for a handshake: the client sends "hello\n" first.
+    async fn hello(mut tcp: tokio::net::TcpStream) -> std::io::Result<tokio::net::TcpStream> {
+        let mut greeting = [0u8; 6];
+        tcp.read_exact(&mut greeting).await?;
+        match &greeting {
+            b"hello\n" => Ok(tcp),
+            _ => Err(std::io::Error::other("not a greeting")),
+        }
+    }
+    async fn hold(upgrade: Upgrade) -> crate::Result<Switch> {
+        upgrade.websocket(|mut stream: crate::upgrade::Stream, _: crate::Signal| async move {
+            let mut buf = [0u8; 64];
+            while matches!(stream.read(&mut buf).await, Ok(n) if n > 0) {}
+        })
+    }
+    let routes = Table::new().route("/ws", get(hold)).route("/", get(|| async { "hi" }));
+    let listeners = crate::app::bind(Some("127.0.0.1"), 0).await.unwrap();
+    let addr = listeners[0].local_addr().unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = App::new(Routes::from(routes)).max_connections(1);
+    let server = tokio::spawn(crate::app::run(listeners, hello, app, async {
+        let _ = stopped.await;
+    }));
+    let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    socket
+        .write_all(b"hello\nGET /ws HTTP/1.1\r\nhost: localhost\r\nconnection: Upgrade\r\nupgrade: websocket\r\nsec-websocket-version: 13\r\nsec-websocket-key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+        .await
+        .unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        head.push(socket.read_u8().await.expect("the switch's head"));
+    }
+    assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
+    let second = tokio::spawn(async move {
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(b"hello\nGET / HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n").await.unwrap();
+        let mut answer = String::new();
+        stream.read_to_string(&mut answer).await.unwrap();
+        answer
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!second.is_finished(), "a second connection waits while a WebSocket after a step is open");
+    drop(socket);
+    let answer = tokio::time::timeout(Duration::from_secs(3), second).await.expect("served once the WebSocket closes").unwrap();
+    assert!(answer.ends_with("hi"), "{answer}");
+    stop.send(()).unwrap();
+    server.await.unwrap().unwrap();
+}
+
 /// A `2xx` to `CONNECT` switches the connection to a tunnel, as a `101` does, so
 /// `App::header_timeout` no longer bounds it: a tunnel carrying bytes both ways stays open past
 /// twice the timeout, and so does one where neither side sends (its idle time is the route's), and
-/// `App::send_timeout` still ends a write its client makes no room for. A switched connection no
-/// longer counts against `App::max_connections`: the next connection is served while it is open.
-/// That is today's behavior (docs/design.md#limit-protocol-switch), not a promise: #1249 would count it, and this test
-/// then expects the next connection to wait.
+/// `App::send_timeout` still ends a write its client makes no room for. The tunnel still counts
+/// against `App::max_connections`: with one allowed, the next connection waits while it is open
+/// and is served once it closes (#1249).
 /// A `CONNECT` refused (`403`) is an answer like any other, and its connection closes once idle
 /// past the timeout (#1218).
 #[tokio::test]
@@ -9974,17 +10144,21 @@ async fn a_connect_tunnel_outlives_the_header_timeout_and_a_refused_connect_does
     assert!(matches!(read, Ok(Ok(_))), "an idle tunnel is held past the header timeout: {read:?}");
     assert_eq!(&echo, b"after a quiet spell\n");
 
-    // The send timeout on a tunnel, which held before the fix too: a client that reads nothing
-    // more has the route's write fail. Its connection is served while the first tunnel is still
-    // open, with one connection allowed (today's behavior, docs/design.md#limit-protocol-switch; #1249 would make it wait).
+    // With one connection allowed, the next waits in the listener's queue while the tunnel is
+    // open, and is served once the tunnel closes (#1249). Nothing of its answer has arrived, so
+    // dropping the first read takes nothing.
     let mut flood = tokio::net::TcpStream::connect(addr).await.unwrap();
     flood.write_all(b"CONNECT / HTTP/1.1\r\nhost: localhost\r\nx-flood: 1\r\n\r\n").await.unwrap();
-    let answer = tokio::time::timeout(Duration::from_secs(3), head(&mut flood)).await.expect("served beside an open tunnel");
+    let waited = tokio::time::timeout(Duration::from_millis(300), head(&mut flood)).await;
+    assert!(waited.is_err(), "a second connection waits while a tunnel is open: {waited:?}");
+    drop(tunnel);
+    let answer = tokio::time::timeout(Duration::from_secs(3), head(&mut flood)).await.expect("served once the tunnel closes");
     assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    // The send timeout on a tunnel, which held before the fix too: a client that reads nothing
+    // more has the route's write fail.
     let kind = tokio::time::timeout(Duration::from_secs(5), failure.recv()).await.expect("the tunnel's write fails");
     assert_eq!(kind, Some(std::io::ErrorKind::TimedOut));
     drop(flood);
-    drop(tunnel);
 
     let mut refused = tokio::net::TcpStream::connect(addr).await.unwrap();
     let asked = Instant::now();

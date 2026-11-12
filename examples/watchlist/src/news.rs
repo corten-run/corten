@@ -474,7 +474,7 @@ mod tests {
     async fn only_the_news_pages_link_their_area_stylesheet() {
         let app = client();
         let links = |body: &str| body.matches("data-corten-style").count();
-        let home = app.get(&Home).await;
+        let home = app.get(&Home::default()).await;
         assert_eq!(links(home.text()), 0, "{}", home.text());
         let news = app.get(&url::News::default()).await;
         let news = news.text();

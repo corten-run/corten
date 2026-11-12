@@ -184,7 +184,8 @@ every candidate in the reserved [framework group](bench/marketplace/nightly.md#f
 and both sources and every browser/content profile for each admitted app before load.
 The nightly suite measures CPU, memory,
 load and cold start only, with three short-window passes (`--duration 15 --warmup 10 --rate 150`)
-on a dedicated c-8, app CPU 1, upstream CPUs 2-3 and load CPUs 4-7. Time pages in all three
+on a dedicated c-8, app CPU 1, upstream CPUs 2-3 and load CPUs 4-7, or on several such droplets
+when a [split round](bench/marketplace/nightly.md#split-rounds) is worth launching. Time pages in all three
 locales (`en-US`, `fr-FR`, `de-DE`) and locale-neutral JSON once per source per pass.
 Report medians, ranges and headroom limits, not a guaranteed finish by 7 am. Compare only
 compatible v2 rounds, with no r16 or catalog c1 delta; catalog is not a duplicate nightly run.

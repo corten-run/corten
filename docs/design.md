@@ -297,7 +297,8 @@ rules something out.
    without JavaScript it lands at the end of the page; and with the data fetched together
    (`tokio::join!`) and rendering in microseconds, the most it saves is the slowest source's
    wait. A part that is slow and optional is a `<corten-live>` whose stream sends it when it is
-   ready and ends.
+   ready and ends; where no stream will bring it, its placeholder links to the page with it read
+   in ([Choice 44](#choice-slow-part-link)).
 
    Stands on: bet (a page's sources are fetched together and the slowest is rarely slow enough for a
    part sent later to be worth its costs); measured (an uncompressed, untagged whole item page request
@@ -2603,6 +2604,58 @@ rules something out.
     `corten-run` scopes' package lists) and npm's trusted-publishing, `npm trust` (npm 11.21.2) and
     name-squatting documentation, read at `684a5395f`.
 
+44. <a id="choice-slow-part-link"></a>**A slow part no stream will bring is a link the app writes to
+    its own page with a query field that reads the part in, not a marker Corten reads.** A
+    browser without JavaScript opens no `<corten-live>` stream
+    ([Choice 7](#choice-whole-pages)), and one with it can give up (`status="closed"`: the server
+    answered with an error or a 204), so a placeholder alone would stay for good. The placeholder
+    holds a link to the page's own route with a query field whose handler branch reads the part
+    in (`url::Home { picks: Some(true) }`, `rel="nofollow"`), as an address already says what a
+    page reads (the receipt a page waits for): no second route per part, and nothing of Corten's
+    own in the URL. The component's CSS hides the link under `@media (scripting: enabled)` and the
+    loading line under `@media (scripting: none)`, and swaps them inside
+    `corten-live[status="closed"]`, so a browser without the `scripting` media feature shows both.
+    Corten adds no element, attribute or marker for it: `<corten-live>` cannot draw the link
+    without a script, so the server would, from a label only the app has, which is the link the
+    app writes; and a query parameter Corten reads on every page would be a second way for an
+    address to say what a page reads. The cost is one field plus one handler branch per page with
+    a slow part; other links name the page through its route's `Default` (`url::Home::default()`),
+    and the address the link opens waits for the slow read wherever it is opened, with JavaScript
+    too. Three cases are left with the line and no link: scripting is on but the runtime never
+    runs (blocked by an extension or the CSP, or failed to load), as the query follows whether
+    scripts are on, not whether one ran
+    ([scripts guide](guide/scripts.md#a-control-only-the-script-makes-work)); a stream that ends
+    (`end`) after a fragment that failed to apply, where a rule on `status="ended"` would show the
+    link for a moment after every stream that ends as it should; and a stream dropped each time
+    before the part is sent (a proxy whose idle timeout is shorter than the slow read), which stays
+    `reconnecting` while the browser retries, where a rule on that status would show the link at
+    every drop the browser recovers from. Not chosen: the link in a `<noscript>`, which a browser
+    with scripting on never draws, on the first page or in markup the runtime fetches, so it would
+    never show for a stream that gave up.
+
+    Stands on: bet (an app has a slow part on few of its pages, so a field on each of those costs
+    less than a marker Corten reads on every request); platform (with scripting off
+    `@media (scripting: none)` matches and `(scripting: enabled)` does not, with it on the
+    reverse; an `EventSource` answered with an error or a 204 closes for good instead of
+    reconnecting); reasoned (a browser without Media Queries 5's `scripting` matches neither
+    query, as Media Queries evaluates a feature it does not know to unknown, which a query takes
+    as false, so it shows both; the runtime sets `status="closed"` on a `<corten-live>` whose
+    `EventSource` has closed for good, in `crates/corten/js/corten.js`, so CSS can tell a stream
+    that gave up; the page's handler can call the read the stream calls, so reading the part in
+    is a branch on the field, not a second handler; the link is in the markup with JavaScript
+    too, so no runtime step draws or removes it); value (a page works without a script, Values 3,
+    where a part a stream sends would never come).
+
+    Revisit when: the repository's examples and the Chase Sets pilot between them write such a
+    field and handler branch on three or more routes; or a browser the repository's Playwright
+    runs matches `@media (scripting: none)` with JavaScript on, or not with it off.
+
+    Last checked: 2026-11-12, `@media (scripting: none)` and `(scripting: enabled)` with
+    JavaScript off and on (`javaScriptEnabled` in Playwright 1.64.1), and an `EventSource` closing
+    after a 204 (the picks' checks and the `#flaky-live` one) and after a 503 (the feed's check of
+    a stream answered with an error), probed in Chromium 156, Firefox 157 and WebKit 27.2 by
+    `scripts/smoke.mjs`.
+
 ## Rules
 
 1. <a id="rule-html-macro"></a>Markup is written in `html!`, never built from strings in a script. A script makes new
@@ -2781,12 +2834,14 @@ by design; where it is known, a limit says what would lift it or why it is so.
     the connection may sit idle are the WebSocket library's and the route's, though
     `App::send_timeout` still ends a write the client makes no room for. `App::header_timeout`
     no longer applies and the deadline covered only the handler, so a switched connection on which
-    neither side sends stays open until the route ends it; it no longer counts against
-    `App::max_connections`, since hyper's connection ends when it hands over the socket and
-    the cap's permit goes with it, so a route that accepts switched connections bounds how many
-    it holds. Moving the permit into the socket that is handed over would lift this
-    ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)). The work on a switched connection is told when shutdown begins and is
-    not waited for.
+    neither side sends stays open until the route ends it. It still counts against
+    `App::max_connections` until then: the cap's permit is held by the socket hyper hands over,
+    not by hyper's connection, which ends at the switch (fixed by
+    [#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
+    So a route that accepts switched connections must end idle ones (a deadline from the last
+    frame the client sent, with pings so one that only listens answers) and should bound how
+    many it keeps: otherwise sockets no one uses take the cap from every other request. The work
+    on a switched connection is told when shutdown begins and is not waited for.
 14. <a id="limit-http1"></a>Connections are HTTP/1.1. A request's head must arrive within `App::header_timeout` (30
     seconds), which also closes an idle keep-alive connection, and be at most
     `App::max_request_head` (32 KiB, [Choice 19](#choice-head-size)) with at most 100 headers; an answer must make

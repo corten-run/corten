@@ -163,6 +163,62 @@ commits main moved. On uncertainty inspect the reservation and owned host, never
 If unit is running, keep running. If terminal, collect partial data. If missing, preserve the
 host and report the provisioning error rather than guessing deletion is safe.
 
+## Split Rounds
+
+A round may be split across droplets started together with `--droplets <n>`
+([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816));
+the [marketplace README](README.md#splitting-a-round-across-droplets) describes the split, the
+merge and the check. The nightly default stays one droplet until a split round has been run and
+validated with Todd's approval. A split deals every selected candidate of the group to a part
+by membership. Membership is the group's candidates as `groups.mjs` sets them, and it does not
+shrink when an adapter lacks a feature: missing support is implementation backlog, not a reason
+to drop a candidate. Qualification status is what `admitted()` says of each candidate on a given
+run, on its own droplet. So a split is worth launching only when the latest full round's Feature
+Qualification table (not a check-only run's, which has no report) admits at least one peer for
+every part of the `--plan` split: a part whose peers are all excluded makes the round
+unmergeable, and that shows only after the other droplets have spent their hours. When
+splitting, check `--plan` against that table first, then launch with the same
+state directory rules as above:
+
+```sh
+node bench/marketplace/droplet.mjs r17 --droplets 3 --ssh-key <saved-key-id> --state-dir <round-control-directory> --detach
+node bench/marketplace/droplet.mjs r17 --state-dir <round-control-directory> --collect
+```
+
+Each droplet is a dedicated c-8 with the same pinning, passes, windows and rate. The launch
+checks the account's droplet limit before it writes `split.json`, and `--collect` needs no
+`--droplets`: it reads the plan. A running launch holds `launch.lock` (its pid) in the state
+directory, and collect refuses while that pid runs; as with collect.lock, check the exact
+process, and never remove a live lock. A lock whose pid is not running is a killed launch:
+collect removes it and collects the stopped launch. The launcher ignores SIGHUP, so a closed
+terminal does not stop it. Exit codes are as above, for the round: 3 while any droplet
+runs (finished droplets are already collected and deleted), 2 for a collection error on any
+droplet or a leftover `corten-marketplace-rN-d*` droplet (reported with its delete command, never
+deleted), 1 when a droplet did not finish its part or the parts do not merge, 0 when every
+droplet finished, was deleted and merged into `round/rN/` in the state directory. Exit 2 wins
+over 3: a droplet can still be running when collect exits 2. Then fix what it names and collect
+again until it exits 0 or 1; never relaunch. Exit 1 is final for the round: when the parts do not
+merge, collect says the round cannot be merged and to follow the exit 1 steps in
+[State And Collection](#state-and-collection); the next round takes the next rN. When a droplet never started, is partial or is
+missing, the round cannot merge, and collect prints an `ssh ... systemctl stop` command for each
+droplet still running, whatever the exit code: run each, then collect again. This overrides "keep
+running" above, so a round that cannot merge stops billing. Import that merged folder, not a
+droplet's `d<k>/` alone, as results/rN. A launch stopped by a signal says what each droplet is
+left doing, and saves it as `launch-stopped.txt` in the state directory; stop a started round
+with the `ssh` command it prints, then collect. A droplet whose launch stopped before
+`systemctl start` (`creating` or `preparing`) never ran its round: the launch and collect both
+print what to delete (collect finds a droplet whose create returned no id by name and run tag,
+and checks its ownership tags before printing a `doctl` delete command); run it. A `starting` droplet is collected, never deleted on a
+guess. A split round compares only with a round split the same way, droplet by droplet, so
+droplets that land on different CPU models refuse comparison with a baseline whose droplets
+differ (see the README); its report's Between droplets section flags stages where Corten's own
+numbers differ between droplets, and a flagged stage is reported, not hidden. A split splits the
+launch's group, never the whole inventory: Corten on every droplet, each other candidate on one,
+each qualified on its droplet with the same feature contract, and no anchor. A droplet that
+admits no peer fails its part, and the merge accounts for every candidate once, admitted or
+excluded with its evidence. The merge also refuses a part that did not finish clean (checks
+passed, no failures, a clean tree at the plan's commit) and parts that did not run together.
+
 ## Finished Results
 
 1. Require exit 0, saved archive/checksum, deletion confirmation and report.mjs validation:
