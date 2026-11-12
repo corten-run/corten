@@ -750,6 +750,78 @@ fn checks_href(name: &str, attrs: &[Attr]) -> bool {
     name == "a" && label_of(attrs).is_some() && attrs.iter().any(|a| matches!(a, Attr::Bare(n) | Attr::Static(n, _) if named(n)))
 }
 
+/// Attributes whose value is a URL a browser loads or goes to.
+const URL_ATTRS: &[&str] =
+    &["href", "xlink:href", "src", "srcset", "imagesrcset", "poster", "action", "formaction", "data", "ping"];
+
+/// The path in this app that `value`, the text of the attribute `name` (lowercase), names: a URL
+/// attribute's URL that is a path (`is_local_path`). `srcset` and `imagesrcset` hold a list of
+/// candidates and `ping` a list of URLs, and each URL in them is read. A link is a route and a
+/// static file its constant, so a path written as text is refused (`refused_path`).
+fn local_path<'a>(name: &str, value: &'a str) -> Option<&'a str> {
+    match name {
+        "srcset" | "imagesrcset" => srcset_urls(value).into_iter().find(|url| is_local_path(url)),
+        "ping" => value.split_ascii_whitespace().find(|url| is_local_path(url)),
+        _ if URL_ATTRS.contains(&name) => is_local_path(value).then_some(value),
+        _ => None,
+    }
+}
+
+/// Whether `url` is a path in this app as a browser reads it: once the spaces and control
+/// characters it drops at either end, and the tabs and newlines it drops anywhere, are gone, it
+/// starts with one `/` or `\` (which a browser reads as `/`), not two, which name another host.
+/// A fragment, a URL with a scheme and a relative path are not.
+fn is_local_path(url: &str) -> bool {
+    let mut chars = url.trim_matches(|c: char| c <= ' ').chars().filter(|c| !matches!(c, '\t' | '\n' | '\r'));
+    let slash = |c: Option<char>| matches!(c, Some('/' | '\\'));
+    slash(chars.next()) && !slash(chars.next())
+}
+
+/// The URLs of a `srcset`, split as the HTML standard splits it: a candidate is a URL (the text up
+/// to a space, less its trailing commas) and its descriptors, up to the next comma outside
+/// parentheses. A comma inside a URL (`data:image/jpeg;base64,/9j/..`) does not split it.
+fn srcset_urls(value: &str) -> Vec<&str> {
+    let mut urls = Vec::new();
+    let mut rest = value;
+    loop {
+        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == ',');
+        if rest.is_empty() {
+            return urls;
+        }
+        let end = rest.find(|c: char| c.is_ascii_whitespace()).unwrap_or(rest.len());
+        let url = rest[..end].trim_end_matches(',');
+        urls.push(url);
+        let ended = url.len() < end;
+        rest = &rest[end..];
+        if ended {
+            // A comma after the URL ends the candidate: it has no descriptors.
+            continue;
+        }
+        let mut depth = 0u32;
+        let cut = rest
+            .char_indices()
+            .find(|&(_, c)| {
+                match c {
+                    '(' => depth += 1,
+                    ')' => depth = depth.saturating_sub(1),
+                    ',' if depth == 0 => return true,
+                    _ => {}
+                }
+                false
+            })
+            .map_or(rest.len(), |(at, _)| at);
+        rest = &rest[cut..];
+    }
+}
+
+/// The error for a path in this app written as text in the URL attribute `name`: it names the
+/// typed forms that replace it.
+fn refused_path(name: &str, path: &str) -> String {
+    format!(
+        "{name}: \"{path}\" is a path in this app written as text, which nothing checks. Link to a #[derive(Route)] struct, {name}={{url::Items}} (url::Item {{ id }} for one with parameters, url::Items.at(Id) for a place on a page), or name a static file by its constant, {name}={{req.asset(Static::LOGO_SVG)}}; a URL outside the app is written whole (https://..)"
+    )
+}
+
 /// `tokens` with every span, inside groups too, located at `at`, so an error in them points
 /// there; their names still resolve where the macro expands (a `macro_rules!` around `html!`).
 fn respan(tokens: TokenStream, at: Span) -> TokenStream {
@@ -1118,8 +1190,14 @@ impl Cursor {
                     }
                     if is_punct(self.peek(), '=') {
                         self.next();
+                        let value_span = self.span();
                         match self.value(false)? {
-                            (Some(text), _) => attrs.push(Attr::Static(name, text)),
+                            (Some(text), _) => {
+                                if let Some(path) = local_path(&lower, &text) {
+                                    return err(value_span, refused_path(&name, path));
+                                }
+                                attrs.push(Attr::Static(name, text))
+                            }
                             (None, expr) => {
                                 // One `data-vars` per element: a browser keeps the first of two.
                                 if name == "style" && attrs.iter().any(|a| matches!(a, Attr::Expr(n, _) if n == "style")) {
@@ -2158,4 +2236,62 @@ fn keywords(tokens: TokenStream, event_ty: &TokenStream, target_ty: &TokenStream
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::local_path;
+
+    #[test]
+    fn a_path_in_the_app_is_found_in_each_url_attribute() {
+        for (name, value, path) in [
+            ("href", "/items", "/items"),
+            ("href", "/", "/"),
+            ("href", "/items?tab=offers#review", "/items?tab=offers#review"),
+            ("action", " /watch ", " /watch "),
+            ("formaction", "/unwatch", "/unwatch"),
+            ("href", "\\items", "\\items"),
+            ("href", "\t/items", "\t/items"),
+            ("src", "/logo.svg", "/logo.svg"),
+            ("poster", "/clip.jpg", "/clip.jpg"),
+            ("data", "/doc.pdf", "/doc.pdf"),
+            ("xlink:href", "/sprite.svg#arrow", "/sprite.svg#arrow"),
+            ("srcset", "a.png 1x, /b.png 2x", "/b.png"),
+            ("srcset", "/a.png, https://cdn.example/b.png 2x", "/a.png"),
+            ("srcset", "https://cdn.example/a.png 1x,/b.png 2x", "/b.png"),
+            ("srcset", "https://cdn.example/a.png 100w,/b.png 200w", "/b.png"),
+            ("imagesrcset", "https://cdn.example/a.png 1x, /b.png 2x", "/b.png"),
+            ("ping", "https://stats.example/p /track", "/track"),
+        ] {
+            assert_eq!(local_path(name, value), Some(path), "{name}={value:?}");
+        }
+    }
+
+    #[test]
+    fn other_urls_and_other_attributes_are_not_paths_in_the_app() {
+        for (name, value) in [
+            ("href", "#top"),
+            ("href", "https://example.com"),
+            ("href", "mailto:help@example.com"),
+            ("href", "tel:+15550100"),
+            ("href", "//cdn.example/a.png"),
+            ("href", "/\\evil.example"),
+            ("href", "\\\\evil.example"),
+            ("href", "/\t/evil.example"),
+            ("href", "items/7"),
+            ("href", "?page=2"),
+            ("href", ""),
+            ("src", "data:image/png;base64,iVBORw0KGgo="),
+            ("srcset", "data:image/jpeg;base64,/9j/4AAQ 1x, https://cdn.example/b.png 2x"),
+            // One URL: a comma splits candidates only after a space or at the URL's end.
+            ("srcset", "https://cdn.example/a.png,/b.png 2x"),
+            ("srcset", "a.png 1x, b.png 2x"),
+            ("ping", "https://stats.example/p https://stats.example/q"),
+            ("title", "/items"),
+            ("data-path", "/items"),
+            ("content", "0; url=/items"),
+        ] {
+            assert_eq!(local_path(name, value), None, "{name}={value:?}");
+        }
+    }
 }

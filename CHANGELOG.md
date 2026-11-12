@@ -5,6 +5,22 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+### Changed
+
+- `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
+  `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
+  value that starts with one `/` (or `\`), such as `href="/items"` or `action="/watch"`, is a
+  compile error that names the fix, as the type-safety guide already said of every link. This
+  breaks an app that wrote one. To migrate, link to the route, `href={url::Items}` (a
+  `#[derive(Route)]` struct; `url::Item { id: &id }` for one with parameters, `url::Items.at(Id)`
+  for a place on a page), and name a static file by its constant,
+  `src={req.asset(Static::LOGO_SVG)}`. A fragment (`#top`), a full URL, `mailto:`, `tel:` and
+  `//host` still compile. A value in braces is not checked, so a path built there
+  (`href={format!("/items/{id}")}`, a tuple of its parts) still builds: replace it with a route
+  too. The views guide and the `html!` docs no longer show the hand-built path, and the guides
+  say where the check holds
+  ([#1232 The guides say a path written as text does not compile for any link, but html! takes href="/items" and href={("/items/", &id)}, and the views guide teaches the second](https://github.com/corten-run/corten/issues/1232)).
+
 ## 0.2.0 (2026-11-11)
 
 The first release of all seven crates, published together by the Release workflow. The main crate's

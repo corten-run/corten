@@ -33,10 +33,12 @@
 //! - Text is a string literal: `"Price"`. Source whitespace between tags is never output.
 //! - `{expr}` prints an expression, escaped: anything that implements [`Render`] (strings,
 //!   numbers, `Option`, other views) or else `Display`. [`raw`] prints trusted HTML as is.
-//! - Attributes: `class="x"`, `required`, `href={url}`, `href={("/items/", &item.id)}` (a tuple
-//!   prints its parts in order, without building a string). A `bool` value prints the bare name when
-//!   true and nothing when false; `None` leaves the attribute out. `{..attrs}` spreads an
-//!   [`Attrs`] value (`<input {..e.aria(field)}>`, [`crate::Errors::within`]).
+//! - Attributes: `class="x"`, `required`, `href={url::Item { id: &item.id }}` (a link is a route,
+//!   [`crate::route`]), `aria-label={("Remove ", &item.name)}` (a tuple prints its parts in order,
+//!   without building a string). A `bool` value prints the bare name when true and nothing when
+//!   false; `None` leaves the attribute out. `{..attrs}` spreads an [`Attrs`] value
+//!   (`<input {..e.aria(field)}>`, [`crate::Errors::within`]). A path in the app written as text in
+//!   a URL attribute (`href="/items"`) does not compile: see [`html!`].
 //! - `for`, `if`/`else`, `match` and `let` are written as in Rust, with markup in their braces.
 //! - `class={..}` takes a list: a class constant of the component's stylesheet (`class={Title}`,
 //!   see [`crate::style`]), utility classes, text, an `Option` of one, or a tuple of them, joined
@@ -103,19 +105,28 @@ use std::{
 ///
 /// ```
 /// use corten::prelude::*;
-/// let before: Option<&str> = Some("/shipments/1");
+///
+/// #[derive(Route)]
+/// #[route("/")]
+/// struct Home;
+///
+/// #[derive(Route)]
+/// #[route("/items/{id}")]
+/// struct Item<'a> { id: &'a str }
+///
+/// let before: Option<&str> = Some("https://carrier.example/track/1");
 /// let spread: [(&str, &str); 1] = [("role", "img")];
 /// let _ = html! { <span role="img" aria-label="3 unread">"3"</span> };
 /// let _ = html! { <span aria-label="3 unread" {..spread}>"3"</span> };
-/// let _ = html! { <a href="/" aria-label="Home">"<"</a> };
-/// let _ = html! { <a href={before.unwrap_or("/shipments")} aria-label="Previous shipment">"<"</a> };
+/// let _ = html! { <a href={Home} aria-label="Home">"<"</a> };
+/// let _ = html! { <a href={before.unwrap_or("https://carrier.example/track")} aria-label="Previous shipment">"<"</a> };
 /// let _ = html! { <a href={before}>"Previous shipment"</a> };
 /// let _ = html! { <a href={before} aria-label={before.map(|_| "Previous shipment")}>"<"</a> };
 /// let _ = html! { <svg><a aria-label="Chart"><g></g></a><a xlink:href="#x" aria-label="X"></a></svg> };
 /// let item = 7;
-/// let _ = html! { <a href={format!("/items/{item}").as_str()} aria-label="Item">"7"</a> };
+/// let _ = html! { <a href={Item { id: &item.to_string() }} aria-label="Item">"7"</a> };
 /// macro_rules! next { ($h:ident) => { html! { <a href={$h} aria-label="Next">">"</a> } } }
-/// let to = "/items/8";
+/// let to = Item { id: "8" };
 /// let _ = next!(to);
 /// ```
 ///
@@ -124,6 +135,57 @@ use std::{
 /// app's own that writes nothing. SVG is told by an enclosing `<svg>` in the same `html!`: a
 /// component that draws an SVG fragment names its `<a>` with `role="group"` (or `role="link"`
 /// with its href).
+///
+/// A path in the app written as text in an element's URL attribute does not compile: a link is a
+/// route (`href={url::Items}`, [`crate::route`]) and a static file is named by its constant
+/// (`src={req.asset(Static::LOGO_SVG)}`, [`crate::assets`]), so a typo or a route whose path
+/// changed is a compile error rather than a link that answers 404. The URL attributes are `href`,
+/// `src`, `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping` and
+/// `xlink:href`, and a path is a URL that starts with one `/` (or `\`, which a browser reads as
+/// `/`):
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <a href="/items">"Items"</a> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <form method="post" action="/watch"><button>"Watch"</button></form> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <form method="post"><button formaction="/unwatch">"Remove"</button></form> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <img src="/logo.svg" alt="Corten"> };
+/// ```
+///
+/// ```compile_fail
+/// use corten::prelude::*;
+/// let _ = html! { <img srcset="https://cdn.example/logo.svg 1x, /logo-2x.svg 2x" alt="Corten"> };
+/// ```
+///
+/// A fragment, a URL with a scheme (`https:`, `mailto:`, `tel:`, `data:`) and one on another
+/// host (`//cdn.example`) are not paths in the app, and compile:
+///
+/// ```
+/// use corten::prelude::*;
+/// let _ = html! { <a href="#top">"Back to the top"</a> };
+/// let _ = html! { <a href="https://example.com">"Example"</a> };
+/// let _ = html! { <a href="mailto:help@example.com">"Write to us"</a> };
+/// let _ = html! { <a href="tel:+15550100">"Call us"</a> };
+/// let _ = html! { <form method="post" action="https://example.com/watch"><button formaction="https://example.com/unwatch">"Remove"</button></form> };
+/// let _ = html! { <img src="//cdn.example/logo.svg" srcset="data:image/jpeg;base64,/9j/4AAQ 1x, https://cdn.example/logo-2x.svg 2x" alt="Corten"> };
+/// ```
+///
+/// Only text is read: a value in braces is an expression whose text the compiler does not see, so
+/// `href={"/items"}`, `href={format!("/items/{id}")}` and a tuple of a path's parts compile, as do
+/// a spread, a component's prop and a relative path (`items/7`, `?page=2`). Write a route there
+/// too.
 pub use corten_macros::html;
 
 /// Turns a function into a component: a struct with one field per parameter, which `html!`
@@ -1234,7 +1296,7 @@ impl Render for () {
     fn render(&self, _: &mut String) {}
 }
 
-/// Each part in order, without building a string: `href={("/items/", &item.id)}`.
+/// Each part in order, without building a string: `aria-label={("Remove ", &item.name)}`.
 macro_rules! tuples {
     ($(($($name:ident),+)),*) => {$(
         impl<$($name: Render),+> Render for ($($name,)+) {

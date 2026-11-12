@@ -14,9 +14,14 @@ fn demo(text: &str) -> impl Render + '_ {
     html! {
         <p>{text}</p>
         <sort-table><b>"x"</b></sort-table>
-        <corten-live src="/x"></corten-live>
+        <corten-live src={DemoLive}></corten-live>
     }
 }
+
+/// Where `demo`'s `<corten-live>` streams from.
+#[derive(crate::Route)]
+#[route("/x")]
+struct DemoLive;
 
 /// A path of the test's own under the system's temp directory (`corten-{name}-{pid}`): any
 /// leftover there is removed when it is made, the test creates what it writes, and the directory

@@ -19,7 +19,10 @@ These are what the framework is built around. Code that breaks them fights the f
    `#[derive(Fields)]`, classes are constants from the component's CSS file, refs come from
    `let (a, b) = refs();`, handlers are `on:event={js::name(..)}` calls checked against the
    script's JSDoc, and user-facing text comes from `messages!`. If you are typing a path, field name, class or key as a string, stop and find
-   the typed form.
+   the typed form. The compiler catches a path as text in `req.redirect`, a current-page check,
+   a `&dyn Href` prop, the test client and, in `html!`, an element's URL attribute written as text
+   (`href="/items"`, `action="/watch"`, `src="/logo.svg"`). It does not see a path built in braces
+   (`href={format!("/items/{id}")}`, a tuple of its parts): never write one.
 2. **Markup is Rust.** Every element comes from `html!`. Scripts never build HTML from strings:
    they clone markup the server rendered (`<template ref={rest}>`, a view's `rows(..).push(..)`)
    and move, show, hide or fill what is on the page.
