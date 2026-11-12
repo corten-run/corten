@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterPhase, cpuSettings, imageProvenance, inventory, parseArgs, passPlan, phaseEnd, phases, readOutcome, resultSchema, sources, stageAggregate, timedProfiles, upstreamErrors } from "./run-contract.mjs";
 import { workload } from "./contract.mjs";
+import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
 import { validateMarketplace } from "./records.mjs";
 import { sampleStats } from "../catalog/stats.mjs";
 
@@ -31,6 +32,7 @@ const summary = { schema: resultSchema, workload, round: options.round, runId, o
     cpuWindow: "cgroup v2 usage_usec before/after docker start -a of k6; includes small Docker command/idle windows, not only HTTP handler CPU", coldClock: "Docker-host container StartedAt to first complete 200, not process exec" } };
 const save = () => { writeFileSync(join(folder, "summary.json.tmp"), JSON.stringify(summary, null, 2)); renameSync(join(folder, "summary.json.tmp"), join(folder, "summary.json")); };
 const log = (message) => { const line = `${new Date().toISOString()} ${message}`; console.log(line); appendFileSync(join(folder, "run.log"), `${line}\n`); };
+if (options.group) Object.assign(summary.measurement, { featureProfile, qualificationSettings });
 const active = new Set();
 let interrupted = false;
 const children = new Set();
@@ -129,7 +131,8 @@ async function upstreamCounters() {
 function appArgs(name, source, image) {
   return ["--network", network, ...cpus.app.args, "--memory", "1g", "-p", "127.0.0.1::8080",
     "-v", `${fixtureDir}:/fixtures:ro`, "-e", `MARKETPLACE_SOURCE=${source}`, "-e", "MARKETPLACE_FIXTURE_PATH=/fixtures/marketplace.json",
-    "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`, image];
+    "-e", `API_BASE=${apiBase}`, "-e", "PORT=8080", "-e", `HOSTS=${name},localhost,127.0.0.1`,
+    ...(options.group ? ["--ulimit", "nofile=65536:65536", "-e", `PROFILE=${qualificationSettings.nativeProfile}`, "-e", `MAX_CONNECTIONS=${qualificationSettings.maxConnections}`] : []), image];
 }
 async function ready(base) {
   const deadline = Date.now() + options.startupTimeout * 1000;
@@ -272,7 +275,7 @@ try {
   assert.deepEqual(marketplace, generated, "generated fixture is stale: run node bench/marketplace/fixtures.mjs");
   summary.fixtureSha256 = createHash("sha256").update(fixture).digest("hex");
   for (const app of options.apps) {
-    const entry = summary.apps[app] = { label: inventory[app].label, image: `cb-marketplace-${app}`, checks: {}, runs: {}, phases: {} };
+    const entry = summary.apps[app] = { label: inventory[app].label, image: `cb-marketplace-${options.group ? "production-" : ""}${app}`, checks: {}, runs: {}, phases: {} };
     try {
       if (options.build) {
         log(`building ${app}`);
@@ -280,13 +283,16 @@ try {
         const dockerfile = app === "corten" ? join(here, "corten/Dockerfile") : join(context, app === "sveltekit" ? "Dockerfile.marketplace" : "Dockerfile");
         const buildCommit = await command("git", ["rev-parse", "HEAD"]);
         const buildDirty = (await command("git", ["status", "--porcelain"])).length > 0;
-        await docker(["build", "--label", `run.corten.marketplace.commit=${buildCommit}`, "--label", `run.corten.marketplace.dirty=${buildDirty}`, "-t", entry.image, "-f", dockerfile, context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
+        await docker(["build", "--label", `run.corten.marketplace.commit=${buildCommit}`, "--label", `run.corten.marketplace.dirty=${buildDirty}`,
+          ...(options.group ? ["--label", `run.corten.marketplace.profile=${featureProfile}`, "--build-arg", `PROFILE=${qualificationSettings.nativeProfile}`] : []),
+          "-t", entry.image, "-f", dockerfile, context], { timeout: 60 * 60 * 1000, file: join(folder, `build-${app}.log`) });
         assert.equal(await command("git", ["rev-parse", "HEAD"]), buildCommit, "HEAD changed during image build");
         assert.ok(buildDirty || !(await command("git", ["status", "--porcelain"])).length, "checkout became dirty during image build");
       }
       const image = JSON.parse(await docker(["image", "inspect", entry.image]))[0];
       Object.assign(entry, imageProvenance(image.Config.Labels, summary.commit, options.checkOnly));
       entry.imageId = image.Id;
+      if (options.group) assert.equal(image.Config.Labels["run.corten.marketplace.profile"], featureProfile, "image lacks the required feature profile");
       entry.imageBytes = image.Size;
     } catch (e) { fail(app, null, "build/image", e); }
     save();
@@ -324,9 +330,26 @@ try {
       mkdirSync(out, { recursive: true });
       try {
         log(`checking ${app} ${source}`);
+        if (options.group && source === "api") {
+          // A failed diagnostic must not leave the shared upstream fault injected
+          // for the next candidate. This resets isolation, not the app's failed result.
+          const reset = await fetch(`${upstreamUrl}/__marketplace/control`, { method: "POST", headers: { connection: "close" }, body: "{}", signal: AbortSignal.timeout(5000) });
+          assert.equal(reset.status, 200); await reset.arrayBuffer();
+        }
         await owned(["run", "-d", ...appArgs(name, source, entry.imageId)], name);
         const base = await portOf(name);
         await ready(base);
+        if (options.group) {
+          const qualificationContainer = `${name}-qualification`;
+          try {
+            await owned(["create", "--network", `container:${name}`, ...cpus.load.args, "--memory", "512m", "--ulimit", "nofile=65536:65536", "-v", `${repo}:/repo:ro`, "-v", `${out}:/results`,
+              checker.Id, "node", "/repo/bench/marketplace/qualify.mjs", "http://127.0.0.1:8080", source, apiBase, "/results/qualification.json"], qualificationContainer);
+            await docker(["start", "-a", qualificationContainer], { timeout: 8 * 60000, file: join(out, "qualification.log") });
+            const q = validateQualification(JSON.parse(readFileSync(join(out, "qualification.json"), "utf8")));
+            (entry.qualification ??= {})[source] = q;
+            if (!q.eligible) { log(`excluding ${app} ${source}: missing ${q.missing.join(", ")}`); save(); continue; }
+          } finally { await remove(qualificationContainer); }
+        }
         // Chromium starts a separate process group. A host Node/group kill cannot
         // reliably reap it, so timeout cleanup removes its entire owned PID namespace.
         // Share ONLY the app's network namespace, not its PID namespace: loopback
@@ -352,6 +375,8 @@ try {
       }
       save();
     }
+  const measuredApps = options.group ? options.apps.filter((a) => admitted(summary.apps[a])) : options.apps;
+  if (options.group) assert.ok(measuredApps.includes("corten") && measuredApps.length > 1, "no feature-qualified Corten/peer comparison; preserve exclusions, not a performance baseline");
   summary.checksPassed = summary.failures.length === 0;
   save();
   if (!summary.checksPassed) throw new Error("parity failed; no app will be load-tested");
@@ -364,7 +389,7 @@ try {
       nodeImage, "node", "-e", "setInterval(() => {}, 1000)"], cpuName);
     startedAt[cpuName] = (await inspect(cpuName)).State.StartedAt;
     // A profile in which the app's container stopped runs no later pass (#1128).
-    for (const { pass, profile: { key, source, locale, target }, app, skip } of passPlan(options.passes, options.apps, timedProfiles, (a, k) => summary.apps[a].runs[k] ?? [])) {
+    for (const { pass, profile: { key, source, locale, target }, app, skip } of passPlan(options.passes, measuredApps, timedProfiles, (a, k) => summary.apps[a].runs[k] ?? [])) {
       const entry = summary.apps[app];
       if (skip) { log(`skipping ${app} ${source} ${target} pass ${pass}: its container stopped in pass ${skip.pass} during ${skip.phase}`); continue; }
       const name = `${runId}-${app}`;

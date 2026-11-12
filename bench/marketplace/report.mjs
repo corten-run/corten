@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
-import { apps, locales, workload } from "./contract.mjs";
+import { locales, workload } from "./contract.mjs";
 import { records } from "./fixtures.mjs";
+import { groupApps } from "./groups.mjs";
+import { admitted, featureProfile, qualificationSettings, validateQualification } from "./feature-contract.mjs";
 import { aggregateCold, cpuSettings, loadPhases, phases, readableSchemas, roundIdentity, sources, stageAggregate, timedProfiles, v3Schema } from "./run-contract.mjs";
 const finite = (n, min = 0) => assert.ok(Number.isFinite(n) && n >= min, "missing/invalid measurement");
 const time = (s) => { const n = Date.parse(s); assert.ok(Number.isFinite(n), "missing/invalid timestamp"); return n; };
@@ -69,14 +71,30 @@ export function validateSummary(s) {
   assert.ok(typeof s.host.cpu === "string" && s.host.cpu.length > 0);
   assert.match(s.host.onlineCpus, /^\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*$/);
   for (const tool of ["upstream", "checker", "k6"]) assert.match(s.tools[tool].imageId, /^sha256:[a-f0-9]{64}$/);
-  assert.deepEqual([...s.options.apps].sort(), [...apps].sort());
-  assert.deepEqual(Object.keys(s.apps).sort(), [...apps].sort());
+  const selected = groupApps(s.options.group);
+  assert.deepEqual([...s.options.apps].sort(), [...selected].sort());
+  assert.deepEqual(Object.keys(s.apps).sort(), [...selected].sort());
   assert.equal(s.fixtureSha256, createHash("sha256").update(JSON.stringify(records())).digest("hex"));
-  for (const app of apps) {
+  if (s.options.group) {
+    assert.equal(s.schema, "marketplace-results/v5", "named feature groups require the v5 schema");
+    assert.equal(s.measurement.featureProfile, featureProfile);
+    assert.deepEqual(s.measurement.qualificationSettings, qualificationSettings);
+    assert.ok(admitted(s.apps.corten) && Object.values(s.apps).filter(admitted).length > 1, "a group needs a feature-qualified Corten and peer");
+  }
+  for (const app of selected) {
     const a = s.apps[app]; assert.match(a.imageId, /^sha256:[a-f0-9]{64}$/);
     assert.equal(a.builtCommit, s.commit);
     assert.equal(a.builtDirty, false);
     assert.ok(!a.failures?.length, "per-app failures contradict complete status");
+    if (s.options.group) {
+      assert.deepEqual(Object.keys(a.qualification).sort(), [...sources].sort());
+      for (const source of sources) { const q = validateQualification(a.qualification[source]); assert.equal(q.source, source); }
+      if (!admitted(a)) {
+        assert.deepEqual(a.runs, {}, "an excluded candidate cannot have load runs");
+        assert.deepEqual(a.phases, {}, "an excluded candidate cannot have aggregates");
+        continue;
+      }
+    }
     for (const field of ["runs", "phases"]) assert.deepEqual(Object.keys(a[field]).sort(), timedProfiles.map((p) => p.key).sort(), `unexpected/missing ${field} profiles`);
     for (const source of sources) {
       const c = a.checks[source]; assert.equal(c.workload, workload); assert.equal(c.source, source);
@@ -128,12 +146,16 @@ export function validateSummary(s) {
 }
 export function report(s) {
   validateSummary(s);
+  const candidates = groupApps(s.options.group);
+  const apps = candidates.filter((a) => !s.options.group || admitted(s.apps[a]));
   const identity = roundIdentity(s.round);
   const lines = [`# Marketplace v2 ${s.round}${identity.kind === "development" ? " (development)" : ""}`, "",
     `Commit: \`${s.commit}\`. Schema: \`${s.schema}\`${s.schema === v3Schema ? " (read as v4: a v3 round has no stop records, since an app that stopped failed it)" : ""}. CPU: ${s.host.cpu} (online CPUs ${s.host.onlineCpus}).`,
+    `Group: ${s.options.group ?? "full"}. Measured adapters: ${apps.join(", ")}. Omitted adapters were not tested; this is not a ranking of the full inventory.`,
+    `Omitted adapters: ${groupApps().filter((a) => !candidates.includes(a)).join(", ") || "none"}.`,
     "A new localized baseline, not a change from marketplace r16 or catalog c1.", "",
     "Every number is the median [min-max] of three measured passes, not a confidence interval, except in a row marked stopped, which has fewer: of two passes each number is the lower of the two values in its column, of one pass that pass. Overlapping ranges do not establish a speed difference.",
-    "Pages cover all three locales; JSON is locale-neutral and timed once per source/pass. All twenty apps pass both sources and twelve browser profiles before any load.",
+    "Pages cover all three locales; JSON is locale-neutral and timed once per source/pass. Every measured adapter passes both sources and twelve browser profiles before any load.",
     `Fixed load asks for ${s.options.rate} requests/second. Closed-loop 64/256-user results are observed throughput and latency, not proven maximum capacity. Warmup ${s.options.warmup}s; each phase ${s.options.duration}s; identity encoding.`,
     "CPU % is sampled app-container usage (100% = one core). CPU us/request and requests/CPU-second use counted whole-container cgroup CPU, not instructions or handler-only time. CPU % and steady memory average the central 15%-95% of samples; peak memory is the sampled maximum, not an unsampled high-water mark.",
     "These load results do not measure browser interactivity, bytes, build cost or instructions.",
@@ -141,6 +163,14 @@ export function report(s) {
     "A stage marked (stopped: n of 3 passes) is also the app's outcome: its container exited or was OOM-killed during a load phase (warmup included), and the line below the table says when. That profile's later phases and passes were not run, so the stage's numbers come from the n passes before the stop, or none. A 200 of the wrong content type, an app that stopped during its cold start or before a phase began, or an upstream error fails the run instead."];
   const cell = (r, digits = 2) => `${r.median.toFixed(digits)} [${r.min.toFixed(digits)}-${r.max.toFixed(digits)}]`;
   const label = (v) => v.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
+  if (s.options.group) {
+    lines.push("", `Feature contract: ${featureProfile}. Popular and performance-oriented candidate cohorts are deduplicated; candidates are not a current speed ranking. ETag/conditional GET and downstream readiness are not required by this workload, and are not claimed equivalent. Logging remains native, not normalized.`,
+      "", "## Feature Qualification", "", "| Candidate | Result | Missing required work |", "|---|---|---|");
+    for (const app of candidates) {
+      const missing = sources.flatMap((source) => s.apps[app].qualification[source].missing.map((k) => `${source}: ${k}`));
+      lines.push(`| ${app} | ${admitted(s.apps[app]) ? "admitted" : "excluded, not timed"} | ${missing.join("; ") || "none"} |`);
+    }
+  }
   const warnings = [];
   if (s.options.duration < 60) warnings.push(`Short ${s.options.duration}s phase windows (${s.options.warmup}s warmup): variability and sampling limits matter; not comparable to manual 60s phases with 30s warmup.`);
   if (Object.values(s.measurement.cpus).some((c) => !c.cpuset)) warnings.push("CPU quotas without disjoint pinning do not prove CPU isolation.");
