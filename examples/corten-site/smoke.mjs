@@ -178,7 +178,9 @@ for (engine of engines) {
     const before = await reading("Up for");
     await page.waitForFunction((was) => [...document.querySelectorAll("dl dt")].find((dt) => dt.textContent.includes("Up for"))?.nextElementSibling?.textContent !== was, before);
     check("the readings stream", before !== "");
-    const mib = Number.parseFloat(await reading("Memory this server holds"));
+    // A size is written with its thousands apart: "1,024.0 MiB".
+    const size = (/** @type {string} */ text) => Number.parseFloat(text.replaceAll(",", ""));
+    const mib = size(await reading("Memory this server holds"));
     check("the server reads the memory it holds", mib > 0 && mib < 512, `${mib} MiB`);
     // The CPU is counted between two readings, so its meter comes with the second. Each gauge is
     // read in one look at the page: the next reading replaces all of them.
@@ -204,7 +206,7 @@ for (engine of engines) {
     const [cpu, memory] = gauges;
     check("the server reads the CPU in use, and says whose", gauges.length === 2 && cpu?.label === `CPU this ${whose} is using` && /^\d+%$/.test(cpu.figure) && cpu.value <= 100, JSON.stringify(cpu));
     check("its meter is at the figure", cpu !== undefined && cpu.value === Number.parseInt(cpu.figure, 10) && cpu.high === 80, JSON.stringify(cpu));
-    check("and the memory in use, and says whose", memory?.label === `Memory this ${whose} is using` && Number.parseFloat(memory.figure) > 0, JSON.stringify(memory));
+    check("and the memory in use, and says whose", memory?.label === `Memory this ${whose} is using` && size(memory.figure) > 0, JSON.stringify(memory));
     check("its meter is read as the sizes", memory !== undefined && memory.said.startsWith(`${memory.figure.replace(" MiB", "")} of `) && memory.value > 0 && memory.value <= 100, JSON.stringify(memory));
     check("each meter is a thin bar across its gauge", gauges.length === 2 && gauges.every((gauge) => gauge.height >= 4 && gauge.height <= 8 && gauge.width > 200), JSON.stringify(gauges.map((gauge) => [gauge.width, gauge.height])));
     check(
@@ -262,11 +264,12 @@ for (engine of engines) {
     await context.close();
   }
 
-  // Between a phone and a desktop the gauges are three to a row, and narrowest just above a
-  // phone: nothing in one is wider than it.
+  // Above a phone the gauges are three to a row. They are narrowest just above a phone, and
+  // again just above the width where the readout moves beside its text (62rem): nothing in one
+  // is wider than it at either.
   {
     const { context, page } = await open({ viewport: { width: 1000, height: 800 }, javaScriptEnabled: false });
-    for (const width of [1000, 600]) {
+    for (const width of [1000, 580]) {
       await page.setViewportSize({ width, height: 800 });
       // A part too wide for its gauge is as wide as what it holds, so it is measured against the gauge.
       const over = await page.evaluate(() =>

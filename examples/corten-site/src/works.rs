@@ -1,10 +1,12 @@
 //! What this server knows about itself: how long it has been up, the pages it has rendered and
 //! how long the last one took, the plates struck, how many pages are following along, and, where
 //! the operating system says (Linux), the memory it holds, the machine it is on and how much of
-//! that machine's CPU and memory is in use: the whole machine's, or, where a container holds the
-//! server to a limit, what is in use of that limit. A task reads it once a second into a `watch`
-//! channel, and every open page's `<corten-live>` follows that channel (`corten::live_watch`).
-//! Nothing here is made up for show: each number is counted.
+//! that machine's CPU and memory is in use: the whole machine's, or, where the server's own
+//! control group holds it to a limit (control groups v2: a container's `--memory` or `--cpus`,
+//! a unit's `MemoryMax=` or `CPUQuota=`), what is in use of that limit. A limit set on a group
+//! above the server's own is not looked for, and the counts are then the machine's. A task reads
+//! it once a second into a `watch` channel, and every open page's `<corten-live>` follows that
+//! channel (`corten::live_watch`). Nothing here is made up for show: each number is counted.
 use std::{
     sync::{
         Arc,
@@ -74,6 +76,11 @@ pub struct Machine {
     pub cpu_limit: Option<f64>,
     /// Whether the system counts what is in use of both, found by reading each once.
     pub metered: bool,
+    /// The CPUs the machine's own count is of (`/proc/stat`): more than `cpus` where the server
+    /// is kept to some of them and not by a limit.
+    pub(crate) stat_cpus: usize,
+    /// The directory of the server's own control group, whose files say its limits and counts.
+    pub(crate) group: String,
 }
 
 /// A file the system keeps, as text; `None` where it keeps none.
@@ -93,20 +100,32 @@ impl Machine {
             memory_limited: memory_bytes < self::memory_bytes(meminfo, None),
             cpu_limit: cpu_max.and_then(quota),
             metered: false,
+            stat_cpus: 0,
+            group: String::new(),
         }
     }
 
     fn read() -> Self {
+        let group = system("/proc/self/cgroup").as_deref().and_then(group_dir).unwrap_or_default();
         let mut machine = Machine::counted(
             std::thread::available_parallelism().map_or(0, usize::from),
             system("/proc/meminfo").as_deref(),
-            system("/sys/fs/cgroup/memory.max").as_deref(),
-            system("/sys/fs/cgroup/cpu.max").as_deref(),
+            system(&format!("{group}/memory.max")).as_deref(),
+            system(&format!("{group}/cpu.max")).as_deref(),
         );
+        machine.group = group;
+        machine.stat_cpus = system("/proc/stat").as_deref().map_or(0, stat_cpus);
         machine.named =
             std::env::var("CORTEN_SITE_MACHINE").ok().map(|named| named.trim().to_string()).filter(|named| !named.is_empty());
         machine.metered = machine.spent().is_some() && machine.used_bytes(0) > 0;
         machine
+    }
+
+    /// Whether the CPU in use is a part of the CPUs the server may use: of its limit, or of a
+    /// machine all of whose CPUs it may run on. Kept to one CPU of eight with no limit
+    /// (`--cpuset-cpus`), the machine's count is of all eight, and reads low with that one busy.
+    pub fn counts_its_cpus(&self) -> bool {
+        self.metered && (self.cpu_limit.is_some() || self.cpus >= self.stat_cpus)
     }
 
     /// Whether a container holds the server to a limit, of memory or of CPU.
@@ -117,7 +136,7 @@ impl Machine {
     /// The CPU time spent so far, by the count that says what is in use of this machine.
     fn spent(&self) -> Option<Spent> {
         if self.cpu_limit.is_some() {
-            return system("/sys/fs/cgroup/cpu.stat").as_deref().and_then(group_micros).map(Spent::Group);
+            return system(&format!("{}/cpu.stat", self.group)).as_deref().and_then(group_micros).map(Spent::Group);
         }
         let (busy, idle) = system("/proc/stat").as_deref().and_then(machine_ticks)?;
         Some(Spent::Machine { busy, idle, own: system("/proc/self/stat").as_deref().and_then(own_ticks)? })
@@ -127,11 +146,30 @@ impl Machine {
     /// else the system's. `held` is what this server holds.
     fn used_bytes(&self, held: u64) -> u64 {
         if self.memory_limited {
-            group_bytes(system("/sys/fs/cgroup/memory.current").as_deref(), system("/sys/fs/cgroup/memory.stat").as_deref(), held)
+            group_bytes(
+                system(&format!("{}/memory.current", self.group)).as_deref(),
+                system(&format!("{}/memory.stat", self.group)).as_deref(),
+                held,
+            )
         } else {
             system("/proc/meminfo").as_deref().and_then(unavailable_bytes).unwrap_or(0)
         }
     }
+}
+
+/// The directory of a process's own control group, from its `/proc/self/cgroup`: the line of
+/// control groups v2 is `0::` and the group's path, which is `/` in a container, where the group
+/// is the root of what the container sees. `None` on a system with only the first version's
+/// groups, whose limits are not looked for.
+fn group_dir(cgroup: &str) -> Option<String> {
+    let path = cgroup.lines().find_map(|line| line.strip_prefix("0::"))?.trim();
+    (path.starts_with('/') && !path.split('/').any(|part| part == ".."))
+        .then(|| format!("/sys/fs/cgroup{}", path.trim_end_matches('/')))
+}
+
+/// The CPUs `/proc/stat` has a line for: `cpu0`, `cpu1` and on, after the line of them all.
+fn stat_cpus(stat: &str) -> usize {
+    stat.lines().filter(|line| line.strip_prefix("cpu").is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))).count()
 }
 
 /// The memory a server may use, from the system's count of the machine's (`/proc/meminfo`) and
@@ -162,10 +200,12 @@ fn unavailable_bytes(meminfo: &str) -> Option<u64> {
 
 /// The memory a control group has in use, in bytes; 0 where it cannot be read. It is the
 /// group's `memory.current` less the file cache its `memory.stat` calls inactive, which the
-/// system drops first when the group needs room: the count `docker stats` shows. A group is
-/// charged for a page of a file only when it was the first to read it, so its count can leave
-/// out pages of the program itself, which the server holds all the same (`held`): the larger of
-/// the two is the least that is in use.
+/// system drops first when the group needs room, as `docker stats` takes it; or what the server
+/// holds (`held`), where that is more. A group is charged for a page of a file only when it was
+/// the first to read it, so its count can leave out pages of the program itself that the server
+/// holds all the same, and the page would then say the container uses less than the server in
+/// it holds. The larger of the two is the least that is in use; it can be more than is charged
+/// against the limit, by the pages another group was charged for.
 fn group_bytes(current: Option<&str>, stat: Option<&str>, held: u64) -> u64 {
     let Some(current) = current.and_then(|bytes| bytes.trim().parse::<u64>().ok()) else { return 0 };
     let inactive = stat.and_then(|stat| stat.lines().find_map(|line| line.strip_prefix("inactive_file ")?.trim().parse().ok()));
@@ -228,7 +268,7 @@ const APART: Duration = Duration::from_millis(500);
 
 /// `part` of `whole` as a percent, to the nearest and at most 100; `None` of nothing.
 pub(crate) fn percent(part: u64, whole: u64) -> Option<u8> {
-    (whole > 0).then(|| ((part.saturating_mul(100) + whole / 2) / whole).min(100) as u8)
+    (whole > 0).then(|| ((u128::from(part) * 100 + u128::from(whole) / 2) / u128::from(whole)).min(100) as u8)
 }
 
 /// The CPU in use between two counts: the machine's and this server's part of it, or, where a
@@ -409,7 +449,9 @@ impl Works {
                 _ = signal.aborted() => return,
                 _ = tick.tick() => {
                     let now = self.counts();
-                    let next = self.read(&self.0.pulse.borrow().pulse, &before, &now);
+                    // Copied out first: the system's files are not read with the channel held.
+                    let last = self.pulse();
+                    let next = self.read(&last, &before, &now);
                     // The first tick comes at once, and one that was held up is followed by the
                     // next too soon: neither is measured from.
                     if now.at.saturating_duration_since(before.at) >= APART {
@@ -498,6 +540,8 @@ mod tests {
         assert_eq!(group_micros("user_usec 5\n"), None);
         assert_eq!((quota("max 100000\n"), quota("100000 100000\n"), quota("50000 100000\n")), (None, Some(1.0), Some(0.5)));
         assert_eq!((percent(1, 3), percent(2, 3), percent(7, 5), percent(1, 0)), (Some(33), Some(67), Some(100), None));
+        assert_eq!((percent(u64::MAX, u64::MAX), percent(u64::MAX / 2, u64::MAX)), (Some(100), Some(50)));
+        assert_eq!((stat_cpus(stat), stat_cpus("cpu  1 2 3\ncpu0 1\ncpu1 2\ncpu10 3\ncpufreq 1\n")), (1, 3));
 
         let works = Works::new();
         let start = Instant::now();
@@ -547,6 +591,32 @@ mod tests {
         assert_eq!(group_bytes(Some("20000000\n"), None, 5_775_360), 20_000_000);
         assert_eq!(group_bytes(Some("7503232\n"), Some(stat), 5_775_360), 5_775_360);
         assert_eq!((group_bytes(Some("max\n"), Some(stat), 5_775_360), group_bytes(None, Some(stat), 5_775_360)), (0, 0));
+    }
+
+    /// The server's own group is found from the system's line for it, and nowhere else.
+    #[test]
+    fn the_servers_own_group_is_the_one_read() {
+        // In a container the group is the root of what it sees; under systemd it is the unit's.
+        assert_eq!(group_dir("0::/\n").as_deref(), Some("/sys/fs/cgroup"));
+        assert_eq!(
+            group_dir("0::/system.slice/corten-site.service\n").as_deref(),
+            Some("/sys/fs/cgroup/system.slice/corten-site.service")
+        );
+        // The first version's groups have no such line; beside the second's, its line is the one read.
+        assert_eq!(group_dir("12:memory:/docker/abc\n11:cpu,cpuacct:/docker/abc\n"), None);
+        assert_eq!(
+            group_dir("1:name=systemd:/user.slice\n0::/user.slice/x.scope\n").as_deref(),
+            Some("/sys/fs/cgroup/user.slice/x.scope")
+        );
+        assert_eq!((group_dir("0::/../../etc\n"), group_dir("0::\n"), group_dir("")), (None, None, None));
+        // Kept to fewer CPUs than the machine's count is of, and by no limit, that count is not of
+        // what the server may use; under a limit, or on all of them, it is.
+        let meminfo = Some("MemTotal:       12250780 kB\nMemAvailable:   8000000 kB\n");
+        let on = |cpus, stat_cpus, cpu_max| Machine { metered: true, stat_cpus, ..Machine::counted(cpus, meminfo, None, cpu_max) };
+        assert!(on(8, 8, None).counts_its_cpus() && on(1, 1, None).counts_its_cpus());
+        assert!(!on(1, 8, None).counts_its_cpus());
+        assert!(on(1, 8, Some("100000 100000\n")).counts_its_cpus());
+        assert!(!Machine { metered: false, ..on(8, 8, None) }.counts_its_cpus());
     }
 
     /// Which count says what is in use follows from the limits a container sets: neither, the

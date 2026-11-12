@@ -4,7 +4,9 @@
 // the server last read as in use: its machine's, or of the limits its container is held to. A
 // browser asks for its stream compressed, and each compressed stream holds a coder's memory:
 // name a coding (zstd or gzip) to hold the streams as a browser does, or none to hold them as
-// they are.
+// they are. A coder's memory is held as its window fills, which at a reading a second took a
+// zstd stream about a minute, so compressed streams are held 90 seconds before the memory is
+// read, and others 10.
 // Usage: node examples/corten-site/deploy/hold.mjs http://localhost:18488 [streams] [seconds] [coding]
 import http from "node:http";
 
@@ -65,7 +67,7 @@ for (let n = 0; n < streams; n += 1) {
   held.push(req);
   if (n % 100 === 99) await wait(100);
 }
-await wait(5000);
+await wait(coding ? 85_000 : 5000);
 const before = readings;
 await wait(5000);
 const holding = await server();

@@ -102,6 +102,9 @@ docker build -f examples/corten-site/Dockerfile -t corten-site .
 docker run -d --name corten-site -p 18488:8080 corten-site
 node examples/corten-site/smoke.mjs http://localhost:18488
 docker rm -f corten-site
+docker run -d --name corten-site --cpus 1 --memory 512m -p 18488:8080 corten-site
+SITE_HELD=1 node examples/corten-site/smoke.mjs http://localhost:18488 chromium
+docker rm -f corten-site
 docker build -f examples/seller-desk/Dockerfile -t corten-seller-desk .
 docker run -d --name corten-seller-desk -p 18484:8080 corten-seller-desk
 node examples/seller-desk/smoke.mjs http://localhost:18484

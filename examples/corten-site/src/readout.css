@@ -92,7 +92,7 @@
   white-space: nowrap;
 }
 
-/* How much is in use: ember along a dim track, white-hot from the meter's `high` up, where
+/* How much is in use: ember along a dim track, white-hot above the meter's `high`, where
    little is left. Each engine's parts are separate rules: a selector one engine does not know
    drops the whole rule in it. */
 .bar {

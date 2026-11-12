@@ -53,7 +53,10 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
                         } else {
                             "Two of the readings are the whole machine's, counted by its operating system each second: the CPU and the memory in use by everything on it, for everyone reading this now."
                         }
-                        " If the server is falling behind, they say so before the page does."
+                        // Not where the server is kept to some of the CPUs the count is of.
+                        if machine.counts_its_cpus() {
+                            " If the server is falling behind, they say so before the page does."
+                        }
                     </p>
                 }
                 <Built on={&["Server-sent events", "Last-Event-ID", "AbortSignal"][..]} />
@@ -108,7 +111,7 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
                             ": " {named.as_str()}
                         }
                         "."
-                        if machine.metered {
+                        if machine.counts_its_cpus() {
                             " The readings above say how much of both is in use, and how much of the memory this server holds."
                         }
                     </p>
@@ -156,11 +159,13 @@ pub struct CpuUsedId;
 #[derive(Id)]
 pub struct MemoryUsedId;
 
-/// A container's limit as a count of CPUs, as text: `1 CPU`, `0.5 CPU`, `1.5 CPUs`.
+/// A container's limit as a count of CPUs, as text, to the hundredth and never none: `1 CPU`,
+/// `0.5 CPU`, `1.5 CPUs`.
 fn cpus(limit: f64) -> String {
-    let count = format!("{limit:.2}");
+    let hundredths = ((limit * 100.0).round() as u64).max(1);
+    let count = format!("{}.{:02}", hundredths / 100, hundredths % 100);
     let count = count.trim_end_matches('0').trim_end_matches('.');
-    format!("{count} {}", if limit > 1.0 { "CPUs" } else { "CPU" })
+    format!("{count} {}", if hundredths > 100 { "CPUs" } else { "CPU" })
 }
 
 /// The server's readings. Drawn by the page, then by every fragment `/live/works` streams; a
@@ -223,7 +228,7 @@ pub fn Readout<'a>(pulse: &'a Pulse, machine: &'a Machine) -> impl Render {
                 </div>
             }
             if machine.metered {
-                // A meter is white-hot from its `high` up: little is left. The CPU is counted
+                // A meter is white-hot above its `high`: little is left. The CPU is counted
                 // between two readings, so the first has none yet.
                 <div class={(Gauge, Wide)}>
                     <dt id={CpuUsedId}>
@@ -378,6 +383,7 @@ mod tests {
             (cpus(1.0), cpus(0.5), cpus(1.5), cpus(2.0), cpus(0.25)),
             ("1 CPU".into(), "0.5 CPU".into(), "1.5 CPUs".into(), "2 CPUs".into(), "0.25 CPU".into())
         );
+        assert_eq!((cpus(1.004), cpus(1.006), cpus(0.001)), ("1 CPU".into(), "1.01 CPUs".into(), "0.01 CPU".into()));
     }
 
     const MEMINFO: Option<&str> = Some("MemTotal:         468428 kB\nMemAvailable:     268428 kB\n");
