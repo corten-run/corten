@@ -50,7 +50,11 @@ the commit that wrote it. An entry moves only when its evidence is taken, probed
 the pull request that moves it says how, so the next check can repeat it; an old date is the premise
 to check next. `npm run check` refuses a Choice without all three, a premise of a kind not listed
 here or a value before another kind, a Last checked entry without a date no later than today and a
-commit or versions, and Choices out of order (`scripts/choices.mjs`).
+commit or versions, and Choices out of order (`scripts/choices.mjs`). A commit is cited in
+backticks, another repository's as GitHub writes it (`owner/repo@sha`), and one of Corten's alone,
+on GitHub: on `main`'s history, or, when no branch keeps it, under `refs/tags/evidence/<name>`
+(usually its short name); `npm run check` fails on one that is on neither
+(`scripts/design-refs.mjs`).
 
 The Rules and Limits below have none of the three: a Rule applies the values to code and changes
 with them, and a Limit is what Corten does not do, saying, where it is known, what would lift it
@@ -775,7 +779,7 @@ rules something out.
    Last checked: 2026-11-04, the 42.5k and 28.8k counts, on `a398ea95`; 2026-11-04, the callgrind
    pairs, `efa7503b` against `2293663a`; 2026-11-01, the pilot's read and page times, as reported in
    [#534 A layout value read the way the guide shows starts after the page's own reads, so a full load waits for both, and an extractor cannot read Mode to start it early](https://github.com/corten-run/corten/issues/534)
-   (chase-sets at `162ed0c298`, the commit the issue links).
+   (`chase-sets/chase-sets@162ed0c298`, the commit the issue links).
 
 21. <a id="choice-own-extractors"></a>**An app's own extractor implements Corten's `FromRequestParts`, which keeps axum's name,
     `Rejection` and signature.** An app reads a value from the request's head (a visitor's cookie, a
