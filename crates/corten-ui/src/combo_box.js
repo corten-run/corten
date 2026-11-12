@@ -19,8 +19,16 @@ const box = (root) => boxes.get(root);
 /**
  * @param {HTMLElement} root @param {HTMLSelectElement} select @param {HTMLInputElement} input
  * @param {HTMLDivElement} popup @param {HTMLDivElement} list @param {HTMLParagraphElement} empty
+ * @param {AbortSignal} signal
  */
-export function connect(root, select, input, popup, list, empty) {
+export function connect(root, select, input, popup, list, empty, signal) {
+  // A form reset puts the select (and the input's text) back as drawn and sends no `input`: the
+  // options are marked again once it has. Listened for each time, a move's `signal` too.
+  const reset = () => {
+    const b = box(root);
+    if (b) mark(b);
+  };
+  select.form?.addEventListener("reset", () => setTimeout(reset), { signal });
   if (boxes.has(root)) return; // back after a move: already built
   /** @type {Box} */
   const b = { select, input, popup, list, empty, all: [], words: [], shown: [], active: -1 };

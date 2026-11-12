@@ -7,6 +7,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- The marketplace alert-form check saves the exact submitted case, POST status and response,
+  current message and original timeout when the result message does not arrive. The
+  React Router timeout from r19 remains unconfirmed as an adapter defect
+  ([#1251 Benchmark r19: React Router fixture correctness times out waiting for an alert-form message](https://github.com/corten-run/corten/issues/1251)).
+
 - `corten::caller::bearer(&headers)` reads the token of RFC 6750's bearer credentials
   (`Authorization: Bearer <token>`), the scheme `Challenge::bearer` asks an API's clients to use:
   the scheme in any case, one or more spaces, the token trimmed, and `None` for no
@@ -19,8 +24,9 @@ Corten is pre-1.0, so any minor version may change the API.
   prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
   has no Navigation API, so nothing is prefetched). An upload answered with a status that has no
   body is read with none: Corten's `204` redirect (`corten-location`) is followed with no
-  `corten:error`, and a bare `204`, `205` or `304` is `corten:error` with that status (the
-  `304` in Chromium and Firefox: Playwright cannot answer one in WebKit); one answered with a status of 600 is
+  `corten:error`, a bare `204` or `205` dispatches none (below), and a bare `304` is
+  `corten:error` with that status (in Chromium and Firefox: Playwright cannot answer one in
+  WebKit); one answered with a status of 600 is
   `corten:error` with status 0; the form is left not busy each time. Another file of the same
   name, chosen while a write sending the first is out, is sent after it, whether its size or only
   its time differs, where the same file pressed again is not. Each check failed against a runtime
@@ -39,14 +45,12 @@ Corten is pre-1.0, so any minor version may change the API.
   `<template>` that a script copies (rows of a list drawn in the browser), and the runtime gives
   an empty submit key a new one when its form is first sent, a `data-patch` form or a plain post,
   before any `on:submit` handler or listener added after the runtime loads (`requestSubmit()`,
-  not `submit()`, which fires no event).
-  Each copy is then a submission of its own; a copy of a template that held a key shared it, so
-  the app applied only the first copy's submit, and a script had to carry its own UUID function to
-  avoid that. A `SubmitKey` posted empty (without JavaScript) is still refused with a 422 naming
-  the field, a debug build's page that draws `SubmitKey::template_field` outside a `<template>`
-  is an error, and
-  a page whose only key field is a template's keeps its `ETag`. The runtime grows 23 bytes
-  compressed
+  not `submit()`, which fires no event). Each copy is then a submission of its own; a copy of a
+  template that held a key shared it, so the app applied only the first copy's submit, and a
+  script had to carry its own UUID function to avoid that. A `SubmitKey` posted empty (without
+  JavaScript) is still refused with a 422 naming the field, a debug build's page that draws
+  `SubmitKey::template_field` outside a `<template>` is an error, and a page whose only key field
+  is a template's keeps its `ETag`. The runtime grows 27 bytes compressed
   ([#1254 A script cannot mint a submit key for a form it makes from a template, so copied rows share one key](https://github.com/corten-run/corten/issues/1254)).
 
 ### Changed
@@ -74,6 +78,20 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
+  server's docs give for a write with nothing to say) or `205 Reset Content` is the submit done
+  with nothing to draw (RFC 9110, 15.3.5 and 15.3.6): no `corten:error`, so corten-ui's `Toaster`
+  no longer shows its failed text for a write that succeeded, and a submit pressed while it was
+  out is sent, where before it was dropped. A `205` also resets the form (firing `reset`), unless
+  the user changed a field after it was sent (another file of the same name, or text a number
+  input cannot read, among them), a control was added to the form since, or the user pressed again
+  with other values
+  ([#1258 A data-patch write answered 204, which the server doc gives for a write with nothing to say, fires corten:error and drops the queued submit](https://github.com/corten-run/corten/issues/1258)).
+  corten-ui's `NumberField` and `ComboBox` follow a form reset, which sends no `input`: a
+  button at the bound the reset puts back is disabled again, and the option marked as the value
+  is the select's. A file input's files are told by each one's name, size and time there and when
+  a patch answers: another file of the same name, chosen while the answer that takes the first is
+  on its way, stays chosen, where before it was taken with the answer.
 - A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
   `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
   `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so
