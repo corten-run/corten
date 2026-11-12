@@ -27,8 +27,8 @@ Rails.application.configure do
 
   # Force all access to the app over SSL, use Strict-Transport-Security, and use secure cookies.
   config.force_ssl = false
-  # A bench-only key unless one is given: the app keeps no sessions or secrets worth protecting.
-  config.secret_key_base = ENV.fetch("SECRET_KEY_BASE", "bench-only-not-secret")
+  # A standalone process gets a fresh cookie-signing key; deployments supply a stable key.
+  config.secret_key_base = ENV.fetch("SECRET_KEY_BASE") { SecureRandom.hex(64) }
 
   # Skip http-to-https redirect for the default health check endpoint.
   # config.ssl_options = { redirect: { exclude: ->(request) { request.path == "/up" } } }

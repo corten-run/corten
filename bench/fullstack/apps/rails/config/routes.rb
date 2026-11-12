@@ -1,4 +1,5 @@
 Rails.application.routes.draw do
+  get "api/alerts", to: "marketplace#alerts"
   get "marketplace/:locale/:id", to: "marketplace#show", as: :marketplace
   post "marketplace/:locale/:id", to: "marketplace#show"
   get "api/marketplace/:id", to: "api/marketplace#show"

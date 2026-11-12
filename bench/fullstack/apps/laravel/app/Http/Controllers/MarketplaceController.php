@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Support\MarketplaceFormat;
 use App\Support\MarketplaceSource;
+use App\Support\MarketplaceAlerts;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\View\View;
@@ -29,18 +30,30 @@ class MarketplaceController extends Controller
         $email = $request->input('email', '');
         $target = $request->input('target_price', '');
         abort_unless(is_string($email) && is_string($target), 400);
+        $message = '';
+        if ($request->isMethod('post')) {
+            [$message, $minor] = $format->alertResult($email, $target, $record['title']);
+            if ($minor !== null) {
+                app(MarketplaceAlerts::class)->append($request->session(), ['item_id' => $record['id'], 'email' => $email, 'target_minor' => $minor]);
+            }
+        }
 
         return view('marketplace', [
             'record' => $record, 'locale' => $locale, 'format' => $format, 'labels' => $format->labels,
             'prefix' => $prefix, 'order' => $order, 'showAll' => $showAll, 'listings' => $listings,
             'offers' => $showAll ? $record['offers'] : array_slice($record['offers'], 0, 5),
             'email' => $email, 'target' => $target,
-            'message' => $request->isMethod('post') ? $format->alert($email, $target, $record['title']) : '',
+            'message' => $message,
         ]);
     }
 
     public function json(string $id, MarketplaceSource $source): JsonResponse
     {
         return response()->json($source->get($id) ?? abort(404));
+    }
+
+    public function alerts(Request $request, MarketplaceAlerts $alerts): JsonResponse
+    {
+        return response()->json($alerts->list($request->session()))->header('Cache-Control', 'private, no-store');
     }
 }
