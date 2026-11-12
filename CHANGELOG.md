@@ -18,6 +18,11 @@ Corten is pre-1.0, so any minor version may change the API.
   keeps its existing source timeout behavior. Native pages and forms remain in
   place. These functional repairs are not source-audit receipts or load results.
 
+- Gin's native catalog and marketplace JSON routes support GET/HEAD, generic JSON
+  errors and uncached responses. Their shared native HTTP client refuses redirects,
+  bounds complete reads and cancels work with the request. Existing templ pages and
+  forms remain native; this is not production qualification or a group load result.
+
 - Offline correctness contracts for the full-stack browser and client-heavy groups
   cover native navigation/forms, equivalent keyed state, operation-time HTTP and
   terminal resource cleanup. Reference helpers cannot supply native observations;
