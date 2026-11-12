@@ -348,22 +348,46 @@ messages each held an apostrophe, which `sh` and bash pair across the two lines.
 fixes that, shown by running those lines in Ubuntu 24.04's `sh`; the runs above skip the one
 place the argument is used, so they could not show it.
 
-`infra/` was checked without DigitalOcean. `tofu validate` passes, and a plan made with no
-state and stand-in values lists the nine things it would make. What that plan hands a droplet
-passes `cloud-init schema`, and was given to cloud-init in a container like the one above (with
-sudo and sshd, as a cloud image has): the files arrived as they are in the repository, the
-host key was the one given, SSH took no password, and the boot unit ran `boot.sh`, which
-finished `provision.sh`. Where the name pointed elsewhere it waited, and went on within half a
-minute of the name reaching it. The ship step then shipped to that machine, knowing it by the
-host key under the site's name as `bootstrap.sh` writes it, and a restart did not set the
-machine up again. With the service held to loopback, a command run under the same two
-settings could not reach an outside address, and the site answered through nginx.
-`bootstrap.sh` was run in Ubuntu 24.04's `sh` against a stand-in for `gh` that records what it
-is asked: it made both environments with their rule for `main`, stored the four secrets and the
-variables, and on a second run kept the keys and wrote the host's line again under the new
-name. It has not been run against GitHub. Nor has `tofu apply`, the Spaces bucket, the
-`Site machine` workflow on GitHub, or the address moving from one droplet to the next: the
-first apply is their test.
+`infra/` was checked without DigitalOcean, at `3211fe4f5` and, for what a review changed,
+at `a8d7663eb`. `tofu validate` passes, and a plan made with no state and stand-in values
+lists the six things it would make, eight with the two records that refuse mail. A plan made
+from a hand-written state in which the droplet's hash differs makes the new droplet, changes
+the address in place and then removes the old droplet; with the address assigned by a resource
+of its own, as `3211fe4f5` had it, the same plan took the address off the old droplet before
+making the new one. Plans are refused for a control character in what the machine is, a size
+or region that is not a slug, an empty host key, and a name outside its zone.
+
+What the plan hands a droplet passes `cloud-init schema`, and was given to cloud-init in a
+container like the one above (with sudo and sshd, as a cloud image has): the files arrived as
+they are in the repository, the host key was the one given, SSH took no password, and the boot
+unit ran `boot.sh`, which finished `provision.sh`. Where the name pointed elsewhere it waited.
+It went on, in one container, once the name reached the machine itself, and in another, where
+the name's address answered nothing, once a stand-in for the metadata address said that address
+was the machine's; while the stand-in named another address it kept waiting. At `3211fe4f5`
+the ship step then shipped to such a machine, knowing it by the host key under the site's name
+as `bootstrap.sh` writes it, and a restart did not set the machine up again. With the service
+held to loopback, a command run under the same two settings could not reach an outside
+address, and the site answered through nginx. With the package lists' lock held, a bare
+`apt-get update` ended at once with status 100, and the scripts' loop went on when the lock
+was let go.
+
+The step the workflow runs after an apply was run as GitHub runs it (`bash -eo pipefail`)
+against that container, with a stand-in for `gh`: it started the Site workflow for a machine
+answering 502, whether or not the run had made it; with deploys off it only said so; and for an
+address that answers nothing it failed after 90 seconds with deploys on and warned with them
+off. `bootstrap.sh` was run in Ubuntu 24.04's `sh` against a stand-in for `gh` that records
+what it is asked: it made both environments with their rule for `main`, stored the four secrets
+and the variables, and on a second run kept the keys and wrote the host's line again under the
+new name; after a run that had stopped between the keys' halves it made the keys again; it
+stopped, writing nothing more, when the host key could not be read back; and interrupted with
+the keys on disk it left nothing in its temporary directory.
+
+None of this has met DigitalOcean or GitHub. Not run: `tofu apply`, the Spaces bucket, the
+`Site machine` workflow's apply on GitHub, `bootstrap.sh` against GitHub, the address moving
+from one droplet to the next, and the metadata address itself: the two paths `boot.sh` reads
+there (`reserved_ip/ipv4/active` and `ip_address`) have not been asked of a droplet. Whether a
+droplet can reach its own reserved address from inside is not known either, which is why
+`boot.sh` has both ways. The first apply is their test.
 
 certbot's request for a certificate and the Site workflow on GitHub have not been run from this
 repository yet: the first deploy is their test.
