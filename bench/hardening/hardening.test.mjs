@@ -6,7 +6,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { budgets, validateBudget, matrix, apps, phases, cases, sources, parseArgs, selected, groupReady } from "./plan.mjs";
-import { Connections, controls, inject, legitimate, payload } from "./probe.mjs";
+import { Connections, controls, validateControl, inject, legitimate, payload } from "./probe.mjs";
 import { artifacts, verifyArtifacts, verifyParity } from "./evidence.mjs";
 
 test("all selected native candidates, sources, deployments and phases remain visible", () => {
@@ -31,6 +31,20 @@ test("immutable effective profiles charge equal total budgets including every na
 test("same native socket injectors pass independent receiver controls for all six phases", async () => {
   for (const phase of phases) {
     const result = await controls(phase); assert.equal(result.passed, true); assert.equal(result.legitimate.ok, true);
+  }
+});
+
+test("control assertions reject corrupted receipts rather than trusting a passing flag", async () => {
+  for (const phase of ["slow-headers", "slow-readers", "oversized-requests"]) {
+    const measured = await controls(phase);
+    for (const corrupt of [(c) => c.observations[0].bytes++, (c) => c.rows.pop(), (c) => c.legitimate.bodySha256 = "invented", (c) => c.legitimate.ok = false]) {
+      const changed = structuredClone(measured); corrupt(changed); assert.throws(() => validateControl(changed));
+    }
+    const changed = structuredClone(measured);
+    if (phase === "slow-headers") changed.rows[0].drips = 0;
+    if (phase === "slow-readers") changed.observations[0].responseBackpressure = false;
+    if (phase === "oversized-requests") changed.rows[2].bodyBytesQueued = 0;
+    assert.throws(() => validateControl(changed));
   }
 });
 

@@ -77,6 +77,13 @@ Scheduled starts and actual monotonic starts are retained including refusals;
 local FD/memory/address exhaustion, missing work, excessive lag, stalled event
 loop, invalid controls, changed lifecycle or failed cleanup invalidate apparatus.
 
+The bounded raw journal is buffered in injector memory (64 MiB maximum) and
+flushed after the timed windows, so host-mounted filesystem stalls cannot delay
+scheduled traffic. Adjacent windows share one observed boundary clock sample.
+The final cleanup observer samples the same Linux kernel monotonic clock and
+boot identity as the injector, including on Docker Desktop; the parent removes
+that observer before verifying zero remaining owned containers.
+
 Raw JSONL retains attempts, status prefixes, byte hashes/counts, paused-reader
 kernel receive queues, observation boundaries, cgroup CPU/memory/OOM/procs and
 controls. Lifecycle/config/image/source records, complete parity/qualification,

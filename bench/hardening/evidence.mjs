@@ -53,6 +53,10 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
   assert.equal(cleanup.complete, true); assert.equal(cleanup.containers.length, 0); assert.equal(cleanup.volumes.length, 0);
   assert.equal(cleanup.commandClients, 0);
   const clock = one("clock");
+  assert.equal(cleanup.nativeClock?.bootId, clock.bootId, "cleanup and injector clocks are not from the same kernel boot");
+  assert.match(clock.monotonicNs, /^\d+$/); assert.match(cleanup.nativeClock.monotonicNs, /^\d+$/);
+  const cleanupAtMs = Number(BigInt(cleanup.nativeClock.monotonicNs) - BigInt(clock.monotonicNs)) / 1e6;
+  assert.ok(cleanupAtMs >= reaped.atMs, "cleanup clock preceded injector cleanup");
   const attack = raw.filter((r) => r.type === "attack").sort((a, c) => a.index - c.index);
   assert.deepEqual(attack.map((r) => r.index), b.attack.scheduledAtMs.map((_, i) => i), "attack attempt indices incomplete");
   assert.ok(attack.every((r) => r.phase === settings.phase && r.endedAtMs >= r.startedAtMs));
@@ -103,7 +107,7 @@ export function assemble({ settings, raw, parity, source, cleanup, provenance, l
     parity: { status: "passed", contract: "marketplace-v2/native-browser-and-content", evidence: "parity.json" },
     apparatus: { injector: { healthy: true, scheduled: b.attack.scheduledAtMs.length, attempted: attack.length, errors: 0, dropped: 0, evidence: "raw.jsonl#attack" },
       host: { healthy: true, evidence: "raw.jsonl#probe-cleanup" }, controls: { attackValid: true, legitimateValid: true, evidence: "raw.jsonl#control-before,control-after" },
-      artifacts: { complete: true, evidence: "manifest.json" }, cleanup: { complete: true, atMs: Math.max(reaped.atMs, legitimate.after.endMs) + cleanup.elapsedAfterProbeMs,
+      artifacts: { complete: true, evidence: "manifest.json" }, cleanup: { complete: true, atMs: cleanupAtMs,
         connections: 0, processes: 0, tasks: 0, evidence: "cleanup.json" } },
     attack: { attempted: attack.length, established: established.length, failed: attack.length - established.length, closed: closed.length, held: established.length - closed.length,
       startedAtMs: attack.map((r) => r.startedAtMs), evidence: "raw.jsonl#attack" }, legitimate, resources,

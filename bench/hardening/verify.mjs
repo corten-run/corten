@@ -10,6 +10,7 @@ const read = (file) => JSON.parse(readFileSync(file, "utf8"));
 
 export function verify(folder) {
   const summary = read(join(folder, "summary.json")); assert.equal(summary.schema, schema); assert.equal(summary.registryDigest, registryDigest);
+  groupReady(summary.cells); // Validate the complete, canonical matrix before following artifact paths.
   let observed = 0;
   for (const cell of summary.cells) {
     if (cell.status !== "observed") continue;
