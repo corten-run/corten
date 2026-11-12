@@ -929,13 +929,15 @@ fn not_one_object(output: &str, parse: bool) -> Option<String> {
     None
 }
 
-/// Whether the request used the bearer method, for RFC 6750 3.1's choice of error: `Bearer` and a
-/// space in any case, then something other than whitespace. A token that is malformed, not ASCII
-/// included (which [`crate::caller::bearer`] cannot hand an app as text), was still sent, so its 401
-/// says `error="invalid_token"`; `Bearer` with nothing after it, which RFC 6750 (2.1) does not
-/// allow, is taken as no token, so the client is told where to get one.
+/// Whether the request used the bearer method, for RFC 6750 3.1's choice of error: an
+/// `Authorization` line that is `Bearer` and a space in any case, then something other than
+/// whitespace. A token that is malformed, not ASCII included (which [`crate::caller::bearer`]
+/// cannot hand an app as text), was still sent, as was one on either of two `Authorization` lines
+/// (which the reader refuses), so its 401 says `error="invalid_token"`; `Bearer` with nothing
+/// after it, which RFC 6750 (2.1) does not allow, is taken as no token, so the client is told
+/// where to get one. It runs only on a 401, so reading every line costs an accepted call nothing.
 fn sent_bearer(headers: &HeaderMap) -> bool {
-    headers.get(header::AUTHORIZATION).is_some_and(|value| {
+    headers.get_all(header::AUTHORIZATION).iter().any(|value| {
         let value = value.as_bytes();
         value.len() > 7 && value[..7].eq_ignore_ascii_case(b"bearer ") && !value[7..].trim_ascii().is_empty()
     })
@@ -1589,19 +1591,26 @@ mod tests {
         let app = protected(Some(authorization));
         // Other credentials than a bearer token are no token, nor is `Bearer` with only
         // whitespace after it: told where to get one, nothing more. A token outside visible ASCII,
-        // which `caller::bearer` does not read, was sent: the check refuses it and the 401 says it
-        // is invalid (RFC 6750 3.1).
+        // which `caller::bearer` does not read, was sent, as was a bearer token on either of two
+        // `Authorization` lines: the check refuses it and the 401 says it is invalid (RFC 6750 3.1).
         let call = json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": "inventory.adjust", "arguments": {} } });
-        for (sent, invalid) in [
-            (&b"Basic YTpi"[..], false),
-            (b"Bearer", false),
-            (b"Bearer   ", false),
-            (b"Bearer \t", false),
-            ("Bearer caf\u{e9}".as_bytes(), true),
-            (b"bearer caf\xe9", true),
-        ] {
-            let sent = HeaderValue::from_bytes(sent).unwrap();
-            let req = Request::post("/mcp").header("content-type", "application/json").header("authorization", &sent);
+        // Each request's `Authorization` lines, and whether its 401 names the token invalid.
+        let requests: [(&[&[u8]], bool); 8] = [
+            (&[b"Basic YTpi"], false),
+            (&[b"Bearer"], false),
+            (&[b"Bearer   "], false),
+            (&[b"Bearer \t"], false),
+            (&["Bearer caf\u{e9}".as_bytes()], true),
+            (&[b"bearer caf\xe9"], true),
+            (&[b"Basic YTpi", b"Bearer t"], true),
+            (&[b"Bearer t", b"Bearer u"], true),
+        ];
+        for (sent, invalid) in requests {
+            let sent: Vec<_> = sent.iter().map(|line| HeaderValue::from_bytes(line).unwrap()).collect();
+            let mut req = Request::post("/mcp").header("content-type", "application/json");
+            for line in &sent {
+                req = req.header("authorization", line);
+            }
             let (status, headers, _) = send(&app, req.body(Body::from(call.to_string())).unwrap()).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{sent:?}");
             assert_eq!(headers["www-authenticate"].to_str().unwrap().contains("invalid_token"), invalid, "{sent:?}: {headers:?}");

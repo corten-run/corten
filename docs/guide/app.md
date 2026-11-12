@@ -1507,11 +1507,11 @@ endpoint at another route panics at startup. The origin and each issuer must be 
 `http` on `localhost` or a loopback address), checked when given. Without `authorization`, a
 401 names `Bearer` and the endpoint's name as its realm (`mcp` when the name is empty or not
 printable ASCII), for tokens handed out by hand, and tokens are checked per tool call as
-before. Either way a 401 for a request that sent a token adds `error="invalid_token"`: one whose
-`Authorization` is `Bearer ` and something more, whether or not `corten::caller::bearer` can read
-it (RFC 6750 3.1 leaves the error out only for a request without credentials); `Bearer` with
-nothing after it counts as no token, so the client is told where to get one. The check reads the
-token with `caller::bearer(headers)`.
+before. Either way a 401 for a request that sent a token adds `error="invalid_token"`: one with an
+`Authorization` line that is `Bearer ` and something other than whitespace, whether or not
+`corten::caller::bearer` can read it (RFC 6750 3.1 leaves the error out only for a request without
+bearer credentials); `Bearer` with nothing after it counts as no token, so the client is told
+where to get one. The check reads the token with `caller::bearer(headers)`.
 
 APIs nest as areas do, so each feature owns its JSON routes as it owns its pages. A feature's
 module has a prefix under the app's (`/api/forecast-calibration` in `/api`), and both are

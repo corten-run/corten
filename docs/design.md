@@ -1407,9 +1407,9 @@ rules something out.
     `caller::bearer` (the scheme in any case, RFC 9110 11.1; an empty token, a value outside
     visible ASCII or two `Authorization` lines, which RFC 9110 5.3 does not let a client send,
     none), so no app parses `Authorization` by hand; the MCP endpoint's check reads the token with
-    it, and the endpoint's 401 names a token invalid whenever the request used the bearer method,
-    readable or not, since RFC 6750 3.1 leaves the error out only for a request without
-    credentials.
+    it, and the endpoint's 401 names a token invalid whenever the request used the bearer method
+    (an `Authorization` line that is `Bearer` and something other than whitespace), readable or
+    not, since RFC 6750 3.1 leaves the error out only for a request without bearer credentials.
     Not chosen for the type: `unauthorized()` sending `Bearer` by default, which would have
     kept every caller compiling but named a scheme for an app that takes another; a `BEARER`
     constant with no parameter, which RFC 6750 (3) does not allow; a method per RFC 6750 error
@@ -1503,11 +1503,10 @@ rules something out.
     of `Bearer` alone or with only whitespace after it, and card-market's agents with a lowercase
     scheme and its partners' empty key, at `ea4aff53`; 2026-11-11, the test of `caller::bearer`'s
     credentials (`crates/corten/src/caller.rs`: the scheme in any case, two spaces, `Bearer` alone
-    or with whitespace, `Basic`, a value outside visible ASCII) and the MCP endpoint's of a value
-    outside visible ASCII (`crates/corten/src/agent.rs`), at `751e26bb`, the commit that adds them;
-    2026-11-11, the reader's test of two `Authorization` lines, the MCP endpoint's test that a token
-    outside visible ASCII is named invalid, and the callgrind count of the reader, at `de945242`,
-    the commit that adds them.
+    or with whitespace, `Basic`, a value outside visible ASCII), at `751e26bb`, the commit that
+    adds it; 2026-11-11, the reader's test of two `Authorization` lines, the MCP endpoint's test
+    that a token outside visible ASCII is named invalid (`crates/corten/src/agent.rs`), and the
+    callgrind count of the reader, at `de945242`, the commit that adds them.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
