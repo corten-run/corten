@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFile, writeFile, rm } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
-import { options, qualifyAndMeasure, checkedBuild } from "./run.mjs";
+import { options, qualifyAndMeasure } from "./run.mjs";
 import { selectedApps } from "../workloads/registry.mjs";
 
 test("explicit bounded round/fixture inputs and no contender filter", () => {
@@ -32,24 +29,6 @@ test("measurement happens only after qualification and must pass its own oracle"
   }
 });
 
-test("native build reuse rejects different fixtures, contenders, sources and artifacts", { skip: !process.env.CLIENT_NATIVE_DIR && "Set CLIENT_NATIVE_DIR to a runner's native build directory" }, async () => {
-  const directory = dirname(resolve(process.env.CLIENT_NATIVE_DIR));
-  const path = join(directory, "result.json"), previous = JSON.parse(await readFile(path, "utf8"));
-  const { effectiveWorkload: workload, provenance: { sources } } = previous;
-  assert.equal((await checkedBuild(path, workload, sources)).directory, join(directory, "native"));
-  await assert.rejects(checkedBuild(path, { ...workload, seed: workload.seed + 1 }, sources), /workload differs/);
-  await assert.rejects(checkedBuild(path, workload, { ...sources, "bench/client-heavy/build.mjs": "changed" }), /stale native source/);
-  const temporary = join(directory, `reuse-test-${randomUUID()}.json`);
-  try {
-    for (const [mutate, message] of [
-      [(r) => r.selectedApps.pop(), /contender set differs/],
-      [(r) => r.builds.react.inputs[0].sha256 = "changed", /stale native input/],
-      [(r) => r.builds.react.artifacts["app.js"] = "changed", /stale native artifact/],
-      [(r) => delete r.builds.corten.artifacts["views.js"], /incomplete native artifacts/],
-    ]) {
-      const changed = structuredClone(previous); mutate(changed);
-      await writeFile(temporary, JSON.stringify(changed));
-      await assert.rejects(checkedBuild(temporary, workload, sources), message);
-    }
-  } finally { await rm(temporary, { force: true }); }
+test("external build receipts and source-unbound generator binaries cannot qualify apps", () => {
+  for (const flag of ["--built", "--generator"]) assert.throws(() => options(["forged", flag, "forged.json"]), /unknown/);
 });

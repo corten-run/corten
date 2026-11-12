@@ -3,6 +3,69 @@ import test from "node:test";
 import { chromium } from "playwright";
 import { installObserver } from "./observer.mjs";
 
+test("global event-handler properties are counted until cleared without changing dispatch", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.evaluate(installObserver);
+    const observed = await page.evaluate(() => {
+      const o = window.clientObserver;
+      document.onchange = () => {};
+      const baseline = o.begin().owned;
+      let calls = 0;
+      document.oninput = () => { calls++; };
+      document.dispatchEvent(new Event("input"));
+      const documentHandler = o.owned();
+      window.onresize = () => { calls++; };
+      window.dispatchEvent(new Event("resize"));
+      const windowHandler = o.owned();
+      document.oninput = null;
+      window.onresize = null;
+      const cleared = o.owned();
+      document.onchange = () => {};
+      const replaced = o.owned();
+      document.onchange = null;
+      return { baseline, documentHandler, windowHandler, cleared, replaced, calls, final: o.owned() };
+    });
+    assert.equal(observed.baseline.listeners, 0);
+    assert.equal(observed.documentHandler.listeners, 1);
+    assert.equal(observed.windowHandler.listeners, 2);
+    assert.equal(observed.calls, 2);
+    assert.equal(observed.cleared.listeners, 0);
+    assert.equal(observed.replaced.listeners, 1);
+    assert.equal(observed.final.listeners, 0);
+  } finally { await browser.close(); }
+});
+
+test("body window aliases count once but independent slots using the same callback remain distinct", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.evaluate(installObserver);
+    const observed = await page.evaluate(() => {
+      const o = window.clientObserver; o.begin();
+      let calls = 0;
+      const callback = () => { calls++; };
+      document.body.onresize = callback;
+      window.dispatchEvent(new Event("resize"));
+      const alias = o.owned();
+      window.onclick = callback;
+      document.onclick = callback;
+      document.documentElement.onclick = callback;
+      document.body.onclick = callback;
+      const distinct = o.owned();
+      document.body.dispatchEvent(new Event("click", { bubbles: true }));
+      document.body.onresize = null;
+      window.onclick = document.onclick = document.documentElement.onclick = document.body.onclick = null;
+      return { alias, distinct, calls, final: o.owned() };
+    });
+    assert.equal(observed.alias.listeners, 1);
+    assert.equal(observed.distinct.listeners, 5);
+    assert.equal(observed.calls, 5);
+    assert.equal(observed.final.listeners, 0);
+  } finally { await browser.close(); }
+});
+
 // Real browser API probes, deliberately not framework qualification evidence.
 test("observer detects and releases listeners, abort/once, timers and queued work", async () => {
   const browser = await chromium.launch({ headless: true });
