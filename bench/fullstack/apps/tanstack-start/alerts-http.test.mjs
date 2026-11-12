@@ -19,6 +19,34 @@ function client() {
     return response;
   };
 }
+test("native alerts readback preserves HEAD and refuses other methods without mutation", { timeout: 30000 }, async (t) => {
+  const request = client();
+  assert.deepEqual(await (await request("/api/alerts")).json(), []);
+  const accepted = await request("/marketplace/en-US/item_1", {
+    method: "POST", headers: { Origin: origin },
+    body: new URLSearchParams({ email: "methods@example.test", target_price: "1.25" }),
+  });
+  assert.equal(accepted.status, 200);
+  await accepted.arrayBuffer();
+  const expected = [{ item_id: "item_1", email: "methods@example.test", target_minor: 125 }];
+  const head = await request("/api/alerts", { method: "HEAD" });
+  assert.equal(head.status, 200);
+  assert.match(head.headers.get("content-type"), /application\/json/);
+  assert.match(head.headers.get("cache-control"), /no-store/);
+  assert.equal(await head.text(), "");
+  for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) await t.test(method, async () => {
+    const response = await request("/api/alerts", {
+      method, headers: { Origin: origin },
+      body: new URLSearchParams({ item_id: "item_2", email: "unexpected@example.test", target_minor: "999" }),
+    });
+    const body = await response.text();
+    assert.deepEqual(await (await request("/api/alerts")).json(), expected);
+    assert.equal(response.status, 405, body.slice(0, 200));
+    assert.equal(response.headers.get("allow"), "GET, HEAD");
+    assert.match(response.headers.get("content-type"), /application\/json/);
+    assert.deepEqual(JSON.parse(body), { error: "method not allowed" });
+  });
+});
 test("native HTTP alerts: accepted writes, independent reads, rejected writes, ordering and session isolation", { timeout: 60000 }, async () => {
   const a = client(), b = client();
   let response = await a("/api/alerts");
