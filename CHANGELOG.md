@@ -7,6 +7,18 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Feature-qualified marketplace comparison groups: popular and performance-oriented
+  candidate pools share one deduplicated production run instead of timing the full inventory
+  each night. Both sources must satisfy the same scoped production checklist, then the full
+  localized browser/content gate; unsupported candidates are listed with missing features,
+  not timed or silently dropped. No framework is an unconditional anchor. ETag and downstream
+  readiness are disclosed exceptions, not claims of complete enterprise equivalence.
+
+- The marketplace alert-form check saves the exact submitted case, POST status and response,
+  current message and original timeout when the result message does not arrive. The
+  React Router timeout from r19 remains unconfirmed as an adapter defect
+  ([#1251 Benchmark r19: React Router fixture correctness times out waiting for an alert-form message](https://github.com/corten-run/corten/issues/1251)).
+
 - `corten::caller::bearer(&headers)` reads the token of RFC 6750's bearer credentials
   (`Authorization: Bearer <token>`), the scheme `Challenge::bearer` asks an API's clients to use:
   the scheme in any case, one or more spaces, the token trimmed, and `None` for no
@@ -19,8 +31,9 @@ Corten is pre-1.0, so any minor version may change the API.
   prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
   has no Navigation API, so nothing is prefetched). An upload answered with a status that has no
   body is read with none: Corten's `204` redirect (`corten-location`) is followed with no
-  `corten:error`, and a bare `204`, `205` or `304` is `corten:error` with that status (the
-  `304` in Chromium and Firefox: Playwright cannot answer one in WebKit); one answered with a status of 600 is
+  `corten:error`, a bare `204` or `205` dispatches none (below), and a bare `304` is
+  `corten:error` with that status (in Chromium and Firefox: Playwright cannot answer one in
+  WebKit); one answered with a status of 600 is
   `corten:error` with status 0; the form is left not busy each time. Another file of the same
   name, chosen while a write sending the first is out, is sent after it, whether its size or only
   its time differs, where the same file pressed again is not. Each check failed against a runtime
@@ -79,6 +92,20 @@ Corten is pre-1.0, so any minor version may change the API.
   look at its first byte, and a `{*rest}` value with a dot a second read
   (docs/design.md#limit-path-values)
   ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)).
+- A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
+  server's docs give for a write with nothing to say) or `205 Reset Content` is the submit done
+  with nothing to draw (RFC 9110, 15.3.5 and 15.3.6): no `corten:error`, so corten-ui's `Toaster`
+  no longer shows its failed text for a write that succeeded, and a submit pressed while it was
+  out is sent, where before it was dropped. A `205` also resets the form (firing `reset`), unless
+  the user changed a field after it was sent (another file of the same name, or text a number
+  input cannot read, among them), a control was added to the form since, or the user pressed again
+  with other values
+  ([#1258 A data-patch write answered 204, which the server doc gives for a write with nothing to say, fires corten:error and drops the queued submit](https://github.com/corten-run/corten/issues/1258)).
+  corten-ui's `NumberField` and `ComboBox` follow a form reset, which sends no `input`: a
+  button at the bound the reset puts back is disabled again, and the option marked as the value
+  is the select's. A file input's files are told by each one's name, size and time there and when
+  a patch answers: another file of the same name, chosen while the answer that takes the first is
+  on its way, stays chosen, where before it was taken with the answer.
 - A component stylesheet's `@scope` rule has its root and limit prefixed as any selector is, so
   `@scope (.list) to (.slot)` matches the component's list down to its slot, and `list` and
   `slot` are classes of the file (`class={Slot}`). Before, the prelude was copied as written, so
@@ -146,6 +173,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- [The Choice on npm onboarding](docs/design.md#choice-no-npm-launcher) records why Corten
+  publishes no npm initializer that creates an app (`npm create corten`): the app would still
+  build with Cargo and its other commands are installed by Cargo, so it would replace only
+  `corten new`, at the cost of a second way to start an app and a second release channel. It also
+  records that `create-corten` is held by a placeholder, published once by hand, that prints the
+  Cargo steps, so the npm convention cannot run a stranger's code
+  ([#872 Evaluate optional npm onboarding through a launcher for the existing Corten CLI](https://github.com/corten-run/corten/issues/872)).
 - `bench/fullstack/README.md`'s four cited commits that GitHub did not keep on `main`'s history
   (`2fa883a6`, `1e1fb7be`, `eedbcc2a`, and `7f0b81f`, which only the branch `bench/r13-tree` held) are
   kept under `refs/tags/evidence/`, so `scripts/design-refs.mjs` checks every commit the file

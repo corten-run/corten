@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { groupApps, scheduledGroup } from "./groups.mjs";
 
 export const nightly = Object.freeze({ passes: 3, duration: 15, warmup: 10, rate: 150 });
 export function officialRound(round) {
@@ -12,14 +13,16 @@ export function parseDropletArgs(args) {
     const flag = args[i];
     assert.ok(!seen.has(flag), `duplicate ${flag}`); seen.add(flag);
     if (["--collect", "--detach", "--plan"].includes(flag)) options[flag.slice(2)] = true;
-    else if (["--ssh-key", "--state-dir"].includes(flag)) {
+    else if (["--ssh-key", "--state-dir", "--group"].includes(flag)) {
       const value = args[++i]; assert.ok(value && !value.startsWith("--"), `${flag} needs a value`);
-      options[flag === "--ssh-key" ? "sshKey" : "stateDir"] = value;
+      options[flag === "--ssh-key" ? "sshKey" : flag === "--group" ? "group" : "stateDir"] = value;
     } else throw new Error(`unknown option ${flag}`);
   }
   assert.ok(options.stateDir, "--state-dir is required (durable launcher state, outside the checkout)");
   assert.ok(options.collect ? !options.detach && !options.plan : options.detach || options.plan, "use --detach to launch, or --collect");
   assert.ok(options.collect || /^\d+$/.test(options.sshKey ?? ""), "--ssh-key needs a DigitalOcean key id");
+  assert.ok(!options.collect || options.group === undefined, "collection uses the reserved group, never a new selection");
+  if (!options.collect) { options.group ??= scheduledGroup(options.round); groupApps(options.group); }
   return options;
 }
 export function validateState(s, round) {
@@ -29,6 +32,9 @@ export function validateState(s, round) {
   assert.match(s.tag, /^corten-marketplace-run-[a-f0-9]{16}$/);
   assert.match(s.commit, /^[a-f0-9]{40}$/);
   assert.deepEqual(s.options, nightly);
+  if (s.group !== undefined) {
+    assert.deepEqual(s.apps, groupApps(s.group), "reserved group membership changed");
+  } else assert.equal(s.apps, undefined, "legacy reservations have no group selection");
   if (s.id !== undefined) assert.match(s.id, /^\d+$/);
   if (s.ip !== undefined) assert.match(s.ip, /^\d{1,3}(?:\.\d{1,3}){3}$/);
   return s;
@@ -94,11 +100,11 @@ test "$(nproc)" -ge 8
 timeout 900 npm ci --no-audit --no-fund
 node bench/marketplace/fixtures.mjs
 export MARKETPLACE_APP_CPUS=1 MARKETPLACE_API_CPUS=2-3 MARKETPLACE_LOAD_CPUS=4-7
-node bench/marketplace/run.mjs ${s.round} --build --passes ${nightly.passes} --duration ${nightly.duration} --warmup ${nightly.warmup} --rate ${nightly.rate}
+node bench/marketplace/run.mjs ${s.round} --build --passes ${nightly.passes} --duration ${nightly.duration} --warmup ${nightly.warmup} --rate ${nightly.rate}${s.group === undefined ? "" : ` --group ${s.group}`}
 node bench/marketplace/report.mjs bench/marketplace/results/${s.round}/summary.json > /bench/report.md
 `;
   const unit = `[Unit]
-Description=Localized marketplace ${s.round}, twenty apps, three passes
+Description=Localized marketplace ${s.round}, ${s.group ?? "full"} group, three passes
 After=network-online.target
 Wants=network-online.target
 [Service]

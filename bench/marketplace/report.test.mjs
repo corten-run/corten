@@ -6,6 +6,9 @@ import { records } from "./fixtures.mjs";
 import { aggregate, appStop, cpuSettings, phases, resultSchema, sources, stageAggregate, timedProfiles } from "./run-contract.mjs";
 import { report, validateSummary } from "./report.mjs";
 import { compare, comparisonKey } from "./compare.mjs";
+import { groupApps } from "./groups.mjs";
+import { featureProfile, qualification, qualificationSettings } from "./feature-contract.mjs";
+import { qualificationProbes } from "./qualification-fixture.mjs";
 function synthetic() {
   const s = { schema: resultSchema, workload, round: "r17", commit: "a".repeat(40), dirty: false, complete: true, checksPassed: true,
     failures: [], cleanupFailures: [], finishedCommit: "a".repeat(40), finishedDirty: false,
@@ -29,6 +32,47 @@ function synthetic() {
   }
   return s;
 }
+
+test("named groups require exact evidence and compare only with the same group", () => {
+  const grouped = (group, round) => {
+    const s = synthetic(); s.round = round; s.options.round = round;
+    s.options.group = group; s.options.apps = groupApps(group);
+    s.apps = Object.fromEntries(s.options.apps.map((a) => [a, s.apps[a]]));
+    s.measurement.featureProfile = featureProfile;
+    s.measurement.qualificationSettings = qualificationSettings;
+    for (const a of Object.values(s.apps)) a.qualification = Object.fromEntries(sources.map((source) => [source, qualification(qualificationProbes(), source)]));
+    return s;
+  };
+  const s = grouped("production", "r24"); validateSummary(s);
+  assert.match(report(s), /Group: production/);
+  assert.equal(compare(s, grouped("production", "r20"), { unchangedApps: ["aspnet"] }).compatible, true);
+  assert.equal(compare(s, grouped("production-performant", "r22")).compatible, false);
+  assert.equal(compare(s, grouped("production", "r20"), { unchangedApps: ["axum-maud"] }).compatible, false);
+  for (const mutate of [
+    (v) => { delete v.apps.nextjs; },
+    (v) => { v.options.group = "full"; },
+    (v) => { delete v.options.group; },
+    (v) => { v.options.apps = ["corten"]; },
+  ]) { const v = structuredClone(s); mutate(v); assert.throws(() => validateSummary(v)); }
+  const oldSchema = structuredClone(s); oldSchema.schema = "marketplace-results/v4";
+  assert.throws(() => validateSummary(oldSchema));
+  const excluded = structuredClone(s);
+  const unsupported = qualificationProbes(); delete unsupported.page.headers["content-security-policy"];
+  excluded.apps.nextjs.qualification.api = qualification(unsupported, "api");
+  excluded.apps.nextjs.runs = {}; excluded.apps.nextjs.phases = {};
+  validateSummary(excluded);
+  assert.match(report(excluded), /excluded, not timed/);
+  const loss = compare({ ...excluded, round: "r25", options: { ...excluded.options, round: "r25" } }, s);
+  assert.equal(loss.compatible, false);
+  assert.equal(loss.qualificationLosses[0].app, "nextjs");
+  const forged = structuredClone(excluded); forged.apps.nextjs.qualification.api.eligible = true;
+  assert.throws(() => validateSummary(forged));
+  const lone = structuredClone(s);
+  for (const [name, a] of Object.entries(lone.apps)) if (name !== "corten") { a.qualification.api = qualification(unsupported, "api"); a.runs = {}; a.phases = {}; }
+  assert.throws(() => validateSummary(lone));
+  const missingEvidence = structuredClone(excluded); missingEvidence.apps.nextjs.qualification.api = qualification({}, "api");
+  assert.throws(() => validateSummary(missingEvidence));
+});
 test("read-only reporter requires every app, locale, source and three complete passes", () => {
   const s = synthetic(); validateSummary(s);
   const text = report(s); for (const locale of locales) assert.ok(text.includes(`## ${locale}`));
