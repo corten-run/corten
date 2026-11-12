@@ -10,12 +10,13 @@ mod marketplace;
 mod marketplace_page;
 mod model;
 mod pages;
+mod record_http;
 
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use axum::{
     Form, Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, Query, State, rejection::PathRejection},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     response::{
         IntoResponse, Response,
@@ -57,9 +58,12 @@ async fn main() {
         .route("/items/{id}", get(item_page).post(create_alert))
         .route("/api/items/{id}", get(item_json))
         .route("/catalog/{id}", get(catalog_page))
-        .route("/api/catalog/{id}", get(catalog_json))
+        .route("/api/catalog/{id}", get(catalog_json).fallback(async || record_http::problem(StatusCode::METHOD_NOT_ALLOWED)))
         .route("/marketplace/{locale}/{id}", get(marketplace_page::get).post(marketplace_page::post))
-        .route("/api/marketplace/{id}", get(marketplace_page::json))
+        .route(
+            "/api/marketplace/{id}",
+            get(marketplace_page::json).fallback(async || record_http::problem(StatusCode::METHOD_NOT_ALLOWED)),
+        )
         .route("/live/prices", get(live_prices))
         .route("/live/publish", post(live_publish))
         .fallback(async || not_found());
@@ -118,11 +122,12 @@ async fn catalog_page(Path(id): Path<String>, Query(query): Query<CatalogQuery>)
     }
 }
 
-async fn catalog_json(Path(id): Path<String>) -> Response {
+async fn catalog_json(id: Result<Path<String>, PathRejection>) -> Response {
+    let Ok(Path(id)) = id else { return record_http::problem(StatusCode::BAD_REQUEST) };
     match catalog::source::get(&id).await {
         Ok(Some(record)) => Json(record).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => (StatusCode::BAD_GATEWAY, "The catalog API did not answer.").into_response(),
+        Ok(None) => record_http::problem(StatusCode::NOT_FOUND),
+        Err(_) => record_http::problem(StatusCode::BAD_GATEWAY),
     }
 }
 
