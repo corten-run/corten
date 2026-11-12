@@ -47,7 +47,7 @@ const ELSEWHERE: [&str; 4] = [
 const LIMITS: [&str; 4] = [
     "Corten speaks HTTP/1.1. A proxy or CDN in front serves browsers HTTP/2 or HTTP/3, which an app with live streams needs.",
     "Pages swap without a full load where the browser has the Navigation API (Chrome, Edge, Firefox 147 and later, Safari 26.2 and later). Older browsers load each page in full; forms, patches and handlers still work.",
-    "A native app shell is planned, not built. Agents are given actions as MCP tools behind the agent feature.",
+    "A native app shell is planned, not built.",
     "It is 0.2: the API will change before 1.0.",
 ];
 
@@ -60,7 +60,7 @@ const AGAINST: [(&str, &str); 5] = [
     ),
     (
         "htmx",
-        "HTML first either way: the server sends markup, and the page works without scripts. Corten's behavior is JavaScript functions beside their component, checked against the markup when the crate compiles.",
+        "HTML first either way. Corten's behavior is JavaScript functions beside their component, checked against the markup when the crate compiles.",
     ),
     (
         "Leptos, or another WASM framework",
@@ -72,7 +72,7 @@ const AGAINST: [(&str, &str); 5] = [
     ),
     (
         "Rails, Phoenix or Laravel",
-        "Corten is the web layer alone. The ORM, the jobs and the mail those bring are yours to choose.",
+        "The ORM, the jobs and the mail those bring are yours to choose.",
     ),
 ];
 

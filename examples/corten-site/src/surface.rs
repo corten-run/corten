@@ -78,7 +78,7 @@ pub fn Surface<'a>(here: Here<'a>, t: Msg) -> impl Render {
                 } else {
                     <p class={State}>"Scripts: running"</p>
                     <p class={Told}>
-                        "The link below reloads this page under a policy that forbids every script. Your browser enforces it."
+                        "The link below reloads this page under a policy that forbids every script, enforced by your browser."
                     </p>
                     // A page swapped in by the runtime would keep its scripts, so this one loads in full.
                     <a href={here.scripts(false).at(SurfaceId)} class={Throw} data-reload>"Block every script"</a>
