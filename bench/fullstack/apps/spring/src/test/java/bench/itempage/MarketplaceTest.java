@@ -60,7 +60,7 @@ class MarketplaceTest {
         org.mockito.Mockito.when(source.get("item_1")).thenReturn(sample());
         var controller = new MarketplaceController(source);
         var request = new MockHttpServletRequest("GET", "/marketplace/fr-FR/item_1");
-        assertEquals("marketplace", controller.show("fr-FR", "item_1", "", "asc", "", "", "", request, model));
+        assertEquals("marketplace", controller.show("fr-FR", "item_1", "", "asc", "", "", "", request, new org.springframework.mock.web.MockHttpServletResponse(), model));
         // The web context expands @{...} routes in the actual MVC integration; this
         // unit test uses a link builder that preserves their already-parsed paths.
         engine.setLinkBuilder(new org.thymeleaf.linkbuilder.StandardLinkBuilder() {

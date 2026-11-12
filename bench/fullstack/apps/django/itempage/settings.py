@@ -1,5 +1,4 @@
-# Django's startproject settings for production, without the parts that need a database
-# (sessions, auth, messages, admin). CSRF protection is on, as by default.
+# Django's native sessions and ORM persist marketplace alerts across Gunicorn workers.
 import os
 from pathlib import Path
 
@@ -7,11 +6,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("SECRET_KEY", "bench-only-not-secret")
 DEBUG = False
 ALLOWED_HOSTS = ["*"]
-INSTALLED_APPS = ["django.contrib.staticfiles", "django.contrib.humanize", "itempage.apps.CatalogConfig"]
+INSTALLED_APPS = ["django.contrib.staticfiles", "django.contrib.humanize", "django.contrib.sessions", "itempage.apps.CatalogConfig"]
+DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "alerts.sqlite3"}}
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+SESSION_COOKIE_AGE = 1800
+SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE") == "1"
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]

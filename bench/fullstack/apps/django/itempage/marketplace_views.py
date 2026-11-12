@@ -2,17 +2,20 @@ from urllib.parse import urlencode
 
 from requests import RequestException
 
-from django.http import Http404, HttpResponseBadRequest, JsonResponse
+from django.http import Http404, HttpResponseBadRequest, HttpResponseForbidden, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from .marketplace import LABELS, MarketplaceFormat, source
+from .models import Alert
 
 
 @require_http_methods(["GET", "POST"])
 def show(request, locale, record_id):
+    if request.method == "POST" and request.headers.get("Sec-Fetch-Site") == "cross-site":
+        return HttpResponseForbidden("Forbidden")
     if locale not in LABELS:
         return HttpResponseBadRequest("Unsupported locale")
     record = source.get(record_id)
@@ -26,7 +29,9 @@ def show(request, locale, record_id):
     listings.sort(key=lambda row: (row["price_minor"] is None, (row["price_minor"] or 0) * (-1 if order == "desc" else 1)))
     path = reverse("marketplace", args=[locale, record_id])
     summary = record["summary"]
-    return render(request, "marketplace.html", {
+    email, target = request.POST.get("email", ""), request.POST.get("target_price", "")
+    message, minor = fmt.validate_alert(email, target, record["title"]) if request.method == "POST" else ("", None)
+    response = render(request, "marketplace.html", {
         "locale": locale, "record": record, "labels": fmt.labels, "prefix": prefix, "order": order,
         "show_all": show_all, "path": path,
         "more": path + "?" + urlencode({"seller": prefix, "sort": order, "offers": "all"}),
@@ -38,9 +43,24 @@ def show(request, locale, record_id):
             for row in (record["offers"] if show_all else record["offers"][:5])],
         "contents": [{**row, "quantity_text": fmt.number(row["quantity"])} for row in record["contents"]],
         "included": [{**row, "quantity_text": fmt.number(row["quantity"])} for row in record["included_in"]],
-        "email": request.POST.get("email", ""), "target": request.POST.get("target_price", ""),
-        "message": fmt.alert(request.POST.get("email", ""), request.POST.get("target_price", ""), record["title"]) if request.method == "POST" else "",
+        "email": email, "target": target, "message": message,
     })
+    if request.method == "POST":
+        response["Cache-Control"] = "private, no-store"
+    if minor is not None:
+        if not request.session.get("marketplace"):
+            request.session["marketplace"] = True
+            request.session.create()
+        Alert.objects.create(session_id=request.session.session_key, item_id=record_id, email=email, target_minor=minor)
+    return response
+
+
+@require_http_methods(["GET", "HEAD"])
+def alerts(request):
+    rows = []
+    if request.session.get("marketplace"):
+        rows = list(Alert.objects.filter(session_id=request.session.session_key).values("item_id", "email", "target_minor"))
+    return JsonResponse(rows, safe=False, headers={"Cache-Control": "private, no-store"})
 
 
 # This read-only endpoint rejects unsafe methods before any source access. Let its
