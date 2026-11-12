@@ -100,6 +100,8 @@ test("generic errors and unavailable service are not attributed as protective re
 test("native TCP queue parser keeps port-specific observed bytes for IPv4 and IPv6", () => {
   const parsed = tcpQueues("header\n 0: 0100007F:1234 0100007F:1F90 01 00000000:00000100 extra\n 1: 00000000000000000000000001000000:1235 00000000000000000000000001000000:1F90 01 00000000:0000002A extra\n");
   assert.equal(parsed.get(0x1234), 256); assert.equal(parsed.get(0x1235), 42); assert.equal(parsed.has(0x9999), false);
+  const filtered = tcpQueues("header\n 0: 0100007F:1234 0100007F:1F90 01 00000000:00000100 extra\n 1: 0100007F:1234 0100007F:1F91 01 00000000:00000001 extra\n 2: 020000AC:1234 030000AC:1F90 01 00000000:00000002 extra\n", 8080);
+  assert.equal(filtered.get(0x1234), 256, "same-port upstream and different-peer sockets cannot replace the reader's observed queue");
 });
 
 test("raw evidence cannot escape the result directory, mutate or disappear after sealing", () => {

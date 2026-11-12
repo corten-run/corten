@@ -10,6 +10,7 @@ operational benchmark network, production deployment or automation is used.
 node --test bench/hardening/*.test.mjs
 node bench/hardening/run.mjs w1 --review approved-profile-reference --build
 node bench/hardening/verify.mjs bench/hardening/results/w1
+node bench/hardening/adversarial.mjs bench/hardening/results/w1/<observed-cell-directory>
 ```
 
 The dispatcher interface is `export async function run(args)`, where `args` is
@@ -116,7 +117,11 @@ so closure counters describe client-observed closure, not an exact server FIN ti
 A hold shorter than a native deadline cannot prove the defense absent outside that
 window. Statuses and closures never identify a proxy/server mechanism by inference.
 TCP receive-queue scans are shared for at most 50 ms and retain their sample age;
-an absent connection is unavailable evidence, never an invented zero-byte queue.
+they match both loopback endpoints and the destination port, not just a local
+port that an upstream socket could also use. An absent connection is unavailable
+evidence, never an invented zero-byte queue. Timed JSON reads validate the full
+record; timed page reads check completed HTTP bodies and page markers, not a full
+DOM/CSS comparison on every request. The full browser gate runs before injection.
 Memory/CPU are window samples, not continuous peaks or kernel socket-memory totals.
 No ranking or throughput claim is supported by these safety runs, particularly
 on a concurrently loaded workstation. Full native qualification and group-wide

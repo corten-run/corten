@@ -54,25 +54,29 @@ export function payload(phase, index, target, attack, form) {
   return { first: bodyHead(attack.bodyBytes) + form.prefix, body: attack.bodyBytes - Buffer.byteLength(form.prefix), variant: "body-size" };
 }
 
-export function tcpQueues(body) {
+export function tcpQueues(body, remotePort) {
   const result = new Map();
+  const loopback = new Set(["0100007F", "00000000000000000000000001000000", "0000000000000000FFFF00000100007F"]);
   for (const line of body.split("\n").slice(1)) {
     const f = line.trim().split(/\s+/);
-    if (f.length > 4) result.set(parseInt(f[1].split(":")[1], 16), parseInt(f[4].split(":")[1], 16));
+    if (f.length <= 4) continue;
+    const [localAddress, localPort] = f[1].split(":"), [remoteAddress, peerPort] = f[2].split(":");
+    if (remotePort !== undefined && (parseInt(peerPort, 16) !== remotePort || !loopback.has(localAddress) || !loopback.has(remoteAddress))) continue;
+    result.set(parseInt(localPort, 16), parseInt(f[4].split(":")[1], 16));
   }
   return result;
 }
 let queuesCache;
-export function unread(port) {
+export function unread(port, remotePort) {
   const at = process.hrtime.bigint();
   // A burst of paused readers must not scan the whole TCP table once per socket.
   // Preserve the sample age rather than presenting cached observations as fresh.
   const absent = { kernelBytes: { status: "unavailable", reason: "connection absent from TCP sample" } };
-  if (queuesCache && at - queuesCache.at < 50_000_000n) return { ...(queuesCache.values.get(port) ?? absent), sampleAgeMs: Number(at - queuesCache.at) / 1e6, scanMs: queuesCache.scanMs };
+  if (queuesCache?.remotePort === remotePort && at - queuesCache.at < 50_000_000n) return { ...(queuesCache.values.get(port) ?? absent), sampleAgeMs: Number(at - queuesCache.at) / 1e6, scanMs: queuesCache.scanMs };
   try {
     const values = new Map();
-    for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) for (const [key, bytes] of tcpQueues(readFileSync(file, "utf8"))) values.set(key, { kernelBytes: bytes });
-    const scanMs = Number(process.hrtime.bigint() - at) / 1e6; queuesCache = { at, values, scanMs };
+    for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) for (const [key, bytes] of tcpQueues(readFileSync(file, "utf8"), remotePort)) values.set(key, { kernelBytes: bytes });
+    const scanMs = Number(process.hrtime.bigint() - at) / 1e6; queuesCache = { at, values, scanMs, remotePort };
     return { ...(values.get(port) ?? absent), sampleAgeMs: scanMs, scanMs };
   } catch { return { kernelBytes: { status: "unavailable", reason: "Linux /proc TCP receive queues unavailable" }, sampleAgeMs: 0, scanMs: 0 }; }
 }
@@ -122,7 +126,7 @@ export async function inject({ phase, index, target, attack, form, pool, now, re
       if (p.repeat) dripTimer = setInterval(() => { if (!socket.destroyed) { write(p.drip); row.drips++; } }, attack.everyMs);
       const midpoint = now() + Math.max(0, releaseAtMs - now()) / 2;
       await Promise.race([close, sleep(midpoint - now())]);
-      const snapshotUnread = () => { const sample = unread(row.localPort); return { atMs: now(), ...sample, nodeBytes: socket.readableLength, paused: socket.isPaused() }; };
+      const snapshotUnread = () => { const sample = unread(row.localPort, target.port); return { atMs: now(), ...sample, nodeBytes: socket.readableLength, paused: socket.isPaused() }; };
       if (p.paused && !socket.destroyed) row.unreadMidpoint = snapshotUnread();
       await Promise.race([close, sleep(releaseAtMs - now())]);
       if (p.paused && !socket.destroyed) row.unreadEnd = snapshotUnread();
