@@ -1175,15 +1175,28 @@ function uuid() {
 
 /**
  * Gives the form's submit keys (`SubmitKey::field`, `data-submit`) new values once a submission
- * has its answer, so the next submit is a new one. Until then a retry sends the same key. With
- * `empty`, only a key that has none yet (`SubmitKey::template_field`, in a form a script copied).
- * @param {HTMLFormElement} form @param {boolean} [empty]
+ * has its answer, so the next submit is a new one. Until then a retry sends the same key.
+ * @param {HTMLFormElement} form
  */
-function renewSubmitKeys(form, empty) {
+function renewSubmitKeys(form) {
   for (const field of Array.from(formProperty(form, "elements"))) {
-    if (field instanceof HTMLInputElement && field.hasAttribute("data-submit") && !(empty && field.value)) {
+    if (field instanceof HTMLInputElement && field.hasAttribute("data-submit")) {
       field.value = uuid();
     }
+  }
+}
+
+/**
+ * Gives each of the form's submit keys that has none yet (`SubmitKey::template_field`, in a form a
+ * script copied from a `<template>`) a new one. Run in the capture phase of every `submit`, before
+ * any handler of the page reads the form and before the runtime or the browser sends it, so each
+ * copy is a submission of its own. `form.submit()` fires no event and gets no key; `requestSubmit()`
+ * does.
+ * @param {HTMLFormElement} form
+ */
+function fillSubmitKeys(form) {
+  for (const field of Array.from(formProperty(form, "elements"))) {
+    if (field instanceof HTMLInputElement && !field.value && field.hasAttribute("data-submit")) field.value = uuid();
   }
 }
 
@@ -2827,18 +2840,14 @@ const sentEntries = (data) => {
 // the document, and calls it itself when one stops the submit's propagation): one that cancels
 // it stops the form, as it would without the runtime.
 addEventListener("submit", patchSubmit);
+// An empty submit key is filled first of all, in the window's capture phase: every handler of the
+// submit, and whatever sends the form, sees the key.
+addEventListener("submit", (event) => event.target instanceof HTMLFormElement && fillSubmitKeys(event.target), true);
 
-/**
- * Sends a `data-patch` form's submit as a patch, unless a handler cancelled it. Any form that is
- * sent first gets a key for each empty submit key, before the runtime or the browser reads it: a
- * script's copies of one template's form are submissions of their own.
- * @param {Event} event
- */
+/** Sends a `data-patch` form's submit as a patch, unless a handler cancelled it. @param {Event} event */
 function patchSubmit(event) {
   const form = event.target;
-  if (event.defaultPrevented || !(form instanceof HTMLFormElement)) return;
-  renewSubmitKeys(form, true);
-  if (!hasAttr(form, "data-patch")) return;
+  if (event.defaultPrevented || !(form instanceof HTMLFormElement) || !hasAttr(form, "data-patch")) return;
   const submitter = /** @type {SubmitEvent} */ (event).submitter;
   const sends = sendsAs(form, submitter);
   // A dialog's form closes the dialog and sends nothing: the browser's to do.

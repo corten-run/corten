@@ -661,16 +661,22 @@ no store); `corten_cluster::begin` takes it as its idempotency key. A field that
 `Option<SubmitKey>` when data clients post the same form without one.
 
 A form that a script makes from a `<template>` (rows of a list drawn in the browser, each with its
-own form) draws its key field with `SubmitKey::template_field(f.submit)`, which holds no key. The
-runtime gives an empty submit key a new one when its form is first sent, a `data-patch` form or a
-plain post, so each copy is a submission of its own, and from then on keeps and renews it as
-above; the app never needs the key's format. Drawn with `SubmitKey::field`, every copy would carry
-the template's one key, and the app would apply only the first copy's submit. Put it only in a
-`<template>`: without JavaScript nothing fills it, and a `SubmitKey` posted empty is refused with
-the same 422 as a malformed one (an `Option<SubmitKey>` reads it as none). A script that copies a
-form already on the page, rather than a template, empties the copy's key field
-(`field.value = ""`) so the runtime gives it one. A field with no key draws nothing at random, so a
-page whose only key fields are a template's keeps its `ETag`, which `SubmitKey::field` takes away.
+own form) draws its key field with `SubmitKey::template_field(f.submit)`, which holds no key. When
+its form is first sent, a `data-patch` form or a plain post, the runtime gives an empty submit key
+a new one before any handler of the submit runs, so each copy is a submission of its own and an
+`on:submit` handler that reads the form sees the key that is sent; the app never needs the key's
+format. A `data-patch` copy then keeps and renews its key as above. A plain post's copy keeps it
+for as long as the page does (one the back button restores still has it); a page loaded again
+copies the template again, with no key. A script that sends the form itself calls
+`form.requestSubmit()`, which fires the submit; `form.submit()` fires none, so the key is sent
+empty and refused. Drawn with `SubmitKey::field`, every copy would carry the template's one key,
+and the app would apply only the first copy's submit. Put it only in a `<template>`: without
+JavaScript nothing fills it, and a `SubmitKey` posted empty is refused with the same 422 as a
+malformed one (an `Option<SubmitKey>` reads it as none). A debug build's page that draws one
+outside a `<template>` is an error. A script that copies a form already on the page, rather than
+a template, empties the copy's key field (`field.value = ""`) so the runtime gives it one. A field
+with no key draws nothing at random, so a page whose only key fields are a template's keeps its
+`ETag`, which `SubmitKey::field` takes away.
 
 An MCP tool's input takes the same field (`submit: SubmitKey` in the struct `Tools::tool`
 reads): its `inputSchema` shows a UUID string described as an idempotency key to send again on

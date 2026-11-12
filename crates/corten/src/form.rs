@@ -1799,6 +1799,26 @@ pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> O
     })
 }
 
+/// The first submit key with no value ([`SubmitKey::template_field`]) in `html` that is not inside
+/// a `<template>`, as written: a browser without JavaScript sends it empty, and the post is
+/// refused. A page without one costs one search of its markup, and only a debug build makes it
+/// (also for a field drawn ahead, `req.rendered`, which needs nothing carried with it).
+#[cfg(debug_assertions)]
+pub(crate) fn keyless_submit_field(html: &str) -> Option<&str> {
+    const EMPTY: &str = r#"" data-submit>"#;
+    let mut from = 0;
+    while let Some(found) = html[from..].find(EMPTY) {
+        let end = from + found + EMPTY.len();
+        let before = &html[..end];
+        // Markup only: a `<` in text or a value is written `&lt;`.
+        if before.matches("<template").count() <= before.matches("</template>").count() {
+            return Some(&before[before.rfind("<input").unwrap_or(0)..]);
+        }
+        from = end;
+    }
+    None
+}
+
 /// The start tag around the attribute at `attr`'s first place in `html`, `<input .. id="x" ..>`.
 #[cfg(debug_assertions)]
 fn start_tag<'a>(html: &'a str, attr: &str) -> Option<&'a str> {

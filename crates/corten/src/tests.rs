@@ -1133,6 +1133,57 @@ async fn a_hint_with_text_that_no_control_names_is_an_error_in_a_debug_build() {
     }
 }
 
+/// A form's submit key with no value (`SubmitKey::template_field`) is for the copies a script
+/// makes of a `<template>`: drawn outside one, a browser without JavaScript sends it empty and
+/// every post is refused, so a debug build's page says so, also for one drawn ahead
+/// (`req.rendered`). Inside a template, nested too, it is not an error, and neither is it in a
+/// patch: only the runtime asks for one, and it fills the key when the form is sent.
+#[tokio::test]
+async fn a_submit_key_with_no_value_outside_a_template_is_an_error_in_a_debug_build() {
+    fn keys(case: &'static str) -> Router {
+        let field = || crate::SubmitKey::template_field(KeyedWrite::FIELDS.submit);
+        let page = move |req: Req| async move {
+            let form = || html! { <form method="post">{field()}</form> };
+            let row = || html! { <template><p>"row"</p></template> };
+            match case {
+                "template" => req.test_page("Keys", html! { <template>{form()}</template> }),
+                "nested" => req.test_page("Keys", html! { <template><div><template>{form()}</template></div></template> }),
+                "after" => req.test_page("Keys", html! { {row()}{form()} }),
+                "rendered" => {
+                    let drawn = req.rendered(form());
+                    let placed = &drawn;
+                    req.test_page("Keys", html! { {placed} })
+                }
+                _ => req.test_page("Keys", form()),
+            }
+        };
+        let patch = move |req: Req| async move {
+            let answer: HtmlResult = req.patch(html! { <form id={MsgId} method="post">{field()}</form> });
+            answer
+        };
+        App::new(Routes::from(Table::new().route("/", get(page)).route("/patch", get(patch))))
+            .dev(true)
+            .error_page(test_error_page, ())
+            .router()
+    }
+    for case in ["template", "nested"] {
+        let (status, _, body) = call(keys(case), "GET", None).await;
+        assert_eq!(status, 200, "{case}: {body}");
+        assert!(body.contains(r#"<input type="hidden" name="submit" data-submit>"#), "{case}: {body}");
+    }
+    let (status, _, body) = call_with(keys("form"), "GET", "/patch", Some("action"), None).await;
+    assert_eq!(status, 200, "patch: {body}");
+    for case in ["form", "after", "rendered"] {
+        let (status, _, body) = call(keys(case), "GET", None).await;
+        if cfg!(debug_assertions) {
+            assert_eq!(status, 500, "{case}: {body}");
+            assert!(body.contains("so a browser without JavaScript sends it empty"), "{case}: {body}");
+        } else {
+            assert_eq!(status, 200, "{case}: {body}");
+        }
+    }
+}
+
 /// What a view rendered ahead noted reaches the render it is placed in: its values beside those
 /// the outer render wrote before and after it was made, its script modules and its components.
 #[test]
