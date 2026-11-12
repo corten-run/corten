@@ -60,8 +60,8 @@ the framework itself.
 
 All of these must pass before a pull request is ready. Run each command separately (shown for
 PowerShell from the repository root; in another shell use `$PWD` for `${PWD}`,
-`checkout=$(basename "$PWD")` for the first line, and `SITE_HELD=1` before the command that
-follows the line setting it).
+`checkout=$(basename "$PWD")` for the first line, and, for the three lines of corten-site's held run, the one
+line `SITE_HELD=1 node examples/corten-site/smoke.mjs http://localhost:18488 chromium`).
 
 Each checkout builds into its own volumes, named after its folder (`corten-target-<folder>`,
 `corten-msrv-target-<folder>`), so two checkouts or worktrees never share one: every checkout is

@@ -234,7 +234,7 @@ struct Server {
     machine_memory_used_bytes: u64,
     machine_cpu_used_percent: Option<u8>,
     /// This server's part of the machine's percent: a part of all its CPUs, not of one. `null`
-    /// under a CPU limit, where the percent above is the server's already.
+    /// under a CPU limit, where the percent above is the server's group's already.
     cpu_used_percent: Option<u8>,
 }
 

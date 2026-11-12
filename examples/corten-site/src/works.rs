@@ -72,15 +72,17 @@ pub struct Machine {
     /// Whether that memory is the group's limit (its `memory.max`, which a container or a
     /// systemd unit sets): the memory in use is then the group's count, not the machine's.
     pub memory_limited: bool,
-    /// The CPUs the group holds the server to (its `cpu.max`), where it sets a limit, and never
-    /// more than the CPUs the server may run on: the CPU in use is then the group's count as a
-    /// part of this, not the machine's.
+    /// The CPUs the group holds the server to (its `cpu.max`), where it sets a limit; as the
+    /// server reads it when it starts, never more than the CPUs it may run on. The CPU in use is
+    /// then the group's count as a part of this, not the machine's.
     pub cpu_limit: Option<f64>,
     /// Whether the system counts what is in use of both, found by reading each once.
     pub metered: bool,
     /// The CPUs the machine's own count is of (`/proc/stat`): more than `cpus` where the server
     /// is kept to some of them and not by a limit.
     pub(crate) stat_cpus: usize,
+    /// The machine's memory, in bytes, whatever limit holds the server; 0 where it cannot be read.
+    pub(crate) whole_bytes: u64,
     /// The directory of the server's own control group, whose files say its limits and counts;
     /// `None` where the system has none to name, and nothing of a group's is then read.
     pub(crate) group: Option<String>,
@@ -104,6 +106,7 @@ impl Machine {
             cpu_limit: cpu_max.and_then(quota),
             metered: false,
             stat_cpus: 0,
+            whole_bytes: self::memory_bytes(meminfo, None),
             group: None,
         }
     }
@@ -142,6 +145,19 @@ impl Machine {
     /// Whether the server's group holds it to a limit, of memory or of CPU.
     pub fn held(&self) -> bool {
         self.memory_limited || self.cpu_limit.is_some()
+    }
+
+    /// The CPUs the machine has: those its own count is of, or where it has none, those the
+    /// server may use.
+    pub fn machine_cpus(&self) -> usize {
+        self.stat_cpus.max(self.cpus)
+    }
+
+    /// The CPUs the server is held to, where that is fewer than the machine's: its group's limit,
+    /// or else the count it may use, which is less where it is kept to some of them, or held by
+    /// a limit this does not look for (a group above its own, or the first version's).
+    pub fn held_cpus(&self) -> Option<f64> {
+        self.cpu_limit.or((self.cpus < self.stat_cpus).then_some(self.cpus as f64))
     }
 
     /// A file of the server's own control group, as text.
@@ -187,8 +203,9 @@ fn stat_cpus(stat: &str) -> usize {
         .count()
 }
 
-/// The CPUs a process may run on, from the `Cpus_allowed_list` of its `/proc/self/status`:
-/// `0-3,8` is five.
+/// The CPUs a process is allowed, from the `Cpus_allowed_list` of its `/proc/self/status`:
+/// `0-3,8` is five. The kernel lists every CPU the machine could have, so an unrestricted
+/// process on a machine of eight may read 128, which is why this is one of two counts.
 fn allowed_cpus(status: &str) -> Option<usize> {
     let list = status.lines().find_map(|line| line.strip_prefix("Cpus_allowed_list:"))?.trim();
     list.split(',')
@@ -694,6 +711,23 @@ mod tests {
         }
         let none = Machine::in_group(None);
         assert_eq!((none.cpu_limit, none.memory_limited, none.of_group("cpu.max")), (None, false, None));
+    }
+
+    /// A group's limit of more CPUs than the machine has is read as no more than the machine's.
+    #[test]
+    fn a_limit_is_read_as_no_more_than_the_machines_cpus() {
+        let dir = std::env::temp_dir().join(format!("corten-site-wide-group-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory to lay the group out in");
+        std::fs::write(dir.join("cpu.max"), "409600000 100000\n").expect("a file of the group's");
+        let machine = Machine::in_group(Some(dir.to_string_lossy().into_owned()));
+        std::fs::remove_dir_all(&dir).expect("the directory removed");
+        let limit = machine.cpu_limit.expect("the limit the group sets");
+        // Only a system that counts its CPUs has a count to hold the limit to.
+        if machine.stat_cpus > 0 {
+            assert!(limit <= machine.stat_cpus as f64 && limit < 4096.0, "{machine:?}");
+        } else {
+            assert_eq!(limit, 4096.0);
+        }
     }
 
     /// Which count says what is in use follows from the limits the group sets: neither, the

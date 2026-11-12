@@ -212,11 +212,11 @@ for (engine of engines) {
     check("each meter is a thin bar across its gauge", gauges.length === 2 && gauges.every((gauge) => gauge.height >= 4 && gauge.height <= 8 && gauge.width > 200), JSON.stringify(gauges.map((gauge) => [gauge.width, gauge.height])));
     check(
       "each says what it is a part of",
-      held ? /^of a limit of [\d.]+ CPUs?$/.test(cpu?.note ?? "") && /^of a limit of [\d,.]+ MiB$/.test(memory?.note ?? "") : /^this server: \d+%$/.test(cpu?.note ?? "") && /^of [\d,.]+ MiB$/.test(memory?.note ?? ""),
+      held ? cpu?.note === "of a limit of 1 CPU" && memory?.note === "of a limit of 512.0 MiB" : /^this server: \d+%$/.test(cpu?.note ?? "") && /^of [\d,.]+ MiB$/.test(memory?.note ?? ""),
       `${cpu?.note} | ${memory?.note}`,
     );
     check("the readout says how many followed at most", /^[1-9][\d,]* at most$/.test(await page.evaluate(() => [...document.querySelectorAll("dl dt")].find((dt) => dt.textContent === "Pages following this stream")?.parentElement?.lastElementChild?.textContent ?? "")));
-    check("the page says what serves it", (held ? /This server is held to [\d.]+ CPUs? and [\d,.]+ MiB of memory/ : /The machine serving you this has \d+ CPUs? and [\d,.]+ MiB of memory/).test(await page.locator("body").innerText()));
+    check("the page says what serves it", (held ? /The machine serving you this has \d+ CPUs? and [\d,.]+ MiB of memory, by the system's count[^.]*\. This server is held to 1 CPU and 512\.0 MiB of memory\./ : /The machine serving you this has \d+ CPUs? and [\d,.]+ MiB of memory, by the system's count[^.]*\. The readings/).test(await page.locator("body").innerText()));
 
     // The response read back, and the same address as JSON. A header the response lacked is
     // written in as that, in words, so every value is held to being a header's.
@@ -241,11 +241,11 @@ for (engine of engines) {
       JSON.stringify(server),
     );
     // On the machine itself this server's part is said, and is no more than the whole; under a
-    // limit the count is the server's already.
+    // limit the count is the server's group's already.
     check(
       "and whose count that is",
       held
-        ? server.machine_memory_limited === true && server.machine_cpu_limit > 0 && server.cpu_used_percent === null
+        ? server.machine_memory_limited === true && server.machine_cpu_limit === 1 && server.machine_memory_bytes === 512 * 1048576 && server.cpu_used_percent === null
         : server.machine_memory_limited === false && server.machine_cpu_limit === null && Number.isInteger(server.cpu_used_percent) && server.cpu_used_percent <= server.machine_cpu_used_percent,
       JSON.stringify(server),
     );

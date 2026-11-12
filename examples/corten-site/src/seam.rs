@@ -52,7 +52,7 @@ pub fn Seam<'a>(here: Here<'a>, plate: &'a Plate<'a>) -> impl Render {
                         " gets back only the elements that changed. Without JavaScript it posts, and the same handler answers for the whole page."
                     </p>
                     <p>
-                        "Name an app and strike its plate, and watch the strip at the bottom of the window: the patch is one request of about a kilobyte, carrying only the nameplate's HTML. The first strike also loads two small files: the nameplate's script, and the class of the DOM event it fires, generated from a Rust struct."
+                        "Name an app and strike its plate. With scripts running, the strip at the bottom of the window counts the patch: one request of about a kilobyte, carrying only the nameplate's HTML. The first strike also loads two small files: the nameplate's script, and the class of the DOM event it fires, generated from a Rust struct."
                     </p>
                     <Built on={&["HTML forms", "fetch", "303 See Other", "DOM events"][..]} />
                 </div>

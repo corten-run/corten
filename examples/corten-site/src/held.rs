@@ -10,9 +10,12 @@ const MANIFEST: &str = include_str!("../../../Cargo.toml");
 const CERT: &str = include_str!("cert.rs");
 const AFTER: &str = include_str!("after.rs");
 const SURFACE: &str = include_str!("surface.rs");
+const STEEL: &str = include_str!("steel.rs");
+const CORTEN: &str = include_str!("../../../crates/corten/Cargo.toml");
 
 /// The file that says it, what it says, the document, and what the document says.
-const HELD: [(&str, &str, &str, &str); 19] = [
+const HELD: [(&str, &str, &str, &str); 20] = [
+    (STEEL, r#"With the Cargo feature " <code>"agent"</code>"#, CORTEN, "agent = ["),
     (
         CERT,
         "2026-11-06 to 2026-11-07, at eea6adb, one DigitalOcean c-8 droplet, Xeon Platinum 8168",

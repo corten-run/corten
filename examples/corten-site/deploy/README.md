@@ -137,7 +137,8 @@ what the service file sets on the machine.
 | 3,000 asked for as gzip, 728 of them compressed | 236.2 to 237.1 MiB | 611 and 445 |
 
 Two runs of each, with 10 seconds of page loads in a run. Every stream was sent its reading each
-second, and each page is about 147,400 bytes before compression. A memory range is from the
+second, and each page is about 147,400 bytes before compression (its size moves by a few
+bytes with the digits in its readings). A memory range is from the
 reading with the streams open to the one after the page loads, over both runs; idle is over all
 twelve. The streams are held 10 seconds before the first reading where they are sent as they
 are, and 90 where they are compressed: a coder's memory is held as its window fills, and a zstd
@@ -158,11 +159,12 @@ A compressed stream holds its coder for as long as it is open. The app compresse
 a budget of its own (`crates/corten/src/compress.rs`) and sends the rest as they are, which is
 why 546 or 728 of them were compressed however many were open: the rows above are what the
 streams hold at most, about 69 MiB more as zstd and about 191 MiB more as gzip than the same
-streams sent as they are. That is the memory the server holds, about 130 KiB for each zstd
-stream and 270 KiB for each gzip one, where the budget reserves 480 KiB and 360 KiB. A
+streams sent as they are. That is the memory the server holds resident, about 130 KiB for each
+zstd stream and 270 KiB for each gzip one, where the budget reserves the 480 KiB and 360 KiB a
+coder may allocate. A
 browser asks for its stream compressed, so without a proxy in front the gzip rows are what
 readers whose browsers take no zstd would cost. `nginx.conf` therefore asks the app for a
-stream as zstd where the browser lists it, and as it is where it does not, which keeps the
+stream as zstd where the browser lists it with no q-value, and as it is otherwise, which keeps the
 machine to the zstd rows. It keeps zstd because of what a stream then sends: a reading is 1,513
 bytes as it is, and 16 bytes in a zstd stream once it is under way (41 in a gzip one), by
 reading one stream of each kind for eight seconds and taking the mean size of the pieces after
