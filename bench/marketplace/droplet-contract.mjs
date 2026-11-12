@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { groupApps, scheduledGroup } from "./groups.mjs";
+import { parsePart, partName, splitApps } from "./run-contract.mjs";
 
 export const nightly = Object.freeze({ passes: 3, duration: 15, warmup: 10, rate: 150 });
 export function officialRound(round) {
@@ -16,24 +17,34 @@ export function parseDropletArgs(args) {
     else if (["--ssh-key", "--state-dir", "--group"].includes(flag)) {
       const value = args[++i]; assert.ok(value && !value.startsWith("--"), `${flag} needs a value`);
       options[flag === "--ssh-key" ? "sshKey" : flag === "--group" ? "group" : "stateDir"] = value;
+    } else if (flag === "--droplets") {
+      // A round split across n droplets started together (#816); 1 is the whole round on one.
+      const value = args[++i]; assert.match(value ?? "", /^[1-9]\d*$/, "--droplets needs a count");
+      if (Number(value) > 1) options.droplets = Number(value);
     } else throw new Error(`unknown option ${flag}`);
   }
   assert.ok(options.stateDir, "--state-dir is required (durable launcher state, outside the checkout)");
   assert.ok(options.collect ? !options.detach && !options.plan : options.detach || options.plan, "use --detach to launch, or --collect");
+  assert.ok(!(options.collect && seen.has("--droplets")), "--collect reads the split from the state directory's split.json; omit --droplets");
   assert.ok(options.collect || /^\d+$/.test(options.sshKey ?? ""), "--ssh-key needs a DigitalOcean key id");
   assert.ok(!options.collect || options.group === undefined, "collection uses the reserved group, never a new selection");
   if (!options.collect) { options.group ??= scheduledGroup(options.round); groupApps(options.group); }
+  // A split deals the group's candidates: at most one besides Corten per droplet.
+  if (options.droplets) splitApps(options.group, options.droplets);
   return options;
 }
 export function validateState(s, round) {
   officialRound(round);
+  // One droplet's part of a split round (#816) is named for it: corten-marketplace-r17-d2.
+  const part = s.part === undefined ? null : parsePart(s.part);
   assert.equal(s.round, round); assert.equal(s.workload, "marketplace-v2");
-  assert.equal(s.name, `corten-marketplace-${round}`); assert.equal(s.unit, `${s.name}.service`);
+  assert.equal(s.name, `corten-marketplace-${partName(round, part)}`); assert.equal(s.unit, `${s.name}.service`);
   assert.match(s.tag, /^corten-marketplace-run-[a-f0-9]{16}$/);
   assert.match(s.commit, /^[a-f0-9]{40}$/);
   assert.deepEqual(s.options, nightly);
+  assert.ok(!part || s.group !== undefined, "a part of a split round splits a named group");
   if (s.group !== undefined) {
-    assert.deepEqual(s.apps, groupApps(s.group), "reserved group membership changed");
+    assert.deepEqual(s.apps, part ? splitApps(s.group, part.of)[part.index - 1] : groupApps(s.group), "reserved group membership changed");
   } else assert.equal(s.apps, undefined, "legacy reservations have no group selection");
   if (s.id !== undefined) assert.match(s.id, /^\d+$/);
   if (s.ip !== undefined) assert.match(s.ip, /^\d{1,3}(?:\.\d{1,3}){3}$/);
@@ -54,8 +65,8 @@ export function terminalUnit(output) {
   assert.equal(fields.Restart, "no", "unexpected restart policy; refusing collection and deletion");
   return ["inactive", "failed"].includes(fields.ActiveState);
 }
-export function safeArchive(entries, verbose, round) {
-  const root = `repo/bench/marketplace/results/${officialRound(round)}`;
+export function safeArchive(entries, verbose, round, part = null) {
+  const root = `repo/bench/marketplace/results/${officialRound(round)}${part ? `/d${parsePart(part).index}` : ""}`;
   for (const entry of entries.trim().split(/\r?\n/)) {
     assert.ok(entry && !/[\\:]/.test(entry) && !entry.startsWith("/") && !entry.split("/").some((s) => s === ".." || s === "."), "unsafe archive member");
     assert.ok(["run.log", "host.txt", "exit-code"].includes(entry) || entry === root || entry.startsWith(`${root}/`), `unexpected archive member ${entry}`);
@@ -64,13 +75,16 @@ export function safeArchive(entries, verbose, round) {
 }
 export function remoteFiles(s) {
   validateState(s, s.round);
+  // A part of a split round (#816) runs its share (run.mjs --part) into results/<round>/d<k>.
+  const results = `repo/bench/marketplace/results/${s.round}${s.part ? `/d${s.part.index}` : ""}`;
+  const part = s.part ? ` --part ${s.part.index}/${s.part.of}` : "";
   const pack = `#!/bin/bash
 set -euo pipefail
 cd /bench
 test -f exit-code || systemctl show ${s.unit} --value --property=ExecMainStatus > exit-code
 files=(run.log exit-code)
 test ! -f host.txt || files+=(host.txt)
-test ! -d repo/bench/marketplace/results/${s.round} || files+=(repo/bench/marketplace/results/${s.round})
+test ! -d ${results} || files+=(${results})
 tar -czf results.tgz.tmp "\${files[@]}"
 mv results.tgz.tmp results.tgz
 `;
@@ -100,11 +114,11 @@ test "$(nproc)" -ge 8
 timeout 900 npm ci --no-audit --no-fund
 node bench/marketplace/fixtures.mjs
 export MARKETPLACE_APP_CPUS=1 MARKETPLACE_API_CPUS=2-3 MARKETPLACE_LOAD_CPUS=4-7
-node bench/marketplace/run.mjs ${s.round} --build --passes ${nightly.passes} --duration ${nightly.duration} --warmup ${nightly.warmup} --rate ${nightly.rate}${s.group === undefined ? "" : ` --group ${s.group}`}
-node bench/marketplace/report.mjs bench/marketplace/results/${s.round}/summary.json > /bench/report.md
+node bench/marketplace/run.mjs ${s.round} --build --passes ${nightly.passes} --duration ${nightly.duration} --warmup ${nightly.warmup} --rate ${nightly.rate}${s.group === undefined ? "" : ` --group ${s.group}`}${part}
+node bench/marketplace/report.mjs ${results.slice("repo/".length)}/summary.json > /bench/report.md
 `;
   const unit = `[Unit]
-Description=Localized marketplace ${s.round}, ${s.group ?? "full"} group, three passes
+Description=Localized marketplace ${s.round}${s.part ? ` d${s.part.index} of ${s.part.of}` : ""}, ${s.group ?? "full"} group, three passes
 After=network-online.target
 Wants=network-online.target
 [Service]
@@ -117,4 +131,54 @@ TimeoutStopSec=120
 KillMode=control-group
 `;
   return { "job.sh": job, "pack.sh": pack, [s.unit]: unit };
+}
+
+/**
+ * A split round's plan (#816), split.json in the launcher's state directory, written once before
+ * any droplet: the measured commit, decided once for every droplet, the named group it splits, and
+ * each droplet's name and candidates (splitApps). Each droplet's launcher state is d<k>/state.json
+ * beside it.
+ */
+export function validatePlan(plan, round) {
+  officialRound(round);
+  assert.deepEqual(Object.keys(plan ?? {}).sort(), ["commit", "createdAt", "droplets", "group", "options", "parts", "round", "workload"], "unexpected split plan fields");
+  assert.equal(plan.workload, "marketplace-v2"); assert.equal(plan.round, round);
+  assert.match(plan.commit, /^[a-f0-9]{40}$/);
+  assert.deepEqual(plan.options, nightly);
+  const shares = splitApps(plan.group, plan.droplets);
+  assert.deepEqual(plan.parts, shares.map((apps, i) => ({ index: i + 1, name: `corten-marketplace-${round}-d${i + 1}`, apps })), "split plan parts are not the split of the group's candidates");
+  return plan;
+}
+export function splitPlan(round, group, droplets, commit, createdAt = new Date().toISOString()) {
+  return validatePlan({ workload: "marketplace-v2", round, group, droplets, commit, createdAt, options: nightly,
+    parts: splitApps(group, droplets).map((apps, i) => ({ index: i + 1, name: `corten-marketplace-${round}-d${i + 1}`, apps })) }, round);
+}
+/**
+ * The exit code of a split round's collection from each droplet's (#816). Each is a collect()
+ * code (0 done, 1 partial, 3 still running), 2 for a collection error, or "missing" for a part
+ * that was never created. A collection error, a leftover droplet or any other code is 2, like one
+ * droplet's; then 3 while any still runs; then 1 when any is partial or missing. 0 only when every
+ * droplet finished, was collected and deleted: the round can merge.
+ * @param {(number | "missing")[]} codes @param {number} leftovers droplets reported by leftoverDroplets
+ */
+export function splitExit(codes, leftovers = 0) {
+  if (leftovers || codes.some((c) => ![0, 1, 3, "missing"].includes(c))) return 2;
+  if (codes.includes(3)) return 3;
+  if (codes.includes(1) || codes.includes("missing")) return 1;
+  return 0;
+}
+/**
+ * Droplets named for this round's parts (corten-marketplace-<round>-d*) that no live part state
+ * owns: an extra or duplicate, one for a part never reserved, or one still listed after its
+ * part's deletion was confirmed. Each is reported, never deleted: it is not proven to be ours.
+ * @param {object[]} droplets doctl's list @param {object} plan @param {(object | null)[]} states d1 first
+ */
+export function leftoverDroplets(droplets, plan, states) {
+  const prefix = `corten-marketplace-${plan.round}-d`;
+  return droplets.filter((d) => typeof d.name === "string" && d.name.startsWith(prefix)).filter((d) => {
+    const k = plan.parts.findIndex((p) => p.name === d.name);
+    const s = states[k];
+    if (k === -1 || !s || s.destroyedAt) return true;
+    return !(s.id ? String(d.id) === s.id : d.tags?.includes(s.tag));
+  });
 }

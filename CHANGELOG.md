@@ -22,6 +22,25 @@ Corten is pre-1.0, so any minor version may change the API.
   behind the page (one fragment shader, drawn after weathering steel) in Chromium, where it also
   reads that the plate is no brighter under the steel's type than the type can stand.
 
+- A nightly `bench/marketplace` group round can be split across droplets started together:
+  `droplet.mjs rN --droplets <n> --detach` checks the checkout, existing droplets and the
+  account's droplet limit once, writes the plan (commit, group and each droplet's candidates) and
+  creates every droplet before starting any, holding `launch.lock` so collect waits for a live
+  launch and a hangup does not stop it. Each droplet runs Corten beside a round-robin share of
+  the group's other candidates (`run.mjs --group <g> --part k/n`), qualifies them with the
+  group's feature contract and times only those it admits; a droplet with no admitted peer fails
+  its part. `--collect` collects and deletes each droplet as it finishes, reports any leftover
+  droplet, prints the command that stops each running droplet once one that never started, is
+  partial or is missing means the round cannot merge, and merges the round only when every
+  droplet has finished clean and every candidate of the group is accounted for once, admitted and
+  measured or excluded with its evidence; parts that did not run together, or share a run, do not
+  merge. The report shows each droplet's CPU and Corten in
+  every table, each candidate's ratio to the Corten on its own droplet (`-` where either stage
+  stopped), and flags a stage where
+  Corten's own numbers differ between droplets beyond the pass ranges. A one-droplet round runs,
+  reports and compares as before, and a split round compares only with one split the same way,
+  each row naming its droplet
+  ([#816 A bench round runs every app in sequence on one droplet, so its wall time grows with each app, tier and repeat, and it cannot be split across droplets and still compared](https://github.com/corten-run/corten/issues/816)).
 - Feature-qualified marketplace comparison groups: popular and performance-oriented
   candidate pools share one deduplicated production run instead of timing the full inventory
   each night. Both sources must satisfy the same scoped production checklist, then the full

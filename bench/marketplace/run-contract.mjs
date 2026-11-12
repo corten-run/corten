@@ -39,6 +39,47 @@ export function roundIdentity(round) {
   assert.equal(round, `${round[0]}${number}`, "round identity must be canonical, with no whitespace or padding");
   return { kind: round[0] === "r" ? "official" : "development", number };
 }
+// A round split across droplets started together (#816) splits one named group (groups.mjs). Every
+// droplet runs Corten, the subject, so each candidate is compared with a Corten measured on its own
+// machine; the group's other candidates are dealt round-robin in the group's order, so each runs on
+// exactly one droplet. No other app is added: admission (feature-contract.mjs) decides, on each
+// droplet, which of its candidates are timed.
+export const splitSubject = "corten";
+// At most one candidate besides Corten per droplet.
+export const maxDroplets = (group) => groupApps(group).length - 1;
+/**
+ * The candidates each droplet of a group's round split n ways qualifies and, if admitted, measures:
+ * Corten on every droplet and each other candidate on exactly one, in the group's order.
+ * @param {string} group a named group from groups.mjs
+ * @param {number} n droplets, 2 to maxDroplets(group)
+ * @returns {string[][]} one list per droplet, d1 first
+ */
+export function splitApps(group, n) {
+  assert.ok(group !== undefined, "a split round splits a named group; pass --group");
+  const candidates = groupApps(group), max = maxDroplets(group);
+  assert.ok(Number.isSafeInteger(n) && n >= 2 && n <= max, `group ${group} splits across 2 to ${max} droplets`);
+  const shares = Array.from({ length: n }, () => new Set([splitSubject]));
+  candidates.filter((app) => app !== splitSubject).forEach((app, i) => shares[i % n].add(app));
+  return shares.map((share) => candidates.filter((app) => share.has(app)));
+}
+/**
+ * One droplet's part of a split round, from run.mjs --part k/n or saved state: {index: k, of: n}.
+ * splitApps checks n against the group.
+ * @param {string | {index: number, of: number}} value
+ */
+export function parsePart(value) {
+  const part = typeof value === "string" ? (() => {
+    assert.match(value, /^[1-9]\d*\/[1-9]\d*$/, "--part needs k/n, for example 2/3");
+    const [index, of] = value.split("/").map(Number);
+    return { index, of };
+  })() : value;
+  assert.deepEqual(Object.keys(part ?? {}).sort(), ["index", "of"], "a part is {index, of}");
+  assert.ok(Number.isSafeInteger(part.of) && part.of >= 2, "a split round has at least two droplets");
+  assert.ok(Number.isSafeInteger(part.index) && part.index >= 1 && part.index <= part.of, `part ${part.index} of ${part.of} does not exist`);
+  return { index: part.index, of: part.of };
+}
+// The name of a round's part: r17-d2, or the round itself when it is not split.
+export const partName = (round, part) => (part ? `${round}-d${part.index}` : round);
 export function parseArgs(args, inventory) {
   const identity = roundIdentity(args[0]);
   const rest = args.slice(1), at = rest.indexOf("--group");
@@ -49,17 +90,25 @@ export function parseArgs(args, inventory) {
     assert.ok(!rest.includes("--apps"), "--group cannot be combined with --apps");
     rest.splice(at, 2);
   }
+  // --part k/n measures one droplet's share of a split group round (#816); it sets the apps itself.
+  const pat = rest.indexOf("--part");
+  const part = pat === -1 ? null : parsePart(rest[pat + 1] ?? "");
+  if (part) {
+    rest.splice(pat, 2);
+    assert.ok(!rest.includes("--part"), "duplicate option --part");
+    assert.ok(group !== undefined, "--part splits a named group; pass --group");
+  }
   const options = catalogArgs([args[0].replace(/^[rw]/, "c"), ...rest], inventory);
   if (group !== undefined) {
-    options.group = group; options.apps = groupApps(group);
+    options.group = group; options.apps = part ? splitApps(group, part.of)[part.index - 1] : groupApps(group);
     assert.ok(options.apps.every((a) => Object.hasOwn(inventory, a)), "group adapter missing from inventory");
   }
   if (identity.kind === "official") {
-    assert.deepEqual([...options.apps].sort(), groupApps(group).sort(), "official rounds require the complete named group; use wN for development");
+    assert.deepEqual([...options.apps].sort(), (part ? splitApps(group, part.of)[part.index - 1] : groupApps(group)).sort(), "official rounds require the complete named group, or with --part its share; use wN for development");
     assert.equal(options.passes, 3, "official rounds require three passes");
     assert.equal(options.checkOnly, false, "use wN for check-only development");
   }
-  return { ...options, round: args[0] };
+  return { ...options, round: args[0], ...(part ? { part } : {}) };
 }
 // A phase as measured, with what the app could not serve under its profile (#1128): requests
 // that failed (any answer but a 200) or timed out, and fixed-rate iterations k6 could not start,
