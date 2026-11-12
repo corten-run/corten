@@ -33,7 +33,13 @@ browser/content gates remain mandatory. Candidates missing production parity sta
 report with their missing features and are not timed. The existing scheduled `production`
 selection and historical reservations are unchanged while native parity work is completed.
 
-Other groups remain pending runner/adapter integration. Their presence in this registry is
+The catalog runner accepts `--group catalog-page` for page-only timing of the exact registry
+selection in both sources, with its stronger native page and JSON correctness gates retained.
+Its versioned group evidence binds checks and timing to each immutable image and verifies
+after-run provenance and saved aggregates. This is a native runner integration, not a passing
+group result or a cloud launcher; see the [catalog procedure](../catalog/README.md).
+
+Remaining groups stay pending runner/adapter integration. Their presence in this registry is
 not a claim that a new benchmark ran, that all native features exist, or that historical
 measurements are interchangeable. The mixed and live contract modules are testable oracles,
 not substitutes for native adapter implementation, browser captures or load evidence.
@@ -104,6 +110,21 @@ equivalent total budgets. Unavailable counters stay unavailable, never numeric z
 
 Run all shared contract checks with `npm run check:workloads`. None of these offline checks
 establishes build-time, instruction-count, browser-interactivity or load-test results.
+
+`json-check.mjs` is a native HTTP correctness gate, not a load runner. `checkJsonApp` exercises
+every record against either the catalog or marketplace schema without requesting HTML or
+requiring forms. The caller retains raw responses through its required observer. Missing
+records and upstream errors need JSON representations, but no common error-body format is
+imposed. HTTP-source probes change upstream records and check exactly one upstream read
+for every record in the complete sweep and each subsequent probe. Wire formatting cannot
+prove native parse/reserialize work: a pretty serializer is valid, while a byte forwarder
+can manipulate whitespace. The gate therefore leaves `nativeSerializationVerified` and
+`readyForLoad` false and requires independent native source/serializer verification.
+Catalog's current upstream
+does not inject redirects; its result explicitly says redirects were not tested. Marketplace
+also tests refusal of upstream redirects. These checks do not establish production middleware
+parity, process provenance or measurement readiness, and do not substitute AOT for ordinary
+ASP.NET Core. Unit tests use a deliberately small test server, not a comparative adapter.
 
 ## Retained evidence
 

@@ -12,6 +12,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- A catalog-page workload-group runner with page-only timing in both sources, retained native
+  page and JSON correctness gates, immutable image bindings and checked after-run provenance
+  and aggregates. Legacy catalog rounds keep their original validation. A separate JSON-only
+  functional gate checks complete catalog and marketplace records, uncached upstream work
+  and JSON errors without imposing page features; native serialization still requires source
+  verification. Neither integration establishes a new baseline or cloud-run readiness.
+
 - Offline correctness contracts for the approved mixed-traffic, live-delivery,
   recoverable-live and hardening groups. They preserve native transport/form behavior,
   independent state readback, bounded-resource cleanup and explicit failure outcomes.
