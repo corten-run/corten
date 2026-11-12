@@ -226,15 +226,23 @@ container: with the workflow's options as of `d916a1b61`, `ssh` gave up 17 secon
 freeze mid-session, and a new connection after 10 (one run). The ship step was not run against a
 machine that freezes.
 
-`provision.sh` was then run whole, as it is at `98ddffbcc`, in an Ubuntu 24.04 container with
-systemd as its first process and a self-signed certificate already where certbot would put
-one, since Let's Encrypt cannot reach a container. It installed its packages, made the `deploy`
-user, enabled the firewall and the service, and left nginx answering 308 on port 80 and 502 on
-443. The workflow's ship step, as written, then shipped a release there over SSH with the
-deploy key: the service started under systemd with the unit's sandbox, and the page, its JSON
-and its live stream answered through nginx as the commit. Linting the script before that run
-found that it never read its second argument (in `sh` the apostrophes in two of its messages
-paired across the lines between them), which `98ddffbcc` fixes.
+`provision.sh` was then run, as it is at `c49e6ba37`, in an Ubuntu 24.04 container with systemd
+as its first process and none of sudo, sshd or nginx installed, and with a self-signed
+certificate already where certbot would put one, since Let's Encrypt cannot reach a container.
+With a certificate there the script skips the lines that ask for one, which are also the only
+lines that read the email address: those lines have not been run. The rest finished: it
+installed its packages, made the `deploy` user, enabled the firewall and the service, and
+started nginx, which answered 308 on port 80 and 502 on 443. Run again with nginx stopped, it
+started it again. The text of the workflow's ship step then shipped a release there over SSH
+with the deploy key, run by bash with the three `GITHUB_` values it reads set by hand, the
+certificate trusted and the name in a hosts file on the client, and sshd started by hand (a
+package does not start its service in a container): the service started under systemd with the
+unit's sandbox, and the page, its JSON and its live stream answered through nginx as the commit.
+
+Linting the script before those runs found that it never read its second argument: two of its
+messages each held an apostrophe, which `sh` and bash pair across the two lines. `98ddffbcc`
+fixes that, shown by running those lines in Ubuntu 24.04's `sh`; the runs above skip the one
+place the argument is used, so they could not show it.
 
 certbot's request for a certificate and the workflow on GitHub have not been run from this
 repository yet: the first deploy is their test.
