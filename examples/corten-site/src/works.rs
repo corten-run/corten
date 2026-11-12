@@ -79,7 +79,7 @@ pub struct Machine {
     /// Whether the system counts what is in use of both, found by reading each once.
     pub metered: bool,
     /// The CPUs the machine's own count is of (`/proc/stat`): more than `cpus` where the server
-    /// is kept to some of them and not by a limit.
+    /// may use only some of them.
     pub(crate) stat_cpus: usize,
     /// The machine's memory, in bytes, whatever limit holds the server; 0 where it cannot be read.
     pub(crate) whole_bytes: u64,
@@ -112,11 +112,15 @@ impl Machine {
     }
 
     fn read() -> Self {
-        Machine::in_group(system("/proc/self/cgroup").as_deref().and_then(group_dir))
+        Machine::in_group(
+            system("/proc/self/cgroup").as_deref().and_then(group_dir),
+            system("/proc/self/status").as_deref().and_then(allowed_cpus),
+        )
     }
 
-    /// The machine as a server in this control group reads it; one in no group reads no limit.
-    fn in_group(group: Option<String>) -> Self {
+    /// The machine as a server in this control group reads it, allowed so many CPUs where the
+    /// system says; one in no group reads no limit.
+    fn in_group(group: Option<String>, allowed: Option<usize>) -> Self {
         let own = Machine { group, ..Machine::default() };
         let mut machine = Machine::counted(
             std::thread::available_parallelism().map_or(0, usize::from),
@@ -127,7 +131,6 @@ impl Machine {
         machine.group = own.group;
         machine.stat_cpus = system("/proc/stat").as_deref().map_or(0, stat_cpus);
         // A limit of more CPUs than the server may run on holds it to those it may run on.
-        let allowed = system("/proc/self/status").as_deref().and_then(allowed_cpus);
         machine.cpu_limit = within(machine.cpu_limit, [allowed, Some(machine.stat_cpus)]);
         machine.named =
             std::env::var("CORTEN_SITE_MACHINE").ok().map(|named| named.trim().to_string()).filter(|named| !named.is_empty());
@@ -153,9 +156,11 @@ impl Machine {
         self.stat_cpus.max(self.cpus)
     }
 
-    /// The CPUs the server is held to, where that is fewer than the machine's: its group's limit,
-    /// or else the count it may use, which is less where it is kept to some of them, or held by
-    /// a limit this does not look for (a group above its own, or the first version's).
+    /// The CPUs the server is held to: its group's limit, whatever the machine has, since the
+    /// CPU in use is then counted against it; or else the count it may use (`cpus`), where that
+    /// is fewer than the machine's. That count is the standard library's: the CPUs the server is
+    /// kept to, or a quota this does not look for (a group above its own, or the first
+    /// version's) rounded down to whole CPUs.
     pub fn held_cpus(&self) -> Option<f64> {
         self.cpu_limit.or((self.cpus < self.stat_cpus).then_some(self.cpus as f64))
     }
@@ -700,7 +705,7 @@ mod tests {
         for (file, text) in files {
             std::fs::write(dir.join(file), text).expect("a file of the group's");
         }
-        let machine = Machine::in_group(Some(dir.to_string_lossy().into_owned()));
+        let machine = Machine::in_group(Some(dir.to_string_lossy().into_owned()), None);
         let (spent, used) = (machine.spent(), machine.used_bytes(0));
         std::fs::remove_dir_all(&dir).expect("the directory removed");
         assert_eq!((machine.cpu_limit, spent), (Some(0.5), Some(Spent::Group(2_300_000))), "{machine:?}");
@@ -709,18 +714,21 @@ mod tests {
             assert!(machine.memory_limited && machine.metered, "{machine:?}");
             assert_eq!((machine.memory_bytes, used), (268_435_456, 14_000_000));
         }
-        let none = Machine::in_group(None);
+        let none = Machine::in_group(None, None);
         assert_eq!((none.cpu_limit, none.memory_limited, none.of_group("cpu.max")), (None, false, None));
     }
 
-    /// A group's limit of more CPUs than the machine has is read as no more than the machine's.
+    /// A group's limit of more CPUs than the machine has, or than the server is allowed, is read
+    /// as no more than either.
     #[test]
-    fn a_limit_is_read_as_no_more_than_the_machines_cpus() {
+    fn a_limit_is_read_as_no_more_than_the_cpus_there_are() {
         let dir = std::env::temp_dir().join(format!("corten-site-wide-group-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a directory to lay the group out in");
         std::fs::write(dir.join("cpu.max"), "409600000 100000\n").expect("a file of the group's");
-        let machine = Machine::in_group(Some(dir.to_string_lossy().into_owned()));
+        let group = || Some(dir.to_string_lossy().into_owned());
+        let (machine, allowed_one) = (Machine::in_group(group(), None), Machine::in_group(group(), Some(1)));
         std::fs::remove_dir_all(&dir).expect("the directory removed");
+        assert_eq!(allowed_one.cpu_limit, Some(1.0), "{allowed_one:?}");
         let limit = machine.cpu_limit.expect("the limit the group sets");
         // Only a system that counts its CPUs has a count to hold the limit to.
         if machine.stat_cpus > 0 {

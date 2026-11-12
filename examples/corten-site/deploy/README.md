@@ -205,7 +205,9 @@ container the server's group is the root of the groups it sees, so those runs re
 service file given `MemoryMax=` or `CPUQuota=`) is held by a test that lays a group's files out
 in a directory, and has not been run under systemd. A limit set on a group above the server's
 own, or by the first version of control groups, is not looked for: the gauges are then the
-machine's, and read low with the server at that limit. It has not run under the service file's
+machine's, and read low with the server at that limit; the page then says the server is held
+to the CPUs the standard library counts for it, a quota rounded down to whole CPUs, and says no
+limit of memory. It has not run under the service file's
 sandbox on a real machine: if the two gauges are missing there, the unit is keeping the server
 from `/proc/stat` or `/proc/meminfo`.
 

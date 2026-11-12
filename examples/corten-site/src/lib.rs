@@ -224,9 +224,11 @@ struct Server {
     memory_held_bytes: u64,
     machine_memory_bytes: u64,
     machine_cpus: usize,
-    /// Whether that memory is a limit the server's control group holds it to, and the CPUs it holds it
-    /// to (`null` with no limit). Each decides whose count the reading under it is.
-    machine_memory_limited: bool,
+    /// The CPUs the server may use: fewer than the machine's where it is kept to some of them.
+    server_cpus: usize,
+    /// The memory and the CPUs the server's control group holds it to (`null` with no limit).
+    /// Each decides whose count the reading under it is.
+    machine_memory_limit_bytes: Option<u64>,
     machine_cpu_limit: Option<f64>,
     /// How much is in use: of the machine, by everything on it, or of a limit, by what the
     /// group holds. 0 where the system does not count, and the percent is `null` there and
@@ -257,9 +259,10 @@ impl<'a> Sheet<'a> {
                 pages_a_second: pulse.pages_a_second,
                 most_pages_following: pulse.most_followers,
                 memory_held_bytes: pulse.held_bytes,
-                machine_memory_bytes: machine.memory_bytes,
-                machine_cpus: machine.cpus,
-                machine_memory_limited: machine.memory_limited,
+                machine_memory_bytes: machine.whole_bytes,
+                machine_cpus: machine.machine_cpus(),
+                server_cpus: machine.cpus,
+                machine_memory_limit_bytes: machine.memory_limited.then_some(machine.memory_bytes),
                 machine_cpu_limit: machine.cpu_limit,
                 machine_memory_used_bytes: pulse.used.memory_bytes,
                 machine_cpu_used_percent: pulse.used.cpu,
@@ -462,8 +465,10 @@ mod tests {
         for part in [
             r#""pages_a_second":12"#,
             r#""most_pages_following":3"#,
-            r#""machine_memory_bytes":536870912"#,
-            r#""machine_memory_limited":true"#,
+            r#""machine_memory_bytes":12544798720"#,
+            r#""machine_cpus":1"#,
+            r#""server_cpus":1"#,
+            r#""machine_memory_limit_bytes":536870912"#,
             r#""machine_cpu_limit":0.5"#,
             r#""machine_memory_used_bytes":209715200"#,
             r#""machine_cpu_used_percent":41"#,
@@ -474,7 +479,12 @@ mod tests {
         let whole = works::Machine::counted(8, meminfo, None, None);
         let pulse = works::Pulse { used: works::Used { cpu: Some(41), cpu_own: Some(7), memory_bytes: 1 }, ..pulse };
         let data = Sheet::new(&pulse, &whole, None).to_json();
-        for part in [r#""machine_memory_limited":false"#, r#""machine_cpu_limit":null"#, r#""cpu_used_percent":7"#] {
+        for part in [
+            r#""machine_memory_limit_bytes":null"#,
+            r#""machine_cpu_limit":null"#,
+            r#""machine_cpus":8"#,
+            r#""cpu_used_percent":7"#,
+        ] {
             assert!(data.contains(part), "the JSON lacks {part}: {data}");
         }
     }

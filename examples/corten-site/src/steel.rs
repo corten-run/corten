@@ -95,47 +95,48 @@ pub fn Steel<'a>(here: Here<'a>, pulse: &'a Pulse, binary_bytes: u64, machine: &
                     "That is the whole site: server, runtime, scripts, styles and images, compiled into one program. A Corten app has no JavaScript build step, and "
                     <code>"static/"</code> " ships inside the binary."
                 </p>
-                if machine.memory_bytes > 0 {
-                    <Host machine={machine} />
-                }
+                <Host machine={machine} />
             </div>
         </div>
     }
 }
 
 /// What the server has to work with, by the system's count, and what whoever runs it calls it:
-/// the machine, and then what of it the server is held to, where that is less: each of the CPUs
-/// and the memory on its own, since a container or a unit may limit one and not the other.
-/// It points at the gauges only where they are of the CPUs the server may use.
+/// the machine, and then what the server is held to (`Machine::held_cpus`, and a limit of
+/// memory less than the machine's), each of the CPUs and the memory on its own, since a
+/// container or a unit may limit one and not the other. It points at the gauges only where
+/// they are of the CPUs the server may use, and is not drawn where the system counts neither.
 #[component]
 fn Host<'a>(machine: &'a Machine) -> impl Render {
     let (held_cpus, held_memory) = (machine.held_cpus().map(cpus), machine.memory_limited.then_some(machine.memory_bytes));
     html! {
-        <p>
-            "The machine serving you this has " {cpus(machine.machine_cpus() as f64)} " and "
-            {megabytes(machine.whole_bytes)} " MiB of memory, by the system's count"
-            for named in machine.named.iter() {
-                ": " {named.as_str()}
-            }
-            "."
-            if held_cpus.is_some() || held_memory.is_some() {
-                " This server is held to "
-                for count in held_cpus.iter() {
-                    {count.as_str()}
-                }
-                if held_cpus.is_some() && held_memory.is_some() {
-                    " and "
-                }
-                for bytes in held_memory.iter() {
-                    {megabytes(*bytes)}
-                    " MiB of memory"
+        if machine.whole_bytes > 0 && machine.machine_cpus() > 0 {
+            <p>
+                "The machine serving you this has " {cpus(machine.machine_cpus() as f64)} " and "
+                {megabytes(machine.whole_bytes)} " MiB of memory, by the system's count"
+                for named in machine.named.iter() {
+                    ": " {named.as_str()}
                 }
                 "."
-            }
-            if machine.counts_its_cpus() {
-                " The readings above say how much of each is in use."
-            }
-        </p>
+                if held_cpus.is_some() || held_memory.is_some() {
+                    " This server is held to "
+                    for count in held_cpus.iter() {
+                        {count.as_str()}
+                    }
+                    if held_cpus.is_some() && held_memory.is_some() {
+                        " and "
+                    }
+                    for bytes in held_memory.iter() {
+                        {megabytes(*bytes)}
+                        " MiB of memory"
+                    }
+                    "."
+                }
+                if machine.counts_its_cpus() {
+                    " The readings above say how much of each is in use."
+                }
+            </p>
+        }
     }
 }
 
@@ -299,7 +300,7 @@ pub fn Readout<'a>(pulse: &'a Pulse, machine: &'a Machine) -> impl Render {
                                 <meter
                                     class={Bar}
                                     aria-labelledby={MemoryUsedId}
-                                    aria-valuetext={format!("{in_use} of {} MiB", megabytes(machine.memory_bytes))}
+                                    aria-valuetext={format!("{in_use} of {}{} MiB", if machine.memory_limited { "a limit of " } else { "" }, megabytes(machine.memory_bytes))}
                                     min="0"
                                     max="100"
                                     high="80"
@@ -441,6 +442,7 @@ mod tests {
         assert!(held.contains(r#"value="85""#) && held.contains(r#"value="98""#) && !held.contains("this machine"), "{held}");
         // A meter is read as its label and its value, so under a limit the value says of what.
         assert!(held.contains(r#"aria-valuetext="85% of a limit of 0.5 CPU""#), "{held}");
+        assert!(held.contains(r#"aria-valuetext="250.0 of a limit of 256.0 MiB""#), "{held}");
         assert_eq!(whole.matches("aria-valuetext").count(), 1, "{whole}");
         // One limit alone changes its own gauge and leaves the other the machine's.
         let memory = draw(&metered(Some("268435456\n"), None), used(Some(41), Some(31), 200 << 20));
@@ -493,6 +495,11 @@ mod tests {
             host(&on(8, None, Some("50000 100000\n"))),
             format!("{MACHINE}8 CPUs and 457.4 MiB of memory, by the system's count. This server is held to 0.5 CPU.{GAUGES}")
         );
+        // Where the machine's own count has no CPUs, they are those the server may use; where
+        // the system counts neither CPUs nor memory, nothing is said.
+        assert!(host(&on(0, None, None)).starts_with(&format!("{MACHINE}1 CPU and 457.4 MiB")));
+        assert_eq!((host(&Machine::default()), host(&Machine { cpus: 4, ..Machine::default() })), (String::new(), String::new()));
+        assert_eq!(host(&Machine { cpus: 0, ..on(0, None, None) }), "");
         // A limit of all the machine has is still the group's count, and is said.
         assert!(
             host(&on(1, None, Some("100000 100000\n")))

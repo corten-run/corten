@@ -216,7 +216,15 @@ for (engine of engines) {
       `${cpu?.note} | ${memory?.note}`,
     );
     check("the readout says how many followed at most", /^[1-9][\d,]* at most$/.test(await page.evaluate(() => [...document.querySelectorAll("dl dt")].find((dt) => dt.textContent === "Pages following this stream")?.parentElement?.lastElementChild?.textContent ?? "")));
-    check("the page says what serves it", (held ? /The machine serving you this has \d+ CPUs? and [\d,.]+ MiB of memory, by the system's count[^.]*\. This server is held to 1 CPU and 512\.0 MiB of memory\./ : /The machine serving you this has \d+ CPUs? and [\d,.]+ MiB of memory, by the system's count[^.]*\. The readings/).test(await page.locator("body").innerText()));
+    // A machine that gives a container fewer CPUs than it has is one the page says so of, so
+    // only a limit of memory is held to being absent with no limit set.
+    const hosted = (await page.locator("body").innerText()).match(/The machine serving you this has (\d+) CPUs? and ([\d,.]+) MiB of memory, by the system's count.*/)?.map(String) ?? [];
+    check("the page says what serves it", hosted.length === 3 && (held ? /\. This server is held to 1 CPU and 512\.0 MiB of memory\./.test(hosted[0]) : !/This server is held to .*MiB/.test(hosted[0])), hosted[0]);
+    check(
+      "a meter under a limit is read as of that limit",
+      held ? cpu?.said === `${cpu.value}% of a limit of 1 CPU` && / of a limit of 512\.0 MiB$/.test(memory?.said ?? "") : cpu?.said === "" && !/limit/.test(memory?.said ?? ""),
+      `${cpu?.said} | ${memory?.said}`,
+    );
 
     // The response read back, and the same address as JSON. A header the response lacked is
     // written in as that, in words, so every value is held to being a header's.
@@ -237,7 +245,7 @@ for (engine of engines) {
     const server = sheet?.server ?? {};
     check(
       "with how much is in use",
-      server.machine_memory_used_bytes > 0 && server.machine_memory_used_bytes <= server.machine_memory_bytes && Number.isInteger(server.machine_cpu_used_percent) && server.machine_cpu_used_percent <= 100,
+      server.machine_memory_used_bytes > 0 && server.machine_memory_used_bytes <= (server.machine_memory_limit_bytes ?? server.machine_memory_bytes) && Number.isInteger(server.machine_cpu_used_percent) && server.machine_cpu_used_percent <= 100,
       JSON.stringify(server),
     );
     // On the machine itself this server's part is said, and is no more than the whole; under a
@@ -245,9 +253,15 @@ for (engine of engines) {
     check(
       "and whose count that is",
       held
-        ? server.machine_memory_limited === true && server.machine_cpu_limit === 1 && server.machine_memory_bytes === 512 * 1048576 && server.cpu_used_percent === null
-        : server.machine_memory_limited === false && server.machine_cpu_limit === null && Number.isInteger(server.cpu_used_percent) && server.cpu_used_percent <= server.machine_cpu_used_percent,
+        ? server.machine_memory_limit_bytes === 512 * 1048576 && server.machine_cpu_limit === 1 && server.cpu_used_percent === null
+        : server.machine_memory_limit_bytes === null && server.machine_cpu_limit === null && Number.isInteger(server.cpu_used_percent) && server.cpu_used_percent <= server.machine_cpu_used_percent,
       JSON.stringify(server),
+    );
+    // The page's sentence and its JSON say the same machine: a size is written to a tenth of a MiB.
+    check(
+      "and the machine is the one the page says",
+      Number(hosted[1]) === server.machine_cpus && size(hosted[2] ?? "") === Math.round(server.machine_memory_bytes / 104857.6) / 10 && server.server_cpus > 0 && server.server_cpus <= server.machine_cpus,
+      `${hosted[0]} | ${JSON.stringify(server)}`,
     );
 
     // Counted before the page is left: a browser may log the live stream the next load cuts off.

@@ -69,7 +69,7 @@ Tests tie what the page says to where it comes from, so one cannot change withou
 - the quick start to the README's (`src/after.rs`);
 - what it says in prose of a round's conditions, the release, the toolchain, browser support and
   the runtime's size to the sentence of `docs/performance.md`, the README, `docs/design.md` or the
-  workspace's manifest it comes from (`src/held.rs`);
+  manifest it comes from (`src/held.rs`);
 - the headers it lists to the headers a request is answered with (`src/lib.rs`);
 - each compiler answer in the seam exhibit to the source as it is: the line it cites is that line
   of the file, with the one change shown (`src/cuts.rs`);

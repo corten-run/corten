@@ -46,7 +46,7 @@ const using = (/** @type {{ machine_cpu_used_percent: number | null, machine_mem
   read.machine_cpu_used_percent === null ? "" : `; in use by its reading: ${read.machine_cpu_used_percent}% of the CPU and ${mib(read.machine_memory_used_bytes)} MiB`;
 
 const idle = await server();
-console.log(`idle: ${mib(idle.memory_held_bytes)} MiB held, of ${mib(idle.machine_memory_bytes)} MiB on ${idle.machine_cpus} CPU`);
+console.log(`idle: ${mib(idle.memory_held_bytes)} MiB held, of ${mib(idle.machine_memory_limit_bytes ?? idle.machine_memory_bytes)} MiB on ${idle.machine_cpu_limit ?? idle.server_cpus} CPU`);
 
 // The streams, each on a connection of its own, as each open page's is.
 let open = 0;
