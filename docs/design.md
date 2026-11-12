@@ -2937,7 +2937,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
     inside the pass that already encodes each value, which also says whether the value has a dot,
     so a whole-segment value pays a comparison of its length, and one of two bytes or fewer a look
     at its first byte. Counted with callgrind in a release build (1,000 and 11,000 links of one
-    route, the difference over 10,000), at `b849003f` against `80dbd7db`, a link costs:
+    route, the difference over 10,000), at `076abde0` against `80dbd7db`, a link costs:
     `/items/{id}` 120 instructions against 117, `/{user}/posts` 128 against 131, `/{lang}/news`
     with `en` 114 against 113, `/feeds/{name}.xml` 125 against 121, three parameters (one a
     `u32`, checked on what its `Display` wrote) 525 against 506, and `/files/{*path}` with a
@@ -2946,7 +2946,9 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `{*rest}` value with a dot is read again, eight bytes at a time. Where a page writes a link
     into an attribute, the check made the link too large to be inlined there at `9aee73ad`, which
     cost the item page's `render_cost` run about 27M instructions of 28,365M; checking a value of
-    two bytes or fewer out of line (`ce50dab8`) inlines it again, and at `b849003f` the run counts
-    28,358.0M, 28,367.5M and 28,365.0M against 28,360.7M, 28,366.7M and 28,364.8M at `80dbd7db`.
+    two bytes or fewer out of line (`ce50dab8`) inlines it again, and at `076abde0` the run counts
+    28,366.4M, 28,359.7M and 28,368.4M against 28,346.8M, 28,362.2M and 28,356.3M at `80dbd7db`:
+    the ranges overlap, and the medians are 10.1M apart, less than the 15.4M between
+    `80dbd7db`'s own runs.
     An app whose slugs, names or file keys come from people refuses these values where it stores
     them, so its links never reach the check.
