@@ -1,0 +1,55 @@
+/* Code: a specimen plate. Charcoal, a rust edge, the file's name stamped at the top. */
+.code {
+  min-width: 0;
+  background: color-mix(in srgb, var(--ink) 96%, transparent);
+  border-left: 3px solid var(--rust);
+  box-shadow:
+    0 1.5rem 3rem rgb(0 0 0 / 35%),
+    inset 0 0 0 1px color-mix(in srgb, var(--bone) 9%, transparent);
+}
+
+.file {
+  padding: 0.55rem 1.1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--bone) 12%, transparent);
+  color: var(--bone-dim);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
+.source {
+  padding: 1rem 1.1rem 1.15rem;
+  overflow-x: auto;
+  color: #d9d2c6;
+  font-size: 0.8125rem;
+  line-height: 1.62;
+  tab-size: 4;
+}
+
+.keyword {
+  color: #e0875a;
+}
+
+.text {
+  color: #d8b77c;
+}
+
+.comment {
+  color: #a39c90;
+}
+
+.mark {
+  color: var(--ember);
+}
+
+.number {
+  color: #c9a58f;
+}
+
+.fault {
+  color: #ff8f6b;
+  font-weight: 600;
+}
+
+.faint {
+  color: #a39c90;
+}

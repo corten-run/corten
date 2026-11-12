@@ -8,6 +8,7 @@ import { hostname, platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sampleStats } from "./stats.mjs";
+import { commandOutput } from "./output.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "../..");
@@ -68,26 +69,26 @@ function killCommand(child) {
   force.unref();
 }
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { interrupted = true; for (const child of children) killCommand(child); });
-async function command(binary, args, { timeout = 30000, file, cleanup = false } = {}) {
+async function command(binary, args, { timeout = 30000, file, capture = true, cleanup = false } = {}) {
   if (interrupted && !cleanup) throw new Error("catalog run interrupted");
+  const output = commandOutput({ file, capture });
   const child = spawn(binary, args, { cwd: repo, detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   children.add(child);
-  let output = "";
-  let error = "";
   let killed = false;
+  let ioError;
   const keep = (chunk, stderr) => {
-    const value = chunk.toString();
-    if (file) appendFileSync(file, value);
-    if (stderr) error = (error + value).slice(-65536); else output = (output + value).slice(-8 * 1024 * 1024);
+    try { (stderr ? output.stderr : output.stdout)(chunk); }
+    catch (e) { ioError ??= e; killCommand(child); }
   };
   child.stdout.on("data", (c) => keep(c, false));
   child.stderr.on("data", (c) => keep(c, true));
   const timer = setTimeout(() => { killed = true; killCommand(child); }, timeout);
   try {
     const code = await new Promise((resolve, reject) => { child.on("error", reject); child.on("close", resolve); });
-    if (code !== 0 || killed || (interrupted && !cleanup)) throw new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${error || output}`);
-    return output.trim();
-  } finally { clearTimeout(timer); children.delete(child); }
+    if (ioError) throw ioError;
+    if (code !== 0 || killed || (interrupted && !cleanup)) throw new Error(`${binary} ${args.slice(0, 3).join(" ")}: ${killed ? `timeout after ${timeout} ms` : `exit ${code}`}\n${output.diagnostic()}`);
+    return output.result();
+  } finally { clearTimeout(timer); children.delete(child); output.close(); }
 }
 const docker = (args, opts) => command("docker", args, opts);
 const inspect = async (name, cleanup = false) => JSON.parse(await docker(["inspect", name], { cleanup }))[0];
@@ -295,7 +296,7 @@ try {
       } catch (e) { fail(app, source, "checks", e); }
       finally {
         if (active.has(checkContainer)) await remove(checkContainer);
-        try { writeFileSync(join(out, "app.log"), await docker(["logs", name])); } catch (e) { fail(app, source, "app logs", e); }
+        try { await docker(["logs", name], { file: join(out, "app.log"), capture: false }); } catch (e) { fail(app, source, "app logs", e); }
         await remove(name);
       }
       save();
@@ -331,7 +332,7 @@ try {
         run.complete = true;
       } catch (e) { run.failed = e.message; fail(app, source, `load ${target} pass ${pass}`, e); }
       finally {
-        try { writeFileSync(join(raw, "app.log"), await docker(["logs", name])); } catch (e) { fail(app, source, "app logs", e); }
+        try { await docker(["logs", name], { file: join(raw, "app.log"), capture: false }); } catch (e) { fail(app, source, "app logs", e); }
         await remove(name);
       }
       for (const phase of phases) {

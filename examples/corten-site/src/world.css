@@ -1,0 +1,532 @@
+/* World: the plate, the gauge, the tagline, the three layers and the far side.
+   Until world.js has drawn the plate (data-forged), and where it will not (data-flat, or no
+   script), each layer has a flat color of its own. */
+.world {
+  position: relative;
+  isolation: isolate;
+  /* Nothing on the page is meant to be reached sideways, so nothing can widen it. */
+  overflow-x: clip;
+}
+
+.plate {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  width: 100%;
+  height: 100%;
+  visibility: hidden;
+}
+
+.world[data-forged] .plate {
+  visibility: visible;
+}
+
+/* The gauge: the mark's three layers down the right edge, the one being read drawn wide.
+   Each band is a link as wide as a finger; what is drawn of it is the strip at its edge. */
+.gauge {
+  position: fixed;
+  right: clamp(0.25rem, 1.2vw, 1.25rem);
+  top: 50%;
+  z-index: 15;
+  display: grid;
+  gap: 5px;
+  transform: translateY(-50%);
+}
+
+.band {
+  position: relative;
+  display: block;
+  width: 1.5rem;
+  height: 4.2rem;
+  text-decoration: none;
+}
+
+.band::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 0 auto;
+  width: 0.7rem;
+  background: var(--band);
+  border: 1px solid color-mix(in srgb, var(--bone) 42%, transparent);
+  transition: width 160ms ease;
+}
+
+.band-surface {
+  --band: var(--rust);
+}
+
+.band-seam {
+  --band: var(--rust-deep);
+}
+
+.band-steel {
+  --band: var(--charcoal);
+}
+
+.band span {
+  position: absolute;
+  right: calc(100% + 0.35rem);
+  top: 50%;
+  padding: 0.1rem 0.5rem;
+  background: var(--ink);
+  color: var(--bone);
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-size: 0.95rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 160ms ease;
+  pointer-events: none;
+}
+
+.band:hover span,
+.band:focus-visible span {
+  opacity: 1;
+}
+
+.band:hover::before,
+.band[aria-current]::before {
+  width: 1.5rem;
+  border-color: var(--bone);
+}
+
+/* On a narrow screen the gauge is a strip on the edge itself, inside the page's margin. */
+@media (max-width: 62rem) {
+  .gauge {
+    right: 0;
+    gap: 3px;
+  }
+
+  .band {
+    height: 3.4rem;
+  }
+
+  .band::before {
+    width: 4px;
+    border: 0;
+    box-shadow: -1px 0 0 color-mix(in srgb, var(--bone) 45%, transparent);
+  }
+
+  .band:hover::before,
+  .band[aria-current]::before {
+    width: 9px;
+    box-shadow: -2px 0 0 var(--bone);
+  }
+}
+
+@media (forced-colors: active) {
+  .band::before {
+    background: CanvasText;
+  }
+
+  .band[aria-current]::before {
+    background: Highlight;
+  }
+}
+
+@media print {
+  .gauge,
+  .plate {
+    display: none;
+  }
+}
+
+/* The tagline, one word a line, stepped as the mark's layers are. world.js stamps the same
+   words into the plate where the page laid them out, and the page's own letters go clear. */
+.hero {
+  position: relative;
+  display: grid;
+  /* The column is the screen's width whatever the tagline's words measure. */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 1fr auto;
+  gap: clamp(1.5rem, 4svh, 3rem);
+  min-height: 100svh;
+  padding: 5.5rem var(--gutter) clamp(1.5rem, 5svh, 3.5rem);
+  background:
+    radial-gradient(120% 90% at 70% 20%, #c0602f 0%, transparent 60%),
+    linear-gradient(160deg, #b4542b 0%, var(--rust) 45%, var(--rust-deep) 100%);
+}
+
+.tagline {
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  font-size: min(21svh, 21.5vw);
+  line-height: 0.85;
+  letter-spacing: -0.005em;
+  color: var(--pit);
+}
+
+.word {
+  display: block;
+  width: max-content;
+}
+
+.first {
+  margin-left: 1.16em;
+}
+
+.second {
+  margin-left: 0.58em;
+}
+
+/* Where a script will draw the plate, the page starts as the plate does: steel in its mill
+   scale, rust already around the letters. So the plate arriving changes nothing the reader has
+   seen, and the rust that then spreads is the first thing that moves. */
+@media (scripting: enabled) and (prefers-reduced-motion: no-preference) {
+  .world:not([data-flat], [data-forged]) .hero {
+    background: linear-gradient(175deg, #2b3136 0%, #23282c 60%, #1e2326 100%);
+  }
+
+  .world:not([data-flat], [data-forged]) .word {
+    text-shadow:
+      0 0 0.08em #c2622f,
+      0 0 0.22em #a84c27,
+      0 0 0.5em #a84c27;
+  }
+}
+
+.world[data-forged] .hero {
+  background: none;
+}
+
+.world[data-forged] .word {
+  color: transparent;
+  text-shadow: none;
+}
+
+.lede {
+  display: grid;
+  grid-template-columns: minmax(0, var(--measure)) auto;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1.25rem 3rem;
+  padding: clamp(1.1rem, 2.4vw, 1.75rem) clamp(1.1rem, 2.6vw, 2rem);
+  background: color-mix(in srgb, var(--ink) 93%, transparent);
+  border-top: 3px solid var(--rust);
+}
+
+.pitch {
+  font-size: clamp(1.02rem, 1.25vw, 1.2rem);
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.primary,
+.quiet {
+  display: inline-block;
+  padding: 0.7rem 1.3rem;
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-size: 1.25rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.primary {
+  background: var(--bone);
+  color: var(--ink);
+}
+
+.primary:hover {
+  background: var(--ember);
+}
+
+.quiet {
+  border: 1px solid color-mix(in srgb, var(--bone) 55%, transparent);
+}
+
+.quiet:hover {
+  border-color: var(--ember);
+  color: var(--ember);
+}
+
+.note {
+  grid-column: 1 / -1;
+  max-width: 62rem;
+  padding-top: 1rem;
+  border-top: 1px solid color-mix(in srgb, var(--bone) 16%, transparent);
+  color: var(--bone-dim);
+  font-size: 0.9375rem;
+}
+
+/* A screen too short for the tagline, the pitch and the note: the note gives way, since the
+   layers say what it says. */
+@media (min-width: 40.0625rem) and (max-height: 56rem) {
+  .note {
+    display: none;
+  }
+}
+
+@media (max-width: 52rem) {
+  .lede {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* A wide screen: the pitch stands in the room the stepped tagline leaves to its right, so the
+   first screen holds both with the tagline at its full height. */
+@media (min-width: 75rem) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 25rem);
+    grid-template-rows: minmax(0, 1fr);
+    gap: clamp(2rem, 3.5vw, 4rem);
+    align-items: end;
+  }
+
+  .tagline {
+    align-self: center;
+    font-size: min(27svh, 13.6vw);
+  }
+
+  .lede {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.1rem;
+    padding: 1.5rem;
+  }
+
+  .note {
+    display: block;
+  }
+}
+
+@media (min-width: 75rem) and (max-height: 44rem) {
+  .note {
+    display: none;
+  }
+}
+
+/* A phone's first screen: the tagline, the pitch and where to go next. */
+@media (max-width: 40rem) {
+  .hero {
+    gap: 1.25rem;
+    padding-top: 4.75rem;
+  }
+
+  .tagline {
+    font-size: min(22svh, 20vw);
+  }
+
+  .lede {
+    gap: 1rem;
+    padding: 1rem;
+  }
+
+  .pitch {
+    font-size: 1rem;
+    line-height: 1.45;
+  }
+
+  .actions {
+    gap: 0.5rem;
+  }
+
+  .primary,
+  .quiet {
+    padding: 0.55rem 0.9rem;
+    font-size: 1.1rem;
+  }
+
+  .note {
+    padding-top: 0.75rem;
+    font-size: 0.875rem;
+  }
+}
+
+@media (max-width: 40rem) and (max-height: 47.5rem) {
+  .note {
+    display: none;
+  }
+}
+
+/* The layers. The plate's light is held under the steel's type from 48px into its section
+   (INSET in world.js), so the padding above and below stays more than that. */
+.stratum {
+  position: relative;
+  padding: clamp(4rem, 10svh, 8rem) var(--gutter) clamp(4rem, 9svh, 7rem);
+}
+
+.surface {
+  background: linear-gradient(180deg, var(--rust-deep), #8f4022 30%, var(--rust-deep));
+}
+
+.seam {
+  background: linear-gradient(180deg, #5d2a19, #46200f);
+}
+
+.steel {
+  background: linear-gradient(180deg, var(--charcoal), var(--ink));
+}
+
+/* The far side of the plate: the sample comes out through rust again, and the page ends where
+   it began. */
+.far {
+  display: grid;
+  justify-items: start;
+  gap: clamp(1.25rem, 3.5svh, 2.5rem);
+  padding-top: clamp(7rem, 22svh, 15rem);
+  padding-bottom: clamp(5rem, 16svh, 11rem);
+  background:
+    radial-gradient(120% 90% at 30% 80%, #c0602f 0%, transparent 60%),
+    linear-gradient(200deg, var(--rust-deep) 0%, var(--rust) 55%, #b4542b 100%);
+}
+
+.world[data-forged] .stratum {
+  background: none;
+}
+
+/* The mark on a tag of its own, as a plate carries its maker's. */
+.mark {
+  width: clamp(8.5rem, 15vw, 14rem);
+  height: auto;
+  padding: clamp(0.9rem, 1.6vw, 1.5rem) clamp(1.1rem, 2vw, 1.9rem);
+  background: var(--bone);
+  box-shadow:
+    0 1.25rem 2.5rem rgb(0 0 0 / 40%),
+    inset 0 0 0 1px rgb(0 0 0 / 25%);
+}
+
+.last {
+  max-width: 100%;
+  color: var(--pit);
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: clamp(3.6rem, 14.5vw, 15rem);
+  line-height: 0.9;
+  letter-spacing: -0.005em;
+  text-shadow:
+    0 2px 0 rgb(255 196 150 / 30%),
+    0 0 0.1em rgb(232 146 74 / 90%),
+    0 0 0.35em rgb(232 146 74 / 60%);
+  text-transform: uppercase;
+}
+
+/* Stamped as the tagline above it is: dark, in the lighter rust around the letters. */
+.origin {
+  max-width: 34ch;
+  color: var(--pit);
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: clamp(1.5rem, 2.7vw, 2.5rem);
+  line-height: 1.14;
+  text-shadow:
+    0 0 0.14em rgb(240 158 88 / 95%),
+    0 0 0.4em rgb(240 158 88 / 80%),
+    0 0 0.9em rgb(232 146 74 / 60%);
+  text-transform: uppercase;
+}
+
+.far .quiet {
+  background: color-mix(in srgb, var(--ink) 90%, transparent);
+}
+
+/* A layer's opening: its name the size of a plate marking, cut the way its layer is. */
+.opening {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: clamp(2.5rem, 6svh, 5rem);
+}
+
+/* Drawn over the name, never under it, whatever a font's letters do outside their line. */
+.place {
+  position: relative;
+  z-index: 1;
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-size: 1.15rem;
+  letter-spacing: 0.08em;
+  text-shadow:
+    0 1px 0 rgb(0 0 0 / 70%),
+    0 0 0.3em rgb(20 10 6 / 90%),
+    0 0 0.8em rgb(20 10 6 / 80%);
+  text-transform: uppercase;
+}
+
+/* The name's box is its capitals: trimmed to them where the browser can, so the label above
+   and the claim below sit the same distance from the letters in every DIN. Elsewhere a full
+   line keeps the letters inside their box, with more air around them. */
+.name {
+  font-size: clamp(5.5rem, 21vw, 21rem);
+  line-height: 1;
+  letter-spacing: -0.01em;
+  margin-left: -0.04em;
+  overflow-wrap: anywhere;
+}
+
+@supports (text-box: trim-both cap alphabetic) {
+  .name {
+    text-box: trim-both cap alphabetic;
+    margin-top: 0.35rem;
+  }
+}
+
+/* The lines are far enough apart that a comma does not reach the capitals under it. */
+.claim {
+  max-width: 24ch;
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-size: clamp(1.7rem, 3.4vw, 3.1rem);
+  line-height: 1.14;
+  text-shadow:
+    0 1px 0 rgb(0 0 0 / 70%),
+    0 0 0.22em rgb(20 10 6 / 85%),
+    0 0 0.7em rgb(20 10 6 / 75%);
+  text-transform: uppercase;
+}
+
+/* Stamped into the surface: dark, in the lighter rust the stamp left around it. */
+.stamped .name {
+  color: var(--pit);
+  text-shadow:
+    0 2px 0 rgb(255 196 150 / 30%),
+    0 0 0.08em rgb(232 146 74 / 95%),
+    0 0 0.3em rgb(232 146 74 / 65%);
+}
+
+.stamped .place {
+  color: var(--bone);
+}
+
+/* Burning through the seam: the one layer whose name is hot. */
+.welded .name {
+  color: var(--ember);
+  text-shadow:
+    0 -2px 0 rgb(0 0 0 / 55%),
+    0 0 0.3em rgb(242 164 75 / 38%);
+}
+
+.welded .place {
+  color: var(--bone);
+}
+
+/* Struck bright into the steel. */
+.struck .name {
+  color: var(--bone);
+  text-shadow: 0 -2px 0 rgb(0 0 0 / 60%);
+}
+
+.struck .place {
+  color: var(--ember);
+}
+
+@media (forced-colors: active) {
+  .name,
+  .last,
+  .place,
+  .claim,
+  .origin {
+    text-shadow: none;
+  }
+}
