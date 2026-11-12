@@ -707,19 +707,31 @@ impl<A: Send + 'static> Tools<A> {
     }
 
     async fn handle(&self, headers: HeaderMap, body: &[u8]) -> Response {
+        // A request whose `MCP-Protocol-Version` names a revision the endpoint does not speak is a
+        // 400 (MCP 2025-06-18 and 2025-11-25, Transports, "Protocol Version Header"), so a message
+        // that cannot be read is one too, with the same JSON-RPC error as without the header.
+        let speaks = speaks(&headers);
+        let malformed = |code, message: &str| {
+            let mut res = reply(Value::Null, Err((code, message.into())));
+            if !speaks {
+                *res.status_mut() = StatusCode::BAD_REQUEST;
+            }
+            res
+        };
         let message: Value = match serde_json::from_slice(body) {
             Ok(value) => value,
-            Err(_) => return reply(Value::Null, Err((-32700, "parse error".into()))),
+            Err(_) => return malformed(-32700, "parse error"),
         };
         if !message.is_object() {
             // JSON-RPC batches were removed from MCP in 2025-06-18.
-            return reply(Value::Null, Err((-32600, "invalid request: send one JSON-RPC message per request".into())));
+            return malformed(-32600, "invalid request: send one JSON-RPC message per request");
         }
         // A revision the endpoint does not speak cannot be served whoever sends it, so it is
-        // refused before the token, as a body that is not JSON is. `initialize` is sent before a
-        // revision is agreed, so a header on it names none to check (MCP 2025-11-25, Lifecycle,
-        // "Version Negotiation"). Without the header a request is 2025-03-26's, which it speaks.
-        if !speaks(&headers) && message.get("method").and_then(Value::as_str) != Some("initialize") {
+        // refused before the token, as a body that is not JSON is. An `initialize` request is sent
+        // before a revision is agreed, so a header on it names none to check (MCP 2025-11-25,
+        // Lifecycle, "Version Negotiation"); one without an `id` is a notification, not that
+        // request, and is checked. Without the header a request is 2025-03-26's, which it speaks.
+        if !speaks && !(message.get("id").is_some() && message.get("method").and_then(Value::as_str) == Some("initialize")) {
             return unsupported_version(&headers);
         }
         let id = message.get("id").cloned();
@@ -1142,11 +1154,10 @@ mod tests {
         }
         // Sent twice with the same revision, the header is still not one revision (RFC 9110, 5.3).
         refused(&["2025-11-25", "2025-11-25"], list.clone()).await;
-        // A notification is refused too; a body that is not JSON is told so first.
+        // A notification is refused too, an `initialize` without an `id` included: it is not the
+        // request that agrees a revision.
         refused(&["nonsense"], json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }).to_string()).await;
-        let (status, _, text) = send(&app(), request(&["nonsense"], "{")).await;
-        let body: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!((status, body["error"]["code"].clone()), (StatusCode::OK, json!(-32700)), "{text}");
+        refused(&["nonsense"], json!({ "jsonrpc": "2.0", "method": "initialize", "params": {} }).to_string()).await;
         // `initialize` comes before a revision is agreed: whatever its header names, it is answered.
         let initialize = &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }).to_string();
         let (status, _, text) = send(&app(), request(&["2099-01-01"], initialize)).await;
@@ -1161,6 +1172,40 @@ mod tests {
         assert_eq!(status, StatusCode::UNAUTHORIZED, "a revision it speaks is then told where to get a token");
         let (status, _, _) = send(&protected, request(&["nonsense"], initialize)).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "an initialize is told where to get a token");
+    }
+
+    /// The status and body of `body` posted with each of these `MCP-Protocol-Version` headers.
+    async fn malformed(body: &str, versions: &[&str]) -> (StatusCode, Value) {
+        let mut req = Request::post("/mcp").header("content-type", "application/json");
+        for version in versions {
+            req = req.header("mcp-protocol-version", *version);
+        }
+        let (status, _, text) = send(&app(), req.body(Body::from(body.to_owned())).unwrap()).await;
+        (status, serde_json::from_str(&text).unwrap())
+    }
+
+    /// A body that is not JSON is a parse error, a 200 as before without the header or with a
+    /// revision the endpoint speaks, and a 400 with the same error when the header names one it
+    /// does not: such a request is a 400 whatever it holds (MCP 2025-11-25, Transports).
+    #[tokio::test]
+    async fn a_body_that_is_not_json_is_a_bad_request_in_a_revision_not_spoken() {
+        let error = json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "parse error" } });
+        assert_eq!(malformed("{", &[]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed("{", &["2025-11-25"]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed("{", &["2099-01-01"]).await, (StatusCode::BAD_REQUEST, error.clone()));
+        assert_eq!(malformed("{", &["2025-11-25", "2025-11-25"]).await, (StatusCode::BAD_REQUEST, error));
+    }
+
+    /// A batch is refused as before, a 200 without the header or with a revision the endpoint
+    /// speaks, and a 400 with the same error when the header names one it does not.
+    #[tokio::test]
+    async fn a_batch_is_a_bad_request_in_a_revision_not_spoken() {
+        let batch = &json!([{ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }]).to_string();
+        let message = "invalid request: send one JSON-RPC message per request";
+        let error = json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32600, "message": message } });
+        assert_eq!(malformed(batch, &[]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed(batch, &["2025-06-18"]).await, (StatusCode::OK, error.clone()));
+        assert_eq!(malformed(batch, &["nonsense"]).await, (StatusCode::BAD_REQUEST, error));
     }
 
     #[tokio::test]

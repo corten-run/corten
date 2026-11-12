@@ -1518,11 +1518,13 @@ and `2025-03-26`). A request whose `MCP-Protocol-Version` header names another, 
 header twice (RFC 9110, 5.3: it holds one revision, not a list), is answered `400 Bad Request` with
 a JSON-RPC error that has no `id` (`-32600`, with `data` listing the revisions it speaks as
 `supported` and the header as `requested`), as both revisions that define the header require; a
-request without the header is read as `2025-03-26`, which they say to assume. `initialize` is not
-checked: a client sends it before a revision is agreed, and the header is for the requests after
-it. The header is checked once the message is read, so a body that is not JSON is a parse error
-first, and before the token: a request in a revision the endpoint does not speak cannot be served
-whoever sends it, and an `initialize` is still told where to get a token. The code is JSON-RPC's
+request without the header is read as `2025-03-26`, which they say to assume. An `initialize`
+request is not checked: a client sends it before a revision is agreed, and the header is for the
+requests after it (an `initialize` without an `id` is a notification, and is checked). A body that
+is not JSON, or a batch, gets its usual JSON-RPC error (`-32700` or `-32600`), with a 400 rather
+than a 200 when the header names a revision the endpoint does not speak. The header is checked
+before the token: a request in a revision the endpoint does not speak cannot be served whoever
+sends it, and an `initialize` is still told where to get a token. The code is JSON-RPC's
 own rather than one a later revision defines (`-32022` in `2026-07-28`), so a client that tries a
 later revision first reads the 400 as an earlier server's, as that revision says, and falls back
 to `initialize`.
