@@ -8,18 +8,24 @@ import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.util.ContentCachingResponseWrapper;
+import org.thymeleaf.spring6.view.ThymeleafViewResolver;
 
 @Controller
 public class MarketplaceController {
     private final MarketplaceSource source;
-    public MarketplaceController(MarketplaceSource source) { this.source = source; }
+    private final ThymeleafViewResolver views;
+    public MarketplaceController(MarketplaceSource source, ThymeleafViewResolver views) {
+        this.source = source;
+        this.views = views;
+    }
 
     @RequestMapping(value = "/marketplace/{locale}/{id}", method = {RequestMethod.GET, RequestMethod.POST})
     public String show(@PathVariable String locale, @PathVariable String id,
             @RequestParam(defaultValue = "") String seller, @RequestParam(defaultValue = "asc") String sort,
             @RequestParam(defaultValue = "") String offers, @RequestParam(defaultValue = "") String email,
             @RequestParam(name = "target_price", defaultValue = "") String target, HttpServletRequest request,
-            HttpServletResponse response, Model model) {
+            HttpServletResponse response, Model model) throws Exception {
         if (!MarketplaceFormat.supported(locale)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
         boolean post = "POST".equals(request.getMethod());
         if (post) {
@@ -46,8 +52,18 @@ public class MarketplaceController {
         model.addAttribute("offers", "all".equals(offers) ? record.offers() : record.offers().subList(0, Math.min(5, record.offers().size())));
         var result = post ? format.validateAlert(email, target, record.title()) : new MarketplaceFormat.AlertResult("", null);
         model.addAttribute("message", result.message());
-        if (result.targetMinor() != null)
-            Alerts.append(request.getSession(), new Alerts.Alert(id, email, result.targetMinor()));
+        if (result.targetMinor() != null) {
+            // MVC normally renders after returning from the controller. Keep this write
+            // pending until the complete native view has rendered without a partial response.
+            var buffered = new ContentCachingResponseWrapper(response);
+            var view = views.resolveViewName("marketplace", request.getLocale());
+            if (view == null) throw new IllegalStateException("Missing marketplace view");
+            view.render(model.asMap(), request, buffered);
+            if (buffered.getStatus() >= 200 && buffered.getStatus() < 300)
+                Alerts.append(request.getSession(), new Alerts.Alert(id, email, result.targetMinor()));
+            buffered.copyBodyToResponse();
+            return null;
+        }
         return "marketplace";
     }
 
