@@ -2905,7 +2905,7 @@ by design; where it is known, a limit says what would lift it or why it is so.
     to use as a file path; an app that does that checks the value itself. Writing a link pays
     inside the pass that already encodes each value, which also says whether the value has a dot,
     so a whole-segment value pays a comparison of its length. Counted with callgrind in a release
-    build (1,000 and 11,000 links of one route, the difference over 10,000), at `236d3839` against
+    build (1,000 and 11,000 links of one route, the difference over 10,000), at `9aee73ad` against
     `a7e02c39`, a link costs: `/items/{id}` 120 instructions against 117, `/{user}/posts` 128
     against 131, `/feeds/{name}.xml` 125 against 121, three parameters (one a `u32`, checked on
     what its `Display` wrote) 525 against 506, and `/files/{*path}` with a 29-byte value 178
