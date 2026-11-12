@@ -33,7 +33,12 @@ defmodule ItemPageWeb.MarketplaceAlertLive do
       })
     end
 
-    {:noreply, assign(socket, message: message)}
+    {:noreply,
+     assign(socket,
+       message: message,
+       email: if(is_binary(email), do: email, else: ""),
+       target: if(is_binary(target), do: target, else: "")
+     )}
   end
 
   def render(assigns) do

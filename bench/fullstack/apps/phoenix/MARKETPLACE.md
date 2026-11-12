@@ -7,6 +7,8 @@ Locales are `en-US`, `fr-FR`, and `de-DE`; legacy LiveViews and channels are unc
 The marketplace alert is an embedded native LiveView with a real `save` event;
 the same form's action and CSRF token keep ordinary no-JS POSTs working. The rest
 of the read-only controller/HEEx page and numeric JSON route remain unchanged.
+The LiveView retains submitted email/target values after accepted and rejected
+actions, so the next localized validation uses the actual native form state.
 
 `MARKETPLACE_SOURCE=fixture` loads `MARKETPLACE_FIXTURE_PATH` once at startup
 (default `/fixtures/marketplace.json`). Otherwise each request reads one record
@@ -43,6 +45,12 @@ mix deps.get
 mix test test/marketplace_test.exs
 ```
 
+The compiled production release also runs `test/native_alert_live.exs` with
+`bin/item_page eval 'Code.eval_file("/checks/native_alert_live.exs")'` when that
+file is mounted at `/checks/native_alert_live.exs` and the marketplace fixture is
+configured. This exercises consecutive accepted/rejected native component events,
+retained form state and independent store readback without browser transport.
+
 From the repository root, with Playwright installed and the native image running:
 
 ```sh
@@ -52,3 +60,7 @@ node bench/fullstack/apps/rails/test/native-alerts.mjs phoenix http://localhost:
 This checks actual native LiveView events, independent HTTP readbacks with the
 browser's cookie jar, JS/no-JS, all locales, rejection, order, concurrent POSTs and
 two-client isolation. It is not a comparative throughput benchmark.
+Its independent HTTP probes explicitly close connections because Bandit may close
+native exception responses (CSRF rejection or missing item); Playwright must not
+pool that socket for the next request. No POST is retried, and browser forms and
+LiveView keep their ordinary native transports and security checks.
