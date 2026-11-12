@@ -12,6 +12,12 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- FastAPI's native record JSON routes bound complete upstream reads, cancel them
+  on caller disconnect and return generic JSON source/serialization errors.
+  Opt-in request tracing spans native serialization without changing successful
+  responses. Focused CI retains failure evidence; unexplained healthy-read errors
+  remain an investigation, not a claimed fix or group load qualification.
+
 - Native record JSON parity checks for Express, Spring and Drogon retain each
   framework's parser and serializer, complete payloads and JSON error/method
   behavior. Express and Drogon bound request-owned reads and cancellation; Spring

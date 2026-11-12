@@ -85,6 +85,13 @@ jobs:
       # This workflow does not measure/publish performance or touch nightly state.
       - name: Build and verify both catalog sources
         run: node bench/catalog/run.mjs c1 --apps ${{ matrix.app }} --build --check-only
+      - name: Test native FastAPI record boundaries
+        if: matrix.app == 'fastapi'
+        run: |
+          docker run --rm --cpus 1 --memory 1g cb-catalog-fastapi python -m unittest app.test_marketplace app.test_record_json
+          docker run --rm --cpus 1 --memory 1g -e PROFILE=matched -e HOSTS=testserver cb-catalog-fastapi python -m unittest app.test_marketplace app.test_record_json
+          node bench/fullstack/apps/fastapi/check-native.mjs cb-catalog-fastapi
+          node bench/fullstack/apps/fastapi/check-trace.mjs cb-catalog-fastapi after --regressions-only
       - name: Build and verify localized marketplace sources
         run: node bench/marketplace/run.mjs w1 --apps ${{ matrix.app }} --build --check-only
       - uses: actions/upload-artifact@v6
@@ -94,6 +101,7 @@ jobs:
           path: |
             bench/catalog/results/c1/
             bench/marketplace/results/w1/
+            bench/fullstack/apps/fastapi/tests/results/
           if-no-files-found: warn
           retention-days: 14
 
