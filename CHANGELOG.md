@@ -15,6 +15,17 @@ Corten is pre-1.0, so any minor version may change the API.
   compiled doctest, where it called an `auth::bearer`
   that does not exist) and card-market's partners and agents read with it in place of their own
   parsers ([#1225 Corten tells an API to take its key as a bearer token but gives it no reader, so each app parses Authorization by hand and the agent docs call an auth::bearer that does not exist](https://github.com/corten-run/corten/issues/1225)).
+- The watchlist smoke checks three runtime behaviors it did not. A tapped link nothing hovered is
+  prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
+  has no Navigation API, so nothing is prefetched). An upload answered with a status that has no
+  body is read with none: Corten's `204` redirect (`corten-location`) is followed with no
+  `corten:error`, and a bare `204`, `205` or `304` is `corten:error` with that status (the
+  `304` in Chromium and Firefox: Playwright cannot answer one in WebKit); one answered with a status of 600 is
+  `corten:error` with status 0; the form is left not busy each time. Another file of the same
+  name, chosen while a write sending the first is out, is sent after it, whether its size or only
+  its time differs, where the same file pressed again is not. Each check failed against a runtime
+  with the line it covers taken out
+  ([#1229 Three runtime behaviors have no browser check: touch prefetch, an upload answered with a status a Response cannot have, and a same-name file sent as a new submit](https://github.com/corten-run/corten/issues/1229)).
 
 ### Fixed
 
