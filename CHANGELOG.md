@@ -27,6 +27,17 @@ Corten is pre-1.0, so any minor version may change the API.
   behind the page (one fragment shader, drawn after weathering steel) in Chromium, where it also
   reads that the plate is no brighter under the steel's type than the type can stand.
 
+- Native record JSON parity checks for Express, Spring and Drogon retain each
+  framework's parser and serializer, complete payloads and JSON error/method
+  behavior. Express and Drogon bound request-owned reads and cancellation; Spring
+  keeps its existing source timeout behavior. Native pages and forms remain in
+  place. These functional repairs are not source-audit receipts or load results.
+
+- Gin's native catalog and marketplace JSON routes support GET/HEAD, generic JSON
+  errors and uncached responses. Their shared native HTTP client refuses redirects,
+  bounds complete reads and cancels work with the request. Existing templ pages and
+  forms remain native; this is not production qualification or a group load result.
+
 - Offline correctness contracts for the full-stack browser and client-heavy groups
   cover native navigation/forms, equivalent keyed state, operation-time HTTP and
   terminal resource cleanup. Reference helpers cannot supply native observations;

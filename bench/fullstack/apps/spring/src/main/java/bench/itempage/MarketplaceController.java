@@ -42,6 +42,7 @@ public class MarketplaceController {
     @ResponseBody
     public ResponseEntity<MarketplaceRecord> json(@PathVariable String id) {
         var record = source.get(id);
-        return record == null ? ResponseEntity.notFound().build() : ResponseEntity.ok(record);
+        if (record == null) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        return ResponseEntity.ok(record);
     }
 }

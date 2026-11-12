@@ -6,12 +6,13 @@
 #include <cmath>
 #include <regex>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace marketplace {
 namespace {
 void check(bool valid) { if (!valid) throw std::runtime_error("invalid marketplace record"); }
 void integer(const Json::Value &v, bool nonnegative = true) {
- check(v.isInt64() && (!nonnegative || v.asInt64() >= 0));
+ check(v.isInt64() && v.asInt64() >= (nonnegative ? 0 : -1000000000LL) && v.asInt64() <= 1000000000LL);
 }
 Json::Value strings(const Json::Value &v, std::initializer_list<const char *> keys) {
  check(v.isObject());
@@ -83,6 +84,10 @@ Json::Value parseRecord(const Json::Value &v) {
   auto line = strings(row, {"id", "item_id", "title"});
   check(row.isMember("quantity")); integer(row["quantity"]); line["quantity"] = row["quantity"];
   out[key].append(std::move(line));
+ }
+ for (auto key : {"listings", "offers", "contents", "included_in"}) {
+  std::unordered_set<std::string> ids;
+  for (const auto &row : out[key]) check(ids.insert(row["id"].asString()).second);
  }
  return out;
 }

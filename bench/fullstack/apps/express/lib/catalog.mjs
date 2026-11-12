@@ -22,10 +22,13 @@ const fixture = process.env.CATALOG_SOURCE === "fixture"
     .map(([id, value]) => [id, parseCatalogRecord(value)]))
   : null;
 
-export async function fetchCatalogRecord(id) {
+export async function fetchCatalogRecord(id, { signal } = {}) {
   if (fixture) return fixture.get(id) ?? null;
-  const response = await fetch(`${base}/catalog/records/${encodeURIComponent(id)}`, { redirect: "manual" });
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`catalog API returned ${response.status}`);
+  const response = await fetch(`${base}/catalog/records/${encodeURIComponent(id)}`, { redirect: "manual", signal });
+  if (!response.ok) {
+    await response.body?.cancel();
+    if (response.status === 404) return null;
+    throw new Error(`catalog API returned ${response.status}`);
+  }
   return parseCatalogRecord(await response.json());
 }
