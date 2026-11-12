@@ -224,6 +224,12 @@ test("a split round compares only with one split the same way, droplet by drople
   }
   const otherCpu = structuredClone(now); otherCpu.split.parts[1].host.cpu = "Other CPU";
   assert.equal(compare(otherCpu, then).compatible, false);
+  // Droplets on mixed CPU models compare only with a baseline mixed the same way, droplet by droplet.
+  const mixed = (s, d1, d2) => { const v = structuredClone(s); v.split.parts[0].host.cpu = v.host.cpu = d1; v.split.parts[1].host.cpu = d2; return validateSummary(v); };
+  const x8168 = "Intel(R) Xeon(R) Platinum 8168 CPU @ 2.70GHz", x8280 = "Intel(R) Xeon(R) Platinum 8280 CPU @ 2.70GHz";
+  assert.equal(compare(mixed(now, x8168, x8280), mixed(then, x8168, x8280)).compatible, true);
+  const swapped = compare(mixed(now, x8280, x8168), mixed(then, x8168, x8280));
+  assert.equal(swapped.compatible, false); assert.ok(swapped.warnings.some((w) => w.startsWith("Incompatible")), swapped.warnings.join("\n"));
   const piece = compare(part(1, 2, { round: "r18" }), then);
   assert.equal(piece.compatible, false); assert.match(piece.warnings.join("\n"), /current is one droplet's part of a split round, not a round/);
 });
@@ -355,10 +361,15 @@ test("a signal during a split launch stops it between steps and says what each d
   assert.match(stopped.message, /r17-d1: droplet 101 keeps running its round until it is stopped\. Stop it: ssh -o "UserKnownHostsFile=.*\/d1\/known_hosts" root@192\.0\.2\.1 systemctl stop corten-marketplace-r17-d1\.service/);
   assert.match(stopped.message, /r17-d2: droplet 102 was created but its round did not start/);
   assert.match(stopped.message, /--collect/);
-  // Collecting it: d1 still runs, d2 never started and must be deleted by hand.
+  // A closed stdout or stderr cannot lose it: the launch saves the same text.
+  assert.match(stopped.message, /This is also saved in .*launch-stopped\.txt\.$/);
+  assert.equal(readFileSync(join(g.local, "launch-stopped.txt"), "utf8"), `${stopped.message.replace(/\nThis is also saved in .*$/, "")}\n`);
+  // Collecting it: d1 still runs, d2 never started and must be deleted by hand, and with d2
+  // unable to finish, exit 2 still says how to stop d1.
   const { value: code, out } = await quiet(t, () => g.task().collect());
   assert.equal(code, 2);
-  assert.match(out, /r17-d2: droplet 102 never started its round \(systemctl reports its unit not found\); nothing to collect\. Delete it: doctl compute droplet delete 102 --force/);
+  assert.match(out, /r17-d2: droplet 102 was created but never started its round \(its launch stopped before systemctl start\); nothing to collect\. Delete it: doctl compute droplet delete 102 --force/);
+  assert.match(out, /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d1\/known_hosts" root@192\.0\.2\.1 systemctl stop corten-marketplace-r17-d1\.service\n/);
 });
 
 test("a split round finishes only when every droplet has, deleting each as it finishes, then merges", async (t) => {
@@ -409,7 +420,7 @@ test("a failed delete, a failed part or a leftover droplet keeps a split round f
   assert.match(leftover.out, /leftover droplet 103 \(corten-marketplace-r17-d3\) belongs to no live part of r17; check it is not another run's, then delete it: doctl compute droplet delete 103 --force/);
 });
 
-test("a round whose start check fails is starting, not never started, and is collected", async (t) => {
+test("a round whose start check fails stays starting, not never started, and is collected", async (t) => {
   // The first systemctl show after d1's round starts loses its SSH connection.
   const f = fleet(t);
   let started = false, thrown = false;
@@ -427,19 +438,24 @@ test("a round whose start check fails is starting, not never started, and is col
   assert.doesNotMatch(error.message, /r17-d1: droplet 101 was created but its round did not start/);
   assert.match(error.message, /r17-d2: droplet 102 was created but its round did not start/);
 
-  // d1's round runs; d2's unit was never installed, so only d2 gets a delete command.
+  // d1's round runs; d2 never reached systemctl start, so only d2 gets a delete command. The
+  // round cannot merge, so exit 2 also says how to stop d1.
+  const stopD1 = /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d1\/known_hosts" root@192\.0\.2\.1 systemctl stop corten-marketplace-r17-d1\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect again/;
   const first = await quiet(t, () => f.task().collect());
   assert.equal(first.value, 2, first.out);
-  assert.match(first.out, /r17-d2: droplet 102 never started its round \(systemctl reports its unit not found\); nothing to collect\. Delete it: doctl compute droplet delete 102 --force/);
+  assert.match(first.out, /r17-d2: droplet 102 was created but never started its round \(its launch stopped before systemctl start\); nothing to collect\. Delete it: doctl compute droplet delete 102 --force/);
   assert.doesNotMatch(first.out, /r17-d1.*(never started|Delete it)/);
-  assert.equal(JSON.parse(readFileSync(join(f.local, "d1", "state.json"), "utf8")).status, "running");
+  assert.match(first.out, stopD1);
+  // A loaded, active unit is not proof the launch's check passed: the state stays starting.
+  assert.equal(JSON.parse(readFileSync(join(f.local, "d1", "state.json"), "utf8")).status, "starting");
 
   // d2 deleted by hand: d1 still runs a round that cannot merge, so collect says to stop it.
   f.drop(102);
   const running = await quiet(t, () => f.task().collect());
   assert.equal(running.value, 3, running.out);
   assert.match(running.out, /r17-d2 never started its round and has no droplet/);
-  assert.match(running.out, /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing, then collect again:\nssh -o "UserKnownHostsFile=.*\/d1\/known_hosts" root@192\.0\.2\.1 systemctl stop corten-marketplace-r17-d1\.service/);
+  assert.match(running.out, stopD1);
+  assert.doesNotMatch(running.out, /is not finished/);
 
   f.finish(1, 2);
   const done = await quiet(t, () => f.task().collect());
@@ -473,27 +489,31 @@ test("a failed create on d2 leaves it creating with no id, and collect looks for
   assert.match(error.message, new RegExp(`r17-d2: its create may have succeeded; look for a droplet named corten-marketplace-r17-d2 tagged ${d2.tag} before deleting anything\\.`));
   assert.ok(!f.calls.some((c) => c[0] === "ssh"), "no round starts when a create fails");
 
-  // No d2 droplet: d2 is missing, and d1's unit was never installed, so d1 gets a delete command.
+  // No d2 droplet: d2 is missing, and d1 never reached systemctl start, so d1 gets a delete command.
   const first = await quiet(t, () => f.task().collect());
   assert.equal(first.value, 2, first.out);
-  assert.match(first.out, /r17-d1: droplet 101 never started its round \(systemctl reports its unit not found\); nothing to collect\. Delete it: doctl compute droplet delete 101 --force/);
+  assert.match(first.out, /r17-d1: droplet 101 was created but never started its round \(its launch stopped before systemctl start\); nothing to collect\. Delete it: doctl compute droplet delete 101 --force/);
   assert.match(first.out, /r17-d2 never started its round and has no droplet/);
+  assert.doesNotMatch(first.out, /cannot merge/, "no droplet runs, so there is nothing to stop");
+  assert.ok(!f.calls.some((c) => c[0] === "ssh"), "collect needs no SSH to droplets that never started");
 
-  // The create succeeded after all: collect adopts d2's droplet by its name and tag first.
+  // The create succeeded after all: collect finds d2's droplet by its name and its unique tag.
   f.add({ id: 102, name: d2.name, tags: ["corten-bench", "corten-marketplace", d2.tag], networks: { v4: [{ type: "public", ip_address: "192.0.2.2" }] }, size: { price_hourly: 0.25 } });
+  f.add({ id: 103, name: d2.name, tags: ["corten-bench", "corten-marketplace", "corten-marketplace-run-ffffffffffffffff"] });
   const found = await quiet(t, () => f.task().collect());
   assert.equal(found.value, 2, found.out);
-  assert.match(found.out, /r17-d2: droplet 102 never started its round \(systemctl reports its unit not found\); nothing to collect\. Delete it: doctl compute droplet delete 102 --force/);
-  assert.equal(JSON.parse(readFileSync(join(f.local, "d2", "state.json"), "utf8")).id, "102");
+  assert.match(found.out, /r17-d2: droplet 102 was created but never started its round \(its launch stopped before systemctl start\); nothing to collect\. Delete it: doctl compute droplet delete 102 --force/);
+  assert.doesNotMatch(found.out, /r17-d2: droplet 103/, "another run's droplet of the same name is not ours");
+  assert.match(found.out, /leftover droplet 103 \(corten-marketplace-r17-d2\)/);
   assert.deepEqual(f.deleted, [], "collect deletes no droplet that never started");
 });
 
-test("a droplet that never answers SSH is not deleted on a guess: only a unit reported not found is", async (t) => {
+test("a starting droplet that never answers SSH is not deleted on a guess", async (t) => {
   const f = fleet(t);
   await quiet(t, () => f.task(2).launch());
-  // d2's state is rewound to before its round started, and its SSH stops answering.
+  // d2's state is rewound to its start not confirmed, and its SSH stops answering.
   const file = join(f.local, "d2", "state.json"), s = JSON.parse(readFileSync(file, "utf8"));
-  writeFileSync(file, JSON.stringify({ ...s, status: "preparing" }));
+  writeFileSync(file, JSON.stringify({ ...s, status: "starting" }));
   f.finish(1, 2);
   // As command() does: a failed ssh throws unless the caller allows it to fail.
   const run = (binary, args, timeout, allowFail) => {
@@ -505,6 +525,20 @@ test("a droplet that never answers SSH is not deleted on a guess: only a unit re
   assert.equal(result.value, 2, result.out);
   assert.match(result.out, /r17-d2: collection error; its droplet and evidence are preserved: ssh: timed out/);
   assert.doesNotMatch(result.out, /delete 102/);
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).status, "starting");
+});
+
+test("a starting part whose droplet is gone may have started: it is missing, not never started", async (t) => {
+  const f = fleet(t);
+  await quiet(t, () => f.task(2).launch());
+  const file = join(f.local, "d2", "state.json"), s = JSON.parse(readFileSync(file, "utf8"));
+  writeFileSync(file, JSON.stringify({ ...s, status: "starting" }));
+  f.drop(102);
+  const result = await quiet(t, () => f.task().collect());
+  assert.equal(result.value, 3, result.out);
+  assert.match(result.out, /r17-d2 may have started its round, but its droplet is gone; nothing to collect/);
+  assert.doesNotMatch(result.out, /r17-d2 never started/);
+  assert.match(result.out, /r17 cannot merge: r17-d2 will not complete it\. Stop each running droplet so it stops billing:\nssh .*\/d1\/known_hosts" root@192\.0\.2\.1 /);
 });
 
 test("code 3 with a partial part says to stop the running droplets, since the round cannot merge", async (t) => {
@@ -514,7 +548,7 @@ test("code 3 with a partial part says to stop the running droplets, since the ro
   const running = await quiet(t, () => f.task().collect());
   assert.equal(running.value, 3, running.out);
   assert.deepEqual(f.deleted, ["101"]);
-  assert.match(running.out, /r17 cannot merge: r17-d1 will not complete it\. Stop each running droplet so it stops billing, then collect again:\nssh -o "UserKnownHostsFile=.*\/d2\/known_hosts" root@192\.0\.2\.2 systemctl stop corten-marketplace-r17-d2\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect/);
+  assert.match(running.out, /r17 cannot merge: r17-d1 will not complete it\. Stop each running droplet so it stops billing:\nssh -o "UserKnownHostsFile=.*\/d2\/known_hosts" root@192\.0\.2\.2 systemctl stop corten-marketplace-r17-d2\.service\nThen run node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect again/);
   assert.doesNotMatch(running.out, /is not finished/);
   // Once stopped, d2 is collected and deleted, and the round is partial.
   f.finish(2, 2);
@@ -563,7 +597,7 @@ test("a stopped launch keeps its own error when saying what each droplet is left
   };
   const launch = splitController({ round: "r17", stateDir: f.local, sshKey: "42", droplets: 2 }, { run, repo: f.repo, sleep: async () => {}, interrupted: () => signal });
   const { value: error } = await quiet(t, () => launch.launch().catch((e) => e));
-  assert.match(error.message, /^SIGINT received\nWhat each droplet is left doing is unknown: .*JSON.*\. Collect the round: node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect$/s);
+  assert.match(error.message, /^SIGINT received\nWhat each droplet is left doing is unknown: .*JSON.*\. Collect the round: node bench\/marketplace\/droplet\.mjs r17 --state-dir ".*" --collect\nThis is also saved in .*launch-stopped\.txt\.$/s);
   assert.equal(error.cause.message, "SIGINT received");
 });
 

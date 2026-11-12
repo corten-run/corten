@@ -13,8 +13,8 @@ Corten is pre-1.0, so any minor version may change the API.
   creates every droplet before starting any. Each runs Corten and axum + Maud beside a
   round-robin share of the other apps (`run.mjs --part k/n`) and gates its own apps before its own
   load. `--collect` collects and deletes each droplet as it finishes, reports any leftover
-  droplet, prints the command that stops each running droplet once a partial or missing one
-  means the round cannot merge, and merges the round only when every droplet has finished; the report shows each
+  droplet, prints the command that stops each running droplet once one that never started, is partial
+  or is missing means the round cannot merge, and merges the round only when every droplet has finished; the report shows each
   droplet's CPU and anchors in every table, each app's ratio to the Corten on its own droplet, and
   flags a stage where axum + Maud's ratio to Corten differs between droplets beyond the pass
   ranges. A one-droplet round runs, reports and compares as before, and a split round compares

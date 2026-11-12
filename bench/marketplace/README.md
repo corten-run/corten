@@ -115,26 +115,34 @@ The launcher checks the clean checkout, that no benchmark droplet exists and the
 droplet limit (`doctl account get`) once, then writes `split.json` (commit and each droplet's
 apps) and refuses another launch from that state directory.
 It creates every droplet before starting any round, so the rounds start within minutes of each
-other; each droplet has its own `d<k>/` state, known_hosts and evidence. A signal (SIGINT,
-SIGTERM, SIGHUP or Ctrl-Break) stops the launch between steps, and the launcher then says what
-each droplet is left doing: a started round keeps running until stopped (it prints the `ssh`
-command), a droplet created but not started is billed until deleted (it prints the `doctl`
-command). Each droplet's state says `starting` from just before `systemctl start` until the
-launcher has seen the unit running, so a round whose start was not confirmed is collected, never
-reported as not started.
+other; each droplet has its own `d<k>/` state, known_hosts and evidence. Ctrl-C, SIGTERM or
+Ctrl-Break stops the launch between steps (SIGHUP is left alone, so `nohup` works), and the
+launcher then says what each droplet is left doing: a started round keeps running until stopped
+(it prints the `ssh` command), a droplet created but not started is billed until deleted (it
+prints the `doctl` command). It also saves that text as `launch-stopped.txt` in the state
+directory, so a closed stdout or stderr does not lose it; closing the terminal without `nohup`
+still ends the launcher at once, so run it under `nohup` or keep the terminal open. Each droplet's state says `starting` from just
+before `systemctl start` until the launch has seen the unit running; collect leaves it so, since
+a loaded unit does not prove the round ran, and collects it like any other.
 
 `--collect` collects each droplet on its own and deletes each one that finished, so a slow
 droplet does not keep a finished one billed. The round is finished only when every droplet has
 been: exit 3 while any runs, 2 for a collection error on any droplet (a failed delete
 included) or for a leftover droplet named `corten-marketplace-rN-d*` that no live part owns,
 which is reported with its delete command, never deleted. A droplet whose launch stopped before
-its round was confirmed is collected like any other, refusing a missing or unloaded unit; it gets
-a delete command only when `systemctl show` reports its unit `LoadState=not-found`. While any
-droplet runs and another is partial or missing, the round cannot merge, so exit 3 also prints the
-`ssh` command that stops each running droplet. Exit 1 means a droplet did not finish its part,
-or the parts do not merge; 0 means every droplet finished and was deleted, and the parts merged
-into `round/rN/` in the state directory (`summary.json`, `split.json` and each droplet's
-`d<k>/`).
+`systemctl start` (state `creating` or `preparing`) never ran its round: `starting` is saved
+just before that command and the unit has no `[Install]` section, so nothing else starts it.
+Collect prints its delete command, the same one the stopped launch printed, and exits 2 until it
+is gone. A `starting` droplet is collected like any other, refusing a missing or unloaded unit;
+if its droplet is gone, it may have run and is missing. Whenever a droplet never started, is
+partial or is missing, the round cannot merge, so collect prints the `ssh` command that stops
+each droplet still running, whatever the exit code. Exit 1 means a droplet did not finish its
+part, or the parts do not merge; 0 means every droplet finished and was deleted, and the parts
+merged into `round/rN/` in the state directory (`summary.json`, `split.json` and each
+droplet's `d<k>/`). Exit 2 wins over 3: while one droplet runs, an error on another still exits
+2. Then fix what it names (delete a droplet that never started with the printed command, run a
+printed `ssh` stop command, or clear the reported error), and run `--collect` again until it
+exits 0 or 1; never relaunch the round.
 
 The merged summary is a round of all twenty apps, each from the droplet that measured it, with
 each droplet's CPU model, tools and anchors in `split`. Its report gives every table a Droplet
@@ -146,9 +154,13 @@ each. A droplet's ratio range is the widest its passes allow: axum + Maud's lowe
 highest to axum + Maud's highest over Corten's lowest. A stage is flagged ("d1 and d2 differ")
 when two droplets' ranges do not overlap, that is when one droplet's lowest ratio is above the
 other's highest. The anchors' rows in every table show how far their raw numbers differ between
-droplets. `compare.mjs` compares
-a split round only with one split the same way, each droplet's host and images equal to the
-baseline's same droplet, and Corten's rows are d1's.
+droplets. `compare.mjs` compares a split round only with one split the same way, each droplet's
+host and images equal to the baseline's same droplet, and Corten's rows are d1's. A droplet's CPU
+model is not chosen at create, so droplets can land on a mix (Xeon Platinum 8168 on d1 and 8280
+on d2, say). The round still merges and its report reads each app by its ratio to its own
+droplet's Corten. But `compare.mjs` refuses it, with no deltas, against any baseline whose
+same-numbered droplet had another model, including the same two models swapped. It does not fall
+back to comparing ratios: compare rounds with mixed droplets by their ratio columns by hand.
 
 For local development, `wN` remains the development identity:
 

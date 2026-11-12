@@ -119,16 +119,21 @@ checks the account's droplet limit before it writes `split.json`, and `--collect
 runs (finished droplets are already collected and deleted), 2 for a collection error on any
 droplet or a leftover `corten-marketplace-rN-d*` droplet (reported with its delete command, never
 deleted), 1 when a droplet did not finish its part or the parts do not merge, 0 when every
-droplet finished, was deleted and merged into `round/rN/` in the state directory. When exit 3
-names a partial or missing droplet, the round cannot merge: run the `ssh ... systemctl stop`
-command it prints for each running droplet, then collect again. This overrides "keep running"
-above, so a round that cannot merge stops billing. Import that merged folder, not a droplet's
-`d<k>/` alone, as results/rN. A launch stopped by a signal says what each droplet is left doing;
-stop a started round with the `ssh` command it prints, then collect. Collect prints a `doctl`
-delete command for a droplet only when its unit is not found, so its round never started; run it. A split round compares only with a round split
-the same way, droplet by droplet; its report's Between droplets section flags stages where
-axum + Maud's ratio to Corten differs between droplets, and a flagged stage is reported, not
-hidden.
+droplet finished, was deleted and merged into `round/rN/` in the state directory. Exit 2 wins
+over 3: a droplet can still be running when collect exits 2. Then fix what it names and collect
+again until it exits 0 or 1; never relaunch. When a droplet never started, is partial or is
+missing, the round cannot merge, and collect prints an `ssh ... systemctl stop` command for each
+droplet still running, whatever the exit code: run each, then collect again. This overrides "keep
+running" above, so a round that cannot merge stops billing. Import that merged folder, not a
+droplet's `d<k>/` alone, as results/rN. A launch stopped by a signal says what each droplet is
+left doing, and saves it as `launch-stopped.txt` in the state directory; stop a started round
+with the `ssh` command it prints, then collect. A droplet whose launch stopped before
+`systemctl start` (`creating` or `preparing`) never ran its round: the launch and collect both
+print its `doctl` delete command; run it. A `starting` droplet is collected, never deleted on a
+guess. A split round compares only with a round split the same way, droplet by droplet, so
+droplets that land on different CPU models refuse comparison with a baseline whose droplets
+differ (see the README); its report's Between droplets section flags stages where axum + Maud's
+ratio to Corten differs between droplets, and a flagged stage is reported, not hidden.
 
 ## Finished Results
 
