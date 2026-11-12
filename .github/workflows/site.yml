@@ -12,11 +12,15 @@ on:
       - examples/corten-site/**
       # A change to what a machine is made from is the Site machine workflow's: it makes the new
       # machine and runs this one when that machine answers. Shipped from here as well, a release
-      # would go to a machine about to be removed, or to one still setting itself up.
+      # would go to a machine about to be removed, or to one still setting itself up. The guide
+      # changes with those files and is not part of the site. A push that also changes something
+      # else here still runs this workflow, and that run may fail against a machine being
+      # replaced: the run the Site machine workflow starts afterwards is the one that ships.
       - "!examples/corten-site/deploy/infra/**"
       - "!examples/corten-site/deploy/provision.sh"
       - "!examples/corten-site/deploy/nginx.conf"
       - "!examples/corten-site/deploy/corten-site.service"
+      - "!examples/corten-site/deploy/README.md"
       - crates/**
       - Cargo.toml
       - Cargo.lock

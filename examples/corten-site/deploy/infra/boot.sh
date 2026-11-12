@@ -38,7 +38,9 @@ answers() {
 
 # Two: the name resolves to the reserved address that DigitalOcean's metadata says is on this
 # machine now. A machine may not reach its own reserved address from inside, and then the first
-# way alone would wait for ever.
+# way alone would wait for ever. This way does not show that port 80 answers from outside, or
+# that the name has no other address: where the certificate is then refused, the unit fails and
+# is started again a quarter of an hour later.
 metadata=http://169.254.169.254/metadata/v1/reserved_ip/ipv4
 assigned() {
     [ "$(curl -fsS --max-time 5 "$metadata/active" 2>/dev/null || true)" = true ] || return 1

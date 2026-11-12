@@ -126,11 +126,14 @@ jobs:
           made=$(tofu show -json "$RUNNER_TEMP/plan" | jq '[.resource_changes[]? | select(.address == "digitalocean_droplet.site") | .change.actions[]] | index("create") != null')
           echo "made=$made" >> "$GITHUB_OUTPUT"
           tofu apply -input=false "$RUNNER_TEMP/plan"
-          echo "address=$(tofu output -raw address)" >> "$GITHUB_OUTPUT"
+          # Read first, so a read that fails fails the step: echo's status would hide it.
+          address=$(tofu output -raw address)
+          echo "address=$address" >> "$GITHUB_OUTPUT"
       # After every apply, not only one that made a machine: a run that failed after making one
       # leaves a machine with no release, and the run after it plans no machine. The machine is
       # asked at its own address, under the site's name, so the answer is that machine's and its
-      # certificate is the name's. nginx says 502 until a release is there.
+      # certificate is the name's. nginx says 502 until a release is there, and also while the
+      # service is down or restarting: either way a deploy is what puts it right.
       - name: Ship the site to a machine that has no release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -148,7 +151,7 @@ jobs:
           done
           if [ "$code" = 000 ]; then
             if [ -n "$SITE_HOST" ]; then
-              echo "::error::The machine at $ADDRESS does not answer as $SITE_DOMAIN, and deploys are on: the site is down. A machine this run made may still be setting itself up. Run this workflow again: it ships the site once the machine answers."
+              echo "::error::The machine at $ADDRESS does not answer as $SITE_DOMAIN, and deploys are on: the site is down. A machine this run made may still be setting itself up. Run this workflow again: it ships the site once the machine answers. If that run ends here too, see in DigitalOcean's control panel whether the address is on the droplet: an apply does not notice an address that is on none."
               exit 1
             fi
             echo "::warning::The machine at $ADDRESS does not answer as $SITE_DOMAIN yet. It sets itself up once the name reaches it: where the name's DNS is new, that waits on the registrar (deploy/README.md)."

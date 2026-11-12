@@ -64,8 +64,9 @@ until the site's name reaches it, and runs them itself.
 4. Run the workflow (`gh workflow run site-machine.yml`). It makes everything in `infra/`, then
    waits up to half an hour for the machine to answer and ends with a warning when it does not,
    as it will not while the name points elsewhere. A zone of the site's name already in the
-   DigitalOcean account makes this run fail: remove it there first, or leave the zone where it
-   is with `SITE_DNS_ELSEWHERE`.
+   DigitalOcean account makes this run fail. Removing it there removes its records, and its
+   answers at once if the registrar already names DigitalOcean's servers: add its records to
+   `infra/main.tf` first, or leave the zone where it is with `SITE_DNS_ELSEWHERE`.
 5. At the name's registrar, name `ns1.digitalocean.com`, `ns2.digitalocean.com` and
    `ns3.digitalocean.com` as the zone's name servers. Records the zone had elsewhere do not
    come along: add each to `infra/main.tf` first. The machine waits for the name to reach it,
@@ -78,22 +79,28 @@ until the site's name reaches it, and runs them itself.
    ```
 
 From then on a change on `main` under `infra/`, or to `provision.sh`, `nginx.conf` or the service
-file, is applied by the workflow, and by it alone: the Site workflow does not run for those
-files. A droplet is never changed in place. A change to anything it is handed, a comment in one
+file, is applied by the workflow. The Site workflow does not run for a change to those files
+and this guide alone. A merge that also changes the site starts both, and that Site run may
+ship to the machine being replaced or fail against the new one while it sets itself up: the
+run the `Site machine` workflow starts afterwards is the one that ships. A droplet is never
+changed in place. A change to anything it is handed, a comment in one
 of those files included, makes a new droplet, moves the address to it once it exists, and
 removes the old one; a droplet that cannot be made leaves the old one serving. After every apply
 the workflow asks the machine at the address for the site, and starts the Site workflow when a
-machine it made answers or the one there has no release.
+machine it made answers or the one there answers 502, as nginx does with no release behind it
+and also while the service is down.
 
 The site is down from the move until that release is served. That is the time a machine takes
 to install its packages and get a certificate, and then a whole run of the Site workflow, which
 tests and builds before it ships; none of it has been timed yet. The old machine and its
 certificate are gone by then, and Let's Encrypt issues the same name five certificates a week:
-a sixth replacement inside a week leaves the site down until the oldest of the five is a week
-old. So gather changes to those files into one merge. When an apply fails, run the workflow
-again (`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the
-site to a machine left without a release. With deploys on, a run fails when the machine does
-not answer.
+a sixth replacement inside a week leaves the site down until its limit allows another. So
+gather changes to those files into one merge. When an apply fails, run the workflow again
+(`gh workflow run site-machine.yml`): what it made is in the state, and the run ships the site
+to a machine that answers 502. With deploys on, a run fails when the machine does not answer.
+If a second run fails the same way, see in DigitalOcean's control panel whether the address is
+on the droplet: an apply does not notice an address that is on none, and puts it back only
+when it moves it.
 
 | Where | Name | What it is |
 |---|---|---|
