@@ -1,0 +1,10 @@
+[package]
+name = "corten-site"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Corten's landing page, served by Corten: the page is the demonstration, with its own source, compiler errors and live readings on it."
+
+[dependencies]
+corten = { package = "corten-run", path = "../../crates/corten", features = ["types", "compress"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }

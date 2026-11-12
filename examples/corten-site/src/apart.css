@@ -1,0 +1,329 @@
+/* Apart: one component as its three files, each cut to the lines where it meets the others.
+   The markup stands beside the pitch with the script right under it, so both ends of a call
+   are in one column, and the stylesheet stands under the pitch. A name one
+   file gives another is underlined in its kind's color, and filled where it is the one
+   followed. The whole files are behind a disclosure, in three panes that scroll. */
+.apart {
+  --named: var(--ember);
+  --called: #8fc1d6;
+  --classed: #a9cf9a;
+  --loose: #cfc6b8;
+
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  /* The markup and the stylesheet set their rows, and the middle one takes what the pitch and
+     the script need beyond them. */
+  grid-template-rows: auto 1fr auto auto;
+  align-items: start;
+  gap: clamp(1rem, 2vw, 1.75rem) clamp(1.5rem, 3vw, 3rem);
+  margin-bottom: clamp(2.75rem, 6.5svh, 5rem);
+}
+
+.pitch {
+  grid-row: 1 / span 2;
+  grid-column: 1 / span 5;
+  min-width: 0;
+}
+
+.file {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: color-mix(in srgb, var(--ink) 96%, transparent);
+  border-left: 3px solid var(--rust);
+  box-shadow:
+    0 1.5rem 3rem rgb(0 0 0 / 35%),
+    inset 0 0 0 1px color-mix(in srgb, var(--bone) 9%, transparent);
+}
+
+.markup {
+  grid-row: 1;
+  grid-column: 6 / -1;
+}
+
+.script {
+  grid-row: 2 / span 2;
+  grid-column: 6 / -1;
+}
+
+.styles {
+  grid-row: 3;
+  grid-column: 1 / span 5;
+}
+
+.name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 1rem;
+  padding: 0.55rem 1.1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--bone) 12%, transparent);
+  color: var(--bone);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.5;
+  text-transform: none;
+}
+
+.what {
+  color: var(--bone-dim);
+}
+
+.lines,
+.source {
+  padding: 0.9rem 1.1rem 1.1rem;
+  overflow: auto;
+  scroll-margin: 7rem 0 3.5rem;
+  scrollbar-color: color-mix(in srgb, var(--bone) 30%, transparent) transparent;
+  scrollbar-width: thin;
+  color: #d9d2c6;
+  font-size: 0.78rem;
+  line-height: 1.6;
+  tab-size: 4;
+}
+
+.source {
+  flex: 1;
+  min-height: 0;
+}
+
+.lines:focus-visible,
+.source:focus-visible {
+  outline: 2px solid var(--ember);
+  outline-offset: -2px;
+}
+
+/* Lines a cut passes over: their count, and a dashed rule to the plate's edge. */
+.gap {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.2rem 0;
+  color: #958e82;
+  font-size: 0.7rem;
+  user-select: none;
+}
+
+.gap::after {
+  flex: 1;
+  border-top: 1px dashed color-mix(in srgb, var(--bone) 20%, transparent);
+  content: "";
+}
+
+.keyword {
+  color: #e0875a;
+}
+
+.text {
+  color: #d8b77c;
+}
+
+.comment {
+  color: #a39c90;
+}
+
+.macro {
+  color: var(--ember);
+}
+
+.number {
+  color: #c9a58f;
+}
+
+.tied {
+  border-radius: 2px;
+  color: var(--kind);
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+}
+
+@media (scripting: enabled) {
+  pre .tied {
+    cursor: pointer;
+  }
+}
+
+.still pre .tied {
+  cursor: auto;
+}
+
+.named {
+  --kind: var(--named);
+}
+
+.called {
+  --kind: var(--called);
+}
+
+.classed {
+  --kind: var(--classed);
+}
+
+.loose {
+  --kind: var(--loose);
+
+  text-decoration-style: wavy;
+}
+
+.tied[data-lit] {
+  background: var(--kind);
+  box-shadow: 0 0 0 2px var(--kind);
+  color: var(--pit);
+  text-decoration: none;
+}
+
+@media (forced-colors: active) {
+  .tied[data-lit] {
+    background: Highlight;
+    box-shadow: 0 0 0 2px Highlight;
+    color: HighlightText;
+  }
+}
+
+/* Under a file: what the name that leads into it is, and what holds it. The name is a button
+   that follows it. */
+.note {
+  padding: 0.6rem 1.1rem 0.7rem;
+  border-top: 1px solid color-mix(in srgb, var(--bone) 12%, transparent);
+  color: #d9d2c6;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.note code,
+.follow {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+}
+
+.follow {
+  margin-right: 0.15rem;
+  padding: 0.1rem 0.45rem;
+  background: color-mix(in srgb, var(--kind) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--kind) 60%, transparent);
+  color: var(--kind);
+  cursor: pointer;
+}
+
+.follow:hover {
+  background: var(--kind);
+  color: var(--pit);
+}
+
+/* Only a script follows a name, so where none runs the button is the name as written and the
+   offer to point at one is not made. */
+@media (scripting: none) {
+  .follow {
+    padding: 0;
+    background: none;
+    border: 0;
+    pointer-events: none;
+  }
+
+  .live {
+    display: none;
+  }
+}
+
+.whole {
+  grid-row: 4;
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.all {
+  width: fit-content;
+  padding: 0.35rem 0;
+  color: var(--bone);
+  font-size: 0.9375rem;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--bone) 45%, transparent);
+  text-underline-offset: 0.25em;
+  cursor: pointer;
+}
+
+.all:hover {
+  text-decoration-color: var(--bone);
+}
+
+.rest {
+  max-width: 62ch;
+  margin: 0.6rem 0 0.9rem;
+  color: color-mix(in srgb, var(--bone) 82%, transparent);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.rest code {
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+}
+
+/* The whole files: the markup tall on the left, the two files it names beside it. */
+.files {
+  display: grid;
+  grid-template-columns: minmax(0, 6fr) minmax(0, 6fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0.75rem;
+  height: min(36rem, 74svh);
+}
+
+.files > :first-child {
+  grid-row: 1 / -1;
+}
+
+@media (max-width: 62rem) {
+  .apart {
+    grid-template-rows: none;
+  }
+
+  .pitch,
+  .markup,
+  .script,
+  .styles,
+  .whole {
+    grid-row: auto;
+    grid-column: 1 / -1;
+  }
+
+  .files {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    height: auto;
+  }
+
+  .files > :first-child {
+    grid-row: auto;
+  }
+
+  .source {
+    max-height: min(17rem, 42svh);
+  }
+}
+
+@media (max-width: 40rem) {
+  .lines,
+  .source {
+    padding: 0.75rem 0.8rem 0.9rem;
+    font-size: 0.72rem;
+  }
+
+  .note {
+    padding: 0.55rem 0.8rem 0.65rem;
+  }
+}
+
+@media print {
+  .files {
+    height: auto;
+  }
+
+  .source {
+    overflow: visible;
+  }
+}

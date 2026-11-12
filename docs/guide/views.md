@@ -543,8 +543,8 @@ An app chooses once, by how many locales it has:
    a literal.
 
 Moving from the first to the second is mechanical: each literal becomes a key. card-market is
-the second kind (English and French); watchlist, seller-desk, deck-builder, ui-gallery and listings-feed are
-the first.
+the second kind (English and French); watchlist, seller-desk, deck-builder, ui-gallery, listings-feed and
+corten-site are the first.
 
 A message with one argument takes it as the method's parameter (`t.grid_items(count)`). One with two
 or more takes them by name, in a struct the catalog's module has for it (`Msg`'s is `msg`), so two

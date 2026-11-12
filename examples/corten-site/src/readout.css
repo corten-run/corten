@@ -1,0 +1,83 @@
+/* Readout: the server's own numbers. One that just moved is hot metal, and cools to bone. */
+.readout {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 1px;
+  background: color-mix(in srgb, var(--bone) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--bone) 16%, transparent);
+  box-shadow: 0 1.5rem 3rem rgb(0 0 0 / 35%);
+}
+
+.gauge {
+  display: grid;
+  grid-column: span 2;
+  align-content: space-between;
+  gap: 1.5rem;
+  min-height: 9.5rem;
+  padding: 1rem 1.15rem 1.1rem;
+  background: var(--ink);
+}
+
+.gauge:nth-child(n + 4) {
+  grid-column: span 3;
+}
+
+/* Six gauges, where the server can read its own memory, are two rows of three. */
+@media (min-width: 36.01rem) {
+  .readout:has(> :nth-child(6)) .gauge {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 36rem) {
+  .gauge,
+  .gauge:nth-child(n + 4) {
+    grid-column: span 6;
+    min-height: 0;
+  }
+}
+
+.gauge dt {
+  color: var(--bone-dim);
+  font-size: 0.875rem;
+}
+
+.figure {
+  font-family: var(--display);
+  font-stretch: 75%;
+  font-weight: 700;
+  font-size: clamp(2.8rem, 5vw, 4.4rem);
+  font-variant-numeric: tabular-nums;
+  line-height: 0.85;
+}
+
+.unit {
+  font-size: 0.45em;
+  font-weight: 400;
+  color: var(--bone-dim);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hot {
+    animation: readout-cool 900ms ease-out;
+  }
+}
+
+@keyframes readout-cool {
+  from {
+    color: #fff3d6;
+    text-shadow:
+      0 0 0.35em var(--ember),
+      0 0 1.2em #e0622a;
+  }
+
+  35% {
+    color: var(--ember);
+    text-shadow: 0 0 0.6em rgb(224 98 42 / 60%);
+  }
+
+  to {
+    color: var(--bone);
+    text-shadow: none;
+  }
+}

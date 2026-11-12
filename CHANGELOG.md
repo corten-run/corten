@@ -7,6 +7,14 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- `examples/corten-site`: Corten's own site as an example. It is one page that demonstrates
+  itself: a link reloads it with every script blocked, one of its components is shown as the
+  lines where its three files meet, its own source is broken five ways with what the compiler
+  said, and the server streams its own readings, with the memory it holds and the machine it is on
+  where the system counts them. Tests hold what it says to `docs/performance.md`, the README,
+  `docs/design.md` or its own source. `deploy/` and the `Site` workflow ship it to one small machine behind nginx
+  as a systemd service; the workflow does nothing until the repository names a machine. Its smoke
+  test runs in CI's `webkit-gallery` group.
 - The watchlist smoke checks three runtime behaviors it did not. A tapped link nothing hovered is
   prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
   has no Navigation API, so nothing is prefetched). An upload answered with a status that has no

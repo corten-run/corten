@@ -1,0 +1,91 @@
+# Ships examples/corten-site to the machine that serves it (examples/corten-site/deploy/README.md):
+# tests the site, builds the release binary, copies it over SSH, points `current` at it and
+# restarts the service, then asks the site for its page, its commit and its live stream. A site
+# that does not answer as this commit is put back on the release before. Does nothing until the
+# repository variable SITE_HOST names a machine.
+name: Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - examples/corten-site/**
+      - crates/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/site.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and each one finishes: a cancelled deploy could leave `current` half moved.
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only main is shipped, whatever ref the workflow is run from by hand.
+    if: vars.SITE_HOST != '' && github.ref == 'refs/heads/main'
+    # The machine runs Ubuntu 24.04 too, so the binary finds the C library it was linked against.
+    runs-on: ubuntu-24.04
+    # The deploy key is this environment's secret. Give the environment a deployment branch rule
+    # for main (deploy/README.md), so no other branch's workflow can read it.
+    environment: site
+    env:
+      SITE_HOST: ${{ vars.SITE_HOST }}
+      SITE_DOMAIN: ${{ vars.SITE_DOMAIN }}
+    steps:
+      - name: The repository names the machine and the site
+        run: |
+          [ -n "$SITE_HOST" ] && [ -n "$SITE_DOMAIN" ] || { echo "set the repository variables SITE_HOST and SITE_DOMAIN"; exit 1; }
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      # CI tests a pull request before it merges; this tests the commit that is about to be served.
+      - name: The site's tests
+        run: cargo test --locked -p corten-site
+      - name: Build the release the site will say it is
+        run: CORTEN_SITE_HEAT="${GITHUB_SHA::7}" cargo build --release --locked -p corten-site
+      - name: The deploy key, and the machine's own host key
+        env:
+          SITE_SSH_KEY: ${{ secrets.SITE_SSH_KEY }}
+          SITE_KNOWN_HOSTS: ${{ secrets.SITE_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SITE_SSH_KEY" > ~/.ssh/site && chmod 600 ~/.ssh/site
+          printf '%s\n' "$SITE_KNOWN_HOSTS" > ~/.ssh/known_hosts
+      - name: Ship it, and put the release before back if the site does not come up as this commit
+        run: |
+          set -eu
+          commit="${GITHUB_SHA::7}"
+          release="/opt/corten-site/releases/${GITHUB_SHA::12}"
+          site="https://$SITE_DOMAIN"
+          ssh="ssh -i $HOME/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes deploy@$SITE_HOST"
+          # deploy/release.sh runs on the machine, sent with each deploy.
+          machine() { $ssh sh -s -- "$@" < examples/corten-site/deploy/release.sh; }
+          before=$($ssh 'readlink /opt/corten-site/current 2>/dev/null || true')
+          $ssh "mkdir -p $release"
+          scp -i ~/.ssh/site -o IdentitiesOnly=yes -o BatchMode=yes target/release/corten-site "deploy@$SITE_HOST:$release/corten-site.new"
+          # The page as HTML names the commit it was built from, its JSON does too, and its live
+          # stream sends a reading every second.
+          page() { curl -fsS --max-time 5 "$site/" | grep -q "built from $1"; }
+          json() { curl -fsS --max-time 5 -H 'accept: application/json' "$site/" | grep -q "\"heat\":\"$1\""; }
+          stream() { curl -sS -N --max-time 5 "$site/live/works" 2>/dev/null | grep -q '^event: patch'; }
+          machine serve "$release"
+          for try in $(seq 1 20); do
+            if page "$commit" && json "$commit" && stream; then
+              echo "$site/ is serving $commit"
+              machine prune
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the site did not come up as $commit"
+          if [ -n "$before" ] && [ "$before" != "$release" ]; then
+            machine serve "$before"
+            sleep 2
+            if curl -fsS --max-time 5 -o /dev/null "$site/"; then echo "put back on $before, which answers"; else echo "put back on $before, which does not answer either"; fi
+          fi
+          exit 1
