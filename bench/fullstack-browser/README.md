@@ -84,6 +84,9 @@ are not saved. Only `email` and `target_price` are extracted from submitted bodi
 platform URL-encoded/multipart parsing or observed Livewire snapshots/updates. External-origin
 browser traffic is blocked, not replaced with local code; any resulting request failure is
 retained as a failure. CSRF fields and session state stay native and in memory.
+Semantic DOM polling runs on the host, without eval or CSP changes. Document replacement
+while sampling is retained in `observerTransitions`; only read-only observation continues,
+within the original action deadline. Actions and forms are never redispatched.
 
 The initial response is parsed again in a separate script-disabled browser context from its
 actual response bytes. This is independent SSR extraction, not a reference renderer. That
@@ -134,6 +137,8 @@ layout does not qualify it. Qualification needs actual `wire:id`/`wire:submit` b
 observed component update POSTs. Rails needs real Turbo presence and Turbo navigation/form
 requests; a plain controller document is not substituted for Hotwire. Architecture disclosure
 uses observed page/runtime markers and requests, not the inventory's historical labels.
+The independent SSR parse also retains native markers, including bootstrap scripts that
+hydration may remove; Astro's emitted ClientRouter module is an observed native marker.
 Unrecognized markers stay explicitly unverified.
 
 Adapter work to dispatch after the runner is integrated:
@@ -153,6 +158,9 @@ Adapter work to dispatch after the runner is integrated:
    is insufficient.
 5. Every candidate needs trustworthy retired-page resource ownership and a bounded event probe;
    destroying a whole browser context is not proof that native page replacement cleaned itself up.
+6. SvelteKit's observed native `.../item_2/__data.json` GET changes the correct visible route,
+   but the shared oracle currently recognizes alternate data destinations only for Next Pages.
+   This remains a failed navigation-request check, not a silent document fallback or a changed gate.
 
 Owned contexts are closed and closure is observed; owned Docker containers, anonymous volumes
 and networks are removed with ownership checks in `finally`, including interruption/failure.
