@@ -100,6 +100,15 @@ Corten is pre-1.0, so any minor version may change the API.
   any other connection, and end idle ones in the route (a deadline from the last frame heard, with
   pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
   ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
+- A request reads what its area or API sets (deadline, body limit, CSP and shell key,
+  middleware, its API) from the route it matched: `App::router` resolves each area's and API's
+  once, with those of the areas and APIs around it, and gives it to each of their routes, where
+  each request looked it up by its path in six prefix tables. Only an unknown URL, whose `404`
+  is its prefix's, and a route whose parameter or catch-all can match under another prefix (a
+  page's `/{*rest}`) look it up by path, so what a request meets is unchanged. A page in an
+  inner area costs 328 instructions fewer and an API's JSON 223 fewer, and in an app with no
+  areas or APIs each costs 138 fewer (callgrind, release, jemalloc, five runs each)
+  ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)).
 
 ### Fixed
 

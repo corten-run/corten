@@ -838,9 +838,9 @@ rules something out.
     would be a second place a route's settings live beside its area or API; and a type parameter
     on the readers (`Json<T, LIMIT>`), which puts a server setting in every handler's signature.
     The request's `Signal`, which every staged request already allocates, carries the limit,
-    so setting one adds no allocation: each request pays the limit's selection (a comparison, or a
-    prefix lookup in an area) and an XOR as its signal is made, and a reader the lookup of the
-    signal and another XOR.
+    so setting one adds no allocation: each request reads the limit from its route's scope
+    ([Choice 28](#choice-fixed-stages)) and pays an XOR as its signal is made, and a reader the
+    lookup of the signal and another XOR.
     The readers wait for a slow client until the deadline, not an idle time as an `Upload` does,
     so a raised limit is held that long: a prefix that raises one keeps a deadline. A route that
     says `unstaged` reads no body; one that takes more than its prefix allows takes the whole
@@ -1515,8 +1515,13 @@ rules something out.
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
     `corten::middleware`'s; the app's steps are resolved at compile time. An area's or an API's
     own steps (`Area::middleware`, `Api::middleware`) run right after the app's, for the requests
-    at its prefix; they are boxed, since which run depends on the path, and an app with none pays
-    nothing for them. A route that says `unstaged` where it is declared, in the app's routes
+    at its prefix; they are boxed, since which run depends on the route, and an app with none pays
+    nothing for them. What an area or API sets (its deadline, body limit, policy and middleware,
+    with those of the areas and APIs around it) is resolved once for each when the router is
+    built and given to each of its routes, so a request reads it from the route it matched; only
+    an unknown URL, whose `404` belongs to the prefix it is under, and a route whose parameter or
+    catch-all can match under another prefix (a page's `/{*rest}` beside an area) look it up by
+    the request's path. A route that says `unstaged` where it is declared, in the app's routes
     module, an area's or an API's, goes through none of the stages, the app's, area's and API's
     middleware among them, and every other route keeps every stage. It is every stage or no stage, so the
     order a reader checks is still one, and a flag, as `no_store` is, that names what the route
@@ -1646,7 +1651,15 @@ rules something out.
     match against the app's names (`security::named`, about 400 in the profile)); measured
     (callgrind, release, five runs each, the same handler on Corten's router at `373a10f9`:
     unstaged 6,932 with jemalloc and 7,745 with glibc in every run, against 7,099 and 8,117 for a
-    plain axum router in the same build); measured (callgrind, release, five runs each, the same
+    plain axum router in the same build); measured (callgrind, release, jemalloc, five runs each
+    alternating with main `31de4268`, a request counted as the run of 1,200 less the run of 200
+    over 1,000 by `tests::what_a_request_in_an_area_costs`, median and range: each route given
+    its scope at `f7d33ce2` against six prefix lookups a request, in an app with two areas (one
+    inside the other) and an API that each set a deadline, a body limit and a middleware, a page
+    in the inner area 23,733 (23,733 to 23,733) against 24,061 (24,061 to 24,061) and the API's
+    JSON 13,647 (13,647 to 13,648) against 13,870 (13,870 to 13,870), and in an app with none
+    the same page 18,261 (18,261 to 18,261) against 18,399 (18,397 to 18,399) and JSON 12,957
+    (12,957 to 12,957) against 13,095 (13,095 to 13,095)); measured (callgrind, release, five runs each, the same
     handler through its lane at `bfa20380`: 7,003 with jemalloc in every run and 7,068 in an
     API's module, against 6,932 and 6,982 with its checks in its handler at `8ddeaea2`, and 7,085
     for a plain axum router in both builds; 7,812 and 7,879 with glibc, three runs, against 7,745
@@ -1693,11 +1706,11 @@ rules something out.
     through its lane, 7,030 and 7,076 since step 4), when a control that shares no code with
     Corten counts the same in both builds (a plain axum router, 7,085 in both, until step 4; since
     step 4 a `service_fn` with no framework, 3,190 in both), or the control itself moves between
-    builds by more than the route does, which says the harness no longer separates them; or a request outside every area costs more than twice
-    the about 200 instructions measured here over the build before area middleware (the lookup
-    and any layout effect together; layout alone moved a whole request by about 280). Area
-    middleware has no switch, so the next check builds current main with the prefix lookup taken
-    out by hand rather than going back to `9200aae4`.
+    builds by more than the route does, which says the harness no longer separates them; or a
+    staged request in an app with no areas or APIs costs more than about 100 instructions over
+    what it cost when each route was given its scope (`tests::what_a_request_in_an_area_costs`
+    at `f7d33ce2`, jemalloc: 18,261 for a page and 12,957 for an API's JSON), or a lookup by path
+    comes back for a route that cannot match under another prefix.
 
     Last checked: 2026-10-29, the area middleware runs of
     [#353 Area and API middleware: a write limit for the requests at a prefix, with no path checks](https://github.com/corten-run/corten/pull/353)
@@ -1720,7 +1733,9 @@ rules something out.
     variant of `8ddeaea2`; 2026-11-09, the `laned` variant of `fa0b1525`; 2026-11-10, the
     unstaged route and the plain axum router with axum gone (step 4) at `5548c97a` against step 3
     at `67e7f5f5`, with the profile of each, and the `service_fn` control with no framework in both
-    builds (three runs each with jemalloc and with glibc, every run the same).
+    builds (three runs each with jemalloc and with glibc, every run the same); 2026-11-12, each
+    route given its area's or API's scope at `f7d33ce2` against main `31de4268`
+    ([#1213 The stages find a request's area by its path in six prefix tables after the router has already matched its route](https://github.com/corten-run/corten/issues/1213)).
 
 29. <a id="choice-upload-xhr"></a>**A write whose form hears its progress (`on:corten:progress`) is sent by
     `XMLHttpRequest`, in a module of its own; every other submit is a `fetch`.** `fetch` reports
