@@ -3,6 +3,8 @@
 `GET /api/alerts` returns the current session's native JSON array in insertion
 order: `[{item_id,email,target_minor}]`. A new cookie jar sees `[]`; repeated reads
 do not consume or reset alerts. Readback is independent of the form response.
+HEAD uses the native GET handler with no response body. Other methods return
+405 JSON with `Allow: GET, HEAD` and do not change the session's alerts.
 
 An accepted marketplace POST appends exactly one row after checking the locale,
 item, email and localized target. Invalid fields, missing items and cross-site

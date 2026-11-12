@@ -10,5 +10,7 @@ export const Route = createFileRoute("/api/alerts")({
       path: "/", httpOnly: true, sameSite: "lax", secure: new URL(request.url).protocol === "https:", maxAge: alertLifetime,
     });
     return Response.json(readAlerts(token), { headers: { "Cache-Control": "private, no-store" } });
-  } } },
+  }, ANY: () => Response.json({ error: "method not allowed" }, {
+    status: 405, headers: { Allow: "GET, HEAD", "Cache-Control": "private, no-store" },
+  }) } },
 });

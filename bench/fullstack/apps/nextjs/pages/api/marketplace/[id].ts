@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import type { MarketplaceRecord } from "../../../lib/marketplace";
 import { fetchMarketplaceRecord } from "../../../lib/marketplace-server";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -18,7 +19,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: "Forbidden" });
     if (!(req.headers["content-type"] ?? "").startsWith("application/x-www-form-urlencoded"))
       return res.status(415).json({ error: "Expected form data" });
-    const record = await fetchMarketplaceRecord(String(req.query.id ?? ""));
+    let record: MarketplaceRecord | null;
+    try {
+      record = await fetchMarketplaceRecord(String(req.query.id ?? ""));
+    } catch {
+      return res.status(502).json({ error: "marketplace source failed" });
+    }
     if (!record) return res.status(404).json({ error: "not found" });
     const form = new URLSearchParams();
     for (const name of ["email", "target_price"]) form.set(name, typeof req.body?.[name] === "string" ? req.body[name] : "");

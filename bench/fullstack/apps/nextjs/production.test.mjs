@@ -97,6 +97,53 @@ async function fixtureApp(profile, run, env = {}, npmStart = false) {
   }
 }
 
+test("enhanced alert POST returns JSON source failures without changing its session", { timeout: 45000 }, async (t) => {
+  const record = { id: "item_1", title: "Synthetic item", subtitle: null, description: "",
+    categories: [], badges: [], tags: [], images: [], fields: [], summary: null,
+    listings: [], offers: [], contents: [], included_in: [] };
+  const upstream = createServer((request, response) => {
+    const id = request.url.split("/").at(-1);
+    response.setHeader("Content-Type", "application/json");
+    if (id === "failed") { response.writeHead(503); response.end('{"error":"unavailable"}'); }
+    else if (id === "malformed") response.end('{"id":"malformed"}');
+    else if (id === "invalid-json") response.end('{');
+    else response.end(JSON.stringify(record));
+  });
+  await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+  try {
+    await fixtureApp(profile, async (base) => {
+      const initial = await fetch(base + "/api/alerts");
+      assert.deepEqual(await initial.json(), []);
+      const cookie = initial.headers.getSetCookie().map((value) => value.split(";")[0]).join("; ");
+      const post = (id) => fetch(`${base}/api/marketplace/${id}?locale=en-US`, {
+        method: "POST", headers: { Origin: base, Cookie: cookie },
+        body: new URLSearchParams({ email: "source@example.test", target_price: "1.25" }),
+        signal: AbortSignal.timeout(10000),
+      });
+      const accepted = await post("item_1");
+      assert.equal(accepted.status, 200);
+      await accepted.json();
+      const readback = async () => (await fetch(base + "/api/alerts", { headers: { Cookie: cookie } })).json();
+      const expected = [{ item_id: "item_1", email: "source@example.test", target_minor: 125 }];
+      assert.deepEqual(await readback(), expected);
+      for (const id of ["failed", "malformed", "invalid-json"]) await t.test(id, async () => {
+        const response = await post(id);
+        const body = await response.text();
+        assert.deepEqual(await readback(), expected, "source failure must not append an alert");
+        assert.equal(response.status, 502, body);
+        assert.match(response.headers.get("content-type"), /application\/json/);
+        assert.match(response.headers.get("cache-control"), /no-store/);
+        assert.deepEqual(JSON.parse(body), { error: "marketplace source failed" });
+        const get = await fetch(`${base}/api/marketplace/${id}`);
+        assert.equal(get.status, 502);
+        assert.deepEqual(await get.json(), { error: "marketplace source failed" });
+      });
+    }, { MARKETPLACE_SOURCE: "http", API_BASE: `http://127.0.0.1:${upstream.address().port}` });
+  } finally {
+    await new Promise((resolve, reject) => upstream.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test(`built ${profile || "default"} artifact preserves native not-found prerendering and rejects mismatched runtime`, () => {
   const manifest = JSON.parse(readFileSync(new URL("./.next/required-server-files.json", import.meta.url), "utf8"));
   assert.equal(manifest.config.env.PROFILE, profile, "test PROFILE must match the independently built artifact");
