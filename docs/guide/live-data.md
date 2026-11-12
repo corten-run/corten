@@ -77,7 +77,7 @@ one page with the slow read in it: `?picks=true` waits for the read wherever it 
 JavaScript too, so the link is `rel="nofollow"` and nothing else links there. A page with several
 slow parts reads them all in under one field, and a data client asks the same address for the
 part. What the pattern costs is one field plus one handler branch per page
-([design Choice 43](../design.md#choice-slow-part-link)).
+([design Choice 44](../design.md#choice-slow-part-link)).
 
 A value that keeps changing is the next section's `corten::live_watch`.
 

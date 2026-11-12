@@ -7,6 +7,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- Feature-qualified marketplace comparison groups: popular and performance-oriented
+  candidate pools share one deduplicated production run instead of timing the full inventory
+  each night. Both sources must satisfy the same scoped production checklist, then the full
+  localized browser/content gate; unsupported candidates are listed with missing features,
+  not timed or silently dropped. No framework is an unconditional anchor. ETag and downstream
+  readiness are disclosed exceptions, not claims of complete enterprise equivalence.
+
 - The marketplace alert-form check saves the exact submitted case, POST status and response,
   current message and original timeout when the result message does not arrive. The
   React Router timeout from r19 remains unconfirmed as an adapter defect
@@ -84,7 +91,7 @@ Corten is pre-1.0, so any minor version may change the API.
 - A slow part a `<corten-live>` stream sends once had no answer without JavaScript: the browser
   opens no stream, so its placeholder stayed for good, as it did when a stream gave up. The live
   data guide's slow-part pattern and
-  [design Choice 43](docs/design.md#choice-slow-part-link) now give it one with what routes
+  [design Choice 44](docs/design.md#choice-slow-part-link) now give it one with what routes
   already do: the placeholder holds a link (`rel="nofollow"`) to the page's own route with a query
   field that has its handler read the part in (`url::Home { picks: Some(true) }`), so an app
   writes no second route per part, at the cost of one field plus one handler branch per page.
@@ -164,6 +171,13 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Documentation
 
+- [The Choice on npm onboarding](docs/design.md#choice-no-npm-launcher) records why Corten
+  publishes no npm initializer that creates an app (`npm create corten`): the app would still
+  build with Cargo and its other commands are installed by Cargo, so it would replace only
+  `corten new`, at the cost of a second way to start an app and a second release channel. It also
+  records that `create-corten` is held by a placeholder, published once by hand, that prints the
+  Cargo steps, so the npm convention cannot run a stranger's code
+  ([#872 Evaluate optional npm onboarding through a launcher for the existing Corten CLI](https://github.com/corten-run/corten/issues/872)).
 - `bench/fullstack/README.md`'s four cited commits that GitHub did not keep on `main`'s history
   (`2fa883a6`, `1e1fb7be`, `eedbcc2a`, and `7f0b81f`, which only the branch `bench/r13-tree` held) are
   kept under `refs/tags/evidence/`, so `scripts/design-refs.mjs` checks every commit the file

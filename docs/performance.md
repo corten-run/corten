@@ -46,7 +46,13 @@ The nightly suite measures CPU, memory, load and cold start. Three passes use
 `--duration 15 --warmup 10 --rate 150` on a dedicated c-8 with app CPU 1, upstream CPUs 2-3
 and load-generator CPUs 4-7. Pages are timed in `en-US`, `fr-FR` and `de-DE`; locale-neutral
 JSON is timed once per source per pass, not repeated as a locale control. The pre-load gate
-still requires all twenty apps (eighteen in r17), both sources and every conformance profile.
+requires every adapter in the reserved [framework group](../bench/marketplace/nightly.md#framework-groups),
+both sources and every conformance profile for each feature-qualified candidate. Popular and
+performance-oriented shortlists share one deduplicated production run; native capability
+probes exclude unsupported peers, with explicit reasons. Axum is not an automatic anchor.
+A group result does not rank unmeasured apps; only identical groups, admitted sets and
+otherwise compatible configurations can be compared. The scoped production checklist's
+ETag and downstream-readiness exceptions are disclosed in the group contract.
 
 Report these as short-window medians and ranges, with errors, utilization and headroom limits;
 they do not guarantee a finish by 7 am or establish small differences without repeatability.
