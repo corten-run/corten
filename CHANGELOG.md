@@ -15,6 +15,13 @@ Corten is pre-1.0, so any minor version may change the API.
   connection idle at once, and a downstream proxy measured hundreds of streams cut at 29 to 31 s
   under the default 30 s
   ([#1218 A CONNECT answered 2xx goes idle like a plain answer, so the header timeout cuts the tunnel mid-stream (only a 101 stays busy)](https://github.com/corten-run/corten/issues/1218)).
+- Locale negotiation follows RFC 4647 Lookup: an `Accept-Language` tag loses its last subtag (and
+  a single-character one before it) until it names a listed locale, before the first locale of
+  its language is taken, so `zh-Hant-TW` gets `zh-Hant` and `sr-Latn-RS` gets `sr-Latn` in an app
+  that lists `zh` or `sr` first, and `fr-CA-u-ca-gregory` gets a listed `fr-CA`. Before, a tag
+  that was not listed went straight to the first locale of its language, so those readers got
+  the other script
+  ([#1234 Locale negotiation jumps from an exact tag straight to the primary language, so zh-Hant-TW gets zh and sr-Latn-RS gets sr when both are listed](https://github.com/corten-run/corten/issues/1234)).
 
 ## 0.2.0 (2026-11-11)
 

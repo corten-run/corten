@@ -674,7 +674,17 @@ amount or a date takes the page's format (`t.js().money(USD)`) and writes the sa
 ### A locale in the URL
 
 `req.t()` and `req.lang()` follow the browser's `Accept-Language`, and so does the page's
-`Vary`. A page that a shared cache keeps (`Public`), or one whose address should name its
+`Vary`. The locale is picked by RFC 4647 Lookup: the header's languages are taken highest `q`
+first, and each loses its last subtag until it is one `messages!` lists (`zh-Hant-TW` is
+`zh-Hant`, `fr-CA-u-ca-gregory` is `fr-CA`, `fr-BE` is `fr`); one that shortens to nothing listed
+takes the first listed locale of its language (`fr` takes `fr-CA`) before the next is tried, and
+a header that matches nothing gets the first locale. So `zh-Hant-TW,zh;q=0.9` gets `zh-Hant`
+when both `zh` and `zh-Hant` are listed: a shorter form of the reader's first choice comes
+before their second. Lookup only shortens a tag, so a browser that sends `zh-TW` or `zh-HK` gets
+`zh` (Simplified) when it is listed, not `zh-Hant`; an app with Traditional Chinese readers
+lists `zh-TW` and `zh-HK` too, which Corten has data for.
+
+A page that a shared cache keeps (`Public`), or one whose address should name its
 language (a link to the French page), takes its locale from its URL instead: a
 `corten::i18n::Locale<Msg>` route field, read only as one of the tags `messages!` lists, as
 it lists it (`/FR/..` is refused, so a page has one URL per locale; so is a tag it does not list,
