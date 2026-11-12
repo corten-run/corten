@@ -1,5 +1,7 @@
 """The FastAPI app's own tests (python -m unittest, with requirements.txt installed): formatting,
-the page's rows and links, the cross-site post check, and both sources, each read per request."""
+the page's rows and links, the cross-site post check, and both sources, each read per request.
+Run them with the profile off, or with HOSTS=testserver under PROFILE=matched (its host list
+refuses the test client's host)."""
 import asyncio
 from copy import deepcopy
 import json
