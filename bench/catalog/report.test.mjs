@@ -25,6 +25,17 @@ test("a clean complete result requires all twenty apps and requested passes", ()
   assert.deepEqual(report.apps.corten["fixture-page"].rps, { median: 200, min: 100, max: 300 });
   assert.match(renderCatalog(report), /200 \[100, 300\] \(3\/3\)/);
 });
+
+test("historical catalog validation does not acquire group-only provenance or aggregate requirements", () => {
+  const s = result();
+  assert.equal(s.commitAfter, undefined);
+  assert.equal(s.dirtyAfter, undefined);
+  assert.equal(s.apps.corten.phases, undefined);
+  assert.equal(inspectCatalog(s).baseline, true);
+  s.commitAfter = "b".repeat(40);
+  s.dirtyAfter = true;
+  assert.equal(inspectCatalog(s).baseline, true, "optional new fields do not change legacy validation");
+});
 test("unfinished, failed, dirty, check-only, missing checks and subset runs are never baselines", () => {
   for (const change of [
     (s) => { delete s.finishedAt; s.complete = false; },

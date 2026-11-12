@@ -5,6 +5,11 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ## Unreleased
 
+- Add a versioned workload-group registry with the approved popular and performance-oriented
+  challengers, separate functional-parity and measurement coverage, and explicit retained
+  benchmark families. The localized-marketplace selection reuses existing strict gates;
+  other native group integrations remain pending, not measured results.
+
 ### Added
 
 - `examples/corten-site`: Corten's own site as an example. It is one page that demonstrates
@@ -21,6 +26,35 @@ Corten is pre-1.0, so any minor version may change the API.
   Chromium, Firefox and WebKit, in CI's `webkit-gallery` group, and builds and draws the plate
   behind the page (one fragment shader, drawn after weathering steel) in Chromium, where it also
   reads that the plate is no brighter under the steel's type than the type can stand.
+
+- Offline correctness contracts for the full-stack browser and client-heavy groups
+  cover native navigation/forms, equivalent keyed state, operation-time HTTP and
+  terminal resource cleanup. Reference helpers cannot supply native observations;
+  these contracts do not qualify adapters or produce timings.
+
+- Ordinary ASP.NET Core's catalog and marketplace JSON routes support native `HEAD`
+  and Problem Details for JSON-compatible clients in both profiles. Page/form error
+  handling stays separate; these functional checks are not production qualification
+  or performance results.
+
+- The separate ASP.NET Core Native AOT JSON adapter now supports complete catalog and numeric
+  marketplace records through native source-generated serialization, with fixture-at-startup
+  or uncached request-time HTTP sources. Focused source and native executable checks cover
+  schemas, error responses, redirects, cancellation and deadlines. Ordinary ASP.NET Core stays
+  a separate challenger; this is not page parity or a group performance result.
+
+- A catalog-page workload-group runner with page-only timing in both sources, retained native
+  page and JSON correctness gates, immutable image bindings and checked after-run provenance
+  and aggregates. Legacy catalog rounds keep their original validation. A separate JSON-only
+  functional gate checks complete catalog and marketplace records, uncached upstream work
+  and JSON errors without imposing page features; native serialization still requires source
+  verification. Neither integration establishes a new baseline or cloud-run readiness.
+
+- Offline correctness contracts for the approved mixed-traffic, live-delivery,
+  recoverable-live and hardening groups. They preserve native transport/form behavior,
+  independent state readback, bounded-resource cleanup and explicit failure outcomes.
+  Synthetic contract tests are not native adapter qualification or measured results;
+  runner integration remains pending.
 
 - A nightly `bench/marketplace` group round can be split across droplets started together:
   `droplet.mjs rN --droplets <n> --detach` checks the checkout, existing droplets and the
@@ -115,6 +149,24 @@ Corten is pre-1.0, so any minor version may change the API.
   any other connection, and end idle ones in the route (a deadline from the last frame heard, with
   pings for a client that only listens, as `examples/watchlist`'s `/quotes` does)
   ([#1249 max_connections does not count a switched connection: a WebSocket or CONNECT tunnel releases its permit when hyper hands off the socket](https://github.com/corten-run/corten/issues/1249)).
+
+- `data-on` is written single-quoted, so the JSON of a handler's arguments keeps its quotes and
+  only `&`, `'`, `<` and `>` in it are entities. A large `ToJson` argument, the data a script
+  searches or sorts in the browser, stays a typed handler argument and costs about its JSON's
+  size: 300 products (51,073 bytes of JSON) went from an attribute of 96,130 bytes to one of
+  51,130, 5,302 bytes with zstd against 6,265, and Chromium, Firefox and WebKit parsed such a page
+  in about 9 to 23% of the time, four to twelve times faster (Chromium 235 to 323 µs against
+  1,401 to 1,616, Firefox 120 to 130 against 1,240 to 1,390, WebKit 390 to 480 against 2,620 to
+  3,500, measured; the ends of each engine's ranges paired, from Firefox's 120 against 1,390 to
+  Chromium's 323 against 1,401). Formats and messages a page passes to a script shrink the same
+  way.
+  The `data-on` format, the runtime and the typing are unchanged; a test or tool that matched
+  `data-on="` or `&quot;` in a page's text matches `data-on='` and `"` now, and a `corten` and a
+  `corten-macros` from either side of the change do not build together, since a message's text is
+  written for one attribute or the other. This is why the release is 0.3.0, not 0.2.x: Cargo
+  would take a 0.2.x `corten-macros` for an app that holds `corten-run` at 0.2.0, and that app
+  would fail to build. The data block the issue asks for is left open
+  ([#1253 A script's data can only reach it as a handler argument in an attribute, so a large ToJson list grows about 55% from escaped quotes](https://github.com/corten-run/corten/issues/1253)).
 
 ### Fixed
 

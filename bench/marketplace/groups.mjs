@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { apps } from "./contract.mjs";
+import { selectedApps } from "../workloads/registry.mjs";
 
 // Candidate pools, not winners or a claim about current marketplace performance.
 // Popularity follows the survey cohort proposed in issue 817, updated for the two
@@ -9,11 +10,12 @@ export const cohorts = {
   popular: ["nextjs", "aspnet", "fastapi", "express"],
   performant: ["aspnet", "topcoat", "leptos"],
 };
-export const groupNames = ["production", "production-popular", "production-performant", "production-qualify"];
+export const groupNames = ["production", "production-popular", "production-performant", "production-qualify", "localized-marketplace"];
 export function groupApps(group) {
   // Pre-group evidence/reservations retain their exact original inventory.
   if (group === undefined) return [...apps];
   assert.ok(groupNames.includes(group), `unknown marketplace group: ${group}`);
+  if (group === "localized-marketplace") return selectedApps(group);
   const candidates = group === "production-qualify" ? apps
     : group === "production-popular" ? cohorts.popular
       : group === "production-performant" ? cohorts.performant : Object.values(cohorts).flat();
@@ -27,5 +29,7 @@ export function scheduledGroup(round) {
   assert.match(round ?? "", /^r[1-9]\d*$/);
   const n = Number(round.slice(1));
   assert.ok(Number.isSafeInteger(n) && n >= 17);
+  // The new registry is explicit opt-in until native parity work is qualified.
+  // Do not silently change the existing automation while its previous round is pending.
   return "production";
 }

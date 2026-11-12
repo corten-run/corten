@@ -8,6 +8,15 @@ the old suite or silently combine its tables with this one.
 
 ## Framework Groups
 
+The approved [workload-specific registry](../workloads/README.md) preserves all benchmark
+families and selected challengers independently of implementation readiness. Its localized
+marketplace selection is available explicitly as `--group localized-marketplace`: Corten,
+Next.js, ASP.NET Core, Django, Topcoat, Leptos, Gin and Drogon. It uses this procedure's
+unchanged qualification, browser/content and measurement gates. Missing parity remains
+visible, never fabricated timing. Other workload groups still need native runner/adapter
+integration; the existing scheduled selection below is not silently migrated by the registry.
+Old group identities and saved reservations retain their original membership.
+
 `groups.mjs` defines candidate cohorts, not language families or unconditional anchors.
 The default `production` run deduplicates the popular and performance-oriented shortlists,
 so overlapping peers are built and timed once. All candidates must qualify against

@@ -10,7 +10,7 @@
 //    submit of a form replaces a pending read and waits for a pending write; a navigation abandons
 //    pending ones.
 // 3. <corten-live src>: apply fragments streamed as server-sent `patch` events, until an `end`.
-// 4. Handlers: `data-on="click:cart_line.confirm($e,@dialog)"` (what `on:click={js::confirm(event, dialog)}`
+// 4. Handlers: `data-on='click:cart_line.confirm($e,@dialog)'` (what `on:click={js::confirm(event, dialog)}`
 //    prints) runs the export `confirm` of `{scripts dir}/cart_line.js` with the event and the
 //    element with `data-ref="dialog"` in the same component. One listener per event type on the
 //    document; modules are imported when markup that names them joins the page, and markup the

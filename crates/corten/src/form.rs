@@ -1784,38 +1784,29 @@ pub(crate) fn collect_hints<T>(render: impl FnOnce() -> T) -> (T, Vec<String>) {
 /// with `hint=""`) describes nothing, so naming it or not is the same. In a page (`page`), a hint
 /// whose element is not drawn describes nothing either (a radio group with no id), and is returned
 /// too; a patch may redraw the hint alone, its control on the page already, so there it is not
-/// checked.
+/// checked. The markup is read tag by tag, so text inside another attribute's value (a handler
+/// argument in `data-on`, whose JSON keeps its quotes) is not taken for an attribute.
 #[cfg(debug_assertions)]
 pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> Option<&'a str> {
+    let tags: Vec<crate::html::Tag<'_>> = crate::html::start_tags(html).collect();
+    let by_id = |id: &str| tags.iter().find(|tag| tag.attr("id") == Some(id));
     hints.iter().map(String::as_str).find(|hint| {
-        let Some(at) = html.find(&format!(r#" id="{hint}""#)) else { return false };
-        if !has_text(html, at) {
+        let Some(shown) = by_id(hint) else { return false };
+        if !has_text(html, shown) {
             return false;
         }
         let described = &hint[..hint.len() - "-hint".len()];
-        let Some(tag) = start_tag(html, &format!(r#" id="{described}""#)) else { return page };
-        let names = tag.split(r#" aria-describedby=""#).nth(1).map(|rest| &rest[..rest.find('"').unwrap_or(rest.len())]);
-        !names.is_some_and(|names| names.split_ascii_whitespace().any(|id| id == *hint))
+        let Some(tag) = by_id(described) else { return page };
+        !tag.attr("aria-describedby").is_some_and(|names| names.split_ascii_whitespace().any(|id| id == *hint))
     })
 }
 
-/// The start tag around the attribute at `attr`'s first place in `html`, `<input .. id="x" ..>`.
+/// Whether the element whose start tag is `tag` has text other than white space, in it or in an
+/// element inside it.
 #[cfg(debug_assertions)]
-fn start_tag<'a>(html: &'a str, attr: &str) -> Option<&'a str> {
-    let at = html.find(attr)?;
-    let open = html[..at].rfind('<')?;
-    let close = at + html[at..].find('>')?;
-    Some(&html[open..=close])
-}
-
-/// Whether the element whose start tag holds `html[at]` has text other than white space, in it or
-/// in an element inside it.
-#[cfg(debug_assertions)]
-fn has_text(html: &str, at: usize) -> bool {
-    let Some(open) = html[..at].rfind('<') else { return false };
-    let name: String = html[open + 1..].chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
-    let Some(end) = html[at..].find('>') else { return false };
-    let (mut rest, mut depth) = (&html[at + end + 1..], 1usize);
+fn has_text(html: &str, tag: &crate::html::Tag<'_>) -> bool {
+    let name = tag.name.as_str();
+    let (mut rest, mut depth) = (&html[tag.end..], 1usize);
     while depth > 0 && !rest.is_empty() {
         match rest.find('<') {
             Some(lt) => {
@@ -1825,8 +1816,8 @@ fn has_text(html: &str, at: usize) -> bool {
                 let tag = &rest[lt..];
                 let gt = tag.find('>').unwrap_or(tag.len() - 1);
                 if let Some(closing) = tag.strip_prefix("</") {
-                    depth -= usize::from(closing.starts_with(name.as_str()));
-                } else if tag[1..].starts_with(name.as_str()) && !tag[..gt].ends_with('/') {
+                    depth -= usize::from(closing.starts_with(name));
+                } else if tag[1..].starts_with(name) && !tag[..gt].ends_with('/') {
                     depth += 1;
                 }
                 rest = &tag[gt + 1..];
@@ -2257,6 +2248,29 @@ impl Errors {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hint is matched to its control by their tags' attributes. A handler argument in
+    /// `data-on` keeps its JSON's quotes, so text in it can look like an `aria-describedby`; read
+    /// as text, it would be taken for the control's own and the hint called unnamed.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_is_matched_by_attributes_not_by_text_inside_another_value() {
+        let hints = ["qty-hint".to_string()];
+        let named = concat!(
+            r#"<input id="qty" data-on='connect:m.f($t,["a aria-describedby=","b"])' aria-describedby="qty-hint">"#,
+            r#"<p id="qty-hint">From 1 to 5.</p>"#,
+        );
+        assert_eq!(unnamed_hint(named, &hints, true), None);
+        let unnamed = concat!(
+            r#"<input id="qty" data-on='connect:m.f($t,[" aria-describedby=","qty-hint"])'>"#,
+            r#"<p id="qty-hint"><em>From 1 to 5.</em></p>"#,
+        );
+        assert_eq!(unnamed_hint(unnamed, &hints, true), Some("qty-hint"));
+        let empty = r#"<input id="qty"><p id="qty-hint"> <span></span></p>"#;
+        assert_eq!(unnamed_hint(empty, &hints, true), None, "a hint with no text describes nothing");
+        assert_eq!(unnamed_hint(r#"<p id="qty-hint">Pick one.</p>"#, &hints, true), Some("qty-hint"), "no control on a page");
+        assert_eq!(unnamed_hint(r#"<p id="qty-hint">3 left.</p>"#, &hints, false), None, "a patch of the hint alone");
+    }
 
     const EMAIL: FieldName = FieldName::__new("email");
     const PRICE: FieldName = FieldName::__new("price");

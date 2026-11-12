@@ -421,7 +421,7 @@ try {
     const answer = await route.fetch({ postData: form.toString() });
     const text = await answer.text();
     // The note's call names the outcome as SaveOutcome declares it (types/app.d.ts).
-    const body = text.replace(/(&quot;Stale&quot;,\d+,\d+,)false\)/, "$1true)");
+    const body = text.replace(/("Stale",\d+,\d+,)false\)/, "$1true)");
     if (body === text) errors.push(`the stale answer to mark unsure was not found: ${text}`);
     await route.fulfill({ response: answer, body });
   });
