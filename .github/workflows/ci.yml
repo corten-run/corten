@@ -144,7 +144,12 @@ jobs:
     env:
       PARTS: " ${{ matrix.parts }} "
     steps:
+      # npm run check resolves every commit the Markdown cites (scripts/design-refs.mjs), so the group
+      # that runs it takes the whole history, and with it every tag: refs/tags/evidence/<sha> keeps a
+      # cited commit no branch has. A depth of 0 fetches +refs/tags/*; the others take one commit.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: ${{ contains(env.PARTS, ' npm-check ') && '0' || '1' }}
       - uses: actions/setup-node@v7
         with:
           node-version: 22
