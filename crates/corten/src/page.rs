@@ -414,7 +414,9 @@ pub enum Failure {
     /// Nothing is at this URL (404): no route has it, or its handler returned
     /// `Error::not_found()` (the error is logged).
     NotFound,
-    /// A route has this URL but not this method (405; the `Allow` header is kept).
+    /// A route has this URL but not this method, which the app implements: another route has a
+    /// handler for it, or it is `GET`, `HEAD` or `OPTIONS` (405; the `Allow` header is kept). One
+    /// no route has (`PROPFIND`) is [`Failure::Failed`] with 501.
     WrongMethod,
     /// A write another site sent (403), refused before anything else ran.
     CrossSite,
@@ -435,7 +437,8 @@ pub enum Failure {
     /// The handler returned an [`Error`]: 500, or the status [`Error::status`] gave (a 404 is
     /// [`Failure::NotFound`]). Also the deadline that passed while the handler waited for the
     /// client to send the rest of the body (408), as a stalled upload's `?` gives, since the
-    /// request did not arrive in time.
+    /// request did not arrive in time; and a method no route in the app has a handler for, at a
+    /// URL a route has (501, RFC 9110 9.1).
     Failed { status: StatusCode, detail: Option<Arc<str>> },
     /// The handler panicked (500).
     Panicked { detail: Option<Arc<str>> },

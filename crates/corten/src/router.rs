@@ -8,8 +8,9 @@
 //! suite, `tests/dispatch.rs`, holds it to): the path is matched as sent, before anything in it
 //! is decoded, and a segment of text is chosen over a parameter; `HEAD` is the route's `GET`
 //! without the body; a method the route has no handler for is a `405` whose `Allow` names those
-//! it has; an answer whose length is known says it (`Content-Length`); and a `2xx` to `CONNECT`
-//! has no body. A request's handler is boxed once, and so are the stages around it.
+//! it has, and one no route in the app has a handler for is a `501` (RFC 9110 9.1; axum's router
+//! answered it `405`); an answer whose length is known says it (`Content-Length`); and a `2xx` to
+//! `CONNECT` has no body. A request's handler is boxed once, and so are the stages around it.
 //!
 //! [matchit]: https://docs.rs/matchit
 
@@ -62,7 +63,7 @@ impl<H: Handler<T, S>, T: 'static, S: Clone + Send + Sync + 'static> Endpoint fo
     }
 }
 
-/// An answer that is a status alone: the router's `404` and `405`.
+/// An answer that is a status alone: the router's `404`, `405` and `501`.
 struct Status(StatusCode);
 
 impl Endpoint for Status {
@@ -158,6 +159,36 @@ fn slot_of(method: &Method) -> Option<usize> {
         Method::CONNECT => CONNECT,
         _ => return None,
     })
+}
+
+/// The methods some route in the app has a handler for, which a route without one answers with
+/// its `405`; any other is a `501` (RFC 9110 9.1: the server implements it for no resource).
+/// `GET` and `HEAD`, which every server implements (9.1), and `OPTIONS`, which Corten answers
+/// itself for a CORS preflight and whose `405` names the methods a resource has, are always
+/// among them; a route that takes every method (`any`) puts every method among them.
+#[derive(Clone, Copy)]
+struct Known {
+    slots: u16,
+    every: bool,
+}
+
+impl Known {
+    fn of<'a>(routes: impl Iterator<Item = &'a Entry>) -> Self {
+        let mut known = Known { slots: 1 << GET | 1 << HEAD | 1 << OPTIONS, every: false };
+        for entry in routes {
+            for (at, slot) in entry.slots.iter().enumerate() {
+                if slot.is_some() {
+                    known.slots |= 1 << at;
+                }
+            }
+            known.every |= entry.fallback.is_some();
+        }
+        known
+    }
+
+    fn has(self, method: &Method) -> bool {
+        self.every || slot_of(method).is_some_and(|at| self.slots & 1 << at != 0)
+    }
 }
 
 /// What a route's `405` says it allows.
@@ -444,6 +475,9 @@ struct Dispatch {
     stages: Option<Arc<dyn Stages>>,
     not_found: Route,
     not_allowed: Route,
+    /// A method no route in the app has a handler for (`PROPFIND` with no `any` route): `501`.
+    not_implemented: Route,
+    known: Known,
 }
 
 /// A path's handlers, ready to answer.
@@ -462,14 +496,17 @@ impl Entry {
     /// The handler for `method`, and the `Allow` its answer gets when it is not one of the
     /// route's own methods.
     #[inline]
-    fn pick<'a>(&'a self, method: &Method, not_allowed: &'a Route) -> (&'a Route, Option<&'a HeaderValue>) {
+    fn pick<'a>(&'a self, method: &Method, dispatch: &'a Dispatch) -> (&'a Route, Option<&'a HeaderValue>) {
         let own = match *method {
             Method::HEAD => self.slots[HEAD].as_ref().or(self.slots[GET].as_ref()),
             _ => slot_of(method).and_then(|at| self.slots[at].as_ref()),
         };
         match own {
             Some(route) => (route, None),
-            None => (self.fallback.as_ref().unwrap_or(not_allowed), self.allow.as_ref()),
+            None => match &self.fallback {
+                Some(fallback) => (fallback, self.allow.as_ref()),
+                None => dispatch.refuse(method, self.allow.as_ref()),
+            },
         }
     }
 }
@@ -503,7 +540,10 @@ impl Router {
         }
         let not_found: Route = Arc::new(Status(StatusCode::NOT_FOUND));
         let not_allowed: Route = Arc::new(Status(StatusCode::METHOD_NOT_ALLOWED));
-        Router { inner: Inner::Routes(Arc::new(Dispatch { paths, routes, stages, not_found, not_allowed })), edge: true }
+        let not_implemented: Route = Arc::new(Status(StatusCode::NOT_IMPLEMENTED));
+        let known = Known::of(routes.iter());
+        let dispatch = Dispatch { paths, routes, stages, not_found, not_allowed, not_implemented, known };
+        Router { inner: Inner::Routes(Arc::new(dispatch)), edge: true }
     }
 
     /// This router inside `layer` ([`crate::App::layer`]).
@@ -552,7 +592,7 @@ impl Dispatch {
                 // route's, whatever the method; no other route answers it either.
                 let (route, allow) = match entry.written {
                     Some(written) if !crate::route::routes_path(written, path) => (&self.not_found, None),
-                    _ => entry.pick(req.method(), &self.not_allowed),
+                    _ => entry.pick(req.method(), self),
                 };
                 (route, allow, entry.stages.as_ref(), Some(matched))
             }
@@ -567,6 +607,18 @@ impl Dispatch {
             None => route.call(req),
         };
         RouterFuture { answering, fix: Some(fix) }
+    }
+
+    /// The answer to a method the route has no handler for: its `405`, with its `Allow`, when some
+    /// route in the app has one for it, and a `501` with no `Allow` when none has (RFC 9110 9.1
+    /// and 15.6.2: no resource here supports it, so the `Allow` of this one is not the answer).
+    #[cold]
+    fn refuse<'a>(&'a self, method: &Method, allow: Option<&'a HeaderValue>) -> (&'a Route, Option<&'a HeaderValue>) {
+        if self.known.has(method) {
+            (&self.not_allowed, allow)
+        } else {
+            (&self.not_implemented, None)
+        }
     }
 }
 

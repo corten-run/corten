@@ -72,6 +72,13 @@ async fn write() -> &'static str {
     "written"
 }
 
+/// The same home, with no relay beside it.
+#[corten::routes]
+mod plain {
+    #[route("/", get = home)]
+    pub struct Home;
+}
+
 #[corten::routes]
 mod checked {
     #[route("/check", get = served)]
@@ -106,6 +113,24 @@ async fn any_method_reaches_the_relay_and_the_apps_own_routes_stay_its_own() {
     }
     assert_eq!(call("GET", "/").await, (StatusCode::OK, "home".to_string()));
     assert_eq!(call("POST", "/").await.0, StatusCode::METHOD_NOT_ALLOWED, "a route without any = keeps its methods");
+}
+
+#[tokio::test]
+async fn a_relay_makes_every_method_one_the_app_implements() {
+    // The relay's upstream may implement `PROPFIND`, so the server does: at a path of the app's
+    // own it is a 405 with that route's `Allow` (RFC 9110 15.5.6), not a 501 (9.1).
+    let router = App::new(url::router()).router();
+    let req = corten::http::Request::builder().method("PROPFIND").uri("/").body(Body::empty()).unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!(
+        (res.status(), res.headers().get("allow").map(|v| v.to_str().unwrap())),
+        (StatusCode::METHOD_NOT_ALLOWED, Some("GET,HEAD"))
+    );
+    // With no relay, no route implements it.
+    let router = App::new(plain::router()).router();
+    let req = corten::http::Request::builder().method("PROPFIND").uri("/").body(Body::empty()).unwrap();
+    let res = router.oneshot(req).await.unwrap();
+    assert_eq!((res.status(), res.headers().get("allow")), (StatusCode::NOT_IMPLEMENTED, None));
 }
 
 #[tokio::test]

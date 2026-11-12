@@ -51,6 +51,20 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Changed
 
+- A request whose method no route in the app has a handler for (`PROPFIND`, `QUERY`, `TRACE`,
+  or `PUT` in an app that routes no `PUT`) now answers `501 Not Implemented` with no `Allow`,
+  where it answered `405 Method Not Allowed` with the route's `Allow`: RFC 9110 9.1 says a
+  server answers 501 for a method it implements for no resource, and keeps 405 (15.5.6) for one
+  it implements and this resource lacks. This changes a status code an app's clients see. A method
+  some route has, and `GET`, `HEAD` and `OPTIONS` always, are still a 405 with `Allow` where the
+  route lacks them; an app with an `any` route (a relay) implements every method, so it answers no
+  501; an unknown URL is still a 404 whatever the method. A browser gets the error page as
+  `Failure::Failed` with status 501, and an API its JSON. Only a request that reaches a route's
+  405 checks the method again: measured with callgrind (release, three runs each, every run the
+  same), a page route, an unstaged route and a 404 move by 1 to 5 instructions, a 405 costs 18
+  more (6,921 against 6,903) and a `PROPFIND` that was a 405 costs 309 fewer as a 501
+  ([design Choice 25](docs/design.md#choice-axum-router), step 1)
+  ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
 - `html!` refuses a path in the app written as text in an element's URL attribute (`href`, `src`,
   `srcset`, `action`, `formaction`, `poster`, `imagesrcset`, `data`, `ping`, `xlink:href`): a
   value that starts with one `/` (or `\`), or is `http:` or `https:` without the `//` of a

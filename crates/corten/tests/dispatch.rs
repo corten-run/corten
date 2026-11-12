@@ -1,8 +1,8 @@
 //! How a request finds its route, as the wire shows it: raw HTTP/1.1 sent to `corten::serve_on`
 //! and the answer read back as bytes. No type of the router under Corten is named here, so the
 //! same cases hold whichever router dispatches (docs/design.md#choice-axum-router): matching,
-//! `HEAD`, `405` with `Allow`, percent-decoding, catch-alls, a suffix after a parameter,
-//! areas, an API's failures and an unstaged route.
+//! `HEAD`, `405` with `Allow`, `501` for a method no route has, percent-decoding, catch-alls, a
+//! suffix after a parameter, areas, an API's failures and an unstaged route.
 
 use std::net::SocketAddr;
 
@@ -52,6 +52,12 @@ mod url {
     #[route("/pay/{step}", get = crate::pay_step)]
     pub struct PayStep<'a> {
         pub step: &'a str,
+    }
+
+    // The app's only `PUT`, `DELETE` and `PATCH`, so another route's are a 405, not a 501.
+    #[route("/drafts/{id}", put = crate::draft, delete = crate::draft, patch = crate::draft)]
+    pub struct Draft {
+        pub id: u32,
     }
 }
 
@@ -151,6 +157,10 @@ async fn count(at: Params<v1::Count>) -> Result<String, corten::http::StatusCode
 
 async fn export(at: Params<v1::Export<'_>>) -> String {
     format!("export {}", at.name)
+}
+
+async fn draft(at: Params<url::Draft>) -> String {
+    format!("draft {}", at.id)
 }
 
 /// The app, served once for every test in this file.
@@ -327,19 +337,41 @@ async fn a_method_the_route_has_no_handler_for_is_a_405_that_says_which_it_has()
     let refused = send("PUT", "/ping", &[]).await;
     assert_eq!((refused.status, methods(refused.header("allow"))), (405, vec!["GET".into(), "HEAD".into()]));
     assert_eq!(refused.header("content-security-policy"), Some("sandbox"));
-    // OPTIONS and a method HTTP does not name are methods like any other.
-    for method in ["OPTIONS", "PROPFIND"] {
-        let refused = send(method, "/items/7", &[]).await;
-        assert_eq!(
-            (refused.status, methods(refused.header("allow"))),
-            (405, vec!["GET".into(), "HEAD".into(), "POST".into()]),
-            "{method}"
-        );
-    }
+    // OPTIONS, which no route here names, is one the server implements (a CORS preflight's), and
+    // its 405 says what the resource allows.
+    let refused = send("OPTIONS", "/items/7", &[]).await;
+    assert_eq!((refused.status, methods(refused.header("allow"))), (405, vec!["GET".into(), "HEAD".into(), "POST".into()]));
     // The path is matched before the method: `/items/new` has no POST, and `/items/{id}`'s is
     // not tried in its place.
     let refused = send("POST", "/items/new", &[]).await;
     assert_eq!((refused.status, methods(refused.header("allow"))), (405, vec!["GET".into(), "HEAD".into()]));
+}
+
+#[tokio::test]
+async fn a_method_no_route_in_the_app_has_is_a_501_with_no_allow() {
+    // RFC 9110 9.1: the server implements it for no resource, so this one's `Allow` is not the
+    // answer. `TRACE` is HTTP's own, and no route here names it.
+    for method in ["PROPFIND", "QUERY", "TRACE"] {
+        let refused = send(method, "/items/7", &[]).await;
+        assert_eq!((refused.status, refused.header("allow")), (501, None), "{method}");
+    }
+    // A method some route has stays a 405 where this route lacks it.
+    let refused = send("PUT", "/", &[]).await;
+    assert_eq!((refused.status, methods(refused.header("allow"))), (405, vec!["GET".into(), "HEAD".into()]));
+    assert_eq!(send("PUT", "/drafts/2", &[]).await.body, "draft 2");
+    // A browser gets the error page, an unstaged route its lane's headers and an API its JSON.
+    let page = send("PROPFIND", "/items/7", &[("accept", "text/html")]).await;
+    assert_eq!(page.status, 501);
+    assert!(page.header("content-type").unwrap().starts_with("text/html"), "{:?}", page.headers);
+    let unstaged = send("PROPFIND", "/ping", &[]).await;
+    assert_eq!((unstaged.status, unstaged.header("content-security-policy")), (501, Some("sandbox")));
+    for target in ["/v1/things/3", "/v1/count/3"] {
+        let api = send("QUERY", target, &[]).await;
+        assert_eq!((api.status, api.header("content-type"), api.header("allow")), (501, Some("application/problem+json"), None));
+    }
+    // The path is matched before the method: an unknown URL is a 404, whatever the method.
+    assert_eq!(send("PROPFIND", "/nowhere", &[]).await.status, 404);
+    assert_eq!(send("PROPFIND", "/v1/nowhere", &[]).await.status, 404);
 }
 
 #[tokio::test]

@@ -1078,11 +1078,26 @@ rules something out.
     1. The dispatch suite (`crates/corten/tests/dispatch.rs`): raw HTTP/1.1 to `serve_on` and the
        answer's bytes, naming no router type, for matching (a segment of text chosen over a
        parameter, the path before the method, nothing decoded before matching, an empty segment
-       standing for an empty parameter before another segment and for none at the end), `HEAD`, `405` with `Allow` for any
-       method, percent-decoding of parameters, catch-alls, text after a parameter, an area's and
+       standing for an empty parameter before another segment and for none at the end), `HEAD`, `405` with `Allow` for a
+       method the route lacks, percent-decoding of parameters, catch-alls, text after a parameter, an area's and
        an API's prefix, every path under an API's prefix being its own, an API's failures, the
        host check, and an unstaged route's. It passes on axum now, and every later step passes it
        unchanged; a case the next step finds missing is added to it first, on axum.
+       Once axum had left, one case changed on purpose: a method no route in the app has a
+       handler for (`PROPFIND`, `QUERY`) is a `501` with no `Allow`, as RFC 9110 9.1 says, where
+       axum's router answered `405` with the route's `Allow`, which 15.5.6 keeps for a method the
+       server implements and the resource lacks
+       ([#1216 A method the app routes nowhere (PROPFIND, QUERY) is answered 405, where RFC 9110 9.1 says 501](https://github.com/corten-run/corten/issues/1216)).
+       The methods some route has are gathered when the router is built, with `GET`, `HEAD` and
+       `OPTIONS` always among them, and every method once any route takes every method (`any`,
+       a relay whose upstream may implement it); only a request that reaches a route's `405`
+       reads them, so no other request does more work. Measured (callgrind, release, glibc's
+       allocator, the run of 1,200 requests less the run of 200 over 1,000 in process, three runs
+       of each build, every run the same, on `794e6c7f` and on it with this change, in a harness
+       outside the repository): a page route 17,822 instructions against 17,827, an unstaged
+       route 6,885 against 6,886 and a page's 404 21,657 against 21,660; a `405` at an unstaged
+       route 6,921 against 6,903, the 18 the method's second look costs there; and `PROPFIND` at
+       it 6,695 as a `501` against 7,004 as a `405`, which had an `Allow` to write.
     2. A router of Corten's on matchit in place of axum's `Router` and `MethodRouter`, and
        `unstaged` as a route whose stages are left out rather than checks written into its
        handler. The stages keep the shape they have unless callgrind counts fewer for another:
@@ -1297,7 +1312,9 @@ rules something out.
     fast, Value 1; small surface, deliberate dependencies, Value 6; correctness before speed, the
     order the Values give, which is why the suite comes first).
 
-    Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case, or
+    Revisit when: a router of Corten's cannot pass the dispatch suite without changing a case
+    (other than one changed to follow a standard where axum did not, which step 1 records, as it
+    records the `501`), or
     counts more than axum's on any request measured in step 2 (that step then waits, and this
     Choice says why); a `Response<Body>` grows past 128 bytes (step 4); or Corten serves HTTP/2 or HTTP/3 itself
     ([Limit 14](#limit-http1)), which adds a protocol under 3 and must leave 4 to 7 as they are.
@@ -1316,7 +1333,9 @@ rules something out.
     2026-11-10, axum gone (step 4) at `5548c97a` against step 3 at `67e7f5f5`, with the suite
     unchanged; 2026-11-09, the lane boxed
     as a second future and held by the router's future, uncommitted variants of `8ddeaea2`, and
-    the `laned` variant of `fa0b1525`.
+    the `laned` variant of `fa0b1525`; 2026-11-12, the dispatch suite with its one case changed
+    for RFC 9110 9.1 (the `501`) and the four requests above, on `794e6c7f` and on it with that
+    change.
 
 26. <a id="choice-derived-deserialize"></a>**`#[derive(Fields)]`, `#[derive(UrlValue)]` and `#[derive(FromJson)]`
     write serde's `Deserialize` themselves, as serde's derive writes it.** Each already reads a
@@ -2772,7 +2791,8 @@ by design; where it is known, a limit says what would lift it or why it is so.
     error page, security headers but `nosniff` and `sandbox`, cache rule but `private` on a
     cookie, or allowed origins, which its handler gives itself if it needs them; the host check
     and, under an API's prefix, the API's JSON for a failure stay; it answers reads only; a wrong
-    method or a missing suffix at its path is a plain 405 or 404 (the API's JSON under an
+    method or a missing suffix at its path is a plain 405 (501 for a method no route in the app
+    has) or 404 (the API's JSON under an
     API's prefix), a failure elsewhere is sent as its handler made it (plain text, not Problem
     Details), and a panic is logged and answered 500 (plain, or the API's JSON under its prefix).
 13. <a id="limit-protocol-switch"></a>A connection switches protocols (a WebSocket, a relayed tunnel, a tunnel a `2xx` to `CONNECT` opens) only over HTTP/1.1 served by

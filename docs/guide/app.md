@@ -1100,7 +1100,8 @@ no-cache` (`no-store` when it says one), whatever caching it says, and loses a C
 `CDN-Cache-Control`, `Cloudflare-CDN-Cache-Control` and `Surrogate-Control`, so no shared cache
 hands one visitor's cookie to another.
 A request for a method the route has no handler for gets a plain 405 with the router's `Allow`,
-and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
+or a plain 501 with none when no route in the app has a handler for the method ([error
+pages](#error-pages)), and one whose segment lacks the route's suffix (`/feeds/x` for `/feeds/{name}.xml`) a plain 404,
 each with the headers every unstaged answer gets, not the app's error page (the API's JSON under
 an API's prefix); any other unknown URL is still the app's 404, inside its
 stages. A tower layer the app puts around the whole app (`.layer(l)`) still goes around it, and
@@ -1610,7 +1611,7 @@ Under the prefix:
    reason, `detail` the message (left out when it would only repeat the title), and `type` is
    left out, which means `about:blank`: the status says what went wrong. That covers a handler's `corten::Error`, an
    extractor's rejection (a body that does not parse), an unknown URL, a wrong method (with
-   `Allow`) and the deadline's 503. A 4xx message is sent, so write it for the client
+   `Allow`), a method no route has (501) and the deadline's 503. A 4xx message is sent, so write it for the client
    (`Error::new("no item 7").with_status(StatusCode::NOT_FOUND)`); a 5xx message stays in the
    log except under `corten dev`. A failure answered with a JSON body of the handler's own
    passes through, and validation errors are `Errors` as the error, which adds
@@ -1930,7 +1931,10 @@ cache keeps neither of its answers.
 
 An app moved onto Corten a slice at a time serves its own paths and relays the rest to the
 old server behind a catch-all route. `any = relay` serves every method there, those the app never
-names included (`OPTIONS`, `PROPFIND`), so the upstream answers them, not Corten's 405. Corten
+names included (`OPTIONS`, `PROPFIND`), so the upstream answers them, not Corten's 405 or 501.
+Since the upstream may implement any method, an app with a relay anywhere implements every one:
+at a path the app routes itself, a method its route lacks is a 405 with that route's `Allow`,
+`PROPFIND` included, never a 501 ([error pages](#error-pages)). Corten
 still answers what it answers for every route first: a write from another site is a 403, and
 under an API that allows other origins a CORS preflight from one of them is Corten's (one from
 any other origin reaches the old server, and the write after it is still refused). It is
@@ -2681,15 +2685,27 @@ Every way a request can fail is a `Failure`, given to the app's error page for a
 | `Failure` | When | Status |
 |---|---|---|
 | `NotFound` | no route has the URL, or the handler returned a 404 | 404 |
-| `WrongMethod` | the route has the URL but not the method (`Allow` is kept) | 405 |
+| `WrongMethod` | the route has the URL but not the method, which the app implements elsewhere (`Allow` is kept) | 405 |
 | `CrossSite` | a write another site sent, refused before anything else ran | 403 |
 | `Refused { status }` | a `Caller` refused, with nowhere to sign in | 401, 403, 429 |
 | `Unidentified { detail }` | who is asking could not be looked up (`Refused::unavailable`), unlike a handler's own 503 | 503 |
 | `Rejected { status, detail }` | the path, the query or the body did not parse | 400, 415, 422 |
-| `Failed { status, detail }` | the handler returned an `Error`, or the deadline passed while it waited for the client to send the body | 500, or its status; 408 for the body |
+| `Failed { status, detail }` | the handler returned an `Error`, or the deadline passed while it waited for the client to send the body, or the route has the URL and no route in the app has the method | 500, or its status; 408 for the body; 501 for the method |
 | `Panicked { detail }` | the handler panicked | 500 |
 | `TimedOut` | the handler ran past its deadline (`App::deadline`, or its area's or API's), not waiting for the body | 503 |
 | `Offline` | the PWA's offline page | 200, so the worker keeps it |
+
+A method is one the app implements when some route in it has a handler for that method, or
+when it is `GET`, `HEAD` (which every server implements, RFC 9110 9.1) or `OPTIONS` (which Corten
+answers itself for a CORS preflight, and whose 405 says what a resource allows). A route that
+takes every method (`any = relay`) makes every method one the app implements, since the server
+behind it may. At a URL a route has, a method the app implements and the route does not is a 405
+with the route's `Allow` (RFC 9110 15.5.6); any other (`PROPFIND`, `QUERY`, or `PUT` in an app
+that routes none) is a 501 with no `Allow` (9.1), since no resource here supports it and the
+route's `Allow` is not the answer. The path is matched first: an unknown URL is a 404 whatever its
+method, as it is for a method the app does implement. Only a request that reaches a route's
+405 checks the method again, so a request a route answers costs no more (within 5 instructions
+when measured, [design Choice 25](../design.md#choice-axum-router), step 1).
 
 Without `App::error_page`, a browser's failure is Corten's plain document: no stylesheet of the app's, no
 navigation. That is right for an API or a first sketch; an app with a layout sets one so a failure
