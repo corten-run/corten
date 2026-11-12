@@ -5,6 +5,7 @@
 // how much CPU and memory is in use: its machine's, or, with SITE_HELD=1, of the limits the
 // container under test is held to on both (docker run --cpus 1 --memory 512m).
 // Usage: node examples/corten-site/smoke.mjs http://localhost:18488 [chromium|firefox|webkit ...]
+import { readFileSync } from "node:fs";
 import { chromium, devices, firefox, webkit } from "@playwright/test";
 import { steady } from "../../scripts/steady.mjs";
 import { stall } from "../../scripts/stall.mjs";
@@ -324,17 +325,19 @@ for (engine of engines) {
     if (state === "forged") {
       // With reduced motion the light stays where it starts, 68% across the window and 30% down.
       // The section's two ends are read, from where its type may begin: a window's height from
-      // 48px inside each, where another layer's rust reaches in. Nearer its ends than that the
-      // light is not held, so the section's padding must keep its type further in.
-      /** @type {{ most: number, mean: number, error: number, padding: number }[]} */
+      // as far inside each as the shader holds its light from (its INSET, 48px), where another
+      // layer's rust reaches in. Nearer its ends than that the light is not held, so the
+      // section's padding must keep its type further in.
+      const inset = Number(/^const float INSET = ([0-9.]+);/m.exec(readFileSync(new URL("./src/world.js", import.meta.url), "utf8"))?.[1]);
+      /** @type {{ most: number, mean: number, error: number, padding: number, ember: string }[]} */
       const read = [];
       for (const end of ["top", "end"]) {
         read.push(
-          await page.evaluate(async (end) => {
+          await page.evaluate(async ([end, inset]) => {
             const steel = /** @type {HTMLElement} */ (document.getElementById("steel"));
             const box = steel.getBoundingClientRect();
             const top = box.top + window.scrollY;
-            window.scrollTo(0, end === "top" ? top + 48 : top + box.height - 48 - window.innerHeight);
+            window.scrollTo(0, end === "top" ? top + inset : top + box.height - inset - window.innerHeight);
             for (let n = 0; n < 3; n++) await new Promise((next) => requestAnimationFrame(next));
             const canvas = /** @type {HTMLCanvasElement} */ (document.querySelector("canvas"));
             const gl = /** @type {WebGL2RenderingContext} */ (canvas.getContext("webgl2"));
@@ -349,24 +352,26 @@ for (engine of engines) {
             }
             const style = getComputedStyle(steel);
             const padding = Math.min(parseFloat(style.paddingTop), parseFloat(style.paddingBottom));
-            return { most, mean: sum / (px.length / 4), error: gl.getError(), padding };
-          }, end),
+            const ember = getComputedStyle(document.documentElement).getPropertyValue("--ember").trim();
+            return { most, mean: sum / (px.length / 4), error: gl.getError(), padding, ember };
+          }, /** @type {const} */ ([end, inset])),
         );
       }
-      // The amber of the page's code, #f2a44b, is the dimmest small type set straight on the
-      // plate there: what it keeps 4.5 to 1 over is the bound (0.0631).
+      // The amber of the page's code (--ember, #f2a44b) is the dimmest small type set straight
+      // on the plate there: what it keeps 4.5 to 1 over is the bound (0.06319).
       const linear = (/** @type {number} */ v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
-      const amber = 0.2126 * linear(0xf2 / 255) + 0.7152 * linear(0xa4 / 255) + 0.0722 * linear(0x4b / 255);
+      const [red, green, blue] = (/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(read[0]?.ember ?? "") ?? []).slice(1).map((hex) => linear(parseInt(hex, 16) / 255));
+      const amber = 0.2126 * (red ?? NaN) + 0.7152 * (green ?? NaN) + 0.0722 * (blue ?? NaN);
       const bound = (amber + 0.05) / 4.5 - 0.05;
       check(
         "what is drawn under the steel's type is lit, and no brighter than its dimmest type can stand",
         read.every(({ most, mean, error }) => error === 0 && mean > 0.01 && most <= bound) && wrong().length === 0,
-        [`bound ${bound.toFixed(4)}`, ...read.map(({ most, mean, error }) => `brightest ${most.toFixed(4)}, mean ${mean.toFixed(4)}${error ? `, error ${error}` : ""}`), ...wrong()].join(" | ").slice(0, 400),
+        [`bound ${bound.toFixed(5)} for ${read[0]?.ember}`, ...read.map(({ most, mean, error }) => `brightest ${most.toFixed(4)}, mean ${mean.toFixed(4)}${error ? `, error ${error}` : ""}`), ...wrong()].join(" | ").slice(0, 400),
       );
       check(
         "and the section's padding keeps its type further in than the light is held from",
-        read.every(({ padding }) => padding >= 48),
-        `${read[0]?.padding}px`,
+        read.every(({ padding }) => padding >= inset),
+        `${read[0]?.padding}px, held from ${inset}px`,
       );
     }
     await context.close();

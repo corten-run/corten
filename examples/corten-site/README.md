@@ -58,14 +58,16 @@ and it moves by whole pixels of its canvas, so its grain does not shimmer as the
 
 A pixel pays for the layer it is in: every texture read names its level, so each layer's
 branch is one the GPU can skip. Where one layer gives way to the next a pixel pays more: for
-what seeds the specks, and in the middle third of the stretch for both layers' relief. A frame
-with such a stretch across it took about a tenth longer than one with the line that was drawn
-there before (8.1, 6.7 and 6.7 ms against 7.4, 6.1 and 6.1 for the three, at 1440 by 900 on one
-workstation's GPU). Frames that come late lower the plate's resolution, and where
-the browser has only a software renderer, no WebGL 2 or no JavaScript, each layer has a flat
-color and the page reads the same (`data-flat`). A lost context is restored when the browser
-gives it back. With reduced motion the plate is drawn weathered, still, and does not follow the
-pointer.
+what seeds the specks, and for both layers where a speck of one lies in the other or, in the
+middle three tenths of the stretch, where the relief of both is eased together. A frame with
+such a stretch across it took a tenth to a sixth longer than one with the line that was drawn
+there before: 8.1, 6.7 and 6.7 ms for the three at `209231071` against 7.4, 6.1 and 6.1 at
+`5e18ffb7e`, at 1440 by 900 on one workstation's GPU through Direct3D, and 10, 13 and 17% longer
+when a review timed the same two commits itself. Frames that come late lower the plate's
+resolution, and where the browser has only a software renderer, no WebGL 2 or no JavaScript,
+each layer has a flat color and the page reads the same (`data-flat`). A lost context is
+restored when the browser gives it back. With reduced motion the plate is drawn weathered,
+still, and does not follow the pointer.
 
 There are no font files: the display face is the DIN already on the reader's machine
 (Bahnschrift on Windows, DIN Condensed on Apple systems, Roboto Condensed on Android, a narrow

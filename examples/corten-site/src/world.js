@@ -151,9 +151,9 @@ void main() {
   float inPatina = 1.0 - toOxide + toFar;
   float inOxide = toOxide * (1.0 - toSteel);
   float inSteel = toSteel * (1.0 - toFar);`,
-  // The same without the specks, eased over the middle third of the stretch: how much of each
-  // layer's relief a pixel has. It is all the GPU's slope is taken from, since a slope taken
-  // across a speck's edge would change as the page moves.
+  // The same without the specks, eased over the middle three tenths of the stretch: how much of
+  // each layer's relief a pixel has. It is all the GPU's slope is taken from, since a slope
+  // taken across a speck's edge would change as the page moves.
   `  float softOxide = first ? soft : toOxide;
   float softSteel = middle ? soft : toSteel;
   float softFar = last ? soft : toFar;
