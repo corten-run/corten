@@ -118,11 +118,14 @@ checks the account's droplet limit before it writes `split.json`, and `--collect
 `--droplets`: it reads the plan. Exit codes are as above, for the round: 3 while any droplet
 runs (finished droplets are already collected and deleted), 2 for a collection error on any
 droplet or a leftover `corten-marketplace-rN-d*` droplet (reported with its delete command, never
-deleted), 1 when a droplet did not finish its part, 0 when every droplet finished, was deleted
-and merged into `round/rN/` in the state directory. Import that merged folder, not a droplet's
+deleted), 1 when a droplet did not finish its part or the parts do not merge, 0 when every
+droplet finished, was deleted and merged into `round/rN/` in the state directory. When exit 3
+names a partial or missing droplet, the round cannot merge: run the `ssh ... systemctl stop`
+command it prints for each running droplet, then collect again. This overrides "keep running"
+above, so a round that cannot merge stops billing. Import that merged folder, not a droplet's
 `d<k>/` alone, as results/rN. A launch stopped by a signal says what each droplet is left doing;
-stop a started round with the `ssh` command it prints, then collect, and delete a droplet that
-never started with the `doctl` command it prints. A split round compares only with a round split
+stop a started round with the `ssh` command it prints, then collect. Collect prints a `doctl`
+delete command for a droplet only when its unit is not found, so its round never started; run it. A split round compares only with a round split
 the same way, droplet by droplet; its report's Between droplets section flags stages where
 axum + Maud's ratio to Corten differs between droplets, and a flagged stage is reported, not
 hidden.

@@ -64,12 +64,12 @@ export const differText = (pairs) => pairs.map(([a, b]) => `d${a} and d${b} diff
  * Whether a split round's droplets agree, from the anchors each one measured. A stage is flagged
  * when axum-maud's ratio to Corten differs between two droplets by more than the noise (their
  * ranges do not overlap): ratios to Corten that compare apps on those droplets are then not
- * like for like. The anchors' raw numbers are information: droplets can differ in machine speed
- * and still agree on the ratio, which is what cross-droplet comparisons use.
+ * like for like. Droplets can differ in machine speed and still agree on the ratio, which is
+ * what cross-droplet comparisons use; every table's anchor rows show their raw numbers.
  * @param {object} s a validated merged summary (with split)
  */
 export function betweenDroplets(s) {
-  const ratios = [], raw = [];
+  const ratios = [];
   for (const { key } of timedProfiles) for (const phase of phases) for (const metric of Object.keys(anchorMetrics)) {
     const cells = s.split.parts.map((p) => {
       const c = p.anchors.corten.phases[key][phase], a = p.anchors["axum-maud"].phases[key][phase];
@@ -77,15 +77,6 @@ export function betweenDroplets(s) {
       return { index: p.index, passes, range: passes ? ratio(a[metric], c[metric]) : null };
     });
     ratios.push({ profile: key, phase, metric, cells, differ: differ(cells) });
-    for (const anchor of anchors) {
-      const cells = s.split.parts.map((p) => {
-        const stage = p.anchors[anchor].phases[key][phase];
-        return { index: p.index, passes: stage.passes, range: stage.passes ? stage[metric] : null };
-      });
-      const medians = cells.filter((c) => c.range).map((c) => c.range.median);
-      raw.push({ anchor, profile: key, phase, metric, cells, differ: differ(cells),
-        spread: medians.length > 1 ? Math.max(...medians) / Math.min(...medians) - 1 : null });
-    }
   }
-  return { ratios, flagged: ratios.filter((r) => r.differ.length), raw, rawBeyondNoise: raw.filter((r) => r.differ.length) };
+  return { ratios, flagged: ratios.filter((r) => r.differ.length) };
 }

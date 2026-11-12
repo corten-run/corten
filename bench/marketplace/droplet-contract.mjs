@@ -126,35 +126,33 @@ KillMode=control-group
 
 /**
  * A split round's plan (#816), split.json in the launcher's state directory, written once before
- * any droplet: the measured commit and tree, decided once for every droplet, and each droplet's
- * name and apps. Each droplet's launcher state is d<k>/state.json beside it.
+ * any droplet: the measured commit, decided once for every droplet, and each droplet's name and
+ * apps. Each droplet's launcher state is d<k>/state.json beside it.
  */
 export function validatePlan(plan, round) {
   officialRound(round);
-  assert.deepEqual(Object.keys(plan ?? {}).sort(), ["commit", "createdAt", "droplets", "options", "parts", "round", "tree", "workload"], "unexpected split plan fields");
+  assert.deepEqual(Object.keys(plan ?? {}).sort(), ["commit", "createdAt", "droplets", "options", "parts", "round", "workload"], "unexpected split plan fields");
   assert.equal(plan.workload, "marketplace-v2"); assert.equal(plan.round, round);
-  assert.match(plan.commit, /^[a-f0-9]{40}$/); assert.match(plan.tree, /^[a-f0-9]{40}$/);
+  assert.match(plan.commit, /^[a-f0-9]{40}$/);
   assert.deepEqual(plan.options, nightly);
   const shares = splitApps(plan.droplets);
   assert.deepEqual(plan.parts, shares.map((apps, i) => ({ index: i + 1, name: `corten-marketplace-${round}-d${i + 1}`, apps })), "split plan parts are not the split of the apps");
   return plan;
 }
-export function splitPlan(round, droplets, commit, tree, createdAt = new Date().toISOString()) {
-  return validatePlan({ workload: "marketplace-v2", round, droplets, commit, tree, createdAt, options: nightly,
+export function splitPlan(round, droplets, commit, createdAt = new Date().toISOString()) {
+  return validatePlan({ workload: "marketplace-v2", round, droplets, commit, createdAt, options: nightly,
     parts: splitApps(droplets).map((apps, i) => ({ index: i + 1, name: `corten-marketplace-${round}-d${i + 1}`, apps })) }, round);
 }
 /**
  * The exit code of a split round's collection from each droplet's (#816). Each is a collect()
  * code (0 done, 1 partial, 3 still running), 2 for a collection error, or "missing" for a part
- * that was never created. A collection error or a leftover droplet is 2, like one droplet's; any
- * other code but 0, 1 or 3 is passed on; then 3 while any still runs; then 1 when any is partial
- * or missing. 0 only when every droplet finished, was collected and deleted: the round can merge.
+ * that was never created. A collection error, a leftover droplet or any other code is 2, like one
+ * droplet's; then 3 while any still runs; then 1 when any is partial or missing. 0 only when every
+ * droplet finished, was collected and deleted: the round can merge.
  * @param {(number | "missing")[]} codes @param {number} leftovers droplets reported by leftoverDroplets
  */
 export function splitExit(codes, leftovers = 0) {
-  if (leftovers || codes.includes(2)) return 2;
-  const other = codes.find((c) => ![0, 1, 3, "missing"].includes(c));
-  if (other !== undefined) return Number.isSafeInteger(other) && other > 0 ? other : 2;
+  if (leftovers || codes.some((c) => ![0, 1, 3, "missing"].includes(c))) return 2;
   if (codes.includes(3)) return 3;
   if (codes.includes(1) || codes.includes("missing")) return 1;
   return 0;

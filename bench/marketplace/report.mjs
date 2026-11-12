@@ -251,17 +251,7 @@ function betweenLines(s, cell) {
     "", "The check is axum-maud's ratio to Corten on each droplet, for req/s and CPU us/request: the median of the medians [lowest axum-maud over highest Corten - highest over lowest]. Two droplets whose ratio ranges do not overlap differ by more than the noise, the rule this report uses for every range; that stage is flagged, and ratios to Corten that compare apps on those droplets are not like for like there.",
     "", check.flagged.length ? `Flagged: ${check.flagged.length} of ${check.ratios.length} stages (${[...new Set(check.flagged.map((r) => differText(r.differ)))].join("; ")}).` : `Flagged: none. No two droplets' axum-maud ratios to Corten differ by more than the noise in any of the ${check.ratios.length} stages.`,
     "", `| Profile | Phase | Metric |${split.parts.map((p) => ` d${p.index} |`).join("")} Flag |`, `|---|---|---|${split.parts.map(() => "---:|").join("")}---|`,
-    ...check.ratios.map((r) => `| ${r.profile} | ${r.phase} | ${anchorMetrics[r.metric]} |${r.cells.map((c) => ` ${value(c)} |`).join("")} ${differText(r.differ)} |`),
-    "", "The anchors' raw numbers across droplets (information, not the flag):", ""];
-  for (const anchor of anchors) for (const [metric, metricLabel] of Object.entries(anchorMetrics)) {
-    const raw = check.raw.filter((r) => r.anchor === anchor && r.metric === metric);
-    const widest = raw.filter((r) => r.spread !== null).sort((a, b) => b.spread - a.spread)[0];
-    const beyond = raw.filter((r) => r.differ.length).length;
-    lines.push(`- ${anchor} ${metricLabel}: ${widest ? `the droplets' medians differ by up to ${(widest.spread * 100).toFixed(1)}% (${widest.profile} ${widest.phase})` : "no stage has two droplets with passes"}; ranges apart in ${beyond} of ${raw.length} stages.`);
-  }
-  if (check.rawBeyondNoise.length) {
-    lines.push("", `Note: the anchors' raw numbers differ by more than the noise in ${check.rawBeyondNoise.length} of ${check.raw.length} anchor stages (${[...new Set(check.rawBeyondNoise.map((r) => differText(r.differ)))].join("; ")}). The droplets' machines are not the same speed; read apps on different droplets through their ratio to Corten, not their raw numbers.`);
-  }
+    ...check.ratios.map((r) => `| ${r.profile} | ${r.phase} | ${anchorMetrics[r.metric]} |${r.cells.map((c) => ` ${value(c)} |`).join("")} ${differText(r.differ)} |`)];
   return lines;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
