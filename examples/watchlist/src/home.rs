@@ -250,15 +250,17 @@ fn LastTrade(text: &str) -> impl Render {
 #[derive(Id)]
 struct PicksId;
 
-/// The picks' placeholder until `/live/picks` sends them. A browser without JavaScript opens no
-/// stream, so for it the line saying they are on their way is hidden (`picks_loading.css`) and a
-/// link takes it to the same page with the picks read in.
+/// The picks' placeholder until `/live/picks` sends them. Its link goes to the same page with the
+/// picks read in, and shows only where no stream will bring them (`picks_loading.css`): without
+/// JavaScript, which opens none, and once the stream has given up (`status="closed"`), when the
+/// line saying they are on their way is hidden instead. `nofollow`, as the page it opens waits for
+/// the slow read.
 #[component(css)]
 pub(crate) fn PicksLoading() -> impl Render {
     html! {
         <p id={PicksId}>
             <span class={Finding}>"Finding picks for you..."</span>
-            <noscript><a href={url::Home { picks: Some(true) }}>"Show picks for you"</a></noscript>
+            <a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">"Show picks for you"</a>
         </p>
     }
 }
@@ -357,7 +359,8 @@ pub(crate) async fn unwatch(
 }
 
 /// The answer to a change of the list: with JavaScript, the prices and the form as a patch; without
-/// it, or to a native screen or an agent, the whole screen.
+/// it, or to a native screen or an agent, the whole screen. The patch leaves the picks as they
+/// are, so until the page is read again they can still name a stock just watched.
 fn changed(req: &Req, viewer: Option<&Viewer>, market: &Market, watching: &mut Watching, message: String) -> HtmlResult {
     let home = Home::new(market, watching, message, None);
     if req.mode != Mode::Action {
@@ -388,7 +391,7 @@ mod tests {
 
     /// The home page, as the visitor sees it.
     async fn watched(app: &Client) -> String {
-        app.get(&url::Home { picks: None }).cookie("visitor", VISITOR).await.text().to_string()
+        app.get(&url::Home::default()).cookie("visitor", VISITOR).await.text().to_string()
     }
 
     /// The visitor's Remove button on the row of `remove`, the stock picked to watch coming along.
@@ -409,7 +412,7 @@ mod tests {
 
     #[tokio::test]
     async fn home_renders_the_watched_stocks_and_script_for_browsers() {
-        let res = client().get(&url::Home { picks: None }).await;
+        let res = client().get(&url::Home::default()).await;
         assert!(res.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
         let body = res.text();
         assert!(body.contains("/scripts/live_prices.js\">"), "the script module is preloaded: {body}");
@@ -450,7 +453,7 @@ mod tests {
     #[tokio::test]
     async fn a_browser_gets_a_visitor_id_once_and_keeps_its_list_on_the_server() {
         let app = client();
-        let first = app.get(&url::Home { picks: None }).await;
+        let first = app.get(&url::Home::default()).await;
         let cookie = first.headers()["set-cookie"].to_str().unwrap();
         assert!(cookie.starts_with("visitor=") && cookie[8..].find(';') == Some(32), "{cookie}");
         assert!(cookie.ends_with("; Path=/; SameSite=Lax; Max-Age=31536000; HttpOnly; Secure"), "{cookie}");
@@ -458,7 +461,7 @@ mod tests {
         assert!(res.headers().get("set-cookie").is_none(), "a browser with a list keeps its id");
         assert_eq!(rows(&watched(&app).await), ["ACME", "GLBX", "INIT", "SOLR"]);
         // Another browser, and a cookie the app did not write, see a list of their own.
-        let other = app.get(&url::Home { picks: None }).cookie("visitor", "nope").await;
+        let other = app.get(&url::Home::default()).cookie("visitor", "nope").await;
         assert_eq!(rows(other.text()), ["ACME", "GLBX", "INIT"]);
     }
 
@@ -473,7 +476,7 @@ mod tests {
         let res = app.post(&url::Watch).mode(Mode::Action).field(StockForm::FIELDS.id, "SOLR").await;
         let cookies: Vec<_> = res.headers().get_all("set-cookie").iter().map(|c| c.to_str().unwrap()).collect();
         assert!(cookies.len() == 1 && cookies[0].starts_with("visitor="), "{cookies:?}");
-        let list = app.get(&url::Home { picks: None }).cookie("visitor", res.cookie("visitor").unwrap()).await;
+        let list = app.get(&url::Home::default()).cookie("visitor", res.cookie("visitor").unwrap()).await;
         assert_eq!(rows(list.text()), ["ACME", "GLBX", "INIT", "SOLR"]);
     }
 
@@ -497,7 +500,7 @@ mod tests {
 
     #[tokio::test]
     async fn home_is_json_for_data_clients() {
-        let res = client().get(&url::Home { picks: None }).mode(Mode::Data).await;
+        let res = client().get(&url::Home::default()).mode(Mode::Data).await;
         assert_eq!(res.headers()["content-type"], "application/json");
         let body = res.text();
         assert!(
@@ -511,17 +514,17 @@ mod tests {
     }
 
     /// A slow part sent once (#1264): the page goes without the picks and its `<corten-live>`
-    /// brings them; for a browser without JavaScript, which opens no stream, the placeholder links
-    /// to the same page with them read in.
+    /// brings them; the placeholder links to the same page with them read in, for a browser
+    /// without JavaScript, which opens no stream, and for a stream that gives up.
     #[tokio::test]
     async fn the_picks_come_later_or_read_in_for_a_browser_without_javascript() {
         let app = client();
-        let page = app.get(&url::Home { picks: None }).await;
+        let page = app.get(&url::Home::default()).await;
         let page = page.text();
         assert!(
             page.contains(concat!(
                 r#"<corten-live src="/live/picks"><p id="picks"><span class="picks-loading__finding">Finding picks for you...</span>"#,
-                r#"<noscript><a href="/?picks=true">Show picks for you</a></noscript></p></corten-live>"#
+                r#"<a class="picks-loading__show" href="/?picks=true" rel="nofollow">Show picks for you</a></p></corten-live>"#
             )),
             "{page}"
         );
@@ -533,7 +536,7 @@ mod tests {
         // A data client asks the same address for them; without it they are left out.
         let data = app.get(&url::Home { picks: Some(true) }).mode(Mode::Data).await;
         assert!(data.text().contains(r#""picks":[{"id":"HLTH","#), "{}", data.text());
-        let data = app.get(&url::Home { picks: None }).mode(Mode::Data).await;
+        let data = app.get(&url::Home::default()).mode(Mode::Data).await;
         assert!(!data.text().contains("picks"), "{}", data.text());
     }
 

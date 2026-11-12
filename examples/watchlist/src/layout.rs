@@ -46,7 +46,7 @@ pub fn Layout<'a>(
                     >
                         <nav class={(row(Space::_1), flex_wrap())}>
                             <span class={(weight_bold(), tracking_tight())}>"Watchlist"</span>
-                            <a {..req.nav(&url::Home { picks: None })}>"Stocks"</a>
+                            <a {..req.nav(&url::Home::default())}>"Stocks"</a>
                             <a {..req.nav(&news::url::News::default())}>"News"</a>
                             <a {..req.nav(&url::Alerts { saved: None })}>"Alerts"</a>
                         </nav>
@@ -121,7 +121,7 @@ mod tests {
         assert!(guest.contains(r#"<a href="/" data-nav>Stocks</a>"#));
         assert!(guest.contains("<button>Sign in</button>") && !guest.contains(r#"href="/account""#), "{guest}");
         let session = sign_in(&app).await;
-        let ada = app.get(&Home { picks: None }).cookie("session", &session).await;
+        let ada = app.get(&Home::default()).cookie("session", &session).await;
         let ada = ada.text();
         assert!(
             ada.contains(r#"<a href="/account" data-nav aria-label="Ada: account"><span id="viewer-badge""#)

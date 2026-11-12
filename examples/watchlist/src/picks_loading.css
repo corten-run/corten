@@ -1,7 +1,20 @@
-/* Without JavaScript no stream brings the picks, so the line saying they are on their way is hidden
-   and the link in <noscript>, to the page with them read in, is what shows. */
+/* The line saying the picks are on their way shows while a stream can still bring them. Where
+   none will, the link to the page with them read in shows instead: without JavaScript, which
+   opens no stream, and once the stream has given up (`closed`: an error or a 204 answered it). */
+.show {
+  display: none;
+}
 @media (scripting: none) {
   .finding {
     display: none;
   }
+  .show {
+    display: inline;
+  }
+}
+corten-live[status="closed"] .finding {
+  display: none;
+}
+corten-live[status="closed"] .show {
+  display: inline;
 }

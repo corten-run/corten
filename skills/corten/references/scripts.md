@@ -187,11 +187,13 @@ translated text and its dates take `.zone(..)`.
 Another source (a change stream, a queue) is `corten::live(stream)`: give each item its version,
 `Fragment::new(html).cursor(v)`, and use the `LiveSince` argument (the page's `since`, or
 `Last-Event-ID` after a reconnect) to send nothing until the next change when it is current. A
-slow part sent once is a stream of one item. Without JavaScript no stream opens, so its
-placeholder holds `<noscript><a href={url::Home { picks: Some(true) }}>..</a></noscript>`: the
-page's own route with a query field its handler reads the part in for (never a second route), and
-the component's CSS hides the loading line under `@media (scripting: none)`. See the live-data
-guide.
+slow part sent once is a stream of one item. Where no stream will bring it (no JavaScript, or a
+stream that gave up), its placeholder's link shows:
+`<a class={Show} href={url::Home { picks: Some(true) }} rel="nofollow">..</a>`, the page's own
+route with a query field its handler reads the part in for (no second route per part; the route
+derives `Default`, so other links are `url::Home::default()`). The component's CSS hides it and
+shows it in place of the loading line under `@media (scripting: none)` and inside
+`corten-live[status="closed"]`. See the live-data guide.
 
 A job's progress is a `<progress value max>` a `corten::live` stream draws again as the job
 moves; a growing log or a generated answer is a `view::Append(id, lines)` per piece. A script that
