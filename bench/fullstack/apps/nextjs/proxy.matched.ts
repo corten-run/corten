@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-// The matched tier's CSP for the pages (next.config.mjs has the other headers), as Next.js's Content
+// The matched tier's CSP for App Router pages (server-profile.mjs has the other headers), as Next.js's Content
 // Security Policy guide sets it: a nonce for each response, which Next.js reads from the request's
 // policy and writes on its scripts. axum-maud's policy with the nonce added.
 export function proxy(request: NextRequest) {
@@ -13,9 +13,9 @@ export function proxy(request: NextRequest) {
   return response;
 }
 
-// The guide's matcher: not the JSON (next.config.mjs gives it a fixed policy), the static files or
+// The guide's matcher: not the JSON (server-profile.mjs gives it a policy), the static files or
 // a link's prefetch; and not bench/live's stream (no page), nor the Pages Router's marketplace pages,
-// which are not in the tier and would need _document to write the nonce.
+// whose _document writes the native server's nonce.
 export const config = {
   matcher: [
     {

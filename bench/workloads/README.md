@@ -36,8 +36,16 @@ selection and historical reservations are unchanged while native parity work is 
 The catalog runner accepts `--group catalog-page` for page-only timing of the exact registry
 selection in both sources, with its stronger native page and JSON correctness gates retained.
 Its versioned group evidence binds checks and timing to each immutable image and verifies
-after-run provenance and saved aggregates. This is a native runner integration, not a passing
-group result or a cloud launcher; see the [catalog procedure](../catalog/README.md).
+after-run provenance and saved aggregates. Its separate explicit-commit cloud controller uses
+independent durable reservations and terminal-only collection/deletion. This is implementation,
+not a passing group result or proof of workload readiness; see the [catalog procedure](../catalog/README.md).
+
+The [JSON API runner](../json-api/README.md) keeps catalog and numeric marketplace payloads
+separate in both sources, with no HTML qualification. Functional responses and independently
+audited native parse/serialization sources are separate gates, bound to exact images and
+configuration. Neither gate can be borrowed from a passing subset or a different ASP.NET
+configuration. Native audit receipts and a complete matrix are prerequisites, not assumed
+readiness; no new baseline or cloud integration is claimed.
 
 Remaining groups stay pending runner/adapter integration. Their presence in this registry is
 not a claim that a new benchmark ran, that all native features exist, or that historical
@@ -110,6 +118,19 @@ equivalent total budgets. Unavailable counters stay unavailable, never numeric z
 
 Run all shared contract checks with `npm run check:workloads`. None of these offline checks
 establishes build-time, instruction-count, browser-interactivity or load-test results.
+
+`browser.mjs` creates a fingerprinted native marketplace journey for every selected source,
+locale, device and JavaScript mode. It checks initial SSR, linked navigation, observable
+filter/sort/show-all work, accepted/rejected native forms and independent write readback.
+Native router data requests keep their actual transport paths; Livewire and Hotwire work
+cannot be replaced with a full-page controller response under their names. Page-scope cleanup
+and browser/environment observations remain requirements for a future native runner.
+
+`client.mjs` describes equal keyed rows and dashboard data with explicit fixture sizes and
+seed. Its oracle checks native selection, sorting/filtering, keyed mutations, dashboard
+updates, no operation-time HTTP and post-unmount resource cleanup. Reference-state helpers
+must not manufacture captured DOM or resource observations. Both new oracles always leave
+`readyForLoad` false and do not replace the retained historical browser/client measurements.
 
 `json-check.mjs` is a native HTTP correctness gate, not a load runner. `checkJsonApp` exercises
 every record against either the catalog or marketplace schema without requesting HTML or

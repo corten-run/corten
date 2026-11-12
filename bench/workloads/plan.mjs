@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { nightly } from "../marketplace/droplet-contract.mjs";
 import { phases } from "../catalog/contract.mjs";
 import { groupDescriptor } from "../catalog/group.mjs";
+import { descriptor as jsonDescriptor } from "../json-api/contract.mjs";
 import { coverage } from "./evidence.mjs";
 import { definition, groupNames, registrySchema, retainedFamilies, selectedApps, validateInventory } from "./registry.mjs";
 
@@ -23,6 +24,15 @@ export function plan(name, evidence = []) {
       runner: "bench/catalog/run.mjs", group: name, descriptor: groupDescriptor(name),
       phases, settings: "bench/catalog/contract.mjs parseArgs defaults; saved options and measurement.cpus are authoritative",
       status: "requires-exact-image-page-and-json-browser-gates",
+      cloud: {
+        runner: "bench/catalog/droplet.mjs", group: name,
+        settings: "bench/catalog/droplet-contract.mjs measurements, host and cpuEnv; durable reservation is authoritative",
+        status: "explicit-merged-commit-independent-state-root-native-gates-required",
+      },
+    } : name === "json-api" ? {
+      runner: "bench/json-api/run.mjs", group: name, descriptor: jsonDescriptor(), phases,
+      settings: "bench/json-api/contract.mjs parseArgs defaults; saved options, timingPlan and measurement.cpus are authoritative",
+      status: "requires-exact-image-json-gates-and-independent-native-source-audits",
       cloud: "not-integrated; this native runner does not launch or collect droplets",
     } : { status: "pending-group-runner-integration", reason: "Selection is approved; existing native runners and adapters must satisfy this group's contract before comparative timing." },
     retainedFamilies,

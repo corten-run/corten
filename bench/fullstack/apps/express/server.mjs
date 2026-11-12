@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { alertMessage, fetchItem, shelf } from "./lib/view-model.mjs";
 import { fetchCatalogRecord } from "./lib/catalog.mjs";
 import { fetchMarketplaceRecord, isLocale, pageModel, readQuery } from "./lib/marketplace.mjs";
+import { recordJson, recordMethod, recordError } from "./lib/record-json.mjs";
 
 const profile = process.env.PROFILE === "matched";
 const app = express();
@@ -120,12 +121,7 @@ async function marketplace(req, res) {
 app.get("/marketplace/:locale/:id", marketplace);
 app.post("/marketplace/:locale/:id", ...parsed(form), marketplace);
 
-app.get("/api/marketplace/:id", async (req, res) => {
-  const record = await fetchMarketplaceRecord(req.params.id);
-  if (req.timedout) return;
-  if (!record) return res.sendStatus(404);
-  res.json(record);
-});
+app.route("/api/marketplace/:id").get(recordJson(fetchMarketplaceRecord)).all(recordMethod);
 
 app.get("/catalog/:id", async (req, res) => {
   const record = await fetchCatalogRecord(req.params.id);
@@ -135,12 +131,7 @@ app.get("/catalog/:id", async (req, res) => {
   res.render("catalog", { record, prefix, fields: record.fields.filter((f) => f.name.startsWith(prefix)) });
 });
 
-app.get("/api/catalog/:id", async (req, res) => {
-  const record = await fetchCatalogRecord(req.params.id);
-  if (req.timedout) return;
-  if (!record) return res.sendStatus(404);
-  res.json(record);
-});
+app.route("/api/catalog/:id").get(recordJson(fetchCatalogRecord)).all(recordMethod);
 
 // The live benchmark (bench/live): GET /live/prices is a server-sent event stream and every
 // POST /live/publish body goes to each open stream.
@@ -158,6 +149,8 @@ app.post("/live/publish", ...parsed(express.text({ type: () => true })), (req, r
   for (const stream of streams) stream.write(event);
   res.sendStatus(204);
 });
+
+app.use(recordError);
 
 const port = Number(process.env.PORT ?? 8080);
 const listening = () => console.log(`express item page listening on ${port}`);

@@ -1,5 +1,7 @@
 #include "marketplace.h"
+#include "record_http.h"
 #include <drogon/drogon.h>
+#include <drogon/HttpMiddleware.h>
 #include <drogon/utils/Utilities.h>
 #include <json/reader.h>
 #include <trantor/net/EventLoop.h>
@@ -20,6 +22,7 @@ std::string env(const char *name, const char *fallback) {
 Json::Value readFile(const std::string &path) {
  std::ifstream file(path, std::ios::binary); if (!file) throw std::runtime_error("cannot open marketplace asset " + path);
  Json::Value value; Json::CharReaderBuilder reader; std::string errors;
+ Json::CharReaderBuilder::strictMode(&reader.settings_);
  if (!Json::parseFromStream(reader, file, &value, &errors) || !value.isObject()) throw std::runtime_error("marketplace JSON: " + errors);
  return value;
 }
@@ -36,7 +39,14 @@ void load() {
  if (env("MARKETPLACE_SOURCE", "") != "fixture") return;
  fromFixture = true;
  auto records = readFile(env("MARKETPLACE_FIXTURE_PATH", "/fixtures/marketplace.json"));
- for (const auto &id : records.getMemberNames()) fixture.emplace(id, std::make_shared<const Json::Value>(parseRecord(records[id])));
+ for (const auto &id : records.getMemberNames()) {
+  auto record = parseRecord(records[id]);
+  if (record["id"].asString() != id) throw std::runtime_error("marketplace fixture id mismatch");
+  fixture.emplace(id, std::make_shared<const Json::Value>(std::move(record)));
+ }
+ for (const auto &entry : fixture) for (auto key : {"contents", "included_in"})
+  for (const auto &line : (*entry.second)[key])
+   if (!fixture.count(line["item_id"].asString())) throw std::runtime_error("unknown marketplace item reference");
 }
 void get(const std::string &id, std::function<void(RecordPtr, bool)> done) {
  if (fromFixture) {
@@ -63,14 +73,36 @@ void get(const std::string &id, std::function<void(RecordPtr, bool)> done) {
 }
 void routes() {
  drogon::app().registerHandler("/api/marketplace/{id}",
-  [](const drogon::HttpRequestPtr &, Callback &&callback, const std::string &id) {
-   get(id, [callback = std::move(callback)](RecordPtr record, bool failed) mutable {
-    if (failed) return error(callback, drogon::k502BadGateway);
-    if (!record) return error(callback, drogon::k404NotFound);
-    auto response = drogon::HttpResponse::newHttpJsonResponse(*record);
-    response->addHeader("Cache-Control", "no-store"); callback(response);
-   });
-  }, {drogon::Get});
+  [](const drogon::HttpRequestPtr &request, Callback &&callback, const std::string &id) {
+   if (request->method() != drogon::Get && request->method() != drogon::Head)
+    return callback(record_http::problem(drogon::k405MethodNotAllowed));
+   if (fromFixture) {
+    auto found = fixture.find(id);
+    if (found == fixture.end()) return callback(record_http::problem(drogon::k404NotFound));
+    auto response = drogon::HttpResponse::newHttpJsonResponse(*found->second);
+    response->addHeader("Cache-Control", "no-store"); return callback(response);
+   }
+   record_http::get(request, "/marketplace/records/", id,
+    [id, callback = std::move(callback)](record_http::Result result, const drogon::HttpResponsePtr &response) {
+     if (result == record_http::Result::Aborted) return;
+     if (result == record_http::Result::Timeout) return callback(record_http::problem(drogon::k504GatewayTimeout));
+     if (result != record_http::Result::Ok) return callback(record_http::problem(drogon::k502BadGateway));
+     if (response->statusCode() == drogon::k404NotFound) return callback(record_http::problem(drogon::k404NotFound));
+     if (response->statusCode() != drogon::k200OK) return callback(record_http::problem(drogon::k502BadGateway));
+     drogon::HttpResponsePtr output;
+     try {
+      Json::Value value; Json::CharReaderBuilder builder; Json::CharReaderBuilder::strictMode(&builder.settings_);
+      std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+      auto body = response->body(); std::string errors;
+      if (!reader->parse(body.data(), body.data()+body.size(), &value, &errors)) throw std::runtime_error("invalid marketplace JSON");
+      auto record = parseRecord(value);
+      if (record["id"].asString() != id) throw std::runtime_error("marketplace id mismatch");
+      output = drogon::HttpResponse::newHttpJsonResponse(std::move(record));
+      output->addHeader("Cache-Control", "no-store");
+     } catch (const std::exception &) { output = record_http::problem(drogon::k502BadGateway); }
+     callback(output);
+    });
+  }, {drogon::HttpOptionsMiddleware::classTypeName()});
  drogon::app().registerHandler("/marketplace/{locale}/{id}",
   [](const drogon::HttpRequestPtr &request, Callback &&callback, const std::string &locale, const std::string &id) {
    if (locale != "en-US" && locale != "fr-FR" && locale != "de-DE") return error(callback, drogon::k400BadRequest);

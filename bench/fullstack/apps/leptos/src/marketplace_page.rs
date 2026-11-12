@@ -30,17 +30,69 @@ pub async fn marketplace_json(axum::extract::Path(id): axum::extract::Path<Strin
     use axum::{http::StatusCode, response::IntoResponse, Json};
     match crate::marketplace::source::get(&id).await {
         Ok(Some(record)) => Json(record).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "Not found" }))).into_response(),
+        Err(_) => {
+            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({ "error": "Marketplace API did not answer" }))).into_response()
+        }
     }
 }
 /// Plain POST fallback rendered by the same Leptos route and resource as GET.
+/// The built-in listener serves HTTP. A TLS-terminating deployment must set
+/// `MARKETPLACE_PUBLIC_ORIGIN` to its public HTTP(S) origin (scheme, name and port;
+/// no credentials, path, query or fragment). This trusted setting also permits a
+/// proxy to rewrite Host. Forwarding headers and request URLs are not trusted.
+/// An invalid setting rejects Origin-bearing posts; headerless native forms remain allowed.
 #[cfg(feature = "ssr")]
 pub async fn marketplace_post(
     axum::extract::State(options): axum::extract::State<LeptosOptions>,
     request: axum::extract::Request,
 ) -> axum::response::Response {
-    use axum::{body::Body, extract::FromRequest, response::IntoResponse};
+    use axum::{
+        body::Body,
+        extract::FromRequest,
+        http::{header, uri::Authority, StatusCode},
+        response::IntoResponse,
+    };
+    let headers = request.headers();
+    let site_allowed = headers.get("sec-fetch-site").is_none_or(|site| matches!(site.to_str(), Ok("same-origin" | "none")));
+    let origin_allowed = headers.get(header::ORIGIN).is_none_or(|value| {
+        let Ok(origin) = value.to_str().unwrap_or_default().parse::<url::Url>() else {
+            return false;
+        };
+        let Some(host) =
+            headers.get(header::HOST).and_then(|host| host.to_str().ok()).and_then(|host| host.parse::<Authority>().ok())
+        else {
+            return false;
+        };
+        let target = match std::env::var_os("MARKETPLACE_PUBLIC_ORIGIN") {
+            Some(value) => value.to_str().and_then(|value| value.parse::<url::Url>().ok()),
+            None => url::Url::parse(&format!("http://{host}")).ok(),
+        };
+        let Some(target) = target else {
+            return false;
+        };
+        matches!(origin.scheme(), "http" | "https")
+            && origin.username().is_empty()
+            && origin.password().is_none()
+            && origin.path() == "/"
+            && origin.query().is_none()
+            && origin.fragment().is_none()
+            && matches!(target.scheme(), "http" | "https")
+            && target.username().is_empty()
+            && target.password().is_none()
+            && target.path() == "/"
+            && target.query().is_none()
+            && target.fragment().is_none()
+            && origin.origin() == target.origin()
+    });
+    if !site_allowed
+        || !origin_allowed
+        || headers.get_all("sec-fetch-site").iter().count() > 1
+        || headers.get_all(header::ORIGIN).iter().count() > 1
+        || headers.get_all(header::HOST).iter().count() > 1
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     let (parts, body) = request.into_parts();
     let input = match axum::Form::<AlertForm>::from_request(axum::http::Request::from_parts(parts.clone(), body), &()).await {
         Ok(axum::Form(input)) => input,

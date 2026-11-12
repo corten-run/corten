@@ -101,9 +101,9 @@ fn a_call_takes_any_number_of_arguments() {
     let html = Instrument {}.to_html();
     assert!(
         html.starts_with(concat!(
-            r#"<div data-scope="instrument" data-on="connect:instrument.instrument("#,
+            r#"<div data-scope="instrument" data-on='connect:instrument.instrument("#,
             r#"@spectrum,@fallback,@controls,@play,@tempo,@pattern,@status,@pause,"#,
-            r#"&quot;Play&quot;,&quot;Stop&quot;,&quot;Off&quot;,&quot;On&quot;,&quot;Unavailable&quot;,&quot;Pause&quot;,&quot;Resume&quot;,$s)">"#
+            r#""Play","Stop","Off","On","Unavailable","Pause","Resume",$s)'>"#
         )),
         "{html}"
     );
@@ -166,8 +166,8 @@ fn a_list_of_strings_is_a_json_array() {
     assert_eq!(
         html,
         concat!(
-            r#"<p data-scope="named" data-ref="out" data-on="connect:shared.named(@out,[&quot;above&quot;,&quot;below&quot;]) "#,
-            r#"click:shared.named(@out,[&quot;a\&quot;b&lt;&quot;]) input:shared.named(@out,[&quot;x&quot;,&quot;y&quot;])"></p>"#
+            r#"<p data-scope="named" data-ref="out" data-on='connect:shared.named(@out,["above","below"]) "#,
+            r#"click:shared.named(@out,["a\"b&lt;"]) input:shared.named(@out,["x","y"])'></p>"#
         )
     );
 }
@@ -178,10 +178,10 @@ fn a_script_gets_the_pages_formats() {
     assert_eq!(
         en,
         concat!(
-            r#"<output data-scope="priced" data-ref="out" data-on="connect:shared.priced(@out,"#,
-            r#"%{&quot;z&quot;:&quot;0&quot;,&quot;s&quot;:[&quot;.&quot;,&quot;,&quot;,3,3,1],&quot;t&quot;:[&quot;\u0001&quot;,&quot;-\u0001&quot;]},"#,
-            r#"%{&quot;z&quot;:&quot;0&quot;,&quot;s&quot;:[&quot;.&quot;,&quot;,&quot;,3,3,1],&quot;t&quot;:[&quot;$\u0001&quot;,&quot;-$\u0001&quot;],&quot;d&quot;:2},"#,
-            r#"%{&quot;z&quot;:&quot;0&quot;,&quot;f&quot;:[[&quot;M&quot;],[&quot;&quot;,&quot;/&quot;],[&quot;d&quot;],[&quot;&quot;,&quot;/&quot;],[&quot;y&quot;]],&quot;o&quot;:-18000})"></output>"#
+            r#"<output data-scope="priced" data-ref="out" data-on='connect:shared.priced(@out,"#,
+            r#"%{"z":"0","s":[".",",",3,3,1],"t":["\u0001","-\u0001"]},"#,
+            r#"%{"z":"0","s":[".",",",3,3,1],"t":["$\u0001","-$\u0001"],"d":2},"#,
+            r#"%{"z":"0","f":[["M"],["","/"],["d"],["","/"],["y"]],"o":-18000})'></output>"#
         )
     );
 }
@@ -200,15 +200,28 @@ fn a_float_argument_is_written_as_display_writes_it() {
         let html = scoped("x", || {
             html! { <corten-live src={Live} on:corten-status={shared::log("x", n, true)}></corten-live> }.to_html()
         });
-        assert!(html.contains(&format!("shared.log(&quot;x&quot;,{text},true)")), "{html}");
+        assert!(html.contains(&format!("shared.log(\"x\",{text},true)")), "{html}");
     }
+}
+
+/// `data-on` is single-quoted, so a JSON argument keeps its quotes; an apostrophe, `&`, `<` and
+/// `>` in it are entities, and the browser reads the same JSON back.
+#[cfg(feature = "json")]
+#[test]
+fn a_json_argument_keeps_its_quotes_in_a_single_quoted_attribute() {
+    let value = ["It's \"<b>\" & more"];
+    let html = scoped("x", || html! { <p on:connect={shared::listed(target, value)}></p> }.to_html());
+    assert_eq!(html, r#"<p data-on='connect:shared.listed($t,["It&#39;s \"&lt;b&gt;\" &amp; more"])'></p>"#);
+    let attr = &html["<p data-on='connect:shared.listed($t,".len()..html.len() - ")'></p>".len()];
+    let json = attr.replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&");
+    assert_eq!(serde_json::from_str::<Vec<String>>(&json).unwrap(), value);
 }
 
 #[test]
 fn a_live_elements_status_event_takes_a_handler() {
     let html =
         scoped("x", || html! { <corten-live src={Live} on:corten-status={shared::log("x", 1, true)}></corten-live> }.to_html());
-    assert_eq!(html, r#"<corten-live src="/live" data-on="corten-status:shared.log(&quot;x&quot;,1,true)"></corten-live>"#);
+    assert_eq!(html, r#"<corten-live src="/live" data-on='corten-status:shared.log("x",1,true)'></corten-live>"#);
 }
 
 #[test]
@@ -217,9 +230,9 @@ fn handlers_are_calls_with_refs_keywords_and_values() {
     assert_eq!(
         html,
         concat!(
-            r#"<li data-scope="line-item"><input value="2" data-on="input:line_item.enable(@save)">"#,
+            r#"<li data-scope="line-item"><input value="2" data-on='input:line_item.enable(@save)'>"#,
             r#"<button data-ref="save" disabled>Save</button>"#,
-            r#"<button data-on="click:line_item.confirm($e,@dialog,&quot;a\&quot;b&quot;)">Remove</button>"#,
+            r#"<button data-on='click:line_item.confirm($e,@dialog,"a\"b")'>Remove</button>"#,
             r#"<dialog data-ref="dialog">Sure?</dialog></li>"#,
         )
     );
@@ -245,8 +258,8 @@ fn RowList<'a>(rows: &'a [&'a str]) -> impl Render {
 #[test]
 fn a_ref_in_a_loop_is_an_array_and_typed_events_are_kebab_case() {
     let html = RowList { rows: &["x", "y"] }.to_html();
-    assert!(html.starts_with(r#"<table data-scope="row-list"><tbody data-on="row-toggled:row_list.count($e,*row)">"#), "{html}");
-    assert!(html.contains(r#"<tr data-ref="row" data-on="click:row_list.toggle($t,&quot;x&quot;)">"#), "{html}");
+    assert!(html.starts_with(r#"<table data-scope="row-list"><tbody data-on='row-toggled:row_list.count($e,*row)'>"#), "{html}");
+    assert!(html.contains(r#"<tr data-ref="row" data-on='click:row_list.toggle($t,"x")'>"#), "{html}");
 }
 
 /// A child that takes a handler and a ref from its parent.
@@ -274,7 +287,7 @@ fn a_parent_passes_a_handler_and_its_refs_resolve_in_its_scope() {
         html,
         concat!(
             r#"<form data-scope="dialog" data-ref="form"><div data-ref="body"></div>"#,
-            r#"<button type="button" data-on="click:dialog.submit(@form,$c)">OK</button>"#,
+            r#"<button type="button" data-on='click:dialog.submit(@form,$c)'>OK</button>"#,
             r#"<button type="button">No</button></form>"#,
         )
     );
@@ -306,7 +319,7 @@ fn a_handler_made_by_a_parent_keeps_the_parents_scope_inside_a_child() {
         html,
         concat!(
             r#"<div data-scope="form"><label data-scope="field"><input data-ref="input" "#,
-            r#"data-on="input:field.trim($t) change:form.enable(@form/save,$c/form)"></label>"#,
+            r#"data-on='input:field.trim($t) change:form.enable(@form/save,$c/form)'></label>"#,
             r#"<button data-ref="save">Save</button></div>"#,
         )
     );
@@ -414,25 +427,25 @@ fn a_layouts_own_handlers_are_drawn_in_each_part_of_it() {
     let mut full = String::new();
     Framed { children: "x" }.render_part(&mut full, crate::view::Part::Full);
     assert_eq!(full, whole);
-    assert!(whole.contains(r#"<div data-on="connect:framed.ready($s)"></div>"#), "{whole}");
+    assert!(whole.contains(r#"<div data-on='connect:framed.ready($s)'></div>"#), "{whole}");
     let rooted = FramedRoot { children: "x" }.to_html();
     let mut rooted_full = String::new();
     FramedRoot { children: "x" }.render_part(&mut rooted_full, crate::view::Part::Full);
     assert_eq!(rooted_full, rooted);
     // Inside the root's scope, so its ref and handler argument are written unqualified.
     assert!(rooted.starts_with(r#"<html data-scope="framed-root">"#), "{rooted}");
-    assert!(rooted.contains(r#"<div data-ref="toasts" data-on="connect:framed.hold(@toasts)"></div>"#), "{rooted}");
+    assert!(rooted.contains(r#"<div data-ref="toasts" data-on='connect:framed.hold(@toasts)'></div>"#), "{rooted}");
 }
 
 #[test]
 fn a_script_that_keeps_state_scopes_its_component_and_a_childs_element_names_its_home() {
-    assert_eq!(Tally {}.to_html(), r#"<button data-scope="tally" type="button" data-on="click:tally.bump($t)">0</button>"#);
+    assert_eq!(Tally {}.to_html(), r#"<button data-scope="tally" type="button" data-on='click:tally.bump($t)'>0</button>"#);
     assert_eq!(
         Tallies {}.to_html(),
         concat!(
             r#"<div data-scope="tallies"><label data-scope="labeled"><input data-ref="input" "#,
-            r#"data-on="change:tallies.bump($t)/tallies"><button type="button" "#,
-            r#"data-on="click:tallies.bump($t)/tallies">0</button></label></div>"#,
+            r#"data-on='change:tallies.bump($t)/tallies'><button type="button" "#,
+            r#"data-on='click:tallies.bump($t)/tallies'>0</button></label></div>"#,
         )
     );
 }
@@ -443,7 +456,7 @@ fn shared_modules_and_events_are_components() {
     let event = RowToggled.event.expect("an event");
     assert_eq!((event.class, event.name, event.fields.len()), ("RowToggled", "row-toggled", 2));
     let html = scoped("x", || html! { <p on:click={shared::log("hi", 2, true)}>"x"</p> }.to_html());
-    assert_eq!(html, r#"<p data-on="click:shared.log(&quot;hi&quot;,2,true)">x</p>"#);
+    assert_eq!(html, r#"<p data-on='click:shared.log("hi",2,true)'>x</p>"#);
 }
 
 // The module docs' script, shared here.
@@ -474,12 +487,12 @@ fn closest_groups_keyed_refs_and_typed_event_handlers_are_written_compactly() {
     assert_eq!(
         html,
         concat!(
-            r#"<table data-scope="stock-grid"><tbody data-on="click:stock_grid.toggle(^row,{rows:*row,count:@count}) "#,
-            r#"row-toggled:stock_grid.toggled($e,{rows:*row,count:@count})">"#,
+            r#"<table data-scope="stock-grid"><tbody data-on='click:stock_grid.toggle(^row,{rows:*row,count:@count}) "#,
+            r#"row-toggled:stock_grid.toggled($e,{rows:*row,count:@count})'>"#,
             r#"<tr data-ref="row" id="a"><td data-ref="qty" data-key="a">1</td></tr>"#,
             r#"<tr data-ref="row" id="b"><td data-ref="qty" data-key="b">2</td></tr></tbody>"#,
             r#"<caption><output data-ref="count">0</output></caption>"#,
-            r#"<tfoot data-on="connect:stock_grid.show(#qty,&quot;a&quot;)"></tfoot></table>"#,
+            r#"<tfoot data-on='connect:stock_grid.show(#qty,"a")'></tfoot></table>"#,
         )
     );
 }
@@ -850,6 +863,7 @@ fn handlers_write_the_shared_wire_vectors() {
                 <p on:click={shared::log(nasty, -1.5, false)}></p>
                 <p on:click={shared::log("", f64::NAN, true)}></p>
                 <p on:connect={shared::watch(signal, Options { id: "a}", tags: ["x,y", "]"] })}></p>
+                <p on:connect={shared::listed(target, ["It's \"<b>\" & more"])}></p>
                 <p on:document:keydown={shared::key(event, target)}></p>
                 <form on:corten:error={shared::failed(event, target)} on:document:corten:notice={shared::said(event)}></form>
             }
@@ -862,14 +876,9 @@ fn handlers_write_the_shared_wire_vectors() {
     ];
     let mut written = Vec::new();
     for page in &pages {
-        for part in page.split(" data-on=\"").skip(1) {
-            let value = &part[..part.find('"').expect("a closing quote")];
-            let text = value
-                .replace("&quot;", "\"")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&#39;", "'")
-                .replace("&amp;", "&");
+        for part in page.split(" data-on='").skip(1) {
+            let value = &part[..part.find('\'').expect("a closing quote")];
+            let text = value.replace("&lt;", "<").replace("&gt;", ">").replace("&#39;", "'").replace("&amp;", "&");
             written.push(text);
         }
     }
@@ -893,4 +902,127 @@ fn an_integer_javascript_cannot_hold_exactly_stops_debug_builds() {
     let at_limit = scoped("x", || html! { <p on:click={shared::log("id", 9_007_199_254_740_991u64, true)}></p> }.to_html());
     assert!(at_limit.contains("9007199254740991"), "{at_limit}");
     scoped("x", || html! { <p on:click={shared::log("id", 9_007_199_254_740_993u64, true)}></p> }.to_html());
+}
+
+/// What a large `ToJson` argument costs: 300 products of a set, as an inventory screen hands them
+/// to a script, in `data-on` as it is written, in the double-quoted attribute it replaced, and in a
+/// `<script type="application/json">` data block a handler would name by id
+/// (`docs/design.md#choice-data-on-single-quoted`). Bytes raw and compressed, the share of the
+/// JSON's bytes that are quotes (each one was six bytes double-quoted), and render times:
+/// `cargo test --release -p corten-run --all-features --lib -- --ignored json_argument_cost --nocapture`
+/// It writes the three forms to `target/data-on-cost/`, which `bench/browser/data-on-cost.mjs`
+/// parses in the three browsers.
+#[cfg(all(feature = "json", feature = "compress"))]
+#[test]
+#[ignore]
+fn json_argument_cost() {
+    use crate::compress::{encode, Coding, Level};
+    #[derive(crate::json::ToJson)]
+    struct Product {
+        id: String,
+        name: String,
+        set: &'static str,
+        number: String,
+        rarity: &'static str,
+        condition: &'static str,
+        price_cents: u32,
+        market_cents: u32,
+        qty: u32,
+    }
+    const PLACES: [&str; 12] =
+        ["Ashen", "Lantern", "Salt", "Gravel", "Undertow", "Cinder", "Pearl", "Kiln", "Fallow", "Rime", "Sable", "Iron"];
+    const BEINGS: [&str; 12] = [
+        "Drake",
+        "Warden",
+        "Oracle",
+        "Sprite",
+        "Serpent",
+        "Cartographer",
+        "Diver",
+        "Colossus",
+        "Smith",
+        "Hound",
+        "Witch",
+        "Pilgrim",
+    ];
+    const RARITIES: [&str; 4] = ["Common", "Uncommon", "Rare", "Mythic"];
+    const CONDITIONS: [&str; 4] = ["Near Mint", "Lightly Played", "Moderately Played", "Damaged"];
+    let products: Vec<Product> = (0..300u32)
+        .map(|k| Product {
+            id: format!("p_{}", 40_000 + k * 7),
+            name: format!("{} {}", PLACES[k as usize % 12], BEINGS[(k as usize / 12 + k as usize) % 12]),
+            set: "Ember Reach",
+            number: format!("{:03}/300", k + 1),
+            rarity: RARITIES[(k.wrapping_mul(2_654_435_761) % 4) as usize],
+            condition: CONDITIONS[(k % 4) as usize],
+            price_cents: 10 + k.wrapping_mul(7919) % 9000,
+            market_cents: 12 + k.wrapping_mul(104_729) % 9000,
+            qty: k % 5,
+        })
+        .collect();
+    let products = &products;
+    let json = crate::json::ToJson::to_json(products);
+    let render = || scoped("x", || html! { <span hidden on:connect={shared::listed(target, products)}></span> }.to_html());
+    // The attribute as it was: double-quoted, every quote of the JSON `&quot;`.
+    let double = || {
+        let mut out = String::from("<span hidden data-on=\"connect:shared.listed($t,");
+        crate::view::escape_into(&crate::json::ToJson::to_json(std::hint::black_box(products)), &mut out);
+        out.push_str(")\"></span>");
+        out
+    };
+    // A data block, as #1253 proposed: the JSON as it is but for `<` (`\u003c`, which reads the same
+    // inside a JSON string and keeps `</script` out), and a handler argument that names it.
+    let block = || {
+        let json = crate::json::ToJson::to_json(std::hint::black_box(products));
+        let mut out = String::from(r#"<script type="application/json" id="listing">"#);
+        out.push_str(&json.replace('<', "\\u003c"));
+        out.push_str(r#"</script><span hidden data-on='connect:shared.listed($t,"listing")'></span>"#);
+        out
+    };
+    let rounds = 2000;
+    let time = |f: &dyn Fn() -> String| {
+        let mut runs: Vec<f64> = (0..5)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                for _ in 0..rounds {
+                    std::hint::black_box(f());
+                }
+                start.elapsed().as_secs_f64() * 1e6 / rounds as f64
+            })
+            .collect();
+        runs.sort_by(f64::total_cmp);
+        (runs[2], runs[0], runs[4])
+    };
+    let quotes = json.bytes().filter(|&b| b == b'"').count();
+    println!(
+        "{} products, JSON {} bytes, {quotes} of them quotes ({:.1}%: double-quoted, each was 6 bytes, {:+.1}%)",
+        products.len(),
+        json.len(),
+        quotes as f64 * 100.0 / json.len() as f64,
+        quotes as f64 * 500.0 / json.len() as f64
+    );
+    let to_json = time(&|| crate::json::ToJson::to_json(std::hint::black_box(products)));
+    println!("to_json alone: {:.1} us (median of 5 runs of {rounds}, {:.1} to {:.1})", to_json.0, to_json.1, to_json.2);
+    let pages = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/data-on-cost");
+    std::fs::create_dir_all(&pages).expect("target/data-on-cost");
+    for (label, file, html, cost) in [
+        ("data-on, single-quoted", "single.html", render(), time(&render)),
+        ("double-quoted, as before", "double.html", double(), time(&double)),
+        ("data block", "block.html", block(), time(&block)),
+    ] {
+        std::fs::write(pages.join(file), &html).expect("a page");
+        let sizes: Vec<usize> =
+            [Coding::Zstd, Coding::Brotli, Coding::Gzip].iter().map(|&c| encode(c, html.as_bytes(), Level::Fast).len()).collect();
+        println!(
+            "{label}: {} bytes ({:+.1}% over the JSON), zstd {} / br {} / gzip {}; {:.1} us ({:.1} to {:.1})",
+            html.len(),
+            (html.len() as f64 / json.len() as f64 - 1.0) * 100.0,
+            sizes[0],
+            sizes[1],
+            sizes[2],
+            cost.0,
+            cost.1,
+            cost.2
+        );
+    }
 }

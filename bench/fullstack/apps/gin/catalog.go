@@ -73,9 +73,7 @@ func newCatalogSource() (*catalogSource, error) {
 			}
 		}
 	} else {
-		transport := http.DefaultTransport.(*http.Transport).Clone()
-		transport.MaxIdleConnsPerHost = transport.MaxIdleConns
-		s.client = &http.Client{Transport: transport}
+		s.client = newRecordHTTPClient()
 	}
 	return s, nil
 }
@@ -122,14 +120,16 @@ func (s *catalogSource) routes(r *gin.Engine) {
 		}
 		render(c, http.StatusOK, catalogPage(record, c.Query("field")))
 	})
-	r.GET("/api/catalog/:id", func(c *gin.Context) {
+	recordJSONMethods(r)
+	r.Match([]string{http.MethodGet, http.MethodHead}, "/api/catalog/:id", func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
 		record, err := s.get(c.Request.Context(), c.Param("id"))
 		if err != nil {
-			_ = c.AbortWithError(http.StatusBadGateway, err)
+			c.AbortWithStatusJSON(http.StatusBadGateway, gin.H{"error": "catalog source unavailable"})
 			return
 		}
 		if record == nil {
-			c.Status(http.StatusNotFound)
+			c.AbortWithStatusJSON(http.StatusNotFound, gin.H{"error": "catalog record not found"})
 			return
 		}
 		c.JSON(http.StatusOK, record)

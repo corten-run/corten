@@ -10,7 +10,7 @@
 //    submit of a form replaces a pending read and waits for a pending write; a navigation abandons
 //    pending ones.
 // 3. <corten-live src>: apply fragments streamed as server-sent `patch` events, until an `end`.
-// 4. Handlers: `data-on="click:cart_line.confirm($e,@dialog)"` (what `on:click={js::confirm(event, dialog)}`
+// 4. Handlers: `data-on='click:cart_line.confirm($e,@dialog)'` (what `on:click={js::confirm(event, dialog)}`
 //    prints) runs the export `confirm` of `{scripts dir}/cart_line.js` with the event and the
 //    element with `data-ref="dialog"` in the same component. One listener per event type on the
 //    document; modules are imported when markup that names them joins the page, and markup the
@@ -1186,6 +1186,20 @@ function renewSubmitKeys(form) {
     if (field instanceof HTMLInputElement && field.hasAttribute("data-submit")) {
       field.value = uuid();
     }
+  }
+}
+
+/**
+ * Gives each of the form's submit keys that has none yet (`SubmitKey::template_field`, in a form a
+ * script copied from a `<template>`) a new one. Run in the capture phase of every `submit`, before
+ * any handler of the page reads the form and before the runtime or the browser sends it, so each
+ * copy is a submission of its own. `form.submit()` fires no event and gets no key; `requestSubmit()`
+ * does.
+ * @param {HTMLFormElement} form
+ */
+function fillSubmitKeys(form) {
+  for (const field of Array.from(formProperty(form, "elements"))) {
+    if (field instanceof HTMLInputElement && !field.value && field.hasAttribute("data-submit")) field.value = uuid();
   }
 }
 
@@ -2829,6 +2843,9 @@ const sentEntries = (data) => {
 // the document, and calls it itself when one stops the submit's propagation): one that cancels
 // it stops the form, as it would without the runtime.
 addEventListener("submit", patchSubmit);
+// An empty submit key is filled first of all, in the window's capture phase: every handler of the
+// submit, and whatever sends the form, sees the key.
+addEventListener("submit", (event) => event.target instanceof HTMLFormElement && fillSubmitKeys(event.target), true);
 
 /** Sends a `data-patch` form's submit as a patch, unless a handler cancelled it. @param {Event} event */
 function patchSubmit(event) {

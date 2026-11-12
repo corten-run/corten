@@ -1784,38 +1784,111 @@ pub(crate) fn collect_hints<T>(render: impl FnOnce() -> T) -> (T, Vec<String>) {
 /// with `hint=""`) describes nothing, so naming it or not is the same. In a page (`page`), a hint
 /// whose element is not drawn describes nothing either (a radio group with no id), and is returned
 /// too; a patch may redraw the hint alone, its control on the page already, so there it is not
-/// checked.
+/// checked. The markup is read tag by tag, so text inside another attribute's value (a handler
+/// argument in `data-on`, whose JSON keeps its quotes) is not taken for an attribute.
 #[cfg(debug_assertions)]
 pub(crate) fn unnamed_hint<'a>(html: &str, hints: &'a [String], page: bool) -> Option<&'a str> {
+    let tags: Vec<crate::html::Tag<'_>> = crate::html::start_tags(html).collect();
+    let by_id = |id: &str| tags.iter().find(|tag| tag.attr("id") == Some(id));
     hints.iter().map(String::as_str).find(|hint| {
-        let Some(at) = html.find(&format!(r#" id="{hint}""#)) else { return false };
-        if !has_text(html, at) {
+        let Some(shown) = by_id(hint) else { return false };
+        if !has_text(html, shown) {
             return false;
         }
         let described = &hint[..hint.len() - "-hint".len()];
-        let Some(tag) = start_tag(html, &format!(r#" id="{described}""#)) else { return page };
-        let names = tag.split(r#" aria-describedby=""#).nth(1).map(|rest| &rest[..rest.find('"').unwrap_or(rest.len())]);
-        !names.is_some_and(|names| names.split_ascii_whitespace().any(|id| id == *hint))
+        let Some(tag) = by_id(described) else { return page };
+        !tag.attr("aria-describedby").is_some_and(|names| names.split_ascii_whitespace().any(|id| id == *hint))
     })
 }
 
-/// The start tag around the attribute at `attr`'s first place in `html`, `<input .. id="x" ..>`.
+/// The first submit key with no value ([`SubmitKey::template_field`]) in `html` that is not inside
+/// a `<template>` a script copies, as written: a browser without JavaScript sends it empty, and the
+/// post is refused. A declarative shadow root (`<template shadowrootmode="open">`) is drawn in the page,
+/// so a field in one needs its own key. A page without one costs one search of its markup, and
+/// only a debug build makes it (also for a field drawn ahead, `req.rendered`, which needs nothing
+/// carried with it).
 #[cfg(debug_assertions)]
-fn start_tag<'a>(html: &'a str, attr: &str) -> Option<&'a str> {
-    let at = html.find(attr)?;
-    let open = html[..at].rfind('<')?;
-    let close = at + html[at..].find('>')?;
-    Some(&html[open..=close])
+pub(crate) fn keyless_submit_field(html: &str) -> Option<&str> {
+    const EMPTY: &str = r#"" data-submit>"#;
+    let mut templates = Templates::default();
+    let mut from = 0;
+    while let Some(found) = html[from..].find(EMPTY) {
+        let end = from + found + EMPTY.len();
+        if !templates.inert_at(html, end) {
+            return Some(&html[html[..end].rfind("<input").unwrap_or(0)..end]);
+        }
+        from = end;
+    }
+    None
 }
 
-/// Whether the element whose start tag holds `html[at]` has text other than white space, in it or
-/// in an element inside it.
+/// How deep a scan of markup is in `<template>`s, read on from where it last stopped, so the
+/// markup is read once however many fields it holds. It reads the markup `html!` writes, where a
+/// `<` in text or a value is `&lt;` and an attribute is `name="value"` with no space around the `=`
+/// (hand-written `raw(..)` markup such as `shadowrootmode = "open"` can mislead it); it does not parse literal `<script>` or `<style>` text,
+/// comments or `raw(..)`, so a `<template` in them can mislead this debug check.
 #[cfg(debug_assertions)]
-fn has_text(html: &str, at: usize) -> bool {
-    let Some(open) = html[..at].rfind('<') else { return false };
-    let name: String = html[open + 1..].chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
-    let Some(end) = html[at..].find('>') else { return false };
-    let (mut rest, mut depth) = (&html[at + end + 1..], 1usize);
+#[derive(Default)]
+struct Templates {
+    /// Where the scan stopped.
+    at: usize,
+    /// The `<template>`s open there.
+    depth: usize,
+    /// The depth of the outermost one open whose content the parser keeps out of the page. A
+    /// declarative shadow root (`<template shadowrootmode="open">` or `"closed"`) is not one: its
+    /// content is in the page.
+    inert: Option<usize>,
+}
+
+#[cfg(debug_assertions)]
+impl Templates {
+    /// Reads `html` on to `end` and says whether `end` is inside an inert `<template>`. A start
+    /// or end tag's name ends at `>`, `/` or whitespace, so a custom element such as
+    /// `<template-picker>` is not one, and is matched ASCII case-insensitively, as the parser does.
+    fn inert_at(&mut self, html: &str, end: usize) -> bool {
+        const NAME: &[u8] = b"template";
+        let bytes = html.as_bytes();
+        while let Some(found) = html.get(self.at..end).and_then(|text| text.find('<')) {
+            let closing = bytes.get(self.at + found + 1) == Some(&b'/');
+            let name = self.at + found + 1 + usize::from(closing);
+            self.at = name;
+            if !bytes.get(name..name + NAME.len()).is_some_and(|text| text.eq_ignore_ascii_case(NAME)) {
+                continue;
+            }
+            self.at = name + NAME.len();
+            let rest = &html[self.at..];
+            if !rest.starts_with(|c: char| c == '>' || c == '/' || c.is_ascii_whitespace()) {
+                continue;
+            }
+            if closing {
+                if self.inert == Some(self.depth) {
+                    self.inert = None;
+                }
+                self.depth = self.depth.saturating_sub(1);
+            } else {
+                self.depth += 1;
+                // A declarative shadow root takes `open` or `closed`, in any case; with no value or
+                // another one, the template is inert (the HTML standard's `shadowrootmode`).
+                let tag = crate::html::start_tag(html, name - 1);
+                self.at = self.at.max(tag.end);
+                let shadow_root = tag
+                    .attr("shadowrootmode")
+                    .is_some_and(|mode| mode.eq_ignore_ascii_case("open") || mode.eq_ignore_ascii_case("closed"));
+                if self.inert.is_none() && !shadow_root {
+                    self.inert = Some(self.depth);
+                }
+            }
+        }
+        self.inert.is_some()
+    }
+}
+
+/// Whether the element whose start tag is `tag` has text other than white space, in it or in an
+/// element inside it.
+#[cfg(debug_assertions)]
+fn has_text(html: &str, tag: &crate::html::Tag<'_>) -> bool {
+    let name = tag.name.as_str();
+    let (mut rest, mut depth) = (&html[tag.end..], 1usize);
     while depth > 0 && !rest.is_empty() {
         match rest.find('<') {
             Some(lt) => {
@@ -1825,8 +1898,8 @@ fn has_text(html: &str, at: usize) -> bool {
                 let tag = &rest[lt..];
                 let gt = tag.find('>').unwrap_or(tag.len() - 1);
                 if let Some(closing) = tag.strip_prefix("</") {
-                    depth -= usize::from(closing.starts_with(name.as_str()));
-                } else if tag[1..].starts_with(name.as_str()) && !tag[..gt].ends_with('/') {
+                    depth -= usize::from(closing.starts_with(name));
+                } else if tag[1..].starts_with(name) && !tag[..gt].ends_with('/') {
                     depth += 1;
                 }
                 rest = &tag[gt + 1..];
@@ -2037,7 +2110,44 @@ pub struct SubmitKey(Box<str>);
 impl SubmitKey {
     /// The hidden input that carries a new key: `<input type="hidden" name=".." data-submit value="..">`.
     pub fn field(name: FieldName<SubmitKey>) -> SubmitField {
-        SubmitField { name: name.untyped(), key: uuid_v4(crate::security::random_hex()) }
+        SubmitField { name: name.untyped(), key: Some(uuid_v4(crate::security::random_hex())) }
+    }
+
+    /// The hidden input with no key yet, for a form inside a `<template>` that a script copies
+    /// (`<input type="hidden" name=".." data-submit>`): the runtime gives an empty submit key a new
+    /// one when its form is first sent, so each copy is a submission of its own. A form the server
+    /// draws on the page takes [`SubmitKey::field`]: without JavaScript nothing fills the key, and
+    /// a `SubmitKey` field posted empty is refused (a 422 naming it), as any key that is not a
+    /// UUID v4 is. Nothing is drawn at random, so a page with only this one keeps its `ETag`.
+    ///
+    /// ```
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Fields)]
+    /// struct Count { qty: u32, submit: SubmitKey }
+    ///
+    /// let f = Count::FIELDS;
+    /// let row = html! {
+    ///     <template>
+    ///         <form method="post" data-patch>{SubmitKey::template_field(f.submit)}<input name={f.qty}></form>
+    ///     </template>
+    /// };
+    /// assert!(row.to_html().contains(r#"<input type="hidden" name="submit" data-submit>"#));
+    /// assert!(corten::form::from_bytes::<Count>(b"qty=1&submit=").is_err(), "an empty key is refused");
+    /// ```
+    ///
+    /// Like [`SubmitKey::field`], it takes only a `SubmitKey` field's name:
+    ///
+    /// ```compile_fail,E0308
+    /// use corten::prelude::*;
+    ///
+    /// #[derive(Fields)]
+    /// struct Count { qty: u32, submit: SubmitKey }
+    ///
+    /// let _ = SubmitKey::template_field(Count::FIELDS.qty);
+    /// ```
+    pub fn template_field(name: FieldName<SubmitKey>) -> SubmitField {
+        SubmitField { name: name.untyped(), key: None }
     }
 
     /// The hidden input that carries this key again, for a form drawn again from the post that
@@ -2071,7 +2181,7 @@ impl SubmitKey {
         // Read only as a UUID (`Deserialize`), so it is 36 ASCII bytes.
         let mut key = [0u8; 36];
         key.copy_from_slice(self.0.as_bytes());
-        SubmitField { name: name.untyped(), key }
+        SubmitField { name: name.untyped(), key: Some(key) }
     }
 
     /// A new key, as [`SubmitKey::field`] draws one: [`crate::testing::submit_key`].
@@ -2150,24 +2260,29 @@ fn uuid_v4(hex: [u8; 32]) -> [u8; 36] {
     out
 }
 
-/// [`SubmitKey::field`]'s hidden input.
+/// [`SubmitKey::field`]'s hidden input, or [`SubmitKey::template_field`]'s with no key.
 pub struct SubmitField {
     name: FieldName,
-    key: [u8; 36],
+    key: Option<[u8; 36]>,
 }
 
 thread_local! {
-    /// Set when a [`SubmitField`] is written: the page being rendered holds a key drawn for it.
+    /// Set when a [`SubmitField`] with a key is written: the page being rendered holds a key drawn
+    /// for it.
     pub(crate) static DREW_KEY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl Render for SubmitField {
     fn render(&self, out: &mut String) {
-        DREW_KEY.set(true);
         out.push_str(r#"<input type="hidden" name=""#);
         self.name.render(out);
+        let Some(key) = &self.key else {
+            out.push_str(r#"" data-submit>"#);
+            return;
+        };
+        DREW_KEY.set(true);
         out.push_str(r#"" data-submit value=""#);
-        out.push_str(std::str::from_utf8(&self.key).expect("hex is ASCII"));
+        out.push_str(std::str::from_utf8(key).expect("hex is ASCII"));
         out.push_str(r#"">"#);
     }
 }
@@ -2257,6 +2372,29 @@ impl Errors {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hint is matched to its control by their tags' attributes. A handler argument in
+    /// `data-on` keeps its JSON's quotes, so text in it can look like an `aria-describedby`; read
+    /// as text, it would be taken for the control's own and the hint called unnamed.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn a_hint_is_matched_by_attributes_not_by_text_inside_another_value() {
+        let hints = ["qty-hint".to_string()];
+        let named = concat!(
+            r#"<input id="qty" data-on='connect:m.f($t,["a aria-describedby=","b"])' aria-describedby="qty-hint">"#,
+            r#"<p id="qty-hint">From 1 to 5.</p>"#,
+        );
+        assert_eq!(unnamed_hint(named, &hints, true), None);
+        let unnamed = concat!(
+            r#"<input id="qty" data-on='connect:m.f($t,[" aria-describedby=","qty-hint"])'>"#,
+            r#"<p id="qty-hint"><em>From 1 to 5.</em></p>"#,
+        );
+        assert_eq!(unnamed_hint(unnamed, &hints, true), Some("qty-hint"));
+        let empty = r#"<input id="qty"><p id="qty-hint"> <span></span></p>"#;
+        assert_eq!(unnamed_hint(empty, &hints, true), None, "a hint with no text describes nothing");
+        assert_eq!(unnamed_hint(r#"<p id="qty-hint">Pick one.</p>"#, &hints, true), Some("qty-hint"), "no control on a page");
+        assert_eq!(unnamed_hint(r#"<p id="qty-hint">3 left.</p>"#, &hints, false), None, "a patch of the hint alone");
+    }
 
     const EMAIL: FieldName = FieldName::__new("email");
     const PRICE: FieldName = FieldName::__new("price");
@@ -2476,5 +2614,95 @@ mod tests {
         e.add(FieldName::<Untyped>::__new("b"), "2");
         e.add(FieldName::<Untyped>::__new("a"), "1");
         assert_eq!(serde_json::to_string(&e).unwrap(), r#"{"b":"2","a":"1"}"#);
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct Keyed {
+        submit: SubmitKey,
+    }
+
+    #[derive(Debug, serde::Deserialize)]
+    struct MaybeKeyed {
+        submit: Option<SubmitKey>,
+    }
+
+    /// A template's key field holds no key and marks nothing drawn for the request; the runtime
+    /// fills it when a copy is sent. Posted empty (without JavaScript, or by a client that did not
+    /// fill it), a required key is refused like a malformed one, and an optional one reads as none.
+    #[test]
+    fn a_template_s_submit_key_field_is_empty_and_an_empty_key_is_refused() {
+        const SUBMIT: FieldName<SubmitKey> = FieldName::__new("submit");
+        DREW_KEY.set(false);
+        assert_eq!(SubmitKey::template_field(SUBMIT).to_html(), r#"<input type="hidden" name="submit" data-submit>"#);
+        assert!(!DREW_KEY.get(), "nothing drawn for this request");
+        let drawn = SubmitKey::field(SUBMIT).to_html();
+        let start = r#"<input type="hidden" name="submit" data-submit value=""#;
+        assert!(drawn.starts_with(start) && drawn.len() == start.len() + 36 + 2, "{drawn}");
+        assert!(DREW_KEY.take(), "a drawn key is marked");
+
+        let read = from_bytes::<Keyed>(b"submit=3f2504e0-4f89-41d3-9a0c-0305e82c3301").unwrap().submit;
+        assert_eq!(read.as_str(), "3f2504e0-4f89-41d3-9a0c-0305e82c3301");
+        let empty = from_bytes::<Keyed>(b"submit=").unwrap_err().to_string();
+        let forged = from_bytes::<Keyed>(b"submit=3f2504e0").unwrap_err().to_string();
+        assert!(empty.starts_with("submit: ") && empty == forged, "refused as a malformed key is: {empty}");
+        assert!(from_bytes::<Keyed>(b"").is_err(), "a missing key is refused too");
+        assert!(from_bytes::<MaybeKeyed>(b"submit=").unwrap().submit.is_none());
+        let kept = from_bytes::<MaybeKeyed>(b"submit=3f2504e0-4f89-41d3-9a0c-0305e82c3301").unwrap().submit;
+        assert_eq!(kept.as_ref().map(SubmitKey::as_str), Some("3f2504e0-4f89-41d3-9a0c-0305e82c3301"));
+    }
+
+    /// A debug build's check for a submit key with no value outside a `<template>` a script copies
+    /// counts `<template>` tags in any case, not a custom element such as `<template-picker>`, and
+    /// not a declarative shadow root (`shadowrootmode` `open` or `closed`, in any case), whose
+    /// content is in the page.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn only_an_inert_template_holds_a_submit_key_with_no_value() {
+        const F: &str = r#"<input type="hidden" name="submit" data-submit>"#;
+        let found = |html: &str| keyless_submit_field(html).map(str::to_owned);
+        for html in [
+            format!("<template>{F}</template>"),
+            format!(r#"<template class="row">{F}</template>"#),
+            format!("<template\n  id=\"t\">{F}</template>"),
+            format!(r#"<template title="shadowrootmode">{F}</template>"#),
+            format!(r#"<template data-shadowrootmode="open">{F}</template>"#),
+            format!("<template><div><template>{F}</template>{F}</div></template>"),
+            format!(r#"<template shadowrootmode="open"><template>{F}</template></template>"#),
+            format!(r#"<template><template shadowrootmode="open">{F}</template>{F}</template>"#),
+            format!("<template>{F}</template><template>{F}</template>"),
+            format!("<TEMPLATE>{F}</TEMPLATE>"),
+            format!("<Template class=\"row\">{F}</template>"),
+            format!("<template/>{F}</template>"),
+            format!("<template shadowrootmode>{F}</template>"),
+            format!(r#"<template shadowrootmode="">{F}</template>"#),
+            format!(r#"<template shadowrootmode="nope">{F}</template>"#),
+            format!(r#"<template shadowrootmode="open " >{F}</template>"#),
+            format!(r#"<template title="a > b" shadowrootmode="nope">{F}</template>"#),
+            format!(r#"<template shadowrootmode="nope" shadowrootmode="open">{F}</template>"#),
+        ] {
+            assert_eq!(found(&html), None, "{html}");
+        }
+        for html in [
+            F.to_owned(),
+            format!("<template-picker>{F}</template-picker>"),
+            format!("<template-picker><template></template>{F}</template-picker>"),
+            format!(r#"<template shadowrootmode="open">{F}</template>"#),
+            format!("<template shadowrootmode=open>{F}</template>"),
+            format!(r#"<div><template shadowrootmode="closed" shadowrootdelegatesfocus>{F}</template></div>"#),
+            format!(r#"<template shadowrootmode="open"><template></template>{F}</template>"#),
+            format!("<template>{F}</template>{F}"),
+            format!("<template><template></template>{F}</template>{F}"),
+            format!(r#"<template shadowRootMode="open">{F}</template>"#),
+            format!(r#"<template shadowrootmode="CLOSED">{F}</template>"#),
+            format!("<template SHADOWROOTMODE='Open'>{F}</template>"),
+            format!(r#"<template title="x>y" shadowrootmode="open">{F}</template>"#),
+            format!(r#"<template data-on='connect:m.f($t,["<template>"])' shadowrootmode='open'>{F}</template>"#),
+            format!("<TEMPLATE>{F}</TEMPLATE>{F}"),
+            format!("<template>{F}</template >{F}"),
+        ] {
+            assert_eq!(found(&html).as_deref(), Some(F), "{html}");
+        }
+        let html = r#"<template><input type="hidden" name="a" data-submit></template><input type="hidden" name="b" data-submit>"#;
+        assert_eq!(found(html).as_deref(), Some(r#"<input type="hidden" name="b" data-submit>"#), "the field outside");
     }
 }

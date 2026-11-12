@@ -74,7 +74,7 @@ pub struct Chosen<I, V> {
 /// assert!(html.contains(r#"<div data-scope="ui-choice-group" id="ui-window" role="radiogroup" aria-label="Performance window""#), "{html}");
 /// assert!(html.contains(r#"<a data-ref="radio" role="radio" href="/performance?window=90" aria-checked="false""#), "{html}");
 /// // The part for the other window is drawn hidden; each says its group and its words.
-/// assert!(html.contains(r#"<p>Sold 14</p></div><p>A chart</p><div hidden data-on="connect:ui.choice.part($t,&quot;ui-window&quot;,[&quot;90&quot;],$s)">"#), "{html}");
+/// assert!(html.contains(r#"<p>Sold 14</p></div><p>A chart</p><div hidden data-on='connect:ui.choice.part($t,"ui-window",["90"],$s)'>"#), "{html}");
 /// ```
 ///
 /// A part's values are its choice's type, so a word of another enum does not compile:

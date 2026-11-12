@@ -27,7 +27,7 @@ use corten::{i18n::Relative, prelude::*};
 /// let now = UNIX_EPOCH + Duration::from_secs(1_774_191_845); // 2026-03-22T15:04:05Z
 /// let reset = now + Duration::from_secs(10 * 3600 + 35 * 60);
 /// let html = html! { <p>"Resets "<RelativeTime when={t.relative(reset, now, RelativeStyle::Long)} /></p> }.to_html();
-/// assert!(html.contains(r#"<time datetime="2026-03-23T01:39:05Z" data-on="connect:ui.relative_time.connect($t,&quot;en&quot;,&quot;long&quot;,$s)">in 10 hours</time>"#), "{html}");
+/// assert!(html.contains(r#"<time datetime="2026-03-23T01:39:05Z" data-on='connect:ui.relative_time.connect($t,"en","long",$s)'>in 10 hours</time>"#), "{html}");
 /// ```
 ///
 /// It takes what `t.relative` returns, so a time written another way does not compile:

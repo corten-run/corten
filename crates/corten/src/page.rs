@@ -1596,7 +1596,8 @@ impl Req {
     /// stylesheet the page does not get is an error, since it would be served unstyled or without
     /// its handlers: the app does not list it, or lists it in another area only. Release builds do
     /// not record what renders, so a render does no bookkeeping, and do not check.
-    /// `page` is false for a patch, whose hint's control may be on the page already.
+    /// `page` is false for a patch, whose hint's control may be on the page already, and whose
+    /// submit key with no value the runtime that asked for it fills when the form is sent.
     fn render_into(&self, view: impl Render, out: &mut String, page: bool) -> Result<Vec<&'static str>> {
         #[cfg(feature = "zones")]
         let _zone = self.zone_scope();
@@ -1625,6 +1626,10 @@ impl Req {
         self.check_modules(&modules)?;
         #[cfg(debug_assertions)]
         self.check_hints(&out[start..], &hints, page)?;
+        #[cfg(debug_assertions)]
+        if page {
+            self.check_submit_keys(&out[start..])?;
+        }
         Ok(modules)
     }
 
@@ -1638,6 +1643,24 @@ impl Req {
         match crate::form::unnamed_hint(html, hints, page) {
             Some(hint) => Err(self.unserved(format!(
                 "{path} draws the hint {hint}, which has text, and the element it describes does not name it in aria-describedby (or is not drawn), so a screen reader never reads it: give the control .hint() ({{..e.control(f.x).hint()}}), or e.aria(f.x).hint(&HintId(..)), or aria-describedby={{HintId(..)}} (a corten-ui widget's attrs)",
+                path = self.path()
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// In a debug build: an error when a page draws a submit key with no value
+    /// ([`crate::SubmitKey::template_field`]) outside a `<template>` a script copies (a declarative
+    /// shadow root, `<template shadowrootmode="open">`, is drawn in the page). The runtime gives it one
+    /// when the form is sent, but a browser without JavaScript sends it empty and every post is
+    /// refused.
+    #[cfg(debug_assertions)]
+    #[cold]
+    #[inline(never)]
+    fn check_submit_keys(&self, html: &str) -> Result<()> {
+        match crate::form::keyless_submit_field(html) {
+            Some(field) => Err(self.unserved(format!(
+                "{path} draws the submit key {field}, which has no value, outside a <template> a script copies, so a browser without JavaScript sends it empty and the post is refused: draw SubmitKey::field(..) in a form the server draws, including one in a declarative shadow root (<template shadowrootmode=\"open\">), which is drawn in the page, and SubmitKey::template_field(..) only in a <template> a script copies",
                 path = self.path()
             ))),
             None => Ok(()),
@@ -3157,22 +3180,18 @@ impl<D: Document> Render for Parted<D> {
 
 /// Under `corten dev`: an error when a full page has a `data-vars` value its style block has no
 /// rule for, which markup placed with `raw` gives (its render's values were not noted), so a size
-/// from data would paint at its initial value until a patch.
+/// from data would paint at its initial value until a patch. Read tag by tag, so text inside another
+/// attribute's value (a handler argument in `data-on`) is not taken for one.
 #[cold]
 #[inline(never)]
 fn unruled_vars(page: &str, rules: &str) -> Result<()> {
-    const ATTR: &str = " data-vars=\"";
-    let mut rest = page;
-    while let Some(at) = rest.find(ATTR) {
-        rest = &rest[at + ATTR.len()..];
-        let Some(end) = rest.find('"') else { break };
-        let value = &rest[..end];
+    for tag in crate::html::start_tags(page) {
+        let Some(value) = tag.attr("data-vars") else { continue };
         if !rules.contains(&format!("[data-vars=\"{value}\"]")) {
             return Err(Error::new(format!(
                 "the page has data-vars=\"{value}\" and no rule for it, so that size paints at its initial value: markup placed with raw() keeps no values; render the view into a corten::Rendered and place that"
             )));
         }
-        rest = &rest[end..];
     }
     Ok(())
 }
@@ -3198,6 +3217,23 @@ pub(crate) fn html_response(status: StatusCode, body: String, kind: Option<Heade
 #[cfg(test)]
 mod carried_tests {
     use super::*;
+
+    /// `corten dev` reads a page's `data-vars` attributes, not text that looks like one inside
+    /// another attribute's value: a handler argument in `data-on` keeps its JSON's quotes.
+    #[test]
+    fn a_data_vars_lookalike_inside_data_on_is_not_a_value() {
+        let rules = r#"[data-vars="--m__fill:42.5%"]{--m__fill:42.5%!important}"#;
+        let ruled = r#"<div data-vars="--m__fill:42.5%" data-on='connect:m.f($t,["a data-vars=","b"])'></div>"#;
+        assert!(unruled_vars(ruled, rules).is_ok());
+        let unruled = r#"<p data-on='connect:m.f($t," data-vars=")'></p><div data-vars="--m__fill:7%"></div>"#;
+        let error = unruled_vars(unruled, rules).expect_err("7% has no rule").to_string();
+        assert!(error.contains(r#"data-vars="--m__fill:7%" and no rule"#), "{error}");
+        // Markup placed with raw() may have a `<` that starts no tag in its text: the tag after it
+        // is still read.
+        let raw = r#"<p>1 <2 <div data-vars="--m__fill:7%"></div></p>"#;
+        let error = unruled_vars(raw, rules).expect_err("7% after a lone < has no rule").to_string();
+        assert!(error.contains(r#"data-vars="--m__fill:7%" and no rule"#), "{error}");
+    }
 
     /// The failed answer's `Vary` names are added to the error page's, each name once whatever its
     /// case or the line it is on, and a value that is not text as it came.
