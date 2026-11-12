@@ -18,9 +18,9 @@ void main() {
 }`;
 
 // Every texture read names its level (textureLod), so none needs the screen's derivatives and
-// a layer's branch is one the GPU can skip: a pixel pays for the layer it is in. The shader is
-// written in parts with its comments between them, so they are this script's comments, which
-// the browser is not sent.
+// a layer's branch is one the GPU can skip: a pixel pays for the layer it is in, and for the
+// stretch between two where one gives way to the next. The shader is written in parts with its
+// comments between them, so they are this script's comments, which the browser is not sent.
 const FRAGMENT = [
   `#version 300 es
 precision highp float;
@@ -120,39 +120,43 @@ void main() {
   // a pixel, and only near it. The stretch drifts a little along the plate, so it is not level.
   `  float upper = (uStrata.x + uStrata.y) * 0.5;
   float lower = (uStrata.y + uStrata.z) * 0.5;
-  float edge = y < upper ? uStrata.x : (y < lower ? uStrata.y : uStrata.z);
-  float row = y < upper ? 3.1 : (y < lower ? 14.6 : 27.3);
-  float off = y - edge + (edge == uStrata.x ? 0.0 : (edge == uStrata.y ? LEAD : -LEAD));
+  bool first = y < upper;
+  bool last = y >= lower;
+  bool middle = !first && !last;
+  float edge = first ? uStrata.x : (last ? uStrata.z : uStrata.y);
+  float row = first ? 3.1 : (last ? 27.3 : 14.6);
+  float off = y - edge + (first ? 0.0 : (last ? -LEAD : LEAD));
   float grit = grain(page);
   float drift = 0.0;
   float gone = step(0.0, off);
   float soft = gone;
   float rim = 0.0;
-  if (abs(off) < SPAN + 70.0) {
-    drift = (noise(vec2(page.x * 0.0052, row)) - 0.5) * 90.0 + (noise(vec2(page.x * 0.0155, row + 7.0)) - 0.5) * 40.0;
-    drift *= 1.0 - smoothstep(SPAN, SPAN + 70.0, abs(off));
+  if (abs(off) < SPAN + 60.0) {
+    drift = (noise(vec2(page.x * 0.0052, row)) - 0.5) * 110.0;
+    drift *= 1.0 - smoothstep(SPAN, SPAN + 60.0, abs(off));
     float through = clamp((off + drift) * (0.5 / SPAN) + 0.5, 0.0, 1.0);
-    float streak = square3(vec2(page.x * 0.019, page.y * 0.0021) + 11.0 + row);
-    float seed = clamp((turned4(page * 0.013 + 11.0 + row) * 0.36 + streak * 0.3 + grit * 0.34 - 0.5) * 2.1 + 0.5, 0.0, 1.0);`,
+    vec2 run = vec2(page.x * 0.019, page.y * 0.0021) + 11.0 + row;
+    float streak = noise(run) * 0.64 + noise(run * 2.03 + vec2(17.1, 9.2)) * 0.36;
+    float seed = clamp((turned3(page * 0.013 + 11.0 + row) * 0.36 + streak * 0.3 + grit * 0.34 - 0.5) * 2.1 + 0.5, 0.0, 1.0);`,
   // What thins is the layer above, but under the steel: there it is the far side's rust.
-  `    float left = edge == uStrata.z ? through : 1.0 - through;
+  `    float left = last ? through : 1.0 - through;
     float stays = smoothstep(0.0, 0.14, left * 1.14 - seed);
-    gone = edge == uStrata.z ? stays : 1.0 - stays;
+    gone = last ? stays : 1.0 - stays;
     rim = stays * (1.0 - stays) * 4.0;
-    soft = smoothstep(0.25, 0.75, through);
+    soft = smoothstep(0.35, 0.65, through);
   }
-  float toOxide = edge == uStrata.x ? gone : step(uStrata.x, y);
-  float toSteel = edge == uStrata.y ? gone : step(uStrata.y, y);
-  float toFar = edge == uStrata.z ? gone : step(uStrata.z, y);
+  float toOxide = first ? gone : 1.0;
+  float toSteel = middle ? gone : (last ? 1.0 : 0.0);
+  float toFar = last ? gone : 0.0;
   float inPatina = 1.0 - toOxide + toFar;
   float inOxide = toOxide * (1.0 - toSteel);
   float inSteel = toSteel * (1.0 - toFar);`,
-  // The same without the specks, eased over the middle half of the stretch: how much of each
+  // The same without the specks, eased over the middle third of the stretch: how much of each
   // layer's relief a pixel has. It is all the GPU's slope is taken from, since a slope taken
   // across a speck's edge would change as the page moves.
-  `  float softOxide = edge == uStrata.x ? soft : toOxide;
-  float softSteel = edge == uStrata.y ? soft : toSteel;
-  float softFar = edge == uStrata.z ? soft : toFar;
+  `  float softOxide = first ? soft : toOxide;
+  float softSteel = middle ? soft : toSteel;
+  float softFar = last ? soft : toFar;
   float nearPatina = 1.0 - softOxide + softFar;
   float nearOxide = softOxide * (1.0 - softSteel);
   float nearSteel = softSteel * (1.0 - softFar);`,
@@ -308,7 +312,7 @@ void main() {
   }`,
   // The patina stands a little proud of the oxide under it and shades its own edge; rust on
   // steel is newest at its edge, and brightest.
-  `  if (edge == uStrata.x) body *= 1.0 - 0.3 * rim;
+  `  if (first) body *= 1.0 - 0.3 * rim;
   else body += vec3(0.42, 0.17, 0.03) * rim * 0.5;`,
   // The broad part of the height, by how much of each layer's relief the pixel has.
   `  height = (fine * 0.9 + mottle * 0.8) * mix(0.25, 1.0, rusted) * nearPatina + fine * 0.9 * nearOxide;

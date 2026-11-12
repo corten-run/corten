@@ -324,8 +324,9 @@ for (engine of engines) {
     if (state === "forged") {
       // With reduced motion the light stays where it starts, 68% across the window and 30% down.
       // The section's two ends are read, from where its type may begin: a window's height from
-      // 48px inside each, where another layer's rust reaches in.
-      /** @type {{ most: number, mean: number, error: number }[]} */
+      // 48px inside each, where another layer's rust reaches in. Nearer its ends than that the
+      // light is not held, so the section's padding must keep its type further in.
+      /** @type {{ most: number, mean: number, error: number, padding: number }[]} */
       const read = [];
       for (const end of ["top", "end"]) {
         read.push(
@@ -346,15 +347,26 @@ for (engine of engines) {
               most = Math.max(most, light);
               sum += light;
             }
-            return { most, mean: sum / (px.length / 4), error: gl.getError() };
+            const style = getComputedStyle(steel);
+            const padding = Math.min(parseFloat(style.paddingTop), parseFloat(style.paddingBottom));
+            return { most, mean: sum / (px.length / 4), error: gl.getError(), padding };
           }, end),
         );
       }
-      // The amber of the page's code (#f2a44b, luminance 0.459) keeps 4.5 to 1 over 0.0632 or less.
+      // The amber of the page's code, #f2a44b, is the dimmest small type set straight on the
+      // plate there: what it keeps 4.5 to 1 over is the bound (0.0631).
+      const linear = (/** @type {number} */ v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+      const amber = 0.2126 * linear(0xf2 / 255) + 0.7152 * linear(0xa4 / 255) + 0.0722 * linear(0x4b / 255);
+      const bound = (amber + 0.05) / 4.5 - 0.05;
       check(
         "what is drawn under the steel's type is lit, and no brighter than its dimmest type can stand",
-        read.every(({ most, mean, error }) => error === 0 && mean > 0.01 && most <= 0.0632) && wrong().length === 0,
-        [...read.map(({ most, mean, error }) => `brightest ${most.toFixed(4)}, mean ${mean.toFixed(4)}${error ? `, error ${error}` : ""}`), ...wrong()].join(" | ").slice(0, 400),
+        read.every(({ most, mean, error }) => error === 0 && mean > 0.01 && most <= bound) && wrong().length === 0,
+        [`bound ${bound.toFixed(4)}`, ...read.map(({ most, mean, error }) => `brightest ${most.toFixed(4)}, mean ${mean.toFixed(4)}${error ? `, error ${error}` : ""}`), ...wrong()].join(" | ").slice(0, 400),
+      );
+      check(
+        "and the section's padding keeps its type further in than the light is held from",
+        read.every(({ padding }) => padding >= 48),
+        `${read[0]?.padding}px`,
       );
     }
     await context.close();

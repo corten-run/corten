@@ -57,7 +57,11 @@ again only when the page scrolls, the pointer moves, a plate is struck or the wi
 and it moves by whole pixels of its canvas, so its grain does not shimmer as the page scrolls.
 
 A pixel pays for the layer it is in: every texture read names its level, so each layer's
-branch is one the GPU can skip. Frames that come late lower the plate's resolution, and where
+branch is one the GPU can skip. Where one layer gives way to the next a pixel pays more: for
+what seeds the specks, and in the middle third of the stretch for both layers' relief. A frame
+with such a stretch across it took about a tenth longer than one with the line that was drawn
+there before (8.1, 6.7 and 6.7 ms against 7.4, 6.1 and 6.1 for the three, at 1440 by 900 on one
+workstation's GPU). Frames that come late lower the plate's resolution, and where
 the browser has only a software renderer, no WebGL 2 or no JavaScript, each layer has a flat
 color and the page reads the same (`data-flat`). A lost context is restored when the browser
 gives it back. With reduced motion the plate is drawn weathered, still, and does not follow the
@@ -98,8 +102,10 @@ Linux. An edit that moves a cited line fails the test there until the answer is 
 `smoke.mjs` runs the page in Chromium, Firefox and WebKit: with its scripts, with them blocked
 by the page's own switch, and with scripting off; and on a touch screen in Chromium. A browser
 under test has no GPU and keeps the flat layers, so in Chromium the test also has its software
-renderer build the plate's shader and draw it, and reads what is drawn under the steel
-section's type: it fails if that is brighter than the type's contrast allows.
+renderer build the plate's shader and draw it, and reads the plate at both ends of the steel's
+section, a window's height from where its type may begin, weathered and with the light where
+reduced motion leaves it: it fails if a pixel there is brighter than the type's contrast allows,
+or if the section's padding would let type nearer its ends than the light is held from.
 
 ## Serving it
 
