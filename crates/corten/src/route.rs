@@ -4734,9 +4734,10 @@ pub mod __private {
     /// release build writes `%FF` after the value ([`unreadable`]), so the link opens no other
     /// page, and logs that as an error the first time for each route and field, so a list that
     /// links a stored value on every row and every render is one line, not one per link. A
-    /// refusal is counted only when an error would be logged, so one written before the app's
-    /// subscriber is installed does not use up the line. The list of those logged is read before
-    /// it is written, so refusals of a route and field already logged do not wait on each other.
+    /// refusal is counted only when the subscriber takes an error event here, so one written
+    /// before the app's subscriber is installed does not use up the line. The list of those
+    /// logged is read before it is written, so refusals of a route and field already logged do
+    /// not wait on each other.
     /// It takes the parameter by reference, a constant the derive writes, so a link's call to it
     /// is three arguments and the link stays small enough to be inlined where it is written.
     #[cold]
@@ -4757,7 +4758,9 @@ pub mod __private {
             panic!("{}", message());
         }
         let key = (param.route, param.field);
-        let first = tracing::enabled!(tracing::Level::ERROR)
+        // `event_enabled!`, not `enabled!`: a subscriber that takes events alone, such as
+        // Corten's own, answers no to a callsite that may be a span.
+        let first = tracing::event_enabled!(tracing::Level::ERROR)
             && !LOGGED.read().unwrap_or_else(PoisonError::into_inner).contains(&key)
             && {
                 let mut logged = LOGGED.write().unwrap_or_else(PoisonError::into_inner);

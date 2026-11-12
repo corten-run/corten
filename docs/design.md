@@ -3050,13 +3050,17 @@ by design; where it is known, a limit says what would lift it or why it is so.
     `/%FF/posts`), which no browser resolves and the route answers with a 400, since no parameter
     reads a value that is not UTF-8, and logs that as an error the first time for each route and
     field in the process, so a list that links a stored value on every row is one line, not one
-    per link and render. Only a refusal written while a subscriber would log the error counts as
-    that time, so one before the app installs its subscriber does not use it up; a subscriber
-    that drops the event by something other than its level and target (its message, a span) still
-    counts it. Later refusals of a route and field read the list of those logged and do not wait
-    on each other. The link opens no other
-    page or file either way. A route that starts with a `{*rest}` refuses a dot segment after the
-    value's leading `/` too (`/..`), though it writes that `/` as `%2F` (`/%2F..`), which no
+    per link and render. A route is known by its name and module path, which leaves out function
+    bodies, so two routes of one name declared in two functions of one module share their line. A
+    refusal counts as that time only when the subscriber takes an error event of Corten's
+    (`tracing::event_enabled!`), as Corten's default subscriber and one that filters by level and
+    target do, so one written before the app installs its subscriber does not use it up. The check
+    asks before the event exists, so a subscriber that filters on what it cannot see (the event's
+    fields or message, its span, its file or line) can disagree with it either way: a refusal it
+    drops still uses up the line, and one it would log may never be logged. Later refusals of a
+    route and field read the list of those logged and do not wait on each other. The link opens no
+    other page or file either way. A route that starts with a `{*rest}` refuses a dot segment after
+    the value's leading `/` too (`/..`), though it writes that `/` as `%2F` (`/%2F..`), which no
     browser resolves: the refusal is kept, since it costs nothing where no value has such a
     segment and the value means a path above the route's. A value that only contains dots
     (`a.b`, `...`, `.hidden`) is written as it is, and so is an empty one between two segments

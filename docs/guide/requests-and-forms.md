@@ -382,11 +382,14 @@ last in the path, before text in its segment, or as a whole `{*rest}` value, whe
 no segment for it (`/{user}/posts` would be `//posts`, another host). A debug build panics when
 such a link is written, naming the route by its module path (`shop::url::Item`) and the field; a
 release build writes `%FF` after the value (`/items/..%FF`), which the route answers with a 400,
-and logs that as an error once for each route and field, counting only a refusal written once a
-subscriber that logs errors is installed. A value that only contains dots (`a.b`, `.hidden`) is
-written as it is, as is an empty one between two segments (`/shelves//` for `/shelves/{id}/`), which reads back. Refuse these values where the app
-stores them (a slug, a user name, a file key), so no link reaches the check. A route's own path
-with a `.` or `..` segment, or that text after a parameter, does not compile. These are checks of
+and logs that as an error once for each route and field. A refusal counts only when the subscriber
+then in place takes an error event of Corten's, as Corten's default subscriber and a level or
+target filter do; a subscriber that filters on an event's fields, message, span, file or line can
+disagree with that check, and drop the one line or never get it. A value that only contains dots
+(`a.b`, `.hidden`) is written as it is, as is an empty one between two segments (`/shelves//`
+for `/shelves/{id}/`), which reads back. Refuse these values where the app stores them (a slug, a
+user name, a file key), so no link reaches the check. A route's own path with a `.` or `..`
+segment, or that text after a parameter, does not compile. These are checks of
 `#[derive(Route)]` links: a `Route` written by hand writes its own values in `write_href`, and
 nothing checks them.
 

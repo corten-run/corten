@@ -135,15 +135,17 @@ Corten is pre-1.0, so any minor version may change the API.
   slug `/posts`). A debug build panics when such a link is written, naming the route by its
   module path (`shop::url::Item`) and the field; a release build writes `%FF` after the value
   (`/items/..%FF`), which the route answers with a 400, and logs that as an error once for each
-  route and field, counting only a refusal a subscriber would log. Values that only contain dots
-  (`a.b`, `.hidden`) are written as before, and so is an empty value between two segments. A
-  route path with a `.` or `..` segment, or that text after a parameter, no longer compiles, nor
-  does a hand-written `Route` whose `WRITTEN` has that text or whose `PATH` in an area or an API
-  has such a segment; a hand-written `Route` at the app's top level is not checked for a dot
-  segment in its `PATH`, and the values a hand-written `write_href` writes are not checked. The
-  check costs a whole-segment value a comparison of its length, and one of two bytes or fewer a
-  look at its first byte, and a `{*rest}` value with a dot a second read
-  (docs/design.md#limit-path-values)
+  route and field, counting only a refusal written while the subscriber takes an error event of
+  Corten's, as Corten's default subscriber and a level or target filter do (a subscriber that
+  filters on an event's fields, message, span, file or line can drop that line or never get it).
+  Values that only contain dots (`a.b`, `.hidden`) are written as before, and so is an empty
+  value between two segments. A route path with a `.` or `..` segment, or that text after a
+  parameter, no longer compiles, nor does a hand-written `Route` whose `WRITTEN` has that text
+  or whose `PATH` in an area or an API has such a segment; a hand-written `Route` at the app's
+  top level is not checked for a dot segment in its `PATH`, and the values a hand-written
+  `write_href` writes are not checked. The check costs a whole-segment value a comparison of its
+  length, and one of two bytes or fewer a look at its first byte, and a `{*rest}` value with a
+  dot a second read (docs/design.md#limit-path-values)
   ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)).
 - A `data-patch` submit answered with a bare `204 No Content` (the `StatusCode::NO_CONTENT` the
   server's docs give for a write with nothing to say) or `205 Reset Content` is the submit done

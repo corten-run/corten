@@ -346,6 +346,32 @@ mod tests {
         assert_eq!(lines[0], format!("  WARN {escaped} host={escaped} quoted={:?}", forged));
     }
 
+    /// Refused only by `a_refused_link_is_logged_once_by_this_subscriber`, which needs the first
+    /// refusal of its field in the process.
+    #[cfg(not(debug_assertions))]
+    #[derive(crate::Route)]
+    #[route("/refused/{*path}")]
+    struct Refused {
+        path: String,
+    }
+
+    /// A link a release build refuses is logged once by this subscriber, the one `serve` installs
+    /// when the app sets none: what decides whether a refusal is counted asks whether an error
+    /// event would be logged, which this subscriber takes (docs/design.md#limit-path-values).
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn a_refused_link_is_logged_once_by_this_subscriber() {
+        use crate::route::Route as _;
+        let lines = ours(false, || {
+            assert_eq!(Refused { path: "a/..".into() }.href(), "/refused/a/..%FF");
+            assert_eq!(Refused { path: "./b".into() }.href(), "/refused/.%FF/b");
+        });
+        assert_eq!(lines.len(), 1, "{lines:#?}");
+        let named = format!("a link to {}::Refused cannot carry path = \"a/..\"", module_path!());
+        assert!(lines[0].starts_with(" ERROR corten: ") && lines[0].contains(&named), "{named}: {}", lines[0]);
+        assert!(lines[0].contains("logged once for this route and field"), "{}", lines[0]);
+    }
+
     /// What one line costs: `LOG_LINES` events (default 1,000) with this subscriber, or
     /// `tracing-subscriber`'s when `LOG_SUBSCRIBER=theirs`, each written to a sink. Run under
     /// callgrind with two counts and take the difference.
