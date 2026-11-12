@@ -21,6 +21,17 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Fixed
 
+- A typed link no longer writes a path value that would open another page: `.` or `..`, which a
+  browser resolves away (`url::Item { id: ".." }` linked to `/`, and a `{*rest}` key
+  `public/../private/x` to `/files/private/x`), and an empty value first or last in the path,
+  before text in its segment, or as a whole `{*rest}` value, where the router has no segment for
+  it (`/{user}/posts` with an empty `user` wrote `/%2Fposts`, which a `/{slug}` route read as the
+  slug `/posts`). A debug build panics when such a link is written, naming the route and the
+  field; a release build writes `%FF` after the value (`/items/..%FF`), which the route answers
+  with a 400. Values that only contain dots (`a.b`, `.hidden`) are written as before, and a route
+  path with a `.` or `..` segment, or that text after a parameter, no longer compiles
+  (docs/design.md#limit-path-values)
+  ([#1241 A typed link writes a path value of . or .. as it is, so the browser resolves it away: an item with id .. links to /, and a rest key public/../private/x links to /files/private/x](https://github.com/corten-run/corten/issues/1241)).
 - A `2xx` to `CONNECT` keeps its connection busy as a `101` does, so `App::header_timeout` no
   longer closes a tunnel once the timeout has passed from when it opened, whether it is carrying
   traffic or idle: as on a WebSocket, idle limits on the tunnel are the route's, and

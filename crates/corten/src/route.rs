@@ -21,6 +21,13 @@
 //! parameter without a field, text before a parameter in its segment, or a character that would
 //! need escaping is an error. Renaming the route's path changes every link with it.
 //!
+//! A link never opens another page than the one its values name, so a value the path cannot
+//! carry is refused as it is written: `.` or `..`, which a browser resolves away (`%2e` too), a
+//! `{*rest}` value with such a segment, and an empty value where the router has no segment for it.
+//! A debug build panics, naming the route and the field; a release build writes `%FF` after the
+//! value, which the route answers with a 400 (docs/design.md#limit-path-values). A value that only
+//! contains dots is written as it is.
+//!
 //! A parameter may be followed by plain text in its segment, a file's extension: `{page}.xml`.
 //! A request whose segment does not end in the text, or is only the text, is a 404 before the
 //! handler runs, and [`Params`] reads the parameter without it, as its type:
@@ -81,6 +88,21 @@
 //! #[derive(corten::Route)]
 //! #[route("//evil.example/{id}")]
 //! struct Item { id: u32 }
+//! ```
+//!
+//! Nor has it a `.` or `..` segment, or that text after a parameter, which a browser resolves
+//! away before it asks, so no link would reach the route:
+//!
+//! ```compile_fail
+//! #[derive(corten::Route)]
+//! #[route("/items/../{id}")]
+//! struct Item { id: u32 }
+//! ```
+//!
+//! ```compile_fail
+//! #[derive(corten::Route)]
+//! #[route("/files/{name}.")]
+//! struct File { name: String }
 //! ```
 //!
 //! Nor does a route with a parameter where another of the module has its catch-all, after the same
@@ -2454,9 +2476,10 @@ const fn plain(c: u8) -> bool {
 /// Whether `path` has the shape `#[derive(Route)]` writes, checked when the app compiles so a
 /// `Route` written by hand is held to it too: each segment is `{name}` (lowercase letters, digits
 /// and `_`), `{*name}` as the last, or text a browser sends as it is (letters, digits and
-/// `-._~!$*+,;=:@`); [`with_suffixes`] adds a route with text after a parameter (`{name}.xml`), and
-/// [`chosen`] matches both shapes, as the router does. (The derive also
-/// refuses a name used twice; that changes no route's match, so it is not checked here.)
+/// `-._~!$*+,;=:@`) other than `.` and `..`, which it resolves away; [`with_suffixes`] adds a
+/// route with text after a parameter (`{name}.xml`), and [`chosen`] matches both shapes, as the
+/// router does. (The derive also refuses a name used twice; that changes no route's match, so it
+/// is not checked here.)
 pub(crate) const fn route_shaped(path: &str) -> bool {
     const fn name(c: u8, first: bool) -> bool {
         c.is_ascii_lowercase() || c == b'_' || (!first && c.is_ascii_digit())
@@ -2490,6 +2513,10 @@ pub(crate) const fn route_shaped(path: &str) -> bool {
                 j += 1;
             }
         } else {
+            // `.` or `..`, which a browser resolves away.
+            if end > start && b[start] == b'.' && (end == start + 1 || (end == start + 2 && b[start + 1] == b'.')) {
+                return false;
+            }
             let mut j = start;
             while j < end {
                 if !plain(b[j]) {
@@ -2506,7 +2533,18 @@ pub(crate) const fn route_shaped(path: &str) -> bool {
 #[cfg(test)]
 #[test]
 fn a_route_path_has_the_shape_the_derive_writes() {
-    for ok in ["/", "/items", "/items/{id}", "/items/{id}/edit", "/files/{*rest}", "/a//b", "/a.b~c", "/{a_1}"] {
+    for ok in [
+        "/",
+        "/items",
+        "/items/{id}",
+        "/items/{id}/edit",
+        "/files/{*rest}",
+        "/a//b",
+        "/a.b~c",
+        "/{a_1}",
+        "/.well-known/{x}",
+        "/a/...",
+    ] {
         assert!(route_shaped(ok), "{ok}");
     }
     for bad in [
@@ -2531,6 +2569,10 @@ fn a_route_path_has_the_shape_the_derive_writes() {
         "/{*x}/",
         "//evil.example/{x}",
         "//",
+        "/a/..",
+        "/./x",
+        "/a/./{x}",
+        "/../{*rest}",
     ] {
         assert!(!route_shaped(bad), "{bad}");
     }
@@ -4580,62 +4622,150 @@ pub mod __private {
     route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14], T15);
     route_handlers!([T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T15], T16);
 
-    // A path parameter: one segment, percent-encoded (a `/` in the value is `%2F`), or with
-    // `rest` the rest of the path (`{*rest}`), slashes kept. A text field is encoded straight from
-    // the string; any other `Display` field through its `Display` output. The derive calls
-    // `(&Segment(&field)).__segment(..)`, so the text impls, which take `Segment` itself, are
-    // found before the one for `&Segment`.
+    // A path parameter: one segment, percent-encoded (a `/` in the value is `%2F`), or a
+    // `{*rest}`, the rest of the path, slashes kept; then held to what its place in the path can
+    // carry (`Param`). A text field is encoded straight from the string; any other `Display`
+    // field through its `Display` output. The derive calls `(&Segment(&field)).__segment(..)`, so
+    // the text impls, which take `Segment` itself, are found before the one for `&Segment`.
     pub struct Segment<'a, T: ?Sized>(pub &'a T);
 
-    #[inline]
-    fn keep(rest: bool) -> u8 {
-        if rest {
-            REST
-        } else {
-            SEGMENT
+    /// A path parameter of a route: the route's and the field's names, for the error a value its
+    /// path cannot carry is, and where it sits, which decides those values
+    /// (docs/design.md#limit-path-values).
+    pub struct Param {
+        pub route: &'static str,
+        pub field: &'static str,
+        pub place: Place,
+    }
+
+    /// Where a path parameter sits in its route's path.
+    pub enum Place {
+        /// A whole segment, first or last in the path (`/{user}/posts`, `/items/{id}`): the router
+        /// has no segment for an empty value there.
+        Edge,
+        /// A whole segment between two others (`/items/{id}/offers`), where an empty value reads
+        /// back.
+        Inner,
+        /// Followed by text in its segment (`{page}.xml`), so never a dot segment; an empty value
+        /// leaves the text alone, which the route does not read.
+        Text,
+        /// `{*rest}`: the rest of the path, slashes kept, each segment of it read as one.
+        Rest,
+    }
+
+    impl Param {
+        #[inline]
+        fn keep(&self) -> u8 {
+            match self.place {
+                Place::Rest => REST,
+                _ => SEGMENT,
+            }
+        }
+
+        /// Holds the value written into `out` from `start` to what the path can carry: a browser
+        /// resolves a `.` or `..` segment away, and an empty value where the router has no segment
+        /// does not read back. A value passes on a comparison of its length, a `{*rest}` value on
+        /// a pass over its bytes.
+        #[inline]
+        fn written(&self, out: &mut String, start: usize) {
+            let value = &out.as_bytes()[start..];
+            let carried = match self.place {
+                Place::Edge => !matches!(value, b"" | b"." | b".."),
+                Place::Inner => !matches!(value, b"." | b".."),
+                Place::Text => !value.is_empty(),
+                Place::Rest => !value.is_empty() && !value.split(|&b| b == b'/').any(|s| matches!(s, b"." | b"..")),
+            };
+            if !carried {
+                self.refuse(out, start);
+            }
+        }
+
+        /// A value the path cannot carry: a debug build panics, naming the route and the field; a
+        /// release build writes `%FF` after it ([`unreadable`]), so the link opens no other page.
+        #[cold]
+        #[inline(never)]
+        fn refuse(&self, out: &mut String, start: usize) {
+            if cfg!(debug_assertions) {
+                panic!(
+                    "corten: a link to {} cannot carry {} = {:?}: a browser resolves a . or .. segment away, and the router has no segment for an empty value first or last in the path, before text in its segment or as a whole {{*rest}}, so the link would open another page or none. Refuse such a value where the app stores it (docs/design.md#limit-path-values); a release build writes %FF after it, which the route answers with a 400",
+                    self.route,
+                    self.field,
+                    &out[start..]
+                );
+            }
+            unreadable(out, start);
+        }
+    }
+
+    /// Writes `%FF` after the value written into `out` from `start` when it is empty, and after
+    /// each of its `.` and `..` segments: a browser keeps such a segment as it is, and no parameter
+    /// reads a value that is not UTF-8 (a 400).
+    fn unreadable(out: &mut String, start: usize) {
+        let value = out.split_off(start);
+        if value.is_empty() {
+            out.push_str("%FF");
+            return;
+        }
+        for (n, segment) in value.split('/').enumerate() {
+            if n > 0 {
+                out.push('/');
+            }
+            out.push_str(segment);
+            if segment == "." || segment == ".." {
+                out.push_str("%FF");
+            }
         }
     }
 
     pub trait SegmentText {
-        fn __segment(&self, rest: bool, out: &mut String);
+        fn __segment(&self, param: &Param, out: &mut String);
     }
 
     impl SegmentText for Segment<'_, &str> {
         #[inline]
-        fn __segment(&self, rest: bool, out: &mut String) {
-            Encode { out, keep: keep(rest) }.push(self.0)
+        fn __segment(&self, param: &Param, out: &mut String) {
+            let start = out.len();
+            Encode { out: &mut *out, keep: param.keep() }.push(self.0);
+            param.written(out, start);
         }
     }
 
     impl SegmentText for Segment<'_, String> {
         #[inline]
-        fn __segment(&self, rest: bool, out: &mut String) {
-            Encode { out, keep: keep(rest) }.push(self.0)
+        fn __segment(&self, param: &Param, out: &mut String) {
+            let start = out.len();
+            Encode { out: &mut *out, keep: param.keep() }.push(self.0);
+            param.written(out, start);
         }
     }
 
     impl SegmentText for Segment<'_, Cow<'_, str>> {
         #[inline]
-        fn __segment(&self, rest: bool, out: &mut String) {
-            Encode { out, keep: keep(rest) }.push(self.0)
+        fn __segment(&self, param: &Param, out: &mut String) {
+            let start = out.len();
+            Encode { out: &mut *out, keep: param.keep() }.push(self.0);
+            param.written(out, start);
         }
     }
 
     pub trait SegmentValue {
-        fn __segment(&self, rest: bool, out: &mut String);
+        fn __segment(&self, param: &Param, out: &mut String);
     }
 
     impl<T: Display + ?Sized> SegmentValue for &Segment<'_, T> {
         #[inline]
-        fn __segment(&self, rest: bool, out: &mut String) {
-            let _ = write!(Encode { out, keep: keep(rest) }, "{}", self.0);
+        fn __segment(&self, param: &Param, out: &mut String) {
+            let start = out.len();
+            let _ = write!(Encode { out: &mut *out, keep: param.keep() }, "{}", self.0);
+            param.written(out, start);
         }
     }
 
-    /// Keeps the path written from `at` (one that starts with a parameter) to a path on this
+    /// Keeps the path written from `at` (one that starts with a `{*rest}`) to a path on this
     /// site: a value that made it start with `//`, which a browser reads as another host, has
     /// that second `/` encoded (`/%2Fevil.example/x`), which reads back as the same value. The
-    /// derive calls it only when the path starts with `//`.
+    /// derive calls it only when the path starts with `//`. (An empty first parameter, the other
+    /// way to write `//`, is refused as it is written: `Param`.)
     #[cold]
     pub fn one_slash(out: &mut String, at: usize) {
         out.replace_range(at + 1..at + 2, "%2F");
@@ -4953,6 +5083,112 @@ mod tests {
                 Encode { out: &mut out, keep }.push(v);
                 assert_eq!(out, reference(v, rest), "{v:?}");
             }
+        }
+    }
+
+    #[derive(corten::Route)]
+    #[route("/items/{id}")]
+    struct Item<'a> {
+        id: &'a str,
+    }
+
+    #[derive(corten::Route)]
+    #[route("/{user}/posts")]
+    struct Posts<'a> {
+        user: &'a str,
+    }
+
+    #[derive(corten::Route)]
+    #[route("/{*page}")]
+    struct Page<'a> {
+        page: &'a str,
+    }
+
+    #[derive(corten::Route)]
+    #[route("/feeds/{name}.xml")]
+    struct Feed<'a> {
+        name: &'a str,
+    }
+
+    /// A browser resolves a `.` or `..` segment away before it asks (the URL Standard, which reads
+    /// `%2e` as a dot there too), so `/items/..` opens `/` and `/files/a/../b` opens `/files/b`;
+    /// and an empty value where the router has no segment for it does not read back (`//posts` is
+    /// another host, `/items/` matches no `{id}`). No link carries either
+    /// (docs/design.md#limit-path-values): a debug build refuses it, naming the route and the
+    /// field, and a release build writes `%FF` after it, which no browser resolves and no route
+    /// reads (a 400, `a_value_no_link_carries_is_a_400` in `tests/dispatch.rs`).
+    #[test]
+    fn a_value_a_path_cannot_carry_is_never_written_as_it_is() {
+        let (a, dots) = ("a".to_string(), "..".to_string());
+        type Link<'a> = Box<dyn Fn() -> String + 'a>;
+        let refused: Vec<(Link, &str, &str)> = vec![
+            (Box::new(|| Item { id: "." }.href()), "/items/.%FF", "Item cannot carry id = \".\""),
+            (Box::new(|| Item { id: ".." }.href()), "/items/..%FF", "Item cannot carry id = \"..\""),
+            (Box::new(|| Item { id: "" }.href()), "/items/%FF", "Item cannot carry id = \"\""),
+            (
+                Box::new(|| Offers { id: "..", page: None, sort: "new" }.href()),
+                "/items/..%FF/offers?sort=new",
+                "Offers cannot carry id",
+            ),
+            (Box::new(|| Mixed { n: 1, name: ".".into(), label: &a }.href()), "/n/1/.%FF/a", "Mixed cannot carry name"),
+            (Box::new(|| Mixed { n: 1, name: "a".into(), label: &dots }.href()), "/n/1/a/..%FF", "Mixed cannot carry label"),
+            (Box::new(|| Posts { user: "" }.href()), "/%FF/posts", "Posts cannot carry user"),
+            (Box::new(|| Posts { user: ".." }.href()), "/..%FF/posts", "Posts cannot carry user"),
+            (Box::new(|| Feed { name: "" }.href()), "/feeds/%FF.xml", "Feed cannot carry name"),
+            (
+                Box::new(|| File { path: "public/../private/report.pdf".into() }.href()),
+                "/files/public/..%FF/private/report.pdf",
+                "File cannot carry path = \"public/../private/report.pdf\"",
+            ),
+            (Box::new(|| File { path: "a/./b".into() }.href()), "/files/a/.%FF/b", "File cannot carry path"),
+            (Box::new(|| File { path: "../../x y".into() }.href()), "/files/..%FF/..%FF/x%20y", "File cannot carry path"),
+            (Box::new(|| File { path: "a/..".into() }.href()), "/files/a/..%FF", "File cannot carry path"),
+            (Box::new(|| File { path: String::new() }.href()), "/files/%FF", "File cannot carry path"),
+            (Box::new(|| Page { page: "" }.href()), "/%FF", "Page cannot carry page"),
+            (Box::new(|| Page { page: ".." }.href()), "/..%FF", "Page cannot carry page"),
+            (Box::new(|| Page { page: "/.." }.href()), "/%2F..%FF", "Page cannot carry page"),
+            (Box::new(|| Page { page: "//../x" }.href()), "/%2F/..%FF/x", "Page cannot carry page"),
+        ];
+        // A dot segment as the URL Standard reads one, `%2e` for a dot included.
+        let dot = |s: &str| matches!(s.to_ascii_lowercase().as_str(), "." | "%2e" | ".." | ".%2e" | "%2e." | "%2e%2e");
+        for (link, release, named) in &refused {
+            match (std::panic::catch_unwind(std::panic::AssertUnwindSafe(link)), cfg!(debug_assertions)) {
+                (Ok(href), false) => {
+                    assert_eq!(href, *release);
+                    let path = href.split('?').next().unwrap();
+                    assert!(!path.split('/').any(dot), "{href} has no dot segment");
+                }
+                (Err(panic), true) => {
+                    let message = panic.downcast_ref::<String>().map(String::as_str).unwrap_or_default();
+                    assert!(message.contains(&format!("a link to {named}")), "{named}: {message}");
+                    assert!(message.contains("docs/design.md#limit-path-values"), "{message}");
+                }
+                (Ok(href), true) => panic!("a debug build refuses the link it would write as {release}, not {href}"),
+                (Err(panic), false) => {
+                    panic!("a release build writes {release}, and panicked: {:?}", panic.downcast_ref::<String>())
+                }
+            }
+        }
+        // A value that only contains dots is no dot segment, and an empty one between two
+        // segments reads back (`/notes//edit`): both are written as they are.
+        for (href, want) in [
+            (Item { id: "a.b" }.href(), "/items/a.b"),
+            (Item { id: "..." }.href(), "/items/..."),
+            (Item { id: ".hidden" }.href(), "/items/.hidden"),
+            (Item { id: "a.." }.href(), "/items/a.."),
+            (Item { id: "%2e" }.href(), "/items/%252e"),
+            (Item { id: "./" }.href(), "/items/.%2F"),
+            (Offers { id: "", page: None, sort: "new" }.href(), "/items//offers?sort=new"),
+            (Posts { user: "..." }.href(), "/.../posts"),
+            (Feed { name: "." }.href(), "/feeds/..xml"),
+            (Feed { name: ".." }.href(), "/feeds/...xml"),
+            (File { path: "a/.../b".into() }.href(), "/files/a/.../b"),
+            (File { path: ".well-known/a.b".into() }.href(), "/files/.well-known/a.b"),
+            (File { path: "a//b/".into() }.href(), "/files/a//b/"),
+            (File { path: "/a".into() }.href(), "/files//a"),
+            (Page { page: "/x" }.href(), "/%2Fx"),
+        ] {
+            assert_eq!(href, want);
         }
     }
 }

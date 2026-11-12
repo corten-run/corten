@@ -5877,9 +5877,9 @@ async fn a_path_that_starts_with_a_parameter_stays_on_this_site_and_reads_back()
         let (status, _, body) = call_with(router.clone(), "GET", &link.href(), None, None).await;
         assert_eq!((status, body.as_str()), (StatusCode::OK, value), "{href} reads back as the value");
     }
-    // An empty first segment stays a path on this site; it is not the user's page (a `/{slug}`
-    // route would read it as the slug `/posts`), so an app does not link an empty value.
-    assert_eq!(UserPosts { user: "" }.href(), "/%2Fposts");
+    // A `/` in a first `{name}` stays in its segment. An empty one would write `//posts`, which a
+    // `/{slug}` route would read as the slug `/posts` once kept on the site, so it is refused as
+    // it is written (route.rs, `a_value_a_path_cannot_carry_is_never_written_as_it_is`).
     assert_eq!(UserPosts { user: "/x" }.href(), "/%2Fx/posts");
     assert_eq!(UserPosts { user: "ann" }.href(), "/ann/posts");
     // A hand-written Route is OnSite too, so redirect_with_notice and resend_to check what it

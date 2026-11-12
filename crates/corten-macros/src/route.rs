@@ -154,10 +154,11 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
         }
     }
     let mut body = TokenStream::new();
-    // A path that starts with a parameter (`/{*rest}`, `/{user}/..`) could write `//host/..` for
-    // a value starting with `/` (or an empty one), which a browser reads as another site, so its
-    // href is checked once to start with exactly one `/`.
-    let leading = matches!(segments.as_slice(), [Segment::Static(s), Segment::Param(_) | Segment::Rest(_), ..] if s == "/");
+    // A path that starts with a `{*rest}` could write `//host/..` for a value starting with `/`,
+    // which a browser reads as another site, so its href is checked once to start with exactly one
+    // `/`. (A first `{name}` writes a `/` as `%2F`, and refuses an empty value as it writes it.)
+    let first = matches!(segments.first(), Some(Segment::Static(s)) if s == "/");
+    let leading = first && matches!(segments.get(1), Some(Segment::Rest(_)));
     if leading {
         body.extend(q("let __corten_at = __OUT.len();", &[]));
     }
@@ -168,16 +169,29 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             text.clear();
         }
     };
-    for segment in &segments {
+    for (n, segment) in segments.iter().enumerate() {
         match segment {
             Segment::Static(s) => text.push_str(s),
             Segment::Param(name) | Segment::Rest(name) => {
                 flush(&mut text, &mut body);
                 let field = fields.iter().find(|f| f.name == *name).expect("checked above");
-                let rest = if matches!(segment, Segment::Rest(_)) { "true" } else { "false" };
+                // Which values the path can carry there (docs/design.md#limit-path-values).
+                let place = match (segment, segments.get(n + 1)) {
+                    (Segment::Rest(_), _) => "Rest",
+                    (_, Some(Segment::Static(next))) if !next.starts_with('/') => "Text",
+                    (_, None) => "Edge",
+                    _ if first && n == 1 => "Edge",
+                    _ => "Inner",
+                };
                 body.extend(q(
-                    &format!("(&::corten::route::__private::Segment(&self.__A0)).__segment({rest}, __OUT);"),
-                    &[proc_macro::TokenTree::Ident(field.ident.clone()).into()],
+                    &format!(
+                        "(&::corten::route::__private::Segment(&self.__A0)).__segment(&::corten::route::__private::Param {{ route: __A1, field: __A2, place: ::corten::route::__private::Place::{place} }}, __OUT);"
+                    ),
+                    &[
+                        proc_macro::TokenTree::Ident(field.ident.clone()).into(),
+                        string(&item.name.to_string()).into(),
+                        string(name).into(),
+                    ],
                 ));
             }
         }
@@ -1053,6 +1067,11 @@ pub fn parse_path(path: &str) -> Result<Vec<Segment>, String> {
                         "after {{{inner}}} comes text, {c:?} is not allowed in it: a parameter is a whole segment or followed by plain text, like /sitemap/{{page}}.xml"
                     ));
                 }
+                if suffix == "." || suffix == ".." {
+                    return Err(format!(
+                        "after {{{inner}}} comes {suffix:?}, which with a value of dots, or none, is a . or .. segment a browser resolves away: give the parameter text of its own, like /sitemap/{{page}}.xml"
+                    ));
+                }
                 (&part[..inner.len() + 2], Some(suffix))
             }
             _ => (*part, None),
@@ -1081,6 +1100,10 @@ pub fn parse_path(path: &str) -> Result<Vec<Segment>, String> {
         } else if part.contains(['{', '}']) {
             return Err(format!(
                 "a parameter is a whole segment, or one followed by plain text: /items/{{id}} or /sitemap/{{page}}.xml, not {part:?}"
+            ));
+        } else if part == "." || part == ".." {
+            return Err(format!(
+                "{path:?} has a {part:?} segment, which a browser resolves away before it asks, so no link would reach the route: write the path it resolves to"
             ));
         } else if let Some(c) = part.chars().find(|c| !plain(*c)) {
             return Err(format!("{c:?} is not allowed in a route path; write the path as it is matched"));
@@ -1147,5 +1170,12 @@ mod tests {
         assert!(parse_path("/{id}/{id}").is_err());
         assert!(parse_path("/a b").is_err());
         assert!(parse_path("/{Id}").is_err());
+        // A browser resolves a `.` or `..` segment away, so no link would reach such a route.
+        for dots in ["/a/..", "/./x", "/items/../{id}", "/files/{name}.", "/files/{name}.."] {
+            assert!(parse_path(dots).is_err(), "{dots}");
+        }
+        for dotted in ["/.well-known/{x}", "/a/...", "/files/{name}...", "/files/{name}.x"] {
+            assert!(parse_path(dotted).is_ok(), "{dotted}");
+        }
     }
 }

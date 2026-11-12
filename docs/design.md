@@ -2817,3 +2817,24 @@ by design; where it is known, a limit says what would lift it or why it is so.
     [#1130 Expose opt-in browser diagnostics for action responses and live HTML patches](https://github.com/corten-run/corten/issues/1130)).
     It lifts when apps need the received payload in the page for their users, not their
     developers, or when Chromium's panel stops showing an event stream's messages.
+26. <a id="limit-path-values"></a>A path parameter cannot carry a value its link would not read
+    back as. A browser resolves a `.` or `..` segment away before it asks (the URL Standard, which
+    reads `%2e` as a dot there too), so `/items/..` opens `/` and the `{*rest}` key
+    `public/../private/x` opens `/files/private/x`; and the router has no segment for an empty
+    value first or last in the path (`//posts` is another host to a browser, `/items/` matches no
+    `{id}`), before text in its segment (`{page}.xml`), or as a whole `{*rest}` value. So `.`,
+    `..`, a `{*rest}` value with such a segment, and an empty value in those places are not
+    written as they are: a debug build panics when the link is written, naming the route and the
+    field, and a release build writes `%FF` after the value (`/items/..%FF`,
+    `/files/public/..%FF/private/x`, `/%FF/posts`), which no browser resolves and the route
+    answers with a 400, since no parameter reads a value that is not UTF-8. The link opens no
+    other page or file either way. A value that only contains dots (`a.b`, `...`, `.hidden`) is
+    written as it is, and so is an empty one between two segments (`/notes//edit`), which reads
+    back. A route's own path cannot have a `.` or `..` segment, or that text after a parameter:
+    neither compiles. The check is where a link is written, not where a request is read: no
+    browser sends such a segment, so a check on every request with parameters would cost them all
+    to stop what no link sends, and a value decoded from a segment can hold `../` anyway
+    (`..%2F`), so it would not make a parameter safe to use as a file path; an app that does that
+    checks the value itself. Writing a link pays a comparison of each parameter's length, and a
+    pass over each `{*rest}` value. An app whose slugs, names or file keys come from people
+    refuses these values where it stores them, so its links never reach the check.

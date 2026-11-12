@@ -148,7 +148,7 @@ impl<P: Prefix> Area<P> {
             );
             assert!(
                 crate::route::route_shaped(R::PATH),
-                "corten: a route's path has the shape #[derive(Route)] writes: whole-segment parameters like /items/{{id}} and plain text (the note below names the route)"
+                "corten: a route's path has the shape #[derive(Route)] writes: whole-segment parameters like /items/{{id}} and plain text, no . or .. segment (the note below names the route)"
             );
         };
         // Before the router, which would merge the two or refuse them less clearly.

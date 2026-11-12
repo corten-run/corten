@@ -293,6 +293,36 @@ async fn a_catch_all_takes_the_rest_of_the_path_and_not_nothing() {
     assert_eq!(get("/files").await.status, 404);
 }
 
+/// What a release build writes for a value no link carries (docs/design.md#limit-path-values),
+/// `%FF` after it, is a 400 wherever the parameter sits: no browser resolves it away, and no
+/// parameter reads a value that is not UTF-8. A value that only contains dots reads back.
+#[tokio::test]
+async fn a_value_no_link_carries_is_a_400() {
+    for path in [
+        "/names/..%FF",
+        "/names/.%FF",
+        "/names/%FF",
+        "/notes/..%FF/edit",
+        "/files/public/..%FF/private/report.pdf",
+        "/files/..%FF/..%FF/x",
+        "/files/%FF",
+        "/feeds/%FF.xml",
+    ] {
+        assert_eq!(get(path).await.status, 400, "{path}");
+    }
+    for (path, value) in [
+        ("/names/a.b", "a.b"),
+        ("/names/...", "..."),
+        ("/names/.hidden", ".hidden"),
+        ("/feeds/..xml", "."),
+        ("/files/a/.../b", "a/.../b"),
+        ("/files//a", "/a"),
+    ] {
+        let answer = get(path).await;
+        assert_eq!((answer.status, answer.body.as_str()), (200, value), "{path}");
+    }
+}
+
 #[tokio::test]
 async fn text_after_a_parameter_is_part_of_the_match() {
     assert_eq!(get("/feeds/news.xml").await.body, "news");
