@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -10,8 +11,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/gin-gonic/gin"
 )
+
+func (s *alertStore) renderPost(c *gin.Context, component templ.Component, row *storedAlert) {
+	var body bytes.Buffer
+	if err := component.Render(c.Request.Context(), &body); err != nil {
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	if row != nil {
+		if err := s.append(c, *row); err != nil {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "alert storage unavailable"})
+			return
+		}
+	}
+	c.Data(http.StatusOK, "text/html; charset=utf-8", body.Bytes())
+}
 
 const alertCookie = "marketplace_session"
 

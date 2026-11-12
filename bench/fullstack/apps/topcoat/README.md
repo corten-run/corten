@@ -36,3 +36,10 @@ The native-image HTTP/browser driver in `../gin/check-alerts.mjs` accepts `topco
 and an image name. It checks both fixture/API sources, JS/no-JS native forms,
 same-cookie-jar readback, locale validation, isolation and concurrent writes.
 It is test-only, not a shared application backend or a performance measurement.
+
+Alert writes reject malformed record identities and ratings. The existing native
+page resolves its full view and preflights native HTML materialization before
+committing; it still returns a Topcoat view, retaining native page/frame delivery.
+Read-only paths are unchanged. This does not promise rollback after later network
+failure or change native abort semantics. Exact minor-unit tests cover values above
+2^53, i64 maximum/overflow and ICU's magnitude limit with long leading-zero input.

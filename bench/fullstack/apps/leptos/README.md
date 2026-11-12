@@ -58,3 +58,12 @@ benchmark persistence, not durable or distributed storage.
 concurrent-append unit checks. The native-image driver documented in
 `../gin/README.md`, with `leptos`, exercises fixture/API sources, native enhanced
 and no-JS forms, independent same-cookie-jar readbacks and multi-client isolation.
+
+Writes reject malformed upstream records, identity mismatches and invalid ratings.
+The plain fallback materializes the native Axum/Leptos HTML body successfully
+before committing. The enhanced server function commits after validating its
+record and preparing its typed success result, not by rendering a second page.
+Neither operation promises rollback after a later network failure or extends the
+native upstream/client-abort semantics. Read-only handlers are unchanged. Exact
+minor-unit tests cover values above 2^53, i64 maximum/overflow and ICU's decimal
+magnitude limit, including long leading-zero inputs.

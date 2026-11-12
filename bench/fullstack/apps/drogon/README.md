@@ -61,3 +61,10 @@ not durable or distributed storage. CTest includes concurrent store/cookie/capac
 checks. For fixture/API HTTP, real browser forms in JS/no-JS contexts, cookie-jar
 readback and isolation, run the compiled-native driver documented in
 `../gin/README.md` with `drogon` and the image under test.
+
+POST source parsing requires one complete JSON document and the requested record
+identity. A successful native CSP response must be prepared before appending.
+This is not a transaction tied to client receipt: later delivery failure does not
+roll back committed work, and the page source's existing native abort semantics
+are not expanded. Read-only paths remain unchanged. Tests cover exact minor units
+above 2^53 and the signed-64-bit acceptance boundary.

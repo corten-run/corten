@@ -12,7 +12,7 @@ use topcoat::{
         error::{bad_request, not_found},
         page, path_param, request, route,
     },
-    view::{View, component, view},
+    view::{View, ViewExt, component, view},
 };
 const MARKETPLACE: Asset = asset!("static/marketplace.css");
 path_param!(locale);
@@ -22,16 +22,13 @@ pub async fn marketplace_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<im
     let locale = PageLocale::parse(path_param::<Locale>(cx)).ok_or_else(|| bad_request("unsupported marketplace locale"))?;
     let query = Form::<Query>::from_bytes(request::uri(cx).query().unwrap_or_default().as_bytes())?.0;
     let record = marketplace::source::get(path_param::<Id>(cx)).await.map_err(topcoat::Error::msg)?.ok_or_else(not_found)?;
-    let message = if request::method(cx).as_str() == "POST" {
-        let (message, minor) = locale.alert_result(&record, &form);
-        if let Some(target_minor) = minor {
-            crate::alerts::append(cx, crate::alerts::Alert { item_id: record.id.clone(), email: form.email.clone(), target_minor })?;
-        }
-        message
-    } else {
-        String::new()
-    };
-    Ok(view! {
+    let posted = request::method(cx).as_str() == "POST";
+    if posted && !record.valid_for_alert(path_param::<Id>(cx)) {
+        return Err(topcoat::Error::msg("malformed marketplace record"));
+    }
+    let (message, minor) = if posted { locale.alert_result(&record, &form) } else { (String::new(), None) };
+    let row = minor.map(|target_minor| crate::alerts::Alert { item_id: record.id.clone(), email: form.email, target_minor });
+    let output = view! {
         <!DOCTYPE html>
         <html lang=(locale.tag())>
             <head>
@@ -49,7 +46,20 @@ pub async fn marketplace_page(cx: &Cx, Form(form): Form<AlertForm>) -> Result<im
                 <main>detail(record: &record, locale: locale, query: &query, message: &message)</main>
             </body>
         </html>
-    })
+    };
+    if posted {
+        // Resolve every native component and materialize HTML before the write.
+        let content = output.single().await?;
+        let rendered = content.clone().render_response(cx);
+        if rendered.status_code.is_none_or(|status| status.is_success()) {
+            if let Some(row) = row {
+                crate::alerts::append(cx, row)?;
+            }
+        }
+        Ok(view! { (content) }.boxed())
+    } else {
+        Ok(output.boxed())
+    }
 }
 #[route(GET "/api/marketplace/{id}")]
 pub async fn marketplace_json(cx: &Cx) -> Result<Json<Arc<Record>>> {
