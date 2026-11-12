@@ -1379,7 +1379,7 @@ impl<M: Middleware> App<M> {
         let hosts = policy.host_check();
         shared.proxies = policy.proxies().to_vec();
         shared.allowed_origins = policy.allowed_origins().to_vec();
-        shared.plain_notice = !policy.sends_hsts();
+        shared.https_only = policy.sends_hsts();
         let area_sources: Vec<_> =
             self.areas.iter().filter(|area| !area.sources.is_empty()).map(|area| (area.prefix, &area.sources)).collect();
         let policy = Applied::new(policy, &shared.import_map, &area_sources);

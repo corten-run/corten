@@ -100,6 +100,17 @@ export function heard(failed, notice, out) {
   out.value = notice.detail.message * 2;
 }
 
+/** @import { DeckAnswered } from "corten/events" */
+
+// An event's field of a Rust enum (examples/deck-builder's SaveOutcome) is the enum's names, so a
+// branch on a name it lacks, as a rename on the server would leave one, fails rather than never matching.
+/** @param {DeckAnswered} answer */
+export function answeredAs(answer) {
+  // @ts-expect-error This comparison appears to be unintentional: "saved" is not a SaveOutcome.
+  if (answer.outcome === "saved") return 0;
+  return answer.outcome === "Saved" ? answer.version : 0;
+}
+
 /** @import { NumberFormat, MoneyFormat, DateFormat, PercentFormat } from "corten" */
 
 /** @param {HTMLOutputElement} out @param {NumberFormat} count @param {MoneyFormat} price @param {DateFormat} when @param {PercentFormat} rate */
