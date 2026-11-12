@@ -50,6 +50,8 @@ float noise(vec2 p) {
 
 // Each octave is turned against the last, so the noise's grid never lines up into squares.
 const mat2 TURN = mat2(0.8, -0.6, 0.6, 0.8);
+const float KNEE = 0.24;
+const float CEILING = 0.32;
 
 float turned4(vec2 p) {
   float sum = 0.0;
@@ -73,7 +75,7 @@ float turned3(vec2 p) {
   return sum * 1.143;
 }
 
-// Three octaves kept square to the plate: for streaks that run along it.
+// Three octaves kept square to the plate: for bands and streaks, which run one way.
 float square3(vec2 p) {
   float sum = 0.0;
   float gain = 0.5;
@@ -83,6 +85,19 @@ float square3(vec2 p) {
     gain *= 0.5;
   }
   return sum * 1.143;
+}
+
+// Rust's grains, a pixel or three across.
+float grain(vec2 p) {
+  return noise(TURN * p * 0.71 + 3.0) * 0.58 + noise(TURN * TURN * p * 0.37 + 9.0) * 0.42;
+}
+
+// The wheel's hairlines: long cells across the plate and short ones down it. The sheet of
+// noise is 256 cells tall, so each time down it the read moves along, and no stretch of
+// hairlines comes round again.
+float hairline(vec2 p) {
+  p.x += floor(p.y * (1.0 / 256.0)) * 7.31;
+  return noise(p);
 }
 
 void main() {
@@ -111,15 +126,18 @@ void main() {
   float inOxide = toOxide * (1.0 - toSteel);
   float inSteel = toSteel * (1.0 - toFar);
 
-  // Rust is a crust of grains, not a smooth film: the grit is its grains, a pixel or three
-  // across, and every broader patch is read through coordinates the noise itself has pushed
-  // about, so a patch's edge is ragged where plain noise would round it into a blob.
-  float grit = noise(TURN * page * 0.71 + 3.0) * 0.58 + noise(TURN * TURN * page * 0.37 + 9.0) * 0.42;
+  // Rust is a crust of grains, not a smooth film: the grit is its grains, and the broader
+  // patches of the patina and the oxide are read through coordinates the noise itself has
+  // pushed about, so a patch's edge is ragged where plain noise would round it into a blob.
+  // The grit is read again a pixel across and a pixel down, for the light.
+  float grit = grain(page);
+  vec2 gritOn = vec2(grit);
   float mottle = 0.5;
   float fine = 0.5;
   float tone = 0.5;
   vec2 warped = page;
   if (inPatina + inOxide > 0.0) {
+    gritOn = vec2(grain(page + vec2(1.0 / uScale, 0.0)), grain(page + vec2(0.0, 1.0 / uScale)));
     warped += (vec2(noise(page * 0.011 + 40.0), noise(page * 0.011 + 90.0)) - 0.5) * 24.0;
     float blotch = turned4(warped * 0.0021);
     mottle = turned4(warped * 0.0105 + 31.7);
@@ -127,8 +145,11 @@ void main() {
     tone = blotch * 0.56 + mottle * 0.3 + fine * 0.14;
   }
   // The surface's height, for the light. Each layer builds it from the same patches that color
-  // it, so a pit is dark and also a hollow the light catches the far rim of.
+  // it, so a grain of new rust is redder and also stands up into the light. The broad part is
+  // the height itself; the part that changes from one pixel to the next is kept as its step to
+  // the pixel across and to the pixel down.
   float height = 0.0;
+  vec2 sharp = vec2(0.0);
 
   // The stamp: the tagline's letters, their edges for the light, and a blurred copy of the
   // sheet, which is the metal the stamp worked.
@@ -151,7 +172,7 @@ void main() {
 
   if (inPatina > 0.0) {
     // Weathering steel, as a plate of it looks close up: an orange-brown ground in broad bands
-    // along the plate, lighter and darker; grains of newer, redder rust standing on it, thick
+    // down the plate, lighter and darker; grains of newer, redder rust standing on it, thick
     // in one band and thin in the next; a few long grey-brown smears, and pale dust in patches.
     vec3 dull = vec3(0.4, 0.225, 0.15);
     vec3 ground = vec3(0.64, 0.29, 0.115);
@@ -167,14 +188,17 @@ void main() {
     patina = mix(patina, bright, smoothstep(0.48, 0.64, lay + (fine - 0.5) * 0.22));
     patina = mix(patina, amber, smoothstep(0.56, 0.76, mottle) * 0.45);
     // The grains: a pixel or three across, and sharp.
-    float granule = smoothstep(0.5, 0.62, grit + (mottle - 0.5) * 0.5 + (band - 0.5) * 0.3 + (fine - 0.5) * 0.25);
+    float thick = (mottle - 0.5) * 0.5 + (band - 0.5) * 0.3 + (fine - 0.5) * 0.25;
+    float granule = smoothstep(0.5, 0.62, grit + thick);
     patina = mix(patina, fresh, granule * 0.72);
-    float smeared = smoothstep(0.6, 0.72, square3(vec2(warped.x * 0.021, warped.y * 0.0017) + 31.0));
+    // Long marks down the plate, both from one read: grey-brown smears where it is high, and
+    // where it is low the runs rain has taken, fine and faint.
+    float drawn = square3(vec2(warped.x * 0.021, warped.y * 0.0017) + 31.0);
+    float smeared = smoothstep(0.6, 0.72, drawn);
     patina = mix(patina, smear * (0.8 + 0.4 * grit), smeared * 0.6);
     float dusted = smoothstep(0.6, 0.7, mottle * 0.55 + (1.0 - band) * 0.5) * smoothstep(0.42, 0.6, grit + (fine - 0.5) * 0.4);
     patina = mix(patina, chalk, dusted * 0.5);
-    // Where rain has run down the plate: fine and faint.
-    float runs = square3(vec2(warped.x * 0.021, page.y * 0.0016) + 7.3);
+    float runs = 1.0 - drawn;
     patina *= 1.0 - 0.16 * smoothstep(0.54, 0.76, runs);
     patina *= 0.8 + 0.4 * grit;
     // That is the plate while it is weathering. In a few years the patina closes: deeper, redder
@@ -185,11 +209,12 @@ void main() {
     settled *= 1.0 - 0.14 * smoothstep(0.54, 0.76, runs);
     settled *= 0.82 + 0.36 * grit;
     patina = mix(patina, settled, smoothstep(0.6, 1.0, uWeather) * 0.72);
-    height = grit * 0.5 + granule * 0.9 + fine * 0.9 + mottle * 0.8;
+    height = fine * 0.9 + mottle * 0.8;
+    sharp = (gritOn - grit) * 0.5 + (smoothstep(0.5, 0.62, gritOn + thick) - granule) * 0.9;
     // Worked metal rusts brightest, so the letters stand in a lighter ground than the plate's.
     patina = mix(patina, bloom * (0.92 + 0.34 * grit), nearLetter * 0.82);
     vec3 surface = patina;
-    if (uWeather < 1.0 && toFar < 0.5) {
+    if (uWeather < 1.0 && toFar < 1.0) {
       float rolled = square3(vec2(page.x * 0.0013, page.y * 0.045) + 3.0);
       vec3 millScale = vec3(0.15, 0.172, 0.19) * (0.72 + 0.66 * rolled);
       millScale += vec3(0.012, 0.02, 0.03) * mottle;
@@ -199,13 +224,16 @@ void main() {
       float streak = square3(vec2(page.x * 0.019, page.y * 0.0021) + 11.0);
       float seed = clamp((turned4(page * 0.0058 + 11.0) * 0.4 + streak * 0.3 + grit * 0.3 - 0.5) * 2.1 + 0.5, 0.0, 1.0);
       rusted = smoothstep(0.0, 0.14, uWeather * 1.62 - seed + nearLetter * 0.95);
+      // The far side has had its years already.
+      rusted = mix(rusted, 1.0, toFar);
       surface = mix(millScale, patina, rusted);
       surface += vec3(0.42, 0.17, 0.03) * rusted * (1.0 - rusted) * 4.0;
     }
     // Mill scale is smooth beside the rust that lifts it.
-    height *= mix(0.25, 1.0, rusted);
+    float raised = mix(0.25, 1.0, rusted) * inPatina;
     body += surface * inPatina;
-    height *= inPatina;
+    height *= raised;
+    sharp *= raised;
   }
 
   if (inOxide > 0.0) {
@@ -218,15 +246,21 @@ void main() {
     oxide *= 0.8 + 0.4 * grit;
     float split = smoothstep(0.7, 0.76, leaf * 0.7 + fine * 0.36);
     oxide *= 1.0 - 0.16 * split;
-    height += (grit * 0.5 + leaf * 0.7 + fine * 0.9 - split * 0.5) * inOxide;
+    float leafOn = square3(vec2(warped.x * 0.011, (page.y + 1.0 / uScale) * 0.19) + 61.0);
+    float splitOn = smoothstep(0.7, 0.76, leafOn * 0.7 + fine * 0.36);
+    height += fine * 0.9 * inOxide;
+    sharp += (gritOn - grit) * 0.5 * inOxide;
+    sharp.y += ((leafOn - leaf) * 0.7 - (splitOn - split) * 0.5) * inOxide;
     body += oxide * inOxide;
   }
 
   if (inSteel > 0.0) {
-    // Ground steel: the wheel's hairlines run along the plate, each a pixel wide and as long
-    // as the plate is broad, over the broad bands the rolls left; and a few scratches across.
+    // Ground steel: the wheel's hairlines run across the plate, each a pixel wide and as long
+    // as the plate is broad, over the bands the rolls left; and a few scratches at a slant.
     float rolled = square3(vec2(page.x * 0.0013, page.y * 0.045) + 3.0);
-    brushed = noise(vec2(page.x * 0.0041, page.y * 1.17)) * 0.56 + noise(vec2(page.x * 0.016 + 40.0, page.y * 0.46 + 9.0)) * 0.44;
+    float hair = hairline(vec2(page.x * 0.0041, page.y * 1.17));
+    float coarse = hairline(vec2(page.x * 0.016 + 40.0, page.y * 0.46 + 9.0));
+    brushed = hair * 0.56 + coarse * 0.44;
     vec2 across = vec2(dot(page, vec2(0.93, 0.37)), dot(page, vec2(-0.37, 0.93)));
     vec2 back = vec2(dot(page, vec2(0.81, -0.59)), dot(page, vec2(0.59, 0.81)));
     scratch = smoothstep(0.93, 0.985, noise(vec2(across.x * 0.0031, across.y * 0.21)));
@@ -234,7 +268,8 @@ void main() {
     vec3 steel = vec3(0.15, 0.157, 0.162) * (0.8 + 0.24 * rolled);
     steel *= 0.82 + 0.36 * brushed;
     steel *= 1.0 + 0.5 * scratch;
-    height += (brushed * 0.8 - scratch * 0.9) * inSteel;
+    height += (coarse * 0.35 - scratch * 0.9) * inSteel;
+    sharp.y += (hairline(vec2(page.x * 0.0041, (page.y + 1.0 / uScale) * 1.17)) - hair) * 0.45 * inSteel;
     // Temper colors: the steel next to a rusting layer took its heat, straw nearest, then
     // purple, then blue, fading into the plate.
     float heat = max(exp(-max(0.0, y - uStrata.y + wander) / 380.0), exp(-max(0.0, uStrata.z - y - wander) / 380.0));
@@ -249,9 +284,10 @@ void main() {
 
   float metal = mix(0.5, 0.07, rusted) * inPatina + 0.05 * inOxide + 0.2 * inSteel;
   float rough = mix(0.3, 1.0, rusted) * inPatina + 0.85 * inOxide + 0.16 * inSteel;
-  // The slope is the height's change from this pixel to the next, which the GPU already has:
-  // the page's y runs down the canvas, so that one is turned over.
-  vec2 slope = vec2(dFdx(height), -dFdy(height)) * uScale * 2.1 * rough;
+  // The slope is the height's change from this pixel to the next. Of the broad part the GPU
+  // already has it, for a block of four pixels at a time, which is fine enough for that part
+  // alone: the page's y runs down the canvas, so that one is turned over.
+  vec2 slope = (vec2(dFdx(height), -dFdy(height)) + sharp) * uScale * 2.1 * rough;
   vec3 normal = normalize(vec3(-slope + bevel * 5.2, 1.0));
 
   vec2 toLight = uPointer - view;
@@ -260,7 +296,7 @@ void main() {
   float lit = clamp(dot(normal, light), 0.0, 1.0);
   float shine = pow(clamp(dot(reflect(-light, normal), vec3(0.0, 0.0, 1.0)), 0.0, 1.0), mix(22.0, 9.0, inSteel));
   vec3 shaded = body * (0.56 + 0.16 * inPatina + 0.2 * lit + 0.5 * lit * reach);
-  shaded += vec3(1.0, 0.93, 0.84) * shine * metal * (0.25 + 0.75 * reach);
+  shaded += mix(vec3(1.0, 0.93, 0.84), vec3(0.8, 0.88, 1.0), inSteel) * shine * metal * (0.25 + 0.75 * reach);
   if (inSteel > 0.0) {
     // Hairlines throw the light out across themselves: a bar of it stands over the pointer,
     // narrow along the grain and long across it, and each hairline takes it or does not.
@@ -268,6 +304,15 @@ void main() {
     vec2 spread = between.xy / (vec2(0.075, 0.42) * between.z);
     float bar = exp(-dot(spread, spread));
     shaded += vec3(0.78, 0.86, 1.0) * bar * (0.035 + 0.2 * brushed * brushed + 0.25 * scratch) * inSteel;
+    // Small type is set straight on the steel, so the steel's light stops short of the type's:
+    // it eases off above KNEE and never passes CEILING, under which the palest of that type
+    // (#cfc7ba) keeps 4.5 to 1 over every pixel of the steel. A strike's glow, below, is not
+    // held to it: it is over in four seconds.
+    float top = max(shaded.r, max(shaded.g, shaded.b));
+    float eased = KNEE + (CEILING - KNEE) * (1.0 - exp((KNEE - top) / (CEILING - KNEE)));
+    // The easing flattens the hairlines in the light, so the darker of them are drawn down.
+    eased *= 1.0 - 0.4 * (1.0 - brushed) * smoothstep(KNEE, CEILING + 0.1, top);
+    shaded *= mix(1.0, eased / top, inSteel * step(KNEE, top));
   }
 
   // A struck plate: the blow's heat where it landed, and a ring of it running out through the
@@ -601,7 +646,9 @@ export function forge(world, canvas, line, words, strata, bands, signal) {
     const [, seam = 0, steel = 0, far = 0] = plate.tops;
     gl.uniform2f(at.canvas, canvas.width, canvas.height);
     gl.uniform1f(at.scale, plate.scale);
-    gl.uniform1f(at.scroll, window.scrollY);
+    // By whole pixels of the canvas, which is not always the screen's: grain finer than two
+    // pixels changes when it is read between them, and would shimmer as the page scrolls.
+    gl.uniform1f(at.scroll, Math.round(window.scrollY * plate.scale) / plate.scale);
     gl.uniform2f(at.pointer, plate.light.x, plate.light.y);
     gl.uniform1f(at.weather, plate.weather);
     gl.uniform3f(at.strata, seam, steel, far);

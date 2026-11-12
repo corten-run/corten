@@ -222,7 +222,7 @@ for (engine of engines) {
     check("the page says what serves it", hosted.length === 3 && (held ? /\. This server is held to 1 CPU and 512\.0 MiB of memory\./.test(hosted[0]) : !/This server is held to .*MiB/.test(hosted[0])), hosted[0]);
     check(
       "a meter under a limit is read as of that limit",
-      held ? cpu?.said === `${cpu.value}% of a limit of 1 CPU` && / of a limit of 512\.0 MiB$/.test(memory?.said ?? "") : cpu?.said === "" && !/limit/.test(memory?.said ?? ""),
+      held ? cpu?.said === `${cpu?.value}% of a limit of 1 CPU` && / of a limit of 512\.0 MiB$/.test(memory?.said ?? "") : cpu?.said === "" && !/limit/.test(memory?.said ?? ""),
       `${cpu?.said} | ${memory?.said}`,
     );
 
@@ -260,7 +260,15 @@ for (engine of engines) {
     // The page's sentence and its JSON say the same machine: a size is written to a tenth of a MiB.
     check(
       "and the machine is the one the page says",
-      Number(hosted[1]) === server.machine_cpus && size(hosted[2] ?? "") === Math.round(server.machine_memory_bytes / 104857.6) / 10 && server.server_cpus > 0 && server.server_cpus <= server.machine_cpus,
+      Number(hosted[1]) === server.machine_cpus && size(hosted[2] ?? "") === Math.round(server.machine_memory_bytes / 104857.6) / 10 && server.server_cpus > 0 && (!held || server.server_cpus === 1),
+      `${hosted[0]} | ${JSON.stringify(server)}`,
+    );
+    // With no limit, a server given fewer CPUs than the machine has is said to be held to
+    // them, and the gauges are then not pointed at; one given them all is pointed at its gauges.
+    const some = !held && server.server_cpus < server.machine_cpus;
+    check(
+      "and what it says of the CPUs follows the counts",
+      / This server is held to \d[\d.]* CPUs?[ .]/.test(hosted[0] ?? "") === (held || some) && / The readings above say how much of each is in use\.$/.test(hosted[0] ?? "") === !some,
       `${hosted[0]} | ${JSON.stringify(server)}`,
     );
 

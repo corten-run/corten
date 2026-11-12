@@ -500,6 +500,11 @@ mod tests {
         assert!(host(&on(0, None, None)).starts_with(&format!("{MACHINE}1 CPU and 457.4 MiB")));
         assert_eq!((host(&Machine::default()), host(&Machine { cpus: 4, ..Machine::default() })), (String::new(), String::new()));
         assert_eq!(host(&Machine { cpus: 0, ..on(0, None, None) }), "");
+        // No count of the server's own is not a count of none: nothing is said of a hold.
+        assert_eq!(
+            host(&Machine { cpus: 0, ..on(8, None, None) }),
+            format!("{MACHINE}8 CPUs and 457.4 MiB of memory, by the system's count.</p>")
+        );
         // A limit of all the machine has is still the group's count, and is said.
         assert!(
             host(&on(1, None, Some("100000 100000\n")))

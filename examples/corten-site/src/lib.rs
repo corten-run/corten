@@ -224,7 +224,9 @@ struct Server {
     memory_held_bytes: u64,
     machine_memory_bytes: u64,
     machine_cpus: usize,
-    /// The CPUs the server may use: fewer than the machine's where it is kept to some of them.
+    /// The CPUs the server may use, by the standard library's count: fewer than the machine's
+    /// where it is kept to some of them, and under a quota the quota's whole CPUs, at least one
+    /// (2 under a limit of 2.5, 1 under 0.5; `machine_cpu_limit` is the limit itself).
     server_cpus: usize,
     /// The memory and the CPUs the server's control group holds it to (`null` with no limit).
     /// Each decides whose count the reading under it is.
@@ -261,7 +263,7 @@ impl<'a> Sheet<'a> {
                 memory_held_bytes: pulse.held_bytes,
                 machine_memory_bytes: machine.whole_bytes,
                 machine_cpus: machine.machine_cpus(),
-                server_cpus: machine.cpus,
+                server_cpus: machine.server_cpus(),
                 machine_memory_limit_bytes: machine.memory_limited.then_some(machine.memory_bytes),
                 machine_cpu_limit: machine.cpu_limit,
                 machine_memory_used_bytes: pulse.used.memory_bytes,
@@ -460,13 +462,15 @@ mod tests {
             used: works::Used { cpu: Some(41), cpu_own: None, memory_bytes: 200 << 20 },
             ..works::Pulse::default()
         };
-        let held = works::Machine::counted(1, meminfo, Some("536870912\n"), Some("50000 100000\n"));
+        // Held to half a CPU on a machine of eight: the machine's count and the server's differ.
+        let held =
+            works::Machine { stat_cpus: 8, ..works::Machine::counted(1, meminfo, Some("536870912\n"), Some("50000 100000\n")) };
         let data = Sheet::new(&pulse, &held, None).to_json();
         for part in [
             r#""pages_a_second":12"#,
             r#""most_pages_following":3"#,
             r#""machine_memory_bytes":12544798720"#,
-            r#""machine_cpus":1"#,
+            r#""machine_cpus":8"#,
             r#""server_cpus":1"#,
             r#""machine_memory_limit_bytes":536870912"#,
             r#""machine_cpu_limit":0.5"#,
@@ -483,10 +487,15 @@ mod tests {
             r#""machine_memory_limit_bytes":null"#,
             r#""machine_cpu_limit":null"#,
             r#""machine_cpus":8"#,
+            r#""server_cpus":8"#,
             r#""cpu_used_percent":7"#,
         ] {
             assert!(data.contains(part), "the JSON lacks {part}: {data}");
         }
+        // Where the standard library gave no count, the server's CPUs are the machine's.
+        let uncounted = works::Machine { stat_cpus: 8, ..works::Machine::counted(0, meminfo, None, None) };
+        let data = Sheet::new(&pulse, &uncounted, None).to_json();
+        assert!(data.contains(r#""machine_cpus":8,"server_cpus":8"#), "{data}");
     }
 
     #[tokio::test]

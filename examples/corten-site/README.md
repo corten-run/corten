@@ -46,9 +46,11 @@ is drawn after photographs of weathering steel: a fine grain of newer rust on an
 ground, in bands down the plate. When the page opens the plate weathers as such a plate does
 over a few years, in five and a half seconds: grey mill scale, rust in specks along the runs
 rain takes, the whole plate bright and uneven, then deeper and more even. The bare steel is
-ground along the plate, and throws the pointer's light out in a bar across its hairlines. It is
-drawn again only when the page scrolls, the pointer moves, a plate is struck or the window
-changes.
+ground across the plate, and throws the pointer's light out in a bar across its hairlines; that
+light is held under a ceiling, so the palest small type set on the steel keeps 4.5 to 1 over
+every pixel of it. It is drawn again only when the page scrolls, the pointer moves, a plate is
+struck or the window changes, and it moves by whole pixels of its canvas, so its grain does not
+shimmer as the page scrolls.
 
 A pixel pays for the layer it is in: every texture read names its level, so each layer's
 branch is one the GPU can skip. Frames that come late lower the plate's resolution, and where

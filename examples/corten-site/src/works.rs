@@ -156,13 +156,19 @@ impl Machine {
         self.stat_cpus.max(self.cpus)
     }
 
+    /// The CPUs the server may use, by the standard library's count (`cpus`); where it gave
+    /// none, the machine's.
+    pub fn server_cpus(&self) -> usize {
+        if self.cpus > 0 { self.cpus } else { self.stat_cpus }
+    }
+
     /// The CPUs the server is held to: its group's limit, whatever the machine has, since the
-    /// CPU in use is then counted against it; or else the count it may use (`cpus`), where that
-    /// is fewer than the machine's. That count is the standard library's: the CPUs the server is
-    /// kept to, or a quota this does not look for (a group above its own, or the first
-    /// version's) rounded down to whole CPUs.
+    /// CPU in use is then counted against it; or else the count it may use (`cpus`), where the
+    /// system gave one and it is fewer than the machine's. That count is the standard library's:
+    /// the CPUs the server is kept to, or a quota this does not look for (a group above its own,
+    /// or the first version's) in whole CPUs, rounded down and never fewer than one.
     pub fn held_cpus(&self) -> Option<f64> {
-        self.cpu_limit.or((self.cpus < self.stat_cpus).then_some(self.cpus as f64))
+        self.cpu_limit.or((self.cpus > 0 && self.cpus < self.stat_cpus).then_some(self.cpus as f64))
     }
 
     /// A file of the server's own control group, as text.
@@ -729,6 +735,13 @@ mod tests {
         let (machine, allowed_one) = (Machine::in_group(group(), None), Machine::in_group(group(), Some(1)));
         std::fs::remove_dir_all(&dir).expect("the directory removed");
         assert_eq!(allowed_one.cpu_limit, Some(1.0), "{allowed_one:?}");
+        // On a machine of one CPU that holds with the allowed count ignored, so the rule is held
+        // on its own too: the fewest of the counts the system gave, and a count of none is not one.
+        assert_eq!(within(Some(4096.0), [Some(1), Some(8)]), Some(1.0));
+        assert_eq!(within(Some(4096.0), [None, Some(8)]), Some(8.0));
+        assert_eq!(within(Some(0.5), [Some(1), Some(8)]), Some(0.5));
+        assert_eq!(within(Some(4.0), [Some(0), None]), Some(4.0));
+        assert_eq!(within(None, [Some(1), Some(8)]), None);
         let limit = machine.cpu_limit.expect("the limit the group sets");
         // Only a system that counts its CPUs has a count to hold the limit to.
         if machine.stat_cpus > 0 {
