@@ -12,8 +12,8 @@ import { qualificationProbes } from "../marketplace/qualification-fixture.mjs";
 import { livePaths } from "../fullstack/conformance.mjs";
 import { nativeControls, assessNative, assessTimedSource, observe } from "./native.mjs";
 import { resourceAsync } from "./probe.mjs";
-import { matrix, nativeGroup, groupReady } from "./plan.mjs";
-import { targetOutcome } from "./evidence.mjs";
+import { matrix, nativeGroup, groupReady, budgets } from "./plan.mjs";
+import { targetOutcome, verifyNativeLimits } from "./evidence.mjs";
 
 const listen = async (server) => { await new Promise((r) => server.listen(0, "127.0.0.1", r)); return `http://127.0.0.1:${server.address().port}`; };
 const close = async (server) => { server.closeAllConnections(); await new Promise((r) => server.close(r)); };
@@ -101,4 +101,25 @@ test("asynchronous resource reads retain real counters, PID inventory and collec
     assert.ok(BigInt(sample.endedNs) >= BigInt(sample.startedNs));
     rmSync(join(folder, "cpu.stat")); assert.ok((await resourceAsync(folder)).unavailable);
   } finally { assert.ok(resolve(folder).startsWith(resolve(tmpdir()))); rmSync(folder, { recursive: true }); }
+});
+
+test("actual native container budgets cannot be weakened while the declared profile stays unchanged", () => {
+  for (const mode of ["direct", "deployed-edge"]) {
+    const b = budgets(), roles = ["application", "upstream", ...(mode === "deployed-edge" ? ["proxy"] : [])];
+    const settings = { case: mode, effectiveBudgets: JSON.stringify(b), deployment: { processes: roles.map((role) => ({ id: role, role, count: 1 })) } };
+    const lifecycle = Object.fromEntries(roles.map((role) => {
+      const limit = role === "application" ? b.resources[mode === "direct" ? "applicationDirect" : "applicationEdge"] : b.resources[role];
+      const before = { HostConfig: { NanoCpus: limit.cpu * 1e9, Memory: limit.memory, MemorySwap: limit.memory, PidsLimit: 512,
+        Ulimits: [{ Name: "nofile", Hard: 65536, Soft: 65536 }], RestartPolicy: { Name: "no" }, Privileged: false, PortBindings: {} } };
+      return [role, { before, after: structuredClone(before), events: [] }];
+    }));
+    verifyNativeLimits(settings, lifecycle);
+    for (const mutate of [(c) => c.NanoCpus *= 2, (c) => c.Memory *= 2, (c) => c.MemorySwap *= 2, (c) => c.PidsLimit = 4096,
+      (c) => c.Ulimits[0].Hard++, (c) => c.RestartPolicy.Name = "always", (c) => c.Privileged = true, (c) => c.PortBindings = { "8080/tcp": [{ HostPort: "8080" }] }]) {
+      const changed = structuredClone(lifecycle); mutate(changed.application.before.HostConfig); mutate(changed.application.after.HostConfig);
+      assert.throws(() => verifyNativeLimits(settings, changed));
+    }
+    const changed = structuredClone(lifecycle); changed.application.events.push({ Action: "update" }); assert.throws(() => verifyNativeLimits(settings, changed));
+    assert.throws(() => verifyNativeLimits({ ...settings, deployment: { processes: settings.deployment.processes.slice(1) } }, lifecycle));
+  }
 });

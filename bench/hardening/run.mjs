@@ -7,7 +7,7 @@ import { dirname, join, resolve, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { hostname, platform, release } from "node:os";
 import { budgets, validateBudget, parseArgs, schema, matrix, selected, groupReady, nativeGroup, registryDigest } from "./plan.mjs";
-import { assemble, artifacts, verifyArtifacts, verifyParity, digest, targetOutcome } from "./evidence.mjs";
+import { assemble, artifacts, verifyArtifacts, verifyParity, verifyNativeLimits, digest, targetOutcome } from "./evidence.mjs";
 import { assessNative, assessTimedSource } from "./native.mjs";
 import { records } from "../marketplace/fixtures.mjs";
 import { validateQualification, featureProfile, qualificationSettings } from "../marketplace/feature-contract.mjs";
@@ -180,6 +180,7 @@ export async function run(args) {
       }
       const deployment = { mode: cell.mode, countAllProcesses: true, processes: processList.map(({ containerId, ...p }) => p) };
       settings = { review: options.review, case: cell.mode, phase: cell.phase, nativeSource: cell.source, deployment, effectiveBudgets: JSON.stringify(budget) }; json(join(out, "settings.json"), settings);
+      verifyNativeLimits(settings, Object.fromEntries(targets.map((t) => [t.id, { before: snapshot[t.id].before, after: snapshot[t.id].before, events: [] }])));
       provenance = targets.map((t) => ({ id: t.id, image: t.info.Image, source: t.source, config: digest(readFileSync(join(out, `${t.id}-before.json`))), evidence: `${t.id}-before.json` }));
       const net = JSON.parse(await docker(["network", "inspect", network]))[0];
       assert.deepEqual(Object.keys(net.Containers).sort(), processList.map((p) => p.containerId).sort(), "unaccounted native process container on isolated network");
