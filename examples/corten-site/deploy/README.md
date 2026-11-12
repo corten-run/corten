@@ -107,15 +107,15 @@ other request that arrives while the service is down gets nginx's 502.
 
 ## What it holds
 
-Measured at `e2bd048c3` with `hold.mjs`, against the site's image in a container held to 1 CPU
+Measured at `7f65d026d` with `hold.mjs`, against the site's image in a container held to 1 CPU
 and 512 MB on a workstation. `hold.mjs` ran in a second container that shares the first one's
 network, so the load reached the app over loopback, with no proxy and no TLS, and did not count
-against its CPU. For each run, with 1000 and then 3000 streams:
+against its CPU. For each run, with 1000 and then 3000 streams, held as they are and then asked
+for as `zstd` and as `gzip` (a fourth argument):
 
 ```sh
 docker run -d --name site --cpus 1 --memory 512m -e PORT=18488 corten-site
-docker run --rm --network container:site -v "$PWD/examples/corten-site/deploy/hold.mjs:/hold.mjs:ro" \
-  node:24-slim node /hold.mjs http://localhost:18488 1000 10
+docker run --rm --network container:site -v "$PWD/examples/corten-site/deploy/hold.mjs:/hold.mjs:ro"   node:24-slim node /hold.mjs http://localhost:18488 1000 10
 docker rm -f site
 ```
 
@@ -125,19 +125,40 @@ what the service file sets on the machine.
 
 | | Memory the server holds | Pages a second meanwhile |
 |---|---|---|
-| Idle | 5.6 MiB | |
-| 1,000 live streams open | 18.8 to 19.4 MiB | 1,007 and 737 |
-| 3,000 live streams open | 44.6 to 45.9 MiB | 484 and 597 |
+| Idle | 5.4 to 5.8 MiB | |
+| 1,000 live streams open, sent as they are | 18.7 to 19.8 MiB | 829 and 800 |
+| 3,000 live streams open, sent as they are | 45.3 to 46.2 MiB | 658 and 802 |
+| 1,000 asked for as zstd, 546 of them compressed | 62.3 to 69.9 MiB | 1,098 and 1,293 |
+| 3,000 asked for as zstd, 546 of them compressed | 89.1 to 99.4 MiB | 690 and 727 |
+| 1,000 asked for as gzip, 728 of them compressed | 183.3 to 211.0 MiB | 922 and 672 |
+| 3,000 asked for as gzip, 728 of them compressed | 216.1 to 237.6 MiB | 596 and 646 |
 
 Two runs of each, with 10 seconds of page loads in a run. Every stream was sent its reading each
-second, and each page is 147,882 bytes before compression. A memory range is from the lowest
-reading with the streams open to the highest after the page loads, over both runs. The pages a
-second moved with what else the workstation was doing: other builds kept its eight CPUs busy
-through every run, so the two rows cannot be compared with each other for speed. Neither
-figure is the droplet's number. A shared vCPU is not a workstation's
-core, and nginx and TLS take their part of it: run `hold.mjs` on the machine itself, against
-`http://127.0.0.1:3000`, before saying what it serves. Run there, `hold.mjs` is itself part of
-what the machine's CPU reading counts.
+second, and each page is about 149,040 bytes before compression. A memory range is from the
+lowest reading with the streams open to the highest after the page loads, over both runs; idle
+is over all twelve. The pages a second moved with what else the workstation was doing, so the
+rows cannot be compared with each other for speed. None of these is the droplet's number. A
+shared vCPU is not a workstation's core, and nginx and TLS take their part of it: run
+`hold.mjs` on the machine itself, against `http://127.0.0.1:3000`, before saying what it
+serves. Run there, `hold.mjs` is itself part of what the machine's CPU reading counts; run as
+above, the CPU and memory it prints as in use are the container's, and `hold.mjs` is in neither.
+
+A compressed stream holds its coder for as long as it is open. The app compresses streams up to
+a budget of its own (`crates/corten/src/compress.rs`) and sends the rest as they are, which is
+why 546 or 728 of them were compressed however many were open: the rows above are what the
+streams hold at most, about 50 MiB more as zstd and about 190 MiB more as gzip. A browser asks
+for its stream compressed, so without a proxy in front the gzip rows are what readers whose
+browsers take no zstd would cost. `nginx.conf` therefore asks the app for a stream as zstd
+where the browser takes it and as it is where it does not, which keeps the machine to the zstd
+rows. It keeps zstd because of what a stream then sends: a reading is 1,539 bytes as it is, and
+16 to 20 bytes in a zstd stream once it is under way (42 to 45 in a gzip one).
+
+What the two gauges cost, against `4291a1545`, the commit before them, in the same container:
+a reading went from 733 bytes to 1,539 as it is, and stayed at 16 to 20 bytes in a zstd stream;
+the page went from 147,854 bytes to about 149,000 before compression (25,491 to 25,836 as
+zstd); and the server's own time for a page (`Server-Timing`, the median of 500 pages asked for
+one at a time, three times over, each image twice in turn) was 384 to 415 µs before and 391 to
+427 µs after, which these runs cannot tell apart.
 
 ## What has and has not been checked
 
