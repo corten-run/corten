@@ -226,9 +226,9 @@ value (the MCP endpoint) is added with `Api::route`: `mcp::api(routes).route::<m
 Its tokens from an OAuth server: `Tools::new(..).authorization(Authorization::new::<mcp::Mcp>(&origin, issuer))`,
 and Corten serves the RFC 9728 metadata and names it in the 401; the token check compares the
 audience with `authorization.resource()`; a token missing a scope is
-`ToolError::InsufficientScope("a b".into())`, a 403. A request whose `MCP-Protocol-Version` names
-a revision outside `agent::PROTOCOL_VERSIONS` is a 400 before its token is checked; one without the
-header is read as `2025-03-26`.
+`ToolError::InsufficientScope("a b".into())`, a 403. A request other than `initialize` whose
+`MCP-Protocol-Version` names a revision outside `agent::PROTOCOL_VERSIONS` is a 400 before its
+token is checked; one without the header is read as `2025-03-26`.
 
 `Json` is the prelude's `corten::Json`: a reader that refuses as axum's did (415, 400, 422, 413
 over the body limit, 2 MiB unless `App`, `Area` or `Api::body_limit` sets one, each a

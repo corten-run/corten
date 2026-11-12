@@ -38,11 +38,13 @@ Corten is pre-1.0, so any minor version may change the API.
   and a request costs the same instructions; a listener of the app's own keeps its choice (design
   Choice 41, `bench/nodelay`)
   ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
-- The MCP endpoint (`agent::Tools`) answers a request whose `MCP-Protocol-Version` header names a
-  revision it does not speak, or that sends the header twice, with `400 Bad Request` and a JSON-RPC
-  error with no `id` (`-32600`), before it reads the message or checks the token, as MCP
-  2025-06-18 and 2025-11-25 require; it answered such a request as one of its own revisions, with
-  a 200. A request without the header is still read as 2025-03-26
+- The MCP endpoint (`agent::Tools`) answers a request other than `initialize` whose
+  `MCP-Protocol-Version` header names a revision it does not speak, or that sends the header twice,
+  with `400 Bad Request` and a JSON-RPC error with no `id` (`-32600`, its `data` the revisions it
+  speaks and the one requested), before it checks the token, as MCP 2025-06-18 and 2025-11-25
+  require; it answered such a request as one of its own revisions, with a 200. A request without
+  the header is still read as 2025-03-26, and `initialize`, sent before a revision is agreed, is
+  answered whatever the header names
   ([#1231 The MCP endpoint ignores the MCP-Protocol-Version header, so a request naming a revision Corten does not speak gets a 200 where both revisions it lists require a 400](https://github.com/corten-run/corten/issues/1231)).
 
 ### Documentation
