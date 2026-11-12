@@ -223,6 +223,7 @@ pub fn expand(input: TokenStream) -> Result<TokenStream, Error> {
             __A3
             #[inline]
             fn may_prefetch(&self) -> bool { __A2 }
+            #[inline]
             #[allow(unused_variables)]
             fn write_href(&self, __OUT: &mut ::std::string::String, __corten_html: bool) {
                 #[allow(unused_imports)]

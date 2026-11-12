@@ -4730,12 +4730,16 @@ pub mod __private {
 
     /// A value the path cannot carry: a debug build panics, naming the route and the field; a
     /// release build logs that as an error and writes `%FF` after the value ([`unreadable`]), so
-    /// the link opens no other page.
+    /// the link opens no other page. It takes the parameter by reference, a constant the derive
+    /// writes, so a link's call to it is three arguments and the link stays small enough to be
+    /// inlined where it is written.
     #[cold]
     #[inline(never)]
-    fn refuse(route: &str, field: &str, out: &mut String, start: usize) {
+    fn refuse<const PLACE: u8>(param: &Param<PLACE>, out: &mut String, start: usize) {
         let message = format!(
-            "corten: a link to {route} cannot carry {field} = {:?}: a browser resolves a . or .. segment away, and the router has no segment for an empty value first or last in the path, before text in its segment or as a whole {{*rest}}, so the link would open another page or none. Refuse such a value where the app stores it (docs/design.md#limit-path-values); a release build writes %FF after it, which the route answers with a 400",
+            "corten: a link to {} cannot carry {} = {:?}: a browser resolves a . or .. segment away, and the router has no segment for an empty value first or last in the path, before text in its segment or as a whole {{*rest}}, so the link would open another page or none. Refuse such a value where the app stores it (docs/design.md#limit-path-values); a release build writes %FF after it, which the route answers with a 400",
+            param.route,
+            param.field,
             &out[start..]
         );
         if cfg!(debug_assertions) {
@@ -4830,21 +4834,31 @@ pub mod __private {
 
     /// A text value, encoded and held to its place by its text. A whole-segment value is refused
     /// only when it is empty or dots, which are written as they are, so where it starts is found
-    /// from its length then, and an id or a slug pays a comparison of the length it already has.
+    /// from its length then, and an id or a slug pays a comparison of the length it already has:
+    /// one of two bytes or fewer is looked at out of line ([`short`]), which keeps the link small
+    /// enough to be inlined where it is written.
     #[inline(always)]
     fn text<const PLACE: u8>(value: &str, param: &Param<PLACE>, out: &mut String) {
         if PLACE == place::REST {
             let start = out.len();
             let all = Encode { out: &mut *out, keep: REST }.push(value);
             if Param::<PLACE>::refuses(value.as_bytes(), all & DOTLESS != 0) {
-                refuse(param.route, param.field, out, start);
+                refuse(param, out, start);
             }
         } else {
             Encode { out: &mut *out, keep: SEGMENT }.push(value);
-            if Param::<PLACE>::refuses(value.as_bytes(), true) {
-                let start = out.len() - value.len();
-                refuse(param.route, param.field, out, start);
+            if value.len() <= 2 {
+                short(value.as_bytes(), param, out);
             }
+        }
+    }
+
+    /// A whole-segment or text-followed value of two bytes or fewer, just written to the end of
+    /// `out` as it is: refused when it is one the path cannot carry.
+    #[inline(never)]
+    fn short<const PLACE: u8>(value: &[u8], param: &Param<PLACE>, out: &mut String) {
+        if Param::<PLACE>::refuses(value, true) {
+            refuse(param, out, out.len() - value.len());
         }
     }
 
@@ -4860,7 +4874,7 @@ pub mod __private {
             let start = out.len();
             let _ = write!(Encode { out: &mut *out, keep: Param::<PLACE>::KEEP }, "{}", self.0);
             if Param::<PLACE>::refuses(&out.as_bytes()[start..], false) {
-                refuse(param.route, param.field, out, start);
+                refuse(param, out, start);
             }
         }
     }
