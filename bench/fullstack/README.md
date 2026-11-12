@@ -453,11 +453,11 @@ Cold start rose from 7.7 to 8.6 ms; desktop and phone interactive changed from
 61 to 59 ms and 474 to 468 ms. No other Corten metric crosses the single-round regression
 thresholds, and the trend detector reports no drift or warning. These runs do not establish a cause.
 
-### Browser pass at 3fb4b1ac (round browser-4, 2026-11-11)
+### Browser pass at `3fb4b1ac` (round browser-4, 2026-11-11)
 
 `droplet.mjs browser-4 --suite browser` reran parity, bytes and the browser timing for all
 twenty apps on a c-8 droplet (Xeon Platinum 8358, not the 8280 of browser-3), with Corten at
-3fb4b1ac. Every browser run worked, and parity passed on 17 pages for every app. Corten's item page
+`3fb4b1ac`. Every browser run worked, and parity passed on 17 pages for every app. Corten's item page
 loads 15.0 KB of JavaScript (gzip, three files; browser-3 6.9 KB in four). All rows are in
 [results/browser-4](results/browser-4); the browser table in
 [docs/performance.md](../../docs/performance.md#in-the-browser) is still round r16's. The round
@@ -512,7 +512,7 @@ difference between the two cannot be put down to any one of them.
 ### Browser pass after the many-rows change (round browser-3, 2026-10-23)
 
 `droplet.mjs browser-3 --suite browser` reran parity, bytes and the browser timing for all
-fourteen apps on a c-8 droplet (Xeon Platinum 8280), with Corten at 77002fe (the runtime that
+fourteen apps on a c-8 droplet (Xeon Platinum 8280), with Corten at `77002fe` (the runtime that
 finds ref names in many new rows with one query per name); the other apps are unchanged. Every
 browser run worked and parity passed on 16 pages for every app. Corten's item page loads 6.9 KB of
 JavaScript (gzip, four files; browser-1 6.8 KB). All rows are in
