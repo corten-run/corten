@@ -386,24 +386,24 @@ mod tests {
         let (status, note) = read(&res);
         assert_eq!(status, StatusCode::OK);
         assert!(note.contains(r#"<span id="save-note""#) && note.contains("Saved."), "{note}");
-        assert!(note.contains(r#"save_note.answered($t,&quot;saved&quot;,1,1,false)"#), "{note}");
+        assert!(note.contains(r#"save_note.answered($t,&quot;Saved&quot;,1,1,false)"#), "{note}");
         assert_eq!(builder.saved().1.get("salt-oracle"), Some(&1));
         // Sent again (its answer lost): the same answer, no second write.
         let res = saving(&app, 0, &deck, &key).field(f.draft, 1).mode(Mode::Action).await;
         let (status, note) = read(&res);
-        assert!(status == StatusCode::OK && note.contains("&quot;saved&quot;,1,1,false)"), "{note}");
+        assert!(status == StatusCode::OK && note.contains("&quot;Saved&quot;,1,1,false)"), "{note}");
         assert_eq!(builder.deck.seq(), 1);
         // The same key with a changed deck (made while the answer was lost): nothing is written,
         // and the answer names the send that was saved, so the page sends the change next.
         deck.pop();
         let res = saving(&app, 0, &deck, &key).field(f.draft, 2).mode(Mode::Action).await;
         let (status, note) = read(&res);
-        assert!(status == StatusCode::OK && note.contains("&quot;saved&quot;,1,1,false)"), "{note}");
+        assert!(status == StatusCode::OK && note.contains("&quot;Saved&quot;,1,1,false)"), "{note}");
         assert_eq!((builder.deck.seq(), builder.saved().1.get("salt-oracle")), (1, Some(&1)));
         // A new key, built on the old version, is stale.
         let res = saving(&app, 0, &deck, &submit_key()).mode(Mode::Action).await;
         let (status, note) = read(&res);
-        assert!(status == StatusCode::CONFLICT && note.contains("&quot;stale&quot;,1,0,false)"), "{note}");
+        assert!(status == StatusCode::CONFLICT && note.contains("&quot;Stale&quot;,1,0,false)"), "{note}");
     }
 
     #[test]
@@ -466,7 +466,7 @@ mod tests {
         let (status, note) = read(&res);
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(note.contains("Not saved: You own 2 copies of Ashen Drake."), "{note}");
-        assert!(note.contains("&quot;refused&quot;,0,0,false)"), "{note}");
+        assert!(note.contains("&quot;Refused&quot;,0,0,false)"), "{note}");
         assert_eq!(builder.deck.seq(), 0);
         let f = DeckInput::FIELDS;
         let res =
@@ -547,6 +547,8 @@ mod tests {
             "every deck line is a DeckLine, and the template's"
         );
         assert!(page.contains("/scripts/deck_builder.js\">") && page.contains("/scripts/save_note.js\">"), "{page}");
+        // The page as loaded has had no save answered: its note tells the builder nothing.
+        assert!(page.contains(r#"save_note.answered($t,&quot;Loaded&quot;,0,0,false)"#), "{page}");
         let view = DeckQuery { q: Some("drake".into()), sort: Some(Sort::Cost) };
         let res = app.get(&url::Home { view }).await;
         let page = res.text();

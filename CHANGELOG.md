@@ -7,6 +7,14 @@ Corten is pre-1.0, so any minor version may change the API.
 
 ### Added
 
+- `corten::caller::bearer(&headers)` reads the token of RFC 6750's bearer credentials
+  (`Authorization: Bearer <token>`), the scheme `Challenge::bearer` asks an API's clients to use:
+  the scheme in any case, one or more spaces, the token trimmed, and `None` for no
+  `Authorization`, another scheme, `Bearer` with nothing after it, a value outside visible ASCII
+  or two `Authorization` lines (RFC 9110 5.3). The `Challenge` and `Tools::auth` examples (now a
+  compiled doctest, where it called an `auth::bearer` that does not exist) and card-market's
+  partners and agents read with it in place of their own parsers
+  ([#1225 Corten tells an API to take its key as a bearer token but gives it no reader, so each app parses Authorization by hand and the agent docs call an auth::bearer that does not exist](https://github.com/corten-run/corten/issues/1225)).
 - The watchlist smoke checks three runtime behaviors it did not. A tapped link nothing hovered is
   prefetched at `touchstart`, and its visit uses that answer (Chromium and Firefox; WebKit's run
   has no Navigation API, so nothing is prefetched). An upload answered with a status that has no
@@ -58,6 +66,29 @@ Corten is pre-1.0, so any minor version may change the API.
   and a request costs the same instructions; a listener of the app's own keeps its choice (design
   Choice 41, `bench/nodelay`)
   ([#1215 TCP_NODELAY is never set, so small back-to-back writes of a streamed answer may wait on Nagle and a delayed ACK (unmeasured)](https://github.com/corten-run/corten/issues/1215)).
+- Locale negotiation follows RFC 4647 Lookup, then Corten's same-language step: an
+  `Accept-Language` tag loses its last subtag (and a single-character one before it) until it
+  names a listed locale, and only then is the first locale of its language taken
+  ([design Choice 42](docs/design.md#choice-locale-same-language)), so `zh-Hant-TW` gets `zh-Hant`
+  and `sr-Latn-RS` gets `sr-Latn` in an app that lists `zh` or `sr` first, and
+  `fr-CA-u-ca-gregory` gets a listed `fr-CA`. Before, a tag that was not listed went straight to
+  the first locale of its language, so those readers got the other script
+  ([#1234 Locale negotiation jumps from an exact tag straight to the primary language, so zh-Hant-TW gets zh and sr-Latn-RS gets sr when both are listed](https://github.com/corten-run/corten/issues/1234)).
+- The MCP endpoint (`agent::Tools`) answers a request whose `MCP-Protocol-Version` header names
+  a revision it does not speak, or that sends the header twice, with `400 Bad Request`, as MCP
+  2025-06-18 and 2025-11-25 require: a JSON-RPC error with no `id` (`-32600`, its `data` the
+  revisions it speaks and the one requested), checked before the token, or for a body that is not
+  JSON or a batch, the same error as without the header. It answered such a request as one of its
+  own revisions, with a 200. A request without the header is still read as 2025-03-26, and an
+  `initialize` request (with an `id`), sent before a revision is agreed, is answered whatever the
+  header names
+  ([#1231 The MCP endpoint ignores the MCP-Protocol-Version header, so a request naming a revision Corten does not speak gets a 200 where both revisions it lists require a 400](https://github.com/corten-run/corten/issues/1231)).
+- `examples/deck-builder`'s `DeckAnswered`, the pattern the scripts guide shows for learning a
+  `data-patch` submit's outcome, carries it as `SaveOutcome`, an enum that derives `ToJson`, in
+  place of a `String`: `answered` takes it and the builder's branches compare its declared names,
+  so a renamed or misspelled outcome fails the build or `tsc` instead of leaving a refused save
+  not rolled back. The page as loaded is a variant of its own, `Loaded`, for which no event is sent
+  ([#1243 deck-builder's DeckAnswered carries the save outcome as a String, so a renamed outcome still builds and the script's branch silently stops matching](https://github.com/corten-run/corten/issues/1243)).
 
 ### Documentation
 

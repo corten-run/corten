@@ -1403,7 +1403,13 @@ rules something out.
     to name ([Limit 11](#limit-caller-types); a 401 an app writes by hand, `Error::status`, is
     its own). A key sent in a header of the app's own (`X-Api-Key`) has no scheme either, so an
     API that keeps one for clients that already send it also takes the key as a bearer token and
-    challenges `Bearer`.
+    challenges `Bearer`. Corten reads the credentials it tells every API to take, with
+    `caller::bearer` (the scheme in any case, RFC 9110 11.1; an empty token, a value outside
+    visible ASCII or two `Authorization` lines, which RFC 9110 5.3 does not let a client send,
+    none), so no app parses `Authorization` by hand; the MCP endpoint's check reads the token with
+    it, and the endpoint's 401 names a token invalid whenever the request used the bearer method
+    (an `Authorization` line that is `Bearer` and something other than whitespace), readable or
+    not, since RFC 6750 3.1 leaves the error out only for a request without bearer credentials.
     Not chosen for the type: `unauthorized()` sending `Bearer` by default, which would have
     kept every caller compiling but named a scheme for an app that takes another; a `BEARER`
     constant with no parameter, which RFC 6750 (3) does not allow; a method per RFC 6750 error
@@ -1460,8 +1466,13 @@ rules something out.
     an app builds one `Challenge` from at startup, so checking them when a challenge is made finds
     a mistake in the first test that refuses a request or when the app starts, and a value from a
     store or a request is the app's to clean); platform (RFC 9110 15.5.2: a 401 MUST send
-    `WWW-Authenticate`; RFC 6750 (3) for Bearer's parameters; RFC 7617 (2) for Basic's realm;
-    IANA's HTTP Authentication Scheme Registry, which has no scheme for a session cookie); value
+    `WWW-Authenticate`; RFC 6750 (3) for Bearer's parameters and (2.1) for the credentials
+    `caller::bearer` reads, with the scheme in any case (RFC 9110 11.1) and one `Authorization`
+    line (RFC 9110 5.3); RFC 7617 (2) for Basic's realm;
+    IANA's HTTP Authentication Scheme Registry, which has no scheme for a session cookie); measured
+    (refusing a second `Authorization` line costs `caller::bearer` 17 instructions a call, 466
+    against 449 for reading the first alone, by callgrind over 1,200 and 200 calls in a scratch
+    harness, three runs that gave the same counts); value
     (mistakes fail at compile time, Value 4: a
     route's caller, and a challenge's scheme in a `const`; a challenge's realm and parameters are
     the bet above).
@@ -1470,7 +1481,9 @@ rules something out.
     without repeating it in every handler of a module; or a way to give the `App` a route is
     found that does not pass `Routes` or `Methods`; or an HTTP authentication scheme for a
     session cookie is registered, which `Refused::sign_in`'s 401 would then name; or an app needs
-    two challenges on one 401, or a token68 one.
+    two challenges on one 401, or a token68 one; or an app needs to tell unreadable bearer
+    credentials (a value outside visible ASCII, two `Authorization` lines) from none, which
+    `caller::bearer` answers alike.
 
     Last checked: 2026-11-06, the `compile_fail` doctests that hold `caller = T`
     (`crates/corten/src/route.rs`) and the caller's own (`crates/corten/src/caller.rs`) at
@@ -1488,7 +1501,14 @@ rules something out.
     the tests of the MCP endpoint's `mcp` realm, of a scheme `Challenge::new` makes in a `const`,
     and of card-market's empty bearer token, at `7d743d7a`; 2026-11-10, the MCP endpoint's test
     of `Bearer` alone or with only whitespace after it, and card-market's agents with a lowercase
-    scheme and its partners' empty key, at `ea4aff53`.
+    scheme and its partners' empty key, at `ea4aff53`; 2026-11-11, the test of `caller::bearer`'s
+    credentials (`crates/corten/src/caller.rs`: the scheme in any case, two spaces, `Bearer` alone
+    or with whitespace, `Basic`, a value outside visible ASCII), at `751e26bb`, the commit that
+    adds it; 2026-11-11, the reader's test of two `Authorization` lines, the MCP endpoint's test
+    that a token outside visible ASCII is named invalid (`crates/corten/src/agent.rs`), and the
+    callgrind count of the reader, at `de945242`, the commit that adds them; 2026-11-11, the MCP
+    endpoint's test that a bearer token on either of two `Authorization` lines is named invalid, at
+    `e4d024b0`, the commit that adds it.
 
 28. <a id="choice-fixed-stages"></a>**A request goes through fixed stages in one order, and the app's own steps are one
     `Middleware` tuple at one place in it; a route may say it goes through none.** The stages are
@@ -2460,6 +2480,46 @@ rules something out.
     hyper-util 0.1.21 (`Cargo.lock`) read for `nodelay`, with nginx's `tcp_nodelay` documentation
     (nginx.org, for 1.29.8) and Go's `net` package documentation and source on its master branch
     (`TCPConn.SetNoDelay`, "The default is true"; `newTCPConn` sets it).
+
+42. <a id="choice-locale-same-language"></a>**A negotiated locale is RFC 4647 Lookup, then a step of
+    Corten's own: a range Lookup matches to nothing takes the first listed locale of its
+    language.** `negotiate` takes the `Accept-Language` ranges highest `q` first and runs each
+    through Lookup (RFC 4647, 3.4): the range, then the range without its last subtag (and a
+    single-character subtag before it) until a listed locale is named. Where none is, it takes the
+    first listed locale whose primary language is the range's before the next range is tried.
+    Lookup has no such step. It never returns a tag more specific than the range ("de-ch" can give
+    `de` or `de-CH`, never `de-CH-1996`), and it processes every range before the default (3.4.1),
+    so the step departs from it twice. First, `fr` gets a listed `fr-CA` where Lookup would give
+    the default. Second, the step runs before a lower range, so with `en, fr-CA` listed,
+    `fr-FR, en;q=0.5` gets `fr-CA` where Lookup would give `en`. An app that lists a regional form
+    without the bare language (`fr-CA`, or `pt-BR` alone) gets those readers to their language,
+    which was what `negotiate` did before Lookup was added
+    ([#1234 Locale negotiation jumps from an exact tag straight to the primary language, so zh-Hant-TW gets zh and sr-Latn-RS gets sr when both are listed](https://github.com/corten-run/corten/issues/1234)).
+    The cost: the step does not read the script, so with `en, zh-Hans, zh-Hant` listed and no
+    `zh`, `zh-TW, zh-Hant;q=0.9` gets `zh-Hans`, the first `zh` locale, before `zh-Hant` is tried
+    (`negotiation_takes_the_same_language_before_a_lower_range`); the views guide tells an app
+    with Traditional Chinese readers to list `zh-TW` and `zh-HK`, which Lookup then matches.
+    Not chosen: Lookup alone (a reader of `fr` gets the first locale, often English, from an app
+    that has French); the step after every range, as a computed default (3.4.1 allows the default
+    to search further), which would send `fr-FR, en;q=0.5` to `en`; filling in a range's likely
+    script before Lookup (CLDR's likely subtags, `zh-TW` to `zh-Hant-TW`), which fixes the `zh`
+    case but is a table Corten does not carry.
+
+    Stands on: bet (an app lists a regional form of a language without the bare one more often
+    than it lists two scripts of one language without either's region, and a reader would rather
+    have a listed form of their language than the app's first locale); platform (RFC 4647, 3.4,
+    Lookup never returns a tag more specific than the range, and 3.4.1 processes every range
+    before the default and lets the default search further); reasoned (the step runs only when
+    Lookup names nothing for a range, so an app that lists each tag its readers send gets Lookup's
+    answer); value (a reader gets a page in their language without the app listing each region,
+    Values 7, at the cost of a departure from the standard that this Choice records, Values 2).
+
+    Revisit when: an app reports readers given another script or region they did not ask for by
+    the step (the `zh-TW` case above), or Corten takes CLDR's likely subtags for another reason,
+    when the step can match a range's script before taking the first locale of its language.
+
+    Last checked: 2026-11-11, RFC 4647 sections 3.4 and 3.4.1 read against `negotiate` as at
+    `09a9cd5d6`, and the step's cases run in its tests.
 
 ## Rules
 
