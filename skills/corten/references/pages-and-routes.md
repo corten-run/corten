@@ -223,7 +223,8 @@ does not: there `?` on `Errors` does not compile, and the form answers with `req
 
 A route outside the prefix, or one without a handler, does not compile. An endpoint built from a
 value (the MCP endpoint) is added with `Api::route`: `mcp::api(routes).route::<mcp::Mcp>(tools.route())`.
-Its tokens from an OAuth server: `Tools::new(..).authorization(Authorization::new::<mcp::Mcp>(&origin, issuer))`,
+Its check reads the token with `corten::caller::bearer(headers)` (`.auth(|headers| ..)`), as an
+API key's `Identify` does. Its tokens from an OAuth server: `Tools::new(..).authorization(Authorization::new::<mcp::Mcp>(&origin, issuer))`,
 and Corten serves the RFC 9728 metadata and names it in the 401; the token check compares the
 audience with `authorization.resource()`; a token missing a scope is
 `ToolError::InsufficientScope("a b".into())`, a 403. A request other than `initialize` whose
@@ -315,8 +316,10 @@ impl Identify<Db> for Staff {
             Ok(Some(staff)) => Ok(staff),
             Ok(None) => Err(Refused::forbidden()),
             Err(error) => Err(Refused::unavailable(error)),   // the store is down: a 503, not sign-in
-            // An API key: Err(Refused::unauthorized(Challenge::bearer("partners"))), a 401 whose
-            // WWW-Authenticate names how to send one, and after too many failures (the app
+            // An API key, read with corten::caller::bearer(&parts.headers) (never parse
+            // Authorization by hand): when it is None, Err(Refused::unauthorized(Challenge::bearer("partners"))),
+            // a 401 whose WWW-Authenticate names how to send one; for a key the app does not know,
+            // the same with .param("error", "invalid_token"); and after too many failures (the app
             // counts them) Err(Refused::too_many(wait)): a 429 with Retry-After.
         }
     }

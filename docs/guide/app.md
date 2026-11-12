@@ -1483,7 +1483,7 @@ let authorization = Authorization::new::<mcp::Mcp>(&origin, "https://auth.exampl
 let audience = authorization.resource().to_string(); // https://cards.example/mcp
 let tools = Tools::new("card-market", env!("CARGO_PKG_VERSION"))
     .authorization(authorization)
-    .auth(move |headers| check_token(headers, &audience).ok_or(ToolError::Unauthorized));
+    .auth(move |headers| caller::bearer(headers).and_then(|token| check_token(token, &audience)).ok_or(ToolError::Unauthorized));
 ```
 
 Corten then serves the endpoint's protected-resource metadata (RFC 9728) at
@@ -1507,8 +1507,11 @@ endpoint at another route panics at startup. The origin and each issuer must be 
 `http` on `localhost` or a loopback address), checked when given. Without `authorization`, a
 401 names `Bearer` and the endpoint's name as its realm (`mcp` when the name is empty or not
 printable ASCII), for tokens handed out by hand, and tokens are checked per tool call as
-before. Either way a 401 for a request that sent a token adds `error="invalid_token"`; `Bearer`
-with nothing after it counts as no token, so the client is told where to get one.
+before. Either way a 401 for a request that sent a token adds `error="invalid_token"`: one with an
+`Authorization` line that is `Bearer ` and something other than whitespace, whether or not
+`corten::caller::bearer` can read it (RFC 6750 3.1 leaves the error out only for a request without
+bearer credentials); `Bearer` with nothing after it counts as no token, so the client is told
+where to get one. The check reads the token with `caller::bearer(headers)`.
 
 The endpoint speaks the MCP revisions in `agent::PROTOCOL_VERSIONS` (`2025-11-25`, `2025-06-18`
 and `2025-03-26`). A request whose `MCP-Protocol-Version` header names another, or that sends the
@@ -2205,7 +2208,16 @@ fn Layout(req: &Req, title: &str, children: impl Render) -> impl Document {
    `Challenge` that goes in `WWW-Authenticate`, `Challenge::bearer("partners")` for a key or
    token in `Authorization` (RFC 6750, whose challenge names a realm), with
    `.param("error", "invalid_token")` when the one sent is wrong, and no error when the request
-   sent none or another scheme's credentials (RFC 6750 3.1). `Challenge::basic(realm)` makes a
+   sent none or another scheme's credentials (RFC 6750 3.1). The lookup reads the key with
+   `corten::caller::bearer(&parts.headers)`, which returns the token of RFC 6750's credentials
+   (`Bearer` in any case, one or more spaces, the token trimmed) and `None` for no
+   `Authorization`, another scheme's credentials, `Bearer` with nothing after it, or credentials
+   it cannot read as one token (a value outside visible ASCII, or two `Authorization` lines, which
+   RFC 9110 does not let a client send): `None` gets the challenge alone, and a token the app does
+   not know adds the error. A lookup that wants RFC 6750's `invalid_token` for unreadable
+   credentials treats an `Authorization` that is present but unreadable as a malformed token. The
+   reader does not check the token's syntax (RFC 6750's `b64token`); a malformed one is a wrong
+   one. `Challenge::basic(realm)` makes a
    browser show its own sign-in prompt. A key in a header of the app's own
    (`X-Api-Key`) has no scheme to name, so send it as a bearer token; an API whose clients
    already send that header takes the key as a bearer token too and challenges `Bearer`. Another
